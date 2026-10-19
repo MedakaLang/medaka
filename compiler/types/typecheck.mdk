@@ -332,6 +332,8 @@ import types.tc_types.{
   DynCtx(..),
   DoCtx(..),
   noDyn,
+  SiteCtx(..),
+  noSite,
   DeclEnvModule(..),
   DeclEnvs(..),
   DeclEnvAcc(..),
@@ -8987,15 +8989,15 @@ recordArgSiteFn _ idx mono = match nthArgMono idx mono
 -- call threads the element dict (concrete element → RKey Int; a recursive element
 -- of the SAME parametric type → RDict forwarding the in-scope dict param).  A
 -- still-unsolved free type variable → left RNone (the emitter arg-tag-dispatches).
-resolveArgStamps : List PendingEntry -> Unit
-resolveArgStamps [] = goalSiteLoc := None
-resolveArgStamps ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
-  goalSiteLoc := loc
+resolveArgStamps : SiteCtx -> List PendingEntry -> Unit
+resolveArgStamps _ [] = ()
+resolveArgStamps sx ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
+  let sx = { sx | sxSite = loc }
   let _ = match kind
     SKArg implRef fullMono omitted =>
-      resolveArgStamp name tagRef implRef am fullMono omitted encl loc scope
+      resolveArgStamp sx name tagRef implRef am fullMono omitted encl loc scope
     _ => ()
-  resolveArgStamps rest
+  resolveArgStamps sx rest
 
 -- #156 S3c: a thin adapter over `entail` (EKArg kind).  `entail` returns
 -- `(primaryRoute, elementRoutes)`; stamp them into (tagRef, implRef).  Reproduces the
@@ -9016,7 +9018,8 @@ resolveArgStamps ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
 -- and never clobbers an RLocal seed.  implRef is []-seeded everywhere (every EMethodAt
 -- construction — 7313/7355/7356/7438/7441/7443 — uses `(Ref [])`, and only this resolver
 -- ever writes an arg-site's implRef), so []-over-[] needs no guard (matches resolveSite).
-resolveArgStamp : String ->
+resolveArgStamp : SiteCtx ->
+  String ->
   Ref Route ->
   Ref (List Route) ->
   Mono ->
@@ -9026,8 +9029,8 @@ resolveArgStamp : String ->
   Option Loc ->
   ScopeId ->
   Unit
-resolveArgStamp name tagRef implRef am fullMono omitted encl origin scope =
-  let (route, routes) = entail name am encl scope (EKArg fullMono omitted)
+resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
+  let (route, routes) = entail sx name am encl scope (EKArg fullMono omitted)
   let _ = match route
     RNone => ()
     _ => tagRef := route
@@ -9407,24 +9410,6 @@ pushTypeErrorHelpFixAt code loc msg help fix =
 -- (top-level decls aren't ELoc-wrapped).
 currentLoc : Ref (Option Loc)
 currentLoc = Ref None
-
--- #1155 (F-3c): the span of the dispatch SITE whose goal the post-HM resolvers are
--- currently entailing — republished from the `Option Loc` each `PendingEntry` /
--- `dictApps` entry snapshotted at its RECORD site.  `currentLoc` is useless in that
--- window: inference has long since left the offending expression, so it names
--- whichever ELoc happened to be entered last (observed on the #1155 rigid fixture:
--- the body of an unrelated impl three lines away).  This is the same problem
--- `pushTypeErrorOnceAt`'s `Option Loc` parameter exists for — a route-time reject
--- just has no argument to pass it through, so the span travels in a ref instead.
---
--- ⚠️ SCOPED TO A RESOLVER DRAIN, deliberately.  Each of the five resolver loops sets
--- it per entry and CLEARS it (`None`) in its own base case, so outside a drain the
--- selector falls back to `currentLoc` — the pre-#1155 behaviour — rather than
--- attributing a goal to some earlier site's span.  `concreteReqMatchByIface` (the
--- obligation-check reader of the same selector) runs outside every drain and is
--- exactly the caller that clearing protects.
-goalSiteLoc : Ref (Option Loc)
-goalSiteLoc = Ref None
 
 -- ASYNC-DESIGN Stage 2 (D5): the entry program's inferred `main` scheme, stashed
 -- by `graphModuleWorker`'s `GOutTrees` arm so the native `run` driver can detect a
@@ -10898,29 +10883,30 @@ reqWalkMemo (ReqWalk _ _ memo) = memo
 -- The route walk below the goal [row]'s `requires` discharge at [goals], which [walk]
 -- has just entered: the recorded routes if this walk already built them, otherwise
 -- [follow]'s, recorded when they came out clean.
-routeWalkMemoized : String ->
+routeWalkMemoized : SiteCtx ->
+  String ->
   ScopeId ->
   List Mono ->
   ImplRow ->
   ReqWalk ->
-  (Unit -> List Route) ->
+  (SiteCtx -> List Route) ->
   List Route
-routeWalkMemoized encl useScope goals row walk follow =
+routeWalkMemoized sx encl useScope goals row walk follow =
   let memo = reqWalkMemo walk
   let iface = first3 (ieRowTriple row)
   let key = enteredGoalKey walk
   let entries = optionOr [] (omLookup key memo.wmRoutes.value)
   match routeWalkRecorded iface goals row encl useScope entries
     Some entry =>
-      let _ = noteInner entry.rweInner
+      let _ = noteInner sx entry.rweInner
       entry.rweRoutes
     None =>
       let cutsBefore = memo.wmCuts.value
-      let outer = innerNotes.value
-      innerNotes := innerNone
-      let (erred, routes) = erredDuring follow
-      let inner = innerNotes.value
-      innerNotes := innerOr outer inner
+      let acc = Ref innerNone
+      let (erred, routes) =
+        erredDuring (_ => follow { sx | sxInner = Some acc })
+      let inner = acc.value
+      let _ = noteInner sx inner
       let _ =
         if erred || memo.wmCuts.value /= cutsBefore then
           ()
@@ -10963,16 +10949,15 @@ routeWalkRecorded iface goals row encl useScope (entry :: rest) =
 -- three producers of the routes inside a dictionary (`argReqRoute`, `superRouteAt`,
 -- `undeterminedRowRoute`'s supers) note each route they return, so a sub-route the
 -- solver shares between paths is noted once, where it is built.
-innerNotes : Ref Inner
-innerNotes = Ref innerNone
-
-noteInner : Inner -> Unit
-noteInner inner = innerNotes := innerOr innerNotes.value inner
+noteInner : SiteCtx -> Inner -> Unit
+noteInner sx inner = match sx.sxInner
+  Some acc => acc := innerOr acc.value inner
+  None => ()
 
 -- [r], noted as a route inside a dictionary.
-noteInnerRoute : Route -> Route
-noteInnerRoute r =
-  let _ = noteInner (innerOfRoute r)
+noteInnerRoute : SiteCtx -> Route -> Route
+noteInnerRoute sx r =
+  let _ = noteInner sx (innerOfRoute r)
   r
 
 -- A route walk's cut, counted so no subtree containing one is recorded.
@@ -20151,7 +20136,7 @@ checkAdmittedOccObls _ =
 checkAdmittedOccObl : ImplEnv -> (String, Mono, Option Loc) -> Unit
 checkAdmittedOccObl env (name, mono, loc) =
   let ifs = methodAdmittedHere name
-  match admittedSelection env name mono
+  match admittedSelection noSite env name mono
     Selects _ _ _ => ()
     Undecided => pushAmbiguousMethod name ifs loc
     Unroutable sel => pushUnroutableAdmitted name ifs sel loc
@@ -20167,11 +20152,11 @@ checkAdmittedOccObl env (name, mono, loc) =
 -- S2-DECL (d) at the occurrence of [name] whose instantiated method type is [mono]:
 -- each admitted declaration asked through its own parameter vector, read off its own
 -- declared method type, and its own interface's instances (the (b) pairing).
-admittedSelection : ImplEnv -> String -> Mono -> AdmittedAnswer
-admittedSelection env name mono =
+admittedSelection : SiteCtx -> ImplEnv -> String -> Mono -> AdmittedAnswer
+admittedSelection sx env name mono =
   let visible = methodVisibleHere name
   let answers =
-    map (admittedDeclAnswer env visible mono) (methodAdmittedHere name)
+    map (admittedDeclAnswer sx env visible mono) (methodAdmittedHere name)
   if anyList isUndecided answers then
     Undecided
   else match filterList isSelection answers
@@ -20193,12 +20178,13 @@ routableSelection name (answer@(Selects iface _ _)) =
     _ => answer
 routableSelection _ answer = answer
 
-admittedDeclAnswer : ImplEnv ->
+admittedDeclAnswer : SiteCtx ->
+  ImplEnv ->
   List MethodRow ->
   Mono ->
   IfaceRef ->
   AdmittedAnswer
-admittedDeclAnswer env visible mono ir =
+admittedDeclAnswer sx env visible mono ir =
   match filterList (r => ieRowIfaceMatches (methodRowIface r) ir) visible
     r :: _ => match r.mrEntry
       (iface, typarams, mty, _) => match matchTyMono mty mono
@@ -20206,7 +20192,7 @@ admittedDeclAnswer env visible mono ir =
           let goals = map (paramMonoOf subst) typarams
           match goalHeadCon goals
             None => Undecided
-            Some _ => match ieSelectRowByIface env iface goals
+            Some _ => match ieSelectRowByIface sx env iface goals
               Some row => Selects iface row goals
               None => SelectsNothing
         None => Undecided
@@ -26688,17 +26674,28 @@ constraintSlotDispatchVar typarams (Constraint { constraintArgs = args }) =
       n :: _ => [n]
       [] => []
 
-resolveSites : OrdMap Unit -> List PendingEntry -> Unit
-resolveSites _ [] = goalSiteLoc := None
-resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _) :: rest) =
-  goalSiteLoc := loc
+resolveSites : SiteCtx -> OrdMap Unit -> List PendingEntry -> Unit
+resolveSites _ _ [] = ()
+resolveSites sx rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _) :: rest) =
+  let sx = { sx | sxSite = loc }
   let _ = match kind
     SKReturn implRef fullMono =>
-      resolveSite rpNames name tagRef implRef resultMono fullMono encl loc scope
+      resolveSite
+        sx
+        rpNames
+        name
+        tagRef
+        implRef
+        resultMono
+        fullMono
+        encl
+        loc
+        scope
     SKAdmittedReturn ifaceRef implRef fullMono =>
-      resolveAdmittedSite name ifaceRef tagRef implRef fullMono encl scope
+      resolveAdmittedSite sx name ifaceRef tagRef implRef fullMono encl scope
     SKExactReturn implRef request =>
       resolveExactReturnSite
+        sx
         rpNames
         name
         tagRef
@@ -26710,6 +26707,7 @@ resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _
         scope
     SKNumReturn predicate fullMono =>
       resolveNumLitSite
+        sx
         rpNames
         name
         tagRef
@@ -26720,7 +26718,7 @@ resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _
         loc
         scope
     _ => ()
-  resolveSites rpNames rest
+  resolveSites sx rpNames rest
 
 -- a method occurrence's route: if its discriminating type is a constrained
 -- function's constraint variable, read that function's dict param (RDict);
@@ -26743,7 +26741,8 @@ resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _
 -- site keys off the RESULT mono (`isEmpty`'s `Bool`), which never names the receiver's
 -- impl, so this gate would mis-route every shadow method.  RLocal is stamped by the
 -- arg-position resolveRLocalSites (keyed on the RECEIVER mono) AFTER resolveSites.
-resolveSite : OrdMap Unit ->
+resolveSite : SiteCtx ->
+  OrdMap Unit ->
   String ->
   Ref Route ->
   Ref (List Route) ->
@@ -26765,9 +26764,10 @@ resolveSite : OrdMap Unit ->
 -- EKReturn `entail` yields RNone ONLY from its fallback (assum→RDict/RDictFwd, inst→RKey),
 -- so guarding the stamp on RNone reproduces that do-nothing None arm exactly and never
 -- clobbers an RLocal seed.  implRef is []-seeded everywhere, so []-over-[] needs no guard.
-resolveSite rpNames name tagRef implRef resultMono fullMono encl origin scope =
+resolveSite sx rpNames name tagRef implRef resultMono fullMono encl origin scope =
   let (route, routes) =
     entail
+      sx
       name
       resultMono
       encl
@@ -26783,7 +26783,8 @@ resolveSite rpNames name tagRef implRef resultMono fullMono encl origin scope =
 -- canonical key and prerequisites, and the selecting declaration's interface word on
 -- the occurrence, which carried none while its spelling named two or more.  Any
 -- other answer is rejected there, and the site keeps no route.
-resolveAdmittedSite : String ->
+resolveAdmittedSite : SiteCtx ->
+  String ->
   Ref String ->
   Ref Route ->
   Ref (List Route) ->
@@ -26791,19 +26792,20 @@ resolveAdmittedSite : String ->
   String ->
   ScopeId ->
   Unit
-resolveAdmittedSite name ifaceRef tagRef implRef fullMono encl scope =
-  match admittedSelection perRun.value.bodyImplEnvRef.value name fullMono
+resolveAdmittedSite sx name ifaceRef tagRef implRef fullMono encl scope =
+  match admittedSelection sx perRun.value.bodyImplEnvRef.value name fullMono
     Selects iface row goals =>
       ifaceRef := ifaceWordOf iface.irOrigin iface.irName
       tagRef :=
         RKey
           (rowRouteKey row)
           []
-          (selectedCallSupers name (Some row) encl scope goals)
-      implRef := implDictRoutesForRow encl scope goals row
+          (selectedCallSupers sx name (Some row) encl scope goals)
+      implRef := implDictRoutesForRow sx encl scope goals row
     _ => ()
 
-resolveExactReturnSite : OrdMap Unit ->
+resolveExactReturnSite : SiteCtx ->
+  OrdMap Unit ->
   String ->
   Ref Route ->
   Ref (List Route) ->
@@ -26813,13 +26815,14 @@ resolveExactReturnSite : OrdMap Unit ->
   Option Loc ->
   ScopeId ->
   Unit
-resolveExactReturnSite rpNames name tagRef implRef resultMono request encl origin scope =
+resolveExactReturnSite sx rpNames name tagRef implRef resultMono request encl origin scope =
   if methodReturnAmbiguousWithoutGiven request then
     noteMethodReturnTrace MRTStamped request None []
   else match methodReturnArgs request
     None =>
       let _ = noteMethodReturnTrace MRTStamped request None []
       resolveSite
+        sx
         rpNames
         name
         tagRef
@@ -26830,27 +26833,28 @@ resolveExactReturnSite rpNames name tagRef implRef resultMono request encl origi
         origin
         scope
     Some _ =>
-      let resolution = solveExactReturnOnce request
+      let resolution = solveExactReturnOnce sx request
       let _ =
         if methodReturnResolutionValid request resolution then
           ()
         else
           panic "ordinary return route received invalid solver evidence"
       let (route, routes) =
-        exactReturnRoutes name encl scope (omHasKey name rpNames) resolution
+        exactReturnRoutes sx name encl scope (omHasKey name rpNames) resolution
       let _ = noteMethodReturnTrace MRTStamped request (Some route) routes
       let _ = match route
         RNone => ()
         _ => tagRef := route
       implRef := routes
 
-exactReturnRoutes : String ->
+exactReturnRoutes : SiteCtx ->
+  String ->
   String ->
   ScopeId ->
   Bool ->
   MethodReturnResolution ->
   (Route, List Route)
-exactReturnRoutes name encl scope isReturnPosition resolution = match (
+exactReturnRoutes sx name encl scope isReturnPosition resolution = match (
   resolution.mrrOutcome,
   resolution.mrrSelectedRow,
 )
@@ -26866,8 +26870,8 @@ exactReturnRoutes name encl scope isReturnPosition resolution = match (
     RKey
       (rowRouteKey row)
       []
-      (selectedCallSupers name (Some row) encl scope args),
-    methodReturnEvidenceRoutes encl scope prerequisites,
+      (selectedCallSupers sx name (Some row) encl scope args),
+    methodReturnEvidenceRoutes sx encl scope prerequisites,
   )
   -- No instance was selected: the site keeps no route, never the occurrence's head
   -- tag, which names no instance.
@@ -26882,18 +26886,24 @@ givenRoute isReturnPosition binder =
   else
     RDict (renderEvidenceBinder binder)
 
-methodReturnEvidenceRoutes : String ->
+methodReturnEvidenceRoutes : SiteCtx ->
+  String ->
   ScopeId ->
   List PrerequisiteEvidence ->
   List Route
-methodReturnEvidenceRoutes encl scope prerequisites =
-  map (methodReturnEvidenceRoute encl scope) prerequisites
+methodReturnEvidenceRoutes sx encl scope prerequisites =
+  map (methodReturnEvidenceRoute sx encl scope) prerequisites
 
-methodReturnEvidenceRoute : String -> ScopeId -> PrerequisiteEvidence -> Route
-methodReturnEvidenceRoute encl scope prerequisite =
+methodReturnEvidenceRoute : SiteCtx ->
+  String ->
+  ScopeId ->
+  PrerequisiteEvidence ->
+  Route
+methodReturnEvidenceRoute sx encl scope prerequisite =
   match prerequisite.prerequisiteArguments
     first :: more =>
       routeOfD
+        sx
         prerequisite.prerequisiteInterface
         encl
         scope
@@ -26903,7 +26913,8 @@ methodReturnEvidenceRoute encl scope prerequisite =
         (reqWalkStart ())
     [] => RNone
 
-resolveNumLitSite : OrdMap Unit ->
+resolveNumLitSite : SiteCtx ->
+  OrdMap Unit ->
   String ->
   Ref Route ->
   Mono ->
@@ -26913,9 +26924,10 @@ resolveNumLitSite : OrdMap Unit ->
   Option Loc ->
   ScopeId ->
   Unit
-resolveNumLitSite rpNames name tagRef resultMono fullMono predicate encl origin scope =
+resolveNumLitSite sx rpNames name tagRef resultMono fullMono predicate encl origin scope =
   let (route, routes) =
     entail
+      sx
       name
       resultMono
       encl
@@ -27353,18 +27365,19 @@ ieRowAdmittedBy ir (Some ifaces) = anyList (ieRowIfaceMatches ir) ifaces
 -- ⚠️ Do not re-derive the retired defence "GLOBAL by design — local ∪ imported ∪ prelude":
 -- `SHADOW-SEMANTICS.md:242-245` retires that phrase as a false synonym for graph-global, and
 -- `shadowKeyTableRef` was in fact the cumulative topological PREFIX on the Module arm.)
-resolveRLocalSites : List PendingEntry -> Unit
-resolveRLocalSites [] = goalSiteLoc := None
-resolveRLocalSites ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
-  goalSiteLoc := loc
+resolveRLocalSites : SiteCtx -> List PendingEntry -> Unit
+resolveRLocalSites _ [] = ()
+resolveRLocalSites sx ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
+  let sx = { sx | sxSite = loc }
   let _ = match kind
     SKRLocal sym forceLocal monos ifaces argVecs =>
       if forceLocal then
-        tagRef := RLocal sym (routesOfMonosTopV encl scope monos ifaces argVecs)
+        tagRef :=
+          RLocal sym (routesOfMonosTopV sx encl scope monos ifaces argVecs)
       else
-        resolveRLocalSite name tagRef am encl scope sym monos ifaces argVecs
+        resolveRLocalSite sx name tagRef am encl scope sym monos ifaces argVecs
     _ => ()
-  resolveRLocalSites rest
+  resolveRLocalSites sx rest
 
 -- C5: stamp RLocal on each recorded standalone-shadow arg-position site whose
 -- receiver mono now grounds to a concrete head tycon with NO impl of the method.
@@ -27373,7 +27386,8 @@ resolveRLocalSites ((PendingEntry name tagRef am encl kind loc scope _) :: rest)
 -- stamped the correct RKey<receiverHead> via resolveArgStamps.
 -- An ungrounded receiver (still a tyvar) → leave it.  The
 -- RLocal-vs-ordinary-dispatch split keys the genuine case off the receiver.
-resolveRLocalSite : String ->
+resolveRLocalSite : SiteCtx ->
+  String ->
   Ref Route ->
   Mono ->
   String ->
@@ -27383,7 +27397,7 @@ resolveRLocalSite : String ->
   List IfaceRef ->
   List (List Mono) ->
   Unit
-resolveRLocalSite name tagRef am encl scope sym monos ifaces argVecs =
+resolveRLocalSite sx name tagRef am encl scope sym monos ifaces argVecs =
   match headTyconMono am
     -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
     --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
@@ -27417,12 +27431,14 @@ resolveRLocalSite name tagRef am encl scope sym monos ifaces argVecs =
         && ieImplExistsForHead perRun.value.bodyImplEnvRef.value name tag then
         ()
       else
-        tagRef := RLocal sym (routesOfMonosTopV encl scope monos ifaces argVecs)
+        tagRef :=
+          RLocal sym (routesOfMonosTopV sx encl scope monos ifaces argVecs)
     -- An UNGROUNDED definer-shadow receiver keeps the old default (RLocal → standalone);
     -- other (importer) ungrounded sites stay untouched (deferred/polymorphic).
     None =>
       if omHasKey name perRun.value.definerShadowNamesRef.value then
-        tagRef := RLocal sym (routesOfMonosTopV encl scope monos ifaces argVecs)
+        tagRef :=
+          RLocal sym (routesOfMonosTopV sx encl scope monos ifaces argVecs)
 
 -- if [m] normalizes to a registered constraint variable, the dict parameter name
 -- a method at that type reads.  A return-position method at a HIGHER-KINDED
@@ -27830,15 +27846,16 @@ resolveArithSite dref m = match !dref
 -- (stampOpRouteVal — its builtin-head guard and Ord-style innerDefaultMethod reduction).
 -- #156 S3c: resolveOpSite is now a thin adapter over `entail` (EKOp kind); the inst
 -- route is stampOpRouteVal, a pure Route-returning extraction of the old stampOpRoute.
-resolveOpSites : Bool -> List PendingEntry -> Unit
-resolveOpSites _ [] = goalSiteLoc := None
-resolveOpSites isBinop ((PendingEntry method tagRef operandMono encl kind loc scope _) :: rest) =
-  goalSiteLoc := loc
+resolveOpSites : SiteCtx -> Bool -> List PendingEntry -> Unit
+resolveOpSites _ _ [] = ()
+resolveOpSites sx isBinop ((PendingEntry method tagRef operandMono encl kind loc scope _) :: rest) =
+  let sx = { sx | sxSite = loc }
   let _ = match kind
     SKOp inImpl =>
-      resolveOpSite isBinop method tagRef operandMono inImpl encl scope
+      resolveOpSite sx isBinop method tagRef operandMono inImpl encl scope
     SKPredicateOp inImpl predicate =>
       resolvePredicateOpSite
+        sx
         isBinop
         method
         tagRef
@@ -27848,7 +27865,7 @@ resolveOpSites isBinop ((PendingEntry method tagRef operandMono encl kind loc sc
         encl
         scope
     _ => ()
-  resolveOpSites isBinop rest
+  resolveOpSites sx isBinop rest
 
 -- G4: an `==`/`<`/… INSIDE an impl body ([inImpl]) whose operand is the enclosing
 -- impl's abstract `requires`-constrained tyvar routes RDict that impl's element dict
@@ -27932,7 +27949,8 @@ opDictVarOf request False _ m _ encl useScope =
 -- implRef exists); fallback = RNone.  Op-site route cells are minted `RNone`-seeded
 -- (`mintOpSite`), and the mark pass mints each site once, so the two do-nothing arms
 -- (builtin-inst, fallback) both yield RNone and the RNone guard preserves that seed.
-resolveOpSite : Bool ->
+resolveOpSite : SiteCtx ->
+  Bool ->
   String ->
   Ref Route ->
   Mono ->
@@ -27940,12 +27958,13 @@ resolveOpSite : Bool ->
   String ->
   ScopeId ->
   Unit
-resolveOpSite isBinop method tagRef operandMono inImpl encl scope =
-  match fst (entail method operandMono encl scope (EKOp isBinop inImpl))
+resolveOpSite sx isBinop method tagRef operandMono inImpl encl scope =
+  match fst (entail sx method operandMono encl scope (EKOp isBinop inImpl))
     RNone => ()
     route => tagRef := route
 
-resolvePredicateOpSite : Bool ->
+resolvePredicateOpSite : SiteCtx ->
+  Bool ->
   String ->
   Ref Route ->
   Mono ->
@@ -27954,9 +27973,10 @@ resolvePredicateOpSite : Bool ->
   String ->
   ScopeId ->
   Unit
-resolvePredicateOpSite isBinop method tagRef operandMono inImpl predicate encl scope =
+resolvePredicateOpSite sx isBinop method tagRef operandMono inImpl predicate encl scope =
   match (fst
     (entail
+      sx
       method
       operandMono
       encl
@@ -28001,8 +28021,15 @@ resolvePredicateOpSite isBinop method tagRef operandMono inImpl predicate encl s
 -- Else a concrete non-builtin head → `RKey key reqs` with the element `requires` dicts
 -- PACKED into the primary route's reqs (binopRouteSplit later rips them onto the
 -- EMethodAt impl-dict ref).  Byte-identical to the pre-S3c stampOpRoute stamper.
-stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
-stampOpRouteVal isBinop encl useScope method operandMono tag =
+stampOpRouteVal : SiteCtx ->
+  Bool ->
+  String ->
+  ScopeId ->
+  String ->
+  Mono ->
+  String ->
+  Route
+stampOpRouteVal sx isBinop encl useScope method operandMono tag =
   let isBuiltin =
     if isBinop then binopBuiltinHead method tag else binopPrimitiveHead tag
   -- #2356: a builtin head is not a dispatch, but it is not nothing either.  A
@@ -28035,7 +28062,7 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
     -- singleton — entryHeadMatches then takes its arg-0 fallback, byte-identical
     -- to the pre-#609 scan.  Every operator interface (Eq/Ord/Num) is single-param
     -- anyway, where the singleton IS the full vector.
-    let (siteKey, selected) = keyForSite method [operandMono]
+    let (siteKey, selected) = keyForSite sx method [operandMono]
     -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`.
     -- The head projection is `headTyconMono operandMono`, i.e. the `HeadKey` whose
     -- `headKeyName` IS the `tag` this arm was passed (`entail` derives both from the
@@ -28055,6 +28082,7 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
       else
         method
     let reqs = argImplDictRoutesForEncl
+      sx
       encl
       useScope
       dictMethod
@@ -28067,7 +28095,7 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
         RKey
           key
           reqs
-          (selectedCallSupers method selected encl useScope [operandMono])
+          (selectedCallSupers sx method selected encl useScope [operandMono])
       None => RNone
 
 -- Exact Num arithmetic uses the predicate selected by the producer for both the
@@ -28075,14 +28103,15 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
 -- Int/Float and unsigned U8/U16/U32/U64 heads bypass method dispatch; a user Num
 -- impl for any other head, including String/Bool/Char, is selected through the
 -- exact interface identity.
-stampPredicateOpRouteVal : String ->
+stampPredicateOpRouteVal : SiteCtx ->
+  String ->
   ScopeId ->
   String ->
   Mono ->
   String ->
   ClassPredicate ->
   Route
-stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
+stampPredicateOpRouteVal sx encl useScope method operandMono tag predicate =
   if tag == "Int" then
     let route = RNone
     let _ =
@@ -28090,7 +28119,7 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
         NPTArithmetic
         predicate
         useScope
-        !goalSiteLoc
+        sx.sxSite
         None
         (Some route)
         []
@@ -28105,7 +28134,7 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
         NPTArithmetic
         predicate
         useScope
-        !goalSiteLoc
+        sx.sxSite
         None
         (Some route)
         []
@@ -28113,21 +28142,21 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
   else
     let env = perRun.value.bodyImplEnvRef.value
     let goals = predicate.predicateArguments
-    match ieSelectRowByIface env predicate.predicateInterface goals
+    match ieSelectRowByIface sx env predicate.predicateInterface goals
       Some (row@(ImplRow _ _ selectedIface _ _ _)) =>
-        let reqs = implDictRoutesForRow encl useScope goals row
+        let reqs = implDictRoutesForRow sx encl useScope goals row
         let key = rowRouteKey row
         let route =
           RKey
             key
             reqs
-            (selectedCallSupers method (Some row) encl useScope goals)
+            (selectedCallSupers sx method (Some row) encl useScope goals)
         let _ =
           noteNumericPredicateTrace
             NPTArithmetic
             predicate
             useScope
-            !goalSiteLoc
+            sx.sxSite
             (Some selectedIface)
             (Some (RKey key [] []))
             reqs
@@ -28139,7 +28168,7 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
             NPTArithmetic
             predicate
             useScope
-            !goalSiteLoc
+            sx.sxSite
             None
             (Some route)
             []
@@ -29052,7 +29081,7 @@ checkSuperInstanceContext : String ->
   Unit
 checkSuperInstanceContext subject roots headIds givens loc derived sup supArgs covered
   | anyList (givenAnswers sup supArgs) givens = ()
-  | otherwise = match rigidHeadInstanceContext headIds sup supArgs
+  | otherwise = match rigidHeadInstanceContext noSite headIds sup supArgs
     None =>
       if not (covered ()) then
         reportMissingSuperImpl subject roots loc derived sup supArgs
@@ -29099,11 +29128,12 @@ reportMissingSuperImpl subject roots loc derived sup supArgs =
 
 -- The context of the instance [iface] [args] selects with the head variables
 -- [headIds] held rigid (`sigRigidBindings`), as goals over those variables again.
-rigidHeadInstanceContext : OrdMap Unit ->
+rigidHeadInstanceContext : SiteCtx ->
+  OrdMap Unit ->
   IfaceRef ->
   List Mono ->
   Option (List (IfaceRef, List Mono))
-rigidHeadInstanceContext headIds iface args =
+rigidHeadInstanceContext sx headIds iface args =
   let cells = sigCellsOf headIds (flatMap monoVarCells args)
   let toRigid = sigRigidBindings headIds cells
   map
@@ -29113,6 +29143,7 @@ rigidHeadInstanceContext headIds iface args =
           (ri, rargs) => (ri, map (unrigidSig cells) rargs))
         (snd m))
     (findMatchingImplReqsU
+      sx
       perRun.value.residualUnivRef.value
       iface
       (map (substMono toRigid [] []) args))
@@ -29138,7 +29169,7 @@ superContextLeaves walk headIds givens loc iface args
       next
       iface
       args
-      (_ => match rigidHeadInstanceContext headIds iface args
+      (_ => match rigidHeadInstanceContext noSite headIds iface args
         None => [(iface, args)]
         Some ctx =>
           flatMap
@@ -30780,10 +30811,10 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- diagnostic pushed from here reaches `run` and `build` but never `check`.
 -- The site's route word and the row it names, selected once: a caller that also
 -- needs the row (`selectedCallSupers`) must not select a second time.
-keyForSite : String -> List Mono -> (Option String, Option ImplRow)
-keyForSite name goals =
+keyForSite : SiteCtx -> String -> List Mono -> (Option String, Option ImplRow)
+keyForSite sx name goals =
   let env = perRun.value.bodyImplEnvRef.value
-  let selected = ieSelectRowByMethod env name goals
+  let selected = ieSelectRowByMethod sx env name goals
   (map rowRouteKey selected, selected)
 
 -- The dictionary word of a selected instance row: its canonical key, the identity
@@ -30883,13 +30914,13 @@ mergeByDeclIdx (x :: xs) (y :: ys)
 -- variables, so no instantiation can leave fewer than two incomparable matches:
 -- an open goal that reaches this arm is as ambiguous at quiescence as it is now
 -- (§6.2 T4, "rejected as ambiguous — never committed to a default instance").
-pickMostSpecificEntry : List Mono -> List KeyEntry -> Option KeyEntry
-pickMostSpecificEntry _ [] = None
-pickMostSpecificEntry goals (e :: rest) =
+pickMostSpecificEntry : SiteCtx -> List Mono -> List KeyEntry -> Option KeyEntry
+pickMostSpecificEntry _ _ [] = None
+pickMostSpecificEntry sx goals (e :: rest) =
   match findMostSpecificEntry (e :: rest) (e :: rest)
     Some best => Some best
     None =>
-      let _ = reportAmbiguousOverlap goals (e :: rest)
+      let _ = reportAmbiguousOverlap sx goals (e :: rest)
       Some e
 
 -- #1155: the goal-site `T-AMBIGUOUS-INSTANCE`, with the two gates that keep it from
@@ -30964,14 +30995,14 @@ pickMostSpecificEntry goals (e :: rest) =
 -- error arm prints `filter isDiagError diags` and returns, so on any file with an
 -- error the warnings are dropped — a pre-existing suppression this change neither
 -- causes nor repairs.  Do not restate the improvement as general.
-reportAmbiguousOverlap : List Mono -> List KeyEntry -> Unit
-reportAmbiguousOverlap goals cands = match candsOneIface cands
+reportAmbiguousOverlap : SiteCtx -> List Mono -> List KeyEntry -> Unit
+reportAmbiguousOverlap sx goals cands = match candsOneIface cands
   None => ()
-  Some iface => reportOverlapForIface iface goals cands
+  Some iface => reportOverlapForIface sx iface goals cands
 
-reportOverlapForIface : String -> List Mono -> List KeyEntry -> Unit
-reportOverlapForIface iface goals cands =
-  pushAmbiguityAt True !goalSiteLoc (ambiguousOverlapMsg iface goals cands)
+reportOverlapForIface : SiteCtx -> String -> List Mono -> List KeyEntry -> Unit
+reportOverlapForIface sx iface goals cands =
+  pushAmbiguityAt True sx.sxSite (ambiguousOverlapMsg iface goals cands)
 
 -- §6.2 T3's "closed": every variable of the goal is *"either quantified by the scheme
 -- just produced or already ground"* — the ground goals PLUS the rigid-variable ones.
@@ -31417,12 +31448,16 @@ ieCandidatesForMethod env hk name admitted goals =
 --
 -- A goal with no head tycon keys no bucket and selects nothing — the `None => None` arm
 -- below, which is what `matchingEntries`' `None => []` arm did before B-2.1-d.
-ieSelectRowByIface : ImplEnv -> IfaceRef -> List Mono -> Option ImplRow
-ieSelectRowByIface env iface goals = match goalHeadCon goals
+ieSelectRowByIface : SiteCtx ->
+  ImplEnv ->
+  IfaceRef ->
+  List Mono ->
+  Option ImplRow
+ieSelectRowByIface sx env iface goals = match goalHeadCon goals
   Some hk =>
     ieRowOfEntry
       env
-      (pickMostSpecificEntry goals (ieCandidatesForIface env hk iface goals))
+      (pickMostSpecificEntry sx goals (ieCandidatesForIface env hk iface goals))
   None => None
 
 -- 🚨 ENTRY POINT 2 of 3 — the METHOD-keyed row selector, read by leg 3's two
@@ -31441,12 +31476,17 @@ ieSelectRowByIface env iface goals = match goalHeadCon goals
 -- `ieImplExistsForHead` hoists its own ([T-PERF-HUNT]: Medaka is strict, so an in-loop
 -- projection is rebuilt once per row).  It is inside the `Some hk` arm because a goal
 -- with no head tycon selects nothing and must not pay for the lookup.
-ieSelectRowByMethod : ImplEnv -> String -> List Mono -> Option ImplRow
-ieSelectRowByMethod env name goals = match goalHeadCon goals
+ieSelectRowByMethod : SiteCtx ->
+  ImplEnv ->
+  String ->
+  List Mono ->
+  Option ImplRow
+ieSelectRowByMethod sx env name goals = match goalHeadCon goals
   Some hk =>
     ieRowOfEntry
       env
       (pickMostSpecificEntry
+        sx
         goals
         -- #1386: interface from the OCCURRENCE spelling, method-set membership from
         -- its ORIGIN — both projected off the one name, inside the one query.
@@ -31593,11 +31633,17 @@ headTyconTy t = match headTyNode t
 
 -- Exact prerequisite routing consumes the complete predicate vector and the row
 -- already selected for the route word.  The checker uses the same row matcher.
-implDictRoutesForRow : String -> ScopeId -> List Mono -> ImplRow -> List Route
-implDictRoutesForRow encl useScope goals row =
+implDictRoutesForRow : SiteCtx ->
+  String ->
+  ScopeId ->
+  List Mono ->
+  ImplRow ->
+  List Route
+implDictRoutesForRow sx encl useScope goals row =
   match selectedRowReqMatch goals row
     Some (subst, reqs) =>
       argImplReqRoutes
+        sx
         encl
         useScope
         subst
@@ -31607,13 +31653,19 @@ implDictRoutesForRow encl useScope goals row =
 
 -- Missing predicate-vector metadata keeps the scalar result-head match used by
 -- the legacy return path.  Exact callers use selectedRowReqMatch instead.
-legacyReturnReqRoutesForRow : String -> ScopeId -> Mono -> ImplRow -> List Route
-legacyReturnReqRoutesForRow encl useScope resultMono row =
+legacyReturnReqRoutesForRow : SiteCtx ->
+  String ->
+  ScopeId ->
+  Mono ->
+  ImplRow ->
+  List Route
+legacyReturnReqRoutesForRow sx encl useScope resultMono row =
   match ieRowHeadTriple (Some row)
     Some (headTy, implTys, reqs) =>
       match headSubstWithParams headTy implTys resultMono [resultMono]
         Some subst =>
           argImplReqRoutes
+            sx
             encl
             useScope
             subst
@@ -31836,19 +31888,20 @@ matchStep _ _ = MFail
 -- fill each constrained-fn call site's routes: one route per constraint mono.  A
 -- mono pinned to a concrete head → RKey; still a constraint variable (a nested
 -- constrained call) → RDict; otherwise RNone.
-resolveDictApps : List PendingDictApp -> Unit
-resolveDictApps [] = goalSiteLoc := None
-resolveDictApps (app :: rest) =
-  goalSiteLoc := app.pdaLoc
+resolveDictApps : SiteCtx -> List PendingDictApp -> Unit
+resolveDictApps _ [] = ()
+resolveDictApps sx (app :: rest) =
+  let sx = { sx | sxSite = app.pdaLoc }
   let routes =
     routesOfMonosTopV
+      sx
       app.pdaEncl
       app.pdaScope
       app.pdaMonos
       app.pdaIfaces
       app.pdaArgVecs
   app.pdaRoutesRef := routes
-  resolveDictApps rest
+  resolveDictApps sx rest
 
 -- 🚨 THE LADDER'S SELECTOR-REACHABILITY PROPERTY, inscribed so the next refactor
 -- cannot violate it silently.  Every impl-row SELECTOR call reachable from `entail`
@@ -31913,44 +31966,54 @@ resolveDictApps (app :: rest) =
 -- `Option` — same reason `headTyconNameTy`/`headTyconNameMono` exist at all
 -- (`compiler/AGENTS.md`): Medaka is strict, so the combinator spelling would
 -- allocate a second `Option` on every entailment to throw it away.
-entail : String ->
+entail : SiteCtx ->
+  String ->
   Mono ->
   String ->
   ScopeId ->
   EntailKind ->
   (Route, List Route)
-entail name m encl useScope kind = match entailAssum m encl name useScope kind
-  Some answer =>
-    let _ = noteAssumption useScope answer
-    let result = (
-      assumAnswerRoute answer (goalIfaceOfKind name kind) useScope (dname =>
-        entailAssumRoute dname kind),
-      [],
-    )
-    let _ = noteNumericEntailment kind useScope None (fst result) (snd result)
-    result
-  None => match headTyconMono m
-    Some hk => entailInst name m encl useScope (headKeyTag hk) kind
-    None => match entailRigidLead m encl useScope kind
-      Some result => result
-      None => match entailDetermined name encl useScope kind
+entail sx name m encl useScope kind =
+  match entailAssum m encl name useScope kind
+    Some answer =>
+      let _ = noteAssumption useScope answer
+      let result = (
+        assumAnswerRoute answer (goalIfaceOfKind name kind) useScope (dname =>
+          entailAssumRoute dname kind),
+        [],
+      )
+      let _ =
+        noteNumericEntailment sx kind useScope None (fst result) (snd result)
+      result
+    None => match headTyconMono m
+      Some hk => entailInst sx name m encl useScope (headKeyTag hk) kind
+      None => match entailRigidLead sx m encl useScope kind
         Some result => result
-        None =>
-          let result = (entailFallback encl useScope m kind, [])
-          let _ =
-            noteNumericEntailment kind useScope None (fst result) (snd result)
-          result
+        None => match entailDetermined sx name encl useScope kind
+          Some result => result
+          None =>
+            let result = (entailFallback sx encl useScope m kind, [])
+            let _ =
+              noteNumericEntailment
+                sx
+                kind
+                useScope
+                None
+                (fst result)
+                (snd result)
+            result
 
 -- An argument-position occurrence whose goal a boundary determined by its one
 -- unifying instance (DICT-SEMANTICS §3 "Determination by the one unifying
 -- instance") dispatches through that instance, though its lead position is still
 -- a variable that selection by head cannot read.
-entailDetermined : String ->
+entailDetermined : SiteCtx ->
+  String ->
   String ->
   ScopeId ->
   EntailKind ->
   Option (Route, List Route)
-entailDetermined name encl useScope (EKArg fullMono omitted) = match (
+entailDetermined sx name encl useScope (EKArg fullMono omitted) = match (
   occurrenceParamMonos name fullMono omitted,
   methodIfaceHere name,
 )
@@ -31960,12 +32023,12 @@ entailDetermined name encl useScope (EKArg fullMono omitted) = match (
         RKey
           (rowRouteKey row)
           []
-          (selectedCallSupers name (Some row) encl useScope goals),
-        implDictRoutesForRow encl useScope goals row,
+          (selectedCallSupers sx name (Some row) encl useScope goals),
+        implDictRoutesForRow sx encl useScope goals row,
       ))
       (determinedGoalInstance iface goals)
   _ => None
-entailDetermined _ _ _ _ = None
+entailDetermined _ _ _ _ _ = None
 
 -- `inst` for a nested/top goal whose lead position is a variable, when every variable
 -- of the vector is one a closed binder declared (DICT-SEMANTICS §6.1 points 2-3, §3
@@ -31976,12 +32039,13 @@ entailDetermined _ _ _ _ = None
 -- the headless bucket is the whole candidate set.  The rung lives here rather than in
 -- `ieSelectRowByIface`'s headless arm because rigidity is a property of the goal's
 -- scope, which that selector's other callers do not share.
-entailRigidLead : Mono ->
+entailRigidLead : SiteCtx ->
+  Mono ->
   String ->
   ScopeId ->
   EntailKind ->
   Option (Route, List Route)
-entailRigidLead m encl useScope (EKNestedTop iface _ walk rest) =
+entailRigidLead sx m encl useScope (EKNestedTop iface _ walk rest) =
   let goals = m :: rest
   let ids = flatMap monoUnboundIds goals
   let declared = perRun.value.declaredSigVarIds.value
@@ -31993,20 +32057,22 @@ entailRigidLead m encl useScope (EKNestedTop iface _ walk rest) =
     let env = perRun.value.bodyImplEnvRef.value
     let picked =
       pickMostSpecificEntry
+        sx
         goals
         (ieEntriesForIface (ieHeadRows None env) iface goals)
     map
-      (row => (nestedRowRoute encl useScope m goals walk row, []))
+      (row => (nestedRowRoute sx encl useScope m goals walk row, []))
       (ieRowOfEntry env picked)
-entailRigidLead _ _ _ _ = None
+entailRigidLead _ _ _ _ _ = None
 
-noteNumericEntailment : EntailKind ->
+noteNumericEntailment : SiteCtx ->
+  EntailKind ->
   ScopeId ->
   Option IfaceRef ->
   Route ->
   List Route ->
   Unit
-noteNumericEntailment (EKNumReturn predicate _ _ origin) scope selected route prereqs =
+noteNumericEntailment _ (EKNumReturn predicate _ _ origin) scope selected route prereqs =
   noteNumericPredicateTrace
     NPTReturn
     predicate
@@ -32015,16 +32081,16 @@ noteNumericEntailment (EKNumReturn predicate _ _ origin) scope selected route pr
     selected
     (Some route)
     prereqs
-noteNumericEntailment (EKPredicateOp _ _ predicate) scope selected route prereqs =
+noteNumericEntailment sx (EKPredicateOp _ _ predicate) scope selected route prereqs =
   noteNumericPredicateTrace
     NPTArithmetic
     predicate
     scope
-    !goalSiteLoc
+    sx.sxSite
     selected
     (Some route)
     prereqs
-noteNumericEntailment _ _ _ _ _ = ()
+noteNumericEntailment _ _ _ _ _ _ = ()
 
 -- #412: `assum`, both halves.  DICT-SEMANTICS §3 pins the precedence — `assum`/`super`
 -- takes precedence over `inst`; a predicate already in scope is USED, and `inst` fires only
@@ -32135,8 +32201,8 @@ entailAssumRoute dname (EKArg _ _) = RDict dname
 entailAssumRoute dname (EKOp _ _) = RDict dname
 entailAssumRoute dname (EKPredicateOp _ _ _) = RDict dname
 
-selectReturnRow : ImplEnv -> String -> List Mono -> Option ImplRow
-selectReturnRow env name goals = match ieSelectRowByMethod env name goals
+selectReturnRow : SiteCtx -> ImplEnv -> String -> List Mono -> Option ImplRow
+selectReturnRow sx env name goals = match ieSelectRowByMethod sx env name goals
   Some row => Some row
   None => match methodIfaceHere name
     Some iface => determinedGoalInstance iface goals
@@ -32167,7 +32233,8 @@ determinedGoalInstance iface (first :: rest) = match normalize first
 -- EKArg → same canonical RKey primary as EKReturn but element routes keyed on the
 -- (default-reduced) method via argImplDictRoutesForEncl; EKOp → stampOpRouteVal (builtin
 -- head → RNone do-nothing, else RKey with reqs packed in, no separate element routes).
-entailInst : String ->
+entailInst : SiteCtx ->
+  String ->
   Mono ->
   String ->
   ScopeId ->
@@ -32177,52 +32244,52 @@ entailInst : String ->
 -- The exact arm selects on the interface's full instantiated parameter vector and
 -- uses that same row and vector for both the route word and prerequisites.  A method
 -- with no registered vector retains the legacy scalar result-head match.
-entailInst name m encl useScope tag (EKReturn fullMono _) =
+entailInst sx name m encl useScope tag (EKReturn fullMono _) =
   let env = perRun.value.bodyImplEnvRef.value
   match ifaceParamMonos name fullMono
-    Some goals => match selectReturnRow env name goals
+    Some goals => match selectReturnRow sx env name goals
       Some row =>
         let routeKey = rowRouteKey row
-        let routes = implDictRoutesForRow encl useScope goals row
+        let routes = implDictRoutesForRow sx encl useScope goals row
         (
           RKey
             routeKey
             []
-            (selectedCallSupers name (Some row) encl useScope goals),
+            (selectedCallSupers sx name (Some row) encl useScope goals),
           routes,
         )
       -- No row: the goal has no instance, and the site keeps no route.
       None => (RNone, [])
     -- A method without predicate-vector metadata retains the scalar result-head
     -- selection and substitution used by the compatibility path.
-    None => match ieSelectRowByMethod env name [m]
+    None => match ieSelectRowByMethod sx env name [m]
       Some row =>
         let routeKey = rowRouteKey row
-        let routes = legacyReturnReqRoutesForRow encl useScope m row
+        let routes = legacyReturnReqRoutesForRow sx encl useScope m row
         (
           RKey
             routeKey
             []
-            (selectedCallSupers name (Some row) encl useScope [m]),
+            (selectedCallSupers sx name (Some row) encl useScope [m]),
           routes,
         )
       -- No vector and no row: the site keeps no route.  An occurrence of a spelling
       -- with two or more admitted declarations never reaches here: its route is
       -- `resolveAdmittedSite`'s, and its verdict `checkAdmittedOccObl`'s.
       None => (RNone, [])
-entailInst name m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
+entailInst sx name m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
   let goals = predicate.predicateArguments
   let env = perRun.value.bodyImplEnvRef.value
-  match ieSelectRowByIface env predicate.predicateInterface goals
+  match ieSelectRowByIface sx env predicate.predicateInterface goals
     Some (row@(ImplRow _ _ selectedIface _ _ _)) =>
-      let sups = selectedCallSupers name (Some row) encl useScope goals
+      let sups = selectedCallSupers sx name (Some row) encl useScope goals
       let route = RKey (rowRouteKey row) [] sups
-      let routes = implDictRoutesForRow encl useScope goals row
+      let routes = implDictRoutesForRow sx encl useScope goals row
       let _ =
-        noteNumericEntailment kind useScope (Some selectedIface) route routes
+        noteNumericEntailment sx kind useScope (Some selectedIface) route routes
       (route, routes)
     None =>
-      let _ = noteNumericEntailment kind useScope None RNone []
+      let _ = noteNumericEntailment sx kind useScope None RNone []
       (RNone, [])
 -- The primary route is the canonical key of the MOST-SPECIFIC impl (iface-keyed),
 -- and every nested-`requires`/super-projection goal funnels through here, with
@@ -32237,14 +32304,14 @@ entailInst name m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
 -- (funConstraintArgsRef). Recording it beside `funConstraintsRef`, not inside it,
 -- keeps per-tyvar dict slots — and hence emitted dict arity — exactly as they were.
 -- #607 punch-list item 3 (dict slot = predicate, which would move arity) stays open.
-entailInst _ m encl useScope _ (EKNestedTop iface _ walk rest) =
+entailInst sx _ m encl useScope _ (EKNestedTop iface _ walk rest) =
   -- Select the row once and hand that same value to both the route-word and
   -- prerequisite projections.  This makes §6 C2 structural: the dictionary names
   -- the same impl whose context it discharges.
   let goals = m :: rest
   let env = perRun.value.bodyImplEnvRef.value
-  match ieSelectRowByIface env iface goals
-    Some row => (nestedRowRoute encl useScope m goals walk row, [])
+  match ieSelectRowByIface sx env iface goals
+    Some row => (nestedRowRoute sx encl useScope m goals walk row, [])
     -- No instance answers the vector (a call of `f : K x y => x -> String` leaves
     -- the constraint-only `y` undetermined): the dictionary keeps no route, and the
     -- evidence judgment rejects the call (`compiler/types/evidence_complete.mdk`).
@@ -32257,9 +32324,9 @@ entailInst _ m encl useScope _ (EKNestedTop iface _ walk rest) =
 -- the SAME impl, and the first cut of this fix computed the vector here and then
 -- handed the scalar `m` to argImplDictRoutesForEncl, so the two arms could select
 -- differently at n≥2.  Sharing one binding makes them agree by construction.
-entailInst name m encl useScope tag (EKArg fullMono omitted) =
+entailInst sx name m encl useScope tag (EKArg fullMono omitted) =
   let goals = optionOr [m] (occurrenceParamMonos name fullMono omitted)
-  let (siteKey, selected) = keyForSite name goals
+  let (siteKey, selected) = keyForSite sx name goals
   -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`,
   -- which carries the measured repro.  The head is `headTyconMono m`, the `HeadKey`
   -- whose name IS this arm's `tag` (`entail` derives `tag` from the same `m` via
@@ -32286,13 +32353,13 @@ entailInst name m encl useScope tag (EKArg fullMono omitted) =
   -- restamped `RLocal` (`resolveRLocalSites`).
   let word = match siteKey
     Some routeKey =>
-      RKey routeKey [] (selectedCallSupers name selected encl useScope goals)
+      RKey routeKey [] (selectedCallSupers sx name selected encl useScope goals)
     None => RNone
-  (word, argImplDictRoutesForEncl encl useScope dictName tag subject goals)
-entailInst name m encl useScope tag (EKOp isBinop _) =
-  (stampOpRouteVal isBinop encl useScope name m tag, [])
-entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
-  (stampPredicateOpRouteVal encl useScope name m tag predicate, [])
+  (word, argImplDictRoutesForEncl sx encl useScope dictName tag subject goals)
+entailInst sx name m encl useScope tag (EKOp isBinop _) =
+  (stampOpRouteVal sx isBinop encl useScope name m tag, [])
+entailInst sx name m encl useScope tag (EKPredicateOp _ _ predicate) =
+  (stampPredicateOpRouteVal sx encl useScope name m tag predicate, [])
 
 -- A dictionary's super segment at the goal vector [goals]: one route per DIRECT
 -- super of [iface], in declaration order, each solved at that same goal by the whole
@@ -32300,40 +32367,45 @@ entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
 -- before `inst`).  [walk] is the walk that reached [goals], before [goals] itself was
 -- entered: a super goal is entered beside it, not below it, and the declared super graph
 -- is acyclic (W1), so it cannot recur on its own.
-superRoutesAt : IfaceRef ->
+superRoutesAt : SiteCtx ->
+  IfaceRef ->
   String ->
   ScopeId ->
   List Mono ->
   ReqWalk ->
   List Route
-superRoutesAt iface encl useScope goals walk =
-  map (superRouteAt encl useScope walk) (directSuperGoals iface goals)
+superRoutesAt sx iface encl useScope goals walk =
+  map (superRouteAt sx encl useScope walk) (directSuperGoals iface goals)
 
-superRouteAt : String ->
+superRouteAt : SiteCtx ->
+  String ->
   ScopeId ->
   ReqWalk ->
   (IfaceRef, Option (List Mono)) ->
   Route
-superRouteAt encl useScope walk (superIface, superArgs) = match superArgs
+superRouteAt sx encl useScope walk (superIface, superArgs) = match superArgs
   Some (g0 :: gs) =>
-    noteInnerRoute (routeOfD superIface encl useScope CommitSuper g0 gs walk)
-  _ => noteInnerRoute RNone
+    noteInnerRoute
+      sx
+      (routeOfD sx superIface encl useScope CommitSuper g0 gs walk)
+  _ => noteInnerRoute sx RNone
 
 -- The dictionary of a goal's selected instance [row]: the row's word, its `requires`
 -- answered at [goals], and its own supers.  The word and the context are projections
 -- of one row, so the dictionary names the impl whose context it discharges (§6 C2).
-nestedRowRoute : String ->
+nestedRowRoute : SiteCtx ->
+  String ->
   ScopeId ->
   Mono ->
   List Mono ->
   ReqWalk ->
   ImplRow ->
   Route
-nestedRowRoute encl useScope m goals walk (row@(ImplRow _ _ selectedIface _ _ _)) =
+nestedRowRoute sx encl useScope m goals walk (row@(ImplRow _ _ selectedIface _ _ _)) =
   RKey
     (rowRouteKey row)
-    (argImplRequiresRoutesForRow encl useScope m goals walk row)
-    (superRoutesAt selectedIface encl useScope goals walk)
+    (argImplRequiresRoutesForRow sx encl useScope m goals walk row)
+    (superRoutesAt sx selectedIface encl useScope goals walk)
 
 -- A super goal no dictionary in scope answers and no head constructor selects for: a
 -- goal over variables alone.  It is built from the instance the checker's super
@@ -32341,17 +32413,18 @@ nestedRowRoute encl useScope m goals walk (row@(ImplRow _ _ selectedIface _ _ _)
 -- re-selected at the value: a variable a binder declared is rigid, so the instance is
 -- the min⊑ of those matching the goal (DICT-SEMANTICS §6.1.3); a variable the binder
 -- generalized reaches it here only when that selection is stable.
-committedSuperRoute : String ->
+committedSuperRoute : SiteCtx ->
+  String ->
   ScopeId ->
   IfaceRef ->
   ReqWalk ->
   List Mono ->
   Route
-committedSuperRoute _ _ _ _ [] = RNone
-committedSuperRoute encl useScope iface walk (goals@(m :: _)) =
+committedSuperRoute _ _ _ _ _ [] = RNone
+committedSuperRoute sx encl useScope iface walk (goals@(m :: _)) =
   match stableGoalReach [] iface goals
     ReachOne row if rowHeadMatches goals row =>
-      nestedRowRoute encl useScope m goals walk row
+      nestedRowRoute sx encl useScope m goals walk row
     _ => RNone
 
 -- The super segment of a method-call primary `RKey`.  A call whose selected instance
@@ -32359,42 +32432,50 @@ committedSuperRoute encl useScope iface walk (goals@(m :: _)) =
 -- inherits [name]'s default hands that default the instance's dictionary itself (the
 -- default's receiver), so the route carries the dictionary's supers, solved at the
 -- goal like any dictionary's.
-selectedCallSupers : String ->
+selectedCallSupers : SiteCtx ->
+  String ->
   Option ImplRow ->
   String ->
   ScopeId ->
   List Mono ->
   List Route
-selectedCallSupers name (Some (ImplRow _ _ iface _ _ supplied)) encl useScope goals =
+selectedCallSupers sx name (Some (ImplRow _ _ iface _ _ supplied)) encl useScope goals =
   if contains name supplied then
     []
   else
-    superRoutesAt iface encl useScope goals (reqWalkStart ())
-selectedCallSupers _ None _ _ _ = []
+    superRoutesAt sx iface encl useScope goals (reqWalkStart ())
+selectedCallSupers _ _ None _ _ _ = []
 
-entailFallback : String -> ScopeId -> Mono -> EntailKind -> Route
-entailFallback _ _ _ (EKReturn _ _) = RNone
-entailFallback _ _ _ (EKNumReturn _ _ _ _) = RNone
-entailFallback encl scope m (EKNestedTop iface policy walk rest) =
-  undeterminedRoute encl scope iface policy walk (m :: rest)
-entailFallback _ _ _ (EKArg _ _) = RNone
-entailFallback _ _ _ (EKOp _ _) = RNone
-entailFallback _ _ _ (EKPredicateOp _ _ _) = RNone
+entailFallback : SiteCtx -> String -> ScopeId -> Mono -> EntailKind -> Route
+entailFallback _ _ _ _ (EKReturn _ _) = RNone
+entailFallback _ _ _ _ (EKNumReturn _ _ _ _) = RNone
+entailFallback sx encl scope m (EKNestedTop iface policy walk rest) =
+  undeterminedRoute sx encl scope iface policy walk (m :: rest)
+entailFallback _ _ _ _ (EKArg _ _) = RNone
+entailFallback _ _ _ _ (EKOp _ _) = RNone
+entailFallback _ _ _ _ (EKPredicateOp _ _ _) = RNone
 
 -- ONE constrained-call-arg route resolver — collapses routeOfMono (encl="",
 -- KeepNone) / routeOfMonoEncl (KeepNone) / routeOfMonoTop (encl="", CountImpls).
 -- Only a non-empty [encl] can supply an active dict, and only from that owner's
 -- constraint-var slots.  [policy] decides the undetermined arm (see Undetermined).
-routeOf : IfaceRef -> String -> ScopeId -> Undetermined -> Mono -> Route
-routeOf iface encl useScope policy m =
-  routeOfD iface encl useScope policy m [] (reqWalkStart ())
+routeOf : SiteCtx ->
+  IfaceRef ->
+  String ->
+  ScopeId ->
+  Undetermined ->
+  Mono ->
+  Route
+routeOf sx iface encl useScope policy m =
+  routeOfD sx iface encl useScope policy m [] (reqWalkStart ())
 
 -- #217: the walk-carrying core of routeOf.  [walk] threads the shared `requires`
 -- measure through the aware recursion (routeOfD → argImplRequiresRoutesForRow →
 -- argImplReqRoutes → argReqRoute → routeOfD); the goal is entered in
 -- argImplRequiresRoutesForRow, once per impl level.
 -- #1154 (F-3a): [rest] carries the predicate's goal args past arg 0 (see EKNestedTop).
-routeOfD : IfaceRef ->
+routeOfD : SiteCtx ->
+  IfaceRef ->
   String ->
   ScopeId ->
   Undetermined ->
@@ -32407,21 +32488,22 @@ routeOfD : IfaceRef ->
 -- byte-identical to the pre-S3b arm-by-arm body.  The requires recursion still lands back
 -- here via argImplRequiresRoutesForRow → argImplReqRoutes → argReqRoute → routeOfD, with the
 -- walk threaded through the EKNestedTop payload.
-routeOfD iface encl useScope policy m rest walk =
-  fst (entail "" m encl useScope (EKNestedTop iface policy walk rest))
+routeOfD sx iface encl useScope policy m rest walk =
+  fst (entail sx "" m encl useScope (EKNestedTop iface policy walk rest))
 
-undeterminedRoute : String ->
+undeterminedRoute : SiteCtx ->
+  String ->
   ScopeId ->
   IfaceRef ->
   Undetermined ->
   ReqWalk ->
   List Mono ->
   Route
-undeterminedRoute _ _ _ KeepNone _ _ = RNone
-undeterminedRoute _ scope _ (CountImpls iface) _ goal =
-  routeUndeterminedTop scope iface goal
-undeterminedRoute encl scope iface CommitSuper walk goal =
-  committedSuperRoute encl scope iface walk goal
+undeterminedRoute _ _ _ _ KeepNone _ _ = RNone
+undeterminedRoute sx _ scope _ (CountImpls iface) _ goal =
+  routeUndeterminedTop sx scope iface goal
+undeterminedRoute sx encl scope iface CommitSuper walk goal =
+  committedSuperRoute sx encl scope iface walk goal
 
 -- TOP-LEVEL constraint routes (a constrained-fn CALL site, e.g. `roundtrip 10`).
 -- Like routesOfMonos but passes the CountImpls policy to routeOf, so the UNDETERMINED
@@ -32460,22 +32542,23 @@ undeterminedRoute encl scope iface CommitSuper walk goal =
 -- Slot COUNT, slot ORDER and the number of Routes produced are unchanged either way,
 -- which is what still keeps this arity-neutral.  The self-compile fixpoint proves
 -- absence-of-regression, never correctness of the new path — as before.
-routesOfMonosTopV : String ->
+routesOfMonosTopV : SiteCtx ->
+  String ->
   ScopeId ->
   List Mono ->
   List IfaceRef ->
   List (List Mono) ->
   List Route
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
-routesOfMonosTopV encl useScope monos ifaces [] =
-  routesOfMonosTop encl useScope monos ifaces
-routesOfMonosTopV _ _ [] _ _ = []
-routesOfMonosTopV encl useScope (m :: rest) [] (_ :: vs) =
-  routeOf ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
-    :: routesOfMonosTopV encl useScope rest [] vs
-routesOfMonosTopV encl useScope (m :: rest) (iface :: ifacesRest) (v :: vs) =
-  topRouteV encl useScope iface m v
-    :: routesOfMonosTopV encl useScope rest ifacesRest vs
+routesOfMonosTopV sx encl useScope monos ifaces [] =
+  routesOfMonosTop sx encl useScope monos ifaces
+routesOfMonosTopV _ _ _ [] _ _ = []
+routesOfMonosTopV sx encl useScope (m :: rest) [] (_ :: vs) =
+  routeOf sx ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
+    :: routesOfMonosTopV sx encl useScope rest [] vs
+routesOfMonosTopV sx encl useScope (m :: rest) (iface :: ifacesRest) (v :: vs) =
+  topRouteV sx encl useScope iface m v
+    :: routesOfMonosTopV sx encl useScope rest ifacesRest vs
 
 -- one slot.  A multi-argument predicate hands `routeOfD` the goal TAIL (arg 0 stays in
 -- `routeOfD`'s own `m`, exactly as EKNestedTop documents), so the selector sees
@@ -32486,11 +32569,17 @@ routesOfMonosTopV encl useScope (m :: rest) (iface :: ifacesRest) (v :: vs) =
 -- slot the mono of `b`, while the predicate's arg 0 is `a`'s): both slots are evidence
 -- for the SAME predicate, so both must select on the same goal.  That is what
 -- `vectorGoal` returning the head separately encodes; the scalar arm keeps [m].
-topRouteV : String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route
-topRouteV encl useScope iface m goals = match vectorGoal iface goals
+topRouteV : SiteCtx ->
+  String ->
+  ScopeId ->
+  IfaceRef ->
+  Mono ->
+  List Mono ->
+  Route
+topRouteV sx encl useScope iface m goals = match vectorGoal iface goals
   Some (g0, gs) =>
-    routeOfD iface encl useScope (CountImpls iface) g0 gs (reqWalkStart ())
-  None => routeOf iface encl useScope (CountImpls iface) m
+    routeOfD sx iface encl useScope (CountImpls iface) g0 gs (reqWalkStart ())
+  None => routeOf sx iface encl useScope (CountImpls iface) m
 
 -- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
 -- under a KNOWN interface.  Everything else is None ⇒ the scalar route.
@@ -32508,21 +32597,26 @@ vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
 vectorGoal _ [] = None
 vectorGoal iface (g0 :: gs) = if iface.irName == "" then None else Some (g0, gs)
 
-routesOfMonosTop : String -> ScopeId -> List Mono -> List IfaceRef -> List Route
-routesOfMonosTop _ _ [] _ = []
-routesOfMonosTop encl useScope (m :: rest) [] =
-  routeOf ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
-    :: routesOfMonosTop encl useScope rest []
-routesOfMonosTop encl useScope (m :: rest) (iface :: ifacesRest) =
-  routeOf iface encl useScope (CountImpls iface) m
-    :: routesOfMonosTop encl useScope rest ifacesRest
+routesOfMonosTop : SiteCtx ->
+  String ->
+  ScopeId ->
+  List Mono ->
+  List IfaceRef ->
+  List Route
+routesOfMonosTop _ _ _ [] _ = []
+routesOfMonosTop sx encl useScope (m :: rest) [] =
+  routeOf sx ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
+    :: routesOfMonosTop sx encl useScope rest []
+routesOfMonosTop sx encl useScope (m :: rest) (iface :: ifacesRest) =
+  routeOf sx iface encl useScope (CountImpls iface) m
+    :: routesOfMonosTop sx encl useScope rest ifacesRest
 
 -- The undetermined-constraint resolution (DICT-SEMANTICS §3): the instances the
 -- goal [goal] can still reach, counted by `goalCandidates` and decided by
 -- `goalReach` exactly as a boundary's verdict decides them.  None leaves the goal no
 -- route; one, or a stable minimum, is its route; any other count is ambiguous.
-routeUndeterminedTop : ScopeId -> IfaceRef -> List Mono -> Route
-routeUndeterminedTop scope ifaceRef goal
+routeUndeterminedTop : SiteCtx -> ScopeId -> IfaceRef -> List Mono -> Route
+routeUndeterminedTop sx scope ifaceRef goal
   | ifaceRef.irName == "" = RNone
   | otherwise =
     match goalReach goal (goalCandidates omEmpty goal (goalRows ifaceRef goal))
@@ -32530,7 +32624,7 @@ routeUndeterminedTop scope ifaceRef goal
       -- A goal on a scheme-quantified variable is the caller's: the one instance it
       -- reaches is not chosen for it.
       ReachOne _ if not (monoVectorClosed goal) && goalsClosed goal => RNone
-      ReachOne row => undeterminedRowRoute scope ifaceRef goal row
+      ReachOne row => undeterminedRowRoute sx scope ifaceRef goal row
       -- No route and no diagnostic: the boundary verdict (`goalReach` at quiescence)
       -- owns an ambiguous goal and reports it once at its own site.
       ReachMany => RNone
@@ -32538,15 +32632,29 @@ routeUndeterminedTop scope ifaceRef goal
 -- The route of the one instance [row] an undetermined goal reaches: its canonical
 -- word, its prerequisites answered at the goal, and each super of [ifaceRef], which
 -- the goal leaves undetermined too, answered by the same rule.
-undeterminedRowRoute : ScopeId -> IfaceRef -> List Mono -> ImplRow -> Route
-undeterminedRowRoute _ _ [] _ = RNone
-undeterminedRowRoute scope ifaceRef (m :: rest) row =
+undeterminedRowRoute : SiteCtx ->
+  ScopeId ->
+  IfaceRef ->
+  List Mono ->
+  ImplRow ->
+  Route
+undeterminedRowRoute _ _ _ [] _ = RNone
+undeterminedRowRoute sx scope ifaceRef (m :: rest) row =
   RKey
     (rowRouteKey row)
-    (argImplRequiresRoutesForRow "" scope m (m :: rest) (reqWalkStart ()) row)
+    (argImplRequiresRoutesForRow
+      sx
+      ""
+      scope
+      m
+      (m :: rest)
+      (reqWalkStart ())
+      row)
     (map
       ((superIface, _) =>
-        noteInnerRoute (routeUndeterminedTop scope superIface (m :: rest)))
+        noteInnerRoute
+          sx
+          (routeUndeterminedTop sx scope superIface (m :: rest)))
       (directSuperGoals ifaceRef []))
 
 ambiguousImplMsg : String -> String
@@ -32583,25 +32691,27 @@ ambiguousImplMsg iface =
 --
 -- The caller supplies the selected row, so the route word and the context it
 -- discharges name the same impl (§6 C2) by construction.
-argImplRequiresRoutesForRow : String ->
+argImplRequiresRoutesForRow : SiteCtx ->
+  String ->
   ScopeId ->
   Mono ->
   List Mono ->
   ReqWalk ->
   ImplRow ->
   List Route
-argImplRequiresRoutesForRow encl useScope m goals walk row =
+argImplRequiresRoutesForRow sx encl useScope m goals walk row =
   match reqWalkEnter walk (first3 (ieRowTriple row)) goals
     ReqOn next => routeWalkMemoized
+      sx
       encl
       useScope
       goals
       row
       next
-      (_ => match ieRowHeadTriple (Some row)
+      (walkSx => match ieRowHeadTriple (Some row)
         Some (headTy, itys, reqs) =>
           match headSubstWithParams headTy itys m goals
-            Some subst => argImplReqRoutes encl useScope subst reqs next
+            Some subst => argImplReqRoutes walkSx encl useScope subst reqs next
             None => []
         None => [])
     cut =>
@@ -32667,7 +32777,8 @@ requiresRouteWalkCut _ =
 -- (`@mdk_disp_bar_0_1`).  Differing COUNTS thread the wrong NUMBER of dicts, shifting
 -- every later argument.  Regression:
 -- test/eval_typed_fixtures/multiparam_impl_requires_arity{,_swapped}.mdk.
-argImplDictRoutesForEncl : String ->
+argImplDictRoutesForEncl : SiteCtx ->
+  String ->
   ScopeId ->
   String ->
   String ->
@@ -32677,49 +32788,53 @@ argImplDictRoutesForEncl : String ->
 -- ARCH B-2.1-b2 (LEG 3b): the arg-position twin of leg 3a, repointed for the same
 -- reason and in the same bite — the two legs select the SAME way at the same goal
 -- and a split between them is the §6 C2 break the header describes.
-argImplDictRoutesForEncl encl useScope name _tag mono goals =
+argImplDictRoutesForEncl sx encl useScope name _tag mono goals =
   match (ieRowHeadTriple
-    (ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name goals))
+    (ieSelectRowByMethod sx perRun.value.bodyImplEnvRef.value name goals))
     Some (headTy, implTys, reqs) =>
       match headSubstWithParams headTy implTys mono goals
         Some subst =>
-          argImplReqRoutes encl useScope subst reqs (reqWalkStart ())
+          argImplReqRoutes sx encl useScope subst reqs (reqWalkStart ())
         None => []
     None => []
 
 -- #217: [walk] carries the shared `requires` measure through the aware recursion (see
 -- argImplRequiresRoutesForRow, where each goal is entered).  An entry point seeds
 -- `reqWalkStart`, or `reqWalkSeed` at the goal whose selected row's `requires` these are.
-argImplReqRoutes : String ->
+argImplReqRoutes : SiteCtx ->
+  String ->
   ScopeId ->
   List (String, Mono) ->
   List Require ->
   ReqWalk ->
   List Route
-argImplReqRoutes _ _ _ [] _ = []
-argImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs, requireOrigin = ro }) :: rest) walk =
+argImplReqRoutes _ _ _ _ [] _ = []
+argImplReqRoutes sx encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs, requireOrigin = ro }) :: rest) walk =
   let iface = IfaceRef { irName = rIface, irOrigin = ro }
-  argReqRoute iface encl useScope subst rargs walk
-    :: argImplReqRoutes encl useScope subst rest walk
+  argReqRoute sx iface encl useScope subst rargs walk
+    :: argImplReqRoutes sx encl useScope subst rest walk
 
 -- [iface] is the requirement's resolved interface, origin included: two interfaces
 -- spelled alike (`requires A.Sh a, B.Sh a`) select their impls by declaration, and a
 -- bare spelling here selects whichever same-named row matches first (#3534).
-argReqRoute : IfaceRef ->
+argReqRoute : SiteCtx ->
+  IfaceRef ->
   String ->
   ScopeId ->
   List (String, Mono) ->
   List Ty ->
   ReqWalk ->
   Route
-argReqRoute _ _ _ _ [] _ = noteInnerRoute RNone
+argReqRoute sx _ _ _ _ [] _ = noteInnerRoute sx RNone
 -- #1154 (F-3a): `(arg::_)` USED TO DROP every argument past arg 0, so a multi-param
 -- `requires Ix a Char` reached the selector as the singleton `[Int]` and matched every
 -- `Ix Int _` impl.  Keep the whole vector; `routeOfD` threads the tail down the
 -- EKNestedTop leg.  Single-param requires bind `more == []` ⇒ unchanged.
-argReqRoute iface encl useScope subst (arg :: more) walk =
+argReqRoute sx iface encl useScope subst (arg :: more) walk =
   noteInnerRoute
+    sx
     (routeOfD
+      sx
       iface
       encl
       useScope
@@ -32733,22 +32848,27 @@ argReqRoute iface encl useScope subst (arg :: more) walk =
 -- → RKey (eval supplies a literal VDict for the body's `empty`/… to read); a
 -- constraint variable still (the caller is itself constrained) → RDict forwarding
 -- the caller's dict.  Mirrors resolveDictApps; runs after inference.
-resolveMethodDicts : List PendingMethodDict -> Unit
-resolveMethodDicts [] = ()
-resolveMethodDicts (pending :: rest) =
+resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
+resolveMethodDicts _ [] = ()
+resolveMethodDicts sx (pending :: rest) =
   pending.pmdRoutesRef :=
-    methodPredicateRoutes pending.pmdEncl pending.pmdScope pending.pmdSlots
-  resolveMethodDicts rest
+    methodPredicateRoutes sx pending.pmdEncl pending.pmdScope pending.pmdSlots
+  resolveMethodDicts sx rest
 
-methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
-methodPredicateRoutes _ _ [] = []
-methodPredicateRoutes encl scope (slot :: rest) =
-  methodPredicateRoute encl scope slot :: methodPredicateRoutes encl scope rest
+methodPredicateRoutes : SiteCtx ->
+  String ->
+  ScopeId ->
+  List PredicateSlot ->
+  List Route
+methodPredicateRoutes _ _ _ [] = []
+methodPredicateRoutes sx encl scope (slot :: rest) =
+  methodPredicateRoute sx encl scope slot
+    :: methodPredicateRoutes sx encl scope rest
 
-methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
-methodPredicateRoute encl scope slot = match slot.psArgs
+methodPredicateRoute : SiteCtx -> String -> ScopeId -> PredicateSlot -> Route
+methodPredicateRoute sx encl scope slot = match slot.psArgs
   PSArgsKnown (g0 :: gs) =>
-    routeOfD slot.psIface encl scope KeepNone g0 gs (reqWalkStart ())
+    routeOfD sx slot.psIface encl scope KeepNone g0 gs (reqWalkStart ())
   _ => RNone
 
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
@@ -32756,34 +32876,39 @@ methodPredicateRoute encl scope slot = match slot.psArgs
 -- (matching the dict params dict_pass prepends to its def), each forwarding the
 -- ENCLOSING fn's own dict param.  Run after inference, when funConstraintsRef is
 -- fully populated.
-realizeRecDictApps : List RecDictApp -> Unit
-realizeRecDictApps [] = ()
-realizeRecDictApps ((RecDictApp routesRef callee encl mono scope _) :: rest) =
+realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
+realizeRecDictApps _ [] = ()
+realizeRecDictApps sx ((RecDictApp routesRef callee encl mono scope _) :: rest) =
   let slots =
     optionOr
       []
       (lookupPredicateSlots callee perRun.value.funPredicateSlotsIdxRef.value)
-  let routes = recRoutes encl scope mono slots
+  let routes = recRoutes sx encl scope mono slots
   routesRef := routes
-  realizeRecDictApps rest
+  realizeRecDictApps sx rest
 
-recRoutes : String -> ScopeId -> Mono -> List PredicateSlot -> List Route
-recRoutes _ _ _ [] = []
-recRoutes encl scope mono (slot :: rest) =
-  recRoute encl scope mono slot :: recRoutes encl scope mono rest
+recRoutes : SiteCtx ->
+  String ->
+  ScopeId ->
+  Mono ->
+  List PredicateSlot ->
+  List Route
+recRoutes _ _ _ _ [] = []
+recRoutes sx encl scope mono (slot :: rest) =
+  recRoute sx encl scope mono slot :: recRoutes sx encl scope mono rest
 
 -- For one of the callee's constraint ids, recover the live occurrence type from
 -- [mono] (the var the body unified it to).  Concrete head → RKey; still a
 -- constraint variable that is one of [encl]'s own → forward [encl]'s dict param
 -- (RDict, the slot it sits at); otherwise leave the route unresolved.
-recRoute : String -> ScopeId -> Mono -> PredicateSlot -> Route
-recRoute encl scope mono slot = match recPredicateArgs mono slot
+recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route
+recRoute sx encl scope mono slot = match recPredicateArgs mono slot
   Some (g0 :: gs) =>
-    routeOfD slot.psIface encl scope KeepNone g0 gs (reqWalkStart ())
+    routeOfD sx slot.psIface encl scope KeepNone g0 gs (reqWalkStart ())
   _ => match slot.psBoundIds
     id :: _ => match findTvarInMono mono id
       None => RNone
-      Some m => resolveRecMono encl scope slot.psIface m
+      Some m => resolveRecMono sx encl scope slot.psIface m
     [] => RNone
 
 recPredicateArgs : Mono -> PredicateSlot -> Option (List Mono)
@@ -32800,17 +32925,17 @@ recSlotSubst mono (id :: rest) = match findTvarInMono mono id
   None => None
   Some m => map ((id, m) :: _) (recSlotSubst mono rest)
 
-resolveRecMono : String -> ScopeId -> IfaceRef -> Mono -> Route
-resolveRecMono encl scope iface m = match headTyconMono m
+resolveRecMono : SiteCtx -> String -> ScopeId -> IfaceRef -> Mono -> Route
+resolveRecMono sx encl scope iface m = match headTyconMono m
   -- a rigid variable names no instance, so its spelled head is left as it was
   Some (hk@(HkRigid _)) =>
     RKey
       (headKeyTag hk)
       []
-      (superRoutesAt iface encl scope [m] (reqWalkStart ()))
+      (superRoutesAt sx iface encl scope [m] (reqWalkStart ()))
   -- a concrete head names an instance: select it like any other predicate goal, so
   -- the dictionary carries that instance's word and `requires`
-  Some _ => routeOfD iface encl scope KeepNone m [] (reqWalkStart ())
+  Some _ => routeOfD sx iface encl scope KeepNone m [] (reqWalkStart ())
   -- the enclosing slot is found by tyvar alone, so it may hold a SUB-interface of
   -- the callee's predicate: read the super out of it
   None => match enclSlot encl m
@@ -32820,7 +32945,7 @@ resolveRecMono encl scope iface m = match headTyconMono m
           (Scopes.declarationScope (currentScopeStore ()) scope)
           slot
       assumAnswerRoute (LegacyScalar binder) (Some iface) scope RDict
-    None => routeOf ifaceRefNone "" scope KeepNone m
+    None => routeOf sx ifaceRefNone "" scope KeepNone m
 
 -- the dict-param slot at which [m]'s tyvar sits among the enclosing fn's
 -- constraint ids (its position in funConstraintsRef[encl] = the kept slot)
@@ -35650,11 +35775,13 @@ bucketRecvMatch ((tys, _) :: rest) dm = match tys
 -- table.  Regression:
 -- test/typecheck_error_fixtures/overlap_specific_req_wins.mdk (concrete-vs-headless) and
 -- overlap_same_head_req_wins{,_swapped}.mdk (#326 within-bucket min⊑).
-findMatchingImplReqsU : ImplUniverse ->
+findMatchingImplReqsU : SiteCtx ->
+  ImplUniverse ->
   IfaceRef ->
   List Mono ->
   Option (List (String, Mono), List Require)
-findMatchingImplReqsU univ iface [] = firstReqMatch (univHeadless univ iface) []
+findMatchingImplReqsU _ univ iface [] =
+  firstReqMatch (univHeadless univ iface) []
 -- 🚨 B-4b-ii SUPPLIES THE IDENTITY HERE — B-4b-i's `ifaceRefBare iface.irName`
 -- wrapper is DELETED, and this is the behaviour change that bite deferred.
 --
@@ -35687,8 +35814,8 @@ findMatchingImplReqsU univ iface [] = firstReqMatch (univHeadless univ iface) []
 -- identities and they differ, so a single-file `check`/lsp/repl/doc run — which stamps
 -- nothing — is unaffected, term for term.  This is NOT `ifaceIdMatches`; see
 -- `ieRowIfaceMatches`.
-findMatchingImplReqsU univ iface (a0 :: rest) =
-  match concreteReqMatchByIface iface (a0 :: rest)
+findMatchingImplReqsU sx univ iface (a0 :: rest) =
+  match concreteReqMatchByIface sx iface (a0 :: rest)
     Some r => Some r
     None => firstReqMatch (univHeadless univ iface) (a0 :: rest)
 
@@ -35704,15 +35831,16 @@ findMatchingImplReqsU univ iface (a0 :: rest) =
 -- substituting against the whole vector was the same split #609 names: the checker
 -- saw the vector, the selector saw arg 0.  With one goal for both, a selected entry
 -- can no longer fail the subst for a reason the selector could have seen.
-concreteReqMatchByIface : IfaceRef ->
+concreteReqMatchByIface : SiteCtx ->
+  IfaceRef ->
   List Mono ->
   Option (List (String, Mono), List Require)
 -- Use `bodyImplEnvRef`, not `shadowKeyTableRef`: the latter is a topological PREFIX,
 -- so an impl in a later module contributes no `requires` and the goal reads as
 -- unroutable. This is LEG 1 of ARCH B-2.1-b2's coordinated three-leg change; moving
 -- only this function alone produces an S0.
-concreteReqMatchByIface iface args =
-  match ieSelectRowByIface perRun.value.bodyImplEnvRef.value iface args
+concreteReqMatchByIface sx iface args =
+  match ieSelectRowByIface sx perRun.value.bodyImplEnvRef.value iface args
     Some row => selectedRowReqMatch args row
     None => None
 
@@ -35836,7 +35964,7 @@ checkCallObligationsU deferNonGround univ (o :: rest) =
             consumeExactReturnOutcome
               univ
               request
-              (solveExactReturnOnce request)
+              (solveExactReturnOnce noSite request)
           None =>
             checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
       noteMethodReturnTrace MRTChecked request None []
@@ -35846,11 +35974,11 @@ checkCallObligationsU deferNonGround univ (o :: rest) =
 
 -- The sole production decision for a complete ordinary return.  The request keeps
 -- the result so checking and route publication cannot observe different selections.
-solveExactReturnOnce : MethodReturnRequest -> MethodReturnResolution
-solveExactReturnOnce request = match request.mrrResolution.value
+solveExactReturnOnce : SiteCtx -> MethodReturnRequest -> MethodReturnResolution
+solveExactReturnOnce sx request = match request.mrrResolution.value
   Some resolution => resolution
   None =>
-    let resolution = solveExactReturn request
+    let resolution = solveExactReturn sx request
     request.mrrResolution := Some resolution
     resolution
 
@@ -35903,8 +36031,8 @@ methodPredicateTemplateHeadPairs (None :: rest) (_ :: heads) =
   methodPredicateTemplateHeadPairs rest heads
 methodPredicateTemplateHeadPairs _ _ = None
 
-solveExactReturn : MethodReturnRequest -> MethodReturnResolution
-solveExactReturn request = match methodReturnWanted request
+solveExactReturn : SiteCtx -> MethodReturnRequest -> MethodReturnResolution
+solveExactReturn sx request = match methodReturnWanted request
   None => panic "complete return solver received a legacy request"
   Some wanted =>
     let predicate = wanted.predicate
@@ -35930,23 +36058,24 @@ solveExactReturn request = match methodReturnWanted request
           mrrOutcome = Solved (assumAnswerEvidence answer),
           mrrSelectedRow = None,
         }
-      None => solveExactReturnInstance request wanted args
+      None => solveExactReturnInstance sx request wanted args
 
-solveExactReturnInstance : MethodReturnRequest ->
+solveExactReturnInstance : SiteCtx ->
+  MethodReturnRequest ->
   Wanted ->
   List Mono ->
   MethodReturnResolution
-solveExactReturnInstance request wanted [] = MethodReturnResolution {
+solveExactReturnInstance _ request wanted [] = MethodReturnResolution {
   mrrWanted = wanted,
   mrrOutcome = Deferred wanted [BlockingFinalization],
   mrrSelectedRow = None,
 }
-solveExactReturnInstance request wanted args =
+solveExactReturnInstance sx request wanted args =
   let env = perRun.value.bodyImplEnvRef.value
   let iface = wanted.predicate.predicateInterface
   let selected =
     orElseOpt
-      (ieSelectRowByIface env iface args)
+      (ieSelectRowByIface sx env iface args)
       (determinedGoalInstance iface args)
   match selected
     Some (row@(ImplRow _ inst selectedIface _ _ _)) =>
@@ -36040,6 +36169,7 @@ consumeExactReturnOutcome univ request resolution =
     Solved (GivenEvidence _) => ()
     Solved (InstanceEvidence _ _ prerequisites _) =>
       checkReqObligations
+        noSite
         univ
         (reqWalkSeed
           resolution.mrrWanted.predicate.predicateInterface
@@ -36256,7 +36386,8 @@ checkOneCallObligation deferNonGround univ iface occs loc scope =
     -- requires Display a, Display b`) so an unsatisfied element constraint surfaces
     -- (`main = (Red, 5)` → `No impl of Display for Color`) instead of the head-only
     -- match silently accepting (→ null element dict → SIGSEGV at runtime).
-    Some True => checkNestedReqs univ (reqWalkStart ()) iface args loc scope
+    Some True =>
+      checkNestedReqs noSite univ (reqWalkStart ()) iface args loc scope
     Some False => checkOneCallObligationNoImpl iface args loc scope
 
 -- the no-impl tail of `checkOneCallObligation` — reached when the goal is neither a
@@ -37672,25 +37803,27 @@ substTyVars sub (TyQual t ns l) = TyQual (substTyVars sub t) ns l
 -- reached (iface, args), and a repeated or non-shrinking-past-fuel goal is reported at
 -- [loc] (#1575, #2120).  The goal's dictionary also carries its supers', so each super
 -- instance's `requires` is checked too (`superGoalsEntered`).
-checkNestedReqs : ImplUniverse ->
+checkNestedReqs : SiteCtx ->
+  ImplUniverse ->
   ReqWalk ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
   ScopeId ->
   Unit
-checkNestedReqs univ walk iface args loc scope =
+checkNestedReqs sx univ walk iface args loc scope =
   match reqWalkReported loc (reqWalkEnter walk iface args)
     None => ()
     -- A goal this walk already checked clean is not checked again (`WalkMemo`): every
     -- diagnostic below it is pushed at the walk's one [loc], so a repeat can only
-    -- repeat a push.  It leaves `goalSiteLoc` as a full check would.
-    Some next if walkGoalDischarged next iface args => goalSiteLoc := None
+    -- repeat a push.
+    Some next if walkGoalDischarged next iface args => ()
     Some next =>
       let (erred, _) = erredDuring (_ =>
-        let _ = checkEnteredReqs univ next iface args loc scope
+        let _ = checkEnteredReqs sx univ next iface args loc scope
         fold
-          (_ e => checkEnteredReqs univ e.sgWalk e.sgIface e.sgArgs loc scope)
+          (_ e =>
+            checkEnteredReqs sx univ e.sgWalk e.sgIface e.sgArgs loc scope)
           ()
           (superGoalsEntered univ walk loc [] iface args))
       if erred then () else noteWalkGoalDischarged next iface args
@@ -37778,23 +37911,23 @@ superGoalClosureGo ((iface, args) :: rest) seen acc =
   superGoalClosureGo (rest ++ fresh) seen2 (found ++ acc)
 
 -- `checkNestedReqs` below a goal [walk] has just entered.
-checkEnteredReqs : ImplUniverse ->
+checkEnteredReqs : SiteCtx ->
+  ImplUniverse ->
   ReqWalk ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
   ScopeId ->
   Unit
-checkEnteredReqs univ walk iface args loc scope =
+checkEnteredReqs sx univ walk iface args loc scope =
   -- #1155: `reqObligationsFor` asks the min⊑ selector WHICH impl matched, so this
   -- is the one goal-posing site that reaches `pickMostSpecificEntry` from OUTSIDE
   -- the five resolver drains — publish the obligation's own snapshotted span so
   -- the ambiguity reject lands on the use site rather than on `currentLoc`'s stale
-  -- one.  Restored to None after, per `goalSiteLoc`'s scoping rule.
-  goalSiteLoc := loc
-  let reqs = reqObligationsFor univ iface args
-  let _ = checkReqObligations univ walk loc scope reqs
-  goalSiteLoc := None
+  -- one.
+  let sx = { sx | sxSite = loc }
+  let reqs = reqObligationsFor sx univ iface args
+  checkReqObligations sx univ walk loc scope reqs
 
 -- Impl decls paired with their `requires` (implHeadsOf drops reqs; this keeps them).
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
@@ -37813,13 +37946,15 @@ implDeclWithReqs _ = []
 -- (bucket by iface|tag, headless fallback) instead of a flat scan over every impl.
 -- ⚠️ THE `None` ARM IS NOT "NOTHING TO CHECK" — it is Door 4's `None` arm, one
 -- consumer over.  See `unroutedGroundReqs` directly below for why it rejects.
-reqObligationsFor : ImplUniverse ->
+reqObligationsFor : SiteCtx ->
+  ImplUniverse ->
   IfaceRef ->
   List Mono ->
   List (IfaceRef, List Mono)
-reqObligationsFor univ iface args = match findMatchingImplReqsU univ iface args
-  None => unroutedGroundReqs univ iface args
-  Some (subst, reqs) => map (reqToObligation subst) reqs
+reqObligationsFor sx univ iface args =
+  match findMatchingImplReqsU sx univ iface args
+    None => unroutedGroundReqs sx univ iface args
+    Some (subst, reqs) => map (reqToObligation subst) reqs
 
 -- ── SA-1 / "Door 4b": the GROUND goal's un-plumbed case is a LOUD reject too ──
 -- Door 4 (`unroutedResidual`, on `residualPredsOf`'s `None` arm) made the
@@ -37875,16 +38010,17 @@ reqObligationsFor univ iface args = match findMatchingImplReqsU univ iface args
 -- now serves two sites, and its *"the module where this binding is generalized"* clause
 -- is inaccurate on THIS one (nothing is generalized at a ground use site).  Reword it
 -- for both, and do not fix that by re-splitting the text.
-unroutedGroundReqs : ImplUniverse ->
+unroutedGroundReqs : SiteCtx ->
+  ImplUniverse ->
   IfaceRef ->
   List Mono ->
   List (IfaceRef, List Mono)
-unroutedGroundReqs univ iface args
+unroutedGroundReqs sx univ iface args
   | implMatchesWithReqsU univ iface args =
     let _ =
       pushTypeErrorOnceAt
         "T-REQUIRES-UNROUTED"
-        !goalSiteLoc
+        sx.sxSite
         (requiresUnroutedMsg iface args)
     []
   | otherwise = []
@@ -37947,35 +38083,37 @@ reqTyToMono _ (TyRow labels tail loc) =
 -- Check each substituted requirement with the SAME accept/reject logic as a
 -- top-level obligation, recursing into a satisfied conditional impl's own reqs.
 -- [walk] is the `requires` walk that posed them (`reqWalkEnter`).
-checkReqObligations : ImplUniverse ->
+checkReqObligations : SiteCtx ->
+  ImplUniverse ->
   ReqWalk ->
   Option Loc ->
   ScopeId ->
   List (IfaceRef, List Mono) ->
   Unit
-checkReqObligations _ _ _ _ [] = ()
-checkReqObligations univ walk loc scope ((ifaceR, monoArgs) :: rest) =
-  let _ = checkReqOne univ walk ifaceR monoArgs loc scope
-  checkReqObligations univ walk loc scope rest
+checkReqObligations _ _ _ _ _ [] = ()
+checkReqObligations sx univ walk loc scope ((ifaceR, monoArgs) :: rest) =
+  let _ = checkReqOne sx univ walk ifaceR monoArgs loc scope
+  checkReqObligations sx univ walk loc scope rest
 
 -- One nested `requires` goal, judged as `checkOneCallObligation` judges a top-level one.
 -- An arrow is a constructed head, so a ground `requires Ord k` at k = (Int -> Int) —
 -- `Map { f => 1 }` selecting `FromEntries (Map k v) (k, v) requires Ord k` — is decided
 -- here and rejected (P0-18), and a ground arrow goal some impl matches has that impl's
 -- own `requires` walked by `checkNestedReqs`.
-checkReqOne : ImplUniverse ->
+checkReqOne : SiteCtx ->
+  ImplUniverse ->
   ReqWalk ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
   ScopeId ->
   Unit
-checkReqOne univ walk iface args loc scope
+checkReqOne sx univ walk iface args loc scope
   -- An open prerequisite is judged at its boundary (`nestedRequireGoals`), where the
   -- impl-head and signature variables it may mention are known to be rigid.
   | not (allConcreteHeads args) = ()
   | implMatchesU univ iface args =
-    checkNestedReqs univ walk iface args loc scope
+    checkNestedReqs sx univ walk iface args loc scope
   -- #1939 / #1938 (OPEN WORLD): the nested-`requires` twin of
   -- `checkOneCallObligation`'s open-world defer, and it moves WITH it by the same
   -- argument this header already makes about the function-typed reject — the two
@@ -39534,20 +39672,26 @@ checkImplHeadPrerequisites subject iface site methodTvs mty addedObls addedCallO
       let givens = implBodyGivens iface site methodTvs mty
       let goals =
         flatMap oblPredOf addedObls ++ flatMap callPredOf addedCallObls
-      fold (_ g => checkImplHeadGoal subject roots givens g) () goals
+      fold (_ g => checkImplHeadGoal noSite subject roots givens g) () goals
 
-checkImplHeadGoal : String ->
+checkImplHeadGoal : SiteCtx ->
+  String ->
   List (String, Int) ->
   List PredicateSlot ->
   (IfaceRef, List Mono, Option Loc) ->
   Unit
-checkImplHeadGoal subject roots givens (iface, ds, loc) =
+checkImplHeadGoal sx subject roots givens (iface, ds, loc) =
   let args = map normalize ds
   if anyIn (flatMap monoUnboundIds args) (map snd roots) then
     let headIds = omFromNames (map (r => intToString (snd r)) roots) omEmpty
-    goalSiteLoc := loc
-    let leaves = implGoalResiduals (reqWalkStart ()) headIds givens iface args
-    goalSiteLoc := None
+    let leaves =
+      implGoalResiduals
+        { sx | sxSite = loc }
+        (reqWalkStart ())
+        headIds
+        givens
+        iface
+        args
     fold (_ leaf => reportImplHeadResidual subject roots loc leaf) () leaves
 
 -- The head variables are matched as constants, the representation a declared
@@ -39559,55 +39703,63 @@ checkImplHeadGoal subject roots givens (iface, ds, loc) =
 -- too, as in `residualPredsOf`.  The walk is bounded by the shared `requires` measure
 -- and solves each goal once (`solvedOnWalk`), as in `residualPredsOf`; [headIds] and
 -- [givens] are fixed for the walk `checkImplHeadGoal` starts.
-implGoalResiduals : ReqWalk ->
+implGoalResiduals : SiteCtx ->
+  ReqWalk ->
   OrdMap Unit ->
   List PredicateSlot ->
   IfaceRef ->
   List Mono ->
   List (IfaceRef, List Mono)
-implGoalResiduals walk headIds givens iface args
+implGoalResiduals sx walk headIds givens iface args
   | anyList (givenAnswers iface args) givens = []
   | not (anyConcreteHead args) = [(iface, args)]
-  | otherwise =
-    match reqWalkReported !goalSiteLoc (reqWalkEnter walk iface args)
-      None => []
-      Some next => solvedOnWalk next iface args (_ =>
-        let univ = perRun.value.residualUnivRef.value
-        let cells = sigCellsOf headIds (flatMap monoVarCells args)
-        let toRigid = sigRigidBindings headIds cells
-        match (findMatchingImplReqsU
-          univ
-          iface
-          (map (substMono toRigid [] []) args))
-          None =>
-            if implMatchesU univ iface args
-              || answeredOnlyByBindingHead headIds iface args
-              || not (allConcreteHeads args) then
-              [(iface, args)]
-            else
-              []
-          Some (subst, reqs) =>
-            let own =
-              flatMap
-                (r =>
-                  implGoalResiduals
-                    next
-                    headIds
-                    givens
-                    (fst r)
-                    (map (unrigidSig cells) (snd r)))
-                (map (reqToObligation subst) reqs)
-            superCarriedResiduals
-              own
-              (flatMap
-                (e =>
-                  flatMap
-                    (g =>
-                      implGoalResiduals e.sgWalk headIds givens (fst g) (snd g))
-                    (optionOr
-                      []
-                      (rigidHeadInstanceContext headIds e.sgIface e.sgArgs)))
-                (superGoalsEntered univ walk !goalSiteLoc own iface args)))
+  | otherwise = match reqWalkReported sx.sxSite (reqWalkEnter walk iface args)
+    None => []
+    Some next => solvedOnWalk next iface args (_ =>
+      let univ = perRun.value.residualUnivRef.value
+      let cells = sigCellsOf headIds (flatMap monoVarCells args)
+      let toRigid = sigRigidBindings headIds cells
+      match (findMatchingImplReqsU
+        sx
+        univ
+        iface
+        (map (substMono toRigid [] []) args))
+        None =>
+          if implMatchesU univ iface args
+            || answeredOnlyByBindingHead headIds iface args
+            || not (allConcreteHeads args) then
+            [(iface, args)]
+          else
+            []
+        Some (subst, reqs) =>
+          let own =
+            flatMap
+              (r =>
+                implGoalResiduals
+                  sx
+                  next
+                  headIds
+                  givens
+                  (fst r)
+                  (map (unrigidSig cells) (snd r)))
+              (map (reqToObligation subst) reqs)
+          superCarriedResiduals
+            own
+            (flatMap
+              (e =>
+                flatMap
+                  (g =>
+                    implGoalResiduals
+                      sx
+                      e.sgWalk
+                      headIds
+                      givens
+                      (fst g)
+                      (snd g))
+                  (optionOr
+                    []
+                    (rigidHeadInstanceContext sx headIds e.sgIface e.sgArgs)))
+              (superGoalsEntered univ walk sx.sxSite own iface args)))
 
 -- An instance answers the goal only by fixing a head variable: some instance head
 -- unifies with it while the head variables are free, and none does while they are
@@ -44533,7 +44685,7 @@ vecOblOfPred generalizing boundIds (iface, ds, loc) =
 -- `residualPredsOf` reaches `findMatchingImplReqsU`, which asks the min⊑ selector WHICH
 -- impl matched — so this is a SECOND goal-posing site outside the five resolver drains
 -- (the first is `checkNestedReqs`, whose header says the same thing).  When the goal is
--- ambiguous the selector calls `reportAmbiguousOverlap`, which reads `goalSiteLoc` and
+-- ambiguous the selector calls `reportAmbiguousOverlap`, which reads the context's `sxSite` and
 -- falls back to `currentLoc` when it is `None`.  At a generalized group's close
 -- `currentLoc` points at the LAST expression inferred, not at the site that recorded the
 -- predicate; and because `pushTypeErrorOnceAt` dedups on the message, that badly-located
@@ -44542,9 +44694,9 @@ vecOblOfPred generalizing boundIds (iface, ds, loc) =
 -- (`firstRow xss = index xss 0`): with the recorded loc dropped, the caret moved off the
 -- `index` call at 29:15 onto the literal `0` at 29:25 — same code, same message, worse
 -- span, and NO gate saw it because the dict-semantics gate asserted the code alone.
--- So publish the obligation's OWN snapshotted span for the duration of the reduction and
--- restore `None` after, exactly as `checkNestedReqs` does, per `goalSiteLoc`'s scoping
--- rule (outside a drain the selector must fall back rather than inherit a stale span).
+-- So hand the reduction a context whose `sxSite` is the obligation's OWN snapshotted span,
+-- as `checkNestedReqs` does; a walk outside a drain gets no site and the selector falls
+-- back rather than inheriting a stale span.
 residualVecObls : Bool ->
   List Int ->
   IfaceRef ->
@@ -44552,32 +44704,34 @@ residualVecObls : Bool ->
   Option Loc ->
   List VecObl
 residualVecObls generalizing boundIds iface ds loc =
-  map keepBoundResidual (residualBoundPreds generalizing boundIds iface ds loc)
+  map
+    keepBoundResidual
+    (residualBoundPreds noSite generalizing boundIds iface ds loc)
 
 -- S-inferred-vector-supply: the reduction itself, factored out of `residualVecObls` so
 -- the DICT-ABSTRACTION channel can read the residual predicate's ARGUMENT MONOS and not
 -- only the ids `VecObl` keeps.  ⚠️ ONE run per group: `registerInferredFor`'s vectors and
 -- its slot ids are both projections of this one call (see `maybeInferConstraint`), so the
--- §3 entailment — and the `goalSiteLoc`-scoped diagnostics it can emit — fire exactly as
+-- §3 entailment — and the `sxSite`-scoped diagnostics it can emit — fire exactly as
 -- often as they did before this slice, not twice.
 -- Each entry is (interface, the residual's bare-tyvar ids IN ORDER, the residual's whole
 -- argument vector); a residual not entirely over this scheme's own quantified vars is
 -- dropped, exactly as `keepBoundResidual` always dropped it.
-residualBoundPreds : Bool ->
+residualBoundPreds : SiteCtx ->
+  Bool ->
   List Int ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
   List (IfaceRef, List Int, List Mono)
-residualBoundPreds generalizing boundIds iface ds loc
+residualBoundPreds sx generalizing boundIds iface ds loc
   | isSome (boundTyvarIds boundIds ds) = []
   | not (anyIn (flatMap monoUnboundIds ds) boundIds) = []
   | otherwise =
-    goalSiteLoc := loc
     -- A signed binder's variables are rigid in its body, so no use chooses them.
     let chosen = if generalizing then boundIds else []
-    let preds = residualPredsOf chosen (reqWalkStart ()) iface ds
-    goalSiteLoc := None
+    let preds =
+      residualPredsOf { sx | sxSite = loc } chosen (reqWalkStart ()) iface ds
     flatMap (keepBoundResidualPred boundIds) preds
 
 keepBoundResidualPred : List Int ->
@@ -44690,44 +44844,44 @@ isBareTyvarMono m = match normalize m
 --   stands.
 -- The walk is bounded by the shared `requires` measure (`reqWalkEnter`, DICT §3 W2): a
 -- cyclic instance is `T-REQUIRES-CYCLE` and a context that keeps growing its goal is
--- `T-REQUIRES-DEPTH`, both at `goalSiteLoc`, so a goal that leaves no residual because
+-- `T-REQUIRES-DEPTH`, both at `sxSite`, so a goal that leaves no residual because
 -- the walk stopped is never a silent `[]`.  Each goal is solved once per walk
 -- (`solvedOnWalk`) and the residuals come back deduplicated, so a goal the `requires`
--- reach along many paths costs one solve.  [chosen] and `goalSiteLoc` are fixed for
+-- reach along many paths costs one solve.  [chosen] and `sxSite` are fixed for
 -- the walk `residualBoundPreds` starts, which is why they are not part of that key.
-residualPredsOf : List Int ->
+residualPredsOf : SiteCtx ->
+  List Int ->
   ReqWalk ->
   IfaceRef ->
   List Mono ->
   List (IfaceRef, List Mono)
-residualPredsOf chosen walk iface args
+residualPredsOf sx chosen walk iface args
   | not (anyConcreteHead args) = [(iface, args)]
-  | otherwise =
-    match reqWalkReported !goalSiteLoc (reqWalkEnter walk iface args)
-      None => []
-      Some next => solvedOnWalk next iface args (_ =>
-        let univ = perRun.value.residualUnivRef.value
-        match findMatchingImplReqsU univ iface args
-          None => unroutedResidual iface args
-          Some (subst, reqs) if not
-            (residualSelectionStable
-              chosen
+  | otherwise = match reqWalkReported sx.sxSite (reqWalkEnter walk iface args)
+    None => []
+    Some next => solvedOnWalk next iface args (_ =>
+      let univ = perRun.value.residualUnivRef.value
+      match findMatchingImplReqsU sx univ iface args
+        None => unroutedResidual sx iface args
+        Some (subst, reqs) if not
+          (residualSelectionStable
+            chosen
+            (map (reqToObligation subst) reqs)
+            iface
+            args) => [(iface, args)]
+        Some (subst, reqs) =>
+          let own =
+            flatMap
+              (r => residualPredsOf sx chosen next (fst r) (snd r))
               (map (reqToObligation subst) reqs)
-              iface
-              args) => [(iface, args)]
-          Some (subst, reqs) =>
-            let own =
-              flatMap
-                (r => residualPredsOf chosen next (fst r) (snd r))
-                (map (reqToObligation subst) reqs)
-            superCarriedResiduals
-              own
-              (flatMap
-                (e =>
-                  flatMap
-                    (r => residualPredsOf chosen e.sgWalk (fst r) (snd r))
-                    (reqObligationsFor univ e.sgIface e.sgArgs))
-                (superGoalsEntered univ walk !goalSiteLoc own iface args)))
+          superCarriedResiduals
+            own
+            (flatMap
+              (e =>
+                flatMap
+                  (r => residualPredsOf sx chosen e.sgWalk (fst r) (snd r))
+                  (reqObligationsFor sx univ e.sgIface e.sgArgs))
+              (superGoalsEntered univ walk sx.sxSite own iface args)))
 
 -- Whether every use of the binder builds the dictionary the goal's reduction builds
 -- now (DICT-SEMANTICS §6.1.3): the goal mentions no variable the uses choose, or the
@@ -44900,17 +45054,20 @@ stableGoalReach chosen iface args =
 -- SA-4, above).  It is case (b) — an impl DOES match, its evidence cannot be routed —
 -- and `residualRefutableNow` is False for it by construction (a matching impl is in one
 -- of the two buckets the existence test reads), so the two arms cannot both fire.
-unroutedResidual : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
-unroutedResidual iface args
+unroutedResidual : SiteCtx ->
+  IfaceRef ->
+  List Mono ->
+  List (IfaceRef, List Mono)
+unroutedResidual sx iface args
   | implMatchesWithReqsU perRun.value.residualUnivRef.value iface args =
     let _ =
       pushTypeErrorOnceAt
         "T-REQUIRES-UNROUTED"
-        !goalSiteLoc
+        sx.sxSite
         (requiresUnroutedMsg iface args)
     []
   | residualRefutableNow iface args =
-    let _ = pushNoImplError iface.irName !goalSiteLoc args
+    let _ = pushNoImplError iface.irName sx.sxSite args
     []
   | otherwise = [(iface, args)]
 
@@ -45771,6 +45928,7 @@ methodReturnProbeStamp ownedRow foreignRow impls =
   let resultMono = stripArrows request.mrrOccurrence
   let _ =
     resolveExactReturnSite
+      noSite
       omEmpty
       "make"
       tagRef
@@ -45781,10 +45939,10 @@ methodReturnProbeStamp ownedRow foreignRow impls =
       None
       scope
   let goals = optionOr [] (methodReturnArgs request)
-  let ownedKey = match ieSelectRowByIface env ownedRow.msrIface goals
+  let ownedKey = match ieSelectRowByIface noSite env ownedRow.msrIface goals
     Some selected => rowRouteKey selected
     None => ""
-  let foreignKey = match ieSelectRowByIface env foreignRow.msrIface goals
+  let foreignKey = match ieSelectRowByIface noSite env foreignRow.msrIface goals
     Some selected => rowRouteKey selected
     None => ""
   (methodReturnProbeRouteKey tagRef.value, ownedKey, foreignKey)
@@ -45857,7 +46015,7 @@ methodReturnResolutionMutationProbe _ =
   let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
   perRun.value.bodyImplEnvRef := buildFlatImplEnv [ownedImpl]
   let request = methodReturnProbeRequest ownedRow
-  let resolution = solveExactReturnOnce request
+  let resolution = solveExactReturnOnce noSite request
   let valid = methodReturnResolutionValid request resolution
   let (wrongSelection, wrongPrerequisites) = match resolution.mrrOutcome
     Solved (InstanceEvidence _ args prerequisites supers) => (
@@ -46164,7 +46322,7 @@ requiresCycleMsg parentIface parentArgs iface args =
 -- The impl the selector picks for [iface] at [args], as written in its declaration.
 requiringImplLabel : IfaceRef -> List Mono -> String
 requiringImplLabel iface args =
-  match ieSelectRowByIface perRun.value.bodyImplEnvRef.value iface args
+  match ieSelectRowByIface noSite perRun.value.bodyImplEnvRef.value iface args
     Some row =>
       "`impl \{iface.irName} \{joinWith " " (map ppTyAtom (ieRowTys row))}`"
     None => "the matching `impl \{iface.irName} ...`"
@@ -46185,7 +46343,9 @@ residualInferredPredOf : List Int ->
   (IfaceRef, List Mono, Option Loc) ->
   List (IfaceRef, Int, List Mono)
 residualInferredPredOf boundIds (iface, ds, loc) =
-  flatMap leadInferredPred (residualBoundPreds True boundIds iface ds loc)
+  flatMap
+    leadInferredPred
+    (residualBoundPreds noSite True boundIds iface ds loc)
 
 -- the DIRECT arm's twin: a predicate every one of whose arguments is already a bound
 -- tyvar IS its own residual (`residualVecObls` returns [] for it by design), so its own
@@ -52081,7 +52241,7 @@ judgeMainUse pose scheme =
 -- goals the drive solved so the driver's printing wrap can name it.
 autoPrintEvidence : String -> ScopeId -> IfaceRef -> Mono -> EvId
 autoPrintEvidence mid scope iface tau =
-  let routes = routesOfMonosTopV "" scope [tau] [iface] [[tau]]
+  let routes = routesOfMonosTopV noSite "" scope [tau] [iface] [[tau]]
   let g = graphRun.value
   let n = g.evCounter.value
   g.evCounter := n + 1
@@ -53831,35 +53991,35 @@ runStampStep : StampCtx -> StampStep -> Unit
 runStampStep ctx SSNumlitFloats = setNumlitFloatsGo ctx.scNumlits
 runStampStep ctx SSReturnSites =
   let rpNames = omFromNames ctx.scRpNames omEmpty
-  stampEach (o => resolveSites rpNames (siteEntry o)) GKReturnSite ctx
+  stampEach (sx o => resolveSites sx rpNames (siteEntry o)) GKReturnSite ctx
 runStampStep ctx SSBinopSites =
-  stampEach (o => resolveOpSites True (siteEntry o)) GKBinopSite ctx
+  stampEach (sx o => resolveOpSites sx True (siteEntry o)) GKBinopSite ctx
 runStampStep ctx SSUnopSites =
-  stampEach (o => resolveOpSites False (siteEntry o)) GKUnopSite ctx
+  stampEach (sx o => resolveOpSites sx False (siteEntry o)) GKUnopSite ctx
 runStampStep ctx SSArithSites =
-  stampEach (o => resolveArithSites (arithEntry o)) GKArithSite ctx
+  stampEach (_ o => resolveArithSites (arithEntry o)) GKArithSite ctx
 runStampStep ctx SSArgStamps =
-  stampEach (o => resolveArgStamps (siteEntry o)) GKArgStamp ctx
+  stampEach (sx o => resolveArgStamps sx (siteEntry o)) GKArgStamp ctx
 runStampStep ctx SSRLocalSites =
-  stampEach (o => resolveRLocalSites (siteEntry o)) GKRLocalSite ctx
+  stampEach (sx o => resolveRLocalSites sx (siteEntry o)) GKRLocalSite ctx
 runStampStep ctx SSRecDictApps =
-  stampEach (o => realizeRecDictApps (recDictAppEntry o)) GKRecDictApp ctx
+  stampEach (sx o => realizeRecDictApps sx (recDictAppEntry o)) GKRecDictApp ctx
 runStampStep ctx SSDictApps =
-  stampEach (o => resolveDictApps (dictAppEntry o)) GKDictApp ctx
+  stampEach (sx o => resolveDictApps sx (dictAppEntry o)) GKDictApp ctx
 runStampStep ctx SSMethodDicts =
-  stampEach (o => resolveMethodDicts (methodDictEntry o)) GKMethodDict ctx
+  stampEach (sx o => resolveMethodDicts sx (methodDictEntry o)) GKMethodDict ctx
 
 -- Stamps [ctx]'s goals of kind [k] one at a time, in channel order, and ORs what
 -- each stamp noted below its destination's top level into that goal's `oInner`.
-stampEach : (Obligation -> Unit) -> GoalKind -> StampCtx -> Unit
+stampEach : (SiteCtx -> Obligation -> Unit) -> GoalKind -> StampCtx -> Unit
 stampEach stamp k ctx =
   fold (_ o => stampNoting stamp o) () (goalsOfKindIn k ctx.scGoals)
 
-stampNoting : (Obligation -> Unit) -> Obligation -> Unit
+stampNoting : (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
 stampNoting stamp o =
-  innerNotes := innerNone
-  let _ = stamp o
-  o.oInner := innerOr o.oInner.value innerNotes.value
+  let acc = Ref innerNone
+  let _ = stamp SiteCtx { sxSite = None, sxInner = Some acc } o
+  o.oInner := innerOr o.oInner.value acc.value
 
 -- #2548 (ARCH M3/Q2, DICT §6.2 T4): ONE ordered resolve pass over the whole graph,
 -- at quiescence.  Every module's goals are stamped after every module has been

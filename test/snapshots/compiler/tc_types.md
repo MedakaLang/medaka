@@ -1,5 +1,5 @@
 # META
-source_lines=3308
+source_lines=3329
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -223,7 +223,7 @@ public export data PendingEntry =
   -- 5th element is (see `pushPendingObl`).  The resolvers run POST-HM, long after
   -- inference left this expression, so the live `currentLoc` there names whatever
   -- ELoc was entered last (observed: the body of an unrelated impl three lines away).
-  -- Each resolver loop republishes this span into `goalSiteLoc` so the min⊑ selector's
+  -- Each resolver loop hands this span down as the walk's `sxSite` so the min⊑ selector's
   -- ambiguity reject can point at the goal it was actually posed by.
   -- #2549 M2: the 7th field is this site's EVIDENCE ID — the value-level name of
   -- the association the 2nd field (the route cell) carries by pointer identity.
@@ -1270,7 +1270,7 @@ public export data AbsorptionEvent = AbsorptionEvent {
 -- #1155 (F-3c): [pdaLoc] is the `currentLoc` span snapshotted at the RECORD
 -- site, the same reason and the same shape as `PendingEntry`'s 6th field and
 -- `implObls`' 5th element — `resolveDictApps` runs post-HM, so the live `currentLoc`
--- there is stale.  `resolveDictApps` republishes it into `goalSiteLoc`.
+-- there is stale.  `resolveDictApps` hands it down as the walk's `sxSite`.
 public export data PendingDictApp = PendingDictApp {
   -- #2549 M2: the goal's OWN cell, minted with the goal.  It used to be the
   -- `EDictAt` node's cell, which is how a reader reached the answer; the node now
@@ -2135,6 +2135,27 @@ noDyn = DynCtx {
   dcDo = None,
   dcMethodMismatch = None,
 }
+
+-- The context of one resolver walk: what the dispatch site being resolved tells
+-- the routes and diagnostics below it.  A walk that works on a site is handed an
+-- updated copy.
+--   sxSite — the span of the site, for a diagnostic the route solver raises where
+--     it has no span argument.  `currentLoc` cannot serve: inference has long left
+--     the offending expression, so it names whichever span was entered last.
+--     Absent (a walk outside a resolver drain, such as an obligation check), the
+--     diagnostic falls back to `currentLoc`.
+--   sxInner — the notes accumulator of the running stamp: each route built below
+--     the destination's top level is ORed in.  Absent outside a stamp, where the
+--     notes are not wanted.
+public export data SiteCtx = SiteCtx {
+  sxSite : Option Loc,
+  sxInner : Option (Ref Inner),
+}
+
+-- The context outside every stamp and every site.
+export
+noSite : SiteCtx
+noSite = SiteCtx { sxSite = None, sxInner = None }
 
 -- a constrained-function occurrence (`f` where `f : C a => …`): instantiate f's
 -- scheme (the call's type), and record the routes ref + the instantiated
@@ -3436,6 +3457,9 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "DynCtx" () ((variant "DynCtx" (ConNamed (field "dcJoin" (TyApp (TyCon "Option") (TyCon "JoinContext"))) (field "dcNonCovariant" (TyCon "Bool")) (field "dcSuppressRLocalRecord" (TyCon "Bool")) (field "dcSuppressArgStamp" (TyCon "Bool")) (field "dcShadowHeadCtx" (TyCon "Bool")) (field "dcDo" (TyApp (TyCon "Option") (TyCon "DoCtx"))) (field "dcMethodMismatch" (TyApp (TyCon "Option") (TyCon "String")))))) ())
 (DTypeSig true "noDyn" (TyCon "DynCtx"))
 (DFunDef false "noDyn" () (ERecordCreate "DynCtx" ((fa "dcJoin" (EVar "None")) (fa "dcNonCovariant" (EVar "False")) (fa "dcSuppressRLocalRecord" (EVar "False")) (fa "dcSuppressArgStamp" (EVar "False")) (fa "dcShadowHeadCtx" (EVar "False")) (fa "dcDo" (EVar "None")) (fa "dcMethodMismatch" (EVar "None")))))
+(DData Public "SiteCtx" () ((variant "SiteCtx" (ConNamed (field "sxSite" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "sxInner" (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Inner"))))))) ())
+(DTypeSig true "noSite" (TyCon "SiteCtx"))
+(DFunDef false "noSite" () (ERecordCreate "SiteCtx" ((fa "sxSite" (EVar "None")) (fa "sxInner" (EVar "None")))))
 (DData Public "LocalAbs" () ((variant "LocalAbs" (ConNamed (field "laScope" (TyCon "ScopeId")) (field "laSlots" (TyApp (TyCon "List") (TyCon "PredicateSlot"))) (field "laParams" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "LocalAbsState" () ((variant "LocalAbsState" (ConNamed (field "lasBinders" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "LocalAbs"))))) (field "lasRecOccs" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "EvId") (TyCon "ScopeId")))))) (field "lasCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "lasQuantified" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
 (DData Public "GrantBinder" () ((variant "TopGrantBinder" (ConPos (TyCon "String") (TyCon "String"))) (variant "LocalGrantBinder" (ConPos (TyCon "String"))) (variant "BodyGrantBinder" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))) ())
@@ -3627,6 +3651,9 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "DynCtx" () ((variant "DynCtx" (ConNamed (field "dcJoin" (TyApp (TyCon "Option") (TyCon "JoinContext"))) (field "dcNonCovariant" (TyCon "Bool")) (field "dcSuppressRLocalRecord" (TyCon "Bool")) (field "dcSuppressArgStamp" (TyCon "Bool")) (field "dcShadowHeadCtx" (TyCon "Bool")) (field "dcDo" (TyApp (TyCon "Option") (TyCon "DoCtx"))) (field "dcMethodMismatch" (TyApp (TyCon "Option") (TyCon "String")))))) ())
 (DTypeSig true "noDyn" (TyCon "DynCtx"))
 (DFunDef false "noDyn" () (ERecordCreate "DynCtx" ((fa "dcJoin" (EVar "None")) (fa "dcNonCovariant" (EVar "False")) (fa "dcSuppressRLocalRecord" (EVar "False")) (fa "dcSuppressArgStamp" (EVar "False")) (fa "dcShadowHeadCtx" (EVar "False")) (fa "dcDo" (EVar "None")) (fa "dcMethodMismatch" (EVar "None")))))
+(DData Public "SiteCtx" () ((variant "SiteCtx" (ConNamed (field "sxSite" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "sxInner" (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Inner"))))))) ())
+(DTypeSig true "noSite" (TyCon "SiteCtx"))
+(DFunDef false "noSite" () (ERecordCreate "SiteCtx" ((fa "sxSite" (EVar "None")) (fa "sxInner" (EVar "None")))))
 (DData Public "LocalAbs" () ((variant "LocalAbs" (ConNamed (field "laScope" (TyCon "ScopeId")) (field "laSlots" (TyApp (TyCon "List") (TyCon "PredicateSlot"))) (field "laParams" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "LocalAbsState" () ((variant "LocalAbsState" (ConNamed (field "lasBinders" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "LocalAbs"))))) (field "lasRecOccs" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "EvId") (TyCon "ScopeId")))))) (field "lasCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "lasQuantified" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
 (DData Public "GrantBinder" () ((variant "TopGrantBinder" (ConPos (TyCon "String") (TyCon "String"))) (variant "LocalGrantBinder" (ConPos (TyCon "String"))) (variant "BodyGrantBinder" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))) ())
