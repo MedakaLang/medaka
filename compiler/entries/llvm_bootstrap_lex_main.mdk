@@ -34,7 +34,7 @@ import types.typecheck.{
 }
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
-  lowerProgramEmit,
+  lowerProgramEmitWith,
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -46,6 +46,7 @@ import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 import backend.core_validate.{Backend(..)}
 import types.private_mangle.{mangleUnitsEv}
+import types.program_facts.{factsOfElabWith}
 import entries.entry_support.{driveModules}
 
 export
@@ -55,9 +56,9 @@ oracleMain () = driveModules runEmit
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =
   -- #2809: elaborate the program as written, then mangle its elaborated trees.
-  let (coreE, modulesE, _, _, evTable, _, _) =
-    elaborateModules runtimeDecls coreDecls modules
-  let (coreD, modules2, _) = mangleUnitsEv evTable coreE modulesE
+  let elab = elaborateModules runtimeDecls coreDecls modules
+  let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let allDecls = coreD ++ flatMap snd modules2
   let _ =
     preludeReturnPosDictNames coreD allDecls
@@ -78,7 +79,7 @@ runEmit runtimeDecls coreDecls modules =
       ""
       (declaredRecordFieldOrders allDecls)
       (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-  let cp = lowerProgramEmit allDecls
+  let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
   let (text, _) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
   putStr text
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides

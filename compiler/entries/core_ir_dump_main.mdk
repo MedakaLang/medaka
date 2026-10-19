@@ -15,7 +15,8 @@
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
-import ir.core_ir_lower.{lowerProgram}
+import ir.core_ir_lower.{lowerProgramWithFacts}
+import types.program_facts.{emptyFacts}
 import ir.core_ir_sexp.{cprogramToSexp}
 
 main = match args ()
@@ -28,5 +29,8 @@ withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
   Ok src =>
     putStrLn
-      (cprogramToSexp (lowerProgram (annotateProgram (desugar (parse src)))))
+      (cprogramToSexp
+        (lowerProgramWithFacts
+          emptyFacts
+          (annotateProgram (desugar (parse src)))))
   Err msg => ePutStrLn msg

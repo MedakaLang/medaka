@@ -16,7 +16,8 @@
 -- prelude's point-free `sum` into a mixed-arity VMulti.
 
 import types.annotate.{annotateProgram}
-import ir.core_ir_lower.{lowerProgram}
+import ir.core_ir_lower.{lowerProgramWithFacts}
+import types.program_facts.{emptyFacts}
 import ir.core_ir_eval.{cevalOutputOf}
 import eval.eval.{dropShadowedExp, funNamesOf}
 import frontend.ast.{Decl}
@@ -31,6 +32,6 @@ emit preludeDecls userDecls =
   let decls =
     annotateProgram
       (dropShadowedExp (funNamesOf userDecls) preludeDecls ++ userDecls)
-  putStr (cevalOutputOf decls (lowerProgram decls))
+  putStr (cevalOutputOf decls (lowerProgramWithFacts emptyFacts decls))
 
 main = oracleMain ()

@@ -13,7 +13,8 @@
 -- installed arg-tag VMultis, the slice-5 install path over genuine stdlib code.
 
 import types.annotate.{annotateProgram}
-import ir.core_ir_lower.{lowerProgram}
+import ir.core_ir_lower.{lowerProgramWithFacts}
+import types.program_facts.{emptyFacts}
 import ir.core_ir_eval.{cevalMainOf}
 import frontend.ast.{Decl}
 import entries.entry_support.{drivePrelude}
@@ -25,6 +26,6 @@ oracleMain () = drivePrelude emit
 emit : List Decl -> List Decl -> <IO> Unit
 emit preludeDecls userDecls =
   let decls = annotateProgram (preludeDecls ++ userDecls)
-  putStrLn (cevalMainOf decls (lowerProgram decls))
+  putStrLn (cevalMainOf decls (lowerProgramWithFacts emptyFacts decls))
 
 main = oracleMain ()
