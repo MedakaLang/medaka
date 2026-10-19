@@ -29,8 +29,8 @@ import driver.front_gate.{
 }
 export import support.util.{rootsOrDefault}
 import support.util.{splitLast, startsWith, joinNl}
+import types.tc_types.{ElabResult}
 import types.typecheck.{
-  ElabResult,
   elaborateOne,
   elaborateModulesWithReport,
   setStdlibOwnership,

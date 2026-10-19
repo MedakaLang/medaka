@@ -64,7 +64,7 @@ import types.disposition.{
 }
 import types.repr.{IfaceRef(..), Scheme(..), ppMono, ppScheme}
 import types.solver_contract.{SolverOutcome(..), Wanted(..)}
-import types.typecheck.{
+import types.tc_types.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
   EvidenceObservationEntry(..),
@@ -72,9 +72,11 @@ import types.typecheck.{
   MethodReturnMemoView(..),
   MethodReturnTraceEntry(..),
   MethodReturnTraceStage(..),
-  ModDiags,
   NumericPredicateTraceEntry(..),
   NumericPredicateTraceStage(..),
+}
+import types.typecheck.{
+  ModDiags,
   TcDiag(..),
   beginAssumptionTrace,
   beginEvidenceObservation,

@@ -625,14 +625,34 @@ class = "shout"
 count = 9
 
 [[entry]]
+file = "compiler/types/tc_types.mdk"
+class = "history"
+count = 15
+
+[[entry]]
+file = "compiler/types/tc_types.mdk"
+class = "ruling"
+count = 1
+
+[[entry]]
+file = "compiler/types/tc_types.mdk"
+class = "draft"
+count = 1
+
+[[entry]]
+file = "compiler/types/tc_types.mdk"
+class = "deictic"
+count = 1
+
+[[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 128
+count = 110
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "ruling"
-count = 6
+count = 5
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -642,22 +662,22 @@ count = 5
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 617
+count = 556
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "draft"
-count = 18
+count = 17
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "deictic"
-count = 3
+count = 2
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 553
+count = 501
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"
