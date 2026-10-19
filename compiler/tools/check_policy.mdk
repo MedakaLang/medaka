@@ -36,7 +36,7 @@ import types.effect_rows.{atomKey, atomLabel, atomAuth, renderAtom, Atom(..)}
 -- compiler's externBindings is fixed and user-declared `extern`s get no eval
 -- cell, so we instead SYNTHESIZE Medaka stub funDefs (parsed from a tiny source
 -- string) that shadow those names, prepend them to the prelude, and drive
--- evalModulesRootEnv + apply.  The stubbed `logEvent` writes the `   [LOG] …`
+-- evalModulesRootEnvFacts + apply.  The stubbed `logEvent` writes the `   [LOG] …`
 -- line directly to the captured output buffer (eval's outputRef), reproducing
 -- OCaml's log-then-result ordering byte-for-byte.
 
@@ -56,8 +56,9 @@ import types.typecheck.{
   decodeSetParam,
   bindingGrantArity,
 }
+import types.program_facts.{factsOfElab, withFacts}
 import eval.eval.{
-  Value(..), evalModulesRootEnvWith, buildStampExterns, apply, outputRef,
+  Value(..), evalModulesRootEnvFacts, buildStampExterns, apply, outputRef,
   ppValue
 }
 import support.util.{
@@ -282,23 +283,30 @@ stubSource = stringConcat
 -- quantifies authorities first takes one grant per authority
 -- (EFFECTS-SEMANTICS §8); the sample run grants each the whole domain.
 runPlugin : String -> Int -> ElabResult -> String
-runPlugin fnName grants (coreD, modules, _, _, _, _) =
+runPlugin fnName grants (elab@(coreD, modules, _, _, _, _, _)) =
   let stubD = desugar (parse stubSource)
   -- The plugin runs ELABORATED, as `run` does: an interface default reaches an
   -- instance only through the elaboration's disposition table.  The stubs are
   -- plain prelude-level values the evaluator binds after the prelude.
   let (coreE, modulesE) = mangleCtorCollisionsPair (coreD, modules)
-  outputRef := ""
-  let rootEnv =
-    evalModulesRootEnvWith (buildStampExterns ()) (coreE ++ stubD) modulesE
-  match lookupValue fnName rootEnv
-    None => "   (no '" ++ fnName ++ "' binding in output)\n"
-    Some fnVal =>
-      let sample = "X-Forwarded-For: 192.168.1.1"
-      let granted = fold (f _ => apply f (VList [])) fnVal (replicate grants ())
-      let result = apply granted (VString sample)
-      let logged = !outputRef
-      "\{logged}   \{fnName} \{escStr sample} = \{ppValue result}\n"
+  let facts = factsOfElab elab
+  withFacts facts (_ =>
+    outputRef := ""
+    let rootEnv =
+      evalModulesRootEnvFacts
+        facts
+        (buildStampExterns ())
+        (coreE ++ stubD)
+        modulesE
+    match lookupValue fnName rootEnv
+      None => "   (no '" ++ fnName ++ "' binding in output)\n"
+      Some fnVal =>
+        let sample = "X-Forwarded-For: 192.168.1.1"
+        let granted =
+          fold (f _ => apply f (VList [])) fnVal (replicate grants ())
+        let result = apply granted (VString sample)
+        let logged = !outputRef
+        "\{logged}   \{fnName} \{escStr sample} = \{ppValue result}\n")
 
 lookupValue : String -> List (String, Value e) -> Option (Value e)
 lookupValue _ [] = None

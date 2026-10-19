@@ -1,5 +1,5 @@
 # META
-source_lines=252
+source_lines=211
 stages=DESUGAR,MARK
 # SOURCE
 -- What each source binder holds at run time, as the typechecker decided it.
@@ -24,7 +24,7 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{BinderId(..), TyConOrigin(..)}
 import types.repr.{Mono(..), Tyvar(..)}
-import map.{Map(..), get, set, values}
+import map.{Map(..), get, set}
 
 -- The runtime-type domain.  Each case is a distinction some emitter draws today
 -- by recovering it from the program's shape; the table states it instead.  The
@@ -75,7 +75,7 @@ public export data BinderRow = BinderRow {
 
 -- The table, keyed by the id's ordinal.  Ordinals come from one process-global
 -- counter, so the ordinal alone is unique; the module half is compared on every
--- hit (`binderRow`).
+-- hit (`binderRowIn`).
 export type BinderTypeTable = Map Int BinderRow
 
 export
@@ -157,38 +157,14 @@ builtinRuntimeType "__tuple4__" = RTCon
 builtinRuntimeType "__tuple5__" = RTCon
 builtinRuntimeType _ = RTValue
 
--- ── the installed table ───────────────────────────────────────────────────
--- Exactly one table is installed per elaboration, beside the evidence and
--- disposition tables and under the same ordering: every read of it completes
--- before the next elaboration installs its own.
-binderTypesRef : Ref (Option BinderTypeTable)
-binderTypesRef = Ref None
-
--- Replace the installed table with this elaboration's.
+-- The row [table] holds for [bid], or `None` when the typechecker recorded none for
+-- it; no table answers `None`.  A row answering for a different module than the id
+-- names is a panic: ordinals are never reused within a process, so it can only
+-- mean the module half was rewritten without the ordinal.
 export
-installBinderTypes : BinderTypeTable -> Unit
-installBinderTypes table = binderTypesRef := Some table
-
--- The row published for [bid], or `None` when the typechecker recorded none for
--- it.  Reading before any elaboration installed a table is a panic, as is a row
--- answering for a different module than the id names: ordinals are never reused
--- within a process, so the second can only mean the module half was rewritten
--- without the ordinal.
-export
-binderRow : BinderId -> Option BinderRow
-binderRow (BinderId m i) = match !binderTypesRef
-  None =>
-    panic
-      "binder table: no elaboration has published one (looking up \{m}#\{intToString i})"
-  Some table => rowIn table m i
-
--- `binderRow` for a reader that may run with no elaboration behind it (an untyped
--- lowering): no table answers `None` instead of panicking.
-export
-binderRowIfInstalled : BinderId -> Option BinderRow
-binderRowIfInstalled (BinderId m i) = match !binderTypesRef
-  None => None
-  Some table => rowIn table m i
+binderRowIn : Option BinderTypeTable -> BinderId -> Option BinderRow
+binderRowIn None _ = None
+binderRowIn (Some table) (BinderId m i) = rowIn table m i
 
 rowIn : BinderTypeTable -> String -> Int -> Option BinderRow
 rowIn table m i = match get i table
@@ -199,16 +175,6 @@ rowIn table m i = match get i table
         Some row
       else
         panic "binder table: \{m}#\{intToString i} answered by module \{m2}"
-
--- The installed table, for a helper elaboration that replaces it and must put it
--- back (`route_key.withEvidencePreserved`).
-export
-installedBinderTable : Unit -> Option BinderTypeTable
-installedBinderTable _ = !binderTypesRef
-
-export
-restoreBinderTable : Option BinderTypeTable -> Unit
-restoreBinderTable table = binderTypesRef := table
 
 -- The spelling a row's type has in a Core dump (`core_ir_sexp`), and its inverse.
 -- Both are explicit tables, not derived `Debug`, so that Core dumps and the
@@ -247,17 +213,10 @@ runtimeTypeFromName "RTU8" = Some RTU8
 runtimeTypeFromName "RTCon" = Some RTCon
 runtimeTypeFromName "RTValue" = Some RTValue
 runtimeTypeFromName _ = None
-
--- Every installed row, in ordinal order; empty before any elaboration.
-export
-installedBinderRows : Unit -> List BinderRow
-installedBinderRows _ = match !binderTypesRef
-  None => []
-  Some table => values table
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "TyConOrigin" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Tyvar" true))))
-(DUse false (UseGroup ("map") ((mem "Map" true) (mem "get" false) (mem "set" false) (mem "values" false))))
+(DUse false (UseGroup ("map") ((mem "Map" true) (mem "get" false) (mem "set" false))))
 (DData Public "RuntimeType" () ((variant "RTInt" (ConPos)) (variant "RTFloat" (ConPos)) (variant "RTBool" (ConPos)) (variant "RTChar" (ConPos)) (variant "RTString" (ConPos)) (variant "RTUnit" (ConPos)) (variant "RTU64" (ConPos)) (variant "RTI64" (ConPos)) (variant "RTU32" (ConPos)) (variant "RTI32" (ConPos)) (variant "RTU16" (ConPos)) (variant "RTU8" (ConPos)) (variant "RTCon" (ConPos)) (variant "RTValue" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "RuntimeType")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RTInt") (PCon "RTInt")) () (EVar "True")) (arm (PTuple (PCon "RTFloat") (PCon "RTFloat")) () (EVar "True")) (arm (PTuple (PCon "RTBool") (PCon "RTBool")) () (EVar "True")) (arm (PTuple (PCon "RTChar") (PCon "RTChar")) () (EVar "True")) (arm (PTuple (PCon "RTString") (PCon "RTString")) () (EVar "True")) (arm (PTuple (PCon "RTUnit") (PCon "RTUnit")) () (EVar "True")) (arm (PTuple (PCon "RTU64") (PCon "RTU64")) () (EVar "True")) (arm (PTuple (PCon "RTI64") (PCon "RTI64")) () (EVar "True")) (arm (PTuple (PCon "RTU32") (PCon "RTU32")) () (EVar "True")) (arm (PTuple (PCon "RTI32") (PCon "RTI32")) () (EVar "True")) (arm (PTuple (PCon "RTU16") (PCon "RTU16")) () (EVar "True")) (arm (PTuple (PCon "RTU8") (PCon "RTU8")) () (EVar "True")) (arm (PTuple (PCon "RTCon") (PCon "RTCon")) () (EVar "True")) (arm (PTuple (PCon "RTValue") (PCon "RTValue")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "RuntimeType")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RTInt") () (ELit (LString "RTInt"))) (arm (PCon "RTFloat") () (ELit (LString "RTFloat"))) (arm (PCon "RTBool") () (ELit (LString "RTBool"))) (arm (PCon "RTChar") () (ELit (LString "RTChar"))) (arm (PCon "RTString") () (ELit (LString "RTString"))) (arm (PCon "RTUnit") () (ELit (LString "RTUnit"))) (arm (PCon "RTU64") () (ELit (LString "RTU64"))) (arm (PCon "RTI64") () (ELit (LString "RTI64"))) (arm (PCon "RTU32") () (ELit (LString "RTU32"))) (arm (PCon "RTI32") () (ELit (LString "RTI32"))) (arm (PCon "RTU16") () (ELit (LString "RTU16"))) (arm (PCon "RTU8") () (ELit (LString "RTU8"))) (arm (PCon "RTCon") () (ELit (LString "RTCon"))) (arm (PCon "RTValue") () (ELit (LString "RTValue")))))))
@@ -303,20 +262,11 @@ installedBinderRows _ = match !binderTypesRef
 (DFunDef false "builtinRuntimeType" ((PLit (LString "__tuple4__"))) (EVar "RTCon"))
 (DFunDef false "builtinRuntimeType" ((PLit (LString "__tuple5__"))) (EVar "RTCon"))
 (DFunDef false "builtinRuntimeType" (PWild) (EVar "RTValue"))
-(DTypeSig false "binderTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))))
-(DFunDef false "binderTypesRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "installBinderTypes" (TyFun (TyCon "BinderTypeTable") (TyCon "Unit")))
-(DFunDef false "installBinderTypes" ((PVar "table")) (EApp (EApp (EVar "setRef") (EVar "binderTypesRef")) (EApp (EVar "Some") (EVar "table"))))
-(DTypeSig true "binderRow" (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow"))))
-(DFunDef false "binderRow" ((PCon "BinderId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "binderTypesRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: no elaboration has published one (looking up ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))))
-(DTypeSig true "binderRowIfInstalled" (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow"))))
-(DFunDef false "binderRowIfInstalled" ((PCon "BinderId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "binderTypesRef")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))))
+(DTypeSig true "binderRowIn" (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow")))))
+(DFunDef false "binderRowIn" ((PCon "None") PWild) (EVar "None"))
+(DFunDef false "binderRowIn" ((PCon "Some" (PVar "table")) (PCon "BinderId" (PVar "m") (PVar "i"))) (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))
 (DTypeSig false "rowIn" (TyFun (TyCon "BinderTypeTable") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "BinderRow"))))))
 (DFunDef false "rowIn" ((PVar "table") (PVar "m") (PVar "i")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "table")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "row")) () (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" (PVar "m2") PWild) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Some") (EVar "row")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EVar "display") (EVar "m2"))) (ELit (LString ""))))))))))
-(DTypeSig true "installedBinderTable" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))))
-(DFunDef false "installedBinderTable" (PWild) (EUnOp "!" (EVar "binderTypesRef")))
-(DTypeSig true "restoreBinderTable" (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyCon "Unit")))
-(DFunDef false "restoreBinderTable" ((PVar "table")) (EApp (EApp (EVar "setRef") (EVar "binderTypesRef")) (EVar "table")))
 (DTypeSig true "runtimeTypeName" (TyFun (TyCon "RuntimeType") (TyCon "String")))
 (DFunDef false "runtimeTypeName" ((PCon "RTInt")) (ELit (LString "RTInt")))
 (DFunDef false "runtimeTypeName" ((PCon "RTFloat")) (ELit (LString "RTFloat")))
@@ -348,12 +298,10 @@ installedBinderRows _ = match !binderTypesRef
 (DFunDef false "runtimeTypeFromName" ((PLit (LString "RTCon"))) (EApp (EVar "Some") (EVar "RTCon")))
 (DFunDef false "runtimeTypeFromName" ((PLit (LString "RTValue"))) (EApp (EVar "Some") (EVar "RTValue")))
 (DFunDef false "runtimeTypeFromName" (PWild) (EVar "None"))
-(DTypeSig true "installedBinderRows" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "BinderRow"))))
-(DFunDef false "installedBinderRows" (PWild) (EMatch (EUnOp "!" (EVar "binderTypesRef")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "table")) () (EApp (EVar "values") (EVar "table")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "TyConOrigin" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Tyvar" true))))
-(DUse false (UseGroup ("map") ((mem "Map" true) (mem "get" false) (mem "set" false) (mem "values" false))))
+(DUse false (UseGroup ("map") ((mem "Map" true) (mem "get" false) (mem "set" false))))
 (DData Public "RuntimeType" () ((variant "RTInt" (ConPos)) (variant "RTFloat" (ConPos)) (variant "RTBool" (ConPos)) (variant "RTChar" (ConPos)) (variant "RTString" (ConPos)) (variant "RTUnit" (ConPos)) (variant "RTU64" (ConPos)) (variant "RTI64" (ConPos)) (variant "RTU32" (ConPos)) (variant "RTI32" (ConPos)) (variant "RTU16" (ConPos)) (variant "RTU8" (ConPos)) (variant "RTCon" (ConPos)) (variant "RTValue" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "RuntimeType")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RTInt") (PCon "RTInt")) () (EVar "True")) (arm (PTuple (PCon "RTFloat") (PCon "RTFloat")) () (EVar "True")) (arm (PTuple (PCon "RTBool") (PCon "RTBool")) () (EVar "True")) (arm (PTuple (PCon "RTChar") (PCon "RTChar")) () (EVar "True")) (arm (PTuple (PCon "RTString") (PCon "RTString")) () (EVar "True")) (arm (PTuple (PCon "RTUnit") (PCon "RTUnit")) () (EVar "True")) (arm (PTuple (PCon "RTU64") (PCon "RTU64")) () (EVar "True")) (arm (PTuple (PCon "RTI64") (PCon "RTI64")) () (EVar "True")) (arm (PTuple (PCon "RTU32") (PCon "RTU32")) () (EVar "True")) (arm (PTuple (PCon "RTI32") (PCon "RTI32")) () (EVar "True")) (arm (PTuple (PCon "RTU16") (PCon "RTU16")) () (EVar "True")) (arm (PTuple (PCon "RTU8") (PCon "RTU8")) () (EVar "True")) (arm (PTuple (PCon "RTCon") (PCon "RTCon")) () (EVar "True")) (arm (PTuple (PCon "RTValue") (PCon "RTValue")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "RuntimeType")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RTInt") () (ELit (LString "RTInt"))) (arm (PCon "RTFloat") () (ELit (LString "RTFloat"))) (arm (PCon "RTBool") () (ELit (LString "RTBool"))) (arm (PCon "RTChar") () (ELit (LString "RTChar"))) (arm (PCon "RTString") () (ELit (LString "RTString"))) (arm (PCon "RTUnit") () (ELit (LString "RTUnit"))) (arm (PCon "RTU64") () (ELit (LString "RTU64"))) (arm (PCon "RTI64") () (ELit (LString "RTI64"))) (arm (PCon "RTU32") () (ELit (LString "RTU32"))) (arm (PCon "RTI32") () (ELit (LString "RTI32"))) (arm (PCon "RTU16") () (ELit (LString "RTU16"))) (arm (PCon "RTU8") () (ELit (LString "RTU8"))) (arm (PCon "RTCon") () (ELit (LString "RTCon"))) (arm (PCon "RTValue") () (ELit (LString "RTValue")))))))
@@ -399,20 +347,11 @@ installedBinderRows _ = match !binderTypesRef
 (DFunDef false "builtinRuntimeType" ((PLit (LString "__tuple4__"))) (EVar "RTCon"))
 (DFunDef false "builtinRuntimeType" ((PLit (LString "__tuple5__"))) (EVar "RTCon"))
 (DFunDef false "builtinRuntimeType" (PWild) (EVar "RTValue"))
-(DTypeSig false "binderTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))))
-(DFunDef false "binderTypesRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "installBinderTypes" (TyFun (TyCon "BinderTypeTable") (TyCon "Unit")))
-(DFunDef false "installBinderTypes" ((PVar "table")) (EApp (EApp (EVar "setRef") (EVar "binderTypesRef")) (EApp (EVar "Some") (EVar "table"))))
-(DTypeSig true "binderRow" (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow"))))
-(DFunDef false "binderRow" ((PCon "BinderId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "binderTypesRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: no elaboration has published one (looking up ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))))
-(DTypeSig true "binderRowIfInstalled" (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow"))))
-(DFunDef false "binderRowIfInstalled" ((PCon "BinderId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "binderTypesRef")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))))
+(DTypeSig true "binderRowIn" (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow")))))
+(DFunDef false "binderRowIn" ((PCon "None") PWild) (EVar "None"))
+(DFunDef false "binderRowIn" ((PCon "Some" (PVar "table")) (PCon "BinderId" (PVar "m") (PVar "i"))) (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))
 (DTypeSig false "rowIn" (TyFun (TyCon "BinderTypeTable") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "BinderRow"))))))
 (DFunDef false "rowIn" ((PVar "table") (PVar "m") (PVar "i")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "table")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "row")) () (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" (PVar "m2") PWild) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Some") (EVar "row")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EMethodRef "display") (EVar "m2"))) (ELit (LString ""))))))))))
-(DTypeSig true "installedBinderTable" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))))
-(DFunDef false "installedBinderTable" (PWild) (EUnOp "!" (EVar "binderTypesRef")))
-(DTypeSig true "restoreBinderTable" (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyCon "Unit")))
-(DFunDef false "restoreBinderTable" ((PVar "table")) (EApp (EApp (EVar "setRef") (EVar "binderTypesRef")) (EVar "table")))
 (DTypeSig true "runtimeTypeName" (TyFun (TyCon "RuntimeType") (TyCon "String")))
 (DFunDef false "runtimeTypeName" ((PCon "RTInt")) (ELit (LString "RTInt")))
 (DFunDef false "runtimeTypeName" ((PCon "RTFloat")) (ELit (LString "RTFloat")))
@@ -444,5 +383,3 @@ installedBinderRows _ = match !binderTypesRef
 (DFunDef false "runtimeTypeFromName" ((PLit (LString "RTCon"))) (EApp (EVar "Some") (EVar "RTCon")))
 (DFunDef false "runtimeTypeFromName" ((PLit (LString "RTValue"))) (EApp (EVar "Some") (EVar "RTValue")))
 (DFunDef false "runtimeTypeFromName" (PWild) (EVar "None"))
-(DTypeSig true "installedBinderRows" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "BinderRow"))))
-(DFunDef false "installedBinderRows" (PWild) (EMatch (EUnOp "!" (EVar "binderTypesRef")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "table")) () (EApp (EVar "values") (EVar "table")))))

@@ -7,8 +7,7 @@
 -- Depends only on `types.repr`'s and `frontend.ast`'s identity types, so
 -- `compiler/ir/*`, `compiler/eval/*` and `compiler/backend/*` can import this module
 -- without reaching `types.typecheck` — the producer (`buildDispositions`) lives
--- there; this module is the shared carrier plus the installed lookup, mirroring
--- `types/route_key.mdk`'s `evidenceRef`/`installEvidence`.
+-- there; this module is the shared carrier.
 --
 -- Its readers are the two passes that turn an `InheritedDefault` row into code:
 -- `core_ir_lower` (one `CImplDefault` entry per row, which every compiled engine
@@ -253,42 +252,3 @@ validateDispositionTable expected table =
   match dispositionProblems expected table
     [] => ()
     problem :: _ => panic "disposition table: \{problem}"
-
--- ── the installed table ────────────────────────────────────────────────────
--- `elaborateModules` installs one every elaboration so its readers (see the header)
--- need not thread the table through every call site by hand, exactly as
--- `installEvidence` does.
-dispositionsRef : Ref (Option DispositionTable)
-dispositionsRef = Ref None
-
--- Replace the installed table with this elaboration's. Called once per
--- elaboration, so the table never outlives the program it describes.
-export
-installDispositions : DispositionTable -> Unit
-installDispositions table = dispositionsRef := Some table
-
--- A miss means no elaboration has published one — loud, mirroring
--- `route_key.mdk`'s `evDictRoutes` `None` arm at `evidenceRef`, never a silent
--- empty table.
-export
-installedDispositions : Unit -> DispositionTable
-installedDispositions _ = match !dispositionsRef
-  None => panic "disposition table: no elaboration has published one"
-  Some table => table
-
--- For a lowering driver that may run without an elaboration (the untyped Core-IR
--- and eval probes): `None` there means the program was never typechecked, so no
--- instance's inherited defaults are known and none is specialized — an impl that
--- leaves another module's interface method to its default has no body for it on
--- that path (see `core_ir_lower.lowerProgram`).  A typechecked driver reads
--- `installedDispositions`, which refuses a missing table.
-export
-installedDispositionsOpt : Unit -> Option DispositionTable
-installedDispositionsOpt _ = !dispositionsRef
-
--- Put back a table read with `installedDispositionsOpt`, for a driver that
--- elaborates a program it derived from the user's and must leave the user's own
--- elaboration's table installed for the engine that runs next.
-export
-restoreDispositions : Option DispositionTable -> Unit
-restoreDispositions saved = dispositionsRef := saved

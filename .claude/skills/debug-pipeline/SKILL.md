@@ -134,7 +134,7 @@ happens to contain its spelling.
 ## The signature bug shape: loader-only dispatch failures
 
 **A dispatch bug that reproduces through the loader but is a green single-file run
-is *usually* the eval driver, not dict-passing.** The loader's `evalModules` uses
+is *usually* the eval driver, not dict-passing.** The loader's `evalModulesWith` uses
 per-module frames and a separate prelude/install order, so binding-order and
 impl-install-order bugs surface *only* there.
 

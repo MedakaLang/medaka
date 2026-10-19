@@ -29,7 +29,7 @@ import frontend.ast.{
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import eval.eval.{Value(..), evalOne, force}
+import eval.eval.{Value(..), evalOneFacts, force}
 import ir.core_ir.{
   CBind(..),
   CClause(..),
@@ -40,8 +40,9 @@ import ir.core_ir.{
   noDeclFacts,
 }
 import ir.core_ir_lower.{
-  ifaceMethodArityKey, lowerProgram, methodConstraintIfaces
+  ifaceMethodArityKey, lowerProgramWithFacts, methodConstraintIfaces
 }
+import types.program_facts.{ProgramFacts, factsOfElab, withFacts}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
 import types.evidence.{
@@ -60,7 +61,6 @@ import types.disposition.{
   dispositionMethod,
   dispositionRows,
   instIdMid,
-  installedDispositions,
 }
 import types.repr.{IfaceRef(..), Scheme(..), ppMono, ppScheme}
 import types.solver_contract.{SolverOutcome(..), Wanted(..)}
@@ -92,6 +92,7 @@ import types.typecheck.{
   constrainedSigNames,
   elaborateModules,
   elaborateOne,
+  elaborateOneFacts,
   evCellsSpanProbe,
   finishAssumptionTrace,
   finishEvidenceObservation,
@@ -116,7 +117,7 @@ import types.typecheck.{
   walkGoalSameProbe,
 }
 import types.target_profile.{selectProfile, selectedProfile}
-import types.route_key.{installedEvidenceSlots}
+import types.route_key.{EvIndex(..), evIndexOf}
 import support.ordmap.{omEmpty, omFromNames}
 import support.util.{
   contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
@@ -1364,13 +1365,15 @@ blockRecEvalValue =
   let source = localNumBlockRecSource ++ "\nmain : Float\nmain = value 1.5\n"
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated source)
-  let elaborated = elaborateOne [] core ("block_rec_eval", program)
-  let bindings = evalOne [] ("block_rec_eval", elaborated)
-  match lookupAssoc "main" bindings
-    Some value => match force value
-      VFloat result => result
-      _ => 0.0
-    _ => 0.0
+  let (elaborated, facts) =
+    elaborateOneFacts [] core ("block_rec_eval", program)
+  withFacts facts (_ =>
+    let bindings = evalOneFacts facts [] ("block_rec_eval", elaborated)
+    match lookupAssoc "main" bindings
+      Some value => match force value
+        VFloat result => result
+        _ => 0.0
+      _ => 0.0)
 
 test "block recursive let executes with its captured Num dictionary" =
   expectEqual 1.5 blockRecEvalValue
@@ -1438,15 +1441,17 @@ wrappedReturnRoutes : String -> Option (List String)
 wrappedReturnRoutes source =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated source)
-  let elaborated = elaborateOne [] core ("wrapped_return", program)
-  let (CProgram binds _ _ _ _ _) = lowerProgram elaborated
+  let (elaborated, elabFacts) =
+    elaborateOneFacts [] core ("wrapped_return", program)
+  let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   returnBindRoutes binds
 
 wrappedReturnFlatRoutes : String -> Option (List String)
 wrappedReturnFlatRoutes source =
   let program = desugar (parseLocated "\{numericPreludeSource}\n\{source}")
-  let elaborated = elaborateOne [] [] ("wrapped_return_flat", program)
-  let (CProgram binds _ _ _ _ _) = lowerProgram elaborated
+  let (elaborated, elabFacts) =
+    elaborateOneFacts [] [] ("wrapped_return_flat", program)
+  let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   returnBindRoutes binds
 
 test "wrapped return prerequisites use the class parameter, not the result type" =
@@ -2481,8 +2486,9 @@ loweredMethodArity : String -> String -> String -> Option Int
 loweredMethodArity source bindName method =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated source)
-  let elaborated = elaborateOne [] core ("method_arity", program)
-  let (CProgram binds _ _ _ _ _) = lowerProgram elaborated
+  let (elaborated, elabFacts) =
+    elaborateOneFacts [] core ("method_arity", program)
+  let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   bindMethodArity bindName method binds
 
 test "method occurrence freezes declared arity before higher-order specialization" =
@@ -2634,8 +2640,9 @@ blockRecCoreFacts =
   let source = localNumBlockRecSource ++ "\nmain : Float\nmain = value 1.5\n"
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated source)
-  let elaborated = elaborateOne [] core ("block_rec_core", program)
-  let (CProgram binds _ _ _ _ _) = lowerProgram elaborated
+  let (elaborated, elabFacts) =
+    elaborateOneFacts [] core ("block_rec_core", program)
+  let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   fold
     (facts bind => mergeLocalCoreFacts facts (blockRecValueFacts bind))
     emptyLocalCoreFacts
@@ -2675,8 +2682,9 @@ lamThenGroupCoreFacts : LocalCoreFacts
 lamThenGroupCoreFacts =
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated lamThenGroupSource)
-  let elaborated = elaborateOne [] core ("lam_then_group_core", program)
-  let (CProgram binds _ _ _ _ _) = lowerProgram elaborated
+  let (elaborated, elabFacts) =
+    elaborateOneFacts [] core ("lam_then_group_core", program)
+  let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   fold
     (facts bind => mergeLocalCoreFacts facts (lamThenGroupBindFacts bind))
     emptyLocalCoreFacts
@@ -3539,10 +3547,9 @@ test "a generalized local is dictionary-abstracted: each use applies it to the g
   ]
 
 -- #1112 A-3: production-path observation of `buildDispositions`'
--- installed table, over a real multi-module elaboration. `elaborateModules`
--- installs the table it built via `installDispositions` before returning
--- (`types/typecheck.mdk`'s `driveGraphK`), so a caller reads it back with
--- `installedDispositions` exactly as X-E (#1403) will.
+-- table, over a real multi-module elaboration. `elaborateModules` returns the
+-- table it built (`types/typecheck.mdk`'s `driveGraphK`) as the sixth component
+-- of its result.
 --
 -- Rows are matched by MODULE ID rather than by exact `InstId` (which also
 -- carries a whole-graph-running `seq` the prelude's own impls advance), so a
@@ -3550,12 +3557,12 @@ test "a generalized local is dictionary-abstracted: each use applies it to the g
 -- numbers underneath the test.
 dispositionsAfter : List (String, String) -> DispositionTable
 dispositionsAfter sources =
-  let _ =
+  let (_, _, _, _, _, dispositions, _) =
     elaborateModules
       []
       (desugar (parse numericPreludeSource))
       (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
-  installedDispositions ()
+  dispositions
 
 sameIfaceSpelling : IfaceRef -> String -> Bool
 sameIfaceSpelling iface name = iface.irName == name
@@ -3742,29 +3749,28 @@ placedNumCodes inherited =
   let (errors, _) = checkOneDiags [] core ("placed_num", program)
   map tcCode errors
 
-placedNumElaborated : Bool -> List Decl
+placedNumElaborated : Bool -> (List Decl, ProgramFacts)
 placedNumElaborated inherited =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated (placedNumSource inherited))
-  elaborateOne [] core ("placed_num", program)
+  elaborateOneFacts [] core ("placed_num", program)
 
 placedNumSuppliedValue : Int
-placedNumSuppliedValue =
-  let bindings = evalOne [] ("placed_num", placedNumElaborated False)
-  match lookupAssoc "main" bindings
-    Some v => match force v
-      VInt n => n
-      _ => 0 - 1
-    _ => 0 - 1
+placedNumSuppliedValue = placedNumValue False
 
 placedNumInheritedValue : Int
-placedNumInheritedValue =
-  let bindings = evalOne [] ("placed_num", placedNumElaborated True)
-  match lookupAssoc "main" bindings
-    Some v => match force v
-      VInt n => n
-      _ => 0 - 1
-    _ => 0 - 1
+placedNumInheritedValue = placedNumValue True
+
+placedNumValue : Bool -> Int
+placedNumValue inherited =
+  let (elaborated, facts) = placedNumElaborated inherited
+  withFacts facts (_ =>
+    let bindings = evalOneFacts facts [] ("placed_num", elaborated)
+    match lookupAssoc "main" bindings
+      Some v => match force v
+        VInt n => n
+        _ => 0 - 1
+      _ => 0 - 1)
 
 -- The body-local literal `[1, 2]` appears nowhere in `t`'s declared type, so the
 -- body's own numeric boundary grounds it to Int on either placement, and the call
@@ -4496,14 +4502,18 @@ preludeOutcome prelude sources =
         (_, (_, errors, _)) => map tcCode errors)
       (checkModulesDiagsChain None "" [] [] core modules)
   if isEmptyL codes then
-    let (coreD, elaborated, _, _, _, _) = elaborateModules [] core modules
+    let elab = elaborateModules [] core modules
+    let (coreD, elaborated, _, _, _, _, _) = elab
     let rootId = optionOr "" (map fst (last sources))
-    let bindings = evalOne [] (rootId, coreD ++ flatMap snd elaborated)
-    match lookupAssoc "main" bindings
-      Some value => match force value
-        VString s => (codes, s)
-        _ => (codes, "<not a string>")
-      None => (codes, "<no main>")
+    let facts = factsOfElab elab
+    withFacts facts (_ =>
+      let bindings =
+        evalOneFacts facts [] (rootId, coreD ++ flatMap snd elaborated)
+      match lookupAssoc "main" bindings
+        Some value => match force value
+          VString s => (codes, s)
+          _ => (codes, "<not a string>")
+        None => (codes, "<no main>"))
   else
     (codes, "")
 
@@ -5583,16 +5593,18 @@ test "a stable super selection builds each use's super" =
 -- instance).
 closedGoalOutcome : String -> List String -> ((String, Int, Int), Bool)
 closedGoalOutcome prelude lines =
-  let (coreD, modules, _, residual, _, _) = elaborateModules [] (desugar
-    (parse prelude)) [
+  let elab = elaborateModules [] (desugar (parse prelude)) [
     ("closed_goal", desugar (parseLocated (joinNl lines))),
   ]
+  let (coreD, modules, _, residual, _, _, _) = elab
   let first = match residual
     (_, TcDiag code _ (Some (Loc _ line col _ _)) _ _ _) :: _ =>
       (code, line, col)
     (_, TcDiag code _ None _ _ _) :: _ => (code, 0, 0)
     [] => ("", 0, 0)
-  let sexp = cprogramToSexp (lowerProgram (coreD ++ flatMap snd modules))
+  let sexp =
+    cprogramToSexp
+      (lowerProgramWithFacts (factsOfElab elab) (coreD ++ flatMap snd modules))
   (first, hasBareRKey (splitOnChar '"' sexp))
 
 -- [segments] is the sexp split at every quote, so a route key is the segment
@@ -5708,14 +5720,16 @@ spanProgramModule = (
       ])),
 )
 
--- The method-cell index's length and the installed table's slot count after one
+-- The method-cell index's length and the returned table's slot count after one
 -- unkeyed `elaborateModules` drive.
 elaborateSpans : Unit -> (Int, Int)
 elaborateSpans _ =
-  let _ = elaborateModules [] (desugar (parse numericPreludeSource)) [
+  let (_, _, _, _, table, _, _) = elaborateModules [] (desugar
+    (parse numericPreludeSource)) [
     spanProgramModule,
   ]
-  (evCellsSpanProbe (), installedEvidenceSlots ())
+  match evIndexOf table
+    EvIndex _ arr => (evCellsSpanProbe (), arrayLength arr)
 
 -- The method-cell index's length after one unkeyed `checkOneDiags` drive.
 diagsSpan : Unit -> Int

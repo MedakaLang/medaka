@@ -1,66 +1,59 @@
--- Sibling tests for the published evidence table in `route_key.mdk`.
+-- Sibling tests for the evidence index in `route_key.mdk`.
 --
 -- A lookup that finds no entry panics, and `stdlib/test.mdk` has no verb that
 -- observes a panic in-process, so the miss arms are pinned through the `Result`
--- twins the panicking readers wrap (`installedLookup`, `evidenceLookup`,
--- `evSiteRouteResult`, `evSiteLitResult`, `evSiteHeadResult`): each wrapper is
--- one `match` that panics with the `Err` text.
+-- twin the panicking readers wrap (`evidenceLookup`): each reader is one `match`
+-- that panics with the `Err` text.
 
 import test.{expectEqual, expectAll}
 import types.route_key.{
-  evDictRoutes,
-  evSiteHead,
-  evSiteHeadResult,
-  evSiteLit,
-  evSiteLitResult,
-  evSiteRoute,
-  evSiteRouteResult,
+  evDictRoutesIn,
+  evIndexOf,
+  evMethodRoutesIn,
+  evSiteHeadIn,
+  evSiteLitIn,
+  evSiteRouteIn,
   evidenceLookup,
-  installedLookup,
-  installEvidence,
-  installedEvidenceEntries,
-  installedEvidenceSlots,
-  remapEvidence,
-  withEvidencePreserved,
+  siteHeadResultIn,
+  siteLitResultIn,
+  siteRouteResultIn,
 }
 import frontend.ast.{EvId(..), EvVal(..), EvEntry(..), Route(..), unminted}
 
 test "an application of zero dictionaries is an explicit empty entry" =
-  let _ = installEvidence [EvEntry (EvId "m" 0) (EvMany [])]
-  expectEqual 0 (length (evDictRoutes (EvId "m" 0)))
+  let idx = evIndexOf [EvEntry (EvId "m" 0) (EvMany [])]
+  expectEqual 0 (length (evDictRoutesIn idx (EvId "m" 0)))
 
 test "entries are answered by ordinal, empty and non-empty side by side" =
-  let _ = installEvidence [
+  let idx = evIndexOf [
     EvEntry (EvId "m" 0) (EvMany []),
     EvEntry (EvId "m" 2) (EvMany [RNone, RNone]),
     EvEntry (EvId "m" 1) (EvMany [RNone]),
   ]
   expectAll [
-    expectEqual 0 (length (evDictRoutes (EvId "m" 0))),
-    expectEqual 1 (length (evDictRoutes (EvId "m" 1))),
-    expectEqual 2 (length (evDictRoutes (EvId "m" 2))),
+    expectEqual 0 (length (evDictRoutesIn idx (EvId "m" 0))),
+    expectEqual 1 (length (evDictRoutesIn idx (EvId "m" 1))),
+    expectEqual 2 (length (evDictRoutesIn idx (EvId "m" 2))),
   ]
 
 -- A table is sized by its own entries' ordinals, lowest to highest, so a late graph's
--- table is as small as an early one's; the offset lookup, the restore around a helper
--- elaboration and the in-place rewrite all see the same entries.
+-- table is as small as an early one's and the offset lookup still finds every entry.
 test "a table whose ordinals start late is sized by its span" =
-  let _ = installEvidence [
+  let idx = evIndexOf [
     EvEntry (EvId "m" 1000) (EvMany []),
     EvEntry (EvId "m" 1002) (EvMany [RNone, RNone]),
   ]
-  let slots = installedEvidenceSlots ()
-  let _ = withEvidencePreserved (_ => installEvidence [
-    EvEntry (EvId "m" 5) (EvMany [RNone]),
-  ])
-  let _ = remapEvidence (e => match e
-    EvEntry ev _ => EvEntry ev (EvMany [RNone]))
   expectAll [
-    expectEqual 3 slots,
-    expectEqual 3 (installedEvidenceSlots ()),
-    expectEqual 2 (length (installedEvidenceEntries ())),
-    expectEqual 1 (length (evDictRoutes (EvId "m" 1000))),
-    expectEqual 1 (length (evDictRoutes (EvId "m" 1002))),
+    expectEqual 0 (length (evDictRoutesIn idx (EvId "m" 1000))),
+    expectEqual 2 (length (evDictRoutesIn idx (EvId "m" 1002))),
+    expectEqual
+      "evidence table: dictionary application m#1001 was never published"
+      (missOf
+        (evidenceLookup (Some idx) "dictionary application" (EvId "m" 1001))),
+    expectEqual
+      "evidence table: dictionary application m#999 is from an earlier graph"
+      (missOf
+        (evidenceLookup (Some idx) "dictionary application" (EvId "m" 999))),
   ]
 
 -- The shape of a route, enough to tell the answers below apart (`Route` has no `Eq`).
@@ -71,28 +64,28 @@ routeShape (RKey word _ _) = "key \{word}"
 routeShape _ = "other"
 
 test "an operator site answers the route published under its id" =
-  let _ = installEvidence [
+  let idx = evIndexOf [
     EvEntry (EvId "m" 7) (EvOne (RScalar "Float")),
     EvEntry (EvId "m" 8) (EvOne (RKey "Num|V|" [] [])),
     EvEntry (EvId "m" 9) (EvMany []),
   ]
   expectAll [
-    expectEqual "scalar Float" (routeShape (evSiteRoute (EvId "m" 7))),
-    expectEqual "key Num|V|" (routeShape (evSiteRoute (EvId "m" 8))),
+    expectEqual "scalar Float" (routeShape (evSiteRouteIn idx (EvId "m" 7))),
+    expectEqual "key Num|V|" (routeShape (evSiteRouteIn idx (EvId "m" 8))),
   ]
 
 -- A node built after inference was never marked, so no table has an entry for it.
 test "an unminted operator site answers no route" =
-  let _ = installEvidence [EvEntry (EvId "m" 7) (EvOne (RScalar "Float"))]
-  expectEqual "none" (routeShape (evSiteRoute unminted))
+  let idx = evIndexOf [EvEntry (EvId "m" 7) (EvOne (RScalar "Float"))]
+  expectEqual "none" (routeShape (evSiteRouteIn idx unminted))
 
 test "a published literal site answers its float and route" =
-  let _ = installEvidence [
+  let idx = evIndexOf [
     EvEntry (EvId "m" 3) (EvLit (Some 2.0) RNone),
     EvEntry (EvId "m" 4) (EvLit None (RScalar "Float")),
   ]
-  let hit = evSiteLit (EvId "m" 3)
-  let other = evSiteLit (EvId "m" 4)
+  let hit = evSiteLitIn idx (EvId "m" 3)
+  let other = evSiteLitIn idx (EvId "m" 4)
   expectAll [
     expectEqual (Some 2.0) (fst hit),
     expectEqual "none" (routeShape (snd hit)),
@@ -102,79 +95,91 @@ test "a published literal site answers its float and route" =
 
 -- A literal built after inference was never marked and answers a plain `Int`.
 test "an unminted literal site answers no float and no route" =
-  let _ = installEvidence [EvEntry (EvId "m" 3) (EvLit (Some 2.0) RNone)]
-  let r = evSiteLit unminted
+  let idx = evIndexOf [EvEntry (EvId "m" 3) (EvLit (Some 2.0) RNone)]
+  let r = evSiteLitIn idx unminted
   expectAll [
     expectEqual None (fst r),
     expectEqual "none" (routeShape (snd r)),
   ]
 
 test "a published record-head site answers its head" =
-  let _ = installEvidence [
+  let idx = evIndexOf [
     EvEntry (EvId "m" 3) (EvHead "Mm__Cfg"),
     EvEntry (EvId "m" 4) (EvHead ""),
   ]
   expectAll [
-    expectEqual "Mm__Cfg" (evSiteHead (EvId "m" 3)),
-    expectEqual "" (evSiteHead (EvId "m" 4)),
+    expectEqual "Mm__Cfg" (evSiteHeadIn idx (EvId "m" 3)),
+    expectEqual "" (evSiteHeadIn idx (EvId "m" 4)),
   ]
 
 -- A record access built after inference was never marked and carries no head.
 test "an unminted record-head site answers no head" =
-  let _ = installEvidence [EvEntry (EvId "m" 3) (EvHead "Mm__Cfg")]
-  expectEqual "" (evSiteHead unminted)
+  let idx = evIndexOf [EvEntry (EvId "m" 3) (EvHead "Mm__Cfg")]
+  expectEqual "" (evSiteHeadIn idx unminted)
+
+test "a method occurrence answers the entry published under its id" =
+  let idx = evIndexOf [EvEntry (EvId "m" 14) (EvMethod "Eq" 2 RNone [RNone] [])]
+  let (iface, arity, _, impls, meths) = evMethodRoutesIn idx (EvId "m" 14)
+  expectAll [
+    expectEqual "Eq" iface,
+    expectEqual 2 arity,
+    expectEqual 1 (length impls),
+    expectEqual 0 (length meths),
+  ]
 
 -- The miss text of a lookup, "ok" when it answered.
 missOf : Result String a -> String
 missOf (Ok _) = "ok"
 missOf (Err message) = message
 
-test "a lookup with no table installed names what it looked up" =
+test "a lookup with no table names what it looked up" =
   expectEqual
     "evidence table: no elaboration has published one (looking up operator site m#3)"
     (missOf (evidenceLookup None "operator site" (EvId "m" 3)))
 
-test "each miss of the installed table says why it has no answer" =
-  let _ = installEvidence [
+test "a lookup over an index says why it has no answer" =
+  let idx = evIndexOf [
     EvEntry (EvId "m" 10) (EvOne RNone),
     EvEntry (EvId "m" 12) (EvMany []),
   ]
   expectAll [
     expectEqual
       "evidence table: operator site m#9 is from an earlier graph"
-      (missOf (installedLookup "operator site" (EvId "m" 9))),
+      (missOf (evidenceLookup (Some idx) "operator site" (EvId "m" 9))),
     expectEqual
       "evidence table: operator site m#13 was never published"
-      (missOf (installedLookup "operator site" (EvId "m" 13))),
+      (missOf (evidenceLookup (Some idx) "operator site" (EvId "m" 13))),
     expectEqual
       "evidence table: operator site m#11 was never published"
-      (missOf (installedLookup "operator site" (EvId "m" 11))),
+      (missOf (evidenceLookup (Some idx) "operator site" (EvId "m" 11))),
     expectEqual
       "evidence table: n#10 answered by module m"
-      (missOf (installedLookup "operator site" (EvId "n" 10))),
-    expectEqual "ok" (missOf (installedLookup "operator site" (EvId "m" 10))),
+      (missOf (evidenceLookup (Some idx) "operator site" (EvId "n" 10))),
+    expectEqual
+      "ok"
+      (missOf (evidenceLookup (Some idx) "operator site" (EvId "m" 10))),
   ]
 
 test "a site reader refuses an entry of another kind and passes a miss through" =
-  let _ = installEvidence [
+  let idx = evIndexOf [
     EvEntry (EvId "m" 10) (EvOne RNone),
     EvEntry (EvId "m" 12) (EvMany []),
   ]
   expectAll [
     expectEqual
       "evidence table: an operator site answered by another kind of entry"
-      (missOf (evSiteRouteResult (EvId "m" 12))),
+      (missOf (siteRouteResultIn idx (EvId "m" 12))),
     expectEqual
       "evidence table: a literal site answered by another kind of entry"
-      (missOf (evSiteLitResult (EvId "m" 10))),
+      (missOf (siteLitResultIn idx (EvId "m" 10))),
     expectEqual
       "evidence table: literal site m#9 is from an earlier graph"
-      (missOf (evSiteLitResult (EvId "m" 9))),
+      (missOf (siteLitResultIn idx (EvId "m" 9))),
     expectEqual
       "evidence table: a record-head site answered by another kind of entry"
-      (missOf (evSiteHeadResult (EvId "m" 10))),
+      (missOf (siteHeadResultIn idx (EvId "m" 10))),
     expectEqual
       "evidence table: record-head site m#9 is from an earlier graph"
-      (missOf (evSiteHeadResult (EvId "m" 9))),
-    expectEqual "ok" (missOf (evSiteRouteResult (EvId "m" 10))),
+      (missOf (siteHeadResultIn idx (EvId "m" 9))),
+    expectEqual "ok" (missOf (siteRouteResultIn idx (EvId "m" 10))),
   ]

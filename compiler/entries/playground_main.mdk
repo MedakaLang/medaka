@@ -73,6 +73,7 @@
 -- itself an entry and cannot be imported).
 
 import frontend.ast.{Decl(..), Loc(..), Pat, Expr(..)}
+import types.tc_types.{ElabResult}
 import frontend.parser.{
   parseResult,
   parseLocatedResult,
@@ -140,13 +141,14 @@ import types.typecheck.{
   checkOneSchemeFullK
 }
 import ir.core_ir_lower.{
-  lowerProgramEmit,
+  lowerProgramEmitWith,
   validateFfiExternTypeNames,
   methodIfaceTable,
   declaredRecordFieldOrders,
   ctorFieldTypeNames,
 }
 import types.private_mangle.{mangleUnitsEv}
+import types.program_facts.{factsOfElabWith}
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{
   emitProgram,
@@ -590,7 +592,7 @@ data WrittenEntry = WrittenEntry { wePath : String, weSource : String }
 -- against the selected profile on it, as `check --target` does; a refusal is
 -- the verdict in either mode.  Compile then emits from that same elaboration;
 -- analyze prints its own marker and the same warnings JSON — no
--- lowerProgramEmit, no reach, no emitProgram.  See doEmit's obituary for the
+-- lowerProgramEmitWith, no reach, no emitProgram.  See doEmit's obituary for the
 -- discarded elaboration that once preceded this one: there is exactly one per
 -- run, on either path.
 finishClean : Bool ->
@@ -612,7 +614,8 @@ finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
   match targetRefusalOf written paths analysis
     [] =>
       if emit then
-        let (coreE, modulesE, _, _, _, _) = analysis.eaElab
+        let elab = analysis.eaElab
+        let (coreE, modulesE, _, _, _, _, _) = elab
         let executed =
           executedTrees
             report.trAutoPrint
@@ -620,7 +623,7 @@ finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
             (coreDecls, modules)
             (coreE, modulesE)
         match executed
-          Ok executed => runEmit paths warnTriples runtimeDecls executed
+          Ok executed => runEmit paths warnTriples runtimeDecls elab executed
           Err msg => failWith msg
       else
         emitAnalyzeMarker warnTriples
@@ -673,14 +676,16 @@ nonEmptyDiags _ = True
 runEmit : List (String, String) ->
   List (String, String, List Diag) ->
   List Decl ->
+  ElabResult ->
   (List Decl, List (String, List Decl)) ->
   <IO> Unit
-runEmit paths warnTriples runtimeDecls executed =
+runEmit paths warnTriples runtimeDecls elab executed =
+  let (_, _, _, _, evTable, _, _) = elab
   -- #2809: the program is elaborated as written (`finishClean`), then its
   -- elaborated trees are mangled.
   let (coreE, modulesE) = executed
   let wrapped = mainIsWrapped modulesE
-  let (coreD, modulesM) = mangleUnitsEv coreE modulesE
+  let (coreD, modulesM, evTableM) = mangleUnitsEv evTable coreE modulesE
   let modules2 = stampModulePaths paths modulesM
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
@@ -704,7 +709,7 @@ runEmit paths warnTriples runtimeDecls executed =
   -- program, then drop the impl bodies (and the plain bindings only they
   -- reached) that no dispatchable method name in this program can reach.  Without
   -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
-  let lowered = lowerProgramEmit allDecls
+  let lowered = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
   let (plan, reached) = buildEmitPlanReached ffiRows lowered
   let _ = emitWatMarker warnTriples
   putStr (emitProgram input plan reached)

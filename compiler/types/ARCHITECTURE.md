@@ -22,8 +22,9 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 | `solver_contract.mdk` | Request-local contracts for scoped class solving and scheme instantiation; no inference state | `InstantiationServices` |
 | `superclass.mdk` | The superclass closure over declared `requires` clauses, parameterised by reader | superclass walk |
 | `evidence_complete.mdk` | The completeness judgment: does every dispatch destination name an instance or a given | `EvidenceRow` predicate |
-| `disposition.mdk` | Whole-graph table of which method each impl supplies or inherits from the default; importable by `ir/`, `eval/`, `backend/` without `typecheck.mdk` | `installedDispositionsOpt` |
-| `route_key.mdk` | The only mint of an impl route word | `evMethodRoutes`, `numIntWord` |
+| `disposition.mdk` | Whole-graph table of which method each impl supplies or inherits from the default; importable by `ir/`, `eval/`, `backend/` without `typecheck.mdk` | `dispositionLookup`, `buildDispositionTable` |
+| `route_key.mdk` | The only mint of an impl route word | `evMethodRoutesIn`, `numIntWord` |
+| `program_facts.mdk` | Leaf: the evidence index, dispositions and binder table of one typechecked program as a value, and the run-owned cell a bracket sets | `withFacts`, `factsNow` |
 | `chain_key.mdk` | The part of the module-chain memo key a step reads from modules outside its prefix: instance heads and constrained signature names | `chainGraphKey` |
 | `runtime_types.mdk` | What each source binder holds at run time, keyed by `BinderId`, materialized after the drain | `RuntimeType`, `BinderRow` |
 | `annotate.mdk` | Lexical-addressing emission pass: variable references to addressed references, right before eval | `annotateProgram` |

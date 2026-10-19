@@ -24,7 +24,7 @@
 -- terminal call swapped from eval.mdk's `evalModulesOutput` to
 -- ir.core_ir_eval's `cevalModulesOutput` — i.e. the ONLY variable between the two
 -- drivers is which of the two parallel module drivers runs.  Keep it that way:
--- AGENTS.md records `evalModules` and `cevalModules` as parallel drivers that must
+-- AGENTS.md records `evalModulesWith` and `cevalModules` as parallel drivers that must
 -- move in lockstep, and this driver is the instrument that can see them diverge.
 --
 -- Graded by test/diff_compiler_core_ir_typed_modules.sh.
@@ -34,7 +34,8 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}
 import types.typecheck.{elaborateModules}
-import ir.core_ir_eval.{cevalModulesOutput}
+import ir.core_ir_eval.{cevalModulesOutputFacts}
+import types.program_facts.{factsOfElab}
 import entries.entry_support.{
   failWith, usageModules, rootsOrDefault, desugarPair
 }
@@ -63,8 +64,8 @@ run runtimeP coreP entry roots =
 
 runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runElab runtimeDecls coreDecls modules =
-  let (coreE, modulesE, _, _, _, _) =
-    elaborateModules runtimeDecls coreDecls modules
-  putStr (cevalModulesOutput coreE modulesE)
+  let elab = elaborateModules runtimeDecls coreDecls modules
+  let (coreE, modulesE, _, _, _, _, _) = elab
+  putStr (cevalModulesOutputFacts (factsOfElab elab) coreE modulesE)
 
 main = oracleMain ()

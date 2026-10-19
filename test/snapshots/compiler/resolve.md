@@ -5971,7 +5971,7 @@ stampGraphTyOrigins coreDecls modules =
   (coreS, stampModulesGo coreTypes omEmpty modules)
 
 -- Both identity layers for ONE module, in one place so the prelude pass above and
--- the per-module walk below cannot drift apart — the `evalModules`/`cevalModules`
+-- the per-module walk below cannot drift apart — the `evalModulesWith`/`cevalModules`
 -- lockstep hazard, in miniature.  Declarations first, then the occurrence heads
 -- (type AND interface, one walk): the two are independent (the occurrence scope is
 -- built from `dataRecordNames`/`interfaceNamesOf`, which read names, not origins),

@@ -13,7 +13,8 @@
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
-import ir.core_ir_lower.{lowerProgram}
+import ir.core_ir_lower.{lowerProgramWithFacts}
+import types.program_facts.{emptyFacts}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
 import ir.core_ir_eval.{cevalMainOf}
@@ -30,7 +31,7 @@ withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
   Ok src =>
     let decls = annotateProgram (desugar (parse src))
-    let prog = lowerProgram decls
+    let prog = lowerProgramWithFacts emptyFacts decls
     let sexp = cprogramToSexp prog
     let prog2 = parseCProgram sexp
     -- the round-tripped `prog2` is evaluated, but the interpreter's ctor

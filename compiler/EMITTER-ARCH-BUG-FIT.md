@@ -261,7 +261,7 @@ three-engine agreement, but does not include the Wasm command/output.
 **Prediction.** V carries distinct type `Ident`s and solver-owned `InstId`s; AP
 linkage assigns distinct `LinkId`s; LLVM/Wasm collision validators cover
 impl/method symbols.
-Permuting module order cannot change either result. `evalModules` is an observed
+Permuting module order cannot change either result. `evalModulesWith` is an observed
 residual; `cevalModules` is its source-consistent peer obligation and must be
 tested rather than reported as already observed. Both must consume the same
 qualified identity in lockstep; fixing only emitted linkage does not drain the
@@ -466,7 +466,7 @@ drain claims.
 
 Moving product `run` to V/AP evaluation could retire some duplicate evaluator
 machinery, but this architecture does not assume that decision. Until then,
-`evalModules` and `cevalModules` remain lockstep consumers.
+`evalModulesWith` and `cevalModules` remain lockstep consumers.
 
 ## 6. Type/effect soundness outside the backend arc
 

@@ -16,9 +16,9 @@
 -- lowering leaves every CVar at AGlobal (harmless: ceval resolves by name).
 
 import frontend.ast.{Decl}
-import types.typecheck.{elaborateOne}
+import types.typecheck.{elaborateOneFacts}
 import eval.eval.{funNamesOf, dropShadowedExp}
-import ir.core_ir_lower.{lowerTypedProgram}
+import ir.core_ir_lower.{lowerTypedProgramWith}
 import ir.core_ir_eval.{cevalOutputOf}
 import entries.entry_support.{driveRuntime}
 
@@ -33,7 +33,8 @@ emit runtimeDecls preludeDecls userDecls =
 runTyped : List Decl -> List Decl -> List Decl -> String
 runTyped runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
-  let decls = elaborateOne runtimeDecls livePrelude ("__user__", userDecls)
-  cevalOutputOf decls (lowerTypedProgram decls)
+  let (decls, facts) =
+    elaborateOneFacts runtimeDecls livePrelude ("__user__", userDecls)
+  cevalOutputOf decls (lowerTypedProgramWith facts decls)
 
 main = oracleMain ()

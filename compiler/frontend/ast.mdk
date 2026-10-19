@@ -1358,8 +1358,8 @@ intMinLiteralHelp =
 -- half.  The module half is a TRIPWIRE: it is what lets that lookup panic instead of
 -- answering when an entry comes back stamped by a module the node did not ask for.
 --
--- The tripwire cannot fire for today's readers (`evSiteRoute`, `evSiteLit`,
--- `evSiteHead`, `evMethodRoutes` and `evDictRoutes` in `types/route_key.mdk`),
+-- The tripwire cannot fire for today's readers (`evSiteRouteIn`, `evSiteLitIn`,
+-- `evSiteHeadIn`, `evMethodRoutesIn` and `evDictRoutesIn` in `types/route_key.mdk`),
 -- because each reads with the id its own node carries, the very id `freshEvId`
 -- stamped into the goal, so the comparison is a tautology at every live site.  It is
 -- still not dead weight, and a reader must not conclude from
@@ -1424,7 +1424,7 @@ noBinderId = BinderId "" (0 - 1)
 -- type, never an interface.  The node
 -- itself carries no route: its three cells are the method name, the pre-pass seed
 -- and the `EvId` that addresses that cell, and a reader reaches the routes by
--- looking the id up (`evMethodRoutes`, `compiler/types/route_key.mdk`).  One node
+-- looking the id up (`evMethodRoutesIn`, `compiler/types/route_key.mdk`).  One node
 -- can be the destination of zero goals (the
 -- unbound-method recovery arm writes a final route without pushing one) or three
 -- (the return-site, arg-stamp and RLocal goals all stamp `ecTag`), so the node,
@@ -1543,7 +1543,7 @@ public export data Expr =
   -- A binary operator.  The trailing `EvId` names the operator's site: the parser
   -- and every node built after inference carry `unminted`, and the typechecker's
   -- mark pass mints it.  The route the solver decides for the site is published
-  -- under that id and read back with `evSiteRoute` (`types/route_key.mdk`).  A
+  -- under that id and read back with `evSiteRouteIn` (`types/route_key.mdk`).  A
   -- comparison, equality or arithmetic operator whose operand grounds to a
   -- non-primitive type gets a dispatch route, and dictPass rewrites the node into
   -- the method application (==→eq, /=→not(eq …), <→lt, +→add, …); a primitive
@@ -1560,7 +1560,7 @@ public export data Expr =
   | EInfix String Expr Expr
   -- field access `r.f`.  The trailing `EvId` names the access's site: the parser
   -- carries `unminted` and the typechecker's mark pass mints it.  Inference
-  -- publishes the resolved record head under that id (`evSiteHead`,
+  -- publishes the resolved record head under that id (`evSiteHeadIn`,
   -- `types/route_key.mdk`); "" means unknown, and an `unminted` site answers "".
   -- The emitter reads the head to pick the record by (recHead, label), so two
   -- records sharing a field name at different indices resolve to the correct
@@ -1636,7 +1636,7 @@ public export data Expr =
   -- Method occurrence (return-position `pure`/`empty`/…, arg-position dispatch,
   -- or a standalone shadow) rewritten by the self-hosted typecheck's pre-pass:
   -- the method name, the pre-pass SEED, and the identity under which the solver
-  -- publishes this occurrence's answer (`EvMethod`, read through `evMethodRoutes`
+  -- publishes this occurrence's answer (`EvMethod`, read through `evMethodRoutesIn`
   -- in `compiler/types/route_key.mdk`).  Only appears in the typed eval pipeline,
   -- never in parse/mark output.
   --
@@ -1680,7 +1680,7 @@ public export data Expr =
   -- publishes this occurrence's routes, one per `=>` constraint.  Eval applies the
   -- matching dictionaries as leading args, lining up with the dict params
   -- dict_pass prepended to f's definition; it resolves the id through the table
-  -- `elaborateModules`/`elaborateDict` publish (`evDictRoutes`,
+  -- `elaborateModules`/`elaborateDict` publish (`evDictRoutesIn`,
   -- `compiler/types/route_key.mdk`) rather than through a cell, because the
   -- interpreter cannot reach a typechecker-private ref.
   | EDictAt String EvId
@@ -1703,7 +1703,7 @@ public export data Expr =
   -- position; a pattern-position literal stays `PLit (LInt)`.  The second field
   -- names the literal's site, minted like an operator's: `unminted` until the
   -- typechecker's mark pass mints it.  The solver publishes two answers under that
-  -- id, read back with `evSiteLit`: the float the literal defaulted to, if its type
+  -- id, read back with `evSiteLitIn`: the float the literal defaulted to, if its type
   -- grounded to Float, and the `fromInt` route.  dictPass rewrites the node to
   -- `ELit (LFloat f)` for a float, `ELit (LInt n)` for an unrouted literal, or
   -- `EApp (EMethodAt "fromInt" ...) (ELit (LInt n))` when the literal stays a

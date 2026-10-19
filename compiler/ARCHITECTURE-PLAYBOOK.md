@@ -94,9 +94,9 @@ below. The cut rulings P1-D1 to P1-D22 and the exit outputs are on #4206.
 | `lsp.c_didchange` | 4 | four requests, not a duplicate | none needed |
 
 **What Phase 1 did not do**, and where each residual now lives:
-- Lowering and eval still read the installed evidence table rather than `CheckedProgram`
-  (the emit path remaps it in place after mangling). A2's "consumers read the value" half is
-  therefore unchecked: Phase 2 **S4** (#2705).
+- Lowering and eval now read `ProgramFacts` values rather than an installed evidence table
+  (the emit path remaps the value after mangling); the reader half of Phase 2 **S4** (#2705)
+  landed in sprint arch-p2-2.
 - Stampers still write destination cells inside the drive; "the stamper order is a policy
   over a value" is M-SOLVER's evidence-bindings step (#2705, P1-D18).
 - Process-global cells (`selectedProfile`, `mainSchemeRef`) remain: Phase 2 S1 and S3.
@@ -188,7 +188,7 @@ This is #1398's REVISION block and runs beside Phases 0 to 4; it needs nothing f
 
 | Id | Action | Acceptance |
 |---|---|---|
-| **B1** | The Plan record (R5). **Landed 2026-10-14** (sprint #4107, PR #4110): `backend/emit_plan.mdk`'s `EmitPlan`, carrying its `target`; `lowerProgramEmit` takes no backend. R5's reachable-extern-requirements field is not on it yet; T4's `js/` lowering (#3672) waits for that field. | `lowerProgramEmit` has no backend parameter; `WasmEmitInput` carries the four facts it lacked. |
+| **B1** | The Plan record (R5). **Landed 2026-10-14** (sprint #4107, PR #4110): `backend/emit_plan.mdk`'s `EmitPlan`, carrying its `target`; `lowerProgramEmitWith` takes no backend. R5's reachable-extern-requirements field is not on it yet; T4's `js/` lowering (#3672) waits for that field. | `lowerProgramEmitWith` has no backend parameter; `WasmEmitInput` carries the four facts it lacked. |
 | **B2** | F7 capability manifest and the remaining ledger rows. | Each row's L7 hand-derived fixture; the validator arm observed red. |
 | **B3** | Twin retirement | G3's twin count falls with every fact that lands; a PR that adds a twin says why. |
 | **B4** | Validators on every test | `core_validate` runs before either emitter writes, in every engines fixture, not only in its own gate. |

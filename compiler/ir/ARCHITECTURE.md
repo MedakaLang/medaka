@@ -12,7 +12,7 @@ AST S-expression dump (`sexp.mdk`), kept here with the Core IR dumpers.
 | Module | Owns | Entry points |
 |---|---|---|
 | `core_ir.mdk` | The Core IR itself: a serializable, backend-neutral representation that lives above any ISA | `CProgram`, `CExpr` |
-| `core_ir_lower.mdk` | Elaborated AST to Core IR lowering; reads the typechecker's dispatch cells out into immutable nodes | `lowerProgram`, `lowerProgramEmit`, `definedArityOf` |
+| `core_ir_lower.mdk` | Elaborated AST to Core IR lowering; reads the typechecker's dispatch cells out into immutable nodes | `lowerProgramWithFacts`, `lowerProgramEmitWith`, `definedArityOf` |
 | `core_ir_sexp.mdk` | Structural S-expression dump of the Core IR, the frozen serialization contract | `cprogramToSexp` |
 | `core_ir_sexp_parse.mdk` | Round-trip deserializer for that format back into a `CProgram` | `parseCProgram` |
 | `core_ir_eval.mdk` | Core IR interpreter that reuses the AST evaluator's runtime, diffed against it as the equivalence oracle | `cevalModules` |
@@ -38,7 +38,7 @@ AST S-expression dump (`sexp.mdk`), kept here with the Core IR dumpers.
 - `ARCHITECTURE-PLAYBOOK.md` for the Plan record and the fact ledger.
 
 ## Traps
-- `[T-EVAL-LOCKSTEP]` — `evalModules` and `cevalModules` are parallel drivers; fix both.
+- `[T-EVAL-LOCKSTEP]` — `evalModulesWith` and `cevalModules` are parallel drivers; fix both.
 - `[T-LEGA-GOLDEN]` — `ir.sexp` is a LEG A module; a top-level change moves its selfproc golden.
 - `[T-GLOBAL-TABLE]` — a new IR constructor means auditing every `_ =>` arm.
 - `[D-CORE-IR-TYPED]` — the Core IR dump probes live in the `debug-pipeline` skill.

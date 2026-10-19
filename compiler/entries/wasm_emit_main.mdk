@@ -7,7 +7,7 @@
 --
 -- Parses + desugars the (prelude-free, scalar) target, runs annotateProgram (the
 -- §2.0 lexical-addressing EMIT half — so the Core IR is born addressed, exactly as
--- the LLVM driver does), LOWERS to Core IR (core_ir_lower.lowerProgramEmit), and
+-- the LLVM driver does), LOWERS to Core IR (core_ir_lower.lowerProgramEmitWith), and
 -- EMITS a textual WAT module to stdout.  The gate (test/wasm/diff_wasm.sh) captures
 -- that .wat, assembles+validates it with wasm-tools, runs it under Node ≥22, and
 -- diffs its stdout against the native-compiled oracle — the same equivalence-gate
@@ -21,8 +21,9 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import types.typecheck.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
 import ir.core_ir_lower.{
-  lowerProgramEmit,
+  lowerProgramEmitWith,
   stampDeclaredSignatures,
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
@@ -54,6 +55,7 @@ withTarget targetPath = match readFile targetPath
         []
     -- No typechecker ran, so the lowering stamps every binder `RTValue`; the
     -- signatures the source declares restate what they type.
-    let cp = stampDeclaredSignatures decls (lowerProgramEmit annotated)
+    let cp =
+      stampDeclaredSignatures decls (lowerProgramEmitWith emptyFacts annotated)
     putStr (emitProgram input (buildEmitPlan WasmBackend cp) cp)
   Err msg => ePutStrLn msg

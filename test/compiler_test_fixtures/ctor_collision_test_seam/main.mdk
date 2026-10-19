@@ -1,4 +1,4 @@
--- #1292 (S0), THIRD SEAM: `eval.evalModulesRootEnvWith` -- the driver the
+-- #1292 (S0), THIRD SEAM: `eval.evalModulesRootEnvFacts` -- the driver the
 -- `test "…"` phase, the prop runner and the repl actually use (test_cmd.mdk);
 -- `evalModulesWith` serves doctests only.  A fix wired into the other two module
 -- drivers alone would look correct under every check that never runs `medaka test`.

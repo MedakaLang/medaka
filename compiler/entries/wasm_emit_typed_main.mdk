@@ -39,6 +39,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{elaborateModules}
 import types.private_mangle.{mangleUnitsEv}
+import types.program_facts.{ProgramFacts, emptyFacts, factsOfElabWith}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir.{
   CProgram(..),
@@ -55,11 +56,11 @@ import ir.core_ir.{
   synthBind,
 }
 import ir.core_ir_lower.{
-  lowerProgramEmit,
+  lowerProgramEmitWith,
   markTailSites,
   stampCallModes,
   stampImplSymbols,
-  stampUntypedBinders,
+  stampUntypedBindersWith,
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
   methodIfaceTable,
@@ -133,11 +134,19 @@ runEmit runtimeDecls preludeDecls userDecls =
 -- `entry_support.runEmitWith` runs: elaborate, then mangle.
 typedElaborated : List Decl -> List Decl -> List Decl -> List Decl
 typedElaborated runtimeDecls preludeDecls userDecls =
+  fst (typedElaboratedFacts runtimeDecls preludeDecls userDecls)
+
+-- `typedElaborated` with the facts of the elaboration it mangled.
+typedElaboratedFacts : List Decl ->
+  List Decl ->
+  List Decl ->
+  (List Decl, ProgramFacts)
+typedElaboratedFacts runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
-  let (coreE, modulesE, _, _, _, _) =
-    elaborateModules runtimeDecls livePrelude [("__user__", userDecls)]
-  let (coreD, modules2) = mangleUnitsEv coreE modulesE
-  coreD ++ flatMap snd modules2
+  let elab = elaborateModules runtimeDecls livePrelude [("__user__", userDecls)]
+  let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
+  (coreD ++ flatMap snd modules2, factsOfElabWith evTableM elab)
 
 typedInput : List Decl -> List Decl -> List Decl -> WasmEmitInput
 typedInput runtimeDecls preludeDecls userDecls =
@@ -158,7 +167,8 @@ cprogram : List CBind ->
   List CImplEntry ->
   CProgram
 cprogram groups ctorArs ctorTypes impls =
-  stampUntypedBinders
+  stampUntypedBindersWith
+    emptyFacts
     (markTailSites
       (stampCallModes
         (stampImplSymbols
@@ -167,7 +177,9 @@ cprogram groups ctorArs ctorTypes impls =
 
 typedProgram : List Decl -> List Decl -> List Decl -> CProgram
 typedProgram runtimeDecls preludeDecls userDecls =
-  lowerProgramEmit (typedElaborated runtimeDecls preludeDecls userDecls)
+  let (mangled, facts) =
+    typedElaboratedFacts runtimeDecls preludeDecls userDecls
+  lowerProgramEmitWith facts mangled
 
 -- Same-process input-isolation harness for X-W.H1. It lowers P once, then emits
 -- that exact CProgram with P's complete input, one U-derived field at a time, and
@@ -1183,7 +1195,8 @@ trapStateProgram =
 
 trapStateControlProgram : CProgram
 trapStateControlProgram =
-  stampUntypedBinders
+  stampUntypedBindersWith
+    emptyFacts
     (CProgram
       [synthBind "main" [CClause [] (CLit (LInt 29))]]
       []

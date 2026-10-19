@@ -19,7 +19,8 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import driver.loader.{loadProgram}
-import ir.core_ir_eval.{cevalModulesOutput}
+import ir.core_ir_eval.{cevalModulesOutputFacts}
+import types.program_facts.{emptyFacts}
 import eval.eval.{ffiExternNamesRef}
 import support.util.{isEmptyL, isNonEmptyL}
 import entries.entry_support.{rootsOrDefault}
@@ -52,7 +53,8 @@ run coreP entry roots = match readFile coreP
     Err e => ePutStrLn e
     Ok mods =>
       putStr
-        (cevalModulesOutput
+        (cevalModulesOutputFacts
+          emptyFacts
           (annotateProgram (desugar (parse csrc)))
           (map annotatePair mods))
 
@@ -69,10 +71,17 @@ runFfiResetControl coreP externEntry pureEntry roots = match readFile coreP
       Err e => ePutStrLn e
       Ok pureMods =>
         let coreDecls = annotateProgram (desugar (parse csrc))
-        let _ = cevalModulesOutput coreDecls (map annotatePair externMods)
+        let _ =
+          cevalModulesOutputFacts
+            emptyFacts
+            coreDecls
+            (map annotatePair externMods)
         let seeded = isNonEmptyL !ffiExternNamesRef
         let pureOutput =
-          cevalModulesOutput coreDecls (map annotatePair pureMods)
+          cevalModulesOutputFacts
+            emptyFacts
+            coreDecls
+            (map annotatePair pureMods)
         let reset = isEmptyL !ffiExternNamesRef
         if seeded && reset then
           putStr pureOutput

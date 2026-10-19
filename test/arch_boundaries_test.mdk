@@ -740,12 +740,10 @@ sideSection ls =
 sideNames : List String
 sideNames = [
   "selectedProfile",
-  "evidenceRef",
-  "dispositionsRef",
-  "binderTypesRef",
   "binderOrdinalRef",
   "preludeScopeMemoRef",
   "loadedSourcesRef",
+  "program_facts.currentFacts",
 ]
 
 -- The field name of an indented `name :` line; comment lines give None.

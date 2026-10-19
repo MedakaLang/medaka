@@ -20,7 +20,7 @@
 
 import frontend.ast.{BinderId(..), TyConOrigin(..)}
 import types.repr.{Mono(..), Tyvar(..)}
-import map.{Map(..), get, set, values}
+import map.{Map(..), get, set}
 
 -- The runtime-type domain.  Each case is a distinction some emitter draws today
 -- by recovering it from the program's shape; the table states it instead.  The
@@ -71,7 +71,7 @@ public export data BinderRow = BinderRow {
 
 -- The table, keyed by the id's ordinal.  Ordinals come from one process-global
 -- counter, so the ordinal alone is unique; the module half is compared on every
--- hit (`binderRow`).
+-- hit (`binderRowIn`).
 export type BinderTypeTable = Map Int BinderRow
 
 export
@@ -153,38 +153,14 @@ builtinRuntimeType "__tuple4__" = RTCon
 builtinRuntimeType "__tuple5__" = RTCon
 builtinRuntimeType _ = RTValue
 
--- ── the installed table ───────────────────────────────────────────────────
--- Exactly one table is installed per elaboration, beside the evidence and
--- disposition tables and under the same ordering: every read of it completes
--- before the next elaboration installs its own.
-binderTypesRef : Ref (Option BinderTypeTable)
-binderTypesRef = Ref None
-
--- Replace the installed table with this elaboration's.
+-- The row [table] holds for [bid], or `None` when the typechecker recorded none for
+-- it; no table answers `None`.  A row answering for a different module than the id
+-- names is a panic: ordinals are never reused within a process, so it can only
+-- mean the module half was rewritten without the ordinal.
 export
-installBinderTypes : BinderTypeTable -> Unit
-installBinderTypes table = binderTypesRef := Some table
-
--- The row published for [bid], or `None` when the typechecker recorded none for
--- it.  Reading before any elaboration installed a table is a panic, as is a row
--- answering for a different module than the id names: ordinals are never reused
--- within a process, so the second can only mean the module half was rewritten
--- without the ordinal.
-export
-binderRow : BinderId -> Option BinderRow
-binderRow (BinderId m i) = match !binderTypesRef
-  None =>
-    panic
-      "binder table: no elaboration has published one (looking up \{m}#\{intToString i})"
-  Some table => rowIn table m i
-
--- `binderRow` for a reader that may run with no elaboration behind it (an untyped
--- lowering): no table answers `None` instead of panicking.
-export
-binderRowIfInstalled : BinderId -> Option BinderRow
-binderRowIfInstalled (BinderId m i) = match !binderTypesRef
-  None => None
-  Some table => rowIn table m i
+binderRowIn : Option BinderTypeTable -> BinderId -> Option BinderRow
+binderRowIn None _ = None
+binderRowIn (Some table) (BinderId m i) = rowIn table m i
 
 rowIn : BinderTypeTable -> String -> Int -> Option BinderRow
 rowIn table m i = match get i table
@@ -195,16 +171,6 @@ rowIn table m i = match get i table
         Some row
       else
         panic "binder table: \{m}#\{intToString i} answered by module \{m2}"
-
--- The installed table, for a helper elaboration that replaces it and must put it
--- back (`route_key.withEvidencePreserved`).
-export
-installedBinderTable : Unit -> Option BinderTypeTable
-installedBinderTable _ = !binderTypesRef
-
-export
-restoreBinderTable : Option BinderTypeTable -> Unit
-restoreBinderTable table = binderTypesRef := table
 
 -- The spelling a row's type has in a Core dump (`core_ir_sexp`), and its inverse.
 -- Both are explicit tables, not derived `Debug`, so that Core dumps and the
@@ -243,10 +209,3 @@ runtimeTypeFromName "RTU8" = Some RTU8
 runtimeTypeFromName "RTCon" = Some RTCon
 runtimeTypeFromName "RTValue" = Some RTValue
 runtimeTypeFromName _ = None
-
--- Every installed row, in ordinal order; empty before any elaboration.
-export
-installedBinderRows : Unit -> List BinderRow
-installedBinderRows _ = match !binderTypesRef
-  None => []
-  Some table => values table

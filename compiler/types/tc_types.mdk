@@ -1655,7 +1655,7 @@ public export data GivenMatch =
 
 -- #2705 (M2 phase 2): the solver's working cells for ONE `EMethodAt` node, keyed by
 -- the node's `EvId`.  The node itself carries no cell any more — a reader outside
--- `compiler/types/typecheck.mdk` gets the answer from the published table (`evMethodRoutes`) — but the
+-- `compiler/types/typecheck.mdk` gets the answer from the published table (`evMethodRoutesIn`) — but the
 -- stampers still write through `Ref`s (every goal destination is an `EvDest` over
 -- one), so the cells live here, minted with the node (`mintMethodCell`) and read
 -- back by `methodCellEntries` when the table is published.  It owns five cells:
@@ -1663,7 +1663,7 @@ public export data GivenMatch =
 -- pre-use arrow arity, the dispatch route, the selected impl's `requires` dicts,
 -- and the method's own `=>` dicts.
 -- Two channels carry one fact: inside `compiler/types/typecheck.mdk` a reader dereferences the live
--- cell, outside it reads the installed snapshot, and "no cell is written after the
+-- cell, outside it reads the published snapshot, and "no cell is written after the
 -- last publish" is a discipline of the drain's schedule, not a type.  The mutable
 -- half is what the target's evidence-bindings step retires; until then it is the
 -- solver's working store and nothing else may write it.
@@ -3021,9 +3021,9 @@ public export data ChainMemo = ChainMemo {
 -- What a whole-graph drive produces, for either output selection.  `gdPerMod`,
 -- `gdCoreSchemes` and `gdCoreContexts` are filled on both; `gdCore`, `gdModules`
 -- and `gdResidual` are the tree arm's and are empty on `GOutDiags`.  `gdEvTable`
--- is the goal half of the evidence table only (the drain's per-goal entries, what
--- `ElabResult` returns); the whole table the drive installs is the report's
--- `cpEvidence`.
+-- is the whole evidence table the tree arm returns (what `ElabResult` carries, and
+-- the report's `cpEvidence`), and on `GOutDiags` the goal half only (the drain's
+-- per-goal entries).
 public export data GraphDrive = GraphDrive {
   gdPerMod : List ModDiags,
   gdCoreSchemes : List (String, PubScheme),
@@ -3038,6 +3038,7 @@ public export data GraphDrive = GraphDrive {
   -- (`declEnvsRef`) is complete by the graph preamble above, before either
   -- arm's own work begins.
   gdDispositions : DispositionTable,
+  gdBinders : BinderTypeTable,
   -- The drive's frozen outputs as one value (`types/publish.mdk`'s `TcReport`).
   gdReport : TcReport,
 }
@@ -3062,16 +3063,15 @@ public export data GraphDrive = GraphDrive {
 -- its own `Loc`, in push order.  Callers that gate on `hadTypeErrors` render it
 -- instead of a deflection; the emit driver's #2089 gate prints it.  It is the
 -- same list the sticky channel holds, cut to this call.
--- #2549 M2: the fifth component is the EVIDENCE TABLE — every goal this
--- elaboration solved, keyed by its `EvId`.  It is published as DATA because the one
--- reader that needs it, `compiler/eval/eval.mdk`, cannot import a typechecker-private
--- cell.  Nothing consumes it yet: the routes it carries are the same routes already
--- stamped into the trees' own cells, so a caller that ignores it loses nothing.
+-- #2549 M2: the fifth component is the EVIDENCE TABLE — the whole table this
+-- elaboration produced, keyed by `EvId`: every goal it solved, every method
+-- occurrence and every minted site.  It is the table before `mangleUnitsEv`
+-- renames the trees, so a caller that lowers mangled trees lowers against the
+-- table that call returns.
 -- #1112 A-3: the sixth component is the whole-graph per-method DISPOSITION
--- TABLE (`compiler/types/disposition.mdk`) — same rationale as the evidence
--- table: the reader this exists for (X-E, #1403) is not yet written, so a
--- caller that ignores it loses nothing today.
-export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable)
+-- TABLE (`compiler/types/disposition.mdk`).  The seventh is the BINDER-TYPE
+-- table the elaboration produced.  `program_facts.factsOfElab` reads all three.
+export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable, BinderTypeTable)
 
 -- E4/E6: prePass a module rewriting ARG-position method occurrences to EMethodAt
 -- (argNames) AND `=>`-constrained-fn occurrences to EDictAt (dictNames); both

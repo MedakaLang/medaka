@@ -1,0 +1,90 @@
+-- Sibling tests for `program_facts.mdk`: the bracket nests and restores.
+-- `factsNow` outside a bracket panics, and no verb observes a panic in-process, so
+-- the restore after a bracket stands in for that arm.
+
+import test.{expectEqual, expectAll, expectTrue, expectFalse}
+import frontend.ast.{EvId(..), EvVal(..), EvEntry(..), Route(..)}
+import frontend.desugar.{desugar}
+import frontend.parser.{parseLocated}
+import types.disposition.{emptyDispositionTable}
+import types.program_facts.{
+  ProgramFacts(..),
+  emptyFacts,
+  factsOfElab,
+  withFacts,
+  factsNow,
+}
+import types.route_key.{
+  EvIndex(..),
+  evIndexOf,
+  evSiteRouteIn,
+}
+import types.typecheck.{elaborateModules}
+import support.util.{joinNl}
+
+routeFacts : ProgramFacts
+routeFacts = ProgramFacts {
+  pfEvidence = evIndexOf [EvEntry (EvId "m" 1) (EvOne (RScalar "Int"))],
+  pfDispositions = Some emptyDispositionTable,
+  pfBinders = None,
+}
+
+isTyped : ProgramFacts -> Bool
+isTyped f = isSome f.pfDispositions
+
+routeOf : ProgramFacts -> String
+routeOf f = match evSiteRouteIn f.pfEvidence (EvId "m" 1)
+  RScalar tag => tag
+  _ => "other"
+
+test "withFacts makes its facts current inside the bracket" = expectAll [
+  expectTrue (withFacts routeFacts (_ => isTyped (factsNow ()))),
+  expectEqual "Int" (withFacts routeFacts (_ => routeOf (factsNow ()))),
+]
+
+test "withFacts nests, and each bracket restores the one around it" =
+  let seen = withFacts routeFacts (_ =>
+    let inner = withFacts emptyFacts (_ => isTyped (factsNow ()))
+    (inner, isTyped (factsNow ())))
+  expectEqual (False, True) seen
+
+test "sequential brackets are independent" =
+  let first = withFacts routeFacts (_ => isTyped (factsNow ()))
+  let second = withFacts emptyFacts (_ => isTyped (factsNow ()))
+  expectEqual (True, False) (first, second)
+
+test "emptyFacts carries no dispositions and no binders" = expectAll [
+  expectFalse (isTyped emptyFacts),
+  expectFalse (isSome emptyFacts.pfBinders),
+]
+
+-- An interface in one module, its method applied in another: the entry's
+-- occurrence is a method-occurrence entry, which only the whole table holds.
+twoModuleFacts : ProgramFacts
+twoModuleFacts =
+  let owner = joinNl [
+    "export interface Pick a where",
+    "  pick : a -> Int",
+    "impl Pick Int where",
+    "  pick n = n",
+  ]
+  let entry =
+    joinNl ["import pick_owner.{pick}", "value : Int", "value = pick 41"]
+  factsOfElab
+    (elaborateModules
+      []
+      []
+      (map
+        (m => (fst m, desugar (parseLocated (snd m))))
+        [("pick_owner", owner), ("pick_entry", entry)]))
+
+isMethodSlot : Option EvEntry -> Bool
+isMethodSlot (Some (EvEntry _ (EvMethod _ _ _ _ _))) = True
+isMethodSlot _ = False
+
+indexSlots : EvIndex -> List (Option EvEntry)
+indexSlots (EvIndex _ arr) = toList arr
+
+test "factsOfElab of a driven two-module program holds its method occurrences" =
+  let slots = indexSlots twoModuleFacts.pfEvidence
+  expectAll [expectTrue (any isMethodSlot slots)]

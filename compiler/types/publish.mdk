@@ -18,6 +18,7 @@ import types.repr.{
 import types.effect_rows.{EffRow(..), Effvar(..), Atom(..)}
 import types.effect_authority.{Authority(..), Authvar(..)}
 import types.disposition.{DispositionTable}
+import types.runtime_types.{BinderTypeTable}
 import types.evidence_coverage.{EvidenceFault, evidenceFaults}
 import map as IdMap
 import map.{Map(..)}
@@ -134,6 +135,7 @@ public export data CheckedProgram = CheckedProgram {
   cpCore : List (String, PubScheme),
   cpEvidence : EvTable,
   cpDispositions : DispositionTable,
+  cpBinders : BinderTypeTable,
   cpTrees : Option (List Decl, List (String, List Decl)),
   cpWeak : List LiveCell,
 }
@@ -344,10 +346,11 @@ graphReport : List ModDiags ->
   List (String, TcDiag) ->
   (Unit -> EvTable) ->
   DispositionTable ->
+  BinderTypeTable ->
   Option (List Decl, List (String, List Decl)) ->
   EntryTables ->
   TcReport
-graphReport perMod core residual evidence dispositions trees tables =
+graphReport perMod core residual evidence dispositions binders trees tables =
   let schemes = map (m => (fst m, modSchemes (snd m))) perMod
   let cells = graphCells (core :: map snd schemes)
   let judged =
@@ -362,6 +365,7 @@ graphReport perMod core residual evidence dispositions trees tables =
       cpCore = core,
       cpEvidence = table,
       cpDispositions = dispositions,
+      cpBinders = binders,
       cpTrees = trees,
       cpWeak = cells,
     }

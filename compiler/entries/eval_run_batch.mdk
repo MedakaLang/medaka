@@ -5,7 +5,8 @@
 -- (IO loop) — see eval_prelude_batch.mdk for why (global ctorToTypeRef).
 
 import frontend.ast.{Decl}
-import eval.eval.{evalOutputWith}
+import eval.eval.{evalOutputWithFacts}
+import types.program_facts.{emptyFacts}
 import entries.entry_support.{driveRuntimeBatch}
 
 export
@@ -14,6 +15,6 @@ oracleMain () = driveRuntimeBatch "===SELFHOST-FIX=== " render
 
 render : List Decl -> List Decl -> List Decl -> String
 render coreDecls listDecls targetDecls =
-  evalOutputWith (coreDecls ++ listDecls) targetDecls
+  evalOutputWithFacts emptyFacts (coreDecls ++ listDecls) targetDecls
 
 main = oracleMain ()

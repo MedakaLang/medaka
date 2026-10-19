@@ -1249,7 +1249,7 @@ hashNegativeHashReport = join "\n" [
    every value of the loser's type dispatched to the winner's impl, silently,
    at exit 0.
 
-   This grades the THIRD driver, `evalModulesRootEnvWith` — the one the
+   This grades the THIRD driver, `evalModulesRootEnvFacts` — the one the
    `test` phase, the prop runner and the repl use, where `evalModulesWith`
    serves doctests only; a fix wired into the other two module drivers alone
    passes every other check in this tree. It also pins the `Pass`/`Fail`

@@ -1,0 +1,11 @@
+-- An imported user instance more specific than the prelude's: `debug` on a list
+-- of colors selects `palette`'s `Debug (List Color)`, a list of ints the
+-- prelude's `Debug (List a)`.  The untyped engines cannot tell the two apart by
+-- head (E-AMBIGUOUS-DISPATCH); the elaboration's evidence does, and `medaka run`
+-- and `medaka build` print the same three words.
+import palette.{Color(..)}
+
+main =
+  let _ = println (debug [Red, Green])
+  let _ = println (debug [1, 2])
+  println (debug Red)

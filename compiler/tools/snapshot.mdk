@@ -167,8 +167,8 @@ import ir.sexp.{programToSexp}
 import ir.core_ir.{CProgram}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
-  lowerProgram,
-  lowerProgramEmit,
+  lowerProgramEmitWith,
+  lowerProgramWithFacts,
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -181,7 +181,7 @@ import types.annotate.{annotateProgram}
 import types.typecheck.{
   checkOneToLinesWithRuntime,
   setCoherenceUserDecls,
-  elaborateOne,
+  elaborateOneFacts,
   elaborateModules,
   mainTypeIsUnit,
   mainTypeIsFloat,
@@ -190,7 +190,8 @@ import types.typecheck.{
   resetTypeErrorsSticky,
 }
 import types.private_mangle.{mangleUnitsEv}
-import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
+import types.program_facts.{emptyFacts, factsOfElabWith}
+import eval.eval.{evalOneOutputFacts, funNamesOf, dropShadowedExp, noMainMsg}
 import backend.emit_plan.{buildEmitPlan}
 import backend.core_validate.{Backend(..)}
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
@@ -579,19 +580,19 @@ isDiagProse line = take 8 line == "Warning:" || take 11 line == "TYPE ERROR:"
 -- single snapshot — the section is here to show what the fixture lowers to, and the
 -- dispatch-bearing lowering is already covered by `# LLVM`.
 coreIrOf : List Decl -> String
-coreIrOf d = cprogramToSexp (lowerProgram (annotateProgram d))
+coreIrOf d =
+  cprogramToSexp (lowerProgramWithFacts emptyFacts (annotateProgram d))
 
 evalOf : List Decl -> List Decl -> List Decl -> String
 evalOf runtimeDecls coreDecls d =
   let livePrelude = dropShadowedExp (funNamesOf d) coreDecls
-  evalOneOutput [] (
-    "__main__",
-    elaborateOne runtimeDecls livePrelude ("__user__", d),
-  )
+  let (elaborated, facts) =
+    elaborateOneFacts runtimeDecls livePrelude ("__user__", d)
+  evalOneOutputFacts facts [] ("__main__", elaborated)
 
 -- ── the emit path (BOTH backends, ONE lowered CProgram) ──────────────────────
 --
--- `elaborateModules` + `mangleUnitsEv` -> `lowerProgramEmit` runs ONCE and the resulting CProgram feeds
+-- `elaborateModules` + `mangleUnitsEv` -> `lowerProgramEmitWith` runs ONCE and the resulting CProgram feeds
 -- llvm_emit AND wasm_emit (whose colliding `emitProgram` is import-aliased to
 -- `wasmRecord` above).
 --
@@ -618,11 +619,11 @@ emitBoth root sel runtimeDecls userDecls =
   -- `entry_support.runEmitWith` runs (mirrors `llvm_emit_typed_main.mdk`'s
   -- `runEmit`), so a name-keyed table below sees the same stamped names a real
   -- build's tables do.
-  let (coreE, modulesE, _, _, _, _) =
-    elaborateModules runtimeDecls [] [("__user__", userDecls)]
-  let (coreD, modules2) = mangleUnitsEv coreE modulesE
+  let elab = elaborateModules runtimeDecls [] [("__user__", userDecls)]
+  let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let allDecls = coreD ++ flatMap snd modules2
-  let cp = lowerProgramEmit allDecls
+  let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
   let _ =
     if wants sel "LLVM" then
       emitSection root "LLVM" (llvmOf runtimeDecls allDecls cp)

@@ -29,7 +29,7 @@ loader module graph
   -> resolve / mark / typecheck / dictionary elaboration
   -> backend-specific emitTail
        -> dce.dceFilter (except native half modes that deliberately retain all)
-       -> core_ir_lower.lowerProgramEmit   (target-neutral: it takes no backend)
+       -> core_ir_lower.lowerProgramEmitWith   (target-neutral: it takes no backend)
        -> CProgram
             -> llvm_emit.emitProgram -> LLVM text -> clang -> native binary
             -> emit_plan.buildEmitPlanReached -> wasm_reach (Wasm modules paths only, post-lower)
@@ -59,7 +59,7 @@ The Wasm product emitter is built separately from
 for itself; an unset/missing path is an actionable error.
 
 `playground_main.runEmit` is a third product consumer and currently repeats the
-mangle -> elaborate -> DCE -> input construction -> `lowerProgramEmit` -> `emitProgram`
+mangle -> elaborate -> DCE -> input construction -> `lowerProgramEmitWith` -> `emitProgram`
 sequence instead of using `entry_support.runEmitWith`. It is built by the
 playground Wasm build scripts. Any contract migration that updates only
 `wasm_emit_modules_main` leaves the browser compiler on the old seam. The
@@ -128,8 +128,8 @@ construction/projection/application terms. Each engine still interprets the
 route and can reconstruct a different realization. Open #1068 is exactly this
 producer/consumer disagreement.
 
-`lowerProgram` and `lowerProgramEmit` also form two Core variants.
-`lowerProgramEmit` applies emitter-only record-pattern rewriting and nullary
+`lowerProgramWithFacts` and `lowerProgramEmitWith` also form two Core variants.
+`lowerProgramEmitWith` applies emitter-only record-pattern rewriting and nullary
 memoization before either physical backend sees the program. Core evaluation
 does not consume that form.
 

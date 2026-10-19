@@ -11,7 +11,7 @@
 --
 --   driver.loader.loadProgram  (multi-file, dependency-first)
 --     -> types.typecheck.elaborateModules  (REAL core.mdk prelude + dict-passing)
---     -> ir.core_ir_lower.lowerProgramEmit
+--     -> ir.core_ir_lower.lowerProgramEmitWith
 --     -> ir.dce.dceFilter  (prunes the real prelude to reached decls)
 --     -> backend.wasm_emit.emitProgram
 --
@@ -27,7 +27,7 @@
 -- prerequisites, including the method arity needed to eta-expand the real prelude's
 -- point-free impls. LLVM's additional returns-self, callback-position, and split-half
 -- inputs have no Wasm analogue and stay omitted. Everything up
--- to lowerProgramEmit (loader, mangle, elaborateModules, dceFilter) is identical to
+-- to lowerProgramEmitWith (loader, mangle, elaborateModules, dceFilter) is identical to
 -- the LLVM modules driver.
 
 import frontend.ast.{Decl}
@@ -38,11 +38,12 @@ import types.typecheck.{
   preludeArgPosDictNames,
 }
 import ir.core_ir_lower.{
-  lowerProgramEmit,
+  lowerProgramEmitWith,
   methodIfaceTable,
   declaredRecordFieldOrders,
 }
 import types.private_mangle.{mangleUnitsEv}
+import types.program_facts.{factsOfElabWith}
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInputFull}
 import backend.emit_plan.{buildEmitPlan}
@@ -55,9 +56,9 @@ main = driveModules runEmit
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =
   -- #2809: elaborate the program as written, then mangle its elaborated trees.
-  let (coreE, modulesE, _, _, _, _) =
-    elaborateModules runtimeDecls coreDecls modules
-  let (coreD, modules2) = mangleUnitsEv coreE modulesE
+  let elab = elaborateModules runtimeDecls coreDecls modules
+  let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let allDecls0 = coreD ++ flatMap snd modules2
   -- GAP CENSUS: do NOT run dceFilter.  DCE roots reachability from `main`, and the
   -- census input (all_modules_entry) has NO main — DCE would prune EVERY plain
@@ -76,7 +77,7 @@ runEmit runtimeDecls coreDecls modules =
       False
       (declaredRecordFieldOrders allDecls)
       []
-  let cp = lowerProgramEmit allDecls
+  let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
   let gaps = emitProgramGaps input (buildEmitPlan WasmBackend cp) cp
   printGaps gaps
 

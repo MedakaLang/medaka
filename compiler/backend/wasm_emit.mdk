@@ -10,7 +10,7 @@
 --
 -- WasmGC backend emitter — WASMGC-DESIGN.md §7.  Peer of `backend.llvm_emit`:
 -- consumes the SAME backend-neutral Core IR (`ir.core_ir`) the LLVM emitter
--- consumes (lowered by the SAME `core_ir_lower.lowerProgramEmit`) and produces a
+-- consumes (lowered by the SAME `core_ir_lower.lowerProgramEmitWith`) and produces a
 -- complete WAT text module (assembled by `wasm-tools parse`, run under a WasmGC
 -- engine).  `emitProgram : WasmEmitInput -> CProgram -> String`.
 --
@@ -318,7 +318,6 @@ import backend.trmc_analysis.{
   lastStmtExpr,
 }
 import types.private_mangle.{dictTag, hashName, injectiveIdent}
-import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import backend.emit_plan.{
   EmitPlan(..),
   JsImport(..),
@@ -645,6 +644,9 @@ data WasmFnImplIndex = WasmFnImplIndex {
   arities : ArityEnv,
   implBuckets : OrdMap (List CImplEntry),
   lazyGlobals : OrdMap Unit,
+  -- the super count of each interface word (`DeclFacts.factSupers`); a word
+  -- absent from it has no supers
+  superCounts : OrdMap Int,
   -- the plan's self-recursive TRMC verdict (`EmitPlan.trmc`)
   trmc : TrmcVerdicts,
 }
@@ -1003,7 +1005,7 @@ groupImplsByMethodW entries =
 
 makeWasmProgramIndex : WasmEmitInput ->
   EmitPlan ->
-  List BinderRow ->
+  DeclFacts ->
   List CBind ->
   List (String, Int) ->
   List (String, String) ->
@@ -1011,9 +1013,9 @@ makeWasmProgramIndex : WasmEmitInput ->
   List String ->
   List String ->
   WasmProgramIndex
-makeWasmProgramIndex _ plan binderRows groups ctorArs ctorTypes impls fnNames valNames =
+makeWasmProgramIndex _ plan facts groups ctorArs ctorTypes impls fnNames valNames =
   makeWasmProgramIndexWithLazy
-    binderRows
+    facts
     groups
     ctorArs
     ctorTypes
@@ -1025,7 +1027,7 @@ makeWasmProgramIndex _ plan binderRows groups ctorArs ctorTypes impls fnNames va
 
 makeWasmProgramIndexGaps : WasmEmitInput ->
   TrmcVerdicts ->
-  List BinderRow ->
+  DeclFacts ->
   List CBind ->
   List (String, Int) ->
   List (String, String) ->
@@ -1033,9 +1035,9 @@ makeWasmProgramIndexGaps : WasmEmitInput ->
   List String ->
   List String ->
   WasmProgramIndex
-makeWasmProgramIndexGaps _ trmc binderRows groups ctorArs ctorTypes impls fnNames valNames =
+makeWasmProgramIndexGaps _ trmc facts groups ctorArs ctorTypes impls fnNames valNames =
   makeWasmProgramIndexWithLazy
-    binderRows
+    facts
     groups
     ctorArs
     ctorTypes
@@ -1045,7 +1047,7 @@ makeWasmProgramIndexGaps _ trmc binderRows groups ctorArs ctorTypes impls fnName
     []
     trmc
 
-makeWasmProgramIndexWithLazy : List BinderRow ->
+makeWasmProgramIndexWithLazy : DeclFacts ->
   List CBind ->
   List (String, Int) ->
   List (String, String) ->
@@ -1055,7 +1057,7 @@ makeWasmProgramIndexWithLazy : List BinderRow ->
   List String ->
   TrmcVerdicts ->
   WasmProgramIndex
-makeWasmProgramIndexWithLazy binderRows groups ctorArs ctorTypes impls fnNames valNames lazyNames trmc =
+makeWasmProgramIndexWithLazy facts groups ctorArs ctorTypes impls fnNames valNames lazyNames trmc =
   let fnIndex = omFromNames fnNames omEmpty
   let valIndex = omFromNames valNames omEmpty
   let ctorArIndex = omFromPairs (reverseL ctorArs) omEmpty
@@ -1074,6 +1076,7 @@ makeWasmProgramIndexWithLazy binderRows groups ctorArs ctorTypes impls fnNames v
         programArities (CProgram groups ctorArs ctorTypes impls [] noDeclFacts),
       implBuckets = groupImplsByMethodW impls,
       lazyGlobals = omFromNames lazyNames omEmpty,
+      superCounts = omFromPairs facts.factSupers omEmpty,
       trmc = trmc,
     },
     recordValue = WasmRecordValueIndex {
@@ -1085,7 +1088,7 @@ makeWasmProgramIndexWithLazy binderRows groups ctorArs ctorTypes impls fnNames v
       ordinals = ctorOrds,
       typeCtors = typeCtors,
     },
-    stamps = makeWasmStamps groups binderRows,
+    stamps = makeWasmStamps groups facts.factBinders,
   }
 
 foldImplsByMethodW : List CImplEntry ->
@@ -1579,7 +1582,7 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
     makeWasmProgramIndex
       input
       plan
-      facts.factBinders
+      facts
       groups
       ctorArs
       ctorTypes
@@ -1783,7 +1786,7 @@ emitProgramGaps input plan cp0 =
     makeWasmProgramIndexGaps
       input
       plan.trmc
-      facts.factBinders
+      facts
       groups
       ctorArs
       ctorTypes
@@ -4638,12 +4641,12 @@ data MethodDictsW = MethodDictsW { mdInstrs : List String, mdCount : Int }
 -- ones: an inherited default receives the dictionary that selected it; a supplied
 -- method its `requires` -- the rest of the entry's own leading `$dict_*` count --
 -- which follow the dictionary's super segment (llvm_emit's `emitDispatchArmBody`).
-armDictLoadsW : CImplEntry -> String -> Int -> List String
-armDictLoadsW ent dpar nMeth =
+armDictLoadsW : WasmProgramIndex -> CImplEntry -> String -> Int -> List String
+armDictLoadsW index ent dpar nMeth =
   if isInheritedEntryW ent then
     ["local.get $" ++ gname dpar]
   else
-    let supers = entrySuperCountW ent
+    let supers = entrySuperCountW index ent
     flatMap
       (loadReqDict dpar)
       (rangeList supers (supers + armDictCountW ent nMeth))
@@ -4774,7 +4777,8 @@ emitDispatchChain prog name (arm :: rest) blk tagRead dpar meth argInstrs nArgs 
   -- reaching this arm is a $dictcell whose field-1 $dictarr carries those nested req dicts in
   -- order (built by routeWitness).  Load field 0..reqDicts-1 and prepend them as the impl fn's
   -- leading dict args, mirroring llvm_emit's loadReqDicts (fields 1..n of the boxed cell).
-  let reqLoads = armDictLoadsW (armEntryW arm) dpar meth.mdCount
+  let reqLoads =
+    armDictLoadsW (progIndex prog) (armEntryW arm) dpar meth.mdCount
   let pushed = meth.mdInstrs ++ reqLoads ++ argInstrs
   let armBody =
     if not (armIsExactW arm nArgs) then
@@ -4844,10 +4848,9 @@ loadReqDict dpar i =
 
 -- the super dictionaries a dictionary of [ent]'s interface stores ahead of its
 -- `requires` dictionaries (llvm_emit's `entrySuperCount`)
-entrySuperCountW : CImplEntry -> Int
-entrySuperCountW ent = match installedDispositionsOpt ()
-  Some table => ifaceSuperCount (implEntryIfaceWordW ent) table
-  None => 0
+entrySuperCountW : WasmProgramIndex -> CImplEntry -> Int
+entrySuperCountW index ent =
+  optionOr 0 (omLookup (implEntryIfaceWordW ent) index.fnImpl.superCounts)
 
 -- the local a projected super dictionary is dispatched through
 projLocalName : Route -> List Int -> String

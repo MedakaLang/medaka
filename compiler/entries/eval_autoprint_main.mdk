@@ -17,7 +17,8 @@
 import frontend.ast.{Decl}
 import types.typecheck.{elaborateModulesWithReport}
 import types.publish.{TcReport(..)}
-import eval.eval.{evalModulesOutput}
+import types.program_facts.{factsOfElab}
+import eval.eval.{evalModulesOutputFacts}
 import driver.main_autoprint.{valueMainCandidate, executedTrees}
 import entries.entry_support.{driveModules, failWith}
 
@@ -30,13 +31,14 @@ oracleMain () = driveModules runElab
 -- `Async` main takes the scheduler driver, #2506) and force them.
 runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runElab runtimeDecls coreDecls modules =
-  let ((coreE, modulesE, _, _, _, _), report) =
+  let (elab, report) =
     elaborateModulesWithReport
       (valueMainCandidate coreDecls modules)
       (Some "runAsyncMain")
       runtimeDecls
       coreDecls
       modules
+  let (coreE, modulesE, _, _, _, _, _) = elab
   let executed =
     executedTrees
       report.trAutoPrint
@@ -44,7 +46,8 @@ runElab runtimeDecls coreDecls modules =
       (coreDecls, modules)
       (coreE, modulesE)
   match executed
-    Ok (coreW, modulesW) => putStr (evalModulesOutput coreW modulesW)
+    Ok (coreW, modulesW) =>
+      putStr (evalModulesOutputFacts (factsOfElab elab) coreW modulesW)
     Err msg => failWith msg
 
 main = oracleMain ()

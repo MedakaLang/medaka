@@ -131,6 +131,7 @@ import frontend.ast.{
   EvVal(..),
   EvEntry(..),
   EvId(..),
+  EvTable,
 }
 import frontend.visibility.{
   ModuleExports(..),
@@ -144,7 +145,6 @@ import frontend.visibility.{
   valueDeclOf,
   typeOfCtor,
 }
-import types.route_key.{remapEvidence}
 import u64 as U64
 import list.{last, zip}
 import map.{insertWith}
@@ -274,12 +274,14 @@ entryUnitMid units = match last units
 -- (`llvm_emit.emitMethod`'s and `wasm_emit.emitMethodRef`'s `RLocal` arms, and
 -- `wasm_reach.refsRoute`'s reachability) is named THERE and nowhere else.  An entry's
 -- `EvId` names the module it was minted in, which is the unit whose rename map resolves
--- its symbols.
+-- its symbols.  [table] is the elaboration's whole evidence table; it is returned
+-- renamed.
 export
-mangleUnitsEv : List Decl ->
+mangleUnitsEv : EvTable ->
+  List Decl ->
   List (String, List Decl) ->
-  (List Decl, List (String, List Decl))
-mangleUnitsEv coreDecls modules =
+  (List Decl, List (String, List Decl), EvTable)
+mangleUnitsEv table coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
   let _ = symbolInjectivityGuard entryMid allUnits
@@ -309,10 +311,9 @@ mangleUnitsEv coreDecls modules =
   let modsOut = match renamed
     [] => modules
     _ :: rest => rest
-  let _ =
-    remapEvidence
-      (mangleEvEntry (omFromPairs (reverseL (map dropUnitDecls units)) omEmpty))
-  (coreOut, modsOut)
+  let remap =
+    mangleEvEntry (omFromPairs (reverseL (map dropUnitDecls units)) omEmpty)
+  (coreOut, modsOut, map remap table)
 
 -- one unit's rename map, keyed by its module id, beside the decls it applies to.  The
 -- SAME two builders and the same first-entry-wins fold `mangleUnitU` applies, so a

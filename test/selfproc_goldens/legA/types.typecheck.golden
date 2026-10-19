@@ -175,7 +175,7 @@ argumentIntoTyped : Mono -> Mono -> Unit
 argumentNoun : Int -> String
 arithDispatchMethod : String -> Option String
 arithEntry : Obligation -> List (Ref Route, Mono)
-armDictSites : Arm -> List (List Route)
+armDictSites : EvIndex -> Arm -> List (List Route)
 armEVars : Arm -> List String
 armIsUnguarded : List Guard -> Bool
 armNumGuard : NumGuard -> ArmedGuard
@@ -296,7 +296,7 @@ binopRouteSplit : Route -> (Route, List Route)
 binopSpanLoc : Expr -> Expr -> Option Loc
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
 blockRecLet : TcEnv -> String -> Option Loc -> BinderId -> Expr -> TcEnv
-bodyRDictNames : Expr -> List String
+bodyRDictNames : EvIndex -> Expr -> List String
 boolOp : Mono -> Mono -> Mono
 borrowedEffectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
 bottomGrant : Expr
@@ -558,7 +558,7 @@ classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn
 classEnvFinish : ClassEnv -> ClassEnv
 classEnvRowsOf : Int -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin) -> List CeRow
 clauseEagerlyRefsGroup : List String -> FunClause -> Bool
-clauseImplDictUser : IfaceRef -> Int -> ImplMethod -> List String
+clauseImplDictUser : EvIndex -> IfaceRef -> Int -> ImplMethod -> List String
 clauseIsNonFunction : FunClause -> Bool
 clauseIsValue : TcEnv -> FunClause -> Bool
 clauseRefs : (List Pat, Expr) -> List String
@@ -631,7 +631,7 @@ collectAuthAllowance : List Authority -> Authority
 collectAuthvarIds : List Mono -> List Int
 collectByParam : List String -> List (String, Mono) -> List Mono
 collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
-collectDictSites : Expr -> List (List Route)
+collectDictSites : EvIndex -> Expr -> List (List Route)
 collectMethodSites : Expr -> List (Ref Route)
 collectProducedSummary : List EffRow -> EffRow
 collectRowEffvarIds : List Mono -> List Int
@@ -913,11 +913,11 @@ dictParamName : String -> Int -> String
 dictParams : String -> Int -> List Pat
 dictParamsFrom : String -> Int -> Int -> List Pat
 dictParamsGo : String -> Int -> Int -> List Pat
-dictPass : String -> List String -> List Decl -> List Decl
-dictPassDecl : Map String Unit -> List String -> Decl -> Decl
+dictPass : EvIndex -> String -> List String -> List Decl -> List Decl
+dictPassDecl : EvIndex -> Map String Unit -> List String -> Decl -> Decl
 dictPassLetBind : Map String Unit -> LetBind -> LetBind
 dictPassModulesIfEnabled : List String -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
-dictPassModulesScoped : List String -> List ((String, String), List PredicateSlot) -> Map String (Map String Unit) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
+dictPassModulesScoped : EvIndex -> List String -> List ((String, String), List PredicateSlot) -> Map String (Map String Unit) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
 dictVarSatisfiesIface : String -> Int -> List (String, Mono) -> Bool
 directExternSigs : List Decl -> List (String, Ty)
 directGivenIfaceOf : EvidenceBinderId -> List GivenEntry -> Option IfaceRef
@@ -945,7 +945,7 @@ doBindArgHint : String -> String
 doBindArgMsg : String -> String
 doChainIsDeferred : Expr -> Bool
 doRequiresMonadMsg : String
-doStmtDictSites : DoStmt -> List (List Route)
+doStmtDictSites : EvIndex -> DoStmt -> List (List Route)
 doStmtEVars : DoStmt -> List String
 doStmtSites : DoStmt -> List (Ref Route)
 domainHasPatterns : Param -> Bool
@@ -999,11 +999,12 @@ effectUndeterminedMsg : String -> String -> List String -> String
 effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl)
-elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable)
+elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow)
 elaborateModulesReport : List Decl -> List Decl -> List (String, List Decl) -> TcReport
-elaborateModulesWithReport : Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), TcReport)
-elaborateModulesWithSchemes : Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), List (String, PubScheme), List (String, PubScheme))
+elaborateModulesWithReport : Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), TcReport)
+elaborateModulesWithSchemes : Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), List (String, PubScheme), List (String, PubScheme))
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
+elaborateOneFacts : List Decl -> List Decl -> (String, List Decl) -> (List Decl, ProgramFacts)
 elselessIfHelp : String
 emitCyclicAliasErrors : List String -> Unit
 emitValueShadowGate : String -> Bool
@@ -1150,7 +1151,7 @@ ffiStampMode : String -> Bool
 ffiStampModeOwned : String -> Bool
 ffiTakeAtom : EffAtomTy -> List EffAtomTy -> List EffAtomTy -> List (String, Ty) -> Option (List (String, Ty), List EffAtomTy)
 ffiTyHeadNameWith : List (TabKey, (List String, Ty)) -> Ty -> String
-fieldAssignDictSites : FieldAssign -> List (List Route)
+fieldAssignDictSites : EvIndex -> FieldAssign -> List (List Route)
 fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
@@ -1295,7 +1296,7 @@ fromAstTypeApp : SigVars -> List (String, Mono) -> TyConOrigin -> String -> List
 fromAstTypeE : SigVars -> List (String, Mono) -> Ty -> Mono
 fromAstTypeVarApp : SigVars -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
 funArity : Mono -> Int
-funClauseDictSites : FunClause -> List (List Route)
+funClauseDictSites : EvIndex -> FunClause -> List (List Route)
 funClauseEVars : FunClause -> List String
 funClausePair : FunClause -> (List Pat, Expr)
 funClauseSites : FunClause -> List (Ref Route)
@@ -1401,7 +1402,7 @@ groupRefs : List (List Pat, Expr) -> List String
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
 growImplUniverse : List (IfaceRef, List Ty, List Require) -> ImplUniverse -> ImplUniverse
 guardArmEVars : GuardArm -> List String
-guardDictSites : Guard -> List (List Route)
+guardDictSites : EvIndex -> Guard -> List (List Route)
 guardEVars : Guard -> List String
 guardSites : Guard -> List (Ref Route)
 guardsDefaulting : UObligation -> Bool
@@ -1554,7 +1555,7 @@ implDeclFacts : List Decl -> List (IfaceRef, List Ty, List Require, List String)
 implDeclWithReqs : Decl -> List (IfaceRef, List Ty, List Require)
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
 implDictNames : String -> Int -> Int -> List String
-implDictPassMethods : IfaceRef -> Int -> List ImplMethod -> List ImplMethod
+implDictPassMethods : EvIndex -> IfaceRef -> Int -> List ImplMethod -> List ImplMethod
 implDictRoutesForRow : String -> ScopeId -> List Mono -> ImplRow -> List Route
 implGoalFixesHeadMsg : String -> String -> List String -> String
 implGoalResiduals : ReqWalk -> Map String Unit -> List PredicateSlot -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
@@ -1912,7 +1913,7 @@ leastIfaceSig : (String, Ty) -> Option (String, Ty) -> Option (String, Ty)
 leftmostPart : Expr -> Expr
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
 legacyReturnReqRoutesForRow : String -> ScopeId -> Mono -> ImplRow -> List Route
-letBindDictSites : LetBind -> List (List Route)
+letBindDictSites : EvIndex -> LetBind -> List (List Route)
 letBindEVars : LetBind -> List String
 letBindGeneralizes : TcEnv -> (LetBind, (String, BindingSummary)) -> (Bool, Mono)
 letBindSites : LetBind -> List (Ref Route)
@@ -2540,7 +2541,6 @@ publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding
 publicStandaloneNames : List Decl -> List String
 publicValNames : List Decl -> List String
 publishCore : Map String (List VecObl) -> List (String, Scheme) -> List (String, PubScheme)
-publishEvidence : Unit -> Unit
 publishMethodPredGivens : List String -> Ty -> MethodBodyInstance -> ScopeId -> Unit
 publishMethodReturnTrace : List EvEntry -> MethodReturnTraceEntry -> MethodReturnTraceEntry
 publishOwn : List (String, Scheme) -> List (String, PubScheme)
@@ -2901,7 +2901,7 @@ rewriteArgKv : ArgRw -> Map String String -> (Expr, Expr) -> (Expr, Expr)
 rewriteArgLetBind : ArgRw -> Map String String -> LetBind -> LetBind
 rewriteArgScoped : ArgRw -> Map String String -> Expr -> Expr
 rewriteArgStmts : ArgRw -> Map String String -> List DoStmt -> List DoStmt
-rewriteBinopExpr : Expr -> Expr
+rewriteBinopExpr : EvIndex -> Expr -> Expr
 rewriteLocalDictExpr : Expr -> Expr
 rewriteLocalDoStmt : DoStmt -> DoStmt
 rewriteLocalLetBind : LetBind -> LetBind
@@ -3351,7 +3351,7 @@ usePathModuleId : UsePath -> String
 usePathWitnesses : UsePath -> Bool -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 usePathWitnessesCtor : UsePath -> String -> String -> Ident -> Bool
 userExternSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
-usesImplDict : String -> Int -> Int -> Expr -> Bool
+usesImplDict : EvIndex -> String -> Int -> Int -> Expr -> Bool
 valueJoinOps : JoinContext -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
 varHeadApps : String -> Ty -> List (List Ty)
 varHeadHere : String -> Ty -> List Ty -> List (List Ty)

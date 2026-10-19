@@ -36,8 +36,8 @@ import ir.core_ir.{CProgram(..), CBind(..)}
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
   declaredRecordFieldOrders,
-  lowerProgramEmit,
-  lowerProgramEmitPinned,
+  lowerProgramEmitWith,
+  lowerProgramEmitPinnedWith,
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -67,6 +67,7 @@ import support.timer.{statsEnabled, emitStats}
 import support.util.{endsWith, filterList}
 import driver.main_autoprint.{autoPrintPinName}
 import support.stage_count.{stageCountInit, stageDump}
+import types.program_facts.{ProgramFacts}
 
 -- The entry-module path is argv[2] (`<runtime> <core> <entry> [root ...]`); hand it
 -- to the emitter so a main-less program's diagnostic names the file (issue #397).
@@ -113,8 +114,10 @@ emitHalfOfEnv = match getEnv "MEDAKA_EMIT_HALF"
 -- MEDAKA_PRELUDE_OBJ fast path. The pin is cheap (one small fn), so the fix is
 -- to always DEFINE it in the program half instead of asking the shared object
 -- for it.
-preludeSymsOf : List Decl -> (List String, List (String, String, String))
-preludeSymsOf coreD = match lowerProgramEmit coreD
+preludeSymsOf : ProgramFacts ->
+  List Decl ->
+  (List String, List (String, String, String))
+preludeSymsOf facts coreD = match lowerProgramEmitWith facts coreD
   CProgram groups _ _ impls _ _ => (
     filterList
       (n => not (endsWith autoPrintPinName n))
@@ -129,11 +132,12 @@ cbindNameOf (CBind n _ _ _) = n
 -- [mods] is the loader's (module, path, decls), whose paths name each module's
 -- trap sites.
 emitTail : List (String, String, List Decl) ->
+  ProgramFacts ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-emitTail mods runtimeDecls coreD modules1 =
+emitTail mods facts runtimeDecls coreD modules1 =
   let half = emitHalfOfEnv
   let wrapped = mainIsWrapped modules1
   let modules2 = stampSiteFiles mods modules1
@@ -147,7 +151,7 @@ emitTail mods runtimeDecls coreD modules1 =
   -- than source reachability anyway.
   let allDecls = if half == 0 then dceFilter allDecls0 else allDecls0
   let (preludeBinds, preludeImpls) =
-    if half == 2 then preludeSymsOf coreD else ([], [])
+    if half == 2 then preludeSymsOf facts coreD else ([], [])
   let base =
     withRuntimeExterns
       (runtimeExternNames runtimeDecls)
@@ -168,7 +172,7 @@ emitTail mods runtimeDecls coreD modules1 =
           (checkedFfiExternTypeNamesModules modules2)))
   let input = withNoInlineFns (noInlineFnNames allDecls) base
   let statsOn = statsEnabled ()
-  let cp = lowerProgramEmitPinned preludeImpls allDecls
+  let cp = lowerProgramEmitPinnedWith facts preludeImpls allDecls
   let plan = buildEmitPlan LlvmBackend cp
   if statsOn then
     let (text, stats) = emitProgramWithStats input plan cp

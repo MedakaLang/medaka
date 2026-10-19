@@ -314,7 +314,6 @@ import backend.trmc_analysis.{
   lastStmtExpr,
 }
 import types.private_mangle.{hashName, injectiveIdent}
-import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import types.route_key.{numIntWord}
 import backend.emit_plan.{
   EmitPlan(..),
@@ -940,6 +939,9 @@ data Emit = Emit {
   -- what every binder of the program holds (`DeclFacts.factBinders`), keyed by
   -- the ordinal of the row's id
   binderRows : BM.Map Int BinderRow,
+  -- the super count of each interface word (`DeclFacts.factSupers`); a word
+  -- absent from it has no supers
+  superCounts : OrdMap Int,
   -- each top-level value binding's stamped type, by name
   globalTys : OrdMap LTy,
   lams : Ref (List String),
@@ -1493,7 +1495,7 @@ implFnName tag method = "mdk_impl_\{tag}_\{method}"
 -- The exact impl symbols exported by a standalone prelude object: the stamps of
 -- the prelude lowered on its own.  A later program can add a same-(method, head)
 -- impl, changing the whole-program answer; the program half lowers with these rows
--- as pins (`core_ir_lower.lowerProgramEmitPinned`), which is what keeps references
+-- as pins (`core_ir_lower.lowerProgramEmitPinnedWith`), which is what keeps references
 -- to the already-compiled object linkable.  The index is built once in
 -- O(entries log entries).
 export
@@ -2439,7 +2441,7 @@ emitIoExtern e env "flushStdout" args = match emitArgs e env args
 -- currently-buffered stdout (a pointer+length store; no allocation) so an
 -- abort can flush it; enableRunStdoutFlush arms that flush.  See
 -- runtime/medaka_rt.c's mdk_flush_run_stdout_on_abort and eval.mdk's
--- appendOutput/evalModulesOutputRun.
+-- appendOutput/evalModulesOutputRunFacts.
 emitIoExtern e env "stashRunStdout" args = match emitArgs e env args
   [s] =>
     let _ = emit e ("  call void @mdk_stash_run_stdout(i64 " ++ s ++ ")")
@@ -8395,10 +8397,9 @@ takeRoutes _ _ = []
 
 -- The super dictionaries a dictionary of [ent]'s interface stores ahead of its
 -- `requires` dictionaries (see `dictWordOfRoute`).
-entrySuperCount : CImplEntry -> Int
-entrySuperCount ent = match installedDispositionsOpt ()
-  Some table => ifaceSuperCount (implEntryIfaceWord ent) table
-  None => 0
+entrySuperCount : Emit -> CImplEntry -> Int
+entrySuperCount e ent =
+  optionOr 0 (omLookup (implEntryIfaceWord ent) e.superCounts)
 
 -- load dict words [i, n) from the boxed dict cell `dictPtr`.  The head tag is the
 -- cell header (offset 0); field i is loaded by `loadField i` (offset 8*(i+1)), stored
@@ -8485,7 +8486,7 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     -- #1816: `implReqCount` is a direct `leadingDictPats` count and never negative;
     -- the clamp guards the `- lengthS methWords` subtraction.
     let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
-    let superCount = entrySuperCount ent
+    let superCount = entrySuperCount e ent
     -- an inherited default receives the dictionary that selected it
     let cellDicts =
       if isInheritedEntry ent then
@@ -14769,6 +14770,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     buf = Ref [],
     fnNames = Ref (collectFns groups),
     binderRows = rows,
+    superCounts = omFromPairs facts.factSupers omEmpty,
     globalTys = globalStampTys rows (filter (b => not (isFnBind b)) groups),
     lams = Ref [],
     implEntries = Ref implEntries,

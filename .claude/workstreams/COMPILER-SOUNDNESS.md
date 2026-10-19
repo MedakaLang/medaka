@@ -27,7 +27,7 @@ mutable `Ref` — that is why the WasmGC backend never had the guard bug.
 **2. A decision implemented TWICE, where nothing forces the second copy to agree.** The disease behind
 three separate incidents:
 
-- `evalModules` (`eval/eval.mdk`) and `cevalModules` (`ir/core_ir_eval.mdk`) are **parallel module
+- `evalModulesWith` (`eval/eval.mdk`) and `cevalModules` (`ir/core_ir_eval.mdk`) are **parallel module
   drivers — fix module-frame semantics in LOCKSTEP.** That is how the P0-9 cross-module ctor-collision
   fix shipped patching only `eval.mdk`, leaving `core_ir_eval.mdk` broken for months.
 - `checkOneDiags` ∥ `checkModuleFullImpl` — one-program and per-module typecheck routes whose
