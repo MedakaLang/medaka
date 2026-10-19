@@ -79,7 +79,6 @@ aliasesHeadRowMsg : String -> Ty -> String
 alignScopedSchemes : List ScopedMember -> List (String, Scheme) -> List ScopedScheme
 allArrowEffs : Mono -> List EffRow
 allConcreteHeads : List Mono -> Bool
-allCoreFns : List String -> Bool
 allDigits : String -> Bool
 allDigitsFrom : String -> Int -> Bool
 allEVars : Expr -> List String
@@ -1090,7 +1089,7 @@ extendLocalVars : TcEnv -> List (String, Scheme) -> TcEnv
 extendMethodRow : TcEnv -> String -> MethodSchemeRow -> TcEnv
 extendMethodRows : TcEnv -> List MethodSchemeRow -> TcEnv
 extendPropParams : TcEnv -> List PropParam -> TcEnv
-extendTermBindings : TcEnv -> Map String Unit -> List (String, Scheme) -> TcEnv
+extendTermBindings : TcEnv -> List (String, Scheme) -> TcEnv
 extendVar : TcEnv -> String -> Scheme -> TcEnv
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 extensionBase : Expr -> Option Expr
@@ -1230,7 +1229,6 @@ firstTvar : Mono -> Mono -> Int -> Option Mono
 firstTypeDisagreement : String -> List (String, Int, RecordInfo) -> Option CtorFieldConflict
 fixedSibling : Int -> List (Int, String) -> Option String
 fixedWidthLiteralFits : Route -> Int -> Bool
-flatGroupIsCore : List String -> Bool
 flexibleIndex : Ref Authvar -> Authority -> Bool
 flushPendingEscapes : Option GroupCtx -> Unit
 foldAppFallback : SigVars -> List (String, Mono) -> Mono -> List Ty -> Mono
@@ -2983,7 +2981,6 @@ scopeMembers : ScopeId -> Map String (List (List Pat, Expr)) -> List (String, Mo
 scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) -> Map String Unit -> List (String, List MethodPredicateSlot)
 scopePredicateSlots : List ((String, String), List PredicateSlot) -> Map String Unit -> List Decl -> List (String, List PredicateSlot)
 scopeRolesOf : List (BindingRole, Mono) -> ScopeRoles
-scopeShadowsForGroup : List String -> Unit
 scopeTraceContext : ScopeId -> (String, String)
 scopedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
 scopedMemberBinding : ScopedMember -> (String, EnvBinding)

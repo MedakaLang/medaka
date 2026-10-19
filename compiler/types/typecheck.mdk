@@ -10745,10 +10745,6 @@ freshPerRun _ = PerRun {
   dictAppFns = Ref omEmpty,
   residualUnivRef = Ref emptyImplUniverse,
   promotedRef = Ref [],
-  methodShadowNamesRef = Ref omEmpty,
-  flatShadowScopingRef = Ref False,
-  flatCoreFnNamesRef = Ref omEmpty,
-  flatUserShadowNamesRef = Ref omEmpty,
   fieldOwnerModulesRef = Ref omEmpty,
   fieldOwnerReachRef = Ref omEmpty,
   typeErrors = wNew (),
@@ -14482,25 +14478,19 @@ recordDeclaredBindingCall dc subst =
     (constraintMonosOf (map (pair => (fst pair).csId) expanded) subst)
     (callArgVecsV expanded subst)
 
-extendTermBindings : TcEnv -> OrdMap Unit -> List (String, Scheme) -> TcEnv
-extendTermBindings env _ [] = env
-extendTermBindings env masked ((name, scheme) :: rest) =
-  let visible =
-    if omHasKey name masked then
-      optionOr (ordinaryEnvBinding scheme) (lookupBinding env name)
-    else
-      ordinaryEnvBinding scheme
+extendTermBindings : TcEnv -> List (String, Scheme) -> TcEnv
+extendTermBindings env [] = env
+extendTermBindings env ((name, scheme) :: rest) =
   extendTermBindings
     (extendBindings env [
       (
         name,
-        bindingWithStandalone visible (
+        bindingWithStandalone (ordinaryEnvBinding scheme) (
           LocalStandalone,
           ordinaryValueScheme scheme,
         ),
       ),
     ])
-    masked
     rest
 
 attachStandaloneSources : OrdMap Scheme ->
@@ -34857,18 +34847,9 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   let _ = ffiCheckExternsLabelled (ffiStampMode mid) prog
   let _ = ffiCheckExternsShadow (ffiStampMode mid) prog
   let _ = ffiCheckExternsCatalogRow (ffiStampMode mid) prog
-  -- methodNames: FLAT's SECOND ifaceMethodSchemeRows call over prog — dedup-skipped by
-  -- installMethodPredicateSlots so globalS's registered (first-call) ids stay authoritative.
-  -- Module checks core in isolation and never needs it, so NO extra call there.
-  -- #973: an OrdMap-backed SET, not a `List` — its two consumers (methodShadowNamesRef via
-  -- dropSchemesNamed at 12036 and per-SCC at processGroup) test MEMBERSHIP only, and as a
-  -- List `dropSchemesNamed`'s `contains (fst s) names` scanned this whole interface-method
-  -- list once per scheme → O(schemes x methods), a flat-path `manyifaces:typecheck` quadratic
-  -- (once here over topSchemes, once PER SCC group).  omHasKey is byte-identical membership.
   -- (#4 cont) post-globalS mode setup.  Module: shadowMethodSchemes env layer (rebinding
   -- imported method names to the interface-method scheme) + the method-constraint cross
   -- seed (AFTER globalS's row registration, per installMethodPredicateSlots).
-  -- Flat: record the interface-method names for processSCC's method-shadow scoping.
   let envSeed = extendVars dataEnv seed
   let shadowLayer =
     -- The rows remain local: they carry live scheme cells needed only by setup and
@@ -34914,8 +34895,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- binding keeps its standalone descriptor, so an occurrence of a top-level value
   -- spelled like a method resolves to the value in a tail body too.  Marking and
   -- inference read this one env.
-  let tailEnv =
-    extendTermBindings env1 perRun.value.methodShadowNamesRef.value topSchemes
+  let tailEnv = extendTermBindings env1 topSchemes
   -- Module: the marked tree this call returns (the groups' marked clauses written
   -- back, the tail bodies marked with the module's final dict-name set) and its
   -- stamped twin, which the tail-body inference below reads.  Flat: `progS` is both.
@@ -43000,31 +42980,6 @@ callPredOf (iface, monos, loc)
   | iface.irName == "" = []
   | otherwise = [(iface, monos, loc)]
 
--- FLAT-PATH SHADOW SCOPING (S1): a letrec group whose members are ALL prelude fns is a
--- CORE group — no user standalone is a shadow inside it.  Empty group ⇒ not core (it
--- cannot occur, and "user" is the conservative arm: it preserves the pre-fix behavior).
-flatGroupIsCore : List String -> Bool
-flatGroupIsCore [] = False
-flatGroupIsCore members = allCoreFns members
-
-allCoreFns : List String -> Bool
-allCoreFns [] = True
-allCoreFns (m :: rest)
-  | omHasKey m perRun.value.flatCoreFnNamesRef.value = allCoreFns rest
-  | otherwise = False
-
--- FLAT-PATH SHADOW SCOPING (S1): point definerShadowNamesRef at the shadow set that is
--- actually IN SCOPE for the decls about to be inferred — [] inside the prelude, the
--- user's shadows inside the user's module.  Inert (and byte-identical) unless the flat
--- path prepended a prelude; see flatShadowScopingRef.
-scopeShadowsForGroup : List String -> Unit
-scopeShadowsForGroup members
-  | not perRun.value.flatShadowScopingRef.value = ()
-  | flatGroupIsCore members = perRun.value.definerShadowNamesRef := omEmpty
-  | otherwise =
-    perRun.value.definerShadowNamesRef :=
-      perRun.value.flatUserShadowNamesRef.value
-
 processSCC : TcEnv ->
   List (String, Ty) ->
   OrdMap (List (List Pat, Expr)) ->
@@ -43042,7 +42997,6 @@ processSCC env sigs grouped0 members =
   let groupedStamped = match marking
     Some mm => stampGroupClauses mm members grouped
     None => grouped
-  let _ = scopeShadowsForGroup members
   let _ = enterLevel ()
   let _ = beginEffectSummaryScope ()
   let oblN0 = wMark perRun.value.implObls
@@ -43228,15 +43182,7 @@ processSCC env sigs grouped0 members =
         schemes
         groupedOut
     None => ()
-  -- FLAT-PATH SHADOW FIX (facet 1): thread forward only the NON-method-shadowing
-  -- schemes, so a method name a user fn shadows keeps resolving to the METHOD
-  -- (base env / globalS) for later prelude bindings.  The shadowing scheme is still
-  -- RETURNED (second tuple slot) for the scheme dump + final env.
-  (
-    extendTermBindings env perRun.value.methodShadowNamesRef.value schemes,
-    schemes,
-    groupedOut,
-  )
+  (extendTermBindings env schemes, schemes, groupedOut)
 
 -- A multi-member SCC is a mutually-recursive group (always a function group, like
 -- the oracle's DLetGroup); a singleton is a plain binding gated on its RHS.  Self-
