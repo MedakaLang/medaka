@@ -31,10 +31,11 @@ import frontend.desugar.{desugar}
 import frontend.ast.{Decl(..), ExternDecl(..)}
 import types.annotate.{annotateProgram}
 import types.typecheck.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
 import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
-  lowerProgramEmit,
+  lowerProgramEmitWith,
 }
 import backend.extern_catalog.{
   ExternRow,
@@ -294,7 +295,7 @@ emitWat src =
       False
       (declaredRecordFieldOrders decls)
       []
-  let cp = lowerProgramEmit (annotateProgram decls)
+  let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   emitProgramRecord input (buildEmitPlan WasmBackend cp) cp
 
 -- A program whose one source of `use` is the call to extern `name` emits `marker`,

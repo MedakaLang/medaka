@@ -8,9 +8,9 @@
 --   medaka run compiler/entries/core_ir_dict_pp_main.mdk <runtime.mdk> <prelude.mdk>... <file.mdk>
 
 import frontend.ast.{Decl}
-import types.typecheck.{elaborateOne}
+import types.typecheck.{elaborateOneFacts}
 import eval.eval.{funNamesOf, dropShadowedExp}
-import ir.core_ir_lower.{lowerTypedProgram}
+import ir.core_ir_lower.{lowerTypedProgramWith}
 import ir.core_ir_eval.{cevalMainOf}
 import entries.entry_support.{driveRuntime}
 
@@ -26,7 +26,8 @@ runDict : List Decl -> List Decl -> List Decl -> String
 runDict runtimeDecls preludeDecls userDecls =
   let userNames = funNamesOf userDecls
   let livePrelude = dropShadowedExp userNames preludeDecls
-  let decls = elaborateOne runtimeDecls livePrelude ("__user__", userDecls)
-  cevalMainOf decls (lowerTypedProgram decls)
+  let (decls, facts) =
+    elaborateOneFacts runtimeDecls livePrelude ("__user__", userDecls)
+  cevalMainOf decls (lowerTypedProgramWith facts decls)
 
 main = oracleMain ()

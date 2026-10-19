@@ -50,7 +50,7 @@ import types.typecheck.{
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
-  lowerProgramEmit,
+  lowerProgramEmitWith,
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -60,6 +60,7 @@ import ir.core_ir_lower.{
 }
 import ir.dce.{dceFilter}
 import types.private_mangle.{mangleUnits, mangleUnitsEv}
+import types.program_facts.{factsOfElabWith}
 import backend.emit_plan.{buildEmitPlan}
 import backend.core_validate.{Backend(..)}
 import backend.llvm_emit.{emitProgram, makeEmitInput}
@@ -279,9 +280,9 @@ runStaged on targetPath rsrc csrc tsrc =
   -- The per-module schemes and residual diagnostics `elaborateModules` also returns
   -- have no consumer here: this driver measures stages and throws its emitted IR
   -- away, so it has no diagnostic surface to route them to.
-  let (coreE, modulesE, _, _, evTable, _, _) =
-    elaborateModules rDecls livePrelude (("__user__", desugared) :: [])
-  let (coreD, modules2, _) = mangleUnitsEv evTable coreE modulesE
+  let elab = elaborateModules rDecls livePrelude (("__user__", desugared) :: [])
+  let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let elaborated = coreD ++ flatMap snd modules2
   -- Input indexing is elaboration work; keep it outside the emit timer.  The FFI
   -- projection is post-elaboration so it consumes the same canonical alias shape
@@ -362,7 +363,7 @@ runStaged on targetPath rsrc csrc tsrc =
   let tLw0 = now ()
   let aLw0 = allocSnap ()
   let oLw0 = opSnap ()
-  let cprog = lowerProgramEmit live
+  let cprog = lowerProgramEmitWith (factsOfElabWith evTableM elab) live
   let tLw1 = now ()
   let _ =
     emitPhaseAO

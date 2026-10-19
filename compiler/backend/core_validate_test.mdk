@@ -22,7 +22,8 @@ import support.util.{dedup, listLen, joinNl, reverseL}
 import frontend.marker.{declRefs}
 import map as BM
 import types.annotate.{annotateProgram}
-import types.typecheck.{elaborateOne, grantWholeDomain}
+import types.typecheck.{elaborateOneFacts, grantWholeDomain}
+import types.program_facts.{emptyFacts}
 import ir.core_ir.{
   CBind(..),
   CClause(..),
@@ -48,7 +49,7 @@ import frontend.ast.{BinderId(..)}
 import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
-  lowerProgramEmit,
+  lowerProgramEmitWith,
 }
 import backend.extern_catalog.{catalogRow, ledgerEntry, rowLlvm, rowWasm}
 import backend.core_validate.{
@@ -86,7 +87,9 @@ import test_process.{underRoot}
 
 lowered : String -> CProgram
 lowered src =
-  lowerProgramEmit (annotateProgram (grantWholeDomain (desugar (parse src))))
+  lowerProgramEmitWith
+    emptyFacts
+    (annotateProgram (grantWholeDomain (desugar (parse src))))
 
 -- The extern names `backend` refuses in `src`, in order of first reference.
 refused : Backend -> String -> List String
@@ -189,7 +192,7 @@ test "(e) record mode logs one event per refused extern, and no unbound-variable
       False
       (declaredRecordFieldOrders decls)
       []
-  let cp = lowerProgramEmit (annotateProgram decls)
+  let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (_, events) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   let expected = map ("main\t" ++ _) (refusalLines WasmBackend recordSrc)
   expectAll [
@@ -246,7 +249,7 @@ llvmRecordEvents =
       ""
       (declaredRecordFieldOrders decls)
       []
-  let cp = lowerProgramEmit (annotateProgram decls)
+  let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (_, events) = llvmRecord input (buildEmitPlan LlvmBackend cp) cp
   expectEqual
     (map ("main\t" ++ _) (refusalLines LlvmBackend assertSnapshotSrc))
@@ -384,7 +387,7 @@ ffiNoJsEvents checked =
       False
       (declaredRecordFieldOrders decls)
       ffiTypes
-  let cp = lowerProgramEmit (annotateProgram decls)
+  let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   checkedTarget := checked
   let (_, events) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   checkedTarget := None
@@ -512,11 +515,11 @@ i2078Src =
 
 typedLowered : String -> String -> CProgram
 typedLowered preludeSrc src =
-  lowerProgramEmit
-    (elaborateOne [] (desugar (parse preludeSrc)) (
-      "calls",
-      grantWholeDomain (desugar (parse src)),
-    ))
+  let (decls, facts) = elaborateOneFacts [] (desugar (parse preludeSrc)) (
+    "calls",
+    grantWholeDomain (desugar (parse src)),
+  )
+  lowerProgramEmitWith facts decls
 
 -- [prog] with every application whose head is the variable [name] re-stamped
 -- [mode], in top-level bindings.
@@ -1442,12 +1445,12 @@ loweredSource : String -> <IO, FileRead> Result String CProgram
 loweredSource src = do
   rsrc <- readFile (underRoot "stdlib/runtime.mdk")
   csrc <- readFile (underRoot "stdlib/core.mdk")
-  Ok
-    (lowerProgramEmit
-      (elaborateOne (desugar (parse rsrc)) (desugar (parse csrc)) (
-        "main",
-        grantWholeDomain (desugar (parse src)),
-      )))
+  let (decls, facts) = elaborateOneFacts (desugar (parse rsrc)) (desugar
+    (parse csrc)) (
+    "main",
+    grantWholeDomain (desugar (parse src)),
+  )
+  Ok (lowerProgramEmitWith facts decls)
 
 stampFixture : String -> <IO, FileRead> Expectation
 stampFixture name = match loweredFixture name

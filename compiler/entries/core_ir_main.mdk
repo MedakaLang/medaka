@@ -12,7 +12,8 @@
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
-import ir.core_ir_lower.{lowerProgram}
+import ir.core_ir_lower.{lowerProgramWithFacts}
+import types.program_facts.{emptyFacts}
 import ir.core_ir_eval.{cevalMainOf}
 
 export
@@ -34,7 +35,7 @@ withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
   Ok targetSrc =>
     let decls = annotateProgram (desugar (parse targetSrc))
-    putStrLn (cevalMainOf decls (lowerProgram decls))
+    putStrLn (cevalMainOf decls (lowerProgramWithFacts emptyFacts decls))
   Err msg => ePutStrLn msg
 
 main = oracleMain ()

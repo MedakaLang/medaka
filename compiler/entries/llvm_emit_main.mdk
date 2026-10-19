@@ -21,8 +21,9 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import types.typecheck.{grantWholeDomain}
+import types.program_facts.{emptyFacts}
 import ir.core_ir_lower.{
-  lowerProgramEmit,
+  lowerProgramEmitWith,
   declaredRecordFieldOrders,
 }
 import backend.llvm_emit.{emitProgram, makeEmitInput}
@@ -49,7 +50,7 @@ withTarget targetPath = match readFile targetPath
 -- sites, which misses a record that is only ever projected).
 emitTarget : List Decl -> <IO> Unit
 emitTarget decls =
-  let cp = lowerProgramEmit decls
+  let cp = lowerProgramEmitWith emptyFacts decls
   putStr
     (emitProgram
       (makeEmitInput
