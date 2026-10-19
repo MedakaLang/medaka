@@ -1,6 +1,6 @@
 # Typechecker cell lifetimes
 
-One row per piece of mutable typechecker state: the module-level cells of `compiler/types/typecheck.mdk`, the fields of its four bundle records (declared in `compiler/types/tc_types.mdk`), and the cells outside the file that a drive reads or writes. It is the inventory the state-by-lifetime split works from.
+One row per piece of mutable typechecker state: the module-level cells of `compiler/types/typecheck.mdk`, the fields of its four bundle records (declared in `compiler/types/tc_types.mdk`) and the fields of the context records that replace them (`DynCtx`, `SiteCtx`), and the cells outside the file that a drive reads or writes. It is the inventory the state-by-lifetime split works from.
 
 Columns: `name | holds | lifetime | owner-today | writers | reset | target | interface-fills | source | issue`.
 
@@ -182,6 +182,15 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | PerRun.groupConstraintMonosRef | constraint monos of the group being processed | group | PerRun | processSCC | resetState | GroupCtx | n/a | - | - |
 | PerRun.fieldOwnerModulesRef | field-owner key to declaring module ids; comment says graph-global but it is re-minted per module | module | PerRun | declEnvSeedDataUniverse | resetState | ModuleCtx | no | - | #1597 |
 | PerRun.fieldOwnerReachRef | module ids this module can reach through DUse | module | PerRun | declEnvSeedDataUniverse | resetState | ModuleCtx | no | - | #1597 |
+| DynCtx.dcJoin | the construct whose alternatives a value join is equating, which names the mismatch | run | DynCtx | joinValueEqual | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcNonCovariant | inside a non-covariant type argument, where two closed effect rows must be equal | run | DynCtx | paramVarianceGuard | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcSuppressRLocalRecord | typing a definer-shadow occurrence that heads an application, so recordRLocalSite pushes nothing | run | DynCtx | inferDefinerShadowAppAt | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcSuppressArgStamp | typing a definer-shadow occurrence that heads an application, so recordArgStamp pushes nothing | run | DynCtx | inferDefinerShadowAppAt | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcShadowHeadCtx | typing a shadow occurrence that heads its own application, so the value-position standalone pin does not apply | run | DynCtx | inferDefinerShadowAppAt, shadowHeadEnv | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcDo | inside a do-lowered chain, where a monad-shape mismatch reads as "do requires a monad" | run | DynCtx | infer (the EDoOrigin arm) | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcMethodMismatch | unifying an interface default body against its declared type, so a leaf mismatch names the method | run | DynCtx | checkMethodBodyAgainst | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| SiteCtx.sxSite | the span of the dispatch site being resolved, for a diagnostic raised where no span argument exists | run | SiteCtx | resolveArgStamps, resolveSites, resolveRLocalSites, resolveOpSites, resolveDictApps, checkEnteredReqs, checkImplHeadGoal, residualBoundPreds | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| SiteCtx.sxInner | the notes accumulator of the running stamp, which each route built below the top level is ORed into | run | SiteCtx | routeWalkMemoized, stampNoting | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
 | PerRun.typeErrors | windowed diagnostic output channel | module | PerRun | recordTypeError, replaceAmbiguityAt | resetState | ModuleCtx | no | - | #1146 |
 | PerRun.typeErrorMsgSetRef | membership index over typeErrors rendered messages | module | PerRun | recordTypeError, replaceAmbiguityAt | resetState | ModuleCtx | no | - | #2068 |
 | PerRun.ambiguitySitesRef | spans holding a T-AMBIGUOUS-INSTANCE | module | PerRun | pushAmbiguityAt | resetState | ModuleCtx | no | - | - |
