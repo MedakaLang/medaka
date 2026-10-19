@@ -603,7 +603,6 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:9368 | Ref (List | `schemeObligationsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9373 | Ref (List | `methodPredicateSlotsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9379 | Ref (List | `promotedRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9383 | Ref (List | `flatUserShadowNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9400 | Ref (List | retired local-dict pin accumulator | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:10427 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:10428 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |

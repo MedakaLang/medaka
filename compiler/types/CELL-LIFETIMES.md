@@ -129,7 +129,7 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | PerRun.dataParamRowAtomsRef | atoms each KRow parameter is charged at every occurrence | module | PerRun | declEnvSeedDataUniverse, recordParamRowAtoms | resetState | ModuleCtx | no | - | #2110 |
 | PerRun.aliasTableRef | type alias table, seeded each module | module | PerRun | loadDataUniverse, registerData | resetState | ModuleCtx | no | - | - |
 | PerRun.numLitFromIntAnchorRef | identity-selected prelude Num.fromInt descriptor row | module | PerRun | seedNumLitFromIntAnchor | resetState | ModuleCtx | no | - | - |
-| PerRun.definerShadowNamesRef | definer-shadow names in scope for the current group | group | PerRun | checkBodyImpl, scopeShadowsForGroup | resetState | GroupCtx | n/a | - | - |
+| PerRun.definerShadowNamesRef | definer-shadow names in scope for the current group | group | PerRun | checkBodyImpl | resetState | GroupCtx | n/a | - | - |
 | PerRun.definerShadowSigsRef | signatures of definer-shadow names | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | - |
 | PerRun.bodyImplEnvRef | impl environment of the module body being checked | module | PerRun | checkBodyImpl, methodReturnProbeCodes, methodReturnProbeStamp, methodReturnResolutionMutationProbe | resetState | ModuleCtx | no | - | - |
 | PerRun.methodAliasEntriesRef | alias method spellings the imports supply, mapped to declaration entries | module | PerRun | checkBodyImpl, methodReturnProbeSpelling | resetState | ModuleCtx | no | - | #1386 |
@@ -174,10 +174,6 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | PerRun.dictAppFns | dictionary application mono lists per function | module | PerRun | inferDeclaredDictAt, pushLocalDictApp | resetState | ModuleCtx | no | - | - |
 | PerRun.residualUnivRef | impl universe for residual predicate walks | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | - |
 | PerRun.promotedRef | names promoted by inference | module | PerRun | registerInferredFor | resetState | ModuleCtx | no | - | - |
-| PerRun.methodShadowNamesRef | method shadow names: never written, always empty; readers see the initial value | module | PerRun | - | resetState | delete | no | - | #4136 |
-| PerRun.flatShadowScopingRef | flag never written; always False | module | PerRun | - | resetState | delete | no | - | - |
-| PerRun.flatCoreFnNamesRef | set never written; always empty | module | PerRun | - | resetState | delete | no | - | - |
-| PerRun.flatUserShadowNamesRef | set never written; always empty | module | PerRun | - | resetState | delete | no | - | - |
 | PerRun.fieldOwnerModulesRef | field-owner key to declaring module ids; comment says graph-global but it is re-minted per module | module | PerRun | declEnvSeedDataUniverse | resetState | ModuleCtx | no | - | #1597 |
 | PerRun.fieldOwnerReachRef | module ids this module can reach through DUse | module | PerRun | declEnvSeedDataUniverse | resetState | ModuleCtx | no | - | #1597 |
 | DynCtx.dcJoin | the construct whose alternatives a value join is equating, which names the mismatch | run | DynCtx | joinValueEqual | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |

@@ -1927,10 +1927,6 @@ public export data PerRun = PerRun {
   dictAppFns : Ref (OrdMap (List (List Mono))),
   residualUnivRef : Ref ImplUniverse,
   promotedRef : Ref (List String),
-  methodShadowNamesRef : Ref (OrdMap Unit),
-  flatShadowScopingRef : Ref Bool,
-  flatCoreFnNamesRef : Ref (OrdMap Unit),
-  flatUserShadowNamesRef : Ref (OrdMap Unit),
   fieldOwnerModulesRef : Ref (OrdMap (List String)),  -- #1597: field-owner KEY → declaring module ids, graph-global — see fieldOwnerReachable
   fieldOwnerReachRef : Ref (OrdMap Unit),  -- #1597: the module ids THIS module can reach through DUse — see declEnvSeedDataUniverse
   typeErrors : Windowed TcDiag,  -- issue 1146: the diagnostic OUTPUT channel, on the Windowed discipline
