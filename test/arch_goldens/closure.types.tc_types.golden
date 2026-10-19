@@ -13,7 +13,6 @@ types.effect_domain
 types.effect_infer
 types.effect_rows
 types.effect_solver
-types.effect_values
 types.evidence
 types.evidence_complete
 types.evidence_coverage

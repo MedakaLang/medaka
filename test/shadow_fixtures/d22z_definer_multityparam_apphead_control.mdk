@@ -7,9 +7,9 @@
 -- This pins that relaxing maybeStandaloneValueMonoEmit's DEFINER arm to ifaceMethodName
 -- (typaram-agnostic) does NOT mis-ground the multi-typaram APP head.  A definer app head is
 -- caught by definerShadowArgHead (isDefinerShadow = ifaceMethodName) and routed through
--- inferDefinerShadowApp, which sets shadowHeadCtxRef True before typing the head and types it
+-- inferDefinerShadowApp, which sets dcShadowHeadCtx True before typing the head and types it
 -- via shadowVarHeadMethodScheme / definerShadowHeadType -- NEVER through inferMethodAt/the emit
--- pin.  So the ONLY definer occurrence reaching the emit pin with shadowHeadCtxRef False is a
+-- pin.  So the ONLY definer occurrence reaching the emit pin with dcShadowHeadCtx False is a
 -- genuine value position.  If the relaxation over-fired, `size 10` would be pinned to the
 -- standalone scheme AS A VALUE (not applied) and mis-elaborate.
 -- Expected: check/run/build all print ([2, 3, 4], 11).
