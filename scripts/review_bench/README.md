@@ -199,8 +199,9 @@ $D report --split dev --out /tmp/diffs.md
   with `battery.py`'s audit prompt, its scope paragraph replaced by the diff's
   (the changed lines are listed after the excerpt), and gives a cause for each
   "no". The judge always sees the twin notes.
-- **Budget:** a ledger under `.cache/diffbench/` stops new asking at $8.00 in
-  all ($6.00 for the first pass, $2.00 for `onedecl`). `run` and `audit` on `test` refuse without `--approved`: the test split
+- **Test split:** the baseline arm and one 40-finding audit ran once, with Val's approval (`RESULTS-diffs-test-2026-10-18.md`).
+- **Budget:** a ledger under `.cache/diffbench/` stops new asking at $14.8951 in
+  all ($6.00 for the first pass, $2.00 for `onedecl`, $7.00 for the test pass). `run` and `audit` on `test` refuse without `--approved`: the test split
   is looked at once, with the owner's approval.
 
 ## Cache and results
