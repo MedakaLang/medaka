@@ -13,7 +13,7 @@ The page is a single centered "quiet column" (`min(1040px, 100%)`): a slim
 header (wordmark + tagline + `Quickstart`/`Stdlib`/`GitHub` links), a
 dismissible funnel strip ("The full Medaka compiler, running in your
 browser…", dismissal persists via `localStorage`), a toolbar (an **Examples**
-picker with 3 embedded samples — `hello`/`shapes`/`pipeline` — a **Share**
+picker with 6 embedded samples — `hello`/`shapes`/`pipeline`/`cube`/`lissajous`/`balls` — a **Share**
 button that encodes the current program into a `#code=` URL hash permalink and
 copies it to the clipboard, a status line, and the gold **Run** button with a
 `⌘↵`/`Ctrl+Enter` hint), the CM6 editor, and one **unified console** pane

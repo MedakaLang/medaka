@@ -3,6 +3,7 @@ import { PROTOCOL_VERSION, validateFrameBatch, validateFrameInput } from './anim
 export function createAnimationController(deps) {
   const { createWorker, renderer, requestAnimationFrame: raf, cancelAnimationFrame: caf,
     setTimeout: later, clearTimeout: cancelTimer } = deps;
+  const now = deps.now || (() => performance.now());
   let worker = null;
   let runId = 0;
   let frameId = 0;
@@ -23,6 +24,11 @@ export function createAnimationController(deps) {
   let previousDispatch = null;
   let resumeDelta = true;
   const paused = () => manualPause || hidden || viewport.width <= 0 || viewport.height <= 0;
+  function suspend() {
+    if (baseline !== null) elapsed += Math.max(0, now() - baseline) / 1000;
+    baseline = null;
+    resumeDelta = true;
+  }
   function status(state, extra = {}) { deps.status?.({ state, runId, continuous, ...extra }); }
   function unschedule() { if (scheduled !== null) caf(scheduled); scheduled = null; }
   function clearDeadline() { if (timer !== null) cancelTimer(timer); timer = null; }
@@ -120,11 +126,12 @@ export function createAnimationController(deps) {
   function resize(next) {
     const changed = viewport.width !== next.width || viewport.height !== next.height || viewport.dpr !== next.dpr;
     if (!changed) return;
+    if (next.width <= 0 || next.height <= 0) suspend();
     viewport = { ...next, revision: viewport.revision + 1 };
     if (viewport.width > 0 && viewport.height > 0) {
       renderer.resize(viewport);
       if (initial && !continuous) renderer.present(initial);
-    } else { baseline = null; resumeDelta = true; unschedule(); }
+    } else { unschedule(); }
     schedule();
   }
   return {
@@ -143,10 +150,11 @@ export function createAnimationController(deps) {
       status('loading'); deadline(deps.startupTimeout || 10000);
       source.postMessage({ type: 'start', version: PROTOCOL_VERSION, runId, wasm, isolated, input: input(0) }, [wasm]);
     },
-    pause() { manualPause = true; baseline = null; unschedule(); status('paused'); schedule(); },
+    pause() { manualPause = true; suspend(); unschedule(); status('paused'); schedule(); },
     resume() { manualPause = false; baseline = null; resumeDelta = true; status(paused() ? 'paused' : 'running'); schedule(); },
     visibility(value) {
-      hidden = value; pointer.down = false; baseline = null; resumeDelta = true;
+      if (value && !hidden) suspend();
+      hidden = value; pointer.down = false; resumeDelta = true;
       unschedule(); if (worker) status(paused() ? 'paused' : 'running'); schedule();
     },
     stop() { terminate(); runId++; pending = initial = null; pointer.down = false; status('stopped'); },

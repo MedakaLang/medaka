@@ -3,6 +3,7 @@ import { createAnimationController } from './animation_controller.mjs';
 
 function harness(reducedMotion = false) {
   let id = 0;
+  let now = 0;
   const frames = new Map();
   const timers = new Map();
   const workers = [];
@@ -20,6 +21,7 @@ function harness(reducedMotion = false) {
     cancelAnimationFrame(key) { frames.delete(key); },
     setTimeout(fn, ms) { const key = ++id; timers.set(key, { fn, ms }); return key; },
     clearTimeout(key) { timers.delete(key); },
+    now: () => now,
     reducedMotion: () => reducedMotion,
     startupTimeout: 100, frameTimeout: 20,
     status: state => states.push(state), output: m => output.push(m),
@@ -31,9 +33,10 @@ function harness(reducedMotion = false) {
       continuous: true, viewport: { ...request.input.viewport },
       background: { red: 0, green: 0, blue: 0, alpha: 1 }, commands: [], ...overrides } });
   }
-  function step(now) {
+  function step(time) {
+    now = time;
     const queued = [...frames.values()]; frames.clear();
-    for (const fn of queued) fn(now);
+    for (const fn of queued) fn(time);
   }
   return { controller, workers, painted, states, output, timers, frames, viewport, start, reply, step };
 }
@@ -72,6 +75,21 @@ export function runAnimationControllerTests(check) {
     assert.equal(h.workers[0].sent.at(-1).input.delta, 0);
     assert.equal(h.painted.length, 2);
   });
+  for (const [name, suspend, resume] of [
+    ['manual pause', h => h.controller.pause(), h => h.controller.resume()],
+    ['hidden tab', h => h.controller.visibility(true), h => h.controller.visibility(false)],
+    ['zero layout', h => h.controller.resize({ width: 0, height: 0, dpr: 1 }),
+      h => h.controller.resize({ width: 640, height: 360, dpr: 1 })],
+  ]) {
+    test(`${name} preserves active time with an outstanding frame and resets delta`, () => {
+      const h = harness(); h.start(); h.reply(); h.step(0);
+      h.step(120); suspend(h); h.reply(); h.step(200);
+      resume(h); h.step(300);
+      const next = h.workers[0].sent.at(-1).input;
+      assert.equal(next.elapsed, 0.12);
+      assert.equal(next.delta, 0);
+    });
+  }
   for (const continuous of [false, true]) {
     test(`first ${continuous ? 'continuous' : 'static'} image survives resize, zero layout and pause before presentation`, () => {
       const h = harness(); h.start(); h.controller.pause();

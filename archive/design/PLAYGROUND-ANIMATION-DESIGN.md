@@ -171,7 +171,7 @@ comes from the host's binding map, not from granting arbitrary JS execution.
 ## 5. Scalar ABI and frame protocol
 
 Use signature-bearing `jsffi` imports and `<FFI "js/canvas">`, following
-[the existing WASM FFI contract](../spec/WASM-SEMANTICS.md#31-the-jsffi-import-module-user-js-bindings).
+[the existing WASM FFI contract](../../docs/spec/WASM-SEMANTICS.md#31-the-jsffi-import-module-user-js-bindings).
 The `medaka_canvas_v1_` JS-name prefix versions this application protocol. JS
 binding names must be valid JavaScript identifiers, as required by the existing
 scalar FFI. This prefix does not change the compiler ABI. The binding names are
