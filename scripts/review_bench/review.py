@@ -219,16 +219,66 @@ def cut_units(sha: str, path: str, changed: set[int], merge: bool = True) -> lis
     return out
 
 
-def unit_specs(a: str, b: str, files: list[str], merge: bool) -> tuple[list[tuple], list[str]]:
+SIGILS = re.compile("[\U0001F6A8⚠\U0001F512️]")
+VIS_PREFIX = re.compile(r"^(?:public\s+export|export|private)\s+", re.M)
+COMMENT_MARK = re.compile(r"^\s*(?:--+|\{-|-\})\s?", re.M)
+NEVER_MOVED = ("import",)
+
+
+def normalize_decl(text: str) -> str:
+    """A declaration's text with what a move may change removed: visibility prefix,
+    comment sigils, comment markers (a re-wrapped comment), case and whitespace."""
+    t = SIGILS.sub("", text)
+    t = VIS_PREFIX.sub("", t)
+    t = COMMENT_MARK.sub("", t)
+    return " ".join(t.lower().split())
+
+
+def base_index(a: str) -> dict[tuple[str, str], set[str]]:
+    """(kind, name) -> normalized texts of every named declaration in the .mdk files at `a`."""
+    tree = EV.Tree(a)
+    idx: dict[tuple[str, str], set[str]] = {}
+    for path in sorted(tree.files()):
+        if not path.endswith(".mdk"):
+            continue
+        for d in tree.decls(path):
+            if d.name and d.kind not in NEVER_MOVED:
+                idx.setdefault((d.kind, d.name), set()).add(normalize_decl(d.text()))
+    return idx
+
+
+def moved_unchanged(b: str, path: str, ch: set[int], idx: dict) -> tuple[set[int], list[dict]]:
+    """(changed lines left once unchanged-but-moved declarations are dropped, the
+    dropped declarations). A touched declaration is dropped when a declaration of the
+    same kind and name at the base, in this file or another, has the same normalized text."""
+    left, dropped = set(ch), []
+    for d in EV.Tree(b).decls(path):
+        span = range(d.start, d.end + 1)
+        if not d.name or d.kind in NEVER_MOVED or not any(n in ch for n in span):
+            continue
+        if normalize_decl(d.text()) in idx.get((d.kind, d.name), ()):
+            left -= set(span)
+            dropped.append({"name": d.name, "file": path, "reason": "moved-unchanged"})
+    return left, dropped
+
+
+def unit_specs(a: str, b: str, files: list[str], merge: bool, skip_moved: bool = False,
+               dropped: list | None = None) -> tuple[list[tuple], list[str]]:
     """[(path, lo, hi, anchor, excerpt, changed lines)] in file order, before any
-    evidence is generated, and notes on files with nothing to review."""
+    evidence is generated, and notes on files with nothing to review. With `skip_moved`,
+    declarations unchanged from `a` bar a move are left out and appended to `dropped`."""
     specs, notes = [], []
+    idx = base_index(a) if skip_moved else {}
     for path in files:
         fl = EV.Tree(b).lines(path)
         # A changed blank line carries nothing to review.
         ch = {n for n in changed_lines(a, b, path) if n <= len(fl) and fl[n - 1].strip()}
+        if ch and skip_moved:
+            ch, gone = moved_unchanged(b, path, ch, idx)
+            if dropped is not None:
+                dropped += gone
         if not ch:
-            notes.append(f"`{path}`: deletions or blank lines only")
+            notes.append(f"`{path}`: deletions, blank lines or moved-unchanged declarations only")
             continue
         for lo, hi, anchor in cut_units(b, path, ch, merge):
             specs.append((path, lo, hi, anchor, "\n".join(fl[lo - 1:hi]), sorted(n for n in ch if lo <= n <= hi)))
@@ -243,9 +293,10 @@ def units_from_specs(b: str, specs: list[tuple], jobs: int) -> list[dict]:
         return list(pool.map(lambda s: make_unit(b, *s[:5]) | {"changed": s[5]}, specs))
 
 
-def build_units(a: str, b: str, files: list[str], jobs: int, merge: bool) -> tuple[list[dict], list[str]]:
+def build_units(a: str, b: str, files: list[str], jobs: int, merge: bool, skip_moved: bool = False,
+                dropped: list | None = None) -> tuple[list[dict], list[str]]:
     """Units in file order, with evidence."""
-    specs, notes = unit_specs(a, b, files, merge)
+    specs, notes = unit_specs(a, b, files, merge, skip_moved, dropped)
     return units_from_specs(b, specs, jobs), notes
 
 
@@ -489,7 +540,14 @@ CLOSING = (f"These are a cheap reviewer's findings at the measured operating poi
            f"the reader decides.")
 
 
-def markdown(rev: str, a: str, b: str, res: dict, skipped, other, notes) -> str:
+def moved_lines(moved: list[dict]) -> list[str]:
+    if not moved:
+        return []
+    return [f"## Skipped declarations: unchanged from the base, moved ({len(moved)})"] \
+        + [f"- `{m['name']}` in `{m['file']}`: {m['reason']}" for m in moved] + [""]
+
+
+def markdown(rev: str, a: str, b: str, res: dict, skipped, other, notes, moved=()) -> str:
     fs = res["findings"]
     out = [f"# Cheap style review: `{rev}` ({a[:9]}..{b[:9]})", ""]
     out.append(f"{len(fs)} finding(s), ranked by battery confidence times confirm confidence "
@@ -522,6 +580,7 @@ def markdown(rev: str, a: str, b: str, res: dict, skipped, other, notes) -> str:
         out.append(f"## Units not reviewed: budget reached ({len(res['unreviewed'])})")
         out += [unit_line(u) for u in res["unreviewed"]]
         out.append("")
+    out += moved_lines(list(moved))
     out.append("## Skipped")
     out += skipped_lines(skipped, other, notes)
     out.append("")
@@ -535,7 +594,7 @@ def markdown(rev: str, a: str, b: str, res: dict, skipped, other, notes) -> str:
     return "\n".join(out)
 
 
-def dry_run(rev, a, b, units, rub, classes, skipped, other, notes) -> str:
+def dry_run(rev, a, b, units, rub, classes, skipped, other, notes, moved=()) -> str:
     out = [f"# Dry run: `{rev}` ({a[:9]}..{b[:9]})", "", f"## Units ({len(units)})"]
     tok = cached = 0
     for u in units:
@@ -545,7 +604,8 @@ def dry_run(rev, a, b, units, rub, classes, skipped, other, notes) -> str:
         tok += (len(system) + len(user)) / E.CHARS_PER_TOKEN
         out.append(unit_line(u) + (" (cached)" if hit else ""))
     fresh = len(units) - cached
-    out += ["", "## Skipped"] + skipped_lines(skipped, other, notes) + ["", "## Estimate"]
+    out += [""] + moved_lines(list(moved))
+    out += ["## Skipped"] + skipped_lines(skipped, other, notes) + ["", "## Estimate"]
     out.append(f"Battery input about {tok:,.0f} tokens over {len(units)} call(s) (characters / 4; the "
                f"rubric prefix is the same in every call). Confirm adds about {CONFIRMS_PER_UNIT} per-class "
                f"calls per unit. {cached} unit(s) have a cached battery answer.")
@@ -572,6 +632,10 @@ def main() -> int:
                          "least half of the quote's lines must be changed (scope_strict); strict-exempt: the "
                          "same, but dup.in-diff, test.gap and module.scattered-concern keep the default "
                          "(dev-measured only, RESULTS-diffs-dev-2026-10-18.md)")
+    ap.add_argument("--keep-moved", action="store_true",
+                    help="review declarations whose text is unchanged from the base bar a visibility prefix, "
+                         "whitespace, comment sigils or case, even when moved; by default they are skipped "
+                         "and listed")
     ap.add_argument("--twin-notes", action="store_true",
                     help="dup.* evidence also states suppressions and deliberate-copy comments on the excerpt's "
                          "file and its candidate twins (evidence.TWIN_NOTES; dev-measured only)")
@@ -589,9 +653,10 @@ def main() -> int:
             print(f"review: {len(dirty)} reviewed file(s) have uncommitted changes; only committed code "
                   f"at {head[:9]} is reviewed: " + ", ".join(d[3:] for d in dirty[:8]), file=sys.stderr)
     rub, _known, fx, classes = setup()
-    units, notes = build_units(base, head, files, a.jobs, not a.one_decl)
+    moved: list[dict] = []
+    units, notes = build_units(base, head, files, a.jobs, not a.one_decl, not a.keep_moved, moved)
     if a.dry_run:
-        print(dry_run(rev, base, head, units, rub, classes, skipped, other, notes))
+        print(dry_run(rev, base, head, units, rub, classes, skipped, other, notes, moved))
         return 0
     res = review(units, rub, fx, classes, a)
     if res["unreviewed"]:
@@ -601,10 +666,11 @@ def main() -> int:
         print(json.dumps({"rev": rev, "base": base, "head": head, "findings": res["findings"],
                           "units_reviewed": len(res["reviewed"]), "units_unreviewed": len(res["unreviewed"]),
                           "skipped": [{"file": p, "reason": w} for p, w in skipped],
+                          "skipped_units": moved,
                           "spend_usd": round(res["spend"], 6), "out_of_scope_dropped": res["out_of_scope"],
                           "results": RESULTS_FILE}, indent=1))
     else:
-        print(markdown(rev, base, head, res, skipped, other, notes))
+        print(markdown(rev, base, head, res, skipped, other, notes, moved))
     return 0
 
 
