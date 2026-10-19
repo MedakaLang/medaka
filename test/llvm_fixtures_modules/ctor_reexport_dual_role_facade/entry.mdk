@@ -12,4 +12,5 @@
 -- `sumS (Tq 3 4)` = `3 + 4` = `7`.
 import facade.{Tq, sumS}
 
-main = println (sumS (Tq 3 4))
+main : <IO> Unit
+main = putStrLn (intToString (sumS (Tq 3 4)))

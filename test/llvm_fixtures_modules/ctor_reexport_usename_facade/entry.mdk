@@ -9,4 +9,5 @@
 -- Expected output, derived by hand from the semantics: `unTz (Tz 5)` = `5`.
 import facade.{Tz, unTz}
 
-main = println (unTz (Tz 5))
+main : <IO> Unit
+main = putStrLn (intToString (unTz (Tz 5)))
