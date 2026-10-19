@@ -34,7 +34,8 @@ try {
   });
   let status = (await runSpec(join(HERE, '..', 'tests', 'playground.spec.mjs')))
     || (await runSpec(join(HERE, '..', 'runaway.spec.mjs')))
-    || (await runSpec(join(HERE, '..', 'async.spec.mjs'), noIsoServer.url));
+    || (await runSpec(join(HERE, '..', 'async.spec.mjs'), noIsoServer.url))
+    || (await runSpec(join(HERE, '..', 'animation.spec.mjs')));
   // The cross-engine smoke runs on every engine even after a failure, so a red
   // run names each engine that broke rather than only the first.
   for (const engine of ['chromium', 'firefox', 'webkit']) {

@@ -73,6 +73,12 @@ cp "$SCRIPT_DIR/compile.mjs"         "$SITE/"
 cp "$SCRIPT_DIR/medaka_host.mjs"     "$SITE/"
 cp "$SCRIPT_DIR/compiler-worker.js"  "$SITE/"
 cp "$SCRIPT_DIR/worker.js"           "$SITE/"
+cp "$SCRIPT_DIR/animation_protocol.mjs"   "$SITE/"
+cp "$SCRIPT_DIR/animation_host.mjs"       "$SITE/"
+cp "$SCRIPT_DIR/animation_controller.mjs" "$SITE/"
+cp "$SCRIPT_DIR/canvas_renderer.mjs"      "$SITE/"
+cp "$SCRIPT_DIR/compile_dispatcher.mjs"   "$SITE/"
+cp "$SCRIPT_DIR/animation_examples.mjs"   "$SITE/"
 
 # Committed wat2wasm assembler blob
 cp "$SCRIPT_DIR/vendor/wat2wasm/wat2wasm.js"      "$SITE/vendor/wat2wasm/"
@@ -185,6 +191,29 @@ for f in runtime.mdk core.mdk; do
 done
 if [ -n "$missing" ]; then
   echo "FAIL: main.js fetches these at runtime but they are not in site/dist:$missing" >&2
+  exit 1
+fi
+for m in graphics canvas_host animation; do
+  if grep -Fq "\"$m\"" "$SITE/dist/stdlib_modules.json"; then
+    [ -f "$SITE/dist/$m.mdk" ] || missing="$missing $m.mdk"
+  else
+    missing="$missing $m (not listed in dist/stdlib_modules.json)"
+  fi
+done
+if [ -n "$missing" ]; then
+  echo "FAIL: animation stdlib modules are absent from site/dist:$missing" >&2
+  exit 1
+fi
+
+# The animation page imports a fixed production module roster. Keep the static
+# site complete even when the dev tree can satisfy imports accidentally.
+missing_animation_js=""
+for f in animation_protocol.mjs animation_host.mjs animation_controller.mjs \
+         canvas_renderer.mjs compile_dispatcher.mjs animation_examples.mjs; do
+  [ -f "$SITE/$f" ] || missing_animation_js="$missing_animation_js $f"
+done
+if [ -n "$missing_animation_js" ]; then
+  echo "FAIL: playground modules are missing from site/:$missing_animation_js" >&2
   exit 1
 fi
 

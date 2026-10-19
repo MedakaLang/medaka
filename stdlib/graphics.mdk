@@ -1,0 +1,69 @@
+{- | Pure pictures in logical canvas coordinates.
+
+   The origin is at the viewport center, with x right and y up. Constructors
+   preserve their arguments; the canvas host validates a whole frame before
+   presenting it. -}
+
+{- | A position measured in logical CSS pixels. -}
+public export data Point = Point { x : Float, y : Float } deriving (Eq, Debug)
+
+{- | Straight RGBA components in the range zero through one. -}
+public export data Color = Color {
+  red : Float,
+  green : Float,
+  blue : Float,
+  alpha : Float,
+}
+  deriving (Eq, Debug)
+
+{- | A stroked line, filled circle, or filled polygon.
+
+   Zero-radius circles and polygons with fewer than three points paint
+   nothing. Line widths must be positive; radii must be nonnegative. -}
+public export data Shape =
+  | Line Color Float Point Point
+  | Circle Color Point Float
+  | Polygon Color (List Point)
+  deriving (Eq, Debug)
+
+{- | A complete frame, painted in list order over its background.
+
+   Transparent backgrounds clear the preceding frame before painting. -}
+public export data Picture = Picture {
+  background : Color,
+  shapes : List Shape,
+}
+  deriving (Eq, Debug)
+
+{- | A point at the given horizontal and vertical coordinates. -}
+export
+point : Float -> Float -> Point
+point x y = Point { x = x, y = y }
+
+{- | A color with the given red, green, blue, and alpha components.
+
+   Values are preserved, including components outside the host's valid range. -}
+export
+rgba : Float -> Float -> Float -> Float -> Color
+rgba red green blue alpha =
+  Color { red = red, green = green, blue = blue, alpha = alpha }
+
+{- | A line whose width uses logical CSS pixels. -}
+export
+line : Color -> Float -> Point -> Point -> Shape
+line color width from to = Line color width from to
+
+{- | A filled circle whose radius uses logical CSS pixels. -}
+export
+circle : Color -> Point -> Float -> Shape
+circle color center radius = Circle color center radius
+
+{- | A filled polygon whose final point connects to its first point. -}
+export
+polygon : Color -> List Point -> Shape
+polygon color points = Polygon color points
+
+{- | A complete picture with shapes painted in their supplied order. -}
+export
+picture : Color -> List Shape -> Picture
+picture background shapes = Picture { background = background, shapes = shapes }

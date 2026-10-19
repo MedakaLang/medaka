@@ -1,12 +1,12 @@
 # Playground canvas and animation
 
-**Status:** PROPOSED — direction accepted; execution protocol requires the first implementation spike.
+**Status:** IMPLEMENTED — the playground examples and API are available; see the [user guide](../../docs/advanced/playground-animation.md).
 
 Planning base: `31f730fa4b186424d919e1d469e6cc64e95a40b5` (2026-10-19).
 Tracking: [#4328](https://github.com/MedakaLang/medaka/issues/4328).
 Execution order, ownership, and acceptance are in
 [the implementation plan](PLAYGROUND-ANIMATION-PLAN.md).
-This document specifies new behavior; it does not claim the feature exists.
+This document records the implemented behavior and its boundaries.
 
 ## 1. Outcome and scope
 
@@ -172,8 +172,10 @@ comes from the host's binding map, not from granting arbitrary JS execution.
 
 Use signature-bearing `jsffi` imports and `<FFI "js/canvas">`, following
 [the existing WASM FFI contract](../spec/WASM-SEMANTICS.md#31-the-jsffi-import-module-user-js-bindings).
-The `medaka.canvas.v1.` JS-name prefix versions this application protocol. It
-does not change the compiler ABI. The binding names and argument order are:
+The `medaka_canvas_v1_` JS-name prefix versions this application protocol. JS
+binding names must be valid JavaScript identifiers, as required by the existing
+scalar FFI. This prefix does not change the compiler ABI. The binding names are
+the prefix followed by each suffix below, with the listed argument order:
 
 | Suffix | Parameters -> result | Meaning |
 |---|---|---|

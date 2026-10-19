@@ -27,6 +27,7 @@
 // delete its entry.
 import { chromium, firefox, webkit, devices } from 'playwright';
 import fs from 'node:fs';
+import { ANIMATION_EXAMPLES } from '../animation_examples.mjs';
 
 const [, , BASE_URL, SCREENSHOT_DIR, ENGINE] = process.argv;
 const ENGINES = {
@@ -127,8 +128,43 @@ async function main() {
     check('overlap', 'overlap_sleeps prints "overlapped"',
       /^overlapped$/m.test(ov) && ov.includes(FOOTER), JSON.stringify(ov.slice(-300)));
     await page.screenshot({ path: `${SCREENSHOT_DIR}/smoke_${ENGINE}_3_async.png` });
+
+    for (const [id, expectedSource] of Object.entries(ANIMATION_EXAMPLES)) {
+      await page.selectOption('#example-select', id);
+      check(`${id}-picker`, `${id}: picker restores the shared editable source`,
+        await page.evaluate(() => window.__mdkView.state.doc.toString()) === expectedSource);
+      await page.click('#share-btn');
+      await page.waitForFunction(() => location.hash.startsWith('#code='));
+      await setSource(page, 'main = println "unsaved edit"\n');
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('.cm-editor .cm-content');
+      check(`${id}-share`, `${id}: permalink restores the complete source`,
+        await page.evaluate(() => window.__mdkView.state.doc.toString()) === expectedSource);
+      await page.click('#run-btn');
+      await page.waitForFunction(() => !document.getElementById('run-btn').disabled && document.getElementById('status').textContent === 'running…', null, { timeout: 60000 });
+      const snapshot = () => page.evaluate(() => document.getElementById('animation-canvas').toDataURL());
+      const first = await snapshot();
+      await page.waitForFunction(before => document.getElementById('animation-canvas').toDataURL() !== before,
+        first, { timeout: 10000 });
+      check(`${id}-pixels`, `${id}: canvas pixels change`, await snapshot() !== first);
+      await page.click('#stop-btn');
+      const stopped = await snapshot();
+      await page.waitForTimeout(100);
+      check(`${id}-stop`, `${id}: Stop holds the last picture`, await snapshot() === stopped
+        && await page.locator('#status').textContent() === 'stopped');
+      await page.click('#run-btn');
+      await page.waitForFunction(() => !document.getElementById('run-btn').disabled && document.getElementById('status').textContent === 'running…', null, { timeout: 60000 });
+      const rerun = await snapshot();
+      await page.waitForFunction(before => document.getElementById('animation-canvas').toDataURL() !== before,
+        rerun, { timeout: 10000 });
+      check(`${id}-rerun`, `${id}: clean rerun animates`, await snapshot() !== rerun);
+      await page.click('#stop-btn');
+      await page.screenshot({ path: `${SCREENSHOT_DIR}/smoke_${ENGINE}_${id}.png` });
+    }
   } catch (e) {
     console.error(`Harness error [${ENGINE}]:`, e.message);
+    console.error(await page.locator('#console').textContent());
+    console.error('status:', await page.locator('#status').textContent());
     failures++;
     try { await page.screenshot({ path: `${SCREENSHOT_DIR}/ERROR_smoke_${ENGINE}.png` }); } catch {}
   } finally {

@@ -2954,7 +2954,7 @@ kind = "native"
 migration = "done"
 run = "test/wasm_host_probes_test.mdk"
 oracles = ["wasm_emit_modules_main"]
-sources = ["playground/medaka_host.mjs", "playground/medaka_host_test.mjs", "playground/worker.js", "playground/compile.mjs", "test/wasm/run.js", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk"]
+sources = ["playground/medaka_host.mjs", "playground/medaka_host_test.mjs", "playground/animation_protocol.mjs", "playground/animation_protocol_test.mjs", "playground/animation_host.mjs", "playground/animation_host_test.mjs", "playground/animation_controller.mjs", "playground/animation_controller_test.mjs", "playground/canvas_renderer.mjs", "playground/canvas_renderer_test.mjs", "playground/compile_dispatcher.mjs", "playground/compile_dispatcher_test.mjs", "playground/worker.js", "playground/compile.mjs", "test/wasm/run.js", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk"]
 corpus = ["test/async_jspi_fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
 link = "production"

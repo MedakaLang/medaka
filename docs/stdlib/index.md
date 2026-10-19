@@ -1,5 +1,18 @@
 # Library Index
 
+## [`animation`](animation.md)
+
+Pictures driven by browser frames and retained simulation models.
+
+- [`Pointer`](animation.md#pointer)
+- [`Frame`](animation.md#frame)
+- [`Simulation`](animation.md#simulation)
+- [`drawing`](animation.md#drawing)
+- [`animate`](animation.md#animate)
+- [`animateWith`](animation.md#animatewith)
+- [`simulation`](animation.md#simulation-1)
+- [`runSimulation`](animation.md#runsimulation)
+
 ## [`args`](args.md)
 
 A command-line argument parser.
@@ -214,6 +227,21 @@ An immutable string of bytes.
 - [`adoptByteBlockUnsafe`](bytes.md#adoptbyteblockunsafe)
 - [`lendByteBlockUnsafe`](bytes.md#lendbyteblockunsafe)
 
+## [`canvas_host`](canvas_host.md)
+
+Scalar browser bindings for rendering pure pictures.
+
+- [`begin`](canvas_host.md#begin)
+- [`elapsed`](canvas_host.md#elapsed)
+- [`delta`](canvas_host.md#delta)
+- [`width`](canvas_host.md#width)
+- [`height`](canvas_host.md#height)
+- [`pointerX`](canvas_host.md#pointerx)
+- [`pointerY`](canvas_host.md#pointery)
+- [`pointerInside`](canvas_host.md#pointerinside)
+- [`pointerDown`](canvas_host.md#pointerdown)
+- [`render`](canvas_host.md#render)
+
 ## [`core`](core.md)
 
 The prelude: the types, interfaces, and functions every Medaka program can use without an import.
@@ -355,6 +383,21 @@ Filesystem helpers built on the host file primitives.
 - [`fixtureFiles`](fs.md#fixturefiles)
 - [`fixtureDirs`](fs.md#fixturedirs)
 - [`expectUnitCount`](fs.md#expectunitcount)
+
+## [`graphics`](graphics.md)
+
+Pure pictures in logical canvas coordinates.
+
+- [`Point`](graphics.md#point)
+- [`Color`](graphics.md#color)
+- [`Shape`](graphics.md#shape)
+- [`Picture`](graphics.md#picture)
+- [`point`](graphics.md#point-1)
+- [`rgba`](graphics.md#rgba)
+- [`line`](graphics.md#line)
+- [`circle`](graphics.md#circle)
+- [`polygon`](graphics.md#polygon)
+- [`picture`](graphics.md#picture-1)
 
 ## [`hash_map`](hash_map.md)
 

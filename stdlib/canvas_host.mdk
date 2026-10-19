@@ -1,0 +1,129 @@
+{- | Scalar browser bindings for rendering pure pictures.
+
+   A browser host must supply the versioned canvas bindings. Calls belong
+   inside one entry invocation; begin precedes frame reads and rendering. -}
+
+import graphics.{Picture, Point, Shape(..)}
+
+{- | Begin the invocation's picture, requesting further frames when true. -}
+export
+extern begin : Bool -> <FFI "js/canvas"> Unit
+  bind js "medaka_canvas_v1_begin"
+
+{- | Active animation time in seconds. -}
+export
+extern elapsed : Unit -> <FFI "js/canvas"> Float
+  bind js "medaka_canvas_v1_elapsed"
+
+{- | Seconds since the previous delivered frame, clamped by the host. -}
+export
+extern delta : Unit -> <FFI "js/canvas"> Float
+  bind js "medaka_canvas_v1_delta"
+
+{- | Logical viewport width in CSS pixels. -}
+export
+extern width : Unit -> <FFI "js/canvas"> Float
+  bind js "medaka_canvas_v1_width"
+
+{- | Logical viewport height in CSS pixels. -}
+export
+extern height : Unit -> <FFI "js/canvas"> Float
+  bind js "medaka_canvas_v1_height"
+
+{- | Horizontal pointer position relative to the canvas center. -}
+export
+extern pointerX : Unit -> <FFI "js/canvas"> Float
+  bind js "medaka_canvas_v1_pointerX"
+
+{- | Vertical pointer position, increasing upward. -}
+export
+extern pointerY : Unit -> <FFI "js/canvas"> Float
+  bind js "medaka_canvas_v1_pointerY"
+
+{- | Whether the pointer lies inside the canvas. -}
+export
+extern pointerInside : Unit -> <FFI "js/canvas"> Bool
+  bind js "medaka_canvas_v1_pointerInside"
+
+{- | Whether the primary pointer is pressed. -}
+export
+extern pointerDown : Unit -> <FFI "js/canvas"> Bool
+  bind js "medaka_canvas_v1_pointerDown"
+
+extern background : Float -> Float -> Float -> Float -> <FFI "js/canvas"> Unit
+  bind js "medaka_canvas_v1_background"
+
+extern strokeLine : Float ->
+  Float ->
+  Float ->
+  Float ->
+  Float ->
+  Float ->
+  Float ->
+  Float ->
+  Float ->
+  <FFI "js/canvas"> Unit
+  bind js "medaka_canvas_v1_line"
+
+extern fillCircle : Float ->
+  Float ->
+  Float ->
+  Float ->
+  Float ->
+  Float ->
+  Float ->
+  <FFI "js/canvas"> Unit
+  bind js "medaka_canvas_v1_circle"
+
+extern polygonBegin : Float -> Float -> Float -> Float -> <FFI "js/canvas"> Unit
+  bind js "medaka_canvas_v1_polygonBegin"
+
+extern polygonPoint : Float -> Float -> <FFI "js/canvas"> Unit
+  bind js "medaka_canvas_v1_polygonPoint"
+
+extern polygonEnd : Unit -> <FFI "js/canvas"> Unit
+  bind js "medaka_canvas_v1_polygonEnd"
+
+extern end : Unit -> <FFI "js/canvas"> Unit
+  bind js "medaka_canvas_v1_end"
+
+renderPoint : Point -> <FFI "js/canvas"> Unit
+renderPoint p = polygonPoint p.x p.y
+
+renderShape : Shape -> <FFI "js/canvas"> Unit
+renderShape (Line color width from to) =
+  strokeLine
+    color.red
+    color.green
+    color.blue
+    color.alpha
+    width
+    from.x
+    from.y
+    to.x
+    to.y
+renderShape (Circle color center radius) =
+  fillCircle
+    color.red
+    color.green
+    color.blue
+    color.alpha
+    center.x
+    center.y
+    radius
+renderShape (Polygon color points) =
+  polygonBegin color.red color.green color.blue color.alpha
+  each renderPoint points
+  polygonEnd ()
+
+{- | Render a complete picture after begin and seal its command batch.
+
+   The host validates every scalar, including degenerate shapes, and presents
+   the batch only after the guest invocation returns successfully. -}
+export
+render : Picture -> <FFI "js/canvas"> Unit
+render scene =
+  let color = scene.background
+  background color.red color.green color.blue color.alpha
+  each renderShape scene.shapes
+  end ()

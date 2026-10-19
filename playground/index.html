@@ -306,6 +306,10 @@
     #console .con-stderr { color: #f8a5a5; }
     #console .con-problem { color: #ffb347; display: block; }
     #console .con-meta { color: var(--faint); display: block; margin-top: 6px; }
+    #canvas-pane { margin-top: 16px; width: 100%; }
+    #canvas-pane[hidden] { display: none; }
+    #animation-canvas { display: block; width: 100%; aspect-ratio: 16 / 9; touch-action: none; }
+    .animation-control { padding: 8px 12px; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -362,11 +366,16 @@
       </label>
       <button id="share-btn" class="btn-ghost">Share</button>
       <span id="status" class="b-status"></span>
+      <button id="pause-btn" class="animation-control" hidden>Pause</button>
+      <button id="stop-btn" class="animation-control" disabled>Stop</button>
       <button id="run-btn">&#9654; Run <span class="kbd">&#8984;&#9166;</span></button>
     </div>
 
     <div id="editor"></div>
 
+    <div id="canvas-pane" hidden>
+      <canvas id="animation-canvas" role="img" aria-label="Medaka program drawing"></canvas>
+    </div>
     <div id="console-pane">
       <div class="con-label" id="console-label">Console</div>
       <div id="console" role="log" aria-live="polite" aria-labelledby="console-label" tabindex="0"></div>
