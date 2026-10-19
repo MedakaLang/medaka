@@ -44,11 +44,11 @@ import frontend.resolve.{
   resolveModuleG,
   resolveModulesErrorsByFile,
   importedCtorDecls,
-  ModuleExports,
   withStdlibExports,
   hintableUnboundNames,
   exportedValueNames,
 }
+import frontend.visibility.{ModuleExports}
 import list.{drop, last}
 import support.ordmap.{
   OrdMap,

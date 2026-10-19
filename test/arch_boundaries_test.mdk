@@ -374,6 +374,11 @@ test "arch_boundaries: frontend.ast closure matches its golden" =
     "closure.frontend.ast.golden"
     (closureOf (buildGraph loadModules) "frontend.ast")
 
+test "arch_boundaries: frontend.visibility closure matches its golden" =
+  pin
+    "closure.frontend.visibility.golden"
+    (closureOf (buildGraph loadModules) "frontend.visibility")
+
 test "arch_boundaries: types.repr closure matches its golden" =
   pin
     "closure.types.repr.golden"
