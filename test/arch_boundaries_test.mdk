@@ -673,7 +673,10 @@ badLifetime : List String -> Option String
 badLifetime = badField "lifetime" 2 lifetimeVocab
 
 ownerVocab : List String
-ownerVocab = ["module-level", "PerRun", "GraphRun", "DriverState", "CrossRun"]
+ownerVocab = [
+  "module-level", "PerRun", "GraphRun", "DriverState", "CrossRun", "DynCtx",
+  "SiteCtx"
+]
 
 targetVocab : List String
 targetVocab = [
@@ -761,7 +764,8 @@ fieldNameOf l =
         _ => None
 
 bundleRecords : List String
-bundleRecords = ["PerRun", "GraphRun", "DriverState", "CrossRun"]
+bundleRecords =
+  ["PerRun", "GraphRun", "DriverState", "CrossRun", "DynCtx", "SiteCtx"]
 
 -- Field names of the bundle `rec`: the indented lines after its
 -- `public export data rec = rec {` header, up to the column-0 `}`.
