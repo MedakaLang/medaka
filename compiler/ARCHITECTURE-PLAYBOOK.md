@@ -145,7 +145,7 @@ after S1 rather than after Phase 2.
 
 | Id | Action | Mechanism | Acceptance | Size | Needs |
 |---|---|---|---|---|---|
-| **C1** | `ModuleInterface` codec | Serialize a module's published export surface (schemes, interfaces, instances and their dispositions, the importer-visible evidence rows, declared effects) with a codec in the style of `ir/core_ir_sexp.mdk`, with a format version and the module's source fingerprint, the compiler fingerprint, the instance-environment key the contract requires (§5) and the IO join of the selected target profile (D7: the join's atom list, not the profile's name, so profiles with the same join share an entry). | Round-trip prop: decode (encode x) equals x for every stdlib module; a changed instance environment invalidates; an interface written under one join is never loaded under another, shown by a two-profile test over an unsigned binding whose type differs between them (the open-tail case in D7). | sprint | V2 |
+| **C1** | `ModuleInterface` codec | Serialize a module's published export surface (schemes, interfaces, instances and their dispositions, the importer-visible evidence rows, declared effects) with a codec in the style of `ir/core_ir_sexp.mdk`, with a format version and the module's source fingerprint, the compiler fingerprint, the instance-environment key the contract requires (§5) and the IO join of the selected target profile (D7: the join's atom list, not the profile's name, so profiles with the same join share an entry). The surface is the F1 producer's output. F3 later adds the full view a test sibling reads (private items included, as rustc's `.rmeta` carries them; ruled 2026-10-18) under a format-version bump. | Round-trip prop: decode (encode x) equals x for every stdlib module; a changed instance environment invalidates; an interface written under one join is never loaded under another, shown by a two-profile test over an unsigned binding whose type differs between them (the open-tail case in D7). | sprint | V2, F1 |
 | **C2** | The prelude ships pre-checked | At `make medaka`, the prelude's interface file is produced beside `stdlib/core.mdk`, keyed by the source fingerprint the binary bakes; the loader resolves it from `exeDir` as it resolves `stdlib/` and prefers it when the fingerprint matches (D6, ruled: shipped files, not baked). Every verb loads it instead of re-checking `core.mdk`; the same step then covers every stdlib module. Files are content-addressed per (module, IO join) (D7): `make medaka` produces the full join and the playground's (`wasmgc/browser-worker`), joins whose interfaces are byte-identical share one file, and any other join falls back to a full check. | G6's pins show zero prelude typecheck drives per process; hello-world `check` instruction count falls by the measured prelude share; interface-on versus interface-off differential over the engines corpus is identical; a mismatched fingerprint falls back to a full check and says so on stderr. | sprint | C1 |
 | **C3** | Imports load interfaces | The loader consults the interface cache for every user import whose fingerprints match, falling back to a full check; the LSP, REPL and `medaka test` parent reuse it within a session; `build`'s parent hands the artifact to the child (D4, step two). | Multi-module `check` of `medaka_cli.mdk` re-typechecks only changed modules; the REPL's per-line drive count is 1; `build` parent plus child typecheck the graph once; the Phase 1 exception rows owned here (`test_probe`, `test_doc_native`, `test_doc_eval`, `test_docimp_eval`) fall to 1 because the doctest graph and the native child load the parent's interface instead of re-checking. | sprint | C2, V3 |
 
@@ -193,6 +193,18 @@ This is #1398's REVISION block and runs beside Phases 0 to 4; it needs nothing f
 | **B3** | Twin retirement | G3's twin count falls with every fact that lands; a PR that adds a twin says why. |
 | **B4** | Validators on every test | `core_validate` runs before either emitter writes, in every engines fixture, not only in its own gate. |
 
+**Amendment 2026-10-19: the visibility producer.** A4 applied to the export surface
+(`docs/design/TEST-SIBLING-ACCESS-DESIGN.md`). Like Phase 5 it runs beside the typechecker
+phases, but it is ordered against them: each slice runs serially between Phase 2 sprints, and
+F1 lands before C1 so the codec encodes one producer. F2 and F3 do not gate Phase 3; if C1
+exists when F3 lands, F3 adds the full view to the interface under a format-version bump.
+
+| Id | Action | Acceptance |
+|---|---|---|
+| **F1** | A `frontend/` module, seeded from `resolve.mdk`'s `ExpNs` block, answers "may this importer see this name" from declarations plus a loader-supplied sibling flag; resolve and `private_mangle`'s import map read it. | Two-arm IR identity and the LEG A goldens unchanged; `resolve.mdk` shrinks. |
+| **F2** | The five `public*` projections in `types/typecheck.mdk` read the producer; the M-IDENTITY ladders are untouched. | No direct `pub`-flag projection remains outside the producer (a grep pin that may only fall); `types/typecheck.mdk` shrinks. |
+| **F3** | Test siblings see their subject's private names (the design's slice 3). | The design's slice 3 evidence. |
+
 ---
 
 ## 8. Mapping to the existing plans
@@ -205,6 +217,8 @@ This is #1398's REVISION block and runs beside Phases 0 to 4; it needs nothing f
 | Phase 3 | M-CACHE #2732, run-once O3 (#4160, #3902) and O5 (#4169 to #4172, #3903) | same work; prelude-first ordering and D6 |
 | Phase 4 | #2586, ruling 8 | same sequencing; this document names the layer axis and the per-module acceptance |
 | Phase 5 | #1398 R3 to R9, #4107 | unchanged |
+| F1 to F3 (§7 amendment) | `docs/design/TEST-SIBLING-ACCESS-DESIGN.md`, style ruling R35 | added 2026-10-19 |
+| none yet | M-IDENTITY, #2563 (identity-key every cross-module namespace) | No phase schedules it. Its remaining import-scope ladders are the `Sh` component of `types/` (`ARCHITECTURE.md` §3), which Phase 4's layer table does not yet place; when retired they read the F1 producer. |
 | run-once O2, O4 | #4141 | they land as consequences of V3 (O2) and S2 (O4), and G6 pins them |
 | Targets epic #3661 | `docs/design/TARGETS-DESIGN.md`, milestones T2 to T5 | Since #4032 the selected profile's IO join is an input to inference, so it is part of every cache key (D7). #4053 (a second drive changes rendering) is V2's P-then-Q-then-P test; #4154 (the target gate re-elaborates) lands with V3, and G6 pins `check --target`; #4051 (every verb selects a profile) lands now, not after V3, and V3 deletes its per-verb plumbing; the IO-join cells in `DriverState` and `selectedProfile` are configuration for S1 and S3's `TcConfig`; T4 #3671 adds no lines to `types/typecheck.mdk` (G1); #3672 follows B1's extern-requirements field |
 
