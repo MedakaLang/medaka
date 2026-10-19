@@ -27,6 +27,11 @@ dirty. Answers are cached under `scripts/review_bench/.cache/`, so a rerun is
 free. The README section "Reviewing a live diff" says how units are cut and
 scoped.
 
+## Moved declarations are skipped
+
+By default a touched declaration is dropped when the base commit holds a same-named one (this file or another) with the same text after removing a visibility prefix, whitespace and comment wrapping, 🚨/⚠️/🔒 sigils and case, and the head holds no more copies of that text than the base did: a pure move is not a change, a copy (original kept) is not skipped. Dropped ones are listed (`--json`: `skipped_units`, reason `moved-unchanged`) and `--dry-run` counts without them.
+`--keep-moved` reviews them anyway. A rename or a one-token edit is never skipped. Tests: `python3 -I scripts/review_bench/review_test.py`.
+
 ## What it sees
 
 - Medaka only. Other files, deleted files, goldens, snapshots, the seed and
