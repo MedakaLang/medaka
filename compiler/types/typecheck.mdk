@@ -6638,7 +6638,7 @@ ieInsertRow r env = ieFileRow r { env | ieRows = r :: env.ieRows }
 -- 🚨 AND IT EXISTS BECAUSE THERE ARE **TWO** ONCE-PER-ROW PATHS.  `ieInsertRow`
 -- (Module, via `ieAddRows`) and `ieIndexRows` (Flat, B-2.1-a2's index-only half)
 -- both spelled `ieInsertRowKeys (oblIfaceKeys ir) r` independently, so a new index
--- added to one was silently absent from the other — the `evalModules` /
+-- added to one was silently absent from the other — the `evalModulesWith` /
 -- `cevalModules` divergence shape `AGENTS.md` records ("a fix landed in one
 -- parallel driver and left the other broken for months").  With this seam the two
 -- arms cannot drift: the ONLY per-row difference left between them is the
@@ -7131,7 +7131,7 @@ ieHeadProbeEnv = buildImplEnv [
 -- 9. 🚨 BOTH ONCE-PER-ROW ARMS FILE IT.  `buildImplEnv` (Module, via `ieAddRows` →
 --    `ieInsertRow`) and `buildFlatImplEnv` (Flat, via `ieIndexRows`) are the two
 --    paths B-2.1-a2 left in parallel, and the failure shape for a parallel pair in
---    this tree is a fix landing in one and not the other (`evalModules` /
+--    this tree is a fix landing in one and not the other (`evalModulesWith` /
 --    `cevalModules`, `AGENTS.md`).  The same five decls through the FLAT builder must
 --    give the same buckets.  A future index added to only one arm leaves every line
 --    above green and reddens this one.
@@ -52428,7 +52428,7 @@ allModuleLines ((mid, ss) :: rest) =
 -- (rewriting return-position method occurrences to EMethodAt over the WHOLE
 -- program's RP method set), typechecks each module in dependency order (seeded
 -- like checkModules), and STAMPS each module's route refs from its now-resolved
--- result types.  Returns the SAME trees (refs filled) so evalModules can route
+-- result types.  Returns the SAME trees (refs filled) so evalModulesWith can route
 -- return-position dispatch (`pure`/`andThen` — the Parser monad) by RKey instead
 -- of the untyped arg-tag fallback.  RKey-only (dictNames = []): the bootstrap
 -- source uses no `=>`-constrained user polymorphism, so no EDictAt / dict params
@@ -53823,8 +53823,7 @@ stampNoting stamp o =
 -- last module left, exactly as it does today.
 -- #2705: the drain at a memo's snapshot point (`checkCoreMemoized`, `chainGo`) and
 -- at the keyed chain's graph end.  Nothing is published: a check driver has no
--- reader of the evidence table, and installing one would only widen the
--- install-ordering hazard `route_key.mdk` documents.
+-- reader of the evidence table.
 --
 -- The sticky type-error cells are saved before the drain and restored after it, so
 -- a memo snapshot never carries a drain's diagnostics.  The unkeyed drive

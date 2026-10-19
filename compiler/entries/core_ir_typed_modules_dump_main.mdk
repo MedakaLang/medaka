@@ -2,7 +2,7 @@
 -- the observability probe core_ir_dump_main.mdk cannot be (it is prelude-free and
 -- typecheck-free, so it never shows a `$dict` param or a `CDict`/`CMethod` route).
 -- This driver mirrors llvm_emit_modules_main.mdk exactly (driveModules →
--- runEmitWith → mangle → elaborateModules → dceFilter → lowerProgramEmit) but
+-- runEmitWith → mangle → elaborateModules → dceFilter → lowerProgramEmitWith) but
 -- prints `cprogramToSexp` of the lowered program instead of emitting LLVM — i.e.
 -- the PRECISE Core IR both shipping emitters consume, dicts and routes included.
 --

@@ -9,7 +9,7 @@
 --     (OCaml Loader -> typecheck -> eval_modules drives the probe + its imports)
 --   * the self-hosted eval path:          medaka run compiler/entries/eval_modules_main.mdk
 --     stdlib/core.mdk compiler/entries/selfproc_lex_probe.mdk compiler
--- Byte-identical output proves the self-hosted eval (eval.mdk's evalModules,
+-- Byte-identical output proves the self-hosted eval (eval.mdk's evalModulesWith,
 -- untyped tree-walker over per-module frames) correctly EXECUTES a real compiler
 -- stage module.
 --

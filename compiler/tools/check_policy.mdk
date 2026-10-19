@@ -36,7 +36,7 @@ import types.effect_rows.{atomKey, atomLabel, atomAuth, renderAtom, Atom(..)}
 -- compiler's externBindings is fixed and user-declared `extern`s get no eval
 -- cell, so we instead SYNTHESIZE Medaka stub funDefs (parsed from a tiny source
 -- string) that shadow those names, prepend them to the prelude, and drive
--- evalModulesRootEnv + apply.  The stubbed `logEvent` writes the `   [LOG] …`
+-- evalModulesRootEnvFacts + apply.  The stubbed `logEvent` writes the `   [LOG] …`
 -- line directly to the captured output buffer (eval's outputRef), reproducing
 -- OCaml's log-then-result ordering byte-for-byte.
 

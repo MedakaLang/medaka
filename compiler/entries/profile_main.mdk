@@ -18,7 +18,7 @@
 --   mangle          universal per-module private-name de-collision (mangleUnits; #882)
 --                   ADDITIVE: run standalone for measurement and DISCARDED — it does
 --                   NOT feed lower/emit, so those stages stay byte-unchanged.
---   lower           Core IR lowering (lowerProgramEmit over the elaborated program)
+--   lower           Core IR lowering (lowerProgramEmitWith over the elaborated program)
 --   emit            LLVM text IR emission (emitProgram over the Core IR)
 --   wasm-emit       WasmGC text WAT emission (wasm_emit.emitProgram over the SAME Core IR)
 --                   ⚠️ OPT-IN: only runs under MEDAKA_PERF_WASM=1 (see wasmStage).
@@ -237,7 +237,7 @@ runStaged on targetPath rsrc csrc tsrc =
   -- unprofiled stage is an unprofilable bug.
   --
   -- Mirrors entries/llvm_emit_typed_main.mdk (the typed LLVM driver): elaboration
-  -- stamps dict routes, lowerProgramEmit produces Core IR, emitProgram renders the
+  -- stamps dict routes, lowerProgramEmitWith produces Core IR, emitProgram renders the
   -- textual LLVM IR. The elaboration is deliberately OUTSIDE both timers — it is
   -- typecheck-side work, and rule 1 of the gate says grade a stage, never a sum.
   --

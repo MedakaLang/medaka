@@ -173,7 +173,7 @@ ceval env (CRangeArray lo hi incl) =
 -- Mirrors eval.mdk's EMethodAt/EDictAt arms exactly; both paths share
 -- methodReqCountRef state initialized by installDispatchTables (derives both
 -- tables from one decl list). See .claude/dossier/traps.md § "[T-EVAL-LOCKSTEP]
--- evalModules / cevalModules lockstep".
+-- evalModulesWith / cevalModules lockstep".
 ceval env (CMethod name (MethodEvidence iface _ route implRoutes methRoutes)) =
   let routed = requireMethodRoute name iface route
   let (narrowed, fwdReqs) =
@@ -613,9 +613,9 @@ cevalOutputOf decls prog =
   cevalOutput prog
 
 -- ── multi-module evaluation (per-module Core-IR frames over a shared global) ──
--- The Core-IR analog of eval.mdk's evalModules — the loader-driven path that runs
+-- The Core-IR analog of eval.mdk's evalModulesWith — the loader-driven path that runs
 -- the compiler's own module graph through the Core IR.  Structure mirrors the AST
--- evalModules EXACTLY: the prelude (core) installs GLOBALLY (all its names
+-- evalModulesWith EXACTLY: the prelude (core) installs GLOBALLY (all its names
 -- global); each loaded module's top-level groups are LOCAL, so same-named
 -- functions across modules stay isolated (Phase 110); ctors and impl methods
 -- coalesce GLOBALLY into one coherent VMulti per interface method.  Modules arrive
@@ -623,13 +623,14 @@ cevalOutputOf decls prog =
 -- module's cells.  VThunk laziness defers every nullary binding to its first
 -- lookup, so the reference's explicit deferred-thunk ordering is unnecessary here.
 --
--- The only Core-IR-specific work vs evalModules is the LOWERING: each module's
+-- The only Core-IR-specific work vs evalModulesWith is the LOWERING: each module's
 -- groups lower to `CBind`s (installed via cInstallTopGroups's ceval-closures) and
 -- its impls lower to `CImplEntry`s against the JOINT dispatch table built from
 -- ALL decls (an impl in one module for a prelude interface needs the prelude's
 -- dispatch positions).  The value-agnostic import-frame machinery (importFrameOf /
 -- pubReexports — they thread only cells + DUse paths, never Values) is reused
--- verbatim from eval.mdk.  UNTYPED path, like cevalProgram / evalModules.
+-- verbatim from eval.mdk.  Reads the program's `ProgramFacts` (dispositions and evidence) the way
+-- `evalModulesWith` does, so its dispatch is as typed as the facts it is handed.
 -- parameterized over the value type (v := Value e), like eval.mdk's ModInfo —
 -- see the kind-inference note on `Value`
 data CModInfo v =
@@ -665,7 +666,7 @@ cevalModules facts preludeDecls0 modules0 = withFacts
     let preludeGroups = lowerGroupsWith facts preludeDecls
     let preludeImpls =
       lowerImplsWithFacts facts disp reqCounts arities dispositions preludeDecls
-    -- S1-PRELUDE (a), #1497/#1492 — the Core-IR half of the evalModules/cevalModules
+    -- S1-PRELUDE (a), #1497/#1492 — the Core-IR half of the evalModulesWith/cevalModules
     -- lockstep pair; the mechanism and the frame-count caveat are written out once, on
     -- eval.mdk's `preludeShadowNames`.
     let shadowNames = preludeShadowNames moduleDecls

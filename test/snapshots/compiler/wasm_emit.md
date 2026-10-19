@@ -14,7 +14,7 @@ stages=DESUGAR,MARK
 --
 -- WasmGC backend emitter — WASMGC-DESIGN.md §7.  Peer of `backend.llvm_emit`:
 -- consumes the SAME backend-neutral Core IR (`ir.core_ir`) the LLVM emitter
--- consumes (lowered by the SAME `core_ir_lower.lowerProgramEmit`) and produces a
+-- consumes (lowered by the SAME `core_ir_lower.lowerProgramEmitWith`) and produces a
 -- complete WAT text module (assembled by `wasm-tools parse`, run under a WasmGC
 -- engine).  `emitProgram : WasmEmitInput -> CProgram -> String`.
 --
