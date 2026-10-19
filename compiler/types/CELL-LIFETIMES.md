@@ -13,7 +13,6 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 
 | name | holds | lifetime | owner-today | writers | reset | target | interface-fills | source | issue |
 |---|---|---|---|---|---|---|---|---|---|
-| toggles | three dynamic-context booleans for definer-shadow handling (Toggles record) | run | module-level | bracketed field writes in the infer arms, enterStampCtx, drainStampQueue | resetState (freshToggles) | TcEnv | n/a | - | - |
 | driverState | container: the DriverState bundle; the record is never replaced, only its fields; fields have their own rows | process | module-level | none (fields only) | never | delete | no | - | - |
 | crossRun | container: the CrossRun bundle; fields have their own rows | graph | module-level | resetCrossModuleState, checkCoreMemoized (hit install), checkModulesChainReportFor (hit install), probes | resetCrossModuleState (graphPreamble) | delete | no | - | - |
 | typeErrorsSticky | build or run abort flag armed at the first recorded type error | process | module-level | recordTypeError | resetTypeErrorsSticky (snapshot.mdk and tests only; production never resets); rolled back by checkGraphFinish, captureTypeErrors, methodReturnOwnershipProbe | GraphCtx | no | - | - |
@@ -23,7 +22,6 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | currentDoOrigin | span of the enclosing do block | run | module-level | infer EDoOrigin arm, recordDoMonadError | saved and restored by the EDoOrigin arm | TcEnv | n/a | - | - |
 | currentDoDeferred | true inside a defer chain of a do block | run | module-level | infer EDoOrigin arm | saved and restored by the EDoOrigin arm | TcEnv | n/a | - | - |
 | currentMethodMismatch | method name around a default-body return unify | run | module-level | checkMethodBodyAgainst | saved and restored by checkMethodBodyAgainst | TcEnv | n/a | - | - |
-| currentJoinContext | construct demanding a value join, for the join diagnostic | run | module-level | joinValueEqual | saved and restored by joinValueEqual | TcEnv | n/a | - | - |
 | assumptionTraceEnabled | test-only gate for the assumption trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
 | assumptionTraceEntries | test-only buffer for the assumption trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
 | numericPredicateTraceEnabled | test-only gate for the numeric predicate trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
@@ -35,7 +33,6 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | graphRun | container: the GraphRun bundle; fields have their own rows | graph | module-level | resetGraphLineage, markModules, memo hit installs, probes | resetGraphLineage (via resetGraphState) | delete | no | - | - |
 | perRun | container: the PerRun bundle; fields have their own rows | module | module-level | resetState, memo hit installs, enterStampCtx, drainStampQueue | resetState (checkBodyImpl) | delete | no | - | - |
 | innerNotes | what the running stamper built below its destination top level | run | module-level | stampNoting, routeWalkMemoized | reset per stamp in stampNoting; bracketed in routeWalkMemoized | TcEnv | n/a | - | - |
-| nonCovariantSlot | set while unifying a non-covariant type argument | run | module-level | paramVarianceGuard | saved and restored by paramVarianceGuard | TcEnv | n/a | - | - |
 | coreCheckMemoRef | process-wide core-pass memo, one entry | process | module-level | checkCoreMemoized | never (test helper methodReturnMemoTeardownStats clears and restores) | interner | no | - | - |
 | preludePreambleMemoRef | prelude preamble memo, one entry of pure values | process | module-level | preludePreambleStore | never | interner | no | - | - |
 | moduleChainMemoRef | module-chain prefix memo | process | module-level | checkModulesChainReportFor | never (test helper clears and restores) | interner | no | - | - |

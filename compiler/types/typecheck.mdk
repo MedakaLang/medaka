@@ -329,7 +329,8 @@ import types.tc_types.{
   EvDest(..),
   GoalPayload(..),
   Obligation(..),
-  Toggles(..),
+  DynCtx(..),
+  noDyn,
   DeclEnvModule(..),
   DeclEnvs(..),
   DeclEnvAcc(..),
@@ -1558,13 +1559,13 @@ flexibleIndex cell other =
 
 -- Ordinary row equality can solve flexible cells, never declaration universals.
 -- Binding-owned summaries instead record both directions for scoped solving.
-unifyRow : EffRow -> EffRow -> Unit
-unifyRow r1 r2 = unifyRowN (effrowNorm r1) (effrowNorm r2)
+unifyRow : DynCtx -> EffRow -> EffRow -> Unit
+unifyRow dyn r1 r2 = unifyRowN dyn (effrowNorm r1) (effrowNorm r2)
 
 -- Joins and universal leaves use the role-aware unifier. Plain flexible rows
 -- retain the cheaper single-tail unification path.
-unifyRowN : EffRow -> EffRow -> Unit
-unifyRowN r1 r2 =
+unifyRowN : DynCtx -> EffRow -> EffRow -> Unit
+unifyRowN dyn r1 r2 =
   if rowHasSummary r1 || rowHasSummary r2 then
     let _ = deferEffectRelation False r1 r2
     deferEffectRelation False r2 r1
@@ -1574,7 +1575,7 @@ unifyRowN r1 r2 =
     || rowHasRigid r2 then
     unifyJoinRows False r1 r2
   else
-    unifyRowPlain r1 r2
+    unifyRowPlain dyn r1 r2
 
 -- Equality may solve a flexible variable toward a declared universal, but
 -- never the reverse. The join unifier already partitions cells by this role.
@@ -1724,8 +1725,8 @@ joinMismatchMsg a b =
 -- (see the both-open note), which is the whole reason the trail is needed.
 -- (Intra-file refs below name SYMBOLS, not line numbers — the latter rot; the
 -- §N (:lines) spec cites point into EFFECTS-SEMANTICS.md, verified current.)
-unifyRowPlain : EffRow -> EffRow -> Unit
-unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+unifyRowPlain : DynCtx -> EffRow -> EffRow -> Unit
+unifyRowPlain _ (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   -- L1 ∪ r = L2 ∪ r requires every unmatched atom to belong to r. Preserve
   -- that lower bound by extending the shared tail, just as the join unifier
   -- does for a shared flexible member. Merely recording an absorption loses
@@ -1783,10 +1784,10 @@ unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
 -- §5's binding-boundary escape check (:339-351), checking the OPEN side's labels against
 -- the CLOSED side's bound at the open-meets-closed seam.  (Absorbing into a CLOSED tail is
 -- the guarded direction.)
-unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 None) =
+unifyRowPlain _ (EffRow l1 (Some v1)) (EffRow l2 None) =
   let _ = effectLeakCheck (atomsEscape l1 l2) l2
   linkRow v1 (EffRow (atomsDiff l2 l1) None)
-unifyRowPlain (EffRow l1 None) (EffRow l2 (Some v2)) =
+unifyRowPlain _ (EffRow l1 None) (EffRow l2 (Some v2)) =
   let _ = effectLeakCheck (atomsEscape l2 l1) l1
   linkRow v2 (EffRow (atomsDiff l1 l2) None)
 -- CLOSED~CLOSED arm: EQUALITY, via `closedRowEqCheck` (#2557).  Two written rows
@@ -1805,7 +1806,7 @@ unifyRowPlain (EffRow l1 None) (EffRow l2 (Some v2)) =
 -- one here.  Index rows still route to `unifyIndexRow` below, NOT here — an index
 -- is invariant by kind (#1094); do not re-point `unifyN`'s `TEff`/`TEff` arm at
 -- `unifyRow`.
-unifyRowPlain (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck l1 l2
+unifyRowPlain dyn (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck dyn l1 l2
 
 -- ── the INDEX row unifier (#1094) ──────────────────────────────────────────
 -- `Mono` carries two different kinds of row and they obey different rules:
@@ -1857,8 +1858,8 @@ unifyRowPlain (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck l1 l2
 --     `checkArgEffVars`, whose own comment cites that arm), and the recordAbsorptions →
 --     `launderEscapeFromLog` trail depends on it.  Tightening the arrow side is a design
 --     decision with its own blast radius, tracked separately — not a copy-paste of this.
-unifyIndexRow : EffRow -> EffRow -> Unit
-unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
+unifyIndexRow : DynCtx -> EffRow -> EffRow -> Unit
+unifyIndexRow dyn r1 r2 = unifyIndexRowN dyn (effrowNorm r1) (effrowNorm r2)
 
 -- An index row is a set of atoms, and two index rows are equal when each
 -- covers the other (EFFECTS-SEMANTICS §6.4, §2.2).  Two atoms of one label at
@@ -1885,8 +1886,8 @@ unifyIndexAtomAuthorities a1 a2 =
 -- INDEX mode (equality, never subsumption).  A row with a summary cell goes
 -- to the scoped solver as two exact relations, whose coverage is already
 -- atom by atom.
-unifyIndexRowN : EffRow -> EffRow -> Unit
-unifyIndexRowN r1 r2 =
+unifyIndexRowN : DynCtx -> EffRow -> EffRow -> Unit
+unifyIndexRowN dyn r1 r2 =
   if rowHasSummary r1 || rowHasSummary r2 then
     let _ = deferEffectRelation True r1 r2
     deferEffectRelation True r2 r1
@@ -1896,7 +1897,7 @@ unifyIndexRowN r1 r2 =
     || rowHasRigid r2 then
     unifyJoinRows True r1 r2
   else
-    unifyIndexRowPlain r1 r2
+    unifyIndexRowPlain dyn r1 r2
 
 -- Both closed, or the same tail: nothing can absorb an atom, so the rows are
 -- equal label by label.  Open against closed: the closed side's extra atoms
@@ -1904,15 +1905,15 @@ unifyIndexRowN r1 r2 =
 -- the closed side (the §5 leak check, with a shared label's authority an
 -- index obligation).  Two distinct open tails: each takes what the other
 -- side has that it does not cover, into one fresh shared tail.
-unifyIndexRowPlain : EffRow -> EffRow -> Unit
-unifyIndexRowPlain (EffRow l1 None) (EffRow l2 None) = indexRowEquate l1 l2
-unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+unifyIndexRowPlain : DynCtx -> EffRow -> EffRow -> Unit
+unifyIndexRowPlain _ (EffRow l1 None) (EffRow l2 None) = indexRowEquate l1 l2
+unifyIndexRowPlain _ (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   | effvarId v1 == effvarId v2 = indexRowEquate l1 l2
-unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 None) =
+unifyIndexRowPlain _ (EffRow l1 (Some v1)) (EffRow l2 None) =
   indexOpenClosed l1 v1 l2
-unifyIndexRowPlain (EffRow l1 None) (EffRow l2 (Some v2)) =
+unifyIndexRowPlain _ (EffRow l1 None) (EffRow l2 (Some v2)) =
   indexOpenClosed l2 v2 l1
-unifyIndexRowPlain r1 r2 = unifyRowPlain r1 r2
+unifyIndexRowPlain dyn r1 r2 = unifyRowPlain dyn r1 r2
 
 indexRowEquate : List Atom -> List Atom -> Unit
 indexRowEquate l1 l2 =
@@ -1996,11 +1997,11 @@ effectLeakCheck escaping bound =
 -- `<IO, Stderr>`, one denotation in two spellings, are equal, while `<IO>` and
 -- `<Stderr>` are not.  Inside a non-covariant type argument the mismatch takes
 -- the variance wording, which names that slot and its eta-expansion recovery.
-closedRowEqCheck : List Atom -> List Atom -> Unit
-closedRowEqCheck l1 l2 = match (atomsEscape l1 l2, atomsEscape l2 l1)
+closedRowEqCheck : DynCtx -> List Atom -> List Atom -> Unit
+closedRowEqCheck dyn l1 l2 = match (atomsEscape l1 l2, atomsEscape l2 l1)
   ([], []) => ()
   _ =>
-    if nonCovariantSlot.value then
+    if dyn.dcNonCovariant then
       pushTypeError "T-EFFECT-PARAM-VARIANCE" (paramVarianceMismatchMsg l1 l2)
     else
       pushTypeError "T-EFFECT-LEAK" (closedRowMismatchMsg l1 l2)
@@ -4246,18 +4247,6 @@ recoveredShadowSym name tagRef =
 -- #156 S3a: these fields now live in `PendingEntry`'s `SKRLocal` kind (mangledSym,
 -- forceLocal, dictMonos, dictIfaces); the name/route/receiver-mono/enclosing-fn are
 -- the shared PendingEntry fields.
-
--- Construct all 3 toggle-Refs fresh (each reproduces its former initial — all False).
-freshToggles : Unit -> Toggles
-freshToggles _ = Toggles {
-  suppressRLocalRecord = Ref False,
-  suppressArgStamp = Ref False,
-  shadowHeadCtxRef = Ref False,
-}
-
--- The single module-level cell holding the current run's dynamic-context toggles.
-toggles : Ref Toggles
-toggles = Ref (freshToggles ())
 
 -- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
 -- calls `buildDeclEnvs` reads an empty graph, on which every `declEnvsOrdOf`
@@ -8938,8 +8927,11 @@ nthArgMono n m = match normalize m
 -- inferred type of its discriminating argument (the dispatch-position arg mono).
 -- The cell is read later (resolveArgStamps), once inference has solved it.  D3b-1:
 -- also carry [name] + the impl-dicts ref so a concrete-head site can thread the
--- element dict for a parametric `requires` impl.
-recordArgStamp : String ->
+-- element dict for a parametric `requires` impl.  [suppressed] is the caller's
+-- `dcSuppressArgStamp`: a definer-shadow application head records its argument
+-- itself.
+recordArgStamp : Bool ->
+  String ->
   Ref Route ->
   Ref (List Route) ->
   Ref Inner ->
@@ -8947,8 +8939,8 @@ recordArgStamp : String ->
   Mono ->
   List (String, Mono) ->
   Unit
-recordArgStamp name tagRef implRef innerRef idx mono omitted
-  | toggles.value.suppressArgStamp.value = ()
+recordArgStamp suppressed name tagRef implRef innerRef idx mono omitted
+  | suppressed = ()
   | otherwise = match nthArgMono idx mono
     Some am =>
       pushSiteGoal
@@ -9445,12 +9437,6 @@ currentDoDeferred = Ref False
 -- `Method '<name>': expected type <e> but got <a>` instead of a bare `Type mismatch: …`.
 currentMethodMismatch : Ref (Option String)
 currentMethodMismatch = Ref None
-
--- The context of the value join whose unify is running (`joinValueEqual`), so a
--- mismatch that unify reports can say which construct demanded the two types
--- agree.  `None` outside a join.
-currentJoinContext : Ref (Option JoinContext)
-currentJoinContext = Ref None
 
 -- ASYNC-DESIGN Stage 2 (D5): the entry program's inferred `main` scheme, stashed
 -- by `graphModuleWorker`'s `GOutTrees` arm so the native `run` driver can detect a
@@ -10817,14 +10803,8 @@ perRun = Ref (freshPerRun ())
 -- would then see only builtins.  effectDomains has exactly ONE writer (populateEffectDomains →
 -- seedEffectDomains + registerEffectDomain), so it persists untouched across the per-module
 -- resets — and it is NOT a PerRun field, so freshPerRun cannot disturb it.
--- #158 PR4: mint a fresh Toggles in the SAME reset that mints freshPerRun, so
--- shadowHeadCtxRef (formerly a PerRun field) is still cleared per-module at exactly this
--- point.  The other two toggles are always False at a module boundary (their save/restore
--- brackets never straddle one), so re-minting them here is a no-op — byte-identical.
 resetState : Unit -> Unit
-resetState _ =
-  perRun := freshPerRun ()
-  toggles := freshToggles ()
+resetState _ = perRun := freshPerRun ()
 
 containsI : Int -> List Int -> Bool
 containsI _ [] = False
@@ -11269,42 +11249,48 @@ occursAdjustUnbound id level cell id2 lvl2
 -- an argument (`argumentInto`), a declared parameter, a match scrutinee or a
 -- call's result (`bindFrom`), a cell read (`refStored`).  Below the top the
 -- types are structure, not values, and `unifyN` keeps qualifiers equal.
+--
+-- `unify` is the call from outside every construct that sets a dynamic context;
+-- the unification core takes the caller's `DynCtx` (`unifyIn`).
 unify : Mono -> Mono -> Unit
-unify a b = unifyValue (normalize a) (normalize b)
+unify a b = unifyIn noDyn a b
 
-unifyValue : Mono -> Mono -> Unit
-unifyValue (TVar c) (TQual a _) = unifyN (TVar c) (normalize a)
-unifyValue (TQual a _) (TVar c) = unifyN (normalize a) (TVar c)
-unifyValue (TQual a _) (TQual b _) = unifyN (normalize a) (normalize b)
-unifyValue (TQual a _) b = unifyN (normalize a) b
-unifyValue a (TQual b _) = unifyN a (normalize b)
-unifyValue a b = unifyN a b
+unifyIn : DynCtx -> Mono -> Mono -> Unit
+unifyIn dyn a b = unifyValue dyn (normalize a) (normalize b)
+
+unifyValue : DynCtx -> Mono -> Mono -> Unit
+unifyValue dyn (TVar c) (TQual a _) = unifyN dyn (TVar c) (normalize a)
+unifyValue dyn (TQual a _) (TVar c) = unifyN dyn (normalize a) (TVar c)
+unifyValue dyn (TQual a _) (TQual b _) = unifyN dyn (normalize a) (normalize b)
+unifyValue dyn (TQual a _) b = unifyN dyn (normalize a) b
+unifyValue dyn a (TQual b _) = unifyN dyn a (normalize b)
+unifyValue dyn a b = unifyN dyn a b
 
 -- Structural equality: inside a constructor argument, an arrow or an index, a
 -- qualifier is part of the type.  A variable takes a qualified type verbatim,
 -- two qualifiers must cover each other, and a qualified type against a plain
 -- one is equal only where the qualifier admits the domain's top — a `Ref`
 -- holding `String @p` cannot be the same cell as one holding any `String`.
-unifyStruct : Mono -> Mono -> Unit
-unifyStruct a b = unifyN (normalize a) (normalize b)
+unifyStruct : DynCtx -> Mono -> Mono -> Unit
+unifyStruct dyn a b = unifyN dyn (normalize a) (normalize b)
 
-unifyN : Mono -> Mono -> Unit
-unifyN (TVar c1) (TVar c2) = unifyVars c1 c2
-unifyN (TVar c) t = bindVar c t
-unifyN t (TVar c) = bindVar c t
+unifyN : DynCtx -> Mono -> Mono -> Unit
+unifyN dyn (TVar c1) (TVar c2) = unifyVars dyn c1 c2
+unifyN dyn (TVar c) t = bindVar dyn c t
+unifyN dyn t (TVar c) = bindVar dyn c t
 -- #1111 A-2.10: the head comparison READS THE IDENTITY Stage A-1 landed.  This
 -- is the site the arc turned on — two modules' unrelated `T`s no longer unify
 -- (#1208, #1209), and the origin surviving a link is no longer an artefact of
 -- link direction, so a key computed from the field is a function of the type.
 -- `sameTyConHead` (`frontend/ast.mdk`) owns the absent-origin rule; read its
 -- derivation before changing either side of this.
-unifyN (ta@(TCon a oa)) (tb@(TCon b ob)) =
-  if sameTyConHead a oa b ob then () else typeMismatch ta tb
+unifyN dyn (ta@(TCon a oa)) (tb@(TCon b ob)) =
+  if sameTyConHead a oa b ob then () else typeMismatch dyn ta tb
 -- #1110: rigid~rigid.  MANDATORY, not optional — without it a rigid variable
 -- fails to unify with ITSELF (it would fall to the catch-all `typeMismatch`),
 -- which the shared `TCon` constructor used to handle for free.
-unifyN (TRigid a) (TRigid b) =
-  if a == b then () else typeMismatch (TRigid a) (TRigid b)
+unifyN dyn (TRigid a) (TRigid b) =
+  if a == b then () else typeMismatch dyn (TRigid a) (TRigid b)
 -- #1110 CROSS-POPULATION, and it is NOT dead code.  A rigid and a real head can
 -- share a name — both spell `__tupleN__` (see `Mono.TRigid`) — so the pre-split
 -- `TCon a == TCon b` test could be TRUE across the populations, and dropping
@@ -11317,48 +11303,48 @@ unifyN (TRigid a) (TRigid b) =
 --
 -- ⚠️ The preserved answer is a FORGERY (DICT-SEMANTICS §8 I6.2(b), OWED-#1110):
 -- a rigid variable is not the builtin tuple head.  Carrier now, semantics later.
-unifyN (ta@(TCon a _)) (tb@(TRigid b)) =
-  if a == b then () else typeMismatch ta tb
-unifyN (ta@(TRigid a)) (tb@(TCon b _)) =
-  if a == b then () else typeMismatch ta tb
+unifyN dyn (ta@(TCon a _)) (tb@(TRigid b)) =
+  if a == b then () else typeMismatch dyn ta tb
+unifyN dyn (ta@(TRigid a)) (tb@(TCon b _)) =
+  if a == b then () else typeMismatch dyn ta tb
 -- A tuple TYPE is now a `__tupleN__`-headed `TApp` spine; when it clashes with a
 -- differing-arity tuple or with a concrete non-tuple head, report the FULL types
 -- (which render `(a, b)` via ppGo) instead of letting the generic `TApp~TApp`
 -- recursion bottom out on a partial sub-spine — preserving the pre-refactor
 -- tuple mismatch wording.  Guard is False when the other side is a TVar-headed
 -- spine (so `p a b` unifying with a tuple still flows through the generic arm).
-unifyN t1 t2
-  | tupleUnifyClash t1 t2 = typeMismatch t1 t2
+unifyN dyn t1 t2
+  | tupleUnifyClash t1 t2 = typeMismatch dyn t1 t2
 -- #1119 D-2 (#1098, #1121): the VARIANCE gate.  `a1` is the partial spine, so
 -- the number of `TApp` nodes already in `a1` is `b1`'s positional index.  When
 -- the head's recorded polarity at that index is not `PCo`, an effect row inside
 -- the argument must be EQUAL rather than merely compatible — see
 -- `paramVarianceGuard`, which unifies the argument.
-unifyN (TApp a1 b1) (TApp a2 b2) =
-  let _ = unifyStruct a1 a2
-  paramVarianceGuard a1 b1 b2
-unifyN (TFun a1 r1 b1) (TFun a2 r2 b2) =
-  let _ = unifyStruct a1 a2
-  let _ = unifyRow r1 r2
-  unifyStruct b1 b2
+unifyN dyn (TApp a1 b1) (TApp a2 b2) =
+  let _ = unifyStruct dyn a1 a2
+  paramVarianceGuard dyn a1 b1 b2
+unifyN dyn (TFun a1 r1 b1) (TFun a2 r2 b2) =
+  let _ = unifyStruct dyn a1 a2
+  let _ = unifyRow dyn r1 r2
+  unifyStruct dyn b1 b2
 -- #1094: an `Effect`-kinded type-ARGUMENT row is INVARIANT and gets its own unifier.
 -- `unifyRow` is the ARROW-row unifier; its closed~closed leniency is justified for a
 -- latent row and is a silent laundering hole for an index.  See `unifyIndexRow`.
-unifyN (TEff r1) (TEff r2) = unifyIndexRow r1 r2
+unifyN dyn (TEff r1) (TEff r2) = unifyIndexRow dyn r1 r2
 -- An `Authority`-kinded type-argument index is INVARIANT (§6.4): the two
 -- authorities must cover each other, in both directions, whatever the flow.
-unifyN (TAuth qa) (TAuth qb) = unifyIndex qa qb
-unifyN (TQual a qa) (TQual b qb) =
+unifyN _ (TAuth qa) (TAuth qb) = unifyIndex qa qb
+unifyN dyn (TQual a qa) (TQual b qb) =
   let _ = wantAuthority qa qb
   let _ = wantAuthority qb qa
-  unifyStruct a b
-unifyN (TQual a qa) b =
+  unifyStruct dyn a b
+unifyN dyn (TQual a qa) b =
   let _ = wantAuthority (authTop (authDomainTop qa)) qa
-  unifyStruct a b
-unifyN a (TQual b qb) =
+  unifyStruct dyn a b
+unifyN dyn a (TQual b qb) =
   let _ = wantAuthority (authTop (authDomainTop qb)) qb
-  unifyStruct a b
-unifyN a b = typeMismatch a b
+  unifyStruct dyn a b
+unifyN dyn a b = typeMismatch dyn a b
 
 -- A fresh variable standing for a value takes its source's type verbatim,
 -- qualifier included: a declared parameter, a match scrutinee, a call's
@@ -11366,7 +11352,7 @@ unifyN a b = typeMismatch a b
 bindFrom : Mono -> Mono -> Unit
 bindFrom target source = match normalize target
   TVar cell => match !cell
-    Unbound _ _ => bindVar cell source
+    Unbound _ _ => bindVar noDyn cell source
     Link _ => unify target source
   _ => unify target source
 
@@ -11711,8 +11697,8 @@ solvedUpper _ = False
 --     (Unit -> <IO> Unit)`, where `data Taker a = MkTaker (a -> Int)` puts `a`
 --     in a DOMAIN.  No mutation anywhere; the laundering is pure contravariance.
 -- Both are ANNOTATED-BINDING widenings met by `preunifySigsEx`' `unify`;
--- `unifyN`'s `TApp` arm IS the seam.  The guard unifies the argument under
--- `nonCovariantSlot`, so `closedRowEqCheck` reports a mismatch anywhere inside
+-- `unifyN`'s `TApp` arm IS the seam.  The guard unifies the argument with
+-- `dcNonCovariant` set, so `closedRowEqCheck` reports a mismatch anywhere inside
 -- it with the variance wording (`paramVarianceMismatchMsg`) rather than the
 -- generic one, and `unifyInto` treats such a slot as equality rather than
 -- descending directionally.  An open tail still has a metavariable to solve,
@@ -11725,20 +11711,12 @@ solvedUpper _ = False
 -- Unit)` is declared) is genuinely safe and is rejected as well: a type
 -- argument's polarity is a property of the constructor, not of the flow, and
 -- equality is the only symmetric sound rule.
-paramVarianceGuard : Mono -> Mono -> Mono -> Unit
-paramVarianceGuard hd b1 b2
-  | monoSlotNonCovariant hd =
-    let saved = nonCovariantSlot.value
-    nonCovariantSlot := True
-    let _ = unifyStruct b1 b2
-    nonCovariantSlot := saved
-  | otherwise = unifyStruct b1 b2
-
--- set while `paramVarianceGuard` unifies a non-covariant type argument, read by
--- `closedRowEqCheck` to pick the variance wording.  Saved and restored around
--- the unify, so a covariant slot nested inside an invariant one stays invariant.
-nonCovariantSlot : Ref Bool
-nonCovariantSlot = Ref False
+-- A covariant slot nested inside a non-covariant one is unified in the copy the
+-- outer slot set, so it stays non-covariant.
+paramVarianceGuard : DynCtx -> Mono -> Mono -> Mono -> Unit
+paramVarianceGuard dyn hd b1 b2
+  | monoSlotNonCovariant hd = unifyStruct { dyn | dcNonCovariant = True } b1 b2
+  | otherwise = unifyStruct dyn b1 b2
 
 -- number of `TApp` nodes in a left spine — the positional index of the argument
 -- applied at the node ABOVE it.  `normalize`s at each level for the same reason
@@ -11780,7 +11758,7 @@ paramPolaritiesIn tab key
   | otherwise = lookupTab key tab
 
 recordInvocationView : TcEnv -> Unit
-recordInvocationView (TcEnv _ ctors _ _) =
+recordInvocationView env =
   let universe =
     flatMap
       (cands =>
@@ -11791,7 +11769,7 @@ recordInvocationView (TcEnv _ ctors _ _) =
       (IdMap.values (spRows crossRun.value.universeCtorPop.value))
   driverState.value.invocationViewRef :=
     InvocationView
-      (IdMap.values ctors ++ universe)
+      (IdMap.values env.teCtors ++ universe)
       perRun.value.dataParamPolarityRef.value
       perRun.value.dataParamKindsRef.value
 
@@ -11934,11 +11912,12 @@ paramVarianceMismatchMsg : List Atom -> List Atom -> String
 paramVarianceMismatchMsg l1 l2 =
   "effect row mismatch inside a non-covariant type argument: <\{renderAtoms l1}> vs <\{renderAtoms l2}>; the two rows must be equal here, so write the same row on both sides, or eta-expand a freshly built function, `(s => f s)`"
 
-unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
-unifyVars c1 c2 = if tyvarId c1 == tyvarId c2 then () else bindVar c1 (TVar c2)
+unifyVars : DynCtx -> Ref Tyvar -> Ref Tyvar -> Unit
+unifyVars dyn c1 c2 =
+  if tyvarId c1 == tyvarId c2 then () else bindVar dyn c1 (TVar c2)
 
-bindVar : Ref Tyvar -> Mono -> Unit
-bindVar cell t =
+bindVar : DynCtx -> Ref Tyvar -> Mono -> Unit
+bindVar dyn cell t =
   perRun.value.occursCheckFailed := False
   let _ = occursAdjust (tyvarId cell) (tyvarLevel cell) t
   if perRun.value.occursCheckFailed.value then
@@ -11947,7 +11926,7 @@ bindVar cell t =
     let _ = propagatePoison cell t
     let shaped = takeJoinsShapedBy cell t
     cell := Link t
-    settleShapedJoins shaped
+    settleShapedJoins dyn shaped
 
 -- A recorded join whose result a unification is shaping is decided by that
 -- use, as it was before joins were delayed: once the result has its shape,
@@ -11955,7 +11934,9 @@ bindVar cell t =
 -- it later would let the use first relate a row the alternatives then share
 -- to a closed row, which a caller-supplied row can meet only by equality.
 -- Linking the result to another variable shapes nothing.  The common case has
--- nothing recorded and costs one emptiness test.
+-- nothing recorded and costs one emptiness test.  The join is settled in the
+-- context of the unification that shaped it, under the construct it was
+-- recorded for (`PendingJoin`).
 takeJoinsShapedBy : Ref Tyvar -> Mono -> List PendingJoin
 takeJoinsShapedBy cell t = match perRun.value.pendingJoinsRef.value
   [] => []
@@ -11976,13 +11957,14 @@ joinResultIs id pj = match normalize pj.pjResult
   TVar c => tyvarId c == id
   _ => False
 
-settleShapedJoins : List PendingJoin -> Unit
-settleShapedJoins [] = ()
-settleShapedJoins shaped =
+settleShapedJoins : DynCtx -> List PendingJoin -> Unit
+settleShapedJoins _ [] = ()
+settleShapedJoins dyn shaped =
   fold
     (_ pj =>
       fold
-        (_ (loc, value) => pj.pjOps.vjoEqual loc pj.pjResult value)
+        (_ (loc, value) =>
+          joinValueEqual dyn pj.pjContext loc pj.pjResult value)
         ()
         pj.pjValues)
     ()
@@ -12009,25 +11991,25 @@ poisonMismatchVars a b =
     monoUnboundIds a ++ monoUnboundIds b ++ perRun.value.poisonedVars.value
   perRun.value.poisonedVars := poisoned
 
-typeMismatch : Mono -> Mono -> Unit
-typeMismatch a b =
+typeMismatch : DynCtx -> Mono -> Mono -> Unit
+typeMismatch dyn a b =
   let _ = poisonMismatchVars a b
-  typeMismatchReport a b
+  typeMismatchReport dyn a b
 
-typeMismatchReport : Mono -> Mono -> Unit
-typeMismatchReport a b = match !currentMethodMismatch
+typeMismatchReport : DynCtx -> Mono -> Mono -> Unit
+typeMismatchReport dyn a b = match !currentMethodMismatch
   Some mname =>
     pushTypeError
       "T-METHOD-MISMATCH"
       "method `\{mname}` has type \{ppMono b} but its interface declares \{ppMono a}"
-  None => typeMismatchReportJoin a b
+  None => typeMismatchReportJoin dyn a b
 
 -- A mismatch inside the join of an `if` with no `else` branch is that `if`'s
 -- missing branch: the branch is `()`, so the `then` branch must be Unit too.
 -- Outside a do-lowered chain, a variable applied to arguments against a type
 -- with no application to fill it names the interface that variable stands for.
-typeMismatchReportJoin : Mono -> Mono -> Unit
-typeMismatchReportJoin a b = match !currentJoinContext
+typeMismatchReportJoin : DynCtx -> Mono -> Mono -> Unit
+typeMismatchReportJoin dyn a b = match dyn.dcJoin
   Some JoinElselessIf =>
     pushTypeErrorHelpFixAt
       "T-TYPE-MISMATCH"
@@ -14407,12 +14389,12 @@ restAtoms [] = []
 restAtoms (_ :: rest) = rest
 
 lookupBinding : TcEnv -> String -> Option EnvBinding
-lookupBinding (TcEnv vs _ _ _) n = omLookup n vs
+lookupBinding env n = omLookup n env.teVars
 
 lookupVar : TcEnv -> String -> Option Scheme
-lookupVar (TcEnv vs cs _ _) n = match omLookup n vs
+lookupVar env n = match omLookup n env.teVars
   Some binding => Some binding.ebValue.vsScheme
-  None => omLookup n cs
+  None => omLookup n env.teCtors
 
 lookupMethodRow : TcEnv -> String -> Option MethodSchemeRow
 lookupMethodRow env n = match lookupBinding env n
@@ -14420,19 +14402,19 @@ lookupMethodRow env n = match lookupBinding env n
   None => None
 
 lookupCtor : TcEnv -> String -> Option Scheme
-lookupCtor (TcEnv _ cs _ _) n = omLookup n cs
+lookupCtor env n = omLookup n env.teCtors
 
 extendVar : TcEnv -> String -> Scheme -> TcEnv
-extendVar (TcEnv vs cs al lc) n s =
-  TcEnv (omInsert n (ordinaryEnvBinding s) vs) cs al lc
+extendVar env n s =
+  { env | teVars = omInsert n (ordinaryEnvBinding s) env.teVars }
 
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 extendVars env [] = env
 extendVars env ((n, s) :: rest) = extendVars (extendVar env n s) rest
 
 extendMethodRow : TcEnv -> String -> MethodSchemeRow -> TcEnv
-extendMethodRow (TcEnv vs cs al lc) n row =
-  TcEnv (omInsert n (methodEnvBinding row) vs) cs al lc
+extendMethodRow env n row =
+  { env | teVars = omInsert n (methodEnvBinding row) env.teVars }
 
 extendMethodRows : TcEnv -> List MethodSchemeRow -> TcEnv
 extendMethodRows env [] = env
@@ -14446,8 +14428,8 @@ extendMethodRows env (row :: rest) =
 
 extendBindings : TcEnv -> List (String, EnvBinding) -> TcEnv
 extendBindings env [] = env
-extendBindings (TcEnv vs cs al lc) ((n, binding) :: rest) =
-  extendBindings (TcEnv (omInsert n binding vs) cs al lc) rest
+extendBindings env ((n, binding) :: rest) =
+  extendBindings { env | teVars = omInsert n binding env.teVars } rest
 
 -- A selected standalone is a term binding, even when a method is also visible
 -- under its spelling. Keep both descriptors in the lexical environment. A local
@@ -14563,12 +14545,11 @@ attachStandaloneSources sources bindings =
 -- A local binder shadows the α-let entry of its name: the abstraction reads
 -- a name by its binding, never by a spelling an outer let happens to share.
 extendLocalVar : TcEnv -> String -> Scheme -> TcEnv
-extendLocalVar (TcEnv vs cs al lc) n s =
-  TcEnv
-    (omInsert n (ordinaryEnvBinding s) vs)
-    cs
-    ((n, AParam) :: al)
-    (omInsert n True lc)
+extendLocalVar env n s = { env |
+  teVars = omInsert n (ordinaryEnvBinding s) env.teVars,
+  teAlphaLets = (n, AParam) :: env.teAlphaLets,
+  teIsLocal = omInsert n True env.teIsLocal,
+}
 
 extendLocalVars : TcEnv -> List (String, Scheme) -> TcEnv
 extendLocalVars env [] = env
@@ -14578,26 +14559,33 @@ extendLocalVars env ((n, s) :: rest) =
 -- #837 incr2: is `n` currently bound as a BODY-LOCAL binding?  Presence in the
 -- is-local map means local (only `extendLocalVar[s]` insert, always True).
 lookupLocalFlag : TcEnv -> String -> Bool
-lookupLocalFlag (TcEnv _ _ _ lc) n = omHasKey n lc
+lookupLocalFlag env n = omHasKey n env.teIsLocal
 
 addCtor : TcEnv -> String -> Scheme -> TcEnv
-addCtor (TcEnv vs cs al lc) n s = TcEnv vs (omInsert n s cs) al lc
+addCtor env n s = { env | teCtors = omInsert n s env.teCtors }
 
 -- An environment holding the constructors [cs] and nothing else.
 withCtors : OrdMap Scheme -> TcEnv
-withCtors cs = TcEnv omEmpty cs [] omEmpty
+withCtors cs = TcEnv {
+  teVars = omEmpty,
+  teCtors = cs,
+  teAlphaLets = [],
+  teIsLocal = omEmpty,
+  teDyn = noDyn,
+}
 
 envCtors : TcEnv -> OrdMap Scheme
-envCtors (TcEnv _ cs _ _) = cs
+envCtors env = env.teCtors
 
 -- EFFECTS WS-2: seed α's known-prefix scope with a same-function-body let RHS.
 -- Prepended (most-recent-first) to mirror α's own `(x,e1)::lets` accumulation.
 seedAlphaLets : TcEnv -> String -> Expr -> TcEnv
-seedAlphaLets (TcEnv vs cs al lc) n rhs = TcEnv vs cs ((n, ALet rhs) :: al) lc
+seedAlphaLets env n rhs =
+  { env | teAlphaLets = (n, ALet rhs) :: env.teAlphaLets }
 
 -- read the accumulated α-let scope (for the hole-fill site)
 envAlphaLets : TcEnv -> List (String, AlphaBinder)
-envAlphaLets (TcEnv _ _ al _) = al
+envAlphaLets env = env.teAlphaLets
 
 monoScheme : Mono -> Scheme
 monoScheme t = Forall [] [] [] [] pureRow t
@@ -15189,7 +15177,15 @@ inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef inner
           let omitted = methodOmittedVars name
           let _ = recordMethodObligationGuarded env name s occurrence omitted
           let _ =
-            recordArgStamp name tagRef implRef innerRef idx occurrence omitted
+            recordArgStamp
+              env.teDyn.dcSuppressArgStamp
+              name
+              tagRef
+              implRef
+              innerRef
+              idx
+              occurrence
+              omitted
           let _ = recordArgSiteFn name idx occurrence
           occurrence
         None =>
@@ -15233,7 +15229,7 @@ inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef inner
 -- shadowStandaloneDictSlotsAt.
 recordRLocalSite : TcEnv -> String -> Ref Route -> Ref Inner -> Mono -> Unit
 recordRLocalSite env name tagRef innerRef inst
-  | toggles.value.suppressRLocalRecord.value = ()
+  | env.teDyn.dcSuppressRLocalRecord = ()
   -- #1430 (S2, row 39): a RETURN-POSITION method has NO dispatch argument, so
   -- `methodDispatchIdx` answers None and every arm below declined — no pending site, no
   -- route stamp, and the occurrence kept the method's dispatching route while
@@ -20690,8 +20686,8 @@ unifyIntoN _ True (TVar cell) (lower@(TQual _ _)) = bindValueUpper cell lower
 unifyIntoN _ False (lower@(TQual _ _)) (TVar cell) = bindValueUpper cell lower
 -- A flexible slot the qualified value flows OUT OF keeps the qualifier as it
 -- is, so a composed or partially applied function still names its authority.
-unifyIntoN _ _ (TVar cell) (t@(TQual _ _)) = bindVar cell t
-unifyIntoN _ _ (t@(TQual _ _)) (TVar cell) = bindVar cell t
+unifyIntoN _ _ (TVar cell) (t@(TQual _ _)) = bindVar noDyn cell t
+unifyIntoN _ _ (t@(TQual _ _)) (TVar cell) = bindVar noDyn cell t
 -- Qualified into qualified: the flowing side's authority must be within the
 -- receiving side's.  Qualified into plain forgets; plain into qualified can
 -- only be admitted when the qualifier admits the domain's top, since nothing
@@ -20730,12 +20726,13 @@ bindValueUpper cell lower =
     let upper =
       optionOrFresh
         (joinProducedEnvelope (valueJoinOps
+          noDyn
           JoinArgument
           collectValueAllowance) [
           (!currentLoc, lower),
         ])
     let _ = recordFileValueFlow !currentLoc upper lower
-    bindVar cell upper
+    bindVar noDyn cell upper
 
 collectValueAllowance : List EffRow -> EffRow
 collectValueAllowance rows =
@@ -20763,10 +20760,10 @@ rowInto True (EffRow le None) (EffRow la None) =
 rowInto False (EffRow le None) (EffRow la None) =
   contraRowCheck (atomsEscape le la) le la
 rowInto True (er@(EffRow le _)) (ar@(EffRow la None)) =
-  if isEmptyL (atomsEscape la le) then () else unifyRowN er ar
+  if isEmptyL (atomsEscape la le) then () else unifyRowN noDyn er ar
 rowInto False (er@(EffRow le None)) (ar@(EffRow la _)) =
-  if isEmptyL (atomsEscape le la) then () else unifyRowN er ar
-rowInto _ er ar = unifyRowN er ar
+  if isEmptyL (atomsEscape le la) then () else unifyRowN noDyn er ar
+rowInto _ er ar = unifyRowN noDyn er ar
 
 -- the contravariant half of `rowInto`: the expected PARAMETER row [le] admits
 -- atoms the actual's parameter row [la] does not, so a caller could hand the
@@ -21130,21 +21127,18 @@ inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
       r
     None => inferApp env (EApp f x) (inferShadowAppHead env f) tx
 
--- #411: infer an IMPORTER-shadow application's head with shadowHeadCtxRef flagged, so
+-- #411: infer an IMPORTER-shadow application's head with `dcShadowHeadCtx` set, so
 -- maybeStandaloneValueMono's new importer arm does not pin an APPLIED occurrence to the
 -- standalone scheme (which would kill per-receiver dispatch — Fork 1 / i4).  The definer
--- path has always bracketed its head this way (inferDefinerShadowApp); this is the peer
+-- path has always typed its head this way (inferDefinerShadowApp); this is the peer
 -- the importer path was missing, and the reason it could be missing before is that
 -- nothing pinned importer value positions at all — which IS the #411 bug.
--- Save/restore, not set-False: a nested shadow head inside [f] must not clobber an outer
--- True on its way out (see inferDefinerShadowApp's bracket).
 inferShadowAppHead : TcEnv -> Expr -> Mono
-inferShadowAppHead env f =
-  let saved = toggles.value.shadowHeadCtxRef.value
-  toggles.value.shadowHeadCtxRef := True
-  let ft = infer env f
-  toggles.value.shadowHeadCtxRef := saved
-  ft
+inferShadowAppHead env f = infer (shadowHeadEnv env) f
+
+-- [env] for typing a shadow occurrence that heads its own application.
+shadowHeadEnv : TcEnv -> TcEnv
+shadowHeadEnv env = { env | teDyn = { env.teDyn | dcShadowHeadCtx = True } }
 
 -- #2154: the spine-generalized twin of inferShadowApp — the peer of
 -- inferDefinerShadowAppAt for the IMPORTER path.  [hd] is the spine's ultimate head
@@ -21403,7 +21397,7 @@ importerShadowOnEmitPath name tagRef =
 -- ACTUAL argument mono (`Box`) as this site's receiver so resolveRLocalSite routes
 -- per-receiver: a receiver head WITH an impl of the shadowed interface dispatches to
 -- the method (route left untouched → eval arg-tag / emit RKey), one WITHOUT an impl
--- stays the standalone (RLocal).  suppressRLocalRecord stops recordRLocalSite from
+-- stays the standalone (RLocal).  dcSuppressRLocalRecord stops recordRLocalSite from
 -- ALSO pushing the standalone's declared domain (which would mis-route `Box`→`Int`).
 inferDefinerShadowApp : TcEnv ->
   String ->
@@ -21483,17 +21477,16 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
         let cell = methodCellOf ev
         cell.ecIface := admittedIfaceWord name
       None => ()
-  -- #158 PR4: SAVE/RESTORE the three toggles around the head computation (restore to the
-  -- saved value, NOT unconditional False) so a nested definer-shadow head re-entering this
-  -- bracket inside `ft` cannot clobber an outer True on its way out.
-  let savedRLocal = toggles.value.suppressRLocalRecord.value
-  let savedArgStamp = toggles.value.suppressArgStamp.value
-  let savedShadowHead = toggles.value.shadowHeadCtxRef.value
-  toggles.value.suppressRLocalRecord := True
-  toggles.value.suppressArgStamp := True
-  -- P0-19 d4b: this is an application head (marked EMethodAt on run/build) → keep the
-  -- method scheme for per-receiver dispatch; suppress the value-position standalone pin.
-  toggles.value.shadowHeadCtxRef := True
+  -- The head is typed in `headEnv`: the two default pushes are suppressed, and, as an
+  -- application head (marked EMethodAt on run/build, P0-19 d4b), it keeps the method
+  -- scheme for per-receiver dispatch rather than the value-position standalone pin.
+  let headEnv = { env |
+    teDyn = { env.teDyn |
+      dcSuppressRLocalRecord = True,
+      dcSuppressArgStamp = True,
+      dcShadowHeadCtx = True,
+    },
+  }
   -- P0-18: for the STANDALONE arm, type the head against the STANDALONE scheme.  On the
   -- un-mangled run/check path `infer env f` already resolves the bare name to the
   -- standalone (which shadows the method in scope).  On the EMIT path the bare name
@@ -21514,19 +21507,16 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
     if dispatches then
       None
     else
-      standaloneOccurrence env name sym (orElseLoc (appSpineHeadLoc f) dloc)
+      standaloneOccurrence headEnv name sym (orElseLoc (appSpineHeadLoc f) dloc)
   let ft =
     if dispatches then
-      shadowVarHeadMethodScheme env name hd
+      shadowVarHeadMethodScheme headEnv name hd
     else match selected
       Some occurrence =>
         let _ = recordStandaloneAt name hd occurrence
         occurrence.svoInstance.mtiBody
-      None => infer env hd
+      None => infer headEnv hd
   arityRef := Some (funArity ft)
-  toggles.value.shadowHeadCtxRef := savedShadowHead
-  toggles.value.suppressRLocalRecord := savedRLocal
-  toggles.value.suppressArgStamp := savedArgStamp
   -- S-1: on the STANDALONE arm ONLY, compute that standalone's own `=>`-constraint
   -- dicts (and record its call obligations).  The DISPATCH arm typed `ft` against the
   -- interface METHOD scheme, whose dicts are the method's, not the standalone's — asking
@@ -21828,7 +21818,7 @@ standaloneShadowDomainAt name k =
     Some ty => nthFunDomain k (instantiate (sigToScheme ty))
 
 -- P0-19 d4b (S4): a definer-shadow occurrence in bare VALUE position (NOT the head of
--- its own application — shadowHeadCtxRef is False) denotes the STANDALONE.  Returns the
+-- its own application — dcShadowHeadCtx is False) denotes the STANDALONE.  Returns the
 -- standalone's declared scheme freshly instantiated so a HOF sees `Int -> Int`, not the
 -- permissive method scheme `a -> Int` — making `map size [Box …]` a located reject
 -- (Box vs Int) while `map size [1,2,3]` still accepts.  Only fires for a single-param
@@ -21841,7 +21831,7 @@ standaloneShadowDomainAt name k =
 -- reading the imported standalone's scheme from the lexical binding descriptor
 -- (the same scheme inferShadowApp's standalone arm uses).
 --
--- ⚠️ FORK 1 IS NOT TOUCHED.  This arm is gated on shadowHeadCtxRef = False, i.e. bare
+-- Fork 1 is not touched.  This arm is gated on dcShadowHeadCtx = False, i.e. bare
 -- VALUE position only; every APPLIED importer occurrence goes through inferShadowApp,
 -- which now flags its head (inferShadowAppHead) exactly as the definer path always did.
 -- So per-receiver importer dispatch (i4's `isEmpty [1, 2]` → `Foldable.isEmpty`) is
@@ -21904,7 +21894,7 @@ instantiateStandaloneOccurrence env name sym origin value =
 
 standaloneValueBinding : TcEnv -> String -> Option ValueScheme
 standaloneValueBinding env name
-  | toggles.value.shadowHeadCtxRef.value = None
+  | env.teDyn.dcShadowHeadCtx = None
   | ifaceMethodName name
     && omHasKey name perRun.value.definerShadowNamesRef.value =
     lookupStandaloneValue env name
@@ -21923,7 +21913,7 @@ standaloneValueBinding env name
 -- The scheme is recovered by `standaloneSchemeFor`: an IMPORTER shadow via
 -- its lexical binding descriptor, a DEFINER shadow via the env under that mangled sym — the same
 -- accessor recordRLocalSite already trusts to compute this site's RLocal dicts.  Value-position
--- ONLY (shadowHeadCtxRef False, mirroring maybeStandaloneValueMono's first guard); an
+-- ONLY (dcShadowHeadCtx False, mirroring maybeStandaloneValueMono's first guard); an
 -- application head is bracketed True by inferShadowAppHead / inferDefinerShadowApp and keeps
 -- ordinary per-receiver dispatch.  None (⇒ caller keeps the method scheme) when the route
 -- carries no mangled sym, or when the standalone scheme is unavailable.
@@ -21938,13 +21928,13 @@ standaloneValueBinding env name
 --     emit declined, so `map size [1,2,3]` stamped a null Display element dict and SIGSEGVd).
 --     Safe at multi-typaram width because a DEFINER app head is ALWAYS bracketed: it is caught
 --     by definerShadowArgHead's isDefinerShadow disjunct (typaram-agnostic) →
---     inferDefinerShadowApp, which sets shadowHeadCtxRef True and types the head via
+--     inferDefinerShadowApp, which sets dcShadowHeadCtx True and types the head via
 --     the method scheme or selected standalone occurrence, never inferMethodAt. So the
---     only definer occurrence reaching here with shadowHeadCtxRef False is a genuine value
+--     only definer occurrence reaching here with dcShadowHeadCtx False is a genuine value
 --     position, which is precisely what must ground (d22z is the app-head control).
 --   • otherwise (importer / non-shadow): singleTyparamIfaceMethod is REQUIRED, not incidental.
 --     At MULTI-typaram width the importer app-head path (`get (Box 3) 1`, interface `Ix a i`,
---     i10) uses ORDINARY dispatch, so an app head can reach inferMethodAt with shadowHeadCtxRef
+--     i10) uses ORDINARY dispatch, so an app head can reach inferMethodAt with dcShadowHeadCtx
 --     False AND a mangled route sym — indistinguishable from a value position by those two
 --     signals alone.  The check-path importer arm is singleTyparamIfaceMethod-gated (Fork 1)
 --     for exactly this reason; keeping the guard here leaves i10's per-receiver dispatch
@@ -21963,7 +21953,7 @@ standaloneValueBindingEmit : TcEnv -> String -> Ref Route -> Option ValueScheme
 -- recover a shadow the MANGLER hid; a bare seed hides nothing, and reading one as the
 -- old signal fires this emit-only pin on `check`/`run`.
 standaloneValueBindingEmit env name tagRef
-  | toggles.value.shadowHeadCtxRef.value = None
+  | env.teDyn.dcShadowHeadCtx = None
   | recoveredShadowSym name tagRef == "" = None
   | not (emitValueShadowGate name) = None
   | otherwise = standaloneValueFor env name (recoveredShadowSym name tagRef)
@@ -21981,12 +21971,12 @@ standaloneValueBindingEmit env name tagRef
 --   • DEFINER shadow (isDefinerShadow): admit typaram-agnostically.  Safe at multi-typaram
 --     width because a definer app head is ALWAYS bracketed by inferDefinerShadowApp
 --     (definerShadowArgHead's isDefinerShadow disjunct fires typaram-agnostically), so it
---     reaches standaloneValueBindingEmit with shadowHeadCtxRef True and is declined by that
+--     reaches standaloneValueBindingEmit with dcShadowHeadCtx True and is declined by that
 --     function's first guard — the ONLY definer occurrence reaching the pin with
---     shadowHeadCtxRef False is a genuine value position, which is what must ground.
+--     dcShadowHeadCtx False is a genuine value position, which is what must ground.
 --   • otherwise (importer or non-shadow): keep singleTyparamIfaceMethod — a MULTI-typaram
 --     importer app head (`get (Box 3) 1`, i10) uses ORDINARY dispatch and is NOT bracketed,
---     so it too can reach the pin with shadowHeadCtxRef False and a mangled route sym; the
+--     so it too can reach the pin with dcShadowHeadCtx False and a mangled route sym; the
 --     singleTyparam gate is what keeps it (and its per-receiver dispatch, 4 then 3) intact,
 --     exactly as the check-path importer arm does.
 emitValueShadowGate : String -> Bool
@@ -22161,13 +22151,7 @@ shadowVarHeadMethodScheme env name f = match methodEntryHere name
     forceInstantiation
       name
       (instantiateMethodTracked (fst (sigToSchemeTvsIn scope ty)))
-  None =>
-    -- #158 PR4: save/restore, not set-False (see inferDefinerShadowApp's bracket).
-    let saved = toggles.value.shadowHeadCtxRef.value
-    toggles.value.shadowHeadCtxRef := True
-    let ft = infer env f
-    toggles.value.shadowHeadCtxRef := saved
-    ft
+  None => infer (shadowHeadEnv env) f
 
 -- P0-19 (standalone arm): type the application against the LOCAL standalone scheme so
 -- the result is the standalone's (S2/S5); a domain mismatch (`size "hi"`) or a wrapper
@@ -22196,11 +22180,7 @@ inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc =
       -- `wrap`'s second parameter) and monomorphised the user's written signature.
       unifySpineResult env f occurrence.svoInstance.mtiBody (pre ++ [(x, xt)])
     None =>
-      -- #158 PR4: save/restore, not set-False (see inferDefinerShadowApp's bracket).
-      let saved = toggles.value.shadowHeadCtxRef.value
-      toggles.value.shadowHeadCtxRef := True
-      let ft = infer env hd
-      toggles.value.shadowHeadCtxRef := saved
+      let ft = infer (shadowHeadEnv env) hd
       let _ = enforceStandaloneDomainAt env name xt dloc (listLen pre)
       inferAppNodes env ft (pre ++ [(EApp f x, xt)])
 
@@ -23181,24 +23161,28 @@ joinValueTypes : JoinContext -> List (Option Loc, Mono) -> Mono
 joinValueTypes context values =
   let upper =
     optionOrFresh
-      (joinProduced (valueJoinOps context (collectRows joinCellOf)) values)
+      (joinProduced
+        (valueJoinOps noDyn context (collectRows joinCellOf))
+        values)
   let _ = map ((loc, lower) => recordFileValueFlow loc upper lower) values
   upper
 
-valueJoinOps : JoinContext ->
+valueJoinOps : DynCtx ->
+  JoinContext ->
   (List EffRow -> EffRow) ->
   ValueJoinOps (Option Loc)
-valueJoinOps context collector =
-  let ops = decidingJoinOps context collector
-  { ops | vjoDefer = values => deferJoin ops values }
+valueJoinOps dyn context collector =
+  let ops = decidingJoinOps dyn context collector
+  { ops | vjoDefer = values => deferJoin context collector values }
 
 -- The join services that decide on the spot: resolving a recorded join
 -- must not record it again.
-decidingJoinOps : JoinContext ->
+decidingJoinOps : DynCtx ->
+  JoinContext ->
   (List EffRow -> EffRow) ->
   ValueJoinOps (Option Loc)
-decidingJoinOps context collector = ValueJoinOps {
-  vjoEqual = joinValueEqual context,
+decidingJoinOps dyn context collector = ValueJoinOps {
+  vjoEqual = joinValueEqual dyn context,
   vjoCovariants = producedSlotCovariants,
   vjoFreshType = freshVar,
   vjoFreshRow = openRow,
@@ -23212,8 +23196,11 @@ decidingJoinOps context collector = ValueJoinOps {
 -- are not equated: equality would give both the same latent row before a
 -- later use shapes one of them.  Inside a binding scope the join is recorded
 -- and decided when the scope closes (§6.8); outside one it is decided now.
-deferJoin : ValueJoinOps (Option Loc) -> List (Option Loc, Mono) -> Option Mono
-deferJoin ops values =
+deferJoin : JoinContext ->
+  (List EffRow -> EffRow) ->
+  List (Option Loc, Mono) ->
+  Option Mono
+deferJoin context collector values =
   if EffectSolver.hasSummaryScope perRun.value.effectSummaries
     && distinctVariables values then
     let result = freshVar ()
@@ -23222,7 +23209,8 @@ deferJoin ops values =
           pjResult = result,
           pjValues = values,
           pjLevel = perRun.value.currentLevel.value,
-          pjOps = ops,
+          pjContext = context,
+          pjCollector = collector,
         }
         :: perRun.value.pendingJoinsRef.value
     Some result
@@ -23326,8 +23314,13 @@ lowerPending _ pending = pending
 -- the same way.
 resolvePendingJoin : PendingJoin -> Unit
 resolvePendingJoin pj = match normalize pj.pjResult
-  TVar _ => unify pj.pjResult (resolveDeferredJoin pj.pjOps pj.pjValues)
-  _ => settleShapedJoins [pj]
+  TVar _ =>
+    unify
+      pj.pjResult
+      (resolveDeferredJoin
+        (decidingJoinOps noDyn pj.pjContext pj.pjCollector)
+        pj.pjValues)
+  _ => settleShapedJoins noDyn [pj]
 
 -- A receiving qualified slot's allowance: one flexible variable of the
 -- current scope, bounded below by every value that reaches the slot.
@@ -23356,7 +23349,7 @@ publishProducedResults owned values =
   let produced =
     optionOrFresh
       (joinProducedEnvelope
-        (valueJoinOps JoinClause collectProducedSummary)
+        (valueJoinOps noDyn JoinClause collectProducedSummary)
         results)
   let _ = map ((loc, lower) => recordFileValueFlow loc produced lower) results
   match resultAfterArrows owned.bsArity owned.bsValue
@@ -23371,15 +23364,12 @@ clauseResult arity (loc, value) = match resultAfterArrows arity value
 checkRecursiveValue : BindingSummary -> Unit
 checkRecursiveValue owned = unifyInto True owned.bsRecursiveValue owned.bsValue
 
-joinValueEqual : JoinContext -> Option Loc -> Mono -> Mono -> Unit
-joinValueEqual context loc left right =
+joinValueEqual : DynCtx -> JoinContext -> Option Loc -> Mono -> Mono -> Unit
+joinValueEqual dyn context loc left right =
   let saved = !currentLoc
-  let savedContext = !currentJoinContext
   let _ = setLocIfSome loc
   let _ = noteNumlitCtx left right context
-  currentJoinContext := Some context
-  let _ = unify left right
-  currentJoinContext := savedContext
+  let _ = unifyIn { dyn | dcJoin = Some context } left right
   currentLoc := saved
 
 producedSlotCovariants : Mono -> List Bool
@@ -34421,7 +34411,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   perRun.value.bodyImplEnvRef := driverState.value.declEnvsRef.value.deImpls
   -- (#4 + #3-restore) mode-specific pre-inference ref setup (all pure/independent of the
   -- register+globalS block below, so order-safe).  Flat arms the per-body shadow-scoping
-  -- toggles; Module installs importer-shadow state and restores the cross-module dict
+  -- flags; Module installs importer-shadow state and restores the cross-module dict
   -- accumulators resetState just wiped.
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
   -- lint-disable-next-line rule-prefer-assign-op
@@ -42208,15 +42198,17 @@ freeStmtsEVars bound ((DoFieldAssign _ _ e) :: rest) =
 
 -- builtin constructors available without the prelude (mirrors initial_env)
 initialEnv : TcEnv
-initialEnv =
-  TcEnv
-    omEmpty
-    (omInsert
+initialEnv = TcEnv {
+  teVars = omEmpty,
+  teCtors =
+    omInsert
       "True"
       (monoScheme (tconBuiltin "Bool"))
-      (omInsert "False" (monoScheme (tconBuiltin "Bool")) omEmpty))
-    []
-    omEmpty
+      (omInsert "False" (monoScheme (tconBuiltin "Bool")) omEmpty),
+  teAlphaLets = [],
+  teIsLocal = omEmpty,
+  teDyn = noDyn,
+}
 
 -- ⚠️ S0-3: THE POLARITY PRE-SEED RUNS HERE, ONCE PER CALL, AND THIS IS THE
 -- REASON THE FOLD MOVED INTO A `…Go` HELPER.  `registerData` →
@@ -53701,7 +53693,6 @@ stampCtxOf : String ->
 stampCtxOf mid implDecls goals numlits = StampCtx {
   scModule = mid,
   scPerRun = perRun.value,
-  scToggles = toggles.value,
   scSuperDecls = filterList isInterfaceDecl implDecls,
   scRpNames = returnPosMethodNames implDecls,
   scGoals = goals,
@@ -53874,7 +53865,6 @@ drainStampQueue : Unit -> List DrainFinding
 drainStampQueue _ =
   let ctxs = reverseL graphRun.value.stampCtxs.value
   let savedPerRun = perRun.value
-  let savedToggles = toggles.value
   let savedModule = driverState.value.currentModuleRef.value
   let savedSupers = driverState.value.superDeclsRef.value
   let _ = defaultLiveNumRoots ()
@@ -53893,7 +53883,6 @@ drainStampQueue _ =
   let _ = materializeBinderTypes ()
   graphRun.value.stampCtxs := []
   perRun := savedPerRun
-  toggles := savedToggles
   driverState.value.currentModuleRef := savedModule
   driverState.value.superDeclsRef := savedSupers
   held ++ verdicts ++ holes
@@ -54082,7 +54071,6 @@ runStampCtx ctx =
 enterStampCtx : StampCtx -> Unit
 enterStampCtx ctx =
   perRun := ctx.scPerRun
-  toggles := ctx.scToggles
   -- Deferred goals select their `gGiven` bucket from their captured scope frames;
   -- `currentModuleRef` remains the legacy routing context, and `superDeclsRef` is
   -- the interface decls of the universe `graphModuleWorker` set for this module

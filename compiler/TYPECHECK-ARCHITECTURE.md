@@ -239,7 +239,7 @@ names, not the numbers."*
 | Logical declarations | 1,478 — **1,443 functions**, 33 `data`, 2 type aliases |
 | Exported | 70 (50 functions reachable as entry points) |
 | Banner sections | 75 (**not** a valid partition — §2) |
-| State cells | **118** — `PerRun` 63, `CrossRun` 25, `DriverState` 18, `Toggles` 3, loose module-level **9** |
+| State cells | **118** — `PerRun` 63, `CrossRun` 25, `DriverState` 18, 3 dynamic-context toggles (now `DynCtx` fields), loose module-level **9** |
 | Functions touching any state | **244 of 1,443** — the other 1,199 are pure |
 | Cells written from ≥6 functions | **7 of 118** |
 | Inbound imports | 11 modules (§7.7) |
@@ -286,12 +286,12 @@ this is the #158/#176 design, and it landed.
 | `PerRun` | 63 | HM counters + level; the 8 `pending*` route channels; 4 `Windowed` obligation channels; the 5 `numlit*` defaulting cells; shadow tables; per-module registries | `resetState` re-mints via `freshPerRun` |
 | `CrossRun` | 25 | 15 `universe*` accumulators, 6 `crossModule*` constraint tables (each a bare/`Qual` **pair**), 3 `obUniv*`, and `coreSchemeObligationsRef` | survives `resetState` by design |
 | `DriverState` | 18 | driver-mode flags, the match oracle + warnings, promotion harvest, `main` scheme, dict-eligibility sets | survives; re-minted per driver entry |
-| `Toggles` | 3 | dynamic-scope suppression flags (`suppressRLocalRecord`, `suppressArgStamp`, `shadowHeadCtxRef`) — save/restore around routing decisions | re-minted with `PerRun` |
-| *(loose)* | **9** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, `toggles`) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc`, `currentDoOrigin`, `currentMethodMismatch` | varies |
+| toggles *(now `DynCtx`)* | 3 | dynamic-scope suppression flags, now the `DynCtx` fields `dcSuppressRLocalRecord`, `dcSuppressArgStamp`, `dcShadowHeadCtx` that `TcEnv` carries, so no save/restore remains | none: `initialEnv` and `withCtors` start from `noDyn` |
+| *(loose)* | **9** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, and the toggles cell, since deleted) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc`, `currentDoOrigin`, `currentMethodMismatch` | varies |
 
 **The seven cells with no single owning function** (≥6 distinct writers) are the residual
 state-discipline debt: `perRun` (56 writers), `driverState` (14), `currentLoc` (8),
-`typeErrorsSticky` (8), `crossRun` (7), `toggles` (6), `funConstraintsRef` (6).
+`typeErrorsSticky` (8), `crossRun` (7), the toggles cell (6, since deleted), `funConstraintsRef` (6).
 
 ⚠️ Two granularities are mixed in that list: `funConstraintsRef` is a `PerRun` *field*, so
 its writers are already inside `perRun`'s 56. Read it as "these are the cells a change is
@@ -783,7 +783,7 @@ projections plus `entryOwnSchemes`; `ir/` reaches this file only through
 - **The `pending*` deferred-mutation cells are essential, not accidental.** A method site's
   route depends on which tyvar survives unification, knowable only post-inference. Bundle
   them; never try to eliminate them.
-- **52 cells deliberately survive `resetState`.** It re-mints only `perRun` and `toggles`
+- **52 cells deliberately survive `resetState`.** It re-mints only `perRun` (and, at `1691922a`, the toggles cell, now `DynCtx`)
   (118 − 63 − 3), so every `CrossRun`, `DriverState` and remaining loose cell persists.
   Clearing one "for hygiene" reproduces the Phase-134 dropped-dict bug. *(Prior docs say
   "~37" — that is `97 − 60` from issue #158's title, an artifact of the old inflated Ref

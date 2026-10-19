@@ -1,5 +1,5 @@
 # META
-source_lines=54412
+source_lines=54400
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -333,7 +333,8 @@ import types.tc_types.{
   EvDest(..),
   GoalPayload(..),
   Obligation(..),
-  Toggles(..),
+  DynCtx(..),
+  noDyn,
   DeclEnvModule(..),
   DeclEnvs(..),
   DeclEnvAcc(..),
@@ -1562,13 +1563,13 @@ flexibleIndex cell other =
 
 -- Ordinary row equality can solve flexible cells, never declaration universals.
 -- Binding-owned summaries instead record both directions for scoped solving.
-unifyRow : EffRow -> EffRow -> Unit
-unifyRow r1 r2 = unifyRowN (effrowNorm r1) (effrowNorm r2)
+unifyRow : DynCtx -> EffRow -> EffRow -> Unit
+unifyRow dyn r1 r2 = unifyRowN dyn (effrowNorm r1) (effrowNorm r2)
 
 -- Joins and universal leaves use the role-aware unifier. Plain flexible rows
 -- retain the cheaper single-tail unification path.
-unifyRowN : EffRow -> EffRow -> Unit
-unifyRowN r1 r2 =
+unifyRowN : DynCtx -> EffRow -> EffRow -> Unit
+unifyRowN dyn r1 r2 =
   if rowHasSummary r1 || rowHasSummary r2 then
     let _ = deferEffectRelation False r1 r2
     deferEffectRelation False r2 r1
@@ -1578,7 +1579,7 @@ unifyRowN r1 r2 =
     || rowHasRigid r2 then
     unifyJoinRows False r1 r2
   else
-    unifyRowPlain r1 r2
+    unifyRowPlain dyn r1 r2
 
 -- Equality may solve a flexible variable toward a declared universal, but
 -- never the reverse. The join unifier already partitions cells by this role.
@@ -1728,8 +1729,8 @@ joinMismatchMsg a b =
 -- (see the both-open note), which is the whole reason the trail is needed.
 -- (Intra-file refs below name SYMBOLS, not line numbers — the latter rot; the
 -- §N (:lines) spec cites point into EFFECTS-SEMANTICS.md, verified current.)
-unifyRowPlain : EffRow -> EffRow -> Unit
-unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+unifyRowPlain : DynCtx -> EffRow -> EffRow -> Unit
+unifyRowPlain _ (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   -- L1 ∪ r = L2 ∪ r requires every unmatched atom to belong to r. Preserve
   -- that lower bound by extending the shared tail, just as the join unifier
   -- does for a shared flexible member. Merely recording an absorption loses
@@ -1787,10 +1788,10 @@ unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
 -- §5's binding-boundary escape check (:339-351), checking the OPEN side's labels against
 -- the CLOSED side's bound at the open-meets-closed seam.  (Absorbing into a CLOSED tail is
 -- the guarded direction.)
-unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 None) =
+unifyRowPlain _ (EffRow l1 (Some v1)) (EffRow l2 None) =
   let _ = effectLeakCheck (atomsEscape l1 l2) l2
   linkRow v1 (EffRow (atomsDiff l2 l1) None)
-unifyRowPlain (EffRow l1 None) (EffRow l2 (Some v2)) =
+unifyRowPlain _ (EffRow l1 None) (EffRow l2 (Some v2)) =
   let _ = effectLeakCheck (atomsEscape l2 l1) l1
   linkRow v2 (EffRow (atomsDiff l1 l2) None)
 -- CLOSED~CLOSED arm: EQUALITY, via `closedRowEqCheck` (#2557).  Two written rows
@@ -1809,7 +1810,7 @@ unifyRowPlain (EffRow l1 None) (EffRow l2 (Some v2)) =
 -- one here.  Index rows still route to `unifyIndexRow` below, NOT here — an index
 -- is invariant by kind (#1094); do not re-point `unifyN`'s `TEff`/`TEff` arm at
 -- `unifyRow`.
-unifyRowPlain (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck l1 l2
+unifyRowPlain dyn (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck dyn l1 l2
 
 -- ── the INDEX row unifier (#1094) ──────────────────────────────────────────
 -- `Mono` carries two different kinds of row and they obey different rules:
@@ -1861,8 +1862,8 @@ unifyRowPlain (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck l1 l2
 --     `checkArgEffVars`, whose own comment cites that arm), and the recordAbsorptions →
 --     `launderEscapeFromLog` trail depends on it.  Tightening the arrow side is a design
 --     decision with its own blast radius, tracked separately — not a copy-paste of this.
-unifyIndexRow : EffRow -> EffRow -> Unit
-unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
+unifyIndexRow : DynCtx -> EffRow -> EffRow -> Unit
+unifyIndexRow dyn r1 r2 = unifyIndexRowN dyn (effrowNorm r1) (effrowNorm r2)
 
 -- An index row is a set of atoms, and two index rows are equal when each
 -- covers the other (EFFECTS-SEMANTICS §6.4, §2.2).  Two atoms of one label at
@@ -1889,8 +1890,8 @@ unifyIndexAtomAuthorities a1 a2 =
 -- INDEX mode (equality, never subsumption).  A row with a summary cell goes
 -- to the scoped solver as two exact relations, whose coverage is already
 -- atom by atom.
-unifyIndexRowN : EffRow -> EffRow -> Unit
-unifyIndexRowN r1 r2 =
+unifyIndexRowN : DynCtx -> EffRow -> EffRow -> Unit
+unifyIndexRowN dyn r1 r2 =
   if rowHasSummary r1 || rowHasSummary r2 then
     let _ = deferEffectRelation True r1 r2
     deferEffectRelation True r2 r1
@@ -1900,7 +1901,7 @@ unifyIndexRowN r1 r2 =
     || rowHasRigid r2 then
     unifyJoinRows True r1 r2
   else
-    unifyIndexRowPlain r1 r2
+    unifyIndexRowPlain dyn r1 r2
 
 -- Both closed, or the same tail: nothing can absorb an atom, so the rows are
 -- equal label by label.  Open against closed: the closed side's extra atoms
@@ -1908,15 +1909,15 @@ unifyIndexRowN r1 r2 =
 -- the closed side (the §5 leak check, with a shared label's authority an
 -- index obligation).  Two distinct open tails: each takes what the other
 -- side has that it does not cover, into one fresh shared tail.
-unifyIndexRowPlain : EffRow -> EffRow -> Unit
-unifyIndexRowPlain (EffRow l1 None) (EffRow l2 None) = indexRowEquate l1 l2
-unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+unifyIndexRowPlain : DynCtx -> EffRow -> EffRow -> Unit
+unifyIndexRowPlain _ (EffRow l1 None) (EffRow l2 None) = indexRowEquate l1 l2
+unifyIndexRowPlain _ (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   | effvarId v1 == effvarId v2 = indexRowEquate l1 l2
-unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 None) =
+unifyIndexRowPlain _ (EffRow l1 (Some v1)) (EffRow l2 None) =
   indexOpenClosed l1 v1 l2
-unifyIndexRowPlain (EffRow l1 None) (EffRow l2 (Some v2)) =
+unifyIndexRowPlain _ (EffRow l1 None) (EffRow l2 (Some v2)) =
   indexOpenClosed l2 v2 l1
-unifyIndexRowPlain r1 r2 = unifyRowPlain r1 r2
+unifyIndexRowPlain dyn r1 r2 = unifyRowPlain dyn r1 r2
 
 indexRowEquate : List Atom -> List Atom -> Unit
 indexRowEquate l1 l2 =
@@ -2000,11 +2001,11 @@ effectLeakCheck escaping bound =
 -- `<IO, Stderr>`, one denotation in two spellings, are equal, while `<IO>` and
 -- `<Stderr>` are not.  Inside a non-covariant type argument the mismatch takes
 -- the variance wording, which names that slot and its eta-expansion recovery.
-closedRowEqCheck : List Atom -> List Atom -> Unit
-closedRowEqCheck l1 l2 = match (atomsEscape l1 l2, atomsEscape l2 l1)
+closedRowEqCheck : DynCtx -> List Atom -> List Atom -> Unit
+closedRowEqCheck dyn l1 l2 = match (atomsEscape l1 l2, atomsEscape l2 l1)
   ([], []) => ()
   _ =>
-    if nonCovariantSlot.value then
+    if dyn.dcNonCovariant then
       pushTypeError "T-EFFECT-PARAM-VARIANCE" (paramVarianceMismatchMsg l1 l2)
     else
       pushTypeError "T-EFFECT-LEAK" (closedRowMismatchMsg l1 l2)
@@ -4250,18 +4251,6 @@ recoveredShadowSym name tagRef =
 -- #156 S3a: these fields now live in `PendingEntry`'s `SKRLocal` kind (mangledSym,
 -- forceLocal, dictMonos, dictIfaces); the name/route/receiver-mono/enclosing-fn are
 -- the shared PendingEntry fields.
-
--- Construct all 3 toggle-Refs fresh (each reproduces its former initial — all False).
-freshToggles : Unit -> Toggles
-freshToggles _ = Toggles {
-  suppressRLocalRecord = Ref False,
-  suppressArgStamp = Ref False,
-  shadowHeadCtxRef = Ref False,
-}
-
--- The single module-level cell holding the current run's dynamic-context toggles.
-toggles : Ref Toggles
-toggles = Ref (freshToggles ())
 
 -- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
 -- calls `buildDeclEnvs` reads an empty graph, on which every `declEnvsOrdOf`
@@ -8942,8 +8931,11 @@ nthArgMono n m = match normalize m
 -- inferred type of its discriminating argument (the dispatch-position arg mono).
 -- The cell is read later (resolveArgStamps), once inference has solved it.  D3b-1:
 -- also carry [name] + the impl-dicts ref so a concrete-head site can thread the
--- element dict for a parametric `requires` impl.
-recordArgStamp : String ->
+-- element dict for a parametric `requires` impl.  [suppressed] is the caller's
+-- `dcSuppressArgStamp`: a definer-shadow application head records its argument
+-- itself.
+recordArgStamp : Bool ->
+  String ->
   Ref Route ->
   Ref (List Route) ->
   Ref Inner ->
@@ -8951,8 +8943,8 @@ recordArgStamp : String ->
   Mono ->
   List (String, Mono) ->
   Unit
-recordArgStamp name tagRef implRef innerRef idx mono omitted
-  | toggles.value.suppressArgStamp.value = ()
+recordArgStamp suppressed name tagRef implRef innerRef idx mono omitted
+  | suppressed = ()
   | otherwise = match nthArgMono idx mono
     Some am =>
       pushSiteGoal
@@ -9449,12 +9441,6 @@ currentDoDeferred = Ref False
 -- `Method '<name>': expected type <e> but got <a>` instead of a bare `Type mismatch: …`.
 currentMethodMismatch : Ref (Option String)
 currentMethodMismatch = Ref None
-
--- The context of the value join whose unify is running (`joinValueEqual`), so a
--- mismatch that unify reports can say which construct demanded the two types
--- agree.  `None` outside a join.
-currentJoinContext : Ref (Option JoinContext)
-currentJoinContext = Ref None
 
 -- ASYNC-DESIGN Stage 2 (D5): the entry program's inferred `main` scheme, stashed
 -- by `graphModuleWorker`'s `GOutTrees` arm so the native `run` driver can detect a
@@ -10821,14 +10807,8 @@ perRun = Ref (freshPerRun ())
 -- would then see only builtins.  effectDomains has exactly ONE writer (populateEffectDomains →
 -- seedEffectDomains + registerEffectDomain), so it persists untouched across the per-module
 -- resets — and it is NOT a PerRun field, so freshPerRun cannot disturb it.
--- #158 PR4: mint a fresh Toggles in the SAME reset that mints freshPerRun, so
--- shadowHeadCtxRef (formerly a PerRun field) is still cleared per-module at exactly this
--- point.  The other two toggles are always False at a module boundary (their save/restore
--- brackets never straddle one), so re-minting them here is a no-op — byte-identical.
 resetState : Unit -> Unit
-resetState _ =
-  perRun := freshPerRun ()
-  toggles := freshToggles ()
+resetState _ = perRun := freshPerRun ()
 
 containsI : Int -> List Int -> Bool
 containsI _ [] = False
@@ -11273,42 +11253,48 @@ occursAdjustUnbound id level cell id2 lvl2
 -- an argument (`argumentInto`), a declared parameter, a match scrutinee or a
 -- call's result (`bindFrom`), a cell read (`refStored`).  Below the top the
 -- types are structure, not values, and `unifyN` keeps qualifiers equal.
+--
+-- `unify` is the call from outside every construct that sets a dynamic context;
+-- the unification core takes the caller's `DynCtx` (`unifyIn`).
 unify : Mono -> Mono -> Unit
-unify a b = unifyValue (normalize a) (normalize b)
+unify a b = unifyIn noDyn a b
 
-unifyValue : Mono -> Mono -> Unit
-unifyValue (TVar c) (TQual a _) = unifyN (TVar c) (normalize a)
-unifyValue (TQual a _) (TVar c) = unifyN (normalize a) (TVar c)
-unifyValue (TQual a _) (TQual b _) = unifyN (normalize a) (normalize b)
-unifyValue (TQual a _) b = unifyN (normalize a) b
-unifyValue a (TQual b _) = unifyN a (normalize b)
-unifyValue a b = unifyN a b
+unifyIn : DynCtx -> Mono -> Mono -> Unit
+unifyIn dyn a b = unifyValue dyn (normalize a) (normalize b)
+
+unifyValue : DynCtx -> Mono -> Mono -> Unit
+unifyValue dyn (TVar c) (TQual a _) = unifyN dyn (TVar c) (normalize a)
+unifyValue dyn (TQual a _) (TVar c) = unifyN dyn (normalize a) (TVar c)
+unifyValue dyn (TQual a _) (TQual b _) = unifyN dyn (normalize a) (normalize b)
+unifyValue dyn (TQual a _) b = unifyN dyn (normalize a) b
+unifyValue dyn a (TQual b _) = unifyN dyn a (normalize b)
+unifyValue dyn a b = unifyN dyn a b
 
 -- Structural equality: inside a constructor argument, an arrow or an index, a
 -- qualifier is part of the type.  A variable takes a qualified type verbatim,
 -- two qualifiers must cover each other, and a qualified type against a plain
 -- one is equal only where the qualifier admits the domain's top — a `Ref`
 -- holding `String @p` cannot be the same cell as one holding any `String`.
-unifyStruct : Mono -> Mono -> Unit
-unifyStruct a b = unifyN (normalize a) (normalize b)
+unifyStruct : DynCtx -> Mono -> Mono -> Unit
+unifyStruct dyn a b = unifyN dyn (normalize a) (normalize b)
 
-unifyN : Mono -> Mono -> Unit
-unifyN (TVar c1) (TVar c2) = unifyVars c1 c2
-unifyN (TVar c) t = bindVar c t
-unifyN t (TVar c) = bindVar c t
+unifyN : DynCtx -> Mono -> Mono -> Unit
+unifyN dyn (TVar c1) (TVar c2) = unifyVars dyn c1 c2
+unifyN dyn (TVar c) t = bindVar dyn c t
+unifyN dyn t (TVar c) = bindVar dyn c t
 -- #1111 A-2.10: the head comparison READS THE IDENTITY Stage A-1 landed.  This
 -- is the site the arc turned on — two modules' unrelated `T`s no longer unify
 -- (#1208, #1209), and the origin surviving a link is no longer an artefact of
 -- link direction, so a key computed from the field is a function of the type.
 -- `sameTyConHead` (`frontend/ast.mdk`) owns the absent-origin rule; read its
 -- derivation before changing either side of this.
-unifyN (ta@(TCon a oa)) (tb@(TCon b ob)) =
-  if sameTyConHead a oa b ob then () else typeMismatch ta tb
+unifyN dyn (ta@(TCon a oa)) (tb@(TCon b ob)) =
+  if sameTyConHead a oa b ob then () else typeMismatch dyn ta tb
 -- #1110: rigid~rigid.  MANDATORY, not optional — without it a rigid variable
 -- fails to unify with ITSELF (it would fall to the catch-all `typeMismatch`),
 -- which the shared `TCon` constructor used to handle for free.
-unifyN (TRigid a) (TRigid b) =
-  if a == b then () else typeMismatch (TRigid a) (TRigid b)
+unifyN dyn (TRigid a) (TRigid b) =
+  if a == b then () else typeMismatch dyn (TRigid a) (TRigid b)
 -- #1110 CROSS-POPULATION, and it is NOT dead code.  A rigid and a real head can
 -- share a name — both spell `__tupleN__` (see `Mono.TRigid`) — so the pre-split
 -- `TCon a == TCon b` test could be TRUE across the populations, and dropping
@@ -11321,48 +11307,48 @@ unifyN (TRigid a) (TRigid b) =
 --
 -- ⚠️ The preserved answer is a FORGERY (DICT-SEMANTICS §8 I6.2(b), OWED-#1110):
 -- a rigid variable is not the builtin tuple head.  Carrier now, semantics later.
-unifyN (ta@(TCon a _)) (tb@(TRigid b)) =
-  if a == b then () else typeMismatch ta tb
-unifyN (ta@(TRigid a)) (tb@(TCon b _)) =
-  if a == b then () else typeMismatch ta tb
+unifyN dyn (ta@(TCon a _)) (tb@(TRigid b)) =
+  if a == b then () else typeMismatch dyn ta tb
+unifyN dyn (ta@(TRigid a)) (tb@(TCon b _)) =
+  if a == b then () else typeMismatch dyn ta tb
 -- A tuple TYPE is now a `__tupleN__`-headed `TApp` spine; when it clashes with a
 -- differing-arity tuple or with a concrete non-tuple head, report the FULL types
 -- (which render `(a, b)` via ppGo) instead of letting the generic `TApp~TApp`
 -- recursion bottom out on a partial sub-spine — preserving the pre-refactor
 -- tuple mismatch wording.  Guard is False when the other side is a TVar-headed
 -- spine (so `p a b` unifying with a tuple still flows through the generic arm).
-unifyN t1 t2
-  | tupleUnifyClash t1 t2 = typeMismatch t1 t2
+unifyN dyn t1 t2
+  | tupleUnifyClash t1 t2 = typeMismatch dyn t1 t2
 -- #1119 D-2 (#1098, #1121): the VARIANCE gate.  `a1` is the partial spine, so
 -- the number of `TApp` nodes already in `a1` is `b1`'s positional index.  When
 -- the head's recorded polarity at that index is not `PCo`, an effect row inside
 -- the argument must be EQUAL rather than merely compatible — see
 -- `paramVarianceGuard`, which unifies the argument.
-unifyN (TApp a1 b1) (TApp a2 b2) =
-  let _ = unifyStruct a1 a2
-  paramVarianceGuard a1 b1 b2
-unifyN (TFun a1 r1 b1) (TFun a2 r2 b2) =
-  let _ = unifyStruct a1 a2
-  let _ = unifyRow r1 r2
-  unifyStruct b1 b2
+unifyN dyn (TApp a1 b1) (TApp a2 b2) =
+  let _ = unifyStruct dyn a1 a2
+  paramVarianceGuard dyn a1 b1 b2
+unifyN dyn (TFun a1 r1 b1) (TFun a2 r2 b2) =
+  let _ = unifyStruct dyn a1 a2
+  let _ = unifyRow dyn r1 r2
+  unifyStruct dyn b1 b2
 -- #1094: an `Effect`-kinded type-ARGUMENT row is INVARIANT and gets its own unifier.
 -- `unifyRow` is the ARROW-row unifier; its closed~closed leniency is justified for a
 -- latent row and is a silent laundering hole for an index.  See `unifyIndexRow`.
-unifyN (TEff r1) (TEff r2) = unifyIndexRow r1 r2
+unifyN dyn (TEff r1) (TEff r2) = unifyIndexRow dyn r1 r2
 -- An `Authority`-kinded type-argument index is INVARIANT (§6.4): the two
 -- authorities must cover each other, in both directions, whatever the flow.
-unifyN (TAuth qa) (TAuth qb) = unifyIndex qa qb
-unifyN (TQual a qa) (TQual b qb) =
+unifyN _ (TAuth qa) (TAuth qb) = unifyIndex qa qb
+unifyN dyn (TQual a qa) (TQual b qb) =
   let _ = wantAuthority qa qb
   let _ = wantAuthority qb qa
-  unifyStruct a b
-unifyN (TQual a qa) b =
+  unifyStruct dyn a b
+unifyN dyn (TQual a qa) b =
   let _ = wantAuthority (authTop (authDomainTop qa)) qa
-  unifyStruct a b
-unifyN a (TQual b qb) =
+  unifyStruct dyn a b
+unifyN dyn a (TQual b qb) =
   let _ = wantAuthority (authTop (authDomainTop qb)) qb
-  unifyStruct a b
-unifyN a b = typeMismatch a b
+  unifyStruct dyn a b
+unifyN dyn a b = typeMismatch dyn a b
 
 -- A fresh variable standing for a value takes its source's type verbatim,
 -- qualifier included: a declared parameter, a match scrutinee, a call's
@@ -11370,7 +11356,7 @@ unifyN a b = typeMismatch a b
 bindFrom : Mono -> Mono -> Unit
 bindFrom target source = match normalize target
   TVar cell => match !cell
-    Unbound _ _ => bindVar cell source
+    Unbound _ _ => bindVar noDyn cell source
     Link _ => unify target source
   _ => unify target source
 
@@ -11715,8 +11701,8 @@ solvedUpper _ = False
 --     (Unit -> <IO> Unit)`, where `data Taker a = MkTaker (a -> Int)` puts `a`
 --     in a DOMAIN.  No mutation anywhere; the laundering is pure contravariance.
 -- Both are ANNOTATED-BINDING widenings met by `preunifySigsEx`' `unify`;
--- `unifyN`'s `TApp` arm IS the seam.  The guard unifies the argument under
--- `nonCovariantSlot`, so `closedRowEqCheck` reports a mismatch anywhere inside
+-- `unifyN`'s `TApp` arm IS the seam.  The guard unifies the argument with
+-- `dcNonCovariant` set, so `closedRowEqCheck` reports a mismatch anywhere inside
 -- it with the variance wording (`paramVarianceMismatchMsg`) rather than the
 -- generic one, and `unifyInto` treats such a slot as equality rather than
 -- descending directionally.  An open tail still has a metavariable to solve,
@@ -11729,20 +11715,12 @@ solvedUpper _ = False
 -- Unit)` is declared) is genuinely safe and is rejected as well: a type
 -- argument's polarity is a property of the constructor, not of the flow, and
 -- equality is the only symmetric sound rule.
-paramVarianceGuard : Mono -> Mono -> Mono -> Unit
-paramVarianceGuard hd b1 b2
-  | monoSlotNonCovariant hd =
-    let saved = nonCovariantSlot.value
-    nonCovariantSlot := True
-    let _ = unifyStruct b1 b2
-    nonCovariantSlot := saved
-  | otherwise = unifyStruct b1 b2
-
--- set while `paramVarianceGuard` unifies a non-covariant type argument, read by
--- `closedRowEqCheck` to pick the variance wording.  Saved and restored around
--- the unify, so a covariant slot nested inside an invariant one stays invariant.
-nonCovariantSlot : Ref Bool
-nonCovariantSlot = Ref False
+-- A covariant slot nested inside a non-covariant one is unified in the copy the
+-- outer slot set, so it stays non-covariant.
+paramVarianceGuard : DynCtx -> Mono -> Mono -> Mono -> Unit
+paramVarianceGuard dyn hd b1 b2
+  | monoSlotNonCovariant hd = unifyStruct { dyn | dcNonCovariant = True } b1 b2
+  | otherwise = unifyStruct dyn b1 b2
 
 -- number of `TApp` nodes in a left spine — the positional index of the argument
 -- applied at the node ABOVE it.  `normalize`s at each level for the same reason
@@ -11784,7 +11762,7 @@ paramPolaritiesIn tab key
   | otherwise = lookupTab key tab
 
 recordInvocationView : TcEnv -> Unit
-recordInvocationView (TcEnv _ ctors _ _) =
+recordInvocationView env =
   let universe =
     flatMap
       (cands =>
@@ -11795,7 +11773,7 @@ recordInvocationView (TcEnv _ ctors _ _) =
       (IdMap.values (spRows crossRun.value.universeCtorPop.value))
   driverState.value.invocationViewRef :=
     InvocationView
-      (IdMap.values ctors ++ universe)
+      (IdMap.values env.teCtors ++ universe)
       perRun.value.dataParamPolarityRef.value
       perRun.value.dataParamKindsRef.value
 
@@ -11938,11 +11916,12 @@ paramVarianceMismatchMsg : List Atom -> List Atom -> String
 paramVarianceMismatchMsg l1 l2 =
   "effect row mismatch inside a non-covariant type argument: <\{renderAtoms l1}> vs <\{renderAtoms l2}>; the two rows must be equal here, so write the same row on both sides, or eta-expand a freshly built function, `(s => f s)`"
 
-unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
-unifyVars c1 c2 = if tyvarId c1 == tyvarId c2 then () else bindVar c1 (TVar c2)
+unifyVars : DynCtx -> Ref Tyvar -> Ref Tyvar -> Unit
+unifyVars dyn c1 c2 =
+  if tyvarId c1 == tyvarId c2 then () else bindVar dyn c1 (TVar c2)
 
-bindVar : Ref Tyvar -> Mono -> Unit
-bindVar cell t =
+bindVar : DynCtx -> Ref Tyvar -> Mono -> Unit
+bindVar dyn cell t =
   perRun.value.occursCheckFailed := False
   let _ = occursAdjust (tyvarId cell) (tyvarLevel cell) t
   if perRun.value.occursCheckFailed.value then
@@ -11951,7 +11930,7 @@ bindVar cell t =
     let _ = propagatePoison cell t
     let shaped = takeJoinsShapedBy cell t
     cell := Link t
-    settleShapedJoins shaped
+    settleShapedJoins dyn shaped
 
 -- A recorded join whose result a unification is shaping is decided by that
 -- use, as it was before joins were delayed: once the result has its shape,
@@ -11959,7 +11938,9 @@ bindVar cell t =
 -- it later would let the use first relate a row the alternatives then share
 -- to a closed row, which a caller-supplied row can meet only by equality.
 -- Linking the result to another variable shapes nothing.  The common case has
--- nothing recorded and costs one emptiness test.
+-- nothing recorded and costs one emptiness test.  The join is settled in the
+-- context of the unification that shaped it, under the construct it was
+-- recorded for (`PendingJoin`).
 takeJoinsShapedBy : Ref Tyvar -> Mono -> List PendingJoin
 takeJoinsShapedBy cell t = match perRun.value.pendingJoinsRef.value
   [] => []
@@ -11980,13 +11961,14 @@ joinResultIs id pj = match normalize pj.pjResult
   TVar c => tyvarId c == id
   _ => False
 
-settleShapedJoins : List PendingJoin -> Unit
-settleShapedJoins [] = ()
-settleShapedJoins shaped =
+settleShapedJoins : DynCtx -> List PendingJoin -> Unit
+settleShapedJoins _ [] = ()
+settleShapedJoins dyn shaped =
   fold
     (_ pj =>
       fold
-        (_ (loc, value) => pj.pjOps.vjoEqual loc pj.pjResult value)
+        (_ (loc, value) =>
+          joinValueEqual dyn pj.pjContext loc pj.pjResult value)
         ()
         pj.pjValues)
     ()
@@ -12013,25 +11995,25 @@ poisonMismatchVars a b =
     monoUnboundIds a ++ monoUnboundIds b ++ perRun.value.poisonedVars.value
   perRun.value.poisonedVars := poisoned
 
-typeMismatch : Mono -> Mono -> Unit
-typeMismatch a b =
+typeMismatch : DynCtx -> Mono -> Mono -> Unit
+typeMismatch dyn a b =
   let _ = poisonMismatchVars a b
-  typeMismatchReport a b
+  typeMismatchReport dyn a b
 
-typeMismatchReport : Mono -> Mono -> Unit
-typeMismatchReport a b = match !currentMethodMismatch
+typeMismatchReport : DynCtx -> Mono -> Mono -> Unit
+typeMismatchReport dyn a b = match !currentMethodMismatch
   Some mname =>
     pushTypeError
       "T-METHOD-MISMATCH"
       "method `\{mname}` has type \{ppMono b} but its interface declares \{ppMono a}"
-  None => typeMismatchReportJoin a b
+  None => typeMismatchReportJoin dyn a b
 
 -- A mismatch inside the join of an `if` with no `else` branch is that `if`'s
 -- missing branch: the branch is `()`, so the `then` branch must be Unit too.
 -- Outside a do-lowered chain, a variable applied to arguments against a type
 -- with no application to fill it names the interface that variable stands for.
-typeMismatchReportJoin : Mono -> Mono -> Unit
-typeMismatchReportJoin a b = match !currentJoinContext
+typeMismatchReportJoin : DynCtx -> Mono -> Mono -> Unit
+typeMismatchReportJoin dyn a b = match dyn.dcJoin
   Some JoinElselessIf =>
     pushTypeErrorHelpFixAt
       "T-TYPE-MISMATCH"
@@ -14411,12 +14393,12 @@ restAtoms [] = []
 restAtoms (_ :: rest) = rest
 
 lookupBinding : TcEnv -> String -> Option EnvBinding
-lookupBinding (TcEnv vs _ _ _) n = omLookup n vs
+lookupBinding env n = omLookup n env.teVars
 
 lookupVar : TcEnv -> String -> Option Scheme
-lookupVar (TcEnv vs cs _ _) n = match omLookup n vs
+lookupVar env n = match omLookup n env.teVars
   Some binding => Some binding.ebValue.vsScheme
-  None => omLookup n cs
+  None => omLookup n env.teCtors
 
 lookupMethodRow : TcEnv -> String -> Option MethodSchemeRow
 lookupMethodRow env n = match lookupBinding env n
@@ -14424,19 +14406,19 @@ lookupMethodRow env n = match lookupBinding env n
   None => None
 
 lookupCtor : TcEnv -> String -> Option Scheme
-lookupCtor (TcEnv _ cs _ _) n = omLookup n cs
+lookupCtor env n = omLookup n env.teCtors
 
 extendVar : TcEnv -> String -> Scheme -> TcEnv
-extendVar (TcEnv vs cs al lc) n s =
-  TcEnv (omInsert n (ordinaryEnvBinding s) vs) cs al lc
+extendVar env n s =
+  { env | teVars = omInsert n (ordinaryEnvBinding s) env.teVars }
 
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 extendVars env [] = env
 extendVars env ((n, s) :: rest) = extendVars (extendVar env n s) rest
 
 extendMethodRow : TcEnv -> String -> MethodSchemeRow -> TcEnv
-extendMethodRow (TcEnv vs cs al lc) n row =
-  TcEnv (omInsert n (methodEnvBinding row) vs) cs al lc
+extendMethodRow env n row =
+  { env | teVars = omInsert n (methodEnvBinding row) env.teVars }
 
 extendMethodRows : TcEnv -> List MethodSchemeRow -> TcEnv
 extendMethodRows env [] = env
@@ -14450,8 +14432,8 @@ extendMethodRows env (row :: rest) =
 
 extendBindings : TcEnv -> List (String, EnvBinding) -> TcEnv
 extendBindings env [] = env
-extendBindings (TcEnv vs cs al lc) ((n, binding) :: rest) =
-  extendBindings (TcEnv (omInsert n binding vs) cs al lc) rest
+extendBindings env ((n, binding) :: rest) =
+  extendBindings { env | teVars = omInsert n binding env.teVars } rest
 
 -- A selected standalone is a term binding, even when a method is also visible
 -- under its spelling. Keep both descriptors in the lexical environment. A local
@@ -14567,12 +14549,11 @@ attachStandaloneSources sources bindings =
 -- A local binder shadows the α-let entry of its name: the abstraction reads
 -- a name by its binding, never by a spelling an outer let happens to share.
 extendLocalVar : TcEnv -> String -> Scheme -> TcEnv
-extendLocalVar (TcEnv vs cs al lc) n s =
-  TcEnv
-    (omInsert n (ordinaryEnvBinding s) vs)
-    cs
-    ((n, AParam) :: al)
-    (omInsert n True lc)
+extendLocalVar env n s = { env |
+  teVars = omInsert n (ordinaryEnvBinding s) env.teVars,
+  teAlphaLets = (n, AParam) :: env.teAlphaLets,
+  teIsLocal = omInsert n True env.teIsLocal,
+}
 
 extendLocalVars : TcEnv -> List (String, Scheme) -> TcEnv
 extendLocalVars env [] = env
@@ -14582,26 +14563,33 @@ extendLocalVars env ((n, s) :: rest) =
 -- #837 incr2: is `n` currently bound as a BODY-LOCAL binding?  Presence in the
 -- is-local map means local (only `extendLocalVar[s]` insert, always True).
 lookupLocalFlag : TcEnv -> String -> Bool
-lookupLocalFlag (TcEnv _ _ _ lc) n = omHasKey n lc
+lookupLocalFlag env n = omHasKey n env.teIsLocal
 
 addCtor : TcEnv -> String -> Scheme -> TcEnv
-addCtor (TcEnv vs cs al lc) n s = TcEnv vs (omInsert n s cs) al lc
+addCtor env n s = { env | teCtors = omInsert n s env.teCtors }
 
 -- An environment holding the constructors [cs] and nothing else.
 withCtors : OrdMap Scheme -> TcEnv
-withCtors cs = TcEnv omEmpty cs [] omEmpty
+withCtors cs = TcEnv {
+  teVars = omEmpty,
+  teCtors = cs,
+  teAlphaLets = [],
+  teIsLocal = omEmpty,
+  teDyn = noDyn,
+}
 
 envCtors : TcEnv -> OrdMap Scheme
-envCtors (TcEnv _ cs _ _) = cs
+envCtors env = env.teCtors
 
 -- EFFECTS WS-2: seed α's known-prefix scope with a same-function-body let RHS.
 -- Prepended (most-recent-first) to mirror α's own `(x,e1)::lets` accumulation.
 seedAlphaLets : TcEnv -> String -> Expr -> TcEnv
-seedAlphaLets (TcEnv vs cs al lc) n rhs = TcEnv vs cs ((n, ALet rhs) :: al) lc
+seedAlphaLets env n rhs =
+  { env | teAlphaLets = (n, ALet rhs) :: env.teAlphaLets }
 
 -- read the accumulated α-let scope (for the hole-fill site)
 envAlphaLets : TcEnv -> List (String, AlphaBinder)
-envAlphaLets (TcEnv _ _ al _) = al
+envAlphaLets env = env.teAlphaLets
 
 monoScheme : Mono -> Scheme
 monoScheme t = Forall [] [] [] [] pureRow t
@@ -15193,7 +15181,15 @@ inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef inner
           let omitted = methodOmittedVars name
           let _ = recordMethodObligationGuarded env name s occurrence omitted
           let _ =
-            recordArgStamp name tagRef implRef innerRef idx occurrence omitted
+            recordArgStamp
+              env.teDyn.dcSuppressArgStamp
+              name
+              tagRef
+              implRef
+              innerRef
+              idx
+              occurrence
+              omitted
           let _ = recordArgSiteFn name idx occurrence
           occurrence
         None =>
@@ -15237,7 +15233,7 @@ inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef inner
 -- shadowStandaloneDictSlotsAt.
 recordRLocalSite : TcEnv -> String -> Ref Route -> Ref Inner -> Mono -> Unit
 recordRLocalSite env name tagRef innerRef inst
-  | toggles.value.suppressRLocalRecord.value = ()
+  | env.teDyn.dcSuppressRLocalRecord = ()
   -- #1430 (S2, row 39): a RETURN-POSITION method has NO dispatch argument, so
   -- `methodDispatchIdx` answers None and every arm below declined — no pending site, no
   -- route stamp, and the occurrence kept the method's dispatching route while
@@ -20694,8 +20690,8 @@ unifyIntoN _ True (TVar cell) (lower@(TQual _ _)) = bindValueUpper cell lower
 unifyIntoN _ False (lower@(TQual _ _)) (TVar cell) = bindValueUpper cell lower
 -- A flexible slot the qualified value flows OUT OF keeps the qualifier as it
 -- is, so a composed or partially applied function still names its authority.
-unifyIntoN _ _ (TVar cell) (t@(TQual _ _)) = bindVar cell t
-unifyIntoN _ _ (t@(TQual _ _)) (TVar cell) = bindVar cell t
+unifyIntoN _ _ (TVar cell) (t@(TQual _ _)) = bindVar noDyn cell t
+unifyIntoN _ _ (t@(TQual _ _)) (TVar cell) = bindVar noDyn cell t
 -- Qualified into qualified: the flowing side's authority must be within the
 -- receiving side's.  Qualified into plain forgets; plain into qualified can
 -- only be admitted when the qualifier admits the domain's top, since nothing
@@ -20734,12 +20730,13 @@ bindValueUpper cell lower =
     let upper =
       optionOrFresh
         (joinProducedEnvelope (valueJoinOps
+          noDyn
           JoinArgument
           collectValueAllowance) [
           (!currentLoc, lower),
         ])
     let _ = recordFileValueFlow !currentLoc upper lower
-    bindVar cell upper
+    bindVar noDyn cell upper
 
 collectValueAllowance : List EffRow -> EffRow
 collectValueAllowance rows =
@@ -20767,10 +20764,10 @@ rowInto True (EffRow le None) (EffRow la None) =
 rowInto False (EffRow le None) (EffRow la None) =
   contraRowCheck (atomsEscape le la) le la
 rowInto True (er@(EffRow le _)) (ar@(EffRow la None)) =
-  if isEmptyL (atomsEscape la le) then () else unifyRowN er ar
+  if isEmptyL (atomsEscape la le) then () else unifyRowN noDyn er ar
 rowInto False (er@(EffRow le None)) (ar@(EffRow la _)) =
-  if isEmptyL (atomsEscape le la) then () else unifyRowN er ar
-rowInto _ er ar = unifyRowN er ar
+  if isEmptyL (atomsEscape le la) then () else unifyRowN noDyn er ar
+rowInto _ er ar = unifyRowN noDyn er ar
 
 -- the contravariant half of `rowInto`: the expected PARAMETER row [le] admits
 -- atoms the actual's parameter row [la] does not, so a caller could hand the
@@ -21134,21 +21131,18 @@ inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
       r
     None => inferApp env (EApp f x) (inferShadowAppHead env f) tx
 
--- #411: infer an IMPORTER-shadow application's head with shadowHeadCtxRef flagged, so
+-- #411: infer an IMPORTER-shadow application's head with `dcShadowHeadCtx` set, so
 -- maybeStandaloneValueMono's new importer arm does not pin an APPLIED occurrence to the
 -- standalone scheme (which would kill per-receiver dispatch — Fork 1 / i4).  The definer
--- path has always bracketed its head this way (inferDefinerShadowApp); this is the peer
+-- path has always typed its head this way (inferDefinerShadowApp); this is the peer
 -- the importer path was missing, and the reason it could be missing before is that
 -- nothing pinned importer value positions at all — which IS the #411 bug.
--- Save/restore, not set-False: a nested shadow head inside [f] must not clobber an outer
--- True on its way out (see inferDefinerShadowApp's bracket).
 inferShadowAppHead : TcEnv -> Expr -> Mono
-inferShadowAppHead env f =
-  let saved = toggles.value.shadowHeadCtxRef.value
-  toggles.value.shadowHeadCtxRef := True
-  let ft = infer env f
-  toggles.value.shadowHeadCtxRef := saved
-  ft
+inferShadowAppHead env f = infer (shadowHeadEnv env) f
+
+-- [env] for typing a shadow occurrence that heads its own application.
+shadowHeadEnv : TcEnv -> TcEnv
+shadowHeadEnv env = { env | teDyn = { env.teDyn | dcShadowHeadCtx = True } }
 
 -- #2154: the spine-generalized twin of inferShadowApp — the peer of
 -- inferDefinerShadowAppAt for the IMPORTER path.  [hd] is the spine's ultimate head
@@ -21407,7 +21401,7 @@ importerShadowOnEmitPath name tagRef =
 -- ACTUAL argument mono (`Box`) as this site's receiver so resolveRLocalSite routes
 -- per-receiver: a receiver head WITH an impl of the shadowed interface dispatches to
 -- the method (route left untouched → eval arg-tag / emit RKey), one WITHOUT an impl
--- stays the standalone (RLocal).  suppressRLocalRecord stops recordRLocalSite from
+-- stays the standalone (RLocal).  dcSuppressRLocalRecord stops recordRLocalSite from
 -- ALSO pushing the standalone's declared domain (which would mis-route `Box`→`Int`).
 inferDefinerShadowApp : TcEnv ->
   String ->
@@ -21487,17 +21481,16 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
         let cell = methodCellOf ev
         cell.ecIface := admittedIfaceWord name
       None => ()
-  -- #158 PR4: SAVE/RESTORE the three toggles around the head computation (restore to the
-  -- saved value, NOT unconditional False) so a nested definer-shadow head re-entering this
-  -- bracket inside `ft` cannot clobber an outer True on its way out.
-  let savedRLocal = toggles.value.suppressRLocalRecord.value
-  let savedArgStamp = toggles.value.suppressArgStamp.value
-  let savedShadowHead = toggles.value.shadowHeadCtxRef.value
-  toggles.value.suppressRLocalRecord := True
-  toggles.value.suppressArgStamp := True
-  -- P0-19 d4b: this is an application head (marked EMethodAt on run/build) → keep the
-  -- method scheme for per-receiver dispatch; suppress the value-position standalone pin.
-  toggles.value.shadowHeadCtxRef := True
+  -- The head is typed in `headEnv`: the two default pushes are suppressed, and, as an
+  -- application head (marked EMethodAt on run/build, P0-19 d4b), it keeps the method
+  -- scheme for per-receiver dispatch rather than the value-position standalone pin.
+  let headEnv = { env |
+    teDyn = { env.teDyn |
+      dcSuppressRLocalRecord = True,
+      dcSuppressArgStamp = True,
+      dcShadowHeadCtx = True,
+    },
+  }
   -- P0-18: for the STANDALONE arm, type the head against the STANDALONE scheme.  On the
   -- un-mangled run/check path `infer env f` already resolves the bare name to the
   -- standalone (which shadows the method in scope).  On the EMIT path the bare name
@@ -21518,19 +21511,16 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
     if dispatches then
       None
     else
-      standaloneOccurrence env name sym (orElseLoc (appSpineHeadLoc f) dloc)
+      standaloneOccurrence headEnv name sym (orElseLoc (appSpineHeadLoc f) dloc)
   let ft =
     if dispatches then
-      shadowVarHeadMethodScheme env name hd
+      shadowVarHeadMethodScheme headEnv name hd
     else match selected
       Some occurrence =>
         let _ = recordStandaloneAt name hd occurrence
         occurrence.svoInstance.mtiBody
-      None => infer env hd
+      None => infer headEnv hd
   arityRef := Some (funArity ft)
-  toggles.value.shadowHeadCtxRef := savedShadowHead
-  toggles.value.suppressRLocalRecord := savedRLocal
-  toggles.value.suppressArgStamp := savedArgStamp
   -- S-1: on the STANDALONE arm ONLY, compute that standalone's own `=>`-constraint
   -- dicts (and record its call obligations).  The DISPATCH arm typed `ft` against the
   -- interface METHOD scheme, whose dicts are the method's, not the standalone's — asking
@@ -21832,7 +21822,7 @@ standaloneShadowDomainAt name k =
     Some ty => nthFunDomain k (instantiate (sigToScheme ty))
 
 -- P0-19 d4b (S4): a definer-shadow occurrence in bare VALUE position (NOT the head of
--- its own application — shadowHeadCtxRef is False) denotes the STANDALONE.  Returns the
+-- its own application — dcShadowHeadCtx is False) denotes the STANDALONE.  Returns the
 -- standalone's declared scheme freshly instantiated so a HOF sees `Int -> Int`, not the
 -- permissive method scheme `a -> Int` — making `map size [Box …]` a located reject
 -- (Box vs Int) while `map size [1,2,3]` still accepts.  Only fires for a single-param
@@ -21845,7 +21835,7 @@ standaloneShadowDomainAt name k =
 -- reading the imported standalone's scheme from the lexical binding descriptor
 -- (the same scheme inferShadowApp's standalone arm uses).
 --
--- ⚠️ FORK 1 IS NOT TOUCHED.  This arm is gated on shadowHeadCtxRef = False, i.e. bare
+-- Fork 1 is not touched.  This arm is gated on dcShadowHeadCtx = False, i.e. bare
 -- VALUE position only; every APPLIED importer occurrence goes through inferShadowApp,
 -- which now flags its head (inferShadowAppHead) exactly as the definer path always did.
 -- So per-receiver importer dispatch (i4's `isEmpty [1, 2]` → `Foldable.isEmpty`) is
@@ -21908,7 +21898,7 @@ instantiateStandaloneOccurrence env name sym origin value =
 
 standaloneValueBinding : TcEnv -> String -> Option ValueScheme
 standaloneValueBinding env name
-  | toggles.value.shadowHeadCtxRef.value = None
+  | env.teDyn.dcShadowHeadCtx = None
   | ifaceMethodName name
     && omHasKey name perRun.value.definerShadowNamesRef.value =
     lookupStandaloneValue env name
@@ -21927,7 +21917,7 @@ standaloneValueBinding env name
 -- The scheme is recovered by `standaloneSchemeFor`: an IMPORTER shadow via
 -- its lexical binding descriptor, a DEFINER shadow via the env under that mangled sym — the same
 -- accessor recordRLocalSite already trusts to compute this site's RLocal dicts.  Value-position
--- ONLY (shadowHeadCtxRef False, mirroring maybeStandaloneValueMono's first guard); an
+-- ONLY (dcShadowHeadCtx False, mirroring maybeStandaloneValueMono's first guard); an
 -- application head is bracketed True by inferShadowAppHead / inferDefinerShadowApp and keeps
 -- ordinary per-receiver dispatch.  None (⇒ caller keeps the method scheme) when the route
 -- carries no mangled sym, or when the standalone scheme is unavailable.
@@ -21942,13 +21932,13 @@ standaloneValueBinding env name
 --     emit declined, so `map size [1,2,3]` stamped a null Display element dict and SIGSEGVd).
 --     Safe at multi-typaram width because a DEFINER app head is ALWAYS bracketed: it is caught
 --     by definerShadowArgHead's isDefinerShadow disjunct (typaram-agnostic) →
---     inferDefinerShadowApp, which sets shadowHeadCtxRef True and types the head via
+--     inferDefinerShadowApp, which sets dcShadowHeadCtx True and types the head via
 --     the method scheme or selected standalone occurrence, never inferMethodAt. So the
---     only definer occurrence reaching here with shadowHeadCtxRef False is a genuine value
+--     only definer occurrence reaching here with dcShadowHeadCtx False is a genuine value
 --     position, which is precisely what must ground (d22z is the app-head control).
 --   • otherwise (importer / non-shadow): singleTyparamIfaceMethod is REQUIRED, not incidental.
 --     At MULTI-typaram width the importer app-head path (`get (Box 3) 1`, interface `Ix a i`,
---     i10) uses ORDINARY dispatch, so an app head can reach inferMethodAt with shadowHeadCtxRef
+--     i10) uses ORDINARY dispatch, so an app head can reach inferMethodAt with dcShadowHeadCtx
 --     False AND a mangled route sym — indistinguishable from a value position by those two
 --     signals alone.  The check-path importer arm is singleTyparamIfaceMethod-gated (Fork 1)
 --     for exactly this reason; keeping the guard here leaves i10's per-receiver dispatch
@@ -21967,7 +21957,7 @@ standaloneValueBindingEmit : TcEnv -> String -> Ref Route -> Option ValueScheme
 -- recover a shadow the MANGLER hid; a bare seed hides nothing, and reading one as the
 -- old signal fires this emit-only pin on `check`/`run`.
 standaloneValueBindingEmit env name tagRef
-  | toggles.value.shadowHeadCtxRef.value = None
+  | env.teDyn.dcShadowHeadCtx = None
   | recoveredShadowSym name tagRef == "" = None
   | not (emitValueShadowGate name) = None
   | otherwise = standaloneValueFor env name (recoveredShadowSym name tagRef)
@@ -21985,12 +21975,12 @@ standaloneValueBindingEmit env name tagRef
 --   • DEFINER shadow (isDefinerShadow): admit typaram-agnostically.  Safe at multi-typaram
 --     width because a definer app head is ALWAYS bracketed by inferDefinerShadowApp
 --     (definerShadowArgHead's isDefinerShadow disjunct fires typaram-agnostically), so it
---     reaches standaloneValueBindingEmit with shadowHeadCtxRef True and is declined by that
+--     reaches standaloneValueBindingEmit with dcShadowHeadCtx True and is declined by that
 --     function's first guard — the ONLY definer occurrence reaching the pin with
---     shadowHeadCtxRef False is a genuine value position, which is what must ground.
+--     dcShadowHeadCtx False is a genuine value position, which is what must ground.
 --   • otherwise (importer or non-shadow): keep singleTyparamIfaceMethod — a MULTI-typaram
 --     importer app head (`get (Box 3) 1`, i10) uses ORDINARY dispatch and is NOT bracketed,
---     so it too can reach the pin with shadowHeadCtxRef False and a mangled route sym; the
+--     so it too can reach the pin with dcShadowHeadCtx False and a mangled route sym; the
 --     singleTyparam gate is what keeps it (and its per-receiver dispatch, 4 then 3) intact,
 --     exactly as the check-path importer arm does.
 emitValueShadowGate : String -> Bool
@@ -22165,13 +22155,7 @@ shadowVarHeadMethodScheme env name f = match methodEntryHere name
     forceInstantiation
       name
       (instantiateMethodTracked (fst (sigToSchemeTvsIn scope ty)))
-  None =>
-    -- #158 PR4: save/restore, not set-False (see inferDefinerShadowApp's bracket).
-    let saved = toggles.value.shadowHeadCtxRef.value
-    toggles.value.shadowHeadCtxRef := True
-    let ft = infer env f
-    toggles.value.shadowHeadCtxRef := saved
-    ft
+  None => infer (shadowHeadEnv env) f
 
 -- P0-19 (standalone arm): type the application against the LOCAL standalone scheme so
 -- the result is the standalone's (S2/S5); a domain mismatch (`size "hi"`) or a wrapper
@@ -22200,11 +22184,7 @@ inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc =
       -- `wrap`'s second parameter) and monomorphised the user's written signature.
       unifySpineResult env f occurrence.svoInstance.mtiBody (pre ++ [(x, xt)])
     None =>
-      -- #158 PR4: save/restore, not set-False (see inferDefinerShadowApp's bracket).
-      let saved = toggles.value.shadowHeadCtxRef.value
-      toggles.value.shadowHeadCtxRef := True
-      let ft = infer env hd
-      toggles.value.shadowHeadCtxRef := saved
+      let ft = infer (shadowHeadEnv env) hd
       let _ = enforceStandaloneDomainAt env name xt dloc (listLen pre)
       inferAppNodes env ft (pre ++ [(EApp f x, xt)])
 
@@ -23185,24 +23165,28 @@ joinValueTypes : JoinContext -> List (Option Loc, Mono) -> Mono
 joinValueTypes context values =
   let upper =
     optionOrFresh
-      (joinProduced (valueJoinOps context (collectRows joinCellOf)) values)
+      (joinProduced
+        (valueJoinOps noDyn context (collectRows joinCellOf))
+        values)
   let _ = map ((loc, lower) => recordFileValueFlow loc upper lower) values
   upper
 
-valueJoinOps : JoinContext ->
+valueJoinOps : DynCtx ->
+  JoinContext ->
   (List EffRow -> EffRow) ->
   ValueJoinOps (Option Loc)
-valueJoinOps context collector =
-  let ops = decidingJoinOps context collector
-  { ops | vjoDefer = values => deferJoin ops values }
+valueJoinOps dyn context collector =
+  let ops = decidingJoinOps dyn context collector
+  { ops | vjoDefer = values => deferJoin context collector values }
 
 -- The join services that decide on the spot: resolving a recorded join
 -- must not record it again.
-decidingJoinOps : JoinContext ->
+decidingJoinOps : DynCtx ->
+  JoinContext ->
   (List EffRow -> EffRow) ->
   ValueJoinOps (Option Loc)
-decidingJoinOps context collector = ValueJoinOps {
-  vjoEqual = joinValueEqual context,
+decidingJoinOps dyn context collector = ValueJoinOps {
+  vjoEqual = joinValueEqual dyn context,
   vjoCovariants = producedSlotCovariants,
   vjoFreshType = freshVar,
   vjoFreshRow = openRow,
@@ -23216,8 +23200,11 @@ decidingJoinOps context collector = ValueJoinOps {
 -- are not equated: equality would give both the same latent row before a
 -- later use shapes one of them.  Inside a binding scope the join is recorded
 -- and decided when the scope closes (§6.8); outside one it is decided now.
-deferJoin : ValueJoinOps (Option Loc) -> List (Option Loc, Mono) -> Option Mono
-deferJoin ops values =
+deferJoin : JoinContext ->
+  (List EffRow -> EffRow) ->
+  List (Option Loc, Mono) ->
+  Option Mono
+deferJoin context collector values =
   if EffectSolver.hasSummaryScope perRun.value.effectSummaries
     && distinctVariables values then
     let result = freshVar ()
@@ -23226,7 +23213,8 @@ deferJoin ops values =
           pjResult = result,
           pjValues = values,
           pjLevel = perRun.value.currentLevel.value,
-          pjOps = ops,
+          pjContext = context,
+          pjCollector = collector,
         }
         :: perRun.value.pendingJoinsRef.value
     Some result
@@ -23330,8 +23318,13 @@ lowerPending _ pending = pending
 -- the same way.
 resolvePendingJoin : PendingJoin -> Unit
 resolvePendingJoin pj = match normalize pj.pjResult
-  TVar _ => unify pj.pjResult (resolveDeferredJoin pj.pjOps pj.pjValues)
-  _ => settleShapedJoins [pj]
+  TVar _ =>
+    unify
+      pj.pjResult
+      (resolveDeferredJoin
+        (decidingJoinOps noDyn pj.pjContext pj.pjCollector)
+        pj.pjValues)
+  _ => settleShapedJoins noDyn [pj]
 
 -- A receiving qualified slot's allowance: one flexible variable of the
 -- current scope, bounded below by every value that reaches the slot.
@@ -23360,7 +23353,7 @@ publishProducedResults owned values =
   let produced =
     optionOrFresh
       (joinProducedEnvelope
-        (valueJoinOps JoinClause collectProducedSummary)
+        (valueJoinOps noDyn JoinClause collectProducedSummary)
         results)
   let _ = map ((loc, lower) => recordFileValueFlow loc produced lower) results
   match resultAfterArrows owned.bsArity owned.bsValue
@@ -23375,15 +23368,12 @@ clauseResult arity (loc, value) = match resultAfterArrows arity value
 checkRecursiveValue : BindingSummary -> Unit
 checkRecursiveValue owned = unifyInto True owned.bsRecursiveValue owned.bsValue
 
-joinValueEqual : JoinContext -> Option Loc -> Mono -> Mono -> Unit
-joinValueEqual context loc left right =
+joinValueEqual : DynCtx -> JoinContext -> Option Loc -> Mono -> Mono -> Unit
+joinValueEqual dyn context loc left right =
   let saved = !currentLoc
-  let savedContext = !currentJoinContext
   let _ = setLocIfSome loc
   let _ = noteNumlitCtx left right context
-  currentJoinContext := Some context
-  let _ = unify left right
-  currentJoinContext := savedContext
+  let _ = unifyIn { dyn | dcJoin = Some context } left right
   currentLoc := saved
 
 producedSlotCovariants : Mono -> List Bool
@@ -34425,7 +34415,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   perRun.value.bodyImplEnvRef := driverState.value.declEnvsRef.value.deImpls
   -- (#4 + #3-restore) mode-specific pre-inference ref setup (all pure/independent of the
   -- register+globalS block below, so order-safe).  Flat arms the per-body shadow-scoping
-  -- toggles; Module installs importer-shadow state and restores the cross-module dict
+  -- flags; Module installs importer-shadow state and restores the cross-module dict
   -- accumulators resetState just wiped.
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
   -- lint-disable-next-line rule-prefer-assign-op
@@ -42212,15 +42202,17 @@ freeStmtsEVars bound ((DoFieldAssign _ _ e) :: rest) =
 
 -- builtin constructors available without the prelude (mirrors initial_env)
 initialEnv : TcEnv
-initialEnv =
-  TcEnv
-    omEmpty
-    (omInsert
+initialEnv = TcEnv {
+  teVars = omEmpty,
+  teCtors =
+    omInsert
       "True"
       (monoScheme (tconBuiltin "Bool"))
-      (omInsert "False" (monoScheme (tconBuiltin "Bool")) omEmpty))
-    []
-    omEmpty
+      (omInsert "False" (monoScheme (tconBuiltin "Bool")) omEmpty),
+  teAlphaLets = [],
+  teIsLocal = omEmpty,
+  teDyn = noDyn,
+}
 
 -- ⚠️ S0-3: THE POLARITY PRE-SEED RUNS HERE, ONCE PER CALL, AND THIS IS THE
 -- REASON THE FOLD MOVED INTO A `…Go` HELPER.  `registerData` →
@@ -53705,7 +53697,6 @@ stampCtxOf : String ->
 stampCtxOf mid implDecls goals numlits = StampCtx {
   scModule = mid,
   scPerRun = perRun.value,
-  scToggles = toggles.value,
   scSuperDecls = filterList isInterfaceDecl implDecls,
   scRpNames = returnPosMethodNames implDecls,
   scGoals = goals,
@@ -53878,7 +53869,6 @@ drainStampQueue : Unit -> List DrainFinding
 drainStampQueue _ =
   let ctxs = reverseL graphRun.value.stampCtxs.value
   let savedPerRun = perRun.value
-  let savedToggles = toggles.value
   let savedModule = driverState.value.currentModuleRef.value
   let savedSupers = driverState.value.superDeclsRef.value
   let _ = defaultLiveNumRoots ()
@@ -53897,7 +53887,6 @@ drainStampQueue _ =
   let _ = materializeBinderTypes ()
   graphRun.value.stampCtxs := []
   perRun := savedPerRun
-  toggles := savedToggles
   driverState.value.currentModuleRef := savedModule
   driverState.value.superDeclsRef := savedSupers
   held ++ verdicts ++ holes
@@ -54086,7 +54075,6 @@ runStampCtx ctx =
 enterStampCtx : StampCtx -> Unit
 enterStampCtx ctx =
   perRun := ctx.scPerRun
-  toggles := ctx.scToggles
   -- Deferred goals select their `gGiven` bucket from their captured scope frames;
   -- `currentModuleRef` remains the legacy routing context, and `superDeclsRef` is
   -- the interface decls of the universe `graphModuleWorker` set for this module
@@ -54427,7 +54415,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "effect_solver") ((mem "SummaryFailure" false) (mem "ScopeOutcome" true) (mem "ScopeRoles" true) (mem "noScopeRoles" false))))
 (DUse false (UseGroup ("types" "effect_values") ((mem "ValueJoinOps" true) (mem "joinProduced" false) (mem "joinProducedEnvelope" false) (mem "producedInputTypes" false) (mem "resolveDeferredJoin" false))))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" true) (mem "Variance" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "ObligationSite" true) (mem "RecordInfo" true) (mem "Kind" true) (mem "Polarity" true) (mem "SiteKind" true) (mem "PendingEntry" true) (mem "GoalKind" true) (mem "EvDest" true) (mem "GoalPayload" true) (mem "Obligation" true) (mem "Toggles" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "DeclEnvAcc" true) (mem "DeclEnvSeedAcc" true) (mem "DataTypeDecl" true) (mem "AliasDecl" true) (mem "DataEnv" true) (mem "InstRef" true) (mem "ImplRow" true) (mem "ImplEnv" true) (mem "ImplAcc" true) (mem "CeRow" true) (mem "ClassEnv" true) (mem "MethodEntry" false) (mem "MethodRow" true) (mem "MethodEnv" true) (mem "MethodScope" true) (mem "DriverState" true) (mem "Windowed" true) (mem "CSlot" true) (mem "PredicateSlotArgs" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "MethodPredicateSlot" true) (mem "MethodPredicateTemplate" true) (mem "MethodSchemeRow" true) (mem "MethodInstantiationSubst" true) (mem "MethodTrackedInstantiation" true) (mem "MethodReturnResolution" true) (mem "MethodReturnRequest" true) (mem "NumAnchorTestObservation" true) (mem "MethodRowTestObservation" true) (mem "CDeclaredPrefix" true) (mem "CDeclared" true) (mem "ShadowDicts" true) (mem "Predicate" true) (mem "Provenance" true) (mem "OblProjection" true) (mem "UObligation" true) (mem "AbsorptionEvent" true) (mem "PendingDictApp" true) (mem "PendingMethodDict" true) (mem "CrossRun" true) (mem "RecDictApp" true) (mem "JoinContext" true) (mem "GraphMarks" true) (mem "AssumptionTraceKind" true) (mem "AssumptionTraceEntry" true) (mem "NumericPredicateTraceStage" true) (mem "NumericPredicateTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnMemoView" true) (mem "EvidenceOutcomeKind" true) (mem "EvidenceObservationEntry" true) (mem "AssumAnswer" true) (mem "GivenEntry" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "EvCell" true) (mem "SiteCell" true) (mem "GraphRun" true) (mem "PendingBinder" true) (mem "GivenScope" true) (mem "PendingJoin" true) (mem "PerRun" true) (mem "ReqWalk" true) (mem "WalkMemo" true) (mem "SolvedGoalEntry" true) (mem "RouteWalkEntry" true) (mem "ReqStep" true) (mem "InvocationView" true) (mem "SigVars" true) (mem "StandaloneOrigin" true) (mem "ValueScheme" true) (mem "EnvBinding" true) (mem "TcEnv" true) (mem "LocalAbs" true) (mem "LocalAbsState" true) (mem "GrantBinder" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "GrantCallee" true) (mem "GrantState" true) (mem "CtorFieldConflict" true) (mem "BuiltinClass" true) (mem "BuiltinClasses" true) (mem "AdmittedAnswer" true) (mem "SelectedValueOccurrence" true) (mem "ExistentialScope" true) (mem "RecordSubst" true) (mem "NumBoundaryDisposition" true) (mem "NumBoundary" true) (mem "NumGuard" true) (mem "ArmedGuard" true) (mem "ArgRw" true) (mem "AdmittedVerdict" true) (mem "MethodTemplateGivenResult" true) (mem "CohImpl" true) (mem "MStep" true) (mem "CohScan" true) (mem "CohSweep" true) (mem "KeyEntry" true) (mem "Undetermined" true) (mem "EntailKind" true) (mem "MethodGrantUse" true) (mem "ImplUniverse" true) (mem "GoalReach" true) (mem "LiveGoal" true) (mem "GoalWindow" true) (mem "DeclaringBinder" true) (mem "SuperGoalEntry" true) (mem "ScopedImplMethod" true) (mem "MethodBodyKind" true) (mem "ImplBodySite" true) (mem "MethodBodyInstance" true) (mem "MethodBodyCheck" true) (mem "HeadVarRoot" true) (mem "ScopedMember" true) (mem "ConstraintReg" true) (mem "ScopedScheme" true) (mem "BindingRole" true) (mem "ModuleBindings" true) (mem "ExportBinding" true) (mem "ModuleSeed" true) (mem "CoreCheckMemo" true) (mem "PreludePreamble" true) (mem "GraphOut" true) (mem "ChainStep" true) (mem "ChainMemo" true) (mem "GraphDrive" true) (mem "ElabResult" false) (mem "MarkCtx" true) (mem "SpellCtx" true) (mem "BareLocals" true) (mem "StampStep" true) (mem "StampCtx" true) (mem "DrainFinding" true) (mem "MarkSets" true) (mem "PreludeMarkFacts" true) (mem "ModuleMarking" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "ObligationSite" true) (mem "RecordInfo" true) (mem "Kind" true) (mem "Polarity" true) (mem "SiteKind" true) (mem "PendingEntry" true) (mem "GoalKind" true) (mem "EvDest" true) (mem "GoalPayload" true) (mem "Obligation" true) (mem "DynCtx" true) (mem "noDyn" false) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "DeclEnvAcc" true) (mem "DeclEnvSeedAcc" true) (mem "DataTypeDecl" true) (mem "AliasDecl" true) (mem "DataEnv" true) (mem "InstRef" true) (mem "ImplRow" true) (mem "ImplEnv" true) (mem "ImplAcc" true) (mem "CeRow" true) (mem "ClassEnv" true) (mem "MethodEntry" false) (mem "MethodRow" true) (mem "MethodEnv" true) (mem "MethodScope" true) (mem "DriverState" true) (mem "Windowed" true) (mem "CSlot" true) (mem "PredicateSlotArgs" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "MethodPredicateSlot" true) (mem "MethodPredicateTemplate" true) (mem "MethodSchemeRow" true) (mem "MethodInstantiationSubst" true) (mem "MethodTrackedInstantiation" true) (mem "MethodReturnResolution" true) (mem "MethodReturnRequest" true) (mem "NumAnchorTestObservation" true) (mem "MethodRowTestObservation" true) (mem "CDeclaredPrefix" true) (mem "CDeclared" true) (mem "ShadowDicts" true) (mem "Predicate" true) (mem "Provenance" true) (mem "OblProjection" true) (mem "UObligation" true) (mem "AbsorptionEvent" true) (mem "PendingDictApp" true) (mem "PendingMethodDict" true) (mem "CrossRun" true) (mem "RecDictApp" true) (mem "JoinContext" true) (mem "GraphMarks" true) (mem "AssumptionTraceKind" true) (mem "AssumptionTraceEntry" true) (mem "NumericPredicateTraceStage" true) (mem "NumericPredicateTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnMemoView" true) (mem "EvidenceOutcomeKind" true) (mem "EvidenceObservationEntry" true) (mem "AssumAnswer" true) (mem "GivenEntry" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "EvCell" true) (mem "SiteCell" true) (mem "GraphRun" true) (mem "PendingBinder" true) (mem "GivenScope" true) (mem "PendingJoin" true) (mem "PerRun" true) (mem "ReqWalk" true) (mem "WalkMemo" true) (mem "SolvedGoalEntry" true) (mem "RouteWalkEntry" true) (mem "ReqStep" true) (mem "InvocationView" true) (mem "SigVars" true) (mem "StandaloneOrigin" true) (mem "ValueScheme" true) (mem "EnvBinding" true) (mem "TcEnv" true) (mem "LocalAbs" true) (mem "LocalAbsState" true) (mem "GrantBinder" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "GrantCallee" true) (mem "GrantState" true) (mem "CtorFieldConflict" true) (mem "BuiltinClass" true) (mem "BuiltinClasses" true) (mem "AdmittedAnswer" true) (mem "SelectedValueOccurrence" true) (mem "ExistentialScope" true) (mem "RecordSubst" true) (mem "NumBoundaryDisposition" true) (mem "NumBoundary" true) (mem "NumGuard" true) (mem "ArmedGuard" true) (mem "ArgRw" true) (mem "AdmittedVerdict" true) (mem "MethodTemplateGivenResult" true) (mem "CohImpl" true) (mem "MStep" true) (mem "CohScan" true) (mem "CohSweep" true) (mem "KeyEntry" true) (mem "Undetermined" true) (mem "EntailKind" true) (mem "MethodGrantUse" true) (mem "ImplUniverse" true) (mem "GoalReach" true) (mem "LiveGoal" true) (mem "GoalWindow" true) (mem "DeclaringBinder" true) (mem "SuperGoalEntry" true) (mem "ScopedImplMethod" true) (mem "MethodBodyKind" true) (mem "ImplBodySite" true) (mem "MethodBodyInstance" true) (mem "MethodBodyCheck" true) (mem "HeadVarRoot" true) (mem "ScopedMember" true) (mem "ConstraintReg" true) (mem "ScopedScheme" true) (mem "BindingRole" true) (mem "ModuleBindings" true) (mem "ExportBinding" true) (mem "ModuleSeed" true) (mem "CoreCheckMemo" true) (mem "PreludePreamble" true) (mem "GraphOut" true) (mem "ChainStep" true) (mem "ChainMemo" true) (mem "GraphDrive" true) (mem "ElabResult" false) (mem "MarkCtx" true) (mem "SpellCtx" true) (mem "BareLocals" true) (mem "StampStep" true) (mem "StampCtx" true) (mem "DrainFinding" true) (mem "MarkSets" true) (mem "PreludeMarkFacts" true) (mem "ModuleMarking" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "goalIdForDestination" false) (mem "PrerequisiteEvidence" true) (mem "RequestInstanceId" true) (mem "ScopeId" true) (mem "SolverEvidence" true) (mem "SuperEvidence" true))))
@@ -54643,10 +54631,10 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "substituteIndexLinked" ((PVar "cell") (PVar "term")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "lowerAuthLevels") (EApp (EVar "authvarLevel") (EVar "cell"))) (EVar "term"))) (DoLet false false PWild (EIf (EApp (EVar "authHasVars") (EVar "term")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "indexSubstitutedRef")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "indexSubstitutedRef") "value"))))) (DoExpr (EApp (EApp (EVar "linkAuthvar") (EVar "cell")) (EVar "term")))))
 (DTypeSig false "flexibleIndex" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyCon "Bool"))))
 (DFunDef false "flexibleIndex" ((PVar "cell") (PVar "other")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value"))) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "c")) (EBinOp "==" (EApp (EVar "authvarId") (EVar "c")) (EApp (EVar "authvarId") (EVar "cell"))))) (EApp (EVar "authVars") (EVar "other"))))))
-(DTypeSig false "unifyRow" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyRow" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyRowN") (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
-(DTypeSig false "unifyRowN" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyRowN" ((PVar "r1") (PVar "r2")) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EVar "r1")) (EApp (EVar "rowHasSummary") (EVar "r2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "r2")) (EVar "r1")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "rowTailIsJoin") (EVar "r1")) (EApp (EVar "rowTailIsJoin") (EVar "r2"))) (EApp (EVar "rowHasRigid") (EVar "r1"))) (EApp (EVar "rowHasRigid") (EVar "r2"))) (EApp (EApp (EApp (EVar "unifyJoinRows") (EVar "False")) (EVar "r1")) (EVar "r2")) (EApp (EApp (EVar "unifyRowPlain") (EVar "r1")) (EVar "r2")))))
+(DTypeSig false "unifyRow" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyRow" ((PVar "dyn") (PVar "r1") (PVar "r2")) (EApp (EApp (EApp (EVar "unifyRowN") (EVar "dyn")) (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
+(DTypeSig false "unifyRowN" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyRowN" ((PVar "dyn") (PVar "r1") (PVar "r2")) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EVar "r1")) (EApp (EVar "rowHasSummary") (EVar "r2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "r2")) (EVar "r1")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "rowTailIsJoin") (EVar "r1")) (EApp (EVar "rowTailIsJoin") (EVar "r2"))) (EApp (EVar "rowHasRigid") (EVar "r1"))) (EApp (EVar "rowHasRigid") (EVar "r2"))) (EApp (EApp (EApp (EVar "unifyJoinRows") (EVar "False")) (EVar "r1")) (EVar "r2")) (EApp (EApp (EApp (EVar "unifyRowPlain") (EVar "dyn")) (EVar "r1")) (EVar "r2")))))
 (DTypeSig false "rowHasRigid" (TyFun (TyCon "EffRow") (TyCon "Bool")))
 (DFunDef false "rowHasRigid" ((PVar "row")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef") "value") (arm (PCon "Tip") () (EVar "False")) (arm PWild () (EApp (EApp (EVar "anyList") (EVar "isRigidCell")) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EVar "row")))))))
 (DTypeSig false "rowTailIsJoin" (TyFun (TyCon "EffRow") (TyCon "Bool")))
@@ -54674,23 +54662,23 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "renderAtomsOrEmpty" ((PVar "ls")) (EApp (EVar "renderAtoms") (EVar "ls")))
 (DTypeSig false "joinMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "joinMismatchMsg" ((PVar "a") (PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "effect rows ")) (EApp (EVar "display") (EVar "a"))) (ELit (LString " and "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString " cannot be made equal: each carries an effect variable the other has no room for; keep the method's effect variables distinct, or join them in the result index, `f (e | e2) b`"))))
-(DTypeSig false "unifyRowPlain" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EIf (EBinOp "==" (EApp (EVar "effvarId") (EVar "v1")) (EApp (EVar "effvarId") (EVar "v2"))) (EBlock (DoLet false false (PVar "missing") (EApp (EApp (EVar "atomsUnion") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1")))) (DoExpr (EMatch (EVar "missing") (arm (PList) () (ELit LUnit)) (arm PWild () (EIf (EApp (EVar "isRigidCell") (EVar "v1")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LAUNDER"))) (EBinOp "++" (EBinOp "++" (ELit (LString "a caller-chosen effect row cannot be required to contain <")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">; declare those effects as labels beside the row variable")))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "freshEffvarAt") (EApp (EVar "effvarLevel") (EVar "v1")))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EVar "missing")) (EApp (EVar "Some") (EVar "next"))))) (DoExpr (EApp (EApp (EVar "recordAbsorptions") (EVar "missing")) (EVar "next"))))))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "v3") (EApp (EVar "freshEffvarAt") (EApp (EApp (EVar "minI") (EApp (EVar "effvarLevel") (EVar "v1"))) (EApp (EVar "effvarLevel") (EVar "v2"))))) (DoLet false false (PVar "d21") (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (DoLet false false (PVar "d12") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (DoLet false false PWild (EIf (EBinOp "||" (EApp (EVar "isRigidCell") (EVar "v1")) (EApp (EVar "isRigidCell") (EVar "v2"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "effvarId") (EVar "v3"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef") "value"))) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EVar "d21")) (EApp (EVar "Some") (EVar "v3"))))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v2")) (EApp (EApp (EVar "EffRow") (EVar "d12")) (EApp (EVar "Some") (EVar "v3"))))) (DoExpr (EApp (EApp (EVar "recordAbsorptions") (EBinOp "++" (EVar "d21") (EVar "d12"))) (EVar "v3")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "unifyRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l1")) (EVar "l2"))) (EVar "l2"))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "None"))))))
-(DFunDef false "unifyRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l2")) (EVar "l1"))) (EVar "l1"))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v2")) (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EVar "None"))))))
-(DFunDef false "unifyRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EVar "closedRowEqCheck") (EVar "l1")) (EVar "l2")))
-(DTypeSig false "unifyIndexRow" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyIndexRow" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyIndexRowN") (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
+(DTypeSig false "unifyRowPlain" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EIf (EBinOp "==" (EApp (EVar "effvarId") (EVar "v1")) (EApp (EVar "effvarId") (EVar "v2"))) (EBlock (DoLet false false (PVar "missing") (EApp (EApp (EVar "atomsUnion") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1")))) (DoExpr (EMatch (EVar "missing") (arm (PList) () (ELit LUnit)) (arm PWild () (EIf (EApp (EVar "isRigidCell") (EVar "v1")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LAUNDER"))) (EBinOp "++" (EBinOp "++" (ELit (LString "a caller-chosen effect row cannot be required to contain <")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">; declare those effects as labels beside the row variable")))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "freshEffvarAt") (EApp (EVar "effvarLevel") (EVar "v1")))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EVar "missing")) (EApp (EVar "Some") (EVar "next"))))) (DoExpr (EApp (EApp (EVar "recordAbsorptions") (EVar "missing")) (EVar "next"))))))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "v3") (EApp (EVar "freshEffvarAt") (EApp (EApp (EVar "minI") (EApp (EVar "effvarLevel") (EVar "v1"))) (EApp (EVar "effvarLevel") (EVar "v2"))))) (DoLet false false (PVar "d21") (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (DoLet false false (PVar "d12") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (DoLet false false PWild (EIf (EBinOp "||" (EApp (EVar "isRigidCell") (EVar "v1")) (EApp (EVar "isRigidCell") (EVar "v2"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "effvarId") (EVar "v3"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef") "value"))) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EVar "d21")) (EApp (EVar "Some") (EVar "v3"))))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v2")) (EApp (EApp (EVar "EffRow") (EVar "d12")) (EApp (EVar "Some") (EVar "v3"))))) (DoExpr (EApp (EApp (EVar "recordAbsorptions") (EBinOp "++" (EVar "d21") (EVar "d12"))) (EVar "v3")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "unifyRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l1")) (EVar "l2"))) (EVar "l2"))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "None"))))))
+(DFunDef false "unifyRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l2")) (EVar "l1"))) (EVar "l1"))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v2")) (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EVar "None"))))))
+(DFunDef false "unifyRowPlain" ((PVar "dyn") (PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EApp (EVar "closedRowEqCheck") (EVar "dyn")) (EVar "l1")) (EVar "l2")))
+(DTypeSig false "unifyIndexRow" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyIndexRow" ((PVar "dyn") (PVar "r1") (PVar "r2")) (EApp (EApp (EApp (EVar "unifyIndexRowN") (EVar "dyn")) (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
 (DTypeSig false "unifyIndexAtomAuthorities" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))
 (DFunDef false "unifyIndexAtomAuthorities" ((PVar "a1") (PVar "a2")) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "x")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "a2")) (arm (PCon "Some" (PVar "y")) () (EApp (EApp (EVar "unifyIndex") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EVar "a1")))
-(DTypeSig false "unifyIndexRowN" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyIndexRowN" ((PVar "r1") (PVar "r2")) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EVar "r1")) (EApp (EVar "rowHasSummary") (EVar "r2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "True")) (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "True")) (EVar "r2")) (EVar "r1")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "rowTailIsJoin") (EVar "r1")) (EApp (EVar "rowTailIsJoin") (EVar "r2"))) (EApp (EVar "rowHasRigid") (EVar "r1"))) (EApp (EVar "rowHasRigid") (EVar "r2"))) (EApp (EApp (EApp (EVar "unifyJoinRows") (EVar "True")) (EVar "r1")) (EVar "r2")) (EApp (EApp (EVar "unifyIndexRowPlain") (EVar "r1")) (EVar "r2")))))
-(DTypeSig false "unifyIndexRowPlain" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyIndexRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EVar "indexRowEquate") (EVar "l1")) (EVar "l2")))
-(DFunDef false "unifyIndexRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EIf (EBinOp "==" (EApp (EVar "effvarId") (EVar "v1")) (EApp (EVar "effvarId") (EVar "v2"))) (EApp (EApp (EVar "indexRowEquate") (EVar "l1")) (EVar "l2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "unifyIndexRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EApp (EVar "indexOpenClosed") (EVar "l1")) (EVar "v1")) (EVar "l2")))
-(DFunDef false "unifyIndexRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EApp (EApp (EApp (EVar "indexOpenClosed") (EVar "l2")) (EVar "v2")) (EVar "l1")))
-(DFunDef false "unifyIndexRowPlain" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyRowPlain") (EVar "r1")) (EVar "r2")))
+(DTypeSig false "unifyIndexRowN" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyIndexRowN" ((PVar "dyn") (PVar "r1") (PVar "r2")) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EVar "r1")) (EApp (EVar "rowHasSummary") (EVar "r2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "True")) (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "True")) (EVar "r2")) (EVar "r1")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "rowTailIsJoin") (EVar "r1")) (EApp (EVar "rowTailIsJoin") (EVar "r2"))) (EApp (EVar "rowHasRigid") (EVar "r1"))) (EApp (EVar "rowHasRigid") (EVar "r2"))) (EApp (EApp (EApp (EVar "unifyJoinRows") (EVar "True")) (EVar "r1")) (EVar "r2")) (EApp (EApp (EApp (EVar "unifyIndexRowPlain") (EVar "dyn")) (EVar "r1")) (EVar "r2")))))
+(DTypeSig false "unifyIndexRowPlain" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyIndexRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EVar "indexRowEquate") (EVar "l1")) (EVar "l2")))
+(DFunDef false "unifyIndexRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EIf (EBinOp "==" (EApp (EVar "effvarId") (EVar "v1")) (EApp (EVar "effvarId") (EVar "v2"))) (EApp (EApp (EVar "indexRowEquate") (EVar "l1")) (EVar "l2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "unifyIndexRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EApp (EVar "indexOpenClosed") (EVar "l1")) (EVar "v1")) (EVar "l2")))
+(DFunDef false "unifyIndexRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EApp (EApp (EApp (EVar "indexOpenClosed") (EVar "l2")) (EVar "v2")) (EVar "l1")))
+(DFunDef false "unifyIndexRowPlain" ((PVar "dyn") (PVar "r1") (PVar "r2")) (EApp (EApp (EApp (EVar "unifyRowPlain") (EVar "dyn")) (EVar "r1")) (EVar "r2")))
 (DTypeSig false "indexRowEquate" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))
 (DFunDef false "indexRowEquate" ((PVar "l1") (PVar "l2")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unifyIndexAtomAuthorities") (EVar "l1")) (EVar "l2"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "indexRowEqCheck") (EApp (EApp (EVar "labelsMissing") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "labelsMissing") (EVar "l2")) (EVar "l1"))) (EVar "l1")) (EVar "l2")))))
 (DTypeSig false "indexOpenClosed" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
@@ -54711,8 +54699,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "effectLeakCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))
 (DFunDef false "effectLeakCheck" ((PList) (PVar "bound")) (ELit LUnit))
 (DFunDef false "effectLeakCheck" ((PVar "escaping") (PVar "bound")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EVar "effectLeakMsg") (EVar "bound")) (EVar "escaping"))))
-(DTypeSig false "closedRowEqCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))
-(DFunDef false "closedRowEqCheck" ((PVar "l1") (PVar "l2")) (EMatch (ETuple (EApp (EApp (EVar "atomsEscape") (EVar "l1")) (EVar "l2")) (EApp (EApp (EVar "atomsEscape") (EVar "l2")) (EVar "l1"))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm PWild () (EIf (EFieldAccess (EVar "nonCovariantSlot") "value") (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM-VARIANCE"))) (EApp (EApp (EVar "paramVarianceMismatchMsg") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EVar "closedRowMismatchMsg") (EVar "l1")) (EVar "l2")))))))
+(DTypeSig false "closedRowEqCheck" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
+(DFunDef false "closedRowEqCheck" ((PVar "dyn") (PVar "l1") (PVar "l2")) (EMatch (ETuple (EApp (EApp (EVar "atomsEscape") (EVar "l1")) (EVar "l2")) (EApp (EApp (EVar "atomsEscape") (EVar "l2")) (EVar "l1"))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm PWild () (EIf (EFieldAccess (EVar "dyn") "dcNonCovariant") (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM-VARIANCE"))) (EApp (EApp (EVar "paramVarianceMismatchMsg") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EVar "closedRowMismatchMsg") (EVar "l1")) (EVar "l2")))))))
 (DTypeSig false "closedRowMismatchMsg" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
 (DFunDef false "closedRowMismatchMsg" ((PVar "l1") (PVar "l2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "effect rows <")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "l1")))) (ELit (LString "> and <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "l2")))) (ELit (LString "> cannot be made equal: the two values must have one type, and this position neither widens nor narrows a row; write the same row on both sides"))))
 (DTypeSig false "effectLeakMsg" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
@@ -55163,10 +55151,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "routeLocalSym" (PWild) (ELit (LString "")))
 (DTypeSig false "recoveredShadowSym" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "String"))))
 (DFunDef false "recoveredShadowSym" ((PVar "name") (PVar "tagRef")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (DoExpr (EIf (EBinOp "==" (EVar "s") (EVar "name")) (ELit (LString "")) (EVar "s")))))
-(DTypeSig false "freshToggles" (TyFun (TyCon "Unit") (TyCon "Toggles")))
-(DFunDef false "freshToggles" (PWild) (ERecordCreate "Toggles" ((fa "suppressRLocalRecord" (EApp (EVar "Ref") (EVar "False"))) (fa "suppressArgStamp" (EApp (EVar "Ref") (EVar "False"))) (fa "shadowHeadCtxRef" (EApp (EVar "Ref") (EVar "False"))))))
-(DTypeSig false "toggles" (TyApp (TyCon "Ref") (TyCon "Toggles")))
-(DFunDef false "toggles" () (EApp (EVar "Ref") (EApp (EVar "freshToggles") (ELit LUnit))))
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
 (DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deMethods" (EVar "emptyMethodEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "deNameIndexBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
 (DTypeSig false "emptyDeclEnvAcc" (TyCon "DeclEnvAcc"))
@@ -55880,8 +55864,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "nthArgMono" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))
 (DFunDef false "nthArgMono" ((PLit (LInt 0)) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "a") PWild PWild) () (EApp (EVar "Some") (EVar "a"))) (arm PWild () (EVar "None"))))
 (DFunDef false "nthArgMono" ((PVar "n") (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild PWild (PVar "b")) () (EApp (EApp (EVar "nthArgMono") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "b"))) (arm PWild () (EVar "None"))))
-(DTypeSig false "recordArgStamp" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit")))))))))
-(DFunDef false "recordArgStamp" ((PVar "name") (PVar "tagRef") (PVar "implRef") (PVar "innerRef") (PVar "idx") (PVar "mono") (PVar "omitted")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressArgStamp") "value") (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "mono")) (arm (PCon "Some" (PVar "am")) () (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKArgStamp")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "am")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EVar "SKArg") (EVar "implRef")) (EVar "mono")) (EVar "omitted"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))) (arm (PCon "None") () (ELit LUnit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "recordArgStamp" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit"))))))))))
+(DFunDef false "recordArgStamp" ((PVar "suppressed") (PVar "name") (PVar "tagRef") (PVar "implRef") (PVar "innerRef") (PVar "idx") (PVar "mono") (PVar "omitted")) (EIf (EVar "suppressed") (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "mono")) (arm (PCon "Some" (PVar "am")) () (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKArgStamp")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "am")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EVar "SKArg") (EVar "implRef")) (EVar "mono")) (EVar "omitted"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))) (arm (PCon "None") () (ELit LUnit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordArgSiteFn" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Unit")))))
 (DFunDef false "recordArgSiteFn" (PWild (PVar "idx") (PVar "mono")) (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "mono")) (arm (PCon "Some" (PVar "am")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodSiteFns")) (EApp (EApp (EApp (EVar "consSiteFn") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EVar "am")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodSiteFns") "value")))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig false "resolveArgStamps" (TyFun (TyApp (TyCon "List") (TyCon "PendingEntry")) (TyCon "Unit")))
@@ -55950,8 +55934,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "currentDoDeferred" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "currentMethodMismatch" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "currentMethodMismatch" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig false "currentJoinContext" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "JoinContext"))))
-(DFunDef false "currentJoinContext" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "mainTypeIsAsync" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "mainTypeIsAsync" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "headMonoNode") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Async")) (PCon "OriginModule" (PLit (LString "async")))) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "mainAsyncPayloadIsUnit" (TyFun (TyCon "Unit") (TyCon "Bool")))
@@ -56256,7 +56238,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "perRun" (TyApp (TyCon "Ref") (TyCon "PerRun")))
 (DFunDef false "perRun" () (EApp (EVar "Ref") (EApp (EVar "freshPerRun") (ELit LUnit))))
 (DTypeSig false "resetState" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "resetState" (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "toggles")) (EApp (EVar "freshToggles") (ELit LUnit))))))
+(DFunDef false "resetState" (PWild) (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit))))
 (DTypeSig false "containsI" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
 (DFunDef false "containsI" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsI" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys"))))
@@ -56347,35 +56329,37 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "occursAdjustUnbound" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DFunDef false "occursAdjustUnbound" ((PVar "id") (PVar "level") (PVar "cell") (PVar "id2") (PVar "lvl2")) (EIf (EBinOp "==" (EVar "id2") (EVar "id")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-INFINITE-TYPE"))) (EBinOp "++" (EBinOp "++" (ELit (LString "cannot construct an infinite type involving `")) (EApp (EVar "ppMono") (EApp (EVar "TVar") (EVar "cell")))) (ELit (LString "`")))))) (EIf (EBinOp ">" (EVar "lvl2") (EVar "level")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "Unbound") (EVar "id2")) (EVar "level"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "unify" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "unify" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "unifyValue") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
-(DTypeSig false "unifyValue" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "unifyValue" ((PCon "TVar" (PVar "c")) (PCon "TQual" (PVar "a") PWild)) (EApp (EApp (EVar "unifyN") (EApp (EVar "TVar") (EVar "c"))) (EApp (EVar "normalize") (EVar "a"))))
-(DFunDef false "unifyValue" ((PCon "TQual" (PVar "a") PWild) (PCon "TVar" (PVar "c"))) (EApp (EApp (EVar "unifyN") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "TVar") (EVar "c"))))
-(DFunDef false "unifyValue" ((PCon "TQual" (PVar "a") PWild) (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EVar "unifyN") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
-(DFunDef false "unifyValue" ((PCon "TQual" (PVar "a") PWild) (PVar "b")) (EApp (EApp (EVar "unifyN") (EApp (EVar "normalize") (EVar "a"))) (EVar "b")))
-(DFunDef false "unifyValue" ((PVar "a") (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EVar "unifyN") (EVar "a")) (EApp (EVar "normalize") (EVar "b"))))
-(DFunDef false "unifyValue" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "unifyN") (EVar "a")) (EVar "b")))
-(DTypeSig false "unifyStruct" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "unifyStruct" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "unifyN") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
-(DTypeSig false "unifyN" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "unifyN" ((PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EApp (EApp (EVar "unifyVars") (EVar "c1")) (EVar "c2")))
-(DFunDef false "unifyN" ((PCon "TVar" (PVar "c")) (PVar "t")) (EApp (EApp (EVar "bindVar") (EVar "c")) (EVar "t")))
-(DFunDef false "unifyN" ((PVar "t") (PCon "TVar" (PVar "c"))) (EApp (EApp (EVar "bindVar") (EVar "c")) (EVar "t")))
-(DFunDef false "unifyN" ((PAs "ta" (PCon "TCon" (PVar "a") (PVar "oa"))) (PAs "tb" (PCon "TCon" (PVar "b") (PVar "ob")))) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
-(DFunDef false "unifyN" ((PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EApp (EVar "TRigid") (EVar "a"))) (EApp (EVar "TRigid") (EVar "b")))))
-(DFunDef false "unifyN" ((PAs "ta" (PCon "TCon" (PVar "a") PWild)) (PAs "tb" (PCon "TRigid" (PVar "b")))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
-(DFunDef false "unifyN" ((PAs "ta" (PCon "TRigid" (PVar "a"))) (PAs "tb" (PCon "TCon" (PVar "b") PWild))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
-(DFunDef false "unifyN" ((PVar "t1") (PVar "t2")) (EIf (EApp (EApp (EVar "tupleUnifyClash") (EVar "t1")) (EVar "t2")) (EApp (EApp (EVar "typeMismatch") (EVar "t1")) (EVar "t2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "unifyN" ((PCon "TApp" (PVar "a1") (PVar "b1")) (PCon "TApp" (PVar "a2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unifyStruct") (EVar "a1")) (EVar "a2"))) (DoExpr (EApp (EApp (EApp (EVar "paramVarianceGuard") (EVar "a1")) (EVar "b1")) (EVar "b2")))))
-(DFunDef false "unifyN" ((PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unifyStruct") (EVar "a1")) (EVar "a2"))) (DoLet false false PWild (EApp (EApp (EVar "unifyRow") (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EVar "unifyStruct") (EVar "b1")) (EVar "b2")))))
-(DFunDef false "unifyN" ((PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) (EApp (EApp (EVar "unifyIndexRow") (EVar "r1")) (EVar "r2")))
-(DFunDef false "unifyN" ((PCon "TAuth" (PVar "qa")) (PCon "TAuth" (PVar "qb"))) (EApp (EApp (EVar "unifyIndex") (EVar "qa")) (EVar "qb")))
-(DFunDef false "unifyN" ((PCon "TQual" (PVar "a") (PVar "qa")) (PCon "TQual" (PVar "b") (PVar "qb"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EVar "qa")) (EVar "qb"))) (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EVar "qb")) (EVar "qa"))) (DoExpr (EApp (EApp (EVar "unifyStruct") (EVar "a")) (EVar "b")))))
-(DFunDef false "unifyN" ((PCon "TQual" (PVar "a") (PVar "qa")) (PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qa")))) (EVar "qa"))) (DoExpr (EApp (EApp (EVar "unifyStruct") (EVar "a")) (EVar "b")))))
-(DFunDef false "unifyN" ((PVar "a") (PCon "TQual" (PVar "b") (PVar "qb"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qb")))) (EVar "qb"))) (DoExpr (EApp (EApp (EVar "unifyStruct") (EVar "a")) (EVar "b")))))
-(DFunDef false "unifyN" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "typeMismatch") (EVar "a")) (EVar "b")))
+(DFunDef false "unify" ((PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "unifyIn") (EVar "noDyn")) (EVar "a")) (EVar "b")))
+(DTypeSig false "unifyIn" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "unifyIn" ((PVar "dyn") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "unifyValue") (EVar "dyn")) (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
+(DTypeSig false "unifyValue" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "unifyValue" ((PVar "dyn") (PCon "TVar" (PVar "c")) (PCon "TQual" (PVar "a") PWild)) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EApp (EVar "TVar") (EVar "c"))) (EApp (EVar "normalize") (EVar "a"))))
+(DFunDef false "unifyValue" ((PVar "dyn") (PCon "TQual" (PVar "a") PWild) (PCon "TVar" (PVar "c"))) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "TVar") (EVar "c"))))
+(DFunDef false "unifyValue" ((PVar "dyn") (PCon "TQual" (PVar "a") PWild) (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
+(DFunDef false "unifyValue" ((PVar "dyn") (PCon "TQual" (PVar "a") PWild) (PVar "b")) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EApp (EVar "normalize") (EVar "a"))) (EVar "b")))
+(DFunDef false "unifyValue" ((PVar "dyn") (PVar "a") (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EVar "a")) (EApp (EVar "normalize") (EVar "b"))))
+(DFunDef false "unifyValue" ((PVar "dyn") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EVar "a")) (EVar "b")))
+(DTypeSig false "unifyStruct" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "unifyStruct" ((PVar "dyn") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
+(DTypeSig false "unifyN" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EApp (EApp (EApp (EVar "unifyVars") (EVar "dyn")) (EVar "c1")) (EVar "c2")))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TVar" (PVar "c")) (PVar "t")) (EApp (EApp (EApp (EVar "bindVar") (EVar "dyn")) (EVar "c")) (EVar "t")))
+(DFunDef false "unifyN" ((PVar "dyn") (PVar "t") (PCon "TVar" (PVar "c"))) (EApp (EApp (EApp (EVar "bindVar") (EVar "dyn")) (EVar "c")) (EVar "t")))
+(DFunDef false "unifyN" ((PVar "dyn") (PAs "ta" (PCon "TCon" (PVar "a") (PVar "oa"))) (PAs "tb" (PCon "TCon" (PVar "b") (PVar "ob")))) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")) (ELit LUnit) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EVar "ta")) (EVar "tb"))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EApp (EVar "TRigid") (EVar "a"))) (EApp (EVar "TRigid") (EVar "b")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PAs "ta" (PCon "TCon" (PVar "a") PWild)) (PAs "tb" (PCon "TRigid" (PVar "b")))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EVar "ta")) (EVar "tb"))))
+(DFunDef false "unifyN" ((PVar "dyn") (PAs "ta" (PCon "TRigid" (PVar "a"))) (PAs "tb" (PCon "TCon" (PVar "b") PWild))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EVar "ta")) (EVar "tb"))))
+(DFunDef false "unifyN" ((PVar "dyn") (PVar "t1") (PVar "t2")) (EIf (EApp (EApp (EVar "tupleUnifyClash") (EVar "t1")) (EVar "t2")) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EVar "t1")) (EVar "t2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TApp" (PVar "a1") (PVar "b1")) (PCon "TApp" (PVar "a2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "a1")) (EVar "a2"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "paramVarianceGuard") (EVar "dyn")) (EVar "a1")) (EVar "b1")) (EVar "b2")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "a1")) (EVar "a2"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "unifyRow") (EVar "dyn")) (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "b1")) (EVar "b2")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) (EApp (EApp (EApp (EVar "unifyIndexRow") (EVar "dyn")) (EVar "r1")) (EVar "r2")))
+(DFunDef false "unifyN" (PWild (PCon "TAuth" (PVar "qa")) (PCon "TAuth" (PVar "qb"))) (EApp (EApp (EVar "unifyIndex") (EVar "qa")) (EVar "qb")))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TQual" (PVar "a") (PVar "qa")) (PCon "TQual" (PVar "b") (PVar "qb"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EVar "qa")) (EVar "qb"))) (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EVar "qb")) (EVar "qa"))) (DoExpr (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "a")) (EVar "b")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TQual" (PVar "a") (PVar "qa")) (PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qa")))) (EVar "qa"))) (DoExpr (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "a")) (EVar "b")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PVar "a") (PCon "TQual" (PVar "b") (PVar "qb"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qb")))) (EVar "qb"))) (DoExpr (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "a")) (EVar "b")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EVar "a")) (EVar "b")))
 (DTypeSig false "bindFrom" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "bindFrom" ((PVar "target") (PVar "source")) (EMatch (EApp (EVar "normalize") (EVar "target")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild PWild) () (EApp (EApp (EVar "bindVar") (EVar "cell")) (EVar "source"))) (arm (PCon "Link" PWild) () (EApp (EApp (EVar "unify") (EVar "target")) (EVar "source"))))) (arm PWild () (EApp (EApp (EVar "unify") (EVar "target")) (EVar "source")))))
+(DFunDef false "bindFrom" ((PVar "target") (PVar "source")) (EMatch (EApp (EVar "normalize") (EVar "target")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild PWild) () (EApp (EApp (EApp (EVar "bindVar") (EVar "noDyn")) (EVar "cell")) (EVar "source"))) (arm (PCon "Link" PWild) () (EApp (EApp (EVar "unify") (EVar "target")) (EVar "source"))))) (arm PWild () (EApp (EApp (EVar "unify") (EVar "target")) (EVar "source")))))
 (DTypeSig false "wantAuthority" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit"))))
 (DFunDef false "wantAuthority" ((PVar "lower") (PVar "upper")) (EApp (EApp (EApp (EVar "wantAuthorityWith") (EVar "False")) (EVar "lower")) (EVar "upper")))
 (DTypeSig false "wantAuthorityWith" (TyFun (TyCon "Bool") (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit")))))
@@ -56434,10 +56418,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "solvedUpper" (TyFun (TyApp (TyCon "Option") (TyCon "Authority")) (TyCon "Bool")))
 (DFunDef false "solvedUpper" ((PCon "Some" (PCon "AVar" (PVar "cell")))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild PWild PWild) () (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "indexSubstitutedRef") "value")))) (arm (PCon "AUnbound" PWild PWild PWild PWild PWild) () (EVar "False"))))
 (DFunDef false "solvedUpper" (PWild) (EVar "False"))
-(DTypeSig false "paramVarianceGuard" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
-(DFunDef false "paramVarianceGuard" ((PVar "hd") (PVar "b1") (PVar "b2")) (EIf (EApp (EVar "monoSlotNonCovariant") (EVar "hd")) (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EVar "nonCovariantSlot") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "nonCovariantSlot")) (EVar "True"))) (DoLet false false PWild (EApp (EApp (EVar "unifyStruct") (EVar "b1")) (EVar "b2"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "nonCovariantSlot")) (EVar "saved")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "unifyStruct") (EVar "b1")) (EVar "b2")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "nonCovariantSlot" (TyApp (TyCon "Ref") (TyCon "Bool")))
-(DFunDef false "nonCovariantSlot" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig false "paramVarianceGuard" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
+(DFunDef false "paramVarianceGuard" ((PVar "dyn") (PVar "hd") (PVar "b1") (PVar "b2")) (EIf (EApp (EVar "monoSlotNonCovariant") (EVar "hd")) (EApp (EApp (EApp (EVar "unifyStruct") (ERecordUpdate (EVar "dyn") ((fa "dcNonCovariant" (EVar "True"))))) (EVar "b1")) (EVar "b2")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "b1")) (EVar "b2")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "monoSpineDepth" (TyFun (TyCon "Mono") (TyCon "Int")))
 (DFunDef false "monoSpineDepth" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") PWild) () (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "monoSpineDepth") (EVar "a")))) (arm PWild () (ELit (LInt 0)))))
 (DTypeSig false "paramPolaritiesOf" (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity")))))
@@ -56445,7 +56427,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "paramPolaritiesIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity"))))))
 (DFunDef false "paramPolaritiesIn" ((PVar "tab") (PVar "key")) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Ref")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "tab")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "recordInvocationView" (TyFun (TyCon "TcEnv") (TyCon "Unit")))
-(DFunDef false "recordInvocationView" ((PCon "TcEnv" PWild (PVar "ctors") PWild PWild)) (EBlock (DoLet false false (PVar "universe") (EApp (EApp (EVar "flatMap") (ELam ((PVar "cands")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PTuple PWild PWild (PVar "sch")) () (EVar "sch"))))) (EVar "cands")))) (EApp (EVar "IdMap.values") (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EApp (EVar "InvocationView") (EBinOp "++" (EApp (EVar "IdMap.values") (EVar "ctors")) (EVar "universe"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))))))
+(DFunDef false "recordInvocationView" ((PVar "env")) (EBlock (DoLet false false (PVar "universe") (EApp (EApp (EVar "flatMap") (ELam ((PVar "cands")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PTuple PWild PWild (PVar "sch")) () (EVar "sch"))))) (EVar "cands")))) (EApp (EVar "IdMap.values") (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EApp (EVar "InvocationView") (EBinOp "++" (EApp (EVar "IdMap.values") (EFieldAccess (EVar "env") "teCtors")) (EVar "universe"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))))))
 (DTypeSig true "lastInvocationOps" (TyFun (TyCon "Unit") (TyCon "InvocationOps")))
 (DFunDef false "lastInvocationOps" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef") "value") (arm (PCon "InvocationView" (PVar "ctors") (PVar "pols") (PVar "kinds")) () (EBlock (DoLet false false (PVar "byHead") (EApp (EVar "ctorsByHead") (EVar "ctors"))) (DoExpr (ERecordCreate "InvocationOps" ((fa "headVariances" (ELam ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EApp (EApp (EVar "slotVariances") (EApp (EApp (EVar "paramPolaritiesIn") (EVar "pols")) (EVar "key"))) (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "kinds")))) (arm PWild () (EVar "None"))))) (fa "appliedFields" (ELam ((PVar "applied")) (EBlock (DoLet false false (PTuple (PVar "h") (PVar "args")) (EApp (EVar "spineParts") (EVar "applied"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "instantiateFields") (EVar "args")) (EVar "c")))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "invocationHeadKey") (EVar "h"))) (EVar "byHead")))))))) (fa "headKey" (EVar "invocationHeadKey")))))))))
 (DTypeSig false "invocationHeadKey" (TyFun (TyCon "Mono") (TyCon "String")))
@@ -56476,27 +56458,27 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "paramRowAtomsOf" ((PVar "key")) (EApp (EApp (EVar "lookupTab") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamRowAtomsRef") "value")))
 (DTypeSig false "paramVarianceMismatchMsg" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
 (DFunDef false "paramVarianceMismatchMsg" ((PVar "l1") (PVar "l2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "effect row mismatch inside a non-covariant type argument: <")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "l1")))) (ELit (LString "> vs <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "l2")))) (ELit (LString ">; the two rows must be equal here, so write the same row on both sides, or eta-expand a freshly built function, `(s => f s)`"))))
-(DTypeSig false "unifyVars" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "Unit"))))
-(DFunDef false "unifyVars" ((PVar "c1") (PVar "c2")) (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))) (ELit LUnit) (EApp (EApp (EVar "bindVar") (EVar "c1")) (EApp (EVar "TVar") (EVar "c2")))))
-(DTypeSig false "bindVar" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "bindVar" ((PVar "cell") (PVar "t")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed")) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "occursAdjust") (EApp (EVar "tyvarId") (EVar "cell"))) (EApp (EVar "tyvarLevel") (EVar "cell"))) (EVar "t"))) (DoExpr (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed") "value") (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EVar "propagatePoison") (EVar "cell")) (EVar "t"))) (DoLet false false (PVar "shaped") (EApp (EApp (EVar "takeJoinsShapedBy") (EVar "cell")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Link") (EVar "t")))) (DoExpr (EApp (EVar "settleShapedJoins") (EVar "shaped"))))))))
+(DTypeSig false "unifyVars" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "Unit")))))
+(DFunDef false "unifyVars" ((PVar "dyn") (PVar "c1") (PVar "c2")) (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))) (ELit LUnit) (EApp (EApp (EApp (EVar "bindVar") (EVar "dyn")) (EVar "c1")) (EApp (EVar "TVar") (EVar "c2")))))
+(DTypeSig false "bindVar" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "bindVar" ((PVar "dyn") (PVar "cell") (PVar "t")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed")) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "occursAdjust") (EApp (EVar "tyvarId") (EVar "cell"))) (EApp (EVar "tyvarLevel") (EVar "cell"))) (EVar "t"))) (DoExpr (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed") "value") (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EVar "propagatePoison") (EVar "cell")) (EVar "t"))) (DoLet false false (PVar "shaped") (EApp (EApp (EVar "takeJoinsShapedBy") (EVar "cell")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Link") (EVar "t")))) (DoExpr (EApp (EApp (EVar "settleShapedJoins") (EVar "dyn")) (EVar "shaped"))))))))
 (DTypeSig false "takeJoinsShapedBy" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "PendingJoin")))))
 (DFunDef false "takeJoinsShapedBy" ((PVar "cell") (PVar "t")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef") "value") (arm (PList) () (EListLit)) (arm (PVar "pending") () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" PWild) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "id") (EApp (EVar "tyvarId") (EVar "cell"))) (DoLet false false (PVar "hits") (EApp (EApp (EVar "filter") (ELam ((PVar "pj")) (EApp (EApp (EVar "joinResultIs") (EVar "id")) (EVar "pj")))) (EVar "pending"))) (DoExpr (EMatch (EVar "hits") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef")) (EApp (EApp (EVar "filter") (ELam ((PVar "pj")) (EApp (EVar "not") (EApp (EApp (EVar "joinResultIs") (EVar "id")) (EVar "pj"))))) (EVar "pending")))) (DoExpr (EVar "hits"))))))))))))
 (DTypeSig false "joinResultIs" (TyFun (TyCon "Int") (TyFun (TyCon "PendingJoin") (TyCon "Bool"))))
 (DFunDef false "joinResultIs" ((PVar "id") (PVar "pj")) (EMatch (EApp (EVar "normalize") (EFieldAccess (EVar "pj") "pjResult")) (arm (PCon "TVar" (PVar "c")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c")) (EVar "id"))) (arm PWild () (EVar "False"))))
-(DTypeSig false "settleShapedJoins" (TyFun (TyApp (TyCon "List") (TyCon "PendingJoin")) (TyCon "Unit")))
-(DFunDef false "settleShapedJoins" ((PList)) (ELit LUnit))
-(DFunDef false "settleShapedJoins" ((PVar "shaped")) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "pj")) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PTuple (PVar "loc") (PVar "value"))) (EApp (EApp (EApp (EFieldAccess (EFieldAccess (EVar "pj") "pjOps") "vjoEqual") (EVar "loc")) (EFieldAccess (EVar "pj") "pjResult")) (EVar "value")))) (ELit LUnit)) (EFieldAccess (EVar "pj") "pjValues")))) (ELit LUnit)) (EVar "shaped")))
+(DTypeSig false "settleShapedJoins" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyCon "PendingJoin")) (TyCon "Unit"))))
+(DFunDef false "settleShapedJoins" (PWild (PList)) (ELit LUnit))
+(DFunDef false "settleShapedJoins" ((PVar "dyn") (PVar "shaped")) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "pj")) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PTuple (PVar "loc") (PVar "value"))) (EApp (EApp (EApp (EApp (EApp (EVar "joinValueEqual") (EVar "dyn")) (EFieldAccess (EVar "pj") "pjContext")) (EVar "loc")) (EFieldAccess (EVar "pj") "pjResult")) (EVar "value")))) (ELit LUnit)) (EFieldAccess (EVar "pj") "pjValues")))) (ELit LUnit)) (EVar "shaped")))
 (DTypeSig false "propagatePoison" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "propagatePoison" ((PVar "cell") (PVar "t")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value") (arm (PList) () (ELit LUnit)) (arm (PVar "poisoned") () (EIf (EApp (EApp (EVar "containsI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "poisoned")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars")) (EBinOp "++" (EApp (EVar "monoUnboundIds") (EVar "t")) (EVar "poisoned"))) (ELit LUnit)))))
 (DTypeSig false "poisonMismatchVars" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "poisonMismatchVars" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "poisoned") (EBinOp "++" (EBinOp "++" (EApp (EVar "monoUnboundIds") (EVar "a")) (EApp (EVar "monoUnboundIds") (EVar "b"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars")) (EVar "poisoned")))))
-(DTypeSig false "typeMismatch" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "typeMismatch" ((PVar "a") (PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "a")) (EVar "b"))) (DoExpr (EApp (EApp (EVar "typeMismatchReport") (EVar "a")) (EVar "b")))))
-(DTypeSig false "typeMismatchReport" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "typeMismatchReport" ((PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentMethodMismatch")) (arm (PCon "Some" (PVar "mname")) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-METHOD-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method `")) (EApp (EVar "display") (EVar "mname"))) (ELit (LString "` has type "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " but its interface declares "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EVar "typeMismatchReportJoin") (EVar "a")) (EVar "b")))))
-(DTypeSig false "typeMismatchReportJoin" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "typeMismatchReportJoin" ((PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentJoinContext")) (arm (PCon "Some" (PCon "JoinElselessIf")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EVar "display") (EVar "elselessIfHelp"))) (ELit (LString "")))) (EVar "elselessIfHelp")) (EVar "None"))) (arm PWild () (EMatch (ETuple (EUnOp "!" (EVar "currentDoOrigin")) (EApp (EApp (EVar "constrainedApplicationHelp") (EVar "a")) (EVar "b"))) (arm (PTuple (PCon "None") (PCon "Some" (PVar "help"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm PWild () (EApp (EApp (EVar "typeMismatchReportRest") (EVar "a")) (EVar "b")))))))
+(DTypeSig false "typeMismatch" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "typeMismatch" ((PVar "dyn") (PVar "a") (PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "a")) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "typeMismatchReport") (EVar "dyn")) (EVar "a")) (EVar "b")))))
+(DTypeSig false "typeMismatchReport" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "typeMismatchReport" ((PVar "dyn") (PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentMethodMismatch")) (arm (PCon "Some" (PVar "mname")) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-METHOD-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method `")) (EApp (EVar "display") (EVar "mname"))) (ELit (LString "` has type "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " but its interface declares "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "typeMismatchReportJoin") (EVar "dyn")) (EVar "a")) (EVar "b")))))
+(DTypeSig false "typeMismatchReportJoin" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "typeMismatchReportJoin" ((PVar "dyn") (PVar "a") (PVar "b")) (EMatch (EFieldAccess (EVar "dyn") "dcJoin") (arm (PCon "Some" (PCon "JoinElselessIf")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EVar "display") (EVar "elselessIfHelp"))) (ELit (LString "")))) (EVar "elselessIfHelp")) (EVar "None"))) (arm PWild () (EMatch (ETuple (EUnOp "!" (EVar "currentDoOrigin")) (EApp (EApp (EVar "constrainedApplicationHelp") (EVar "a")) (EVar "b"))) (arm (PTuple (PCon "None") (PCon "Some" (PVar "help"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm PWild () (EApp (EApp (EVar "typeMismatchReportRest") (EVar "a")) (EVar "b")))))))
 (DTypeSig false "elselessIfHelp" (TyCon "String"))
 (DFunDef false "elselessIfHelp" () (ELit (LString "an `if` without `else` has type Unit, so add an `else` branch or make the `then` branch Unit")))
 (DTypeSig false "constrainedApplicationHelp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -57076,26 +57058,26 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "restAtoms" ((PList)) (EListLit))
 (DFunDef false "restAtoms" ((PCons PWild (PVar "rest"))) (EVar "rest"))
 (DTypeSig false "lookupBinding" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "EnvBinding")))))
-(DFunDef false "lookupBinding" ((PCon "TcEnv" (PVar "vs") PWild PWild PWild) (PVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "vs")))
+(DFunDef false "lookupBinding" ((PVar "env") (PVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teVars")))
 (DTypeSig false "lookupVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
-(DFunDef false "lookupVar" ((PCon "TcEnv" (PVar "vs") (PVar "cs") PWild PWild) (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "vs")) (arm (PCon "Some" (PVar "binding")) () (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "binding") "ebValue") "vsScheme"))) (arm (PCon "None") () (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "cs")))))
+(DFunDef false "lookupVar" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teVars")) (arm (PCon "Some" (PVar "binding")) () (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "binding") "ebValue") "vsScheme"))) (arm (PCon "None") () (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teCtors")))))
 (DTypeSig false "lookupMethodRow" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodSchemeRow")))))
 (DFunDef false "lookupMethodRow" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "n")) (arm (PCon "Some" (PVar "binding")) () (EFieldAccess (EVar "binding") "ebMethodRow")) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "lookupCtor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
-(DFunDef false "lookupCtor" ((PCon "TcEnv" PWild (PVar "cs") PWild PWild) (PVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "cs")))
+(DFunDef false "lookupCtor" ((PVar "env") (PVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teCtors")))
 (DTypeSig false "extendVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "TcEnv")))))
-(DFunDef false "extendVar" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "s")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "ordinaryEnvBinding") (EVar "s"))) (EVar "vs"))) (EVar "cs")) (EVar "al")) (EVar "lc")))
+(DFunDef false "extendVar" ((PVar "env") (PVar "n") (PVar "s")) (ERecordUpdate (EVar "env") ((fa "teVars" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "ordinaryEnvBinding") (EVar "s"))) (EFieldAccess (EVar "env") "teVars"))))))
 (DTypeSig false "extendVars" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "TcEnv"))))
 (DFunDef false "extendVars" ((PVar "env") (PList)) (EVar "env"))
 (DFunDef false "extendVars" ((PVar "env") (PCons (PTuple (PVar "n") (PVar "s")) (PVar "rest"))) (EApp (EApp (EVar "extendVars") (EApp (EApp (EApp (EVar "extendVar") (EVar "env")) (EVar "n")) (EVar "s"))) (EVar "rest")))
 (DTypeSig false "extendMethodRow" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "MethodSchemeRow") (TyCon "TcEnv")))))
-(DFunDef false "extendMethodRow" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "row")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "methodEnvBinding") (EVar "row"))) (EVar "vs"))) (EVar "cs")) (EVar "al")) (EVar "lc")))
+(DFunDef false "extendMethodRow" ((PVar "env") (PVar "n") (PVar "row")) (ERecordUpdate (EVar "env") ((fa "teVars" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "methodEnvBinding") (EVar "row"))) (EFieldAccess (EVar "env") "teVars"))))))
 (DTypeSig false "extendMethodRows" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "MethodSchemeRow")) (TyCon "TcEnv"))))
 (DFunDef false "extendMethodRows" ((PVar "env") (PList)) (EVar "env"))
 (DFunDef false "extendMethodRows" ((PVar "env") (PCons (PVar "row") (PVar "rest"))) (EBlock (DoLet false false (PVar "env2") (EIf (EApp (EVar "methodRowCanCarry") (EVar "row")) (EApp (EApp (EApp (EVar "extendMethodRow") (EVar "env")) (EFieldAccess (EVar "row") "msrName")) (EVar "row")) (EApp (EApp (EApp (EVar "extendVar") (EVar "env")) (EFieldAccess (EVar "row") "msrName")) (EFieldAccess (EVar "row") "msrScheme")))) (DoExpr (EApp (EApp (EVar "extendMethodRows") (EVar "env2")) (EVar "rest")))))
 (DTypeSig false "extendBindings" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EnvBinding"))) (TyCon "TcEnv"))))
 (DFunDef false "extendBindings" ((PVar "env") (PList)) (EVar "env"))
-(DFunDef false "extendBindings" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PCons (PTuple (PVar "n") (PVar "binding")) (PVar "rest"))) (EApp (EApp (EVar "extendBindings") (EApp (EApp (EApp (EApp (EVar "TcEnv") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "binding")) (EVar "vs"))) (EVar "cs")) (EVar "al")) (EVar "lc"))) (EVar "rest")))
+(DFunDef false "extendBindings" ((PVar "env") (PCons (PTuple (PVar "n") (PVar "binding")) (PVar "rest"))) (EApp (EApp (EVar "extendBindings") (ERecordUpdate (EVar "env") ((fa "teVars" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "binding")) (EFieldAccess (EVar "env") "teVars")))))) (EVar "rest")))
 (DTypeSig false "lookupStandaloneVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
 (DFunDef false "lookupStandaloneVar" ((PVar "env") (PVar "name")) (EApp (EApp (EVar "map") (ELam ((PVar "value")) (EFieldAccess (EVar "value") "vsScheme"))) (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name"))))
 (DTypeSig false "lookupStandaloneValue" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme")))))
@@ -57118,22 +57100,22 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "attachStandaloneSources" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EnvBinding"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EnvBinding"))))))
 (DFunDef false "attachStandaloneSources" ((PVar "sources") (PVar "bindings")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "name") (PVar "binding"))) (ETuple (EVar "name") (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "sources")) (arm (PCon "Some" (PVar "source")) () (EApp (EApp (EVar "bindingWithStandalone") (EVar "binding")) (ETuple (EVar "ImportedStandalone") (EApp (EVar "ordinaryValueScheme") (EVar "source"))))) (arm (PCon "None") () (EVar "binding")))))) (EVar "bindings")))
 (DTypeSig false "extendLocalVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "TcEnv")))))
-(DFunDef false "extendLocalVar" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "s")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "ordinaryEnvBinding") (EVar "s"))) (EVar "vs"))) (EVar "cs")) (EBinOp "::" (ETuple (EVar "n") (EVar "AParam")) (EVar "al"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "True")) (EVar "lc"))))
+(DFunDef false "extendLocalVar" ((PVar "env") (PVar "n") (PVar "s")) (ERecordUpdate (EVar "env") ((fa "teVars" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "ordinaryEnvBinding") (EVar "s"))) (EFieldAccess (EVar "env") "teVars"))) (fa "teAlphaLets" (EBinOp "::" (ETuple (EVar "n") (EVar "AParam")) (EFieldAccess (EVar "env") "teAlphaLets"))) (fa "teIsLocal" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "True")) (EFieldAccess (EVar "env") "teIsLocal"))))))
 (DTypeSig false "extendLocalVars" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "TcEnv"))))
 (DFunDef false "extendLocalVars" ((PVar "env") (PList)) (EVar "env"))
 (DFunDef false "extendLocalVars" ((PVar "env") (PCons (PTuple (PVar "n") (PVar "s")) (PVar "rest"))) (EApp (EApp (EVar "extendLocalVars") (EApp (EApp (EApp (EVar "extendLocalVar") (EVar "env")) (EVar "n")) (EVar "s"))) (EVar "rest")))
 (DTypeSig false "lookupLocalFlag" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "lookupLocalFlag" ((PCon "TcEnv" PWild PWild PWild (PVar "lc")) (PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "lc")))
+(DFunDef false "lookupLocalFlag" ((PVar "env") (PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "teIsLocal")))
 (DTypeSig false "addCtor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "TcEnv")))))
-(DFunDef false "addCtor" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "s")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "vs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "s")) (EVar "cs"))) (EVar "al")) (EVar "lc")))
+(DFunDef false "addCtor" ((PVar "env") (PVar "n") (PVar "s")) (ERecordUpdate (EVar "env") ((fa "teCtors" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "s")) (EFieldAccess (EVar "env") "teCtors"))))))
 (DTypeSig false "withCtors" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyCon "TcEnv")))
-(DFunDef false "withCtors" ((PVar "cs")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "omEmpty")) (EVar "cs")) (EListLit)) (EVar "omEmpty")))
+(DFunDef false "withCtors" ((PVar "cs")) (ERecordCreate "TcEnv" ((fa "teVars" (EVar "omEmpty")) (fa "teCtors" (EVar "cs")) (fa "teAlphaLets" (EListLit)) (fa "teIsLocal" (EVar "omEmpty")) (fa "teDyn" (EVar "noDyn")))))
 (DTypeSig false "envCtors" (TyFun (TyCon "TcEnv") (TyApp (TyCon "OrdMap") (TyCon "Scheme"))))
-(DFunDef false "envCtors" ((PCon "TcEnv" PWild (PVar "cs") PWild PWild)) (EVar "cs"))
+(DFunDef false "envCtors" ((PVar "env")) (EFieldAccess (EVar "env") "teCtors"))
 (DTypeSig false "seedAlphaLets" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "TcEnv")))))
-(DFunDef false "seedAlphaLets" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "rhs")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "vs")) (EVar "cs")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "ALet") (EVar "rhs"))) (EVar "al"))) (EVar "lc")))
+(DFunDef false "seedAlphaLets" ((PVar "env") (PVar "n") (PVar "rhs")) (ERecordUpdate (EVar "env") ((fa "teAlphaLets" (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "ALet") (EVar "rhs"))) (EFieldAccess (EVar "env") "teAlphaLets"))))))
 (DTypeSig false "envAlphaLets" (TyFun (TyCon "TcEnv") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder")))))
-(DFunDef false "envAlphaLets" ((PCon "TcEnv" PWild PWild (PVar "al") PWild)) (EVar "al"))
+(DFunDef false "envAlphaLets" ((PVar "env")) (EFieldAccess (EVar "env") "teAlphaLets"))
 (DTypeSig false "monoScheme" (TyFun (TyCon "Mono") (TyCon "Scheme")))
 (DFunDef false "monoScheme" ((PVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EVar "pureRow")) (EVar "t")))
 (DTypeSig false "inferPat" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Pat") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
@@ -57279,9 +57261,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "recordShadowStandaloneObls" ((PVar "env") (PVar "name") (PVar "subst")) (EIf (EBinOp "||" (EApp (EVar "isDefinerShadow") (EVar "name")) (EApp (EApp (EVar "isShadowStandalone") (EVar "env")) (EVar "name"))) (EMatch (EApp (EApp (EApp (EVar "lookupSchemeObls") (EVar "name")) (ELit (LInt 0))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PVar "obs")) () (EApp (EApp (EApp (EVar "recordSchemeCallObligations") (ELit (LInt 0))) (EVar "obs")) (EVar "subst"))) (arm (PCon "None") () (EMatch (EApp (EVar "declaredCrossModuleObls") (EVar "name")) (arm (PCon "Some" (PVar "obs")) () (EApp (EApp (EApp (EVar "recordSchemeCallObligations") (ELit (LInt 0))) (EVar "obs")) (EVar "subst"))) (arm (PCon "None") () (ELit LUnit))))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "inferMethodAt" ((PVar "env") (PVar "name") (PVar "ifaceRef") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "methodRef") (PVar "innerRef")) (EBlock (DoLet false false (PVar "selected") (EMatch (EApp (EApp (EVar "standaloneValueBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "scheme")) () (EApp (EVar "Some") (EVar "scheme"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "standaloneValueBindingEmit") (EVar "env")) (EVar "name")) (EVar "tagRef"))))) (DoExpr (EMatch (EVar "selected") (arm (PCon "Some" (PVar "value")) () (EBlock (DoLet false false PWild (EApp (EVar "rejectAdmittedValueOccurrence") (EVar "name"))) (DoLet false false (PVar "sym") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (DoLet false false (PVar "occurrence") (EApp (EApp (EApp (EApp (EApp (EVar "instantiateStandaloneOccurrence") (EVar "env")) (EVar "name")) (EVar "sym")) (EUnOp "!" (EVar "currentLoc"))) (EVar "value"))) (DoLet false false (PVar "inst") (EFieldAccess (EVar "occurrence") "svoInstance")) (DoLet false false (PVar "dicts") (EFieldAccess (EVar "occurrence") "svoDicts")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "grants") "gsLastStandalone")) (EApp (EVar "Some") (ETuple (EFieldAccess (EVar "occurrence") "svoScheme") (EFieldAccess (EFieldAccess (EVar "inst") "mtiSubstitution") "misAuthSubst"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "arityRef")) (EApp (EVar "Some") (EApp (EVar "funArity") (EFieldAccess (EVar "inst") "mtiBody"))))) (DoLet false false (PVar "receiver") (EMatch (EApp (EVar "methodDispatchIdx") (EVar "name")) (arm (PCon "Some" (PVar "idx")) () (EApp (EApp (EVar "optionOr") (EFieldAccess (EVar "inst") "mtiBody")) (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EFieldAccess (EVar "inst") "mtiBody")))) (arm (PCon "None") () (EFieldAccess (EVar "inst") "mtiBody")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "receiver")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EVar "sym")) (EVar "True")) (EFieldAccess (EVar "dicts") "sdMonos")) (EFieldAccess (EVar "dicts") "sdIfaces")) (EFieldAccess (EVar "dicts") "sdArgVecs"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))) (DoExpr (EFieldAccess (EVar "inst") "mtiBody")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferMethodCandidateAt") (EVar "env")) (EVar "name")) (EVar "ifaceRef")) (EVar "arityRef")) (EVar "tagRef")) (EVar "implRef")) (EVar "methodRef")) (EVar "innerRef")))))))
 (DTypeSig false "inferMethodCandidateAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyCon "Mono"))))))))))
-(DFunDef false "inferMethodCandidateAt" ((PVar "env") (PVar "name") (PVar "ifaceRef") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "methodRef") (PVar "innerRef")) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "env")) (EVar "name")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound method: ")) (EVar "name")))) (arm (PCon "Some" (PVar "s")) () (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateMethodTracked") (EVar "s"))) (DoLet false false (PVar "occurrence") (EFieldAccess (EVar "inst") "mtiBody")) (DoLet false false (PVar "subst") (EFieldAccess (EVar "inst") "mtiSubstitution")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "grants") "gsLastMethodInst")) (EApp (EVar "Some") (ETuple (EVar "s") (EFieldAccess (EVar "subst") "misAuthSubst"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "arityRef")) (EApp (EVar "Some") (EApp (EVar "funArity") (EVar "occurrence"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ifaceRef")) (EApp (EVar "admittedIfaceWord") (EVar "name")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordRLocalSite") (EVar "env")) (EVar "name")) (EVar "tagRef")) (EVar "innerRef")) (EVar "occurrence"))) (DoLet false false (PVar "ret") (EMatch (EApp (EVar "argDispatchOf") (EVar "name")) (arm (PCon "Some" (PVar "idx")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordMethodDicts") (EVar "name")) (EVar "methodRef")) (EVar "innerRef")) (EFieldAccess (EVar "subst") "misTypeSubst"))) (DoLet false false (PVar "omitted") (EApp (EVar "methodOmittedVars") (EVar "name"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordMethodObligationGuarded") (EVar "env")) (EVar "name")) (EVar "s")) (EVar "occurrence")) (EVar "omitted"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordArgStamp") (EVar "name")) (EVar "tagRef")) (EVar "implRef")) (EVar "innerRef")) (EVar "idx")) (EVar "occurrence")) (EVar "omitted"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordArgSiteFn") (EVar "name")) (EVar "idx")) (EVar "occurrence"))) (DoExpr (EVar "occurrence")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordSite") (EVar "env")) (EVar "name")) (EVar "s")) (EVar "ifaceRef")) (EVar "tagRef")) (EVar "implRef")) (EVar "methodRef")) (EVar "innerRef")) (EVar "occurrence")) (EVar "subst"))))) (DoLet false false PWild (EApp (EApp (EVar "forceInstantiation") (EVar "name")) (EVar "inst"))) (DoExpr (EVar "ret"))))))
+(DFunDef false "inferMethodCandidateAt" ((PVar "env") (PVar "name") (PVar "ifaceRef") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "methodRef") (PVar "innerRef")) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "env")) (EVar "name")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound method: ")) (EVar "name")))) (arm (PCon "Some" (PVar "s")) () (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateMethodTracked") (EVar "s"))) (DoLet false false (PVar "occurrence") (EFieldAccess (EVar "inst") "mtiBody")) (DoLet false false (PVar "subst") (EFieldAccess (EVar "inst") "mtiSubstitution")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "grants") "gsLastMethodInst")) (EApp (EVar "Some") (ETuple (EVar "s") (EFieldAccess (EVar "subst") "misAuthSubst"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "arityRef")) (EApp (EVar "Some") (EApp (EVar "funArity") (EVar "occurrence"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ifaceRef")) (EApp (EVar "admittedIfaceWord") (EVar "name")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordRLocalSite") (EVar "env")) (EVar "name")) (EVar "tagRef")) (EVar "innerRef")) (EVar "occurrence"))) (DoLet false false (PVar "ret") (EMatch (EApp (EVar "argDispatchOf") (EVar "name")) (arm (PCon "Some" (PVar "idx")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordMethodDicts") (EVar "name")) (EVar "methodRef")) (EVar "innerRef")) (EFieldAccess (EVar "subst") "misTypeSubst"))) (DoLet false false (PVar "omitted") (EApp (EVar "methodOmittedVars") (EVar "name"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordMethodObligationGuarded") (EVar "env")) (EVar "name")) (EVar "s")) (EVar "occurrence")) (EVar "omitted"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordArgStamp") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcSuppressArgStamp")) (EVar "name")) (EVar "tagRef")) (EVar "implRef")) (EVar "innerRef")) (EVar "idx")) (EVar "occurrence")) (EVar "omitted"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordArgSiteFn") (EVar "name")) (EVar "idx")) (EVar "occurrence"))) (DoExpr (EVar "occurrence")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordSite") (EVar "env")) (EVar "name")) (EVar "s")) (EVar "ifaceRef")) (EVar "tagRef")) (EVar "implRef")) (EVar "methodRef")) (EVar "innerRef")) (EVar "occurrence")) (EVar "subst"))))) (DoLet false false PWild (EApp (EApp (EVar "forceInstantiation") (EVar "name")) (EVar "inst"))) (DoExpr (EVar "ret"))))))
 (DTypeSig false "recordRLocalSite" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyFun (TyCon "Mono") (TyCon "Unit")))))))
-(DFunDef false "recordRLocalSite" ((PVar "env") (PVar "name") (PVar "tagRef") (PVar "innerRef") (PVar "inst")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressRLocalRecord") "value") (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNone") (EApp (EVar "methodDispatchIdx") (EVar "name"))) (EApp (EApp (EVar "standaloneValuePinned") (EVar "env")) (EVar "name"))) (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "inst")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (EVar "True")) (EListLit)) (EListLit)) (EListLit))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit)))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "methodDispatchIdx") (EVar "name")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "inst")) (arm (PCon "Some" (PVar "am")) () (EBlock (DoLet false false (PVar "sym") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (DoLet false false (PVar "dicts") (EApp (EApp (EApp (EApp (EVar "shadowStandaloneDictSlotsAt") (EApp (EApp (EApp (EVar "standaloneValueFor") (EVar "env")) (EVar "name")) (EVar "sym"))) (EVar "name")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym"))) (EVar "am"))) (DoExpr (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "am")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EVar "sym")) (EApp (EApp (EVar "standaloneValuePinned") (EVar "env")) (EVar "name"))) (EFieldAccess (EVar "dicts") "sdMonos")) (EFieldAccess (EVar "dicts") "sdIfaces")) (EFieldAccess (EVar "dicts") "sdArgVecs"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))))) (arm (PCon "None") () (ELit LUnit))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "recordRLocalSite" ((PVar "env") (PVar "name") (PVar "tagRef") (PVar "innerRef") (PVar "inst")) (EIf (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcSuppressRLocalRecord") (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNone") (EApp (EVar "methodDispatchIdx") (EVar "name"))) (EApp (EApp (EVar "standaloneValuePinned") (EVar "env")) (EVar "name"))) (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "inst")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (EVar "True")) (EListLit)) (EListLit)) (EListLit))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit)))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "methodDispatchIdx") (EVar "name")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "inst")) (arm (PCon "Some" (PVar "am")) () (EBlock (DoLet false false (PVar "sym") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (DoLet false false (PVar "dicts") (EApp (EApp (EApp (EApp (EVar "shadowStandaloneDictSlotsAt") (EApp (EApp (EApp (EVar "standaloneValueFor") (EVar "env")) (EVar "name")) (EVar "sym"))) (EVar "name")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym"))) (EVar "am"))) (DoExpr (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "am")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EVar "sym")) (EApp (EApp (EVar "standaloneValuePinned") (EVar "env")) (EVar "name"))) (EFieldAccess (EVar "dicts") "sdMonos")) (EFieldAccess (EVar "dicts") "sdIfaces")) (EFieldAccess (EVar "dicts") "sdArgVecs"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))))) (arm (PCon "None") () (ELit LUnit))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "standaloneSchemeFor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme"))))))
 (DFunDef false "standaloneSchemeFor" ((PVar "env") (PVar "name") (PVar "sym")) (EApp (EApp (EVar "map") (ELam ((PVar "value")) (EFieldAccess (EVar "value") "vsScheme"))) (EApp (EApp (EApp (EVar "standaloneValueFor") (EVar "env")) (EVar "name")) (EVar "sym"))))
 (DTypeSig false "standaloneValueFor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme"))))))
@@ -58243,8 +58225,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "unifyIntoN" (PWild (PCon "False") (PAs "lower" (PCon "TApp" PWild PWild)) (PCon "TVar" (PVar "cell"))) (EApp (EApp (EVar "bindValueUpper") (EVar "cell")) (EVar "lower")))
 (DFunDef false "unifyIntoN" (PWild (PCon "True") (PCon "TVar" (PVar "cell")) (PAs "lower" (PCon "TQual" PWild PWild))) (EApp (EApp (EVar "bindValueUpper") (EVar "cell")) (EVar "lower")))
 (DFunDef false "unifyIntoN" (PWild (PCon "False") (PAs "lower" (PCon "TQual" PWild PWild)) (PCon "TVar" (PVar "cell"))) (EApp (EApp (EVar "bindValueUpper") (EVar "cell")) (EVar "lower")))
-(DFunDef false "unifyIntoN" (PWild PWild (PCon "TVar" (PVar "cell")) (PAs "t" (PCon "TQual" PWild PWild))) (EApp (EApp (EVar "bindVar") (EVar "cell")) (EVar "t")))
-(DFunDef false "unifyIntoN" (PWild PWild (PAs "t" (PCon "TQual" PWild PWild)) (PCon "TVar" (PVar "cell"))) (EApp (EApp (EVar "bindVar") (EVar "cell")) (EVar "t")))
+(DFunDef false "unifyIntoN" (PWild PWild (PCon "TVar" (PVar "cell")) (PAs "t" (PCon "TQual" PWild PWild))) (EApp (EApp (EApp (EVar "bindVar") (EVar "noDyn")) (EVar "cell")) (EVar "t")))
+(DFunDef false "unifyIntoN" (PWild PWild (PAs "t" (PCon "TQual" PWild PWild)) (PCon "TVar" (PVar "cell"))) (EApp (EApp (EApp (EVar "bindVar") (EVar "noDyn")) (EVar "cell")) (EVar "t")))
 (DFunDef false "unifyIntoN" ((PVar "vf") (PVar "pos") (PCon "TQual" (PVar "e") (PVar "qe")) (PCon "TQual" (PVar "a") (PVar "qa"))) (EBlock (DoLet false false PWild (EIf (EVar "pos") (EApp (EApp (EVar "wantAuthority") (EVar "qa")) (EVar "qe")) (EApp (EApp (EVar "wantAuthority") (EVar "qe")) (EVar "qa")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifyIntoStep") (EVar "vf")) (EVar "pos")) (EVar "e")) (EVar "a")))))
 (DFunDef false "unifyIntoN" ((PVar "vf") (PVar "pos") (PCon "TQual" (PVar "e") (PVar "qe")) (PVar "a")) (EBlock (DoLet false false PWild (EIf (EVar "pos") (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qe")))) (EVar "qe")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifyIntoStep") (EVar "vf")) (EVar "pos")) (EVar "e")) (EVar "a")))))
 (DFunDef false "unifyIntoN" ((PVar "vf") (PVar "pos") (PVar "e") (PCon "TQual" (PVar "a") (PVar "qa"))) (EBlock (DoLet false false PWild (EIf (EVar "pos") (ELit LUnit) (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qa")))) (EVar "qa")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifyIntoStep") (EVar "vf")) (EVar "pos")) (EVar "e")) (EVar "a")))))
@@ -58253,7 +58235,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "unifyIntoN" ((PVar "vf") (PVar "pos") (PAs "e" (PCon "TApp" (PVar "e1") (PVar "e2"))) (PAs "a" (PCon "TApp" (PVar "a1") (PVar "a2")))) (EIf (EBinOp "||" (EApp (EApp (EVar "tupleUnifyClash") (EVar "e")) (EVar "a")) (EApp (EVar "monoSlotNonCovariant") (EVar "e1"))) (EApp (EApp (EApp (EVar "unifyOrdered") (EVar "vf")) (EVar "e")) (EVar "a")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "unifyIntoStep") (EVar "vf")) (EVar "pos")) (EVar "e1")) (EVar "a1"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifyIntoStep") (EVar "vf")) (EVar "pos")) (EVar "e2")) (EVar "a2")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "unifyIntoN" ((PVar "vf") PWild (PVar "e") (PVar "a")) (EApp (EApp (EApp (EVar "unifyOrdered") (EVar "vf")) (EVar "e")) (EVar "a")))
 (DTypeSig false "bindValueUpper" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "bindValueUpper" ((PVar "cell") (PVar "lower")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed")) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "occursAdjust") (EApp (EVar "tyvarId") (EVar "cell"))) (EApp (EVar "tyvarLevel") (EVar "cell"))) (EVar "lower"))) (DoExpr (EIf (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed") "value")) (EBlock (DoLet false false (PVar "upper") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProducedEnvelope") (EApp (EApp (EVar "valueJoinOps") (EVar "JoinArgument")) (EVar "collectValueAllowance"))) (EListLit (ETuple (EUnOp "!" (EVar "currentLoc")) (EVar "lower")))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordFileValueFlow") (EUnOp "!" (EVar "currentLoc"))) (EVar "upper")) (EVar "lower"))) (DoExpr (EApp (EApp (EVar "bindVar") (EVar "cell")) (EVar "upper")))) (ELit LUnit)))))
+(DFunDef false "bindValueUpper" ((PVar "cell") (PVar "lower")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed")) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "occursAdjust") (EApp (EVar "tyvarId") (EVar "cell"))) (EApp (EVar "tyvarLevel") (EVar "cell"))) (EVar "lower"))) (DoExpr (EIf (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed") "value")) (EBlock (DoLet false false (PVar "upper") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProducedEnvelope") (EApp (EApp (EApp (EVar "valueJoinOps") (EVar "noDyn")) (EVar "JoinArgument")) (EVar "collectValueAllowance"))) (EListLit (ETuple (EUnOp "!" (EVar "currentLoc")) (EVar "lower")))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordFileValueFlow") (EUnOp "!" (EVar "currentLoc"))) (EVar "upper")) (EVar "lower"))) (DoExpr (EApp (EApp (EApp (EVar "bindVar") (EVar "noDyn")) (EVar "cell")) (EVar "upper")))) (ELit LUnit)))))
 (DTypeSig false "collectValueAllowance" (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")))
 (DFunDef false "collectValueAllowance" ((PVar "rows")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "freshInferenceEffvar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "EffectSolver.registerValueAllowance") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EVar "cell"))) (DoLet false false (PVar "upper") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "lower")) (EApp (EApp (EApp (EVar "rowInto") (EVar "True")) (EVar "upper")) (EVar "lower")))) (ELit LUnit)) (EVar "rows"))) (DoExpr (EVar "upper"))))
 (DTypeSig false "unifyOrdered" (TyFun (TyCon "Bool") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
@@ -58263,9 +58245,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "rowInto" ((PVar "pos") (PVar "er") (PVar "ar")) (EIf (EApp (EVar "EffectSolver.hasSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EIf (EVar "pos") (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "ar")) (EVar "er")) (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "er")) (EVar "ar"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "rowInto" ((PCon "True") (PCon "EffRow" (PVar "le") (PCon "None")) (PCon "EffRow" (PVar "la") (PCon "None"))) (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "la")) (EVar "le"))) (EVar "le")))
 (DFunDef false "rowInto" ((PCon "False") (PCon "EffRow" (PVar "le") (PCon "None")) (PCon "EffRow" (PVar "la") (PCon "None"))) (EApp (EApp (EApp (EVar "contraRowCheck") (EApp (EApp (EVar "atomsEscape") (EVar "le")) (EVar "la"))) (EVar "le")) (EVar "la")))
-(DFunDef false "rowInto" ((PCon "True") (PAs "er" (PCon "EffRow" (PVar "le") PWild)) (PAs "ar" (PCon "EffRow" (PVar "la") (PCon "None")))) (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "la")) (EVar "le"))) (ELit LUnit) (EApp (EApp (EVar "unifyRowN") (EVar "er")) (EVar "ar"))))
-(DFunDef false "rowInto" ((PCon "False") (PAs "er" (PCon "EffRow" (PVar "le") (PCon "None"))) (PAs "ar" (PCon "EffRow" (PVar "la") PWild))) (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "le")) (EVar "la"))) (ELit LUnit) (EApp (EApp (EVar "unifyRowN") (EVar "er")) (EVar "ar"))))
-(DFunDef false "rowInto" (PWild (PVar "er") (PVar "ar")) (EApp (EApp (EVar "unifyRowN") (EVar "er")) (EVar "ar")))
+(DFunDef false "rowInto" ((PCon "True") (PAs "er" (PCon "EffRow" (PVar "le") PWild)) (PAs "ar" (PCon "EffRow" (PVar "la") (PCon "None")))) (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "la")) (EVar "le"))) (ELit LUnit) (EApp (EApp (EApp (EVar "unifyRowN") (EVar "noDyn")) (EVar "er")) (EVar "ar"))))
+(DFunDef false "rowInto" ((PCon "False") (PAs "er" (PCon "EffRow" (PVar "le") (PCon "None"))) (PAs "ar" (PCon "EffRow" (PVar "la") PWild))) (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "le")) (EVar "la"))) (ELit LUnit) (EApp (EApp (EApp (EVar "unifyRowN") (EVar "noDyn")) (EVar "er")) (EVar "ar"))))
+(DFunDef false "rowInto" (PWild (PVar "er") (PVar "ar")) (EApp (EApp (EApp (EVar "unifyRowN") (EVar "noDyn")) (EVar "er")) (EVar "ar")))
 (DTypeSig false "contraRowCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
 (DFunDef false "contraRowCheck" ((PList) PWild PWild) (ELit LUnit))
 (DFunDef false "contraRowCheck" ((PVar "extras") (PVar "le") (PVar "la")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EApp (EVar "contraRowMsg") (EVar "le")) (EVar "la")) (EVar "extras"))))
@@ -58302,7 +58284,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "inferShadowStandaloneArm" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Route")) (TyApp (TyCon "Ref") (TyCon "Inner")))) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Mono")))))))))
 (DFunDef false "inferShadowStandaloneArm" ((PVar "env") (PVar "mname") (PVar "arityRefs") (PVar "tagRefs") (PVar "f") (PVar "x") (PVar "tx")) (EMatch (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "mname")) (arm (PCon "Some" (PVar "value")) () (EBlock (DoLet false false (PVar "occurrence") (EApp (EApp (EApp (EApp (EApp (EVar "instantiateStandaloneOccurrence") (EVar "env")) (EVar "mname")) (ELit (LString ""))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EUnOp "!" (EVar "currentLoc")))) (EVar "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneAt") (EVar "mname")) (EVar "f")) (EVar "occurrence"))) (DoLet false false (PVar "smono") (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")) (DoLet false false PWild (EApp (EApp (EVar "stampMethodArities") (EVar "arityRefs")) (EApp (EVar "funArity") (EVar "smono")))) (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "eff") (EApp (EApp (EApp (EApp (EApp (EVar "applicationRow") (EVar "env")) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "smono")) (EVar "tx")) (EVar "r"))) (DoLet false false PWild (EApp (EApp (EVar "performEffect") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "curEffect")) (EVar "eff"))) (DoLet false false PWild (EApp (EVar "stampRoutes") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "tagRefs")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordSelectedStandaloneRoutes") (EVar "mname")) (EFieldAccess (EVar "occurrence") "svoDicts")) (EVar "tagRefs")) (EVar "tx"))) (DoExpr (EVar "r")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "inferApp") (EVar "env")) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EApp (EApp (EVar "inferShadowAppHead") (EVar "env")) (EVar "f"))) (EVar "tx")))))
 (DTypeSig false "inferShadowAppHead" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Mono"))))
-(DFunDef false "inferShadowAppHead" ((PVar "env") (PVar "f")) (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "True"))) (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "saved"))) (DoExpr (EVar "ft"))))
+(DFunDef false "inferShadowAppHead" ((PVar "env") (PVar "f")) (EApp (EApp (EVar "infer") (EApp (EVar "shadowHeadEnv") (EVar "env"))) (EVar "f")))
+(DTypeSig false "shadowHeadEnv" (TyFun (TyCon "TcEnv") (TyCon "TcEnv")))
+(DFunDef false "shadowHeadEnv" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "teDyn" (ERecordUpdate (EFieldAccess (EVar "env") "teDyn") ((fa "dcShadowHeadCtx" (EVar "True"))))))))
 (DTypeSig false "inferShadowAppAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Route")) (TyApp (TyCon "Ref") (TyCon "Inner")))) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono"))))))))))
 (DFunDef false "inferShadowAppAt" ((PVar "env") (PVar "mname") (PVar "arityRefs") (PVar "tagRefs") (PVar "hd") (PVar "nodes") (PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "dloc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "pre") (EApp (EApp (EVar "inferSpineArgs") (EVar "env")) (EVar "nodes"))) (DoLet false false (PVar "k") (EApp (EVar "listLen") (EVar "pre"))) (DoLet false false (PVar "tx") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "groundShadowReceiver") (EApp (EApp (EApp (EVar "importerShadowDomainAt") (EVar "env")) (EVar "mname")) (EVar "k"))) (EVar "tx")) (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "mname")) (EVar "tx"))) (EVar "dloc"))) (DoLet false false (PVar "ats") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "snd")) (EVar "pre")) (EListLit (EVar "tx")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "groundAdmittedReceivers") (EVar "env")) (EVar "mname")) (EVar "ats")) (EVar "dloc"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "importerAdmittedVerdict") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "mname")) (EVar "ats")) (arm (PCon "AdReject" (PVar "ifs")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushAmbiguousShadowDecl") (EVar "mname")) (EVar "ifs")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EVar "dloc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferShadowStandaloneArmAt") (EVar "env")) (EVar "mname")) (EVar "arityRefs")) (EVar "tagRefs")) (EVar "hd")) (EVar "pre")) (EVar "f")) (EVar "x")) (EVar "tx"))))) (arm (PCon "AdStandalone") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferShadowStandaloneArmAt") (EVar "env")) (EVar "mname")) (EVar "arityRefs")) (EVar "tagRefs")) (EVar "hd")) (EVar "pre")) (EVar "f")) (EVar "x")) (EVar "tx"))) (arm (PCon "AdDefer") () (EMatch (EApp (EVar "headTyconMono") (EVar "tx")) (arm (PCon "Some" (PVar "head")) () (EIf (EApp (EApp (EApp (EVar "ieImplExistsForHead") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "mname")) (EVar "head")) (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EApp (EApp (EVar "inferShadowAppHead") (EVar "env")) (EVar "hd"))) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "tx"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferShadowStandaloneArmAt") (EVar "env")) (EVar "mname")) (EVar "arityRefs")) (EVar "tagRefs")) (EVar "hd")) (EVar "pre")) (EVar "f")) (EVar "x")) (EVar "tx")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EApp (EApp (EVar "inferShadowAppHead") (EVar "env")) (EVar "hd"))) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "tx"))))))))))))
 (DTypeSig false "inferShadowStandaloneArmAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Route")) (TyApp (TyCon "Ref") (TyCon "Inner")))) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Mono"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Mono")))))))))))
@@ -58327,7 +58311,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "inferDefinerShadowApp" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono"))))))))))
 (DFunDef false "inferDefinerShadowApp" ((PVar "env") (PVar "name") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "innerRef") (PVar "f") (PVar "x")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferDefinerShadowAppAt") (EVar "env")) (EVar "name")) (EVar "arityRef")) (EVar "tagRef")) (EVar "implRef")) (EVar "innerRef")) (EVar "f")) (EListLit)) (EVar "f")) (EVar "x")))
 (DTypeSig false "inferDefinerShadowAppAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono"))))))))))))
-(DFunDef false "inferDefinerShadowAppAt" ((PVar "env") (PVar "name") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "innerRef") (PVar "hd") (PVar "nodes") (PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef"))) (DoLet false false (PVar "dloc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "pre") (EApp (EApp (EVar "inferSpineArgs") (EVar "env")) (EVar "nodes"))) (DoLet false false (PVar "k") (EApp (EVar "listLen") (EVar "pre"))) (DoLet false false (PVar "xt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false (PVar "isDictVar") (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "name")) (EVar "xt"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "groundShadowReceiver") (EApp (EApp (EApp (EApp (EVar "shadowDomainForAt") (EVar "env")) (EVar "name")) (EVar "sym")) (EVar "k"))) (EVar "xt")) (EVar "isDictVar")) (EVar "dloc"))) (DoLet false false (PVar "dispatches") (EApp (EApp (EVar "definerReceiverDispatches") (EVar "name")) (EVar "xt"))) (DoLet false false PWild (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EMatch (EApp (EVar "spineHeadEv") (EVar "hd")) (arm (PCon "Some" (PVar "ev")) () (EBlock (DoLet false false (PVar "cell") (EApp (EVar "methodCellOf") (EVar "ev"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cell") "ecIface")) (EApp (EVar "admittedIfaceWord") (EVar "name")))))) (arm (PCon "None") () (ELit LUnit))) (ELit LUnit))) (DoLet false false (PVar "savedRLocal") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressRLocalRecord") "value")) (DoLet false false (PVar "savedArgStamp") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressArgStamp") "value")) (DoLet false false (PVar "savedShadowHead") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressRLocalRecord")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressArgStamp")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "True"))) (DoLet false false (PVar "selected") (EIf (EVar "dispatches") (EVar "None") (EApp (EApp (EApp (EApp (EVar "standaloneOccurrence") (EVar "env")) (EVar "name")) (EVar "sym")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EVar "dloc"))))) (DoLet false false (PVar "ft") (EIf (EVar "dispatches") (EApp (EApp (EApp (EVar "shadowVarHeadMethodScheme") (EVar "env")) (EVar "name")) (EVar "hd")) (EMatch (EVar "selected") (arm (PCon "Some" (PVar "occurrence")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneAt") (EVar "name")) (EVar "hd")) (EVar "occurrence"))) (DoExpr (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")))) (arm (PCon "None") () (EApp (EApp (EVar "infer") (EVar "env")) (EVar "hd")))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "arityRef")) (EApp (EVar "Some") (EApp (EVar "funArity") (EVar "ft"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "savedShadowHead"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressRLocalRecord")) (EVar "savedRLocal"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressArgStamp")) (EVar "savedArgStamp"))) (DoLet false false (PVar "dicts") (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EVar "emptyShadowDicts") (EApp (EApp (EVar "optionOr") (EVar "emptyShadowDicts")) (EApp (EApp (EVar "map") (ELam ((PVar "occurrence")) (EFieldAccess (EVar "occurrence") "svoDicts"))) (EVar "selected"))))) (DoLet false false PWild (EIf (EVar "isDictVar") (ELit LUnit) (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "xt")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (EApp (EVar "not") (EVar "dispatches"))) (EFieldAccess (EVar "dicts") "sdMonos")) (EFieldAccess (EVar "dicts") "sdIfaces")) (EFieldAccess (EVar "dicts") "sdArgVecs"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit)))))) (DoLet false false PWild (EMatch (EApp (EVar "argDispatchOf") (EVar "name")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKArgStamp")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "xt")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EVar "SKArg") (EVar "implRef")) (EIf (EVar "dispatches") (EVar "ft") (EVar "xt"))) (EListLit))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EMatch (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EVar "None") (EApp (EApp (EApp (EVar "standaloneSchemeFor") (EVar "env")) (EVar "name")) (EVar "sym"))) (arm (PCon "Some" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "dloc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifySpineResult") (EVar "env")) (EVar "f")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EVar "x") (EVar "xt")))))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "enforceStandaloneDomainAt") (EVar "env")) (EVar "name")) (EVar "xt")) (EVar "dloc")) (EVar "k")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "xt"))))))))))))
+(DFunDef false "inferDefinerShadowAppAt" ((PVar "env") (PVar "name") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "innerRef") (PVar "hd") (PVar "nodes") (PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef"))) (DoLet false false (PVar "dloc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "pre") (EApp (EApp (EVar "inferSpineArgs") (EVar "env")) (EVar "nodes"))) (DoLet false false (PVar "k") (EApp (EVar "listLen") (EVar "pre"))) (DoLet false false (PVar "xt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false (PVar "isDictVar") (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "name")) (EVar "xt"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "groundShadowReceiver") (EApp (EApp (EApp (EApp (EVar "shadowDomainForAt") (EVar "env")) (EVar "name")) (EVar "sym")) (EVar "k"))) (EVar "xt")) (EVar "isDictVar")) (EVar "dloc"))) (DoLet false false (PVar "dispatches") (EApp (EApp (EVar "definerReceiverDispatches") (EVar "name")) (EVar "xt"))) (DoLet false false PWild (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EMatch (EApp (EVar "spineHeadEv") (EVar "hd")) (arm (PCon "Some" (PVar "ev")) () (EBlock (DoLet false false (PVar "cell") (EApp (EVar "methodCellOf") (EVar "ev"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cell") "ecIface")) (EApp (EVar "admittedIfaceWord") (EVar "name")))))) (arm (PCon "None") () (ELit LUnit))) (ELit LUnit))) (DoLet false false (PVar "headEnv") (ERecordUpdate (EVar "env") ((fa "teDyn" (ERecordUpdate (EFieldAccess (EVar "env") "teDyn") ((fa "dcSuppressRLocalRecord" (EVar "True")) (fa "dcSuppressArgStamp" (EVar "True")) (fa "dcShadowHeadCtx" (EVar "True")))))))) (DoLet false false (PVar "selected") (EIf (EVar "dispatches") (EVar "None") (EApp (EApp (EApp (EApp (EVar "standaloneOccurrence") (EVar "headEnv")) (EVar "name")) (EVar "sym")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EVar "dloc"))))) (DoLet false false (PVar "ft") (EIf (EVar "dispatches") (EApp (EApp (EApp (EVar "shadowVarHeadMethodScheme") (EVar "headEnv")) (EVar "name")) (EVar "hd")) (EMatch (EVar "selected") (arm (PCon "Some" (PVar "occurrence")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneAt") (EVar "name")) (EVar "hd")) (EVar "occurrence"))) (DoExpr (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")))) (arm (PCon "None") () (EApp (EApp (EVar "infer") (EVar "headEnv")) (EVar "hd")))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "arityRef")) (EApp (EVar "Some") (EApp (EVar "funArity") (EVar "ft"))))) (DoLet false false (PVar "dicts") (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EVar "emptyShadowDicts") (EApp (EApp (EVar "optionOr") (EVar "emptyShadowDicts")) (EApp (EApp (EVar "map") (ELam ((PVar "occurrence")) (EFieldAccess (EVar "occurrence") "svoDicts"))) (EVar "selected"))))) (DoLet false false PWild (EIf (EVar "isDictVar") (ELit LUnit) (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "xt")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (EApp (EVar "not") (EVar "dispatches"))) (EFieldAccess (EVar "dicts") "sdMonos")) (EFieldAccess (EVar "dicts") "sdIfaces")) (EFieldAccess (EVar "dicts") "sdArgVecs"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit)))))) (DoLet false false PWild (EMatch (EApp (EVar "argDispatchOf") (EVar "name")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKArgStamp")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "xt")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EVar "SKArg") (EVar "implRef")) (EIf (EVar "dispatches") (EVar "ft") (EVar "xt"))) (EListLit))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EMatch (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EVar "None") (EApp (EApp (EApp (EVar "standaloneSchemeFor") (EVar "env")) (EVar "name")) (EVar "sym"))) (arm (PCon "Some" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "dloc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifySpineResult") (EVar "env")) (EVar "f")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EVar "x") (EVar "xt")))))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "enforceStandaloneDomainAt") (EVar "env")) (EVar "name")) (EVar "xt")) (EVar "dloc")) (EVar "k")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "xt"))))))))))))
 (DTypeSig false "isDefinerShadow" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isDefinerShadow" ((PVar "name")) (EBinOp "&&" (EApp (EVar "ifaceMethodName") (EVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value"))))
 (DTypeSig false "definerReceiverDispatches" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Bool"))))
@@ -58359,9 +58343,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "instantiateStandaloneOccurrence" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ValueScheme") (TyCon "SelectedValueOccurrence")))))))
 (DFunDef false "instantiateStandaloneOccurrence" ((PVar "env") (PVar "name") (PVar "sym") (PVar "origin") (PVar "value")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "origin"))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "instantiateValueTracked") (EVar "name")) (EFieldAccess (EVar "value") "vsScheme"))) (DoLet false false (PVar "declared") (EApp (EApp (EVar "declaredEffectsAt") (EVar "inst")) (EFieldAccess (EVar "value") "vsDeclared"))) (DoLet false false PWild (EMatch (EVar "declared") (arm (PCon "Some" (PVar "dc")) () (EApp (EApp (EVar "recordDeclaredBindingCall") (EVar "dc")) (EFieldAccess (EFieldAccess (EVar "inst") "mtiSubstitution") "misTypeSubst"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "recordShadowStandaloneObls") (EVar "env")) (EVar "name")) (EFieldAccess (EFieldAccess (EVar "inst") "mtiSubstitution") "misTypeSubst"))))) (DoLet false false (PVar "key") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym"))) (DoLet false false (PVar "dc") (EApp (EApp (EVar "optionOr") (EApp (EApp (EVar "shadowDeclaredFor") (EVar "name")) (EVar "key"))) (EVar "declared"))) (DoExpr (ERecordCreate "SelectedValueOccurrence" ((fa "svoScheme" (EFieldAccess (EVar "value") "vsScheme")) (fa "svoInstance" (EVar "inst")) (fa "svoDicts" (EApp (EApp (EApp (EVar "shadowStandaloneDictSlots") (EFieldAccess (EVar "dc") "cdSlots")) (EFieldAccess (EVar "dc") "cdArgs")) (EFieldAccess (EFieldAccess (EVar "inst") "mtiSubstitution") "misTypeSubst"))))))))
 (DTypeSig false "standaloneValueBinding" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme")))))
-(DFunDef false "standaloneValueBinding" ((PVar "env") (PVar "name")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value") (EVar "None") (EIf (EBinOp "&&" (EApp (EVar "ifaceMethodName") (EVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value"))) (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name")) (EIf (EApp (EVar "not") (EApp (EVar "singleTyparamIfaceMethod") (EVar "name"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "standaloneValueBinding" ((PVar "env") (PVar "name")) (EIf (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcShadowHeadCtx") (EVar "None") (EIf (EBinOp "&&" (EApp (EVar "ifaceMethodName") (EVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value"))) (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name")) (EIf (EApp (EVar "not") (EApp (EVar "singleTyparamIfaceMethod") (EVar "name"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "standaloneValueBindingEmit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyApp (TyCon "Option") (TyCon "ValueScheme"))))))
-(DFunDef false "standaloneValueBindingEmit" ((PVar "env") (PVar "name") (PVar "tagRef")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value") (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef")) (ELit (LString ""))) (EVar "None") (EIf (EApp (EVar "not") (EApp (EVar "emitValueShadowGate") (EVar "name"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "standaloneValueFor") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "standaloneValueBindingEmit" ((PVar "env") (PVar "name") (PVar "tagRef")) (EIf (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcShadowHeadCtx") (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef")) (ELit (LString ""))) (EVar "None") (EIf (EApp (EVar "not") (EApp (EVar "emitValueShadowGate") (EVar "name"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "standaloneValueFor") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "emitValueShadowGate" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "emitValueShadowGate" ((PVar "name")) (EIf (EApp (EVar "isDefinerShadow") (EVar "name")) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "singleTyparamIfaceMethod") (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "standaloneValuePinned" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -58384,9 +58368,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "inferDefinerShadowVarAppAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono"))))))))
 (DFunDef false "inferDefinerShadowVarAppAt" ((PVar "env") (PVar "name") (PVar "hd") (PVar "nodes") (PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "dloc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "pre") (EApp (EApp (EVar "inferSpineArgs") (EVar "env")) (EVar "nodes"))) (DoLet false false (PVar "xt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false (PVar "isDictVar") (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "name")) (EVar "xt"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "groundShadowReceiver") (EApp (EApp (EVar "standaloneShadowDomainAt") (EVar "name")) (EApp (EVar "listLen") (EVar "pre")))) (EVar "xt")) (EVar "isDictVar")) (EVar "dloc"))) (DoExpr (EIf (EVar "isDictVar") (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EApp (EApp (EApp (EVar "shadowVarHeadMethodScheme") (EVar "env")) (EVar "name")) (EVar "hd"))) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "xt"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferDefinerStandaloneVarAppAt") (EVar "env")) (EVar "name")) (EVar "hd")) (EVar "pre")) (EVar "f")) (EVar "x")) (EVar "xt")) (EVar "dloc"))))))
 (DTypeSig false "shadowVarHeadMethodScheme" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Mono")))))
-(DFunDef false "shadowVarHeadMethodScheme" ((PVar "env") (PVar "name") (PVar "f")) (EMatch (EApp (EVar "methodEntryHere") (EVar "name")) (arm (PCon "Some" (PTuple PWild PWild (PVar "ty") (PVar "scope"))) () (EApp (EApp (EVar "forceInstantiation") (EVar "name")) (EApp (EVar "instantiateMethodTracked") (EApp (EVar "fst") (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "scope")) (EVar "ty")))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "True"))) (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "saved"))) (DoExpr (EVar "ft"))))))
+(DFunDef false "shadowVarHeadMethodScheme" ((PVar "env") (PVar "name") (PVar "f")) (EMatch (EApp (EVar "methodEntryHere") (EVar "name")) (arm (PCon "Some" (PTuple PWild PWild (PVar "ty") (PVar "scope"))) () (EApp (EApp (EVar "forceInstantiation") (EVar "name")) (EApp (EVar "instantiateMethodTracked") (EApp (EVar "fst") (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "scope")) (EVar "ty")))))) (arm (PCon "None") () (EApp (EApp (EVar "infer") (EApp (EVar "shadowHeadEnv") (EVar "env"))) (EVar "f")))))
 (DTypeSig false "inferDefinerStandaloneVarAppAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Mono"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))))))))))
-(DFunDef false "inferDefinerStandaloneVarAppAt" ((PVar "env") (PVar "name") (PVar "hd") (PVar "pre") (PVar "f") (PVar "x") (PVar "xt") (PVar "dloc")) (EMatch (EApp (EApp (EApp (EApp (EVar "standaloneOccurrence") (EVar "env")) (EVar "name")) (ELit (LString ""))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EVar "dloc"))) (arm (PCon "Some" (PVar "occurrence")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneAt") (EVar "name")) (EVar "hd")) (EVar "occurrence"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "dloc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifySpineResult") (EVar "env")) (EVar "f")) (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EVar "x") (EVar "xt")))))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "True"))) (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "hd"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "saved"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "enforceStandaloneDomainAt") (EVar "env")) (EVar "name")) (EVar "xt")) (EVar "dloc")) (EApp (EVar "listLen") (EVar "pre")))) (DoExpr (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "xt"))))))))))
+(DFunDef false "inferDefinerStandaloneVarAppAt" ((PVar "env") (PVar "name") (PVar "hd") (PVar "pre") (PVar "f") (PVar "x") (PVar "xt") (PVar "dloc")) (EMatch (EApp (EApp (EApp (EApp (EVar "standaloneOccurrence") (EVar "env")) (EVar "name")) (ELit (LString ""))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EVar "dloc"))) (arm (PCon "Some" (PVar "occurrence")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneAt") (EVar "name")) (EVar "hd")) (EVar "occurrence"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "dloc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifySpineResult") (EVar "env")) (EVar "f")) (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EVar "x") (EVar "xt")))))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EApp (EVar "shadowHeadEnv") (EVar "env"))) (EVar "hd"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "enforceStandaloneDomainAt") (EVar "env")) (EVar "name")) (EVar "xt")) (EVar "dloc")) (EApp (EVar "listLen") (EVar "pre")))) (DoExpr (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "xt"))))))))))
 (DTypeSig false "stampRoutes" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))) (TyCon "Unit")))
 (DFunDef false "stampRoutes" ((PList)) (ELit LUnit))
 (DFunDef false "stampRoutes" ((PCons (PVar "r") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "RLocal") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "r")))) (EListLit)))) (DoExpr (EApp (EVar "stampRoutes") (EVar "rest")))))
@@ -58613,13 +58597,13 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "isOmittedElse" ((PCon "ELit" (PCon "LUnit"))) (EVar "True"))
 (DFunDef false "isOmittedElse" (PWild) (EVar "False"))
 (DTypeSig false "joinValueTypes" (TyFun (TyCon "JoinContext") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))) (TyCon "Mono"))))
-(DFunDef false "joinValueTypes" ((PVar "context") (PVar "values")) (EBlock (DoLet false false (PVar "upper") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProduced") (EApp (EApp (EVar "valueJoinOps") (EVar "context")) (EApp (EVar "collectRows") (EVar "joinCellOf")))) (EVar "values")))) (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "loc") (PVar "lower"))) (EApp (EApp (EApp (EVar "recordFileValueFlow") (EVar "loc")) (EVar "upper")) (EVar "lower")))) (EVar "values"))) (DoExpr (EVar "upper"))))
-(DTypeSig false "valueJoinOps" (TyFun (TyCon "JoinContext") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")) (TyApp (TyCon "ValueJoinOps") (TyApp (TyCon "Option") (TyCon "Loc"))))))
-(DFunDef false "valueJoinOps" ((PVar "context") (PVar "collector")) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EVar "decidingJoinOps") (EVar "context")) (EVar "collector"))) (DoExpr (ERecordUpdate (EVar "ops") ((fa "vjoDefer" (ELam ((PVar "values")) (EApp (EApp (EVar "deferJoin") (EVar "ops")) (EVar "values")))))))))
-(DTypeSig false "decidingJoinOps" (TyFun (TyCon "JoinContext") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")) (TyApp (TyCon "ValueJoinOps") (TyApp (TyCon "Option") (TyCon "Loc"))))))
-(DFunDef false "decidingJoinOps" ((PVar "context") (PVar "collector")) (ERecordCreate "ValueJoinOps" ((fa "vjoEqual" (EApp (EVar "joinValueEqual") (EVar "context"))) (fa "vjoCovariants" (EVar "producedSlotCovariants")) (fa "vjoFreshType" (EVar "freshVar")) (fa "vjoFreshRow" (EVar "openRow")) (fa "vjoCollectRows" (EVar "collector")) (fa "vjoFreshAuth" (ELam ((PVar "top")) (EApp (EVar "AVar") (EApp (EApp (EVar "freshAuthvar") (EVar "top")) (EVar "None"))))) (fa "vjoCollectAuth" (EVar "collectAuthAllowance")) (fa "vjoDefer" (ELam (PWild) (EVar "None"))))))
-(DTypeSig false "deferJoin" (TyFun (TyApp (TyCon "ValueJoinOps") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono")))))
-(DFunDef false "deferJoin" ((PVar "ops") (PVar "values")) (EIf (EBinOp "&&" (EApp (EVar "EffectSolver.hasSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EApp (EVar "distinctVariables") (EVar "values"))) (EBlock (DoLet false false (PVar "result") (EApp (EVar "freshVar") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef")) (EBinOp "::" (ERecordCreate "PendingJoin" ((fa "pjResult" (EVar "result")) (fa "pjValues" (EVar "values")) (fa "pjLevel" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (fa "pjOps" (EVar "ops")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef") "value")))) (DoExpr (EApp (EVar "Some") (EVar "result")))) (EVar "None")))
+(DFunDef false "joinValueTypes" ((PVar "context") (PVar "values")) (EBlock (DoLet false false (PVar "upper") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProduced") (EApp (EApp (EApp (EVar "valueJoinOps") (EVar "noDyn")) (EVar "context")) (EApp (EVar "collectRows") (EVar "joinCellOf")))) (EVar "values")))) (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "loc") (PVar "lower"))) (EApp (EApp (EApp (EVar "recordFileValueFlow") (EVar "loc")) (EVar "upper")) (EVar "lower")))) (EVar "values"))) (DoExpr (EVar "upper"))))
+(DTypeSig false "valueJoinOps" (TyFun (TyCon "DynCtx") (TyFun (TyCon "JoinContext") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")) (TyApp (TyCon "ValueJoinOps") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "valueJoinOps" ((PVar "dyn") (PVar "context") (PVar "collector")) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EApp (EVar "decidingJoinOps") (EVar "dyn")) (EVar "context")) (EVar "collector"))) (DoExpr (ERecordUpdate (EVar "ops") ((fa "vjoDefer" (ELam ((PVar "values")) (EApp (EApp (EApp (EVar "deferJoin") (EVar "context")) (EVar "collector")) (EVar "values")))))))))
+(DTypeSig false "decidingJoinOps" (TyFun (TyCon "DynCtx") (TyFun (TyCon "JoinContext") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")) (TyApp (TyCon "ValueJoinOps") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "decidingJoinOps" ((PVar "dyn") (PVar "context") (PVar "collector")) (ERecordCreate "ValueJoinOps" ((fa "vjoEqual" (EApp (EApp (EVar "joinValueEqual") (EVar "dyn")) (EVar "context"))) (fa "vjoCovariants" (EVar "producedSlotCovariants")) (fa "vjoFreshType" (EVar "freshVar")) (fa "vjoFreshRow" (EVar "openRow")) (fa "vjoCollectRows" (EVar "collector")) (fa "vjoFreshAuth" (ELam ((PVar "top")) (EApp (EVar "AVar") (EApp (EApp (EVar "freshAuthvar") (EVar "top")) (EVar "None"))))) (fa "vjoCollectAuth" (EVar "collectAuthAllowance")) (fa "vjoDefer" (ELam (PWild) (EVar "None"))))))
+(DTypeSig false "deferJoin" (TyFun (TyCon "JoinContext") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono"))))))
+(DFunDef false "deferJoin" ((PVar "context") (PVar "collector") (PVar "values")) (EIf (EBinOp "&&" (EApp (EVar "EffectSolver.hasSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EApp (EVar "distinctVariables") (EVar "values"))) (EBlock (DoLet false false (PVar "result") (EApp (EVar "freshVar") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef")) (EBinOp "::" (ERecordCreate "PendingJoin" ((fa "pjResult" (EVar "result")) (fa "pjValues" (EVar "values")) (fa "pjLevel" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (fa "pjContext" (EVar "context")) (fa "pjCollector" (EVar "collector")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef") "value")))) (DoExpr (EApp (EVar "Some") (EVar "result")))) (EVar "None")))
 (DTypeSig false "distinctVariables" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))) (TyCon "Bool")))
 (DFunDef false "distinctVariables" ((PVar "values")) (EBlock (DoLet false false (PVar "roots") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "value"))) (EMatch (EApp (EVar "normalize") (EVar "value")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "tyvarId") (EVar "cell"))) (ELit LUnit)) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EVar "values"))) (DoExpr (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "IdMap.keys") (EVar "roots"))) (ELit (LInt 2))))))
 (DTypeSig false "resolvePendingJoins" (TyFun (TyCon "Int") (TyCon "Unit")))
@@ -58642,7 +58626,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "lowerPending" ((PVar "level") (PCons (PVar "pj") (PVar "rest"))) (EIf (EBinOp ">=" (EFieldAccess (EVar "pj") "pjLevel") (EVar "level")) (EBinOp "::" (ERecordUpdate (EVar "pj") ((fa "pjLevel" (EBinOp "-" (EVar "level") (ELit (LInt 1)))))) (EApp (EApp (EVar "lowerPending") (EVar "level")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "lowerPending" (PWild (PVar "pending")) (EVar "pending"))
 (DTypeSig false "resolvePendingJoin" (TyFun (TyCon "PendingJoin") (TyCon "Unit")))
-(DFunDef false "resolvePendingJoin" ((PVar "pj")) (EMatch (EApp (EVar "normalize") (EFieldAccess (EVar "pj") "pjResult")) (arm (PCon "TVar" PWild) () (EApp (EApp (EVar "unify") (EFieldAccess (EVar "pj") "pjResult")) (EApp (EApp (EVar "resolveDeferredJoin") (EFieldAccess (EVar "pj") "pjOps")) (EFieldAccess (EVar "pj") "pjValues")))) (arm PWild () (EApp (EVar "settleShapedJoins") (EListLit (EVar "pj"))))))
+(DFunDef false "resolvePendingJoin" ((PVar "pj")) (EMatch (EApp (EVar "normalize") (EFieldAccess (EVar "pj") "pjResult")) (arm (PCon "TVar" PWild) () (EApp (EApp (EVar "unify") (EFieldAccess (EVar "pj") "pjResult")) (EApp (EApp (EVar "resolveDeferredJoin") (EApp (EApp (EApp (EVar "decidingJoinOps") (EVar "noDyn")) (EFieldAccess (EVar "pj") "pjContext")) (EFieldAccess (EVar "pj") "pjCollector"))) (EFieldAccess (EVar "pj") "pjValues")))) (arm PWild () (EApp (EApp (EVar "settleShapedJoins") (EVar "noDyn")) (EListLit (EVar "pj"))))))
 (DTypeSig false "collectAuthAllowance" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyCon "Authority")))
 (DFunDef false "collectAuthAllowance" ((PVar "lowers")) (EBlock (DoLet false false (PVar "top") (EMatch (EVar "lowers") (arm (PCons (PVar "q") PWild) () (EApp (EVar "authDomainTop") (EVar "q"))) (arm (PList) () (EVar "PUnit")))) (DoLet false false (PVar "cell") (EApp (EApp (EVar "freshAuthvar") (EVar "top")) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "q")) (EApp (EApp (EVar "wantAuthority") (EVar "q")) (EApp (EVar "AVar") (EVar "cell"))))) (ELit LUnit)) (EVar "lowers"))) (DoExpr (EApp (EVar "AVar") (EVar "cell")))))
 (DTypeSig false "optionOrFresh" (TyFun (TyApp (TyCon "Option") (TyCon "Mono")) (TyCon "Mono")))
@@ -58651,13 +58635,13 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "collectProducedSummary" (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")))
 (DFunDef false "collectProducedSummary" ((PVar "rows")) (EBlock (DoLet false false (PVar "summary") (EApp (EVar "freshEffectSummary") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "row")) (EApp (EApp (EVar "recordEffectBody") (EVar "summary")) (EVar "row")))) (ELit LUnit)) (EVar "rows"))) (DoExpr (EVar "summary"))))
 (DTypeSig false "publishProducedResults" (TyFun (TyCon "BindingSummary") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))) (TyCon "Unit"))))
-(DFunDef false "publishProducedResults" ((PVar "owned") (PVar "values")) (EBlock (DoLet false false (PVar "results") (EApp (EApp (EVar "map") (EApp (EVar "clauseResult") (EFieldAccess (EVar "owned") "bsArity"))) (EVar "values"))) (DoLet false false (PVar "produced") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProducedEnvelope") (EApp (EApp (EVar "valueJoinOps") (EVar "JoinClause")) (EVar "collectProducedSummary"))) (EVar "results")))) (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "loc") (PVar "lower"))) (EApp (EApp (EApp (EVar "recordFileValueFlow") (EVar "loc")) (EVar "produced")) (EVar "lower")))) (EVar "results"))) (DoExpr (EMatch (EApp (EApp (EVar "resultAfterArrows") (EFieldAccess (EVar "owned") "bsArity")) (EFieldAccess (EVar "owned") "bsValue")) (arm (PCon "Some" (PVar "expected")) () (EApp (EApp (EVar "bindFrom") (EVar "expected")) (EVar "produced"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "binding source arity differs from its allocated shape"))))))))
+(DFunDef false "publishProducedResults" ((PVar "owned") (PVar "values")) (EBlock (DoLet false false (PVar "results") (EApp (EApp (EVar "map") (EApp (EVar "clauseResult") (EFieldAccess (EVar "owned") "bsArity"))) (EVar "values"))) (DoLet false false (PVar "produced") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProducedEnvelope") (EApp (EApp (EApp (EVar "valueJoinOps") (EVar "noDyn")) (EVar "JoinClause")) (EVar "collectProducedSummary"))) (EVar "results")))) (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "loc") (PVar "lower"))) (EApp (EApp (EApp (EVar "recordFileValueFlow") (EVar "loc")) (EVar "produced")) (EVar "lower")))) (EVar "results"))) (DoExpr (EMatch (EApp (EApp (EVar "resultAfterArrows") (EFieldAccess (EVar "owned") "bsArity")) (EFieldAccess (EVar "owned") "bsValue")) (arm (PCon "Some" (PVar "expected")) () (EApp (EApp (EVar "bindFrom") (EVar "expected")) (EVar "produced"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "binding source arity differs from its allocated shape"))))))))
 (DTypeSig false "clauseResult" (TyFun (TyCon "Int") (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono")) (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono")))))
 (DFunDef false "clauseResult" ((PVar "arity") (PTuple (PVar "loc") (PVar "value"))) (EMatch (EApp (EApp (EVar "resultAfterArrows") (EVar "arity")) (EVar "value")) (arm (PCon "Some" (PVar "result")) () (ETuple (EVar "loc") (EVar "result"))) (arm (PCon "None") () (ETuple (EVar "loc") (EVar "value")))))
 (DTypeSig false "checkRecursiveValue" (TyFun (TyCon "BindingSummary") (TyCon "Unit")))
 (DFunDef false "checkRecursiveValue" ((PVar "owned")) (EApp (EApp (EApp (EVar "unifyInto") (EVar "True")) (EFieldAccess (EVar "owned") "bsRecursiveValue")) (EFieldAccess (EVar "owned") "bsValue")))
-(DTypeSig false "joinValueEqual" (TyFun (TyCon "JoinContext") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
-(DFunDef false "joinValueEqual" ((PVar "context") (PVar "loc") (PVar "left") (PVar "right")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "savedContext") (EUnOp "!" (EVar "currentJoinContext"))) (DoLet false false PWild (EApp (EVar "setLocIfSome") (EVar "loc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "noteNumlitCtx") (EVar "left")) (EVar "right")) (EVar "context"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentJoinContext")) (EApp (EVar "Some") (EVar "context")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "left")) (EVar "right"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentJoinContext")) (EVar "savedContext"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "saved")))))
+(DTypeSig false "joinValueEqual" (TyFun (TyCon "DynCtx") (TyFun (TyCon "JoinContext") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))))
+(DFunDef false "joinValueEqual" ((PVar "dyn") (PVar "context") (PVar "loc") (PVar "left") (PVar "right")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false PWild (EApp (EVar "setLocIfSome") (EVar "loc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "noteNumlitCtx") (EVar "left")) (EVar "right")) (EVar "context"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "unifyIn") (ERecordUpdate (EVar "dyn") ((fa "dcJoin" (EApp (EVar "Some") (EVar "context")))))) (EVar "left")) (EVar "right"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "saved")))))
 (DTypeSig false "producedSlotCovariants" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Bool"))))
 (DFunDef false "producedSlotCovariants" ((PVar "head")) (EMatch (EApp (EVar "headTyconMono") (EVar "head")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EBlock (DoLet false false (PVar "slot") (EApp (EVar "monoSpineDepth") (EVar "head"))) (DoExpr (EMatch (EApp (EVar "paramPolaritiesOf") (EVar "key")) (arm (PCon "Some" (PVar "polarities")) () (EApp (EApp (EVar "map") (EVar "isCovariantPolarity")) (EApp (EApp (EVar "dropFirst") (EVar "slot")) (EVar "polarities")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "List")))) (EIf (EBinOp "==" (EVar "slot") (ELit (LInt 0))) (EListLit (EVar "True")) (EListLit)) (EMatch (EApp (EVar "headTyconNameMono") (EVar "head")) (arm (PCon "Some" (PVar "name")) () (EMatch (EApp (EVar "tupleTagArity") (EVar "name")) (arm (PCon "Some" (PVar "arity")) () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (EVar "name"))) (EApp (EApp (EVar "replicate") (EBinOp "-" (EVar "arity") (EVar "slot"))) (EVar "True")) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit))))))))) (arm PWild () (EListLit))))
 (DTypeSig false "isCovariantPolarity" (TyFun (TyCon "Polarity") (TyCon "Bool")))
@@ -62010,7 +61994,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "freeStmtsEVars" ((PVar "bound") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeStmtsEVars") (EApp (EApp (EVar "namesToSet") (EListLit (EVar "x"))) (EVar "bound"))) (EVar "rest"))))
 (DFunDef false "freeStmtsEVars" ((PVar "bound") (PCons (PCon "DoFieldAssign" PWild PWild (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeStmtsEVars") (EVar "bound")) (EVar "rest"))))
 (DTypeSig false "initialEnv" (TyCon "TcEnv"))
-(DFunDef false "initialEnv" () (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "omEmpty")) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "True"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "False"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EVar "omEmpty")))) (EListLit)) (EVar "omEmpty")))
+(DFunDef false "initialEnv" () (ERecordCreate "TcEnv" ((fa "teVars" (EVar "omEmpty")) (fa "teCtors" (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "True"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "False"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EVar "omEmpty")))) (fa "teAlphaLets" (EListLit)) (fa "teIsLocal" (EVar "omEmpty")) (fa "teDyn" (EVar "noDyn")))))
 (DTypeSig false "registerAllData" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
 (DFunDef false "registerAllData" ((PVar "env") (PVar "ds")) (EApp (EApp (EApp (EVar "registerAllDataScoped") (EVar "env")) (EVar "ds")) (EVar "ds")))
 (DTypeSig false "registerAllDataScoped" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv")))))
@@ -63586,7 +63570,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "moduleStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))
 (DFunDef false "moduleStampOrder" () (EListLit (EVar "SSNumlitFloats") (EVar "SSReturnSites") (EVar "SSBinopSites") (EVar "SSUnopSites") (EVar "SSArithSites") (EVar "SSArgStamps") (EVar "SSRLocalSites") (EVar "SSRecDictApps") (EVar "SSDictApps") (EVar "SSMethodDicts")))
 (DTypeSig false "stampCtxOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "StampCtx"))))))
-(DFunDef false "stampCtxOf" ((PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scPerRun" (EFieldAccess (EVar "perRun") "value")) (fa "scToggles" (EFieldAccess (EVar "toggles") "value")) (fa "scSuperDecls" (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls"))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EVar "liveLocsOf") (EVar "goals"))))))
+(DFunDef false "stampCtxOf" ((PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scPerRun" (EFieldAccess (EVar "perRun") "value")) (fa "scSuperDecls" (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls"))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EVar "liveLocsOf") (EVar "goals"))))))
 (DTypeSig false "liveLocsOf" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "liveLocsOf" ((PVar "goals")) (EBlock (DoLet false false (PVar "ids") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "liveRoots") "value"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ids")) (EListLit) (EBlock (DoLet false false (PVar "live") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "i")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "i")) (ELit LUnit)) (EVar "acc")))) (EVar "Tip")) (EVar "ids"))) (DoLet false false (PVar "mentions") (ELam ((PVar "ms")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EVar "live")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))) (EVar "ms")))) (DoExpr (EApp (EVar "spanKeys") (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "o")) (EFieldAccess (EVar "o") "oLoc"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EVar "mentions") (EApp (EVar "goalMonos") (EVar "o"))))) (EVar "goals"))) (EApp (EApp (EVar "filterMap") (ELam ((PTuple PWild (PVar "m") (PVar "loc"))) (EIf (EApp (EVar "mentions") (EListLit (EVar "m"))) (EApp (EVar "Some") (EVar "loc")) (EVar "None")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "admittedOccObls") "value"))))))))))
 (DTypeSig true "spanKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "String"))))
@@ -63638,7 +63622,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "captureTypeErrors" (TyFun (TyFun (TyCon "Unit") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "TcDiag"))))
 (DFunDef false "captureTypeErrors" ((PVar "act")) (EBlock (DoLet false false (PVar "w") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (DoLet false false (PVar "items") (EFieldAccess (EFieldAccess (EVar "w") "items") "value")) (DoLet false false (PVar "mark") (EApp (EVar "wMark") (EVar "w"))) (DoLet false false (PVar "sticky") (EUnOp "!" (EVar "typeErrorsSticky"))) (DoLet false false (PVar "stickyDiags") (EFieldAccess (EVar "typeErrorsStickyDiags") "value")) (DoLet false false PWild (EApp (EVar "act") (ELit LUnit))) (DoLet false false (PVar "added") (EApp (EApp (EVar "wWindow") (EVar "w")) (EVar "mark"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "items")) (EVar "items"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "sticky"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsStickyDiags")) (EVar "stickyDiags"))) (DoExpr (EApp (EVar "reverseL") (EVar "added")))))
 (DTypeSig false "drainStampQueue" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
-(DFunDef false "drainStampQueue" (PWild) (EBlock (DoLet false false (PVar "ctxs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "stampCtxs") "value"))) (DoLet false false (PVar "savedPerRun") (EFieldAccess (EVar "perRun") "value")) (DoLet false false (PVar "savedToggles") (EFieldAccess (EVar "toggles") "value")) (DoLet false false (PVar "savedModule") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value")) (DoLet false false (PVar "savedSupers") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (DoLet false false PWild (EApp (EVar "defaultLiveNumRoots") (ELit LUnit))) (DoLet false false (PVar "held") (EApp (EVar "judgeLiveGoals") (EVar "ctxs"))) (DoLet false false (PVar "verdicts") (EApp (EVar "runStampCtxs") (EVar "ctxs"))) (DoLet false false (PVar "liveLocs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EFieldAccess (EVar "c") "scLiveLocs"))) (EVar "ctxs"))) (EVar "omEmpty"))) (DoLet false false (PVar "holes") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "mid") (PVar "d"))) (ERecordCreate "DrainFinding" ((fa "dfModule" (EVar "mid")) (fa "dfDiag" (EVar "d")) (fa "dfVerdict" (EVar "False")) (fa "dfLive" (EApp (EApp (EVar "isLiveSpan") (EVar "liveLocs")) (EApp (EVar "tcLoc") (EVar "d")))))))) (EApp (EVar "judgeEvidence") (EVar "ctxs")))) (DoLet false false PWild (EApp (EVar "materializeBinderTypes") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "stampCtxs")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EVar "savedPerRun"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "toggles")) (EVar "savedToggles"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EVar "savedModule"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "savedSupers"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "held") (EVar "verdicts")) (EVar "holes")))))
+(DFunDef false "drainStampQueue" (PWild) (EBlock (DoLet false false (PVar "ctxs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "stampCtxs") "value"))) (DoLet false false (PVar "savedPerRun") (EFieldAccess (EVar "perRun") "value")) (DoLet false false (PVar "savedModule") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value")) (DoLet false false (PVar "savedSupers") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (DoLet false false PWild (EApp (EVar "defaultLiveNumRoots") (ELit LUnit))) (DoLet false false (PVar "held") (EApp (EVar "judgeLiveGoals") (EVar "ctxs"))) (DoLet false false (PVar "verdicts") (EApp (EVar "runStampCtxs") (EVar "ctxs"))) (DoLet false false (PVar "liveLocs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EFieldAccess (EVar "c") "scLiveLocs"))) (EVar "ctxs"))) (EVar "omEmpty"))) (DoLet false false (PVar "holes") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "mid") (PVar "d"))) (ERecordCreate "DrainFinding" ((fa "dfModule" (EVar "mid")) (fa "dfDiag" (EVar "d")) (fa "dfVerdict" (EVar "False")) (fa "dfLive" (EApp (EApp (EVar "isLiveSpan") (EVar "liveLocs")) (EApp (EVar "tcLoc") (EVar "d")))))))) (EApp (EVar "judgeEvidence") (EVar "ctxs")))) (DoLet false false PWild (EApp (EVar "materializeBinderTypes") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "stampCtxs")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EVar "savedPerRun"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EVar "savedModule"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "savedSupers"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "held") (EVar "verdicts")) (EVar "holes")))))
 (DTypeSig false "judgeEvidence" (TyFun (TyApp (TyCon "List") (TyCon "StampCtx")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
 (DFunDef false "judgeEvidence" ((PVar "ctxs")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "lo") (EFieldAccess (EFieldAccess (EVar "g") "evJudged") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evJudged")) (EFieldAccess (EFieldAccess (EVar "g") "evCounter") "value"))) (DoLet false false (PVar "base") (EFieldAccess (EVar "g") "evBase")) (DoLet false false (PVar "cellHoles") (EApp (EApp (EApp (EApp (EVar "judgeCells") (EFieldAccess (EFieldAccess (EVar "g") "evCells") "value")) (EBinOp "-" (EVar "lo") (EVar "base"))) (EBinOp "-" (EFieldAccess (EFieldAccess (EVar "g") "evCounter") "value") (EVar "base"))) (EListLit))) (DoLet false false (PVar "goalHoles") (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "flatMap") (EApp (EVar "judgeGoal") (EFieldAccess (EVar "c") "scModule"))) (EFieldAccess (EVar "c") "scGoals")))) (EVar "ctxs"))) (DoExpr (EApp (EApp (EVar "dedupBy") (EVar "holeKey")) (EBinOp "++" (EVar "cellHoles") (EVar "goalHoles"))))))
 (DTypeSig false "holeKey" (TyFun (TyTuple (TyCon "String") (TyCon "TcDiag")) (TyCon "String")))
@@ -63678,7 +63662,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "runStampCtx" (TyFun (TyCon "StampCtx") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
 (DFunDef false "runStampCtx" ((PVar "ctx")) (EBlock (DoLet false false PWild (EApp (EVar "enterStampCtx") (EVar "ctx"))) (DoLet false false PWild (EApp (EVar "refileDeterminedRows") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "runStampSteps") (EVar "ctx")) (EVar "moduleStampOrder"))) (DoLet false false PWild (EApp (EVar "recordEvidence") (EFieldAccess (EVar "ctx") "scGoals"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ctx") "scLiveLocs")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "verdictFinding") (EFieldAccess (EVar "ctx") "scModule")) (EApp (EApp (EVar "isLiveSpan") (EVar "live")) (EApp (EVar "tcLoc") (EVar "d")))) (EVar "d")))) (EApp (EVar "captureTypeErrors") (ELam (PWild) (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))))))))
 (DTypeSig false "enterStampCtx" (TyFun (TyCon "StampCtx") (TyCon "Unit")))
-(DFunDef false "enterStampCtx" ((PVar "ctx")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EFieldAccess (EVar "ctx") "scPerRun"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "toggles")) (EFieldAccess (EVar "ctx") "scToggles"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EFieldAccess (EVar "ctx") "scModule"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EFieldAccess (EVar "ctx") "scSuperDecls")))))
+(DFunDef false "enterStampCtx" ((PVar "ctx")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EFieldAccess (EVar "ctx") "scPerRun"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EFieldAccess (EVar "ctx") "scModule"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EFieldAccess (EVar "ctx") "scSuperDecls")))))
 (DTypeSig false "recordEvidence" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyCon "Unit")))
 (DFunDef false "recordEvidence" ((PVar "gs")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false PWild (EApp (EApp (EVar "map") (EVar "noteEvidenceObservation")) (EVar "gs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evTable")) (EBinOp "++" (EApp (EVar "evEntriesOf") (EVar "gs")) (EFieldAccess (EFieldAccess (EVar "g") "evTable") "value"))))))
 (DTypeSig false "evEntriesOf" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyCon "EvTable")))
@@ -63749,7 +63733,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "effect_solver") ((mem "SummaryFailure" false) (mem "ScopeOutcome" true) (mem "ScopeRoles" true) (mem "noScopeRoles" false))))
 (DUse false (UseGroup ("types" "effect_values") ((mem "ValueJoinOps" true) (mem "joinProduced" false) (mem "joinProducedEnvelope" false) (mem "producedInputTypes" false) (mem "resolveDeferredJoin" false))))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" true) (mem "Variance" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "ObligationSite" true) (mem "RecordInfo" true) (mem "Kind" true) (mem "Polarity" true) (mem "SiteKind" true) (mem "PendingEntry" true) (mem "GoalKind" true) (mem "EvDest" true) (mem "GoalPayload" true) (mem "Obligation" true) (mem "Toggles" true) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "DeclEnvAcc" true) (mem "DeclEnvSeedAcc" true) (mem "DataTypeDecl" true) (mem "AliasDecl" true) (mem "DataEnv" true) (mem "InstRef" true) (mem "ImplRow" true) (mem "ImplEnv" true) (mem "ImplAcc" true) (mem "CeRow" true) (mem "ClassEnv" true) (mem "MethodEntry" false) (mem "MethodRow" true) (mem "MethodEnv" true) (mem "MethodScope" true) (mem "DriverState" true) (mem "Windowed" true) (mem "CSlot" true) (mem "PredicateSlotArgs" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "MethodPredicateSlot" true) (mem "MethodPredicateTemplate" true) (mem "MethodSchemeRow" true) (mem "MethodInstantiationSubst" true) (mem "MethodTrackedInstantiation" true) (mem "MethodReturnResolution" true) (mem "MethodReturnRequest" true) (mem "NumAnchorTestObservation" true) (mem "MethodRowTestObservation" true) (mem "CDeclaredPrefix" true) (mem "CDeclared" true) (mem "ShadowDicts" true) (mem "Predicate" true) (mem "Provenance" true) (mem "OblProjection" true) (mem "UObligation" true) (mem "AbsorptionEvent" true) (mem "PendingDictApp" true) (mem "PendingMethodDict" true) (mem "CrossRun" true) (mem "RecDictApp" true) (mem "JoinContext" true) (mem "GraphMarks" true) (mem "AssumptionTraceKind" true) (mem "AssumptionTraceEntry" true) (mem "NumericPredicateTraceStage" true) (mem "NumericPredicateTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnMemoView" true) (mem "EvidenceOutcomeKind" true) (mem "EvidenceObservationEntry" true) (mem "AssumAnswer" true) (mem "GivenEntry" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "EvCell" true) (mem "SiteCell" true) (mem "GraphRun" true) (mem "PendingBinder" true) (mem "GivenScope" true) (mem "PendingJoin" true) (mem "PerRun" true) (mem "ReqWalk" true) (mem "WalkMemo" true) (mem "SolvedGoalEntry" true) (mem "RouteWalkEntry" true) (mem "ReqStep" true) (mem "InvocationView" true) (mem "SigVars" true) (mem "StandaloneOrigin" true) (mem "ValueScheme" true) (mem "EnvBinding" true) (mem "TcEnv" true) (mem "LocalAbs" true) (mem "LocalAbsState" true) (mem "GrantBinder" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "GrantCallee" true) (mem "GrantState" true) (mem "CtorFieldConflict" true) (mem "BuiltinClass" true) (mem "BuiltinClasses" true) (mem "AdmittedAnswer" true) (mem "SelectedValueOccurrence" true) (mem "ExistentialScope" true) (mem "RecordSubst" true) (mem "NumBoundaryDisposition" true) (mem "NumBoundary" true) (mem "NumGuard" true) (mem "ArmedGuard" true) (mem "ArgRw" true) (mem "AdmittedVerdict" true) (mem "MethodTemplateGivenResult" true) (mem "CohImpl" true) (mem "MStep" true) (mem "CohScan" true) (mem "CohSweep" true) (mem "KeyEntry" true) (mem "Undetermined" true) (mem "EntailKind" true) (mem "MethodGrantUse" true) (mem "ImplUniverse" true) (mem "GoalReach" true) (mem "LiveGoal" true) (mem "GoalWindow" true) (mem "DeclaringBinder" true) (mem "SuperGoalEntry" true) (mem "ScopedImplMethod" true) (mem "MethodBodyKind" true) (mem "ImplBodySite" true) (mem "MethodBodyInstance" true) (mem "MethodBodyCheck" true) (mem "HeadVarRoot" true) (mem "ScopedMember" true) (mem "ConstraintReg" true) (mem "ScopedScheme" true) (mem "BindingRole" true) (mem "ModuleBindings" true) (mem "ExportBinding" true) (mem "ModuleSeed" true) (mem "CoreCheckMemo" true) (mem "PreludePreamble" true) (mem "GraphOut" true) (mem "ChainStep" true) (mem "ChainMemo" true) (mem "GraphDrive" true) (mem "ElabResult" false) (mem "MarkCtx" true) (mem "SpellCtx" true) (mem "BareLocals" true) (mem "StampStep" true) (mem "StampCtx" true) (mem "DrainFinding" true) (mem "MarkSets" true) (mem "PreludeMarkFacts" true) (mem "ModuleMarking" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "ObligationSite" true) (mem "RecordInfo" true) (mem "Kind" true) (mem "Polarity" true) (mem "SiteKind" true) (mem "PendingEntry" true) (mem "GoalKind" true) (mem "EvDest" true) (mem "GoalPayload" true) (mem "Obligation" true) (mem "DynCtx" true) (mem "noDyn" false) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "DeclEnvAcc" true) (mem "DeclEnvSeedAcc" true) (mem "DataTypeDecl" true) (mem "AliasDecl" true) (mem "DataEnv" true) (mem "InstRef" true) (mem "ImplRow" true) (mem "ImplEnv" true) (mem "ImplAcc" true) (mem "CeRow" true) (mem "ClassEnv" true) (mem "MethodEntry" false) (mem "MethodRow" true) (mem "MethodEnv" true) (mem "MethodScope" true) (mem "DriverState" true) (mem "Windowed" true) (mem "CSlot" true) (mem "PredicateSlotArgs" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "MethodPredicateSlot" true) (mem "MethodPredicateTemplate" true) (mem "MethodSchemeRow" true) (mem "MethodInstantiationSubst" true) (mem "MethodTrackedInstantiation" true) (mem "MethodReturnResolution" true) (mem "MethodReturnRequest" true) (mem "NumAnchorTestObservation" true) (mem "MethodRowTestObservation" true) (mem "CDeclaredPrefix" true) (mem "CDeclared" true) (mem "ShadowDicts" true) (mem "Predicate" true) (mem "Provenance" true) (mem "OblProjection" true) (mem "UObligation" true) (mem "AbsorptionEvent" true) (mem "PendingDictApp" true) (mem "PendingMethodDict" true) (mem "CrossRun" true) (mem "RecDictApp" true) (mem "JoinContext" true) (mem "GraphMarks" true) (mem "AssumptionTraceKind" true) (mem "AssumptionTraceEntry" true) (mem "NumericPredicateTraceStage" true) (mem "NumericPredicateTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnMemoView" true) (mem "EvidenceOutcomeKind" true) (mem "EvidenceObservationEntry" true) (mem "AssumAnswer" true) (mem "GivenEntry" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "EvCell" true) (mem "SiteCell" true) (mem "GraphRun" true) (mem "PendingBinder" true) (mem "GivenScope" true) (mem "PendingJoin" true) (mem "PerRun" true) (mem "ReqWalk" true) (mem "WalkMemo" true) (mem "SolvedGoalEntry" true) (mem "RouteWalkEntry" true) (mem "ReqStep" true) (mem "InvocationView" true) (mem "SigVars" true) (mem "StandaloneOrigin" true) (mem "ValueScheme" true) (mem "EnvBinding" true) (mem "TcEnv" true) (mem "LocalAbs" true) (mem "LocalAbsState" true) (mem "GrantBinder" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "GrantCallee" true) (mem "GrantState" true) (mem "CtorFieldConflict" true) (mem "BuiltinClass" true) (mem "BuiltinClasses" true) (mem "AdmittedAnswer" true) (mem "SelectedValueOccurrence" true) (mem "ExistentialScope" true) (mem "RecordSubst" true) (mem "NumBoundaryDisposition" true) (mem "NumBoundary" true) (mem "NumGuard" true) (mem "ArmedGuard" true) (mem "ArgRw" true) (mem "AdmittedVerdict" true) (mem "MethodTemplateGivenResult" true) (mem "CohImpl" true) (mem "MStep" true) (mem "CohScan" true) (mem "CohSweep" true) (mem "KeyEntry" true) (mem "Undetermined" true) (mem "EntailKind" true) (mem "MethodGrantUse" true) (mem "ImplUniverse" true) (mem "GoalReach" true) (mem "LiveGoal" true) (mem "GoalWindow" true) (mem "DeclaringBinder" true) (mem "SuperGoalEntry" true) (mem "ScopedImplMethod" true) (mem "MethodBodyKind" true) (mem "ImplBodySite" true) (mem "MethodBodyInstance" true) (mem "MethodBodyCheck" true) (mem "HeadVarRoot" true) (mem "ScopedMember" true) (mem "ConstraintReg" true) (mem "ScopedScheme" true) (mem "BindingRole" true) (mem "ModuleBindings" true) (mem "ExportBinding" true) (mem "ModuleSeed" true) (mem "CoreCheckMemo" true) (mem "PreludePreamble" true) (mem "GraphOut" true) (mem "ChainStep" true) (mem "ChainMemo" true) (mem "GraphDrive" true) (mem "ElabResult" false) (mem "MarkCtx" true) (mem "SpellCtx" true) (mem "BareLocals" true) (mem "StampStep" true) (mem "StampCtx" true) (mem "DrainFinding" true) (mem "MarkSets" true) (mem "PreludeMarkFacts" true) (mem "ModuleMarking" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "goalIdForDestination" false) (mem "PrerequisiteEvidence" true) (mem "RequestInstanceId" true) (mem "ScopeId" true) (mem "SolverEvidence" true) (mem "SuperEvidence" true))))
@@ -63965,10 +63949,10 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "substituteIndexLinked" ((PVar "cell") (PVar "term")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "lowerAuthLevels") (EApp (EVar "authvarLevel") (EVar "cell"))) (EVar "term"))) (DoLet false false PWild (EIf (EApp (EVar "authHasVars") (EVar "term")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "indexSubstitutedRef")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "authvarId") (EVar "cell"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "indexSubstitutedRef") "value"))))) (DoExpr (EApp (EApp (EVar "linkAuthvar") (EVar "cell")) (EVar "term")))))
 (DTypeSig false "flexibleIndex" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyCon "Bool"))))
 (DFunDef false "flexibleIndex" ((PVar "cell") (PVar "other")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value"))) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "c")) (EBinOp "==" (EApp (EVar "authvarId") (EVar "c")) (EApp (EVar "authvarId") (EVar "cell"))))) (EApp (EVar "authVars") (EVar "other"))))))
-(DTypeSig false "unifyRow" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyRow" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyRowN") (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
-(DTypeSig false "unifyRowN" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyRowN" ((PVar "r1") (PVar "r2")) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EVar "r1")) (EApp (EVar "rowHasSummary") (EVar "r2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "r2")) (EVar "r1")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "rowTailIsJoin") (EVar "r1")) (EApp (EVar "rowTailIsJoin") (EVar "r2"))) (EApp (EVar "rowHasRigid") (EVar "r1"))) (EApp (EVar "rowHasRigid") (EVar "r2"))) (EApp (EApp (EApp (EVar "unifyJoinRows") (EVar "False")) (EVar "r1")) (EVar "r2")) (EApp (EApp (EVar "unifyRowPlain") (EVar "r1")) (EVar "r2")))))
+(DTypeSig false "unifyRow" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyRow" ((PVar "dyn") (PVar "r1") (PVar "r2")) (EApp (EApp (EApp (EVar "unifyRowN") (EVar "dyn")) (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
+(DTypeSig false "unifyRowN" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyRowN" ((PVar "dyn") (PVar "r1") (PVar "r2")) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EVar "r1")) (EApp (EVar "rowHasSummary") (EVar "r2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "r2")) (EVar "r1")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "rowTailIsJoin") (EVar "r1")) (EApp (EVar "rowTailIsJoin") (EVar "r2"))) (EApp (EVar "rowHasRigid") (EVar "r1"))) (EApp (EVar "rowHasRigid") (EVar "r2"))) (EApp (EApp (EApp (EVar "unifyJoinRows") (EVar "False")) (EVar "r1")) (EVar "r2")) (EApp (EApp (EApp (EVar "unifyRowPlain") (EVar "dyn")) (EVar "r1")) (EVar "r2")))))
 (DTypeSig false "rowHasRigid" (TyFun (TyCon "EffRow") (TyCon "Bool")))
 (DFunDef false "rowHasRigid" ((PVar "row")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef") "value") (arm (PCon "Tip") () (EVar "False")) (arm PWild () (EApp (EApp (EVar "anyList") (EVar "isRigidCell")) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EVar "row")))))))
 (DTypeSig false "rowTailIsJoin" (TyFun (TyCon "EffRow") (TyCon "Bool")))
@@ -63996,23 +63980,23 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "renderAtomsOrEmpty" ((PVar "ls")) (EApp (EVar "renderAtoms") (EVar "ls")))
 (DTypeSig false "joinMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "joinMismatchMsg" ((PVar "a") (PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "effect rows ")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString " and "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString " cannot be made equal: each carries an effect variable the other has no room for; keep the method's effect variables distinct, or join them in the result index, `f (e | e2) b`"))))
-(DTypeSig false "unifyRowPlain" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EIf (EBinOp "==" (EApp (EVar "effvarId") (EVar "v1")) (EApp (EVar "effvarId") (EVar "v2"))) (EBlock (DoLet false false (PVar "missing") (EApp (EApp (EVar "atomsUnion") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1")))) (DoExpr (EMatch (EVar "missing") (arm (PList) () (ELit LUnit)) (arm PWild () (EIf (EApp (EVar "isRigidCell") (EVar "v1")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LAUNDER"))) (EBinOp "++" (EBinOp "++" (ELit (LString "a caller-chosen effect row cannot be required to contain <")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">; declare those effects as labels beside the row variable")))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "freshEffvarAt") (EApp (EVar "effvarLevel") (EVar "v1")))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EVar "missing")) (EApp (EVar "Some") (EVar "next"))))) (DoExpr (EApp (EApp (EVar "recordAbsorptions") (EVar "missing")) (EVar "next"))))))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "v3") (EApp (EVar "freshEffvarAt") (EApp (EApp (EVar "minI") (EApp (EVar "effvarLevel") (EVar "v1"))) (EApp (EVar "effvarLevel") (EVar "v2"))))) (DoLet false false (PVar "d21") (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (DoLet false false (PVar "d12") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (DoLet false false PWild (EIf (EBinOp "||" (EApp (EVar "isRigidCell") (EVar "v1")) (EApp (EVar "isRigidCell") (EVar "v2"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "effvarId") (EVar "v3"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef") "value"))) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EVar "d21")) (EApp (EVar "Some") (EVar "v3"))))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v2")) (EApp (EApp (EVar "EffRow") (EVar "d12")) (EApp (EVar "Some") (EVar "v3"))))) (DoExpr (EApp (EApp (EVar "recordAbsorptions") (EBinOp "++" (EVar "d21") (EVar "d12"))) (EVar "v3")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "unifyRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l1")) (EVar "l2"))) (EVar "l2"))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "None"))))))
-(DFunDef false "unifyRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l2")) (EVar "l1"))) (EVar "l1"))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v2")) (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EVar "None"))))))
-(DFunDef false "unifyRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EVar "closedRowEqCheck") (EVar "l1")) (EVar "l2")))
-(DTypeSig false "unifyIndexRow" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyIndexRow" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyIndexRowN") (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
+(DTypeSig false "unifyRowPlain" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EIf (EBinOp "==" (EApp (EVar "effvarId") (EVar "v1")) (EApp (EVar "effvarId") (EVar "v2"))) (EBlock (DoLet false false (PVar "missing") (EApp (EApp (EVar "atomsUnion") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1")))) (DoExpr (EMatch (EVar "missing") (arm (PList) () (ELit LUnit)) (arm PWild () (EIf (EApp (EVar "isRigidCell") (EVar "v1")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LAUNDER"))) (EBinOp "++" (EBinOp "++" (ELit (LString "a caller-chosen effect row cannot be required to contain <")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">; declare those effects as labels beside the row variable")))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "freshEffvarAt") (EApp (EVar "effvarLevel") (EVar "v1")))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EVar "missing")) (EApp (EVar "Some") (EVar "next"))))) (DoExpr (EApp (EApp (EVar "recordAbsorptions") (EVar "missing")) (EVar "next"))))))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "v3") (EApp (EVar "freshEffvarAt") (EApp (EApp (EVar "minI") (EApp (EVar "effvarLevel") (EVar "v1"))) (EApp (EVar "effvarLevel") (EVar "v2"))))) (DoLet false false (PVar "d21") (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (DoLet false false (PVar "d12") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (DoLet false false PWild (EIf (EBinOp "||" (EApp (EVar "isRigidCell") (EVar "v1")) (EApp (EVar "isRigidCell") (EVar "v2"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef")) (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "effvarId") (EVar "v3"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef") "value"))) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EVar "d21")) (EApp (EVar "Some") (EVar "v3"))))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v2")) (EApp (EApp (EVar "EffRow") (EVar "d12")) (EApp (EVar "Some") (EVar "v3"))))) (DoExpr (EApp (EApp (EVar "recordAbsorptions") (EBinOp "++" (EVar "d21") (EVar "d12"))) (EVar "v3")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "unifyRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l1")) (EVar "l2"))) (EVar "l2"))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v1")) (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "None"))))))
+(DFunDef false "unifyRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l2")) (EVar "l1"))) (EVar "l1"))) (DoExpr (EApp (EApp (EVar "linkRow") (EVar "v2")) (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EVar "None"))))))
+(DFunDef false "unifyRowPlain" ((PVar "dyn") (PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EApp (EVar "closedRowEqCheck") (EVar "dyn")) (EVar "l1")) (EVar "l2")))
+(DTypeSig false "unifyIndexRow" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyIndexRow" ((PVar "dyn") (PVar "r1") (PVar "r2")) (EApp (EApp (EApp (EVar "unifyIndexRowN") (EVar "dyn")) (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
 (DTypeSig false "unifyIndexAtomAuthorities" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))
 (DFunDef false "unifyIndexAtomAuthorities" ((PVar "a1") (PVar "a2")) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "x")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "a2")) (arm (PCon "Some" (PVar "y")) () (EApp (EApp (EVar "unifyIndex") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EVar "a1")))
-(DTypeSig false "unifyIndexRowN" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyIndexRowN" ((PVar "r1") (PVar "r2")) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EVar "r1")) (EApp (EVar "rowHasSummary") (EVar "r2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "True")) (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "True")) (EVar "r2")) (EVar "r1")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "rowTailIsJoin") (EVar "r1")) (EApp (EVar "rowTailIsJoin") (EVar "r2"))) (EApp (EVar "rowHasRigid") (EVar "r1"))) (EApp (EVar "rowHasRigid") (EVar "r2"))) (EApp (EApp (EApp (EVar "unifyJoinRows") (EVar "True")) (EVar "r1")) (EVar "r2")) (EApp (EApp (EVar "unifyIndexRowPlain") (EVar "r1")) (EVar "r2")))))
-(DTypeSig false "unifyIndexRowPlain" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
-(DFunDef false "unifyIndexRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EVar "indexRowEquate") (EVar "l1")) (EVar "l2")))
-(DFunDef false "unifyIndexRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EIf (EBinOp "==" (EApp (EVar "effvarId") (EVar "v1")) (EApp (EVar "effvarId") (EVar "v2"))) (EApp (EApp (EVar "indexRowEquate") (EVar "l1")) (EVar "l2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "unifyIndexRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EApp (EVar "indexOpenClosed") (EVar "l1")) (EVar "v1")) (EVar "l2")))
-(DFunDef false "unifyIndexRowPlain" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EApp (EApp (EApp (EVar "indexOpenClosed") (EVar "l2")) (EVar "v2")) (EVar "l1")))
-(DFunDef false "unifyIndexRowPlain" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyRowPlain") (EVar "r1")) (EVar "r2")))
+(DTypeSig false "unifyIndexRowN" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyIndexRowN" ((PVar "dyn") (PVar "r1") (PVar "r2")) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EVar "r1")) (EApp (EVar "rowHasSummary") (EVar "r2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "True")) (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "True")) (EVar "r2")) (EVar "r1")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "rowTailIsJoin") (EVar "r1")) (EApp (EVar "rowTailIsJoin") (EVar "r2"))) (EApp (EVar "rowHasRigid") (EVar "r1"))) (EApp (EVar "rowHasRigid") (EVar "r2"))) (EApp (EApp (EApp (EVar "unifyJoinRows") (EVar "True")) (EVar "r1")) (EVar "r2")) (EApp (EApp (EApp (EVar "unifyIndexRowPlain") (EVar "dyn")) (EVar "r1")) (EVar "r2")))))
+(DTypeSig false "unifyIndexRowPlain" (TyFun (TyCon "DynCtx") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
+(DFunDef false "unifyIndexRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EVar "indexRowEquate") (EVar "l1")) (EVar "l2")))
+(DFunDef false "unifyIndexRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EIf (EBinOp "==" (EApp (EVar "effvarId") (EVar "v1")) (EApp (EVar "effvarId") (EVar "v2"))) (EApp (EApp (EVar "indexRowEquate") (EVar "l1")) (EVar "l2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "unifyIndexRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EApp (EVar "indexOpenClosed") (EVar "l1")) (EVar "v1")) (EVar "l2")))
+(DFunDef false "unifyIndexRowPlain" (PWild (PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EApp (EApp (EApp (EVar "indexOpenClosed") (EVar "l2")) (EVar "v2")) (EVar "l1")))
+(DFunDef false "unifyIndexRowPlain" ((PVar "dyn") (PVar "r1") (PVar "r2")) (EApp (EApp (EApp (EVar "unifyRowPlain") (EVar "dyn")) (EVar "r1")) (EVar "r2")))
 (DTypeSig false "indexRowEquate" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))
 (DFunDef false "indexRowEquate" ((PVar "l1") (PVar "l2")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unifyIndexAtomAuthorities") (EVar "l1")) (EVar "l2"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "indexRowEqCheck") (EApp (EApp (EVar "labelsMissing") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "labelsMissing") (EVar "l2")) (EVar "l1"))) (EVar "l1")) (EVar "l2")))))
 (DTypeSig false "indexOpenClosed" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
@@ -64033,8 +64017,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "effectLeakCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))
 (DFunDef false "effectLeakCheck" ((PList) (PVar "bound")) (ELit LUnit))
 (DFunDef false "effectLeakCheck" ((PVar "escaping") (PVar "bound")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EVar "effectLeakMsg") (EVar "bound")) (EVar "escaping"))))
-(DTypeSig false "closedRowEqCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))
-(DFunDef false "closedRowEqCheck" ((PVar "l1") (PVar "l2")) (EMatch (ETuple (EApp (EApp (EVar "atomsEscape") (EVar "l1")) (EVar "l2")) (EApp (EApp (EVar "atomsEscape") (EVar "l2")) (EVar "l1"))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm PWild () (EIf (EFieldAccess (EVar "nonCovariantSlot") "value") (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM-VARIANCE"))) (EApp (EApp (EVar "paramVarianceMismatchMsg") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EVar "closedRowMismatchMsg") (EVar "l1")) (EVar "l2")))))))
+(DTypeSig false "closedRowEqCheck" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
+(DFunDef false "closedRowEqCheck" ((PVar "dyn") (PVar "l1") (PVar "l2")) (EMatch (ETuple (EApp (EApp (EVar "atomsEscape") (EVar "l1")) (EVar "l2")) (EApp (EApp (EVar "atomsEscape") (EVar "l2")) (EVar "l1"))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm PWild () (EIf (EFieldAccess (EVar "dyn") "dcNonCovariant") (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM-VARIANCE"))) (EApp (EApp (EVar "paramVarianceMismatchMsg") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EVar "closedRowMismatchMsg") (EVar "l1")) (EVar "l2")))))))
 (DTypeSig false "closedRowMismatchMsg" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
 (DFunDef false "closedRowMismatchMsg" ((PVar "l1") (PVar "l2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "effect rows <")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "l1")))) (ELit (LString "> and <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "l2")))) (ELit (LString "> cannot be made equal: the two values must have one type, and this position neither widens nor narrows a row; write the same row on both sides"))))
 (DTypeSig false "effectLeakMsg" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
@@ -64485,10 +64469,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "routeLocalSym" (PWild) (ELit (LString "")))
 (DTypeSig false "recoveredShadowSym" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "String"))))
 (DFunDef false "recoveredShadowSym" ((PVar "name") (PVar "tagRef")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (DoExpr (EIf (EBinOp "==" (EVar "s") (EVar "name")) (ELit (LString "")) (EVar "s")))))
-(DTypeSig false "freshToggles" (TyFun (TyCon "Unit") (TyCon "Toggles")))
-(DFunDef false "freshToggles" (PWild) (ERecordCreate "Toggles" ((fa "suppressRLocalRecord" (EApp (EVar "Ref") (EVar "False"))) (fa "suppressArgStamp" (EApp (EVar "Ref") (EVar "False"))) (fa "shadowHeadCtxRef" (EApp (EVar "Ref") (EVar "False"))))))
-(DTypeSig false "toggles" (TyApp (TyCon "Ref") (TyCon "Toggles")))
-(DFunDef false "toggles" () (EApp (EVar "Ref") (EApp (EVar "freshToggles") (ELit LUnit))))
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
 (DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deMethods" (EVar "emptyMethodEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "deNameIndexBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
 (DTypeSig false "emptyDeclEnvAcc" (TyCon "DeclEnvAcc"))
@@ -65202,8 +65182,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "nthArgMono" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))
 (DFunDef false "nthArgMono" ((PLit (LInt 0)) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "a") PWild PWild) () (EApp (EVar "Some") (EVar "a"))) (arm PWild () (EVar "None"))))
 (DFunDef false "nthArgMono" ((PVar "n") (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild PWild (PVar "b")) () (EApp (EApp (EVar "nthArgMono") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "b"))) (arm PWild () (EVar "None"))))
-(DTypeSig false "recordArgStamp" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit")))))))))
-(DFunDef false "recordArgStamp" ((PVar "name") (PVar "tagRef") (PVar "implRef") (PVar "innerRef") (PVar "idx") (PVar "mono") (PVar "omitted")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressArgStamp") "value") (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "mono")) (arm (PCon "Some" (PVar "am")) () (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKArgStamp")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "am")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EVar "SKArg") (EVar "implRef")) (EVar "mono")) (EVar "omitted"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))) (arm (PCon "None") () (ELit LUnit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "recordArgStamp" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit"))))))))))
+(DFunDef false "recordArgStamp" ((PVar "suppressed") (PVar "name") (PVar "tagRef") (PVar "implRef") (PVar "innerRef") (PVar "idx") (PVar "mono") (PVar "omitted")) (EIf (EVar "suppressed") (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "mono")) (arm (PCon "Some" (PVar "am")) () (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKArgStamp")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "am")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EVar "SKArg") (EVar "implRef")) (EVar "mono")) (EVar "omitted"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))) (arm (PCon "None") () (ELit LUnit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordArgSiteFn" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Unit")))))
 (DFunDef false "recordArgSiteFn" (PWild (PVar "idx") (PVar "mono")) (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "mono")) (arm (PCon "Some" (PVar "am")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodSiteFns")) (EApp (EApp (EApp (EVar "consSiteFn") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EVar "am")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodSiteFns") "value")))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig false "resolveArgStamps" (TyFun (TyApp (TyCon "List") (TyCon "PendingEntry")) (TyCon "Unit")))
@@ -65272,8 +65252,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "currentDoDeferred" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "currentMethodMismatch" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "currentMethodMismatch" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig false "currentJoinContext" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "JoinContext"))))
-(DFunDef false "currentJoinContext" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "mainTypeIsAsync" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "mainTypeIsAsync" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "headMonoNode") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Async")) (PCon "OriginModule" (PLit (LString "async")))) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "mainAsyncPayloadIsUnit" (TyFun (TyCon "Unit") (TyCon "Bool")))
@@ -65578,7 +65556,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "perRun" (TyApp (TyCon "Ref") (TyCon "PerRun")))
 (DFunDef false "perRun" () (EApp (EVar "Ref") (EApp (EVar "freshPerRun") (ELit LUnit))))
 (DTypeSig false "resetState" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "resetState" (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "toggles")) (EApp (EVar "freshToggles") (ELit LUnit))))))
+(DFunDef false "resetState" (PWild) (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit))))
 (DTypeSig false "containsI" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
 (DFunDef false "containsI" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsI" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "containsI") (EVar "x")) (EVar "ys"))))
@@ -65669,35 +65647,37 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "occursAdjustUnbound" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DFunDef false "occursAdjustUnbound" ((PVar "id") (PVar "level") (PVar "cell") (PVar "id2") (PVar "lvl2")) (EIf (EBinOp "==" (EVar "id2") (EVar "id")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-INFINITE-TYPE"))) (EBinOp "++" (EBinOp "++" (ELit (LString "cannot construct an infinite type involving `")) (EApp (EVar "ppMono") (EApp (EVar "TVar") (EVar "cell")))) (ELit (LString "`")))))) (EIf (EBinOp ">" (EVar "lvl2") (EVar "level")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "Unbound") (EVar "id2")) (EVar "level"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "unify" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "unify" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "unifyValue") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
-(DTypeSig false "unifyValue" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "unifyValue" ((PCon "TVar" (PVar "c")) (PCon "TQual" (PVar "a") PWild)) (EApp (EApp (EVar "unifyN") (EApp (EVar "TVar") (EVar "c"))) (EApp (EVar "normalize") (EVar "a"))))
-(DFunDef false "unifyValue" ((PCon "TQual" (PVar "a") PWild) (PCon "TVar" (PVar "c"))) (EApp (EApp (EVar "unifyN") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "TVar") (EVar "c"))))
-(DFunDef false "unifyValue" ((PCon "TQual" (PVar "a") PWild) (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EVar "unifyN") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
-(DFunDef false "unifyValue" ((PCon "TQual" (PVar "a") PWild) (PVar "b")) (EApp (EApp (EVar "unifyN") (EApp (EVar "normalize") (EVar "a"))) (EVar "b")))
-(DFunDef false "unifyValue" ((PVar "a") (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EVar "unifyN") (EVar "a")) (EApp (EVar "normalize") (EVar "b"))))
-(DFunDef false "unifyValue" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "unifyN") (EVar "a")) (EVar "b")))
-(DTypeSig false "unifyStruct" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "unifyStruct" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "unifyN") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
-(DTypeSig false "unifyN" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "unifyN" ((PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EApp (EApp (EVar "unifyVars") (EVar "c1")) (EVar "c2")))
-(DFunDef false "unifyN" ((PCon "TVar" (PVar "c")) (PVar "t")) (EApp (EApp (EVar "bindVar") (EVar "c")) (EVar "t")))
-(DFunDef false "unifyN" ((PVar "t") (PCon "TVar" (PVar "c"))) (EApp (EApp (EVar "bindVar") (EVar "c")) (EVar "t")))
-(DFunDef false "unifyN" ((PAs "ta" (PCon "TCon" (PVar "a") (PVar "oa"))) (PAs "tb" (PCon "TCon" (PVar "b") (PVar "ob")))) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
-(DFunDef false "unifyN" ((PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EApp (EVar "TRigid") (EVar "a"))) (EApp (EVar "TRigid") (EVar "b")))))
-(DFunDef false "unifyN" ((PAs "ta" (PCon "TCon" (PVar "a") PWild)) (PAs "tb" (PCon "TRigid" (PVar "b")))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
-(DFunDef false "unifyN" ((PAs "ta" (PCon "TRigid" (PVar "a"))) (PAs "tb" (PCon "TCon" (PVar "b") PWild))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
-(DFunDef false "unifyN" ((PVar "t1") (PVar "t2")) (EIf (EApp (EApp (EVar "tupleUnifyClash") (EVar "t1")) (EVar "t2")) (EApp (EApp (EVar "typeMismatch") (EVar "t1")) (EVar "t2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "unifyN" ((PCon "TApp" (PVar "a1") (PVar "b1")) (PCon "TApp" (PVar "a2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unifyStruct") (EVar "a1")) (EVar "a2"))) (DoExpr (EApp (EApp (EApp (EVar "paramVarianceGuard") (EVar "a1")) (EVar "b1")) (EVar "b2")))))
-(DFunDef false "unifyN" ((PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unifyStruct") (EVar "a1")) (EVar "a2"))) (DoLet false false PWild (EApp (EApp (EVar "unifyRow") (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EVar "unifyStruct") (EVar "b1")) (EVar "b2")))))
-(DFunDef false "unifyN" ((PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) (EApp (EApp (EVar "unifyIndexRow") (EVar "r1")) (EVar "r2")))
-(DFunDef false "unifyN" ((PCon "TAuth" (PVar "qa")) (PCon "TAuth" (PVar "qb"))) (EApp (EApp (EVar "unifyIndex") (EVar "qa")) (EVar "qb")))
-(DFunDef false "unifyN" ((PCon "TQual" (PVar "a") (PVar "qa")) (PCon "TQual" (PVar "b") (PVar "qb"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EVar "qa")) (EVar "qb"))) (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EVar "qb")) (EVar "qa"))) (DoExpr (EApp (EApp (EVar "unifyStruct") (EVar "a")) (EVar "b")))))
-(DFunDef false "unifyN" ((PCon "TQual" (PVar "a") (PVar "qa")) (PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qa")))) (EVar "qa"))) (DoExpr (EApp (EApp (EVar "unifyStruct") (EVar "a")) (EVar "b")))))
-(DFunDef false "unifyN" ((PVar "a") (PCon "TQual" (PVar "b") (PVar "qb"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qb")))) (EVar "qb"))) (DoExpr (EApp (EApp (EVar "unifyStruct") (EVar "a")) (EVar "b")))))
-(DFunDef false "unifyN" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "typeMismatch") (EVar "a")) (EVar "b")))
+(DFunDef false "unify" ((PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "unifyIn") (EVar "noDyn")) (EVar "a")) (EVar "b")))
+(DTypeSig false "unifyIn" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "unifyIn" ((PVar "dyn") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "unifyValue") (EVar "dyn")) (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
+(DTypeSig false "unifyValue" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "unifyValue" ((PVar "dyn") (PCon "TVar" (PVar "c")) (PCon "TQual" (PVar "a") PWild)) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EApp (EVar "TVar") (EVar "c"))) (EApp (EVar "normalize") (EVar "a"))))
+(DFunDef false "unifyValue" ((PVar "dyn") (PCon "TQual" (PVar "a") PWild) (PCon "TVar" (PVar "c"))) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "TVar") (EVar "c"))))
+(DFunDef false "unifyValue" ((PVar "dyn") (PCon "TQual" (PVar "a") PWild) (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
+(DFunDef false "unifyValue" ((PVar "dyn") (PCon "TQual" (PVar "a") PWild) (PVar "b")) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EApp (EVar "normalize") (EVar "a"))) (EVar "b")))
+(DFunDef false "unifyValue" ((PVar "dyn") (PVar "a") (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EVar "a")) (EApp (EVar "normalize") (EVar "b"))))
+(DFunDef false "unifyValue" ((PVar "dyn") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EVar "a")) (EVar "b")))
+(DTypeSig false "unifyStruct" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "unifyStruct" ((PVar "dyn") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "unifyN") (EVar "dyn")) (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
+(DTypeSig false "unifyN" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EApp (EApp (EApp (EVar "unifyVars") (EVar "dyn")) (EVar "c1")) (EVar "c2")))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TVar" (PVar "c")) (PVar "t")) (EApp (EApp (EApp (EVar "bindVar") (EVar "dyn")) (EVar "c")) (EVar "t")))
+(DFunDef false "unifyN" ((PVar "dyn") (PVar "t") (PCon "TVar" (PVar "c"))) (EApp (EApp (EApp (EVar "bindVar") (EVar "dyn")) (EVar "c")) (EVar "t")))
+(DFunDef false "unifyN" ((PVar "dyn") (PAs "ta" (PCon "TCon" (PVar "a") (PVar "oa"))) (PAs "tb" (PCon "TCon" (PVar "b") (PVar "ob")))) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")) (ELit LUnit) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EVar "ta")) (EVar "tb"))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EApp (EVar "TRigid") (EVar "a"))) (EApp (EVar "TRigid") (EVar "b")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PAs "ta" (PCon "TCon" (PVar "a") PWild)) (PAs "tb" (PCon "TRigid" (PVar "b")))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EVar "ta")) (EVar "tb"))))
+(DFunDef false "unifyN" ((PVar "dyn") (PAs "ta" (PCon "TRigid" (PVar "a"))) (PAs "tb" (PCon "TCon" (PVar "b") PWild))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EVar "ta")) (EVar "tb"))))
+(DFunDef false "unifyN" ((PVar "dyn") (PVar "t1") (PVar "t2")) (EIf (EApp (EApp (EVar "tupleUnifyClash") (EVar "t1")) (EVar "t2")) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EVar "t1")) (EVar "t2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TApp" (PVar "a1") (PVar "b1")) (PCon "TApp" (PVar "a2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "a1")) (EVar "a2"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "paramVarianceGuard") (EVar "dyn")) (EVar "a1")) (EVar "b1")) (EVar "b2")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "a1")) (EVar "a2"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "unifyRow") (EVar "dyn")) (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "b1")) (EVar "b2")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) (EApp (EApp (EApp (EVar "unifyIndexRow") (EVar "dyn")) (EVar "r1")) (EVar "r2")))
+(DFunDef false "unifyN" (PWild (PCon "TAuth" (PVar "qa")) (PCon "TAuth" (PVar "qb"))) (EApp (EApp (EVar "unifyIndex") (EVar "qa")) (EVar "qb")))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TQual" (PVar "a") (PVar "qa")) (PCon "TQual" (PVar "b") (PVar "qb"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EVar "qa")) (EVar "qb"))) (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EVar "qb")) (EVar "qa"))) (DoExpr (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "a")) (EVar "b")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PCon "TQual" (PVar "a") (PVar "qa")) (PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qa")))) (EVar "qa"))) (DoExpr (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "a")) (EVar "b")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PVar "a") (PCon "TQual" (PVar "b") (PVar "qb"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qb")))) (EVar "qb"))) (DoExpr (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "a")) (EVar "b")))))
+(DFunDef false "unifyN" ((PVar "dyn") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "typeMismatch") (EVar "dyn")) (EVar "a")) (EVar "b")))
 (DTypeSig false "bindFrom" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "bindFrom" ((PVar "target") (PVar "source")) (EMatch (EApp (EVar "normalize") (EVar "target")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild PWild) () (EApp (EApp (EVar "bindVar") (EVar "cell")) (EVar "source"))) (arm (PCon "Link" PWild) () (EApp (EApp (EVar "unify") (EVar "target")) (EVar "source"))))) (arm PWild () (EApp (EApp (EVar "unify") (EVar "target")) (EVar "source")))))
+(DFunDef false "bindFrom" ((PVar "target") (PVar "source")) (EMatch (EApp (EVar "normalize") (EVar "target")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild PWild) () (EApp (EApp (EApp (EVar "bindVar") (EVar "noDyn")) (EVar "cell")) (EVar "source"))) (arm (PCon "Link" PWild) () (EApp (EApp (EVar "unify") (EVar "target")) (EVar "source"))))) (arm PWild () (EApp (EApp (EVar "unify") (EVar "target")) (EVar "source")))))
 (DTypeSig false "wantAuthority" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit"))))
 (DFunDef false "wantAuthority" ((PVar "lower") (PVar "upper")) (EApp (EApp (EApp (EVar "wantAuthorityWith") (EVar "False")) (EVar "lower")) (EVar "upper")))
 (DTypeSig false "wantAuthorityWith" (TyFun (TyCon "Bool") (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit")))))
@@ -65756,10 +65736,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "solvedUpper" (TyFun (TyApp (TyCon "Option") (TyCon "Authority")) (TyCon "Bool")))
 (DFunDef false "solvedUpper" ((PCon "Some" (PCon "AVar" (PVar "cell")))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild PWild PWild) () (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "indexSubstitutedRef") "value")))) (arm (PCon "AUnbound" PWild PWild PWild PWild PWild) () (EVar "False"))))
 (DFunDef false "solvedUpper" (PWild) (EVar "False"))
-(DTypeSig false "paramVarianceGuard" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
-(DFunDef false "paramVarianceGuard" ((PVar "hd") (PVar "b1") (PVar "b2")) (EIf (EApp (EVar "monoSlotNonCovariant") (EVar "hd")) (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EVar "nonCovariantSlot") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "nonCovariantSlot")) (EVar "True"))) (DoLet false false PWild (EApp (EApp (EVar "unifyStruct") (EVar "b1")) (EVar "b2"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "nonCovariantSlot")) (EVar "saved")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "unifyStruct") (EVar "b1")) (EVar "b2")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "nonCovariantSlot" (TyApp (TyCon "Ref") (TyCon "Bool")))
-(DFunDef false "nonCovariantSlot" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig false "paramVarianceGuard" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
+(DFunDef false "paramVarianceGuard" ((PVar "dyn") (PVar "hd") (PVar "b1") (PVar "b2")) (EIf (EApp (EVar "monoSlotNonCovariant") (EVar "hd")) (EApp (EApp (EApp (EVar "unifyStruct") (ERecordUpdate (EVar "dyn") ((fa "dcNonCovariant" (EVar "True"))))) (EVar "b1")) (EVar "b2")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "unifyStruct") (EVar "dyn")) (EVar "b1")) (EVar "b2")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "monoSpineDepth" (TyFun (TyCon "Mono") (TyCon "Int")))
 (DFunDef false "monoSpineDepth" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") PWild) () (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "monoSpineDepth") (EVar "a")))) (arm PWild () (ELit (LInt 0)))))
 (DTypeSig false "paramPolaritiesOf" (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity")))))
@@ -65767,7 +65745,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "paramPolaritiesIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity"))))))
 (DFunDef false "paramPolaritiesIn" ((PVar "tab") (PVar "key")) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Ref")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "tab")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "recordInvocationView" (TyFun (TyCon "TcEnv") (TyCon "Unit")))
-(DFunDef false "recordInvocationView" ((PCon "TcEnv" PWild (PVar "ctors") PWild PWild)) (EBlock (DoLet false false (PVar "universe") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "cands")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PTuple PWild PWild (PVar "sch")) () (EVar "sch"))))) (EVar "cands")))) (EApp (EVar "IdMap.values") (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EApp (EVar "InvocationView") (EBinOp "++" (EApp (EVar "IdMap.values") (EVar "ctors")) (EVar "universe"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))))))
+(DFunDef false "recordInvocationView" ((PVar "env")) (EBlock (DoLet false false (PVar "universe") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "cands")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PTuple PWild PWild (PVar "sch")) () (EVar "sch"))))) (EVar "cands")))) (EApp (EVar "IdMap.values") (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EApp (EVar "InvocationView") (EBinOp "++" (EApp (EVar "IdMap.values") (EFieldAccess (EVar "env") "teCtors")) (EVar "universe"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))))))
 (DTypeSig true "lastInvocationOps" (TyFun (TyCon "Unit") (TyCon "InvocationOps")))
 (DFunDef false "lastInvocationOps" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef") "value") (arm (PCon "InvocationView" (PVar "ctors") (PVar "pols") (PVar "kinds")) () (EBlock (DoLet false false (PVar "byHead") (EApp (EVar "ctorsByHead") (EVar "ctors"))) (DoExpr (ERecordCreate "InvocationOps" ((fa "headVariances" (ELam ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EApp (EApp (EVar "slotVariances") (EApp (EApp (EVar "paramPolaritiesIn") (EVar "pols")) (EVar "key"))) (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "kinds")))) (arm PWild () (EVar "None"))))) (fa "appliedFields" (ELam ((PVar "applied")) (EBlock (DoLet false false (PTuple (PVar "h") (PVar "args")) (EApp (EVar "spineParts") (EVar "applied"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "instantiateFields") (EVar "args")) (EVar "c")))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "invocationHeadKey") (EVar "h"))) (EVar "byHead")))))))) (fa "headKey" (EVar "invocationHeadKey")))))))))
 (DTypeSig false "invocationHeadKey" (TyFun (TyCon "Mono") (TyCon "String")))
@@ -65798,27 +65776,27 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "paramRowAtomsOf" ((PVar "key")) (EApp (EApp (EVar "lookupTab") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamRowAtomsRef") "value")))
 (DTypeSig false "paramVarianceMismatchMsg" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
 (DFunDef false "paramVarianceMismatchMsg" ((PVar "l1") (PVar "l2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "effect row mismatch inside a non-covariant type argument: <")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "l1")))) (ELit (LString "> vs <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "l2")))) (ELit (LString ">; the two rows must be equal here, so write the same row on both sides, or eta-expand a freshly built function, `(s => f s)`"))))
-(DTypeSig false "unifyVars" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "Unit"))))
-(DFunDef false "unifyVars" ((PVar "c1") (PVar "c2")) (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))) (ELit LUnit) (EApp (EApp (EVar "bindVar") (EVar "c1")) (EApp (EVar "TVar") (EVar "c2")))))
-(DTypeSig false "bindVar" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "bindVar" ((PVar "cell") (PVar "t")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed")) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "occursAdjust") (EApp (EVar "tyvarId") (EVar "cell"))) (EApp (EVar "tyvarLevel") (EVar "cell"))) (EVar "t"))) (DoExpr (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed") "value") (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EVar "propagatePoison") (EVar "cell")) (EVar "t"))) (DoLet false false (PVar "shaped") (EApp (EApp (EVar "takeJoinsShapedBy") (EVar "cell")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Link") (EVar "t")))) (DoExpr (EApp (EVar "settleShapedJoins") (EVar "shaped"))))))))
+(DTypeSig false "unifyVars" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "Unit")))))
+(DFunDef false "unifyVars" ((PVar "dyn") (PVar "c1") (PVar "c2")) (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))) (ELit LUnit) (EApp (EApp (EApp (EVar "bindVar") (EVar "dyn")) (EVar "c1")) (EApp (EVar "TVar") (EVar "c2")))))
+(DTypeSig false "bindVar" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "bindVar" ((PVar "dyn") (PVar "cell") (PVar "t")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed")) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "occursAdjust") (EApp (EVar "tyvarId") (EVar "cell"))) (EApp (EVar "tyvarLevel") (EVar "cell"))) (EVar "t"))) (DoExpr (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed") "value") (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EVar "propagatePoison") (EVar "cell")) (EVar "t"))) (DoLet false false (PVar "shaped") (EApp (EApp (EVar "takeJoinsShapedBy") (EVar "cell")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Link") (EVar "t")))) (DoExpr (EApp (EApp (EVar "settleShapedJoins") (EVar "dyn")) (EVar "shaped"))))))))
 (DTypeSig false "takeJoinsShapedBy" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "PendingJoin")))))
 (DFunDef false "takeJoinsShapedBy" ((PVar "cell") (PVar "t")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef") "value") (arm (PList) () (EListLit)) (arm (PVar "pending") () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" PWild) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "id") (EApp (EVar "tyvarId") (EVar "cell"))) (DoLet false false (PVar "hits") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "pj")) (EApp (EApp (EVar "joinResultIs") (EVar "id")) (EVar "pj")))) (EVar "pending"))) (DoExpr (EMatch (EVar "hits") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "pj")) (EApp (EVar "not") (EApp (EApp (EVar "joinResultIs") (EVar "id")) (EVar "pj"))))) (EVar "pending")))) (DoExpr (EVar "hits"))))))))))))
 (DTypeSig false "joinResultIs" (TyFun (TyCon "Int") (TyFun (TyCon "PendingJoin") (TyCon "Bool"))))
 (DFunDef false "joinResultIs" ((PVar "id") (PVar "pj")) (EMatch (EApp (EVar "normalize") (EFieldAccess (EVar "pj") "pjResult")) (arm (PCon "TVar" (PVar "c")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c")) (EVar "id"))) (arm PWild () (EVar "False"))))
-(DTypeSig false "settleShapedJoins" (TyFun (TyApp (TyCon "List") (TyCon "PendingJoin")) (TyCon "Unit")))
-(DFunDef false "settleShapedJoins" ((PList)) (ELit LUnit))
-(DFunDef false "settleShapedJoins" ((PVar "shaped")) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "pj")) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PTuple (PVar "loc") (PVar "value"))) (EApp (EApp (EApp (EFieldAccess (EFieldAccess (EVar "pj") "pjOps") "vjoEqual") (EVar "loc")) (EFieldAccess (EVar "pj") "pjResult")) (EVar "value")))) (ELit LUnit)) (EFieldAccess (EVar "pj") "pjValues")))) (ELit LUnit)) (EVar "shaped")))
+(DTypeSig false "settleShapedJoins" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyCon "PendingJoin")) (TyCon "Unit"))))
+(DFunDef false "settleShapedJoins" (PWild (PList)) (ELit LUnit))
+(DFunDef false "settleShapedJoins" ((PVar "dyn") (PVar "shaped")) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "pj")) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PTuple (PVar "loc") (PVar "value"))) (EApp (EApp (EApp (EApp (EApp (EVar "joinValueEqual") (EVar "dyn")) (EFieldAccess (EVar "pj") "pjContext")) (EVar "loc")) (EFieldAccess (EVar "pj") "pjResult")) (EVar "value")))) (ELit LUnit)) (EFieldAccess (EVar "pj") "pjValues")))) (ELit LUnit)) (EVar "shaped")))
 (DTypeSig false "propagatePoison" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "propagatePoison" ((PVar "cell") (PVar "t")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value") (arm (PList) () (ELit LUnit)) (arm (PVar "poisoned") () (EIf (EApp (EApp (EVar "containsI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "poisoned")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars")) (EBinOp "++" (EApp (EVar "monoUnboundIds") (EVar "t")) (EVar "poisoned"))) (ELit LUnit)))))
 (DTypeSig false "poisonMismatchVars" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "poisonMismatchVars" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "poisoned") (EBinOp "++" (EBinOp "++" (EApp (EVar "monoUnboundIds") (EVar "a")) (EApp (EVar "monoUnboundIds") (EVar "b"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars")) (EVar "poisoned")))))
-(DTypeSig false "typeMismatch" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "typeMismatch" ((PVar "a") (PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "a")) (EVar "b"))) (DoExpr (EApp (EApp (EVar "typeMismatchReport") (EVar "a")) (EVar "b")))))
-(DTypeSig false "typeMismatchReport" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "typeMismatchReport" ((PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentMethodMismatch")) (arm (PCon "Some" (PVar "mname")) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-METHOD-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method `")) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString "` has type "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " but its interface declares "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EVar "typeMismatchReportJoin") (EVar "a")) (EVar "b")))))
-(DTypeSig false "typeMismatchReportJoin" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "typeMismatchReportJoin" ((PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentJoinContext")) (arm (PCon "Some" (PCon "JoinElselessIf")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EVar "elselessIfHelp"))) (ELit (LString "")))) (EVar "elselessIfHelp")) (EVar "None"))) (arm PWild () (EMatch (ETuple (EUnOp "!" (EVar "currentDoOrigin")) (EApp (EApp (EVar "constrainedApplicationHelp") (EVar "a")) (EVar "b"))) (arm (PTuple (PCon "None") (PCon "Some" (PVar "help"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm PWild () (EApp (EApp (EVar "typeMismatchReportRest") (EVar "a")) (EVar "b")))))))
+(DTypeSig false "typeMismatch" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "typeMismatch" ((PVar "dyn") (PVar "a") (PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "a")) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "typeMismatchReport") (EVar "dyn")) (EVar "a")) (EVar "b")))))
+(DTypeSig false "typeMismatchReport" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "typeMismatchReport" ((PVar "dyn") (PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentMethodMismatch")) (arm (PCon "Some" (PVar "mname")) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-METHOD-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method `")) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString "` has type "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " but its interface declares "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "typeMismatchReportJoin") (EVar "dyn")) (EVar "a")) (EVar "b")))))
+(DTypeSig false "typeMismatchReportJoin" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
+(DFunDef false "typeMismatchReportJoin" ((PVar "dyn") (PVar "a") (PVar "b")) (EMatch (EFieldAccess (EVar "dyn") "dcJoin") (arm (PCon "Some" (PCon "JoinElselessIf")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EVar "elselessIfHelp"))) (ELit (LString "")))) (EVar "elselessIfHelp")) (EVar "None"))) (arm PWild () (EMatch (ETuple (EUnOp "!" (EVar "currentDoOrigin")) (EApp (EApp (EVar "constrainedApplicationHelp") (EVar "a")) (EVar "b"))) (arm (PTuple (PCon "None") (PCon "Some" (PVar "help"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm PWild () (EApp (EApp (EVar "typeMismatchReportRest") (EVar "a")) (EVar "b")))))))
 (DTypeSig false "elselessIfHelp" (TyCon "String"))
 (DFunDef false "elselessIfHelp" () (ELit (LString "an `if` without `else` has type Unit, so add an `else` branch or make the `then` branch Unit")))
 (DTypeSig false "constrainedApplicationHelp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -66398,26 +66376,26 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "restAtoms" ((PList)) (EListLit))
 (DFunDef false "restAtoms" ((PCons PWild (PVar "rest"))) (EVar "rest"))
 (DTypeSig false "lookupBinding" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "EnvBinding")))))
-(DFunDef false "lookupBinding" ((PCon "TcEnv" (PVar "vs") PWild PWild PWild) (PVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "vs")))
+(DFunDef false "lookupBinding" ((PVar "env") (PVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teVars")))
 (DTypeSig false "lookupVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
-(DFunDef false "lookupVar" ((PCon "TcEnv" (PVar "vs") (PVar "cs") PWild PWild) (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "vs")) (arm (PCon "Some" (PVar "binding")) () (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "binding") "ebValue") "vsScheme"))) (arm (PCon "None") () (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "cs")))))
+(DFunDef false "lookupVar" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teVars")) (arm (PCon "Some" (PVar "binding")) () (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "binding") "ebValue") "vsScheme"))) (arm (PCon "None") () (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teCtors")))))
 (DTypeSig false "lookupMethodRow" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodSchemeRow")))))
 (DFunDef false "lookupMethodRow" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "n")) (arm (PCon "Some" (PVar "binding")) () (EFieldAccess (EVar "binding") "ebMethodRow")) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "lookupCtor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
-(DFunDef false "lookupCtor" ((PCon "TcEnv" PWild (PVar "cs") PWild PWild) (PVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "cs")))
+(DFunDef false "lookupCtor" ((PVar "env") (PVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teCtors")))
 (DTypeSig false "extendVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "TcEnv")))))
-(DFunDef false "extendVar" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "s")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "ordinaryEnvBinding") (EVar "s"))) (EVar "vs"))) (EVar "cs")) (EVar "al")) (EVar "lc")))
+(DFunDef false "extendVar" ((PVar "env") (PVar "n") (PVar "s")) (ERecordUpdate (EVar "env") ((fa "teVars" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "ordinaryEnvBinding") (EVar "s"))) (EFieldAccess (EVar "env") "teVars"))))))
 (DTypeSig false "extendVars" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "TcEnv"))))
 (DFunDef false "extendVars" ((PVar "env") (PList)) (EVar "env"))
 (DFunDef false "extendVars" ((PVar "env") (PCons (PTuple (PVar "n") (PVar "s")) (PVar "rest"))) (EApp (EApp (EVar "extendVars") (EApp (EApp (EApp (EVar "extendVar") (EVar "env")) (EVar "n")) (EVar "s"))) (EVar "rest")))
 (DTypeSig false "extendMethodRow" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "MethodSchemeRow") (TyCon "TcEnv")))))
-(DFunDef false "extendMethodRow" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "row")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "methodEnvBinding") (EVar "row"))) (EVar "vs"))) (EVar "cs")) (EVar "al")) (EVar "lc")))
+(DFunDef false "extendMethodRow" ((PVar "env") (PVar "n") (PVar "row")) (ERecordUpdate (EVar "env") ((fa "teVars" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "methodEnvBinding") (EVar "row"))) (EFieldAccess (EVar "env") "teVars"))))))
 (DTypeSig false "extendMethodRows" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "MethodSchemeRow")) (TyCon "TcEnv"))))
 (DFunDef false "extendMethodRows" ((PVar "env") (PList)) (EVar "env"))
 (DFunDef false "extendMethodRows" ((PVar "env") (PCons (PVar "row") (PVar "rest"))) (EBlock (DoLet false false (PVar "env2") (EIf (EApp (EVar "methodRowCanCarry") (EVar "row")) (EApp (EApp (EApp (EVar "extendMethodRow") (EVar "env")) (EFieldAccess (EVar "row") "msrName")) (EVar "row")) (EApp (EApp (EApp (EVar "extendVar") (EVar "env")) (EFieldAccess (EVar "row") "msrName")) (EFieldAccess (EVar "row") "msrScheme")))) (DoExpr (EApp (EApp (EVar "extendMethodRows") (EVar "env2")) (EVar "rest")))))
 (DTypeSig false "extendBindings" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EnvBinding"))) (TyCon "TcEnv"))))
 (DFunDef false "extendBindings" ((PVar "env") (PList)) (EVar "env"))
-(DFunDef false "extendBindings" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PCons (PTuple (PVar "n") (PVar "binding")) (PVar "rest"))) (EApp (EApp (EVar "extendBindings") (EApp (EApp (EApp (EApp (EVar "TcEnv") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "binding")) (EVar "vs"))) (EVar "cs")) (EVar "al")) (EVar "lc"))) (EVar "rest")))
+(DFunDef false "extendBindings" ((PVar "env") (PCons (PTuple (PVar "n") (PVar "binding")) (PVar "rest"))) (EApp (EApp (EVar "extendBindings") (ERecordUpdate (EVar "env") ((fa "teVars" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "binding")) (EFieldAccess (EVar "env") "teVars")))))) (EVar "rest")))
 (DTypeSig false "lookupStandaloneVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
 (DFunDef false "lookupStandaloneVar" ((PVar "env") (PVar "name")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "value")) (EFieldAccess (EVar "value") "vsScheme"))) (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name"))))
 (DTypeSig false "lookupStandaloneValue" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme")))))
@@ -66440,22 +66418,22 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "attachStandaloneSources" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EnvBinding"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EnvBinding"))))))
 (DFunDef false "attachStandaloneSources" ((PVar "sources") (PVar "bindings")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "name") (PVar "binding"))) (ETuple (EVar "name") (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "sources")) (arm (PCon "Some" (PVar "source")) () (EApp (EApp (EVar "bindingWithStandalone") (EVar "binding")) (ETuple (EVar "ImportedStandalone") (EApp (EVar "ordinaryValueScheme") (EVar "source"))))) (arm (PCon "None") () (EVar "binding")))))) (EVar "bindings")))
 (DTypeSig false "extendLocalVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "TcEnv")))))
-(DFunDef false "extendLocalVar" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "s")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "ordinaryEnvBinding") (EVar "s"))) (EVar "vs"))) (EVar "cs")) (EBinOp "::" (ETuple (EVar "n") (EVar "AParam")) (EVar "al"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "True")) (EVar "lc"))))
+(DFunDef false "extendLocalVar" ((PVar "env") (PVar "n") (PVar "s")) (ERecordUpdate (EVar "env") ((fa "teVars" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EVar "ordinaryEnvBinding") (EVar "s"))) (EFieldAccess (EVar "env") "teVars"))) (fa "teAlphaLets" (EBinOp "::" (ETuple (EVar "n") (EVar "AParam")) (EFieldAccess (EVar "env") "teAlphaLets"))) (fa "teIsLocal" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "True")) (EFieldAccess (EVar "env") "teIsLocal"))))))
 (DTypeSig false "extendLocalVars" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "TcEnv"))))
 (DFunDef false "extendLocalVars" ((PVar "env") (PList)) (EVar "env"))
 (DFunDef false "extendLocalVars" ((PVar "env") (PCons (PTuple (PVar "n") (PVar "s")) (PVar "rest"))) (EApp (EApp (EVar "extendLocalVars") (EApp (EApp (EApp (EVar "extendLocalVar") (EVar "env")) (EVar "n")) (EVar "s"))) (EVar "rest")))
 (DTypeSig false "lookupLocalFlag" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "lookupLocalFlag" ((PCon "TcEnv" PWild PWild PWild (PVar "lc")) (PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "lc")))
+(DFunDef false "lookupLocalFlag" ((PVar "env") (PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "teIsLocal")))
 (DTypeSig false "addCtor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "TcEnv")))))
-(DFunDef false "addCtor" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "s")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "vs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "s")) (EVar "cs"))) (EVar "al")) (EVar "lc")))
+(DFunDef false "addCtor" ((PVar "env") (PVar "n") (PVar "s")) (ERecordUpdate (EVar "env") ((fa "teCtors" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "s")) (EFieldAccess (EVar "env") "teCtors"))))))
 (DTypeSig false "withCtors" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyCon "TcEnv")))
-(DFunDef false "withCtors" ((PVar "cs")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "omEmpty")) (EVar "cs")) (EListLit)) (EVar "omEmpty")))
+(DFunDef false "withCtors" ((PVar "cs")) (ERecordCreate "TcEnv" ((fa "teVars" (EVar "omEmpty")) (fa "teCtors" (EVar "cs")) (fa "teAlphaLets" (EListLit)) (fa "teIsLocal" (EVar "omEmpty")) (fa "teDyn" (EVar "noDyn")))))
 (DTypeSig false "envCtors" (TyFun (TyCon "TcEnv") (TyApp (TyCon "OrdMap") (TyCon "Scheme"))))
-(DFunDef false "envCtors" ((PCon "TcEnv" PWild (PVar "cs") PWild PWild)) (EVar "cs"))
+(DFunDef false "envCtors" ((PVar "env")) (EFieldAccess (EVar "env") "teCtors"))
 (DTypeSig false "seedAlphaLets" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "TcEnv")))))
-(DFunDef false "seedAlphaLets" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "rhs")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "vs")) (EVar "cs")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "ALet") (EVar "rhs"))) (EVar "al"))) (EVar "lc")))
+(DFunDef false "seedAlphaLets" ((PVar "env") (PVar "n") (PVar "rhs")) (ERecordUpdate (EVar "env") ((fa "teAlphaLets" (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "ALet") (EVar "rhs"))) (EFieldAccess (EVar "env") "teAlphaLets"))))))
 (DTypeSig false "envAlphaLets" (TyFun (TyCon "TcEnv") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder")))))
-(DFunDef false "envAlphaLets" ((PCon "TcEnv" PWild PWild (PVar "al") PWild)) (EVar "al"))
+(DFunDef false "envAlphaLets" ((PVar "env")) (EFieldAccess (EVar "env") "teAlphaLets"))
 (DTypeSig false "monoScheme" (TyFun (TyCon "Mono") (TyCon "Scheme")))
 (DFunDef false "monoScheme" ((PVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EVar "pureRow")) (EVar "t")))
 (DTypeSig false "inferPat" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Pat") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
@@ -66601,9 +66579,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "recordShadowStandaloneObls" ((PVar "env") (PVar "name") (PVar "subst")) (EIf (EBinOp "||" (EApp (EVar "isDefinerShadow") (EVar "name")) (EApp (EApp (EVar "isShadowStandalone") (EVar "env")) (EVar "name"))) (EMatch (EApp (EApp (EApp (EVar "lookupSchemeObls") (EVar "name")) (ELit (LInt 0))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PVar "obs")) () (EApp (EApp (EApp (EVar "recordSchemeCallObligations") (ELit (LInt 0))) (EVar "obs")) (EVar "subst"))) (arm (PCon "None") () (EMatch (EApp (EVar "declaredCrossModuleObls") (EVar "name")) (arm (PCon "Some" (PVar "obs")) () (EApp (EApp (EApp (EVar "recordSchemeCallObligations") (ELit (LInt 0))) (EVar "obs")) (EVar "subst"))) (arm (PCon "None") () (ELit LUnit))))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "inferMethodAt" ((PVar "env") (PVar "name") (PVar "ifaceRef") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "methodRef") (PVar "innerRef")) (EBlock (DoLet false false (PVar "selected") (EMatch (EApp (EApp (EVar "standaloneValueBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "scheme")) () (EApp (EVar "Some") (EVar "scheme"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "standaloneValueBindingEmit") (EVar "env")) (EVar "name")) (EVar "tagRef"))))) (DoExpr (EMatch (EVar "selected") (arm (PCon "Some" (PVar "value")) () (EBlock (DoLet false false PWild (EApp (EVar "rejectAdmittedValueOccurrence") (EVar "name"))) (DoLet false false (PVar "sym") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (DoLet false false (PVar "occurrence") (EApp (EApp (EApp (EApp (EApp (EVar "instantiateStandaloneOccurrence") (EVar "env")) (EVar "name")) (EVar "sym")) (EUnOp "!" (EVar "currentLoc"))) (EVar "value"))) (DoLet false false (PVar "inst") (EFieldAccess (EVar "occurrence") "svoInstance")) (DoLet false false (PVar "dicts") (EFieldAccess (EVar "occurrence") "svoDicts")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "grants") "gsLastStandalone")) (EApp (EVar "Some") (ETuple (EFieldAccess (EVar "occurrence") "svoScheme") (EFieldAccess (EFieldAccess (EVar "inst") "mtiSubstitution") "misAuthSubst"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "arityRef")) (EApp (EVar "Some") (EApp (EVar "funArity") (EFieldAccess (EVar "inst") "mtiBody"))))) (DoLet false false (PVar "receiver") (EMatch (EApp (EVar "methodDispatchIdx") (EVar "name")) (arm (PCon "Some" (PVar "idx")) () (EApp (EApp (EVar "optionOr") (EFieldAccess (EVar "inst") "mtiBody")) (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EFieldAccess (EVar "inst") "mtiBody")))) (arm (PCon "None") () (EFieldAccess (EVar "inst") "mtiBody")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "receiver")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EVar "sym")) (EVar "True")) (EFieldAccess (EVar "dicts") "sdMonos")) (EFieldAccess (EVar "dicts") "sdIfaces")) (EFieldAccess (EVar "dicts") "sdArgVecs"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))) (DoExpr (EFieldAccess (EVar "inst") "mtiBody")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferMethodCandidateAt") (EVar "env")) (EVar "name")) (EVar "ifaceRef")) (EVar "arityRef")) (EVar "tagRef")) (EVar "implRef")) (EVar "methodRef")) (EVar "innerRef")))))))
 (DTypeSig false "inferMethodCandidateAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyCon "Mono"))))))))))
-(DFunDef false "inferMethodCandidateAt" ((PVar "env") (PVar "name") (PVar "ifaceRef") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "methodRef") (PVar "innerRef")) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "env")) (EVar "name")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound method: ")) (EVar "name")))) (arm (PCon "Some" (PVar "s")) () (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateMethodTracked") (EVar "s"))) (DoLet false false (PVar "occurrence") (EFieldAccess (EVar "inst") "mtiBody")) (DoLet false false (PVar "subst") (EFieldAccess (EVar "inst") "mtiSubstitution")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "grants") "gsLastMethodInst")) (EApp (EVar "Some") (ETuple (EVar "s") (EFieldAccess (EVar "subst") "misAuthSubst"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "arityRef")) (EApp (EVar "Some") (EApp (EVar "funArity") (EVar "occurrence"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ifaceRef")) (EApp (EVar "admittedIfaceWord") (EVar "name")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordRLocalSite") (EVar "env")) (EVar "name")) (EVar "tagRef")) (EVar "innerRef")) (EVar "occurrence"))) (DoLet false false (PVar "ret") (EMatch (EApp (EVar "argDispatchOf") (EVar "name")) (arm (PCon "Some" (PVar "idx")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordMethodDicts") (EVar "name")) (EVar "methodRef")) (EVar "innerRef")) (EFieldAccess (EVar "subst") "misTypeSubst"))) (DoLet false false (PVar "omitted") (EApp (EVar "methodOmittedVars") (EVar "name"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordMethodObligationGuarded") (EVar "env")) (EVar "name")) (EVar "s")) (EVar "occurrence")) (EVar "omitted"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordArgStamp") (EVar "name")) (EVar "tagRef")) (EVar "implRef")) (EVar "innerRef")) (EVar "idx")) (EVar "occurrence")) (EVar "omitted"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordArgSiteFn") (EVar "name")) (EVar "idx")) (EVar "occurrence"))) (DoExpr (EVar "occurrence")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordSite") (EVar "env")) (EVar "name")) (EVar "s")) (EVar "ifaceRef")) (EVar "tagRef")) (EVar "implRef")) (EVar "methodRef")) (EVar "innerRef")) (EVar "occurrence")) (EVar "subst"))))) (DoLet false false PWild (EApp (EApp (EVar "forceInstantiation") (EVar "name")) (EVar "inst"))) (DoExpr (EVar "ret"))))))
+(DFunDef false "inferMethodCandidateAt" ((PVar "env") (PVar "name") (PVar "ifaceRef") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "methodRef") (PVar "innerRef")) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "env")) (EVar "name")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound method: ")) (EVar "name")))) (arm (PCon "Some" (PVar "s")) () (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateMethodTracked") (EVar "s"))) (DoLet false false (PVar "occurrence") (EFieldAccess (EVar "inst") "mtiBody")) (DoLet false false (PVar "subst") (EFieldAccess (EVar "inst") "mtiSubstitution")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "grants") "gsLastMethodInst")) (EApp (EVar "Some") (ETuple (EVar "s") (EFieldAccess (EVar "subst") "misAuthSubst"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "arityRef")) (EApp (EVar "Some") (EApp (EVar "funArity") (EVar "occurrence"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ifaceRef")) (EApp (EVar "admittedIfaceWord") (EVar "name")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordRLocalSite") (EVar "env")) (EVar "name")) (EVar "tagRef")) (EVar "innerRef")) (EVar "occurrence"))) (DoLet false false (PVar "ret") (EMatch (EApp (EVar "argDispatchOf") (EVar "name")) (arm (PCon "Some" (PVar "idx")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordMethodDicts") (EVar "name")) (EVar "methodRef")) (EVar "innerRef")) (EFieldAccess (EVar "subst") "misTypeSubst"))) (DoLet false false (PVar "omitted") (EApp (EVar "methodOmittedVars") (EVar "name"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordMethodObligationGuarded") (EVar "env")) (EVar "name")) (EVar "s")) (EVar "occurrence")) (EVar "omitted"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordArgStamp") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcSuppressArgStamp")) (EVar "name")) (EVar "tagRef")) (EVar "implRef")) (EVar "innerRef")) (EVar "idx")) (EVar "occurrence")) (EVar "omitted"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordArgSiteFn") (EVar "name")) (EVar "idx")) (EVar "occurrence"))) (DoExpr (EVar "occurrence")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordSite") (EVar "env")) (EVar "name")) (EVar "s")) (EVar "ifaceRef")) (EVar "tagRef")) (EVar "implRef")) (EVar "methodRef")) (EVar "innerRef")) (EVar "occurrence")) (EVar "subst"))))) (DoLet false false PWild (EApp (EApp (EVar "forceInstantiation") (EVar "name")) (EVar "inst"))) (DoExpr (EVar "ret"))))))
 (DTypeSig false "recordRLocalSite" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyFun (TyCon "Mono") (TyCon "Unit")))))))
-(DFunDef false "recordRLocalSite" ((PVar "env") (PVar "name") (PVar "tagRef") (PVar "innerRef") (PVar "inst")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressRLocalRecord") "value") (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNone") (EApp (EVar "methodDispatchIdx") (EVar "name"))) (EApp (EApp (EVar "standaloneValuePinned") (EVar "env")) (EVar "name"))) (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "inst")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (EVar "True")) (EListLit)) (EListLit)) (EListLit))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit)))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "methodDispatchIdx") (EVar "name")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "inst")) (arm (PCon "Some" (PVar "am")) () (EBlock (DoLet false false (PVar "sym") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (DoLet false false (PVar "dicts") (EApp (EApp (EApp (EApp (EVar "shadowStandaloneDictSlotsAt") (EApp (EApp (EApp (EVar "standaloneValueFor") (EVar "env")) (EVar "name")) (EVar "sym"))) (EVar "name")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym"))) (EVar "am"))) (DoExpr (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "am")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EVar "sym")) (EApp (EApp (EVar "standaloneValuePinned") (EVar "env")) (EVar "name"))) (EFieldAccess (EVar "dicts") "sdMonos")) (EFieldAccess (EVar "dicts") "sdIfaces")) (EFieldAccess (EVar "dicts") "sdArgVecs"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))))) (arm (PCon "None") () (ELit LUnit))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "recordRLocalSite" ((PVar "env") (PVar "name") (PVar "tagRef") (PVar "innerRef") (PVar "inst")) (EIf (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcSuppressRLocalRecord") (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNone") (EApp (EVar "methodDispatchIdx") (EVar "name"))) (EApp (EApp (EVar "standaloneValuePinned") (EVar "env")) (EVar "name"))) (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "inst")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (EVar "True")) (EListLit)) (EListLit)) (EListLit))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit)))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "methodDispatchIdx") (EVar "name")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "inst")) (arm (PCon "Some" (PVar "am")) () (EBlock (DoLet false false (PVar "sym") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (DoLet false false (PVar "dicts") (EApp (EApp (EApp (EApp (EVar "shadowStandaloneDictSlotsAt") (EApp (EApp (EApp (EVar "standaloneValueFor") (EVar "env")) (EVar "name")) (EVar "sym"))) (EVar "name")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym"))) (EVar "am"))) (DoExpr (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "am")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EVar "sym")) (EApp (EApp (EVar "standaloneValuePinned") (EVar "env")) (EVar "name"))) (EFieldAccess (EVar "dicts") "sdMonos")) (EFieldAccess (EVar "dicts") "sdIfaces")) (EFieldAccess (EVar "dicts") "sdArgVecs"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))))) (arm (PCon "None") () (ELit LUnit))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "standaloneSchemeFor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme"))))))
 (DFunDef false "standaloneSchemeFor" ((PVar "env") (PVar "name") (PVar "sym")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "value")) (EFieldAccess (EVar "value") "vsScheme"))) (EApp (EApp (EApp (EVar "standaloneValueFor") (EVar "env")) (EVar "name")) (EVar "sym"))))
 (DTypeSig false "standaloneValueFor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme"))))))
@@ -67565,8 +67543,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "unifyIntoN" (PWild (PCon "False") (PAs "lower" (PCon "TApp" PWild PWild)) (PCon "TVar" (PVar "cell"))) (EApp (EApp (EVar "bindValueUpper") (EVar "cell")) (EVar "lower")))
 (DFunDef false "unifyIntoN" (PWild (PCon "True") (PCon "TVar" (PVar "cell")) (PAs "lower" (PCon "TQual" PWild PWild))) (EApp (EApp (EVar "bindValueUpper") (EVar "cell")) (EVar "lower")))
 (DFunDef false "unifyIntoN" (PWild (PCon "False") (PAs "lower" (PCon "TQual" PWild PWild)) (PCon "TVar" (PVar "cell"))) (EApp (EApp (EVar "bindValueUpper") (EVar "cell")) (EVar "lower")))
-(DFunDef false "unifyIntoN" (PWild PWild (PCon "TVar" (PVar "cell")) (PAs "t" (PCon "TQual" PWild PWild))) (EApp (EApp (EVar "bindVar") (EVar "cell")) (EVar "t")))
-(DFunDef false "unifyIntoN" (PWild PWild (PAs "t" (PCon "TQual" PWild PWild)) (PCon "TVar" (PVar "cell"))) (EApp (EApp (EVar "bindVar") (EVar "cell")) (EVar "t")))
+(DFunDef false "unifyIntoN" (PWild PWild (PCon "TVar" (PVar "cell")) (PAs "t" (PCon "TQual" PWild PWild))) (EApp (EApp (EApp (EVar "bindVar") (EVar "noDyn")) (EVar "cell")) (EVar "t")))
+(DFunDef false "unifyIntoN" (PWild PWild (PAs "t" (PCon "TQual" PWild PWild)) (PCon "TVar" (PVar "cell"))) (EApp (EApp (EApp (EVar "bindVar") (EVar "noDyn")) (EVar "cell")) (EVar "t")))
 (DFunDef false "unifyIntoN" ((PVar "vf") (PVar "pos") (PCon "TQual" (PVar "e") (PVar "qe")) (PCon "TQual" (PVar "a") (PVar "qa"))) (EBlock (DoLet false false PWild (EIf (EVar "pos") (EApp (EApp (EVar "wantAuthority") (EVar "qa")) (EVar "qe")) (EApp (EApp (EVar "wantAuthority") (EVar "qe")) (EVar "qa")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifyIntoStep") (EVar "vf")) (EVar "pos")) (EVar "e")) (EVar "a")))))
 (DFunDef false "unifyIntoN" ((PVar "vf") (PVar "pos") (PCon "TQual" (PVar "e") (PVar "qe")) (PVar "a")) (EBlock (DoLet false false PWild (EIf (EVar "pos") (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qe")))) (EVar "qe")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifyIntoStep") (EVar "vf")) (EVar "pos")) (EVar "e")) (EVar "a")))))
 (DFunDef false "unifyIntoN" ((PVar "vf") (PVar "pos") (PVar "e") (PCon "TQual" (PVar "a") (PVar "qa"))) (EBlock (DoLet false false PWild (EIf (EVar "pos") (ELit LUnit) (EApp (EApp (EVar "wantAuthority") (EApp (EVar "authTop") (EApp (EVar "authDomainTop") (EVar "qa")))) (EVar "qa")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifyIntoStep") (EVar "vf")) (EVar "pos")) (EVar "e")) (EVar "a")))))
@@ -67575,7 +67553,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "unifyIntoN" ((PVar "vf") (PVar "pos") (PAs "e" (PCon "TApp" (PVar "e1") (PVar "e2"))) (PAs "a" (PCon "TApp" (PVar "a1") (PVar "a2")))) (EIf (EBinOp "||" (EApp (EApp (EVar "tupleUnifyClash") (EVar "e")) (EVar "a")) (EApp (EVar "monoSlotNonCovariant") (EVar "e1"))) (EApp (EApp (EApp (EVar "unifyOrdered") (EVar "vf")) (EVar "e")) (EVar "a")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "unifyIntoStep") (EVar "vf")) (EVar "pos")) (EVar "e1")) (EVar "a1"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifyIntoStep") (EVar "vf")) (EVar "pos")) (EVar "e2")) (EVar "a2")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "unifyIntoN" ((PVar "vf") PWild (PVar "e") (PVar "a")) (EApp (EApp (EApp (EVar "unifyOrdered") (EVar "vf")) (EVar "e")) (EVar "a")))
 (DTypeSig false "bindValueUpper" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "bindValueUpper" ((PVar "cell") (PVar "lower")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed")) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "occursAdjust") (EApp (EVar "tyvarId") (EVar "cell"))) (EApp (EVar "tyvarLevel") (EVar "cell"))) (EVar "lower"))) (DoExpr (EIf (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed") "value")) (EBlock (DoLet false false (PVar "upper") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProducedEnvelope") (EApp (EApp (EVar "valueJoinOps") (EVar "JoinArgument")) (EVar "collectValueAllowance"))) (EListLit (ETuple (EUnOp "!" (EVar "currentLoc")) (EVar "lower")))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordFileValueFlow") (EUnOp "!" (EVar "currentLoc"))) (EVar "upper")) (EVar "lower"))) (DoExpr (EApp (EApp (EVar "bindVar") (EVar "cell")) (EVar "upper")))) (ELit LUnit)))))
+(DFunDef false "bindValueUpper" ((PVar "cell") (PVar "lower")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed")) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "occursAdjust") (EApp (EVar "tyvarId") (EVar "cell"))) (EApp (EVar "tyvarLevel") (EVar "cell"))) (EVar "lower"))) (DoExpr (EIf (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "occursCheckFailed") "value")) (EBlock (DoLet false false (PVar "upper") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProducedEnvelope") (EApp (EApp (EApp (EVar "valueJoinOps") (EVar "noDyn")) (EVar "JoinArgument")) (EVar "collectValueAllowance"))) (EListLit (ETuple (EUnOp "!" (EVar "currentLoc")) (EVar "lower")))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordFileValueFlow") (EUnOp "!" (EVar "currentLoc"))) (EVar "upper")) (EVar "lower"))) (DoExpr (EApp (EApp (EApp (EVar "bindVar") (EVar "noDyn")) (EVar "cell")) (EVar "upper")))) (ELit LUnit)))))
 (DTypeSig false "collectValueAllowance" (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")))
 (DFunDef false "collectValueAllowance" ((PVar "rows")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "freshInferenceEffvar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "EffectSolver.registerValueAllowance") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EVar "cell"))) (DoLet false false (PVar "upper") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "lower")) (EApp (EApp (EApp (EVar "rowInto") (EVar "True")) (EVar "upper")) (EVar "lower")))) (ELit LUnit)) (EVar "rows"))) (DoExpr (EVar "upper"))))
 (DTypeSig false "unifyOrdered" (TyFun (TyCon "Bool") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
@@ -67585,9 +67563,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "rowInto" ((PVar "pos") (PVar "er") (PVar "ar")) (EIf (EApp (EVar "EffectSolver.hasSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EIf (EVar "pos") (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "ar")) (EVar "er")) (EApp (EApp (EApp (EVar "deferEffectRelation") (EVar "False")) (EVar "er")) (EVar "ar"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "rowInto" ((PCon "True") (PCon "EffRow" (PVar "le") (PCon "None")) (PCon "EffRow" (PVar "la") (PCon "None"))) (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "la")) (EVar "le"))) (EVar "le")))
 (DFunDef false "rowInto" ((PCon "False") (PCon "EffRow" (PVar "le") (PCon "None")) (PCon "EffRow" (PVar "la") (PCon "None"))) (EApp (EApp (EApp (EVar "contraRowCheck") (EApp (EApp (EVar "atomsEscape") (EVar "le")) (EVar "la"))) (EVar "le")) (EVar "la")))
-(DFunDef false "rowInto" ((PCon "True") (PAs "er" (PCon "EffRow" (PVar "le") PWild)) (PAs "ar" (PCon "EffRow" (PVar "la") (PCon "None")))) (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "la")) (EVar "le"))) (ELit LUnit) (EApp (EApp (EVar "unifyRowN") (EVar "er")) (EVar "ar"))))
-(DFunDef false "rowInto" ((PCon "False") (PAs "er" (PCon "EffRow" (PVar "le") (PCon "None"))) (PAs "ar" (PCon "EffRow" (PVar "la") PWild))) (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "le")) (EVar "la"))) (ELit LUnit) (EApp (EApp (EVar "unifyRowN") (EVar "er")) (EVar "ar"))))
-(DFunDef false "rowInto" (PWild (PVar "er") (PVar "ar")) (EApp (EApp (EVar "unifyRowN") (EVar "er")) (EVar "ar")))
+(DFunDef false "rowInto" ((PCon "True") (PAs "er" (PCon "EffRow" (PVar "le") PWild)) (PAs "ar" (PCon "EffRow" (PVar "la") (PCon "None")))) (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "la")) (EVar "le"))) (ELit LUnit) (EApp (EApp (EApp (EVar "unifyRowN") (EVar "noDyn")) (EVar "er")) (EVar "ar"))))
+(DFunDef false "rowInto" ((PCon "False") (PAs "er" (PCon "EffRow" (PVar "le") (PCon "None"))) (PAs "ar" (PCon "EffRow" (PVar "la") PWild))) (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "le")) (EVar "la"))) (ELit LUnit) (EApp (EApp (EApp (EVar "unifyRowN") (EVar "noDyn")) (EVar "er")) (EVar "ar"))))
+(DFunDef false "rowInto" (PWild (PVar "er") (PVar "ar")) (EApp (EApp (EApp (EVar "unifyRowN") (EVar "noDyn")) (EVar "er")) (EVar "ar")))
 (DTypeSig false "contraRowCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
 (DFunDef false "contraRowCheck" ((PList) PWild PWild) (ELit LUnit))
 (DFunDef false "contraRowCheck" ((PVar "extras") (PVar "le") (PVar "la")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EApp (EVar "contraRowMsg") (EVar "le")) (EVar "la")) (EVar "extras"))))
@@ -67624,7 +67602,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "inferShadowStandaloneArm" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Route")) (TyApp (TyCon "Ref") (TyCon "Inner")))) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Mono")))))))))
 (DFunDef false "inferShadowStandaloneArm" ((PVar "env") (PVar "mname") (PVar "arityRefs") (PVar "tagRefs") (PVar "f") (PVar "x") (PVar "tx")) (EMatch (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "mname")) (arm (PCon "Some" (PVar "value")) () (EBlock (DoLet false false (PVar "occurrence") (EApp (EApp (EApp (EApp (EApp (EVar "instantiateStandaloneOccurrence") (EVar "env")) (EVar "mname")) (ELit (LString ""))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EUnOp "!" (EVar "currentLoc")))) (EVar "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneAt") (EVar "mname")) (EVar "f")) (EVar "occurrence"))) (DoLet false false (PVar "smono") (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")) (DoLet false false PWild (EApp (EApp (EVar "stampMethodArities") (EVar "arityRefs")) (EApp (EVar "funArity") (EVar "smono")))) (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "eff") (EApp (EApp (EApp (EApp (EApp (EVar "applicationRow") (EVar "env")) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "smono")) (EVar "tx")) (EVar "r"))) (DoLet false false PWild (EApp (EApp (EVar "performEffect") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "curEffect")) (EVar "eff"))) (DoLet false false PWild (EApp (EVar "stampRoutes") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "tagRefs")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordSelectedStandaloneRoutes") (EVar "mname")) (EFieldAccess (EVar "occurrence") "svoDicts")) (EVar "tagRefs")) (EVar "tx"))) (DoExpr (EVar "r")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "inferApp") (EVar "env")) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EApp (EApp (EVar "inferShadowAppHead") (EVar "env")) (EVar "f"))) (EVar "tx")))))
 (DTypeSig false "inferShadowAppHead" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Mono"))))
-(DFunDef false "inferShadowAppHead" ((PVar "env") (PVar "f")) (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "True"))) (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "saved"))) (DoExpr (EVar "ft"))))
+(DFunDef false "inferShadowAppHead" ((PVar "env") (PVar "f")) (EApp (EApp (EVar "infer") (EApp (EVar "shadowHeadEnv") (EVar "env"))) (EVar "f")))
+(DTypeSig false "shadowHeadEnv" (TyFun (TyCon "TcEnv") (TyCon "TcEnv")))
+(DFunDef false "shadowHeadEnv" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "teDyn" (ERecordUpdate (EFieldAccess (EVar "env") "teDyn") ((fa "dcShadowHeadCtx" (EVar "True"))))))))
 (DTypeSig false "inferShadowAppAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Route")) (TyApp (TyCon "Ref") (TyCon "Inner")))) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono"))))))))))
 (DFunDef false "inferShadowAppAt" ((PVar "env") (PVar "mname") (PVar "arityRefs") (PVar "tagRefs") (PVar "hd") (PVar "nodes") (PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "dloc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "pre") (EApp (EApp (EVar "inferSpineArgs") (EVar "env")) (EVar "nodes"))) (DoLet false false (PVar "k") (EApp (EVar "listLen") (EVar "pre"))) (DoLet false false (PVar "tx") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "groundShadowReceiver") (EApp (EApp (EApp (EVar "importerShadowDomainAt") (EVar "env")) (EVar "mname")) (EVar "k"))) (EVar "tx")) (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "mname")) (EVar "tx"))) (EVar "dloc"))) (DoLet false false (PVar "ats") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "pre")) (EListLit (EVar "tx")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "groundAdmittedReceivers") (EVar "env")) (EVar "mname")) (EVar "ats")) (EVar "dloc"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "importerAdmittedVerdict") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "mname")) (EVar "ats")) (arm (PCon "AdReject" (PVar "ifs")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushAmbiguousShadowDecl") (EVar "mname")) (EVar "ifs")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EVar "dloc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferShadowStandaloneArmAt") (EVar "env")) (EVar "mname")) (EVar "arityRefs")) (EVar "tagRefs")) (EVar "hd")) (EVar "pre")) (EVar "f")) (EVar "x")) (EVar "tx"))))) (arm (PCon "AdStandalone") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferShadowStandaloneArmAt") (EVar "env")) (EVar "mname")) (EVar "arityRefs")) (EVar "tagRefs")) (EVar "hd")) (EVar "pre")) (EVar "f")) (EVar "x")) (EVar "tx"))) (arm (PCon "AdDefer") () (EMatch (EApp (EVar "headTyconMono") (EVar "tx")) (arm (PCon "Some" (PVar "head")) () (EIf (EApp (EApp (EApp (EVar "ieImplExistsForHead") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "mname")) (EVar "head")) (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EApp (EApp (EVar "inferShadowAppHead") (EVar "env")) (EVar "hd"))) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "tx"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferShadowStandaloneArmAt") (EVar "env")) (EVar "mname")) (EVar "arityRefs")) (EVar "tagRefs")) (EVar "hd")) (EVar "pre")) (EVar "f")) (EVar "x")) (EVar "tx")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EApp (EApp (EVar "inferShadowAppHead") (EVar "env")) (EVar "hd"))) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "tx"))))))))))))
 (DTypeSig false "inferShadowStandaloneArmAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Route")) (TyApp (TyCon "Ref") (TyCon "Inner")))) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Mono"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Mono")))))))))))
@@ -67649,7 +67629,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "inferDefinerShadowApp" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono"))))))))))
 (DFunDef false "inferDefinerShadowApp" ((PVar "env") (PVar "name") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "innerRef") (PVar "f") (PVar "x")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferDefinerShadowAppAt") (EVar "env")) (EVar "name")) (EVar "arityRef")) (EVar "tagRef")) (EVar "implRef")) (EVar "innerRef")) (EVar "f")) (EListLit)) (EVar "f")) (EVar "x")))
 (DTypeSig false "inferDefinerShadowAppAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Inner")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono"))))))))))))
-(DFunDef false "inferDefinerShadowAppAt" ((PVar "env") (PVar "name") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "innerRef") (PVar "hd") (PVar "nodes") (PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef"))) (DoLet false false (PVar "dloc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "pre") (EApp (EApp (EVar "inferSpineArgs") (EVar "env")) (EVar "nodes"))) (DoLet false false (PVar "k") (EApp (EVar "listLen") (EVar "pre"))) (DoLet false false (PVar "xt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false (PVar "isDictVar") (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "name")) (EVar "xt"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "groundShadowReceiver") (EApp (EApp (EApp (EApp (EVar "shadowDomainForAt") (EVar "env")) (EVar "name")) (EVar "sym")) (EVar "k"))) (EVar "xt")) (EVar "isDictVar")) (EVar "dloc"))) (DoLet false false (PVar "dispatches") (EApp (EApp (EVar "definerReceiverDispatches") (EVar "name")) (EVar "xt"))) (DoLet false false PWild (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EMatch (EApp (EVar "spineHeadEv") (EVar "hd")) (arm (PCon "Some" (PVar "ev")) () (EBlock (DoLet false false (PVar "cell") (EApp (EVar "methodCellOf") (EVar "ev"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cell") "ecIface")) (EApp (EVar "admittedIfaceWord") (EVar "name")))))) (arm (PCon "None") () (ELit LUnit))) (ELit LUnit))) (DoLet false false (PVar "savedRLocal") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressRLocalRecord") "value")) (DoLet false false (PVar "savedArgStamp") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressArgStamp") "value")) (DoLet false false (PVar "savedShadowHead") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressRLocalRecord")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressArgStamp")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "True"))) (DoLet false false (PVar "selected") (EIf (EVar "dispatches") (EVar "None") (EApp (EApp (EApp (EApp (EVar "standaloneOccurrence") (EVar "env")) (EVar "name")) (EVar "sym")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EVar "dloc"))))) (DoLet false false (PVar "ft") (EIf (EVar "dispatches") (EApp (EApp (EApp (EVar "shadowVarHeadMethodScheme") (EVar "env")) (EVar "name")) (EVar "hd")) (EMatch (EVar "selected") (arm (PCon "Some" (PVar "occurrence")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneAt") (EVar "name")) (EVar "hd")) (EVar "occurrence"))) (DoExpr (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")))) (arm (PCon "None") () (EApp (EApp (EVar "infer") (EVar "env")) (EVar "hd")))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "arityRef")) (EApp (EVar "Some") (EApp (EVar "funArity") (EVar "ft"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "savedShadowHead"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressRLocalRecord")) (EVar "savedRLocal"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "suppressArgStamp")) (EVar "savedArgStamp"))) (DoLet false false (PVar "dicts") (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EVar "emptyShadowDicts") (EApp (EApp (EVar "optionOr") (EVar "emptyShadowDicts")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "occurrence")) (EFieldAccess (EVar "occurrence") "svoDicts"))) (EVar "selected"))))) (DoLet false false PWild (EIf (EVar "isDictVar") (ELit LUnit) (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "xt")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (EApp (EVar "not") (EVar "dispatches"))) (EFieldAccess (EVar "dicts") "sdMonos")) (EFieldAccess (EVar "dicts") "sdIfaces")) (EFieldAccess (EVar "dicts") "sdArgVecs"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit)))))) (DoLet false false PWild (EMatch (EApp (EVar "argDispatchOf") (EVar "name")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKArgStamp")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "xt")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EVar "SKArg") (EVar "implRef")) (EIf (EVar "dispatches") (EVar "ft") (EVar "xt"))) (EListLit))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EMatch (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EVar "None") (EApp (EApp (EApp (EVar "standaloneSchemeFor") (EVar "env")) (EVar "name")) (EVar "sym"))) (arm (PCon "Some" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "dloc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifySpineResult") (EVar "env")) (EVar "f")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EVar "x") (EVar "xt")))))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "enforceStandaloneDomainAt") (EVar "env")) (EVar "name")) (EVar "xt")) (EVar "dloc")) (EVar "k")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "xt"))))))))))))
+(DFunDef false "inferDefinerShadowAppAt" ((PVar "env") (PVar "name") (PVar "arityRef") (PVar "tagRef") (PVar "implRef") (PVar "innerRef") (PVar "hd") (PVar "nodes") (PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef"))) (DoLet false false (PVar "dloc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "pre") (EApp (EApp (EVar "inferSpineArgs") (EVar "env")) (EVar "nodes"))) (DoLet false false (PVar "k") (EApp (EVar "listLen") (EVar "pre"))) (DoLet false false (PVar "xt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false (PVar "isDictVar") (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "name")) (EVar "xt"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "groundShadowReceiver") (EApp (EApp (EApp (EApp (EVar "shadowDomainForAt") (EVar "env")) (EVar "name")) (EVar "sym")) (EVar "k"))) (EVar "xt")) (EVar "isDictVar")) (EVar "dloc"))) (DoLet false false (PVar "dispatches") (EApp (EApp (EVar "definerReceiverDispatches") (EVar "name")) (EVar "xt"))) (DoLet false false PWild (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EMatch (EApp (EVar "spineHeadEv") (EVar "hd")) (arm (PCon "Some" (PVar "ev")) () (EBlock (DoLet false false (PVar "cell") (EApp (EVar "methodCellOf") (EVar "ev"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cell") "ecIface")) (EApp (EVar "admittedIfaceWord") (EVar "name")))))) (arm (PCon "None") () (ELit LUnit))) (ELit LUnit))) (DoLet false false (PVar "headEnv") (ERecordUpdate (EVar "env") ((fa "teDyn" (ERecordUpdate (EFieldAccess (EVar "env") "teDyn") ((fa "dcSuppressRLocalRecord" (EVar "True")) (fa "dcSuppressArgStamp" (EVar "True")) (fa "dcShadowHeadCtx" (EVar "True")))))))) (DoLet false false (PVar "selected") (EIf (EVar "dispatches") (EVar "None") (EApp (EApp (EApp (EApp (EVar "standaloneOccurrence") (EVar "headEnv")) (EVar "name")) (EVar "sym")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EVar "dloc"))))) (DoLet false false (PVar "ft") (EIf (EVar "dispatches") (EApp (EApp (EApp (EVar "shadowVarHeadMethodScheme") (EVar "headEnv")) (EVar "name")) (EVar "hd")) (EMatch (EVar "selected") (arm (PCon "Some" (PVar "occurrence")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneAt") (EVar "name")) (EVar "hd")) (EVar "occurrence"))) (DoExpr (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")))) (arm (PCon "None") () (EApp (EApp (EVar "infer") (EVar "headEnv")) (EVar "hd")))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "arityRef")) (EApp (EVar "Some") (EApp (EVar "funArity") (EVar "ft"))))) (DoLet false false (PVar "dicts") (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EVar "emptyShadowDicts") (EApp (EApp (EVar "optionOr") (EVar "emptyShadowDicts")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "occurrence")) (EFieldAccess (EVar "occurrence") "svoDicts"))) (EVar "selected"))))) (DoLet false false PWild (EIf (EVar "isDictVar") (ELit LUnit) (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKRLocalSite")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "xt")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "SKRLocal") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "tagRef")))) (EApp (EVar "not") (EVar "dispatches"))) (EFieldAccess (EVar "dicts") "sdMonos")) (EFieldAccess (EVar "dicts") "sdIfaces")) (EFieldAccess (EVar "dicts") "sdArgVecs"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit)))))) (DoLet false false PWild (EMatch (EApp (EVar "argDispatchOf") (EVar "name")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "pushSiteGoal") (EVar "GKArgStamp")) (EVar "innerRef")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PendingEntry") (EVar "name")) (EVar "tagRef")) (EVar "xt")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EApp (EApp (EVar "SKArg") (EVar "implRef")) (EIf (EVar "dispatches") (EVar "ft") (EVar "xt"))) (EListLit))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EVar "captureScope") (ELit LUnit))) (EApp (EVar "freshEvId") (ELit LUnit))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EMatch (EIf (EBinOp "||" (EVar "dispatches") (EVar "isDictVar")) (EVar "None") (EApp (EApp (EApp (EVar "standaloneSchemeFor") (EVar "env")) (EVar "name")) (EVar "sym"))) (arm (PCon "Some" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "dloc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifySpineResult") (EVar "env")) (EVar "f")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EVar "x") (EVar "xt")))))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "enforceStandaloneDomainAt") (EVar "env")) (EVar "name")) (EVar "xt")) (EVar "dloc")) (EVar "k")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "xt"))))))))))))
 (DTypeSig false "isDefinerShadow" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isDefinerShadow" ((PVar "name")) (EBinOp "&&" (EApp (EVar "ifaceMethodName") (EVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value"))))
 (DTypeSig false "definerReceiverDispatches" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Bool"))))
@@ -67681,9 +67661,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "instantiateStandaloneOccurrence" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ValueScheme") (TyCon "SelectedValueOccurrence")))))))
 (DFunDef false "instantiateStandaloneOccurrence" ((PVar "env") (PVar "name") (PVar "sym") (PVar "origin") (PVar "value")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "origin"))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "instantiateValueTracked") (EVar "name")) (EFieldAccess (EVar "value") "vsScheme"))) (DoLet false false (PVar "declared") (EApp (EApp (EVar "declaredEffectsAt") (EVar "inst")) (EFieldAccess (EVar "value") "vsDeclared"))) (DoLet false false PWild (EMatch (EVar "declared") (arm (PCon "Some" (PVar "dc")) () (EApp (EApp (EVar "recordDeclaredBindingCall") (EVar "dc")) (EFieldAccess (EFieldAccess (EVar "inst") "mtiSubstitution") "misTypeSubst"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "recordShadowStandaloneObls") (EVar "env")) (EVar "name")) (EFieldAccess (EFieldAccess (EVar "inst") "mtiSubstitution") "misTypeSubst"))))) (DoLet false false (PVar "key") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym"))) (DoLet false false (PVar "dc") (EApp (EApp (EVar "optionOr") (EApp (EApp (EVar "shadowDeclaredFor") (EVar "name")) (EVar "key"))) (EVar "declared"))) (DoExpr (ERecordCreate "SelectedValueOccurrence" ((fa "svoScheme" (EFieldAccess (EVar "value") "vsScheme")) (fa "svoInstance" (EVar "inst")) (fa "svoDicts" (EApp (EApp (EApp (EVar "shadowStandaloneDictSlots") (EFieldAccess (EVar "dc") "cdSlots")) (EFieldAccess (EVar "dc") "cdArgs")) (EFieldAccess (EFieldAccess (EVar "inst") "mtiSubstitution") "misTypeSubst"))))))))
 (DTypeSig false "standaloneValueBinding" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme")))))
-(DFunDef false "standaloneValueBinding" ((PVar "env") (PVar "name")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value") (EVar "None") (EIf (EBinOp "&&" (EApp (EVar "ifaceMethodName") (EVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value"))) (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name")) (EIf (EApp (EVar "not") (EApp (EVar "singleTyparamIfaceMethod") (EVar "name"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "standaloneValueBinding" ((PVar "env") (PVar "name")) (EIf (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcShadowHeadCtx") (EVar "None") (EIf (EBinOp "&&" (EApp (EVar "ifaceMethodName") (EVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value"))) (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name")) (EIf (EApp (EVar "not") (EApp (EVar "singleTyparamIfaceMethod") (EVar "name"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "standaloneValueBindingEmit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyApp (TyCon "Option") (TyCon "ValueScheme"))))))
-(DFunDef false "standaloneValueBindingEmit" ((PVar "env") (PVar "name") (PVar "tagRef")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value") (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef")) (ELit (LString ""))) (EVar "None") (EIf (EApp (EVar "not") (EApp (EVar "emitValueShadowGate") (EVar "name"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "standaloneValueFor") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "standaloneValueBindingEmit" ((PVar "env") (PVar "name") (PVar "tagRef")) (EIf (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcShadowHeadCtx") (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef")) (ELit (LString ""))) (EVar "None") (EIf (EApp (EVar "not") (EApp (EVar "emitValueShadowGate") (EVar "name"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "standaloneValueFor") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "recoveredShadowSym") (EVar "name")) (EVar "tagRef"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "emitValueShadowGate" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "emitValueShadowGate" ((PVar "name")) (EIf (EApp (EVar "isDefinerShadow") (EVar "name")) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "singleTyparamIfaceMethod") (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "standaloneValuePinned" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -67706,9 +67686,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "inferDefinerShadowVarAppAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono"))))))))
 (DFunDef false "inferDefinerShadowVarAppAt" ((PVar "env") (PVar "name") (PVar "hd") (PVar "nodes") (PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "dloc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "pre") (EApp (EApp (EVar "inferSpineArgs") (EVar "env")) (EVar "nodes"))) (DoLet false false (PVar "xt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false (PVar "isDictVar") (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "name")) (EVar "xt"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "groundShadowReceiver") (EApp (EApp (EVar "standaloneShadowDomainAt") (EVar "name")) (EApp (EVar "listLen") (EVar "pre")))) (EVar "xt")) (EVar "isDictVar")) (EVar "dloc"))) (DoExpr (EIf (EVar "isDictVar") (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EApp (EApp (EApp (EVar "shadowVarHeadMethodScheme") (EVar "env")) (EVar "name")) (EVar "hd"))) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "xt"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferDefinerStandaloneVarAppAt") (EVar "env")) (EVar "name")) (EVar "hd")) (EVar "pre")) (EVar "f")) (EVar "x")) (EVar "xt")) (EVar "dloc"))))))
 (DTypeSig false "shadowVarHeadMethodScheme" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Mono")))))
-(DFunDef false "shadowVarHeadMethodScheme" ((PVar "env") (PVar "name") (PVar "f")) (EMatch (EApp (EVar "methodEntryHere") (EVar "name")) (arm (PCon "Some" (PTuple PWild PWild (PVar "ty") (PVar "scope"))) () (EApp (EApp (EVar "forceInstantiation") (EVar "name")) (EApp (EVar "instantiateMethodTracked") (EApp (EVar "fst") (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "scope")) (EVar "ty")))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "True"))) (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "saved"))) (DoExpr (EVar "ft"))))))
+(DFunDef false "shadowVarHeadMethodScheme" ((PVar "env") (PVar "name") (PVar "f")) (EMatch (EApp (EVar "methodEntryHere") (EVar "name")) (arm (PCon "Some" (PTuple PWild PWild (PVar "ty") (PVar "scope"))) () (EApp (EApp (EVar "forceInstantiation") (EVar "name")) (EApp (EVar "instantiateMethodTracked") (EApp (EVar "fst") (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "scope")) (EVar "ty")))))) (arm (PCon "None") () (EApp (EApp (EVar "infer") (EApp (EVar "shadowHeadEnv") (EVar "env"))) (EVar "f")))))
 (DTypeSig false "inferDefinerStandaloneVarAppAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Mono"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))))))))))
-(DFunDef false "inferDefinerStandaloneVarAppAt" ((PVar "env") (PVar "name") (PVar "hd") (PVar "pre") (PVar "f") (PVar "x") (PVar "xt") (PVar "dloc")) (EMatch (EApp (EApp (EApp (EApp (EVar "standaloneOccurrence") (EVar "env")) (EVar "name")) (ELit (LString ""))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EVar "dloc"))) (arm (PCon "Some" (PVar "occurrence")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneAt") (EVar "name")) (EVar "hd")) (EVar "occurrence"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "dloc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifySpineResult") (EVar "env")) (EVar "f")) (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EVar "x") (EVar "xt")))))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "True"))) (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "hd"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "toggles") "value") "shadowHeadCtxRef")) (EVar "saved"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "enforceStandaloneDomainAt") (EVar "env")) (EVar "name")) (EVar "xt")) (EVar "dloc")) (EApp (EVar "listLen") (EVar "pre")))) (DoExpr (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "xt"))))))))))
+(DFunDef false "inferDefinerStandaloneVarAppAt" ((PVar "env") (PVar "name") (PVar "hd") (PVar "pre") (PVar "f") (PVar "x") (PVar "xt") (PVar "dloc")) (EMatch (EApp (EApp (EApp (EApp (EVar "standaloneOccurrence") (EVar "env")) (EVar "name")) (ELit (LString ""))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "appSpineHeadLoc") (EVar "f"))) (EVar "dloc"))) (arm (PCon "Some" (PVar "occurrence")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneAt") (EVar "name")) (EVar "hd")) (EVar "occurrence"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "dloc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifySpineResult") (EVar "env")) (EVar "f")) (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EVar "x") (EVar "xt")))))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EApp (EVar "shadowHeadEnv") (EVar "env"))) (EVar "hd"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "enforceStandaloneDomainAt") (EVar "env")) (EVar "name")) (EVar "xt")) (EVar "dloc")) (EApp (EVar "listLen") (EVar "pre")))) (DoExpr (EApp (EApp (EApp (EVar "inferAppNodes") (EVar "env")) (EVar "ft")) (EBinOp "++" (EVar "pre") (EListLit (ETuple (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")) (EVar "xt"))))))))))
 (DTypeSig false "stampRoutes" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))) (TyCon "Unit")))
 (DFunDef false "stampRoutes" ((PList)) (ELit LUnit))
 (DFunDef false "stampRoutes" ((PCons (PVar "r") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "RLocal") (EApp (EVar "routeLocalSym") (EUnOp "!" (EVar "r")))) (EListLit)))) (DoExpr (EApp (EVar "stampRoutes") (EVar "rest")))))
@@ -67935,13 +67915,13 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "isOmittedElse" ((PCon "ELit" (PCon "LUnit"))) (EVar "True"))
 (DFunDef false "isOmittedElse" (PWild) (EVar "False"))
 (DTypeSig false "joinValueTypes" (TyFun (TyCon "JoinContext") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))) (TyCon "Mono"))))
-(DFunDef false "joinValueTypes" ((PVar "context") (PVar "values")) (EBlock (DoLet false false (PVar "upper") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProduced") (EApp (EApp (EVar "valueJoinOps") (EVar "context")) (EApp (EVar "collectRows") (EVar "joinCellOf")))) (EVar "values")))) (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "loc") (PVar "lower"))) (EApp (EApp (EApp (EVar "recordFileValueFlow") (EVar "loc")) (EVar "upper")) (EVar "lower")))) (EVar "values"))) (DoExpr (EVar "upper"))))
-(DTypeSig false "valueJoinOps" (TyFun (TyCon "JoinContext") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")) (TyApp (TyCon "ValueJoinOps") (TyApp (TyCon "Option") (TyCon "Loc"))))))
-(DFunDef false "valueJoinOps" ((PVar "context") (PVar "collector")) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EVar "decidingJoinOps") (EVar "context")) (EVar "collector"))) (DoExpr (ERecordUpdate (EVar "ops") ((fa "vjoDefer" (ELam ((PVar "values")) (EApp (EApp (EVar "deferJoin") (EVar "ops")) (EVar "values")))))))))
-(DTypeSig false "decidingJoinOps" (TyFun (TyCon "JoinContext") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")) (TyApp (TyCon "ValueJoinOps") (TyApp (TyCon "Option") (TyCon "Loc"))))))
-(DFunDef false "decidingJoinOps" ((PVar "context") (PVar "collector")) (ERecordCreate "ValueJoinOps" ((fa "vjoEqual" (EApp (EVar "joinValueEqual") (EVar "context"))) (fa "vjoCovariants" (EVar "producedSlotCovariants")) (fa "vjoFreshType" (EVar "freshVar")) (fa "vjoFreshRow" (EVar "openRow")) (fa "vjoCollectRows" (EVar "collector")) (fa "vjoFreshAuth" (ELam ((PVar "top")) (EApp (EVar "AVar") (EApp (EApp (EVar "freshAuthvar") (EVar "top")) (EVar "None"))))) (fa "vjoCollectAuth" (EVar "collectAuthAllowance")) (fa "vjoDefer" (ELam (PWild) (EVar "None"))))))
-(DTypeSig false "deferJoin" (TyFun (TyApp (TyCon "ValueJoinOps") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono")))))
-(DFunDef false "deferJoin" ((PVar "ops") (PVar "values")) (EIf (EBinOp "&&" (EApp (EVar "EffectSolver.hasSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EApp (EVar "distinctVariables") (EVar "values"))) (EBlock (DoLet false false (PVar "result") (EApp (EVar "freshVar") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef")) (EBinOp "::" (ERecordCreate "PendingJoin" ((fa "pjResult" (EVar "result")) (fa "pjValues" (EVar "values")) (fa "pjLevel" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (fa "pjOps" (EVar "ops")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef") "value")))) (DoExpr (EApp (EVar "Some") (EVar "result")))) (EVar "None")))
+(DFunDef false "joinValueTypes" ((PVar "context") (PVar "values")) (EBlock (DoLet false false (PVar "upper") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProduced") (EApp (EApp (EApp (EVar "valueJoinOps") (EVar "noDyn")) (EVar "context")) (EApp (EVar "collectRows") (EVar "joinCellOf")))) (EVar "values")))) (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "loc") (PVar "lower"))) (EApp (EApp (EApp (EVar "recordFileValueFlow") (EVar "loc")) (EVar "upper")) (EVar "lower")))) (EVar "values"))) (DoExpr (EVar "upper"))))
+(DTypeSig false "valueJoinOps" (TyFun (TyCon "DynCtx") (TyFun (TyCon "JoinContext") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")) (TyApp (TyCon "ValueJoinOps") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "valueJoinOps" ((PVar "dyn") (PVar "context") (PVar "collector")) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EApp (EVar "decidingJoinOps") (EVar "dyn")) (EVar "context")) (EVar "collector"))) (DoExpr (ERecordUpdate (EVar "ops") ((fa "vjoDefer" (ELam ((PVar "values")) (EApp (EApp (EApp (EVar "deferJoin") (EVar "context")) (EVar "collector")) (EVar "values")))))))))
+(DTypeSig false "decidingJoinOps" (TyFun (TyCon "DynCtx") (TyFun (TyCon "JoinContext") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")) (TyApp (TyCon "ValueJoinOps") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "decidingJoinOps" ((PVar "dyn") (PVar "context") (PVar "collector")) (ERecordCreate "ValueJoinOps" ((fa "vjoEqual" (EApp (EApp (EVar "joinValueEqual") (EVar "dyn")) (EVar "context"))) (fa "vjoCovariants" (EVar "producedSlotCovariants")) (fa "vjoFreshType" (EVar "freshVar")) (fa "vjoFreshRow" (EVar "openRow")) (fa "vjoCollectRows" (EVar "collector")) (fa "vjoFreshAuth" (ELam ((PVar "top")) (EApp (EVar "AVar") (EApp (EApp (EVar "freshAuthvar") (EVar "top")) (EVar "None"))))) (fa "vjoCollectAuth" (EVar "collectAuthAllowance")) (fa "vjoDefer" (ELam (PWild) (EVar "None"))))))
+(DTypeSig false "deferJoin" (TyFun (TyCon "JoinContext") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono"))))))
+(DFunDef false "deferJoin" ((PVar "context") (PVar "collector") (PVar "values")) (EIf (EBinOp "&&" (EApp (EVar "EffectSolver.hasSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EApp (EVar "distinctVariables") (EVar "values"))) (EBlock (DoLet false false (PVar "result") (EApp (EVar "freshVar") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef")) (EBinOp "::" (ERecordCreate "PendingJoin" ((fa "pjResult" (EVar "result")) (fa "pjValues" (EVar "values")) (fa "pjLevel" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (fa "pjContext" (EVar "context")) (fa "pjCollector" (EVar "collector")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef") "value")))) (DoExpr (EApp (EVar "Some") (EVar "result")))) (EVar "None")))
 (DTypeSig false "distinctVariables" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))) (TyCon "Bool")))
 (DFunDef false "distinctVariables" ((PVar "values")) (EBlock (DoLet false false (PVar "roots") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "value"))) (EMatch (EApp (EVar "normalize") (EVar "value")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EApp (EVar "IdMap.set") (EApp (EVar "tyvarId") (EVar "cell"))) (ELit LUnit)) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EVar "values"))) (DoExpr (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "IdMap.keys") (EVar "roots"))) (ELit (LInt 2))))))
 (DTypeSig false "resolvePendingJoins" (TyFun (TyCon "Int") (TyCon "Unit")))
@@ -67964,7 +67944,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "lowerPending" ((PVar "level") (PCons (PVar "pj") (PVar "rest"))) (EIf (EBinOp ">=" (EFieldAccess (EVar "pj") "pjLevel") (EVar "level")) (EBinOp "::" (ERecordUpdate (EVar "pj") ((fa "pjLevel" (EBinOp "-" (EVar "level") (ELit (LInt 1)))))) (EApp (EApp (EVar "lowerPending") (EVar "level")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "lowerPending" (PWild (PVar "pending")) (EVar "pending"))
 (DTypeSig false "resolvePendingJoin" (TyFun (TyCon "PendingJoin") (TyCon "Unit")))
-(DFunDef false "resolvePendingJoin" ((PVar "pj")) (EMatch (EApp (EVar "normalize") (EFieldAccess (EVar "pj") "pjResult")) (arm (PCon "TVar" PWild) () (EApp (EApp (EVar "unify") (EFieldAccess (EVar "pj") "pjResult")) (EApp (EApp (EVar "resolveDeferredJoin") (EFieldAccess (EVar "pj") "pjOps")) (EFieldAccess (EVar "pj") "pjValues")))) (arm PWild () (EApp (EVar "settleShapedJoins") (EListLit (EVar "pj"))))))
+(DFunDef false "resolvePendingJoin" ((PVar "pj")) (EMatch (EApp (EVar "normalize") (EFieldAccess (EVar "pj") "pjResult")) (arm (PCon "TVar" PWild) () (EApp (EApp (EVar "unify") (EFieldAccess (EVar "pj") "pjResult")) (EApp (EApp (EVar "resolveDeferredJoin") (EApp (EApp (EApp (EVar "decidingJoinOps") (EVar "noDyn")) (EFieldAccess (EVar "pj") "pjContext")) (EFieldAccess (EVar "pj") "pjCollector"))) (EFieldAccess (EVar "pj") "pjValues")))) (arm PWild () (EApp (EApp (EVar "settleShapedJoins") (EVar "noDyn")) (EListLit (EVar "pj"))))))
 (DTypeSig false "collectAuthAllowance" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyCon "Authority")))
 (DFunDef false "collectAuthAllowance" ((PVar "lowers")) (EBlock (DoLet false false (PVar "top") (EMatch (EVar "lowers") (arm (PCons (PVar "q") PWild) () (EApp (EVar "authDomainTop") (EVar "q"))) (arm (PList) () (EVar "PUnit")))) (DoLet false false (PVar "cell") (EApp (EApp (EVar "freshAuthvar") (EVar "top")) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "q")) (EApp (EApp (EVar "wantAuthority") (EVar "q")) (EApp (EVar "AVar") (EVar "cell"))))) (ELit LUnit)) (EVar "lowers"))) (DoExpr (EApp (EVar "AVar") (EVar "cell")))))
 (DTypeSig false "optionOrFresh" (TyFun (TyApp (TyCon "Option") (TyCon "Mono")) (TyCon "Mono")))
@@ -67973,13 +67953,13 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "collectProducedSummary" (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow")))
 (DFunDef false "collectProducedSummary" ((PVar "rows")) (EBlock (DoLet false false (PVar "summary") (EApp (EVar "freshEffectSummary") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "row")) (EApp (EApp (EVar "recordEffectBody") (EVar "summary")) (EVar "row")))) (ELit LUnit)) (EVar "rows"))) (DoExpr (EVar "summary"))))
 (DTypeSig false "publishProducedResults" (TyFun (TyCon "BindingSummary") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono"))) (TyCon "Unit"))))
-(DFunDef false "publishProducedResults" ((PVar "owned") (PVar "values")) (EBlock (DoLet false false (PVar "results") (EApp (EApp (EMethodRef "map") (EApp (EVar "clauseResult") (EFieldAccess (EVar "owned") "bsArity"))) (EVar "values"))) (DoLet false false (PVar "produced") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProducedEnvelope") (EApp (EApp (EVar "valueJoinOps") (EVar "JoinClause")) (EVar "collectProducedSummary"))) (EVar "results")))) (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "loc") (PVar "lower"))) (EApp (EApp (EApp (EVar "recordFileValueFlow") (EVar "loc")) (EVar "produced")) (EVar "lower")))) (EVar "results"))) (DoExpr (EMatch (EApp (EApp (EVar "resultAfterArrows") (EFieldAccess (EVar "owned") "bsArity")) (EFieldAccess (EVar "owned") "bsValue")) (arm (PCon "Some" (PVar "expected")) () (EApp (EApp (EVar "bindFrom") (EVar "expected")) (EVar "produced"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "binding source arity differs from its allocated shape"))))))))
+(DFunDef false "publishProducedResults" ((PVar "owned") (PVar "values")) (EBlock (DoLet false false (PVar "results") (EApp (EApp (EMethodRef "map") (EApp (EVar "clauseResult") (EFieldAccess (EVar "owned") "bsArity"))) (EVar "values"))) (DoLet false false (PVar "produced") (EApp (EVar "optionOrFresh") (EApp (EApp (EVar "joinProducedEnvelope") (EApp (EApp (EApp (EVar "valueJoinOps") (EVar "noDyn")) (EVar "JoinClause")) (EVar "collectProducedSummary"))) (EVar "results")))) (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "loc") (PVar "lower"))) (EApp (EApp (EApp (EVar "recordFileValueFlow") (EVar "loc")) (EVar "produced")) (EVar "lower")))) (EVar "results"))) (DoExpr (EMatch (EApp (EApp (EVar "resultAfterArrows") (EFieldAccess (EVar "owned") "bsArity")) (EFieldAccess (EVar "owned") "bsValue")) (arm (PCon "Some" (PVar "expected")) () (EApp (EApp (EVar "bindFrom") (EVar "expected")) (EVar "produced"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "binding source arity differs from its allocated shape"))))))))
 (DTypeSig false "clauseResult" (TyFun (TyCon "Int") (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono")) (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Mono")))))
 (DFunDef false "clauseResult" ((PVar "arity") (PTuple (PVar "loc") (PVar "value"))) (EMatch (EApp (EApp (EVar "resultAfterArrows") (EVar "arity")) (EVar "value")) (arm (PCon "Some" (PVar "result")) () (ETuple (EVar "loc") (EVar "result"))) (arm (PCon "None") () (ETuple (EVar "loc") (EVar "value")))))
 (DTypeSig false "checkRecursiveValue" (TyFun (TyCon "BindingSummary") (TyCon "Unit")))
 (DFunDef false "checkRecursiveValue" ((PVar "owned")) (EApp (EApp (EApp (EVar "unifyInto") (EVar "True")) (EFieldAccess (EVar "owned") "bsRecursiveValue")) (EFieldAccess (EVar "owned") "bsValue")))
-(DTypeSig false "joinValueEqual" (TyFun (TyCon "JoinContext") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
-(DFunDef false "joinValueEqual" ((PVar "context") (PVar "loc") (PVar "left") (PVar "right")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "savedContext") (EUnOp "!" (EVar "currentJoinContext"))) (DoLet false false PWild (EApp (EVar "setLocIfSome") (EVar "loc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "noteNumlitCtx") (EVar "left")) (EVar "right")) (EVar "context"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentJoinContext")) (EApp (EVar "Some") (EVar "context")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "left")) (EVar "right"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentJoinContext")) (EVar "savedContext"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "saved")))))
+(DTypeSig false "joinValueEqual" (TyFun (TyCon "DynCtx") (TyFun (TyCon "JoinContext") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))))
+(DFunDef false "joinValueEqual" ((PVar "dyn") (PVar "context") (PVar "loc") (PVar "left") (PVar "right")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false PWild (EApp (EVar "setLocIfSome") (EVar "loc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "noteNumlitCtx") (EVar "left")) (EVar "right")) (EVar "context"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "unifyIn") (ERecordUpdate (EVar "dyn") ((fa "dcJoin" (EApp (EVar "Some") (EVar "context")))))) (EVar "left")) (EVar "right"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "saved")))))
 (DTypeSig false "producedSlotCovariants" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Bool"))))
 (DFunDef false "producedSlotCovariants" ((PVar "head")) (EMatch (EApp (EVar "headTyconMono") (EVar "head")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EBlock (DoLet false false (PVar "slot") (EApp (EVar "monoSpineDepth") (EVar "head"))) (DoExpr (EMatch (EApp (EVar "paramPolaritiesOf") (EVar "key")) (arm (PCon "Some" (PVar "polarities")) () (EApp (EApp (EMethodRef "map") (EVar "isCovariantPolarity")) (EApp (EApp (EVar "dropFirst") (EVar "slot")) (EVar "polarities")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "List")))) (EIf (EBinOp "==" (EVar "slot") (ELit (LInt 0))) (EListLit (EVar "True")) (EListLit)) (EMatch (EApp (EVar "headTyconNameMono") (EVar "head")) (arm (PCon "Some" (PVar "name")) () (EMatch (EApp (EVar "tupleTagArity") (EVar "name")) (arm (PCon "Some" (PVar "arity")) () (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (EVar "name"))) (EApp (EApp (EVar "replicate") (EBinOp "-" (EVar "arity") (EVar "slot"))) (EVar "True")) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit))))))))) (arm PWild () (EListLit))))
 (DTypeSig false "isCovariantPolarity" (TyFun (TyCon "Polarity") (TyCon "Bool")))
@@ -71332,7 +71312,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "freeStmtsEVars" ((PVar "bound") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeStmtsEVars") (EApp (EApp (EVar "namesToSet") (EListLit (EVar "x"))) (EVar "bound"))) (EVar "rest"))))
 (DFunDef false "freeStmtsEVars" ((PVar "bound") (PCons (PCon "DoFieldAssign" PWild PWild (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeStmtsEVars") (EVar "bound")) (EVar "rest"))))
 (DTypeSig false "initialEnv" (TyCon "TcEnv"))
-(DFunDef false "initialEnv" () (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "omEmpty")) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "True"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "False"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EVar "omEmpty")))) (EListLit)) (EVar "omEmpty")))
+(DFunDef false "initialEnv" () (ERecordCreate "TcEnv" ((fa "teVars" (EVar "omEmpty")) (fa "teCtors" (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "True"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "False"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EVar "omEmpty")))) (fa "teAlphaLets" (EListLit)) (fa "teIsLocal" (EVar "omEmpty")) (fa "teDyn" (EVar "noDyn")))))
 (DTypeSig false "registerAllData" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
 (DFunDef false "registerAllData" ((PVar "env") (PVar "ds")) (EApp (EApp (EApp (EVar "registerAllDataScoped") (EVar "env")) (EVar "ds")) (EVar "ds")))
 (DTypeSig false "registerAllDataScoped" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv")))))
@@ -72908,7 +72888,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "moduleStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))
 (DFunDef false "moduleStampOrder" () (EListLit (EVar "SSNumlitFloats") (EVar "SSReturnSites") (EVar "SSBinopSites") (EVar "SSUnopSites") (EVar "SSArithSites") (EVar "SSArgStamps") (EVar "SSRLocalSites") (EVar "SSRecDictApps") (EVar "SSDictApps") (EVar "SSMethodDicts")))
 (DTypeSig false "stampCtxOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "StampCtx"))))))
-(DFunDef false "stampCtxOf" ((PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scPerRun" (EFieldAccess (EVar "perRun") "value")) (fa "scToggles" (EFieldAccess (EVar "toggles") "value")) (fa "scSuperDecls" (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls"))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EVar "liveLocsOf") (EVar "goals"))))))
+(DFunDef false "stampCtxOf" ((PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scPerRun" (EFieldAccess (EVar "perRun") "value")) (fa "scSuperDecls" (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls"))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EVar "liveLocsOf") (EVar "goals"))))))
 (DTypeSig false "liveLocsOf" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "liveLocsOf" ((PVar "goals")) (EBlock (DoLet false false (PVar "ids") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "liveRoots") "value"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ids")) (EListLit) (EBlock (DoLet false false (PVar "live") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "i")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "i")) (ELit LUnit)) (EVar "acc")))) (EVar "Tip")) (EVar "ids"))) (DoLet false false (PVar "mentions") (ELam ((PVar "ms")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EVar "live")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))) (EVar "ms")))) (DoExpr (EApp (EVar "spanKeys") (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "o")) (EFieldAccess (EVar "o") "oLoc"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EVar "mentions") (EApp (EVar "goalMonos") (EVar "o"))))) (EVar "goals"))) (EApp (EApp (EMethodRef "filterMap") (ELam ((PTuple PWild (PVar "m") (PVar "loc"))) (EIf (EApp (EVar "mentions") (EListLit (EVar "m"))) (EApp (EVar "Some") (EVar "loc")) (EVar "None")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "admittedOccObls") "value"))))))))))
 (DTypeSig true "spanKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "String"))))
@@ -72960,7 +72940,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "captureTypeErrors" (TyFun (TyFun (TyCon "Unit") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "TcDiag"))))
 (DFunDef false "captureTypeErrors" ((PVar "act")) (EBlock (DoLet false false (PVar "w") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (DoLet false false (PVar "items") (EFieldAccess (EFieldAccess (EVar "w") "items") "value")) (DoLet false false (PVar "mark") (EApp (EVar "wMark") (EVar "w"))) (DoLet false false (PVar "sticky") (EUnOp "!" (EVar "typeErrorsSticky"))) (DoLet false false (PVar "stickyDiags") (EFieldAccess (EVar "typeErrorsStickyDiags") "value")) (DoLet false false PWild (EApp (EVar "act") (ELit LUnit))) (DoLet false false (PVar "added") (EApp (EApp (EVar "wWindow") (EVar "w")) (EVar "mark"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "items")) (EVar "items"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "sticky"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsStickyDiags")) (EVar "stickyDiags"))) (DoExpr (EApp (EVar "reverseL") (EVar "added")))))
 (DTypeSig false "drainStampQueue" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
-(DFunDef false "drainStampQueue" (PWild) (EBlock (DoLet false false (PVar "ctxs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "stampCtxs") "value"))) (DoLet false false (PVar "savedPerRun") (EFieldAccess (EVar "perRun") "value")) (DoLet false false (PVar "savedToggles") (EFieldAccess (EVar "toggles") "value")) (DoLet false false (PVar "savedModule") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value")) (DoLet false false (PVar "savedSupers") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (DoLet false false PWild (EApp (EVar "defaultLiveNumRoots") (ELit LUnit))) (DoLet false false (PVar "held") (EApp (EVar "judgeLiveGoals") (EVar "ctxs"))) (DoLet false false (PVar "verdicts") (EApp (EVar "runStampCtxs") (EVar "ctxs"))) (DoLet false false (PVar "liveLocs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EFieldAccess (EVar "c") "scLiveLocs"))) (EVar "ctxs"))) (EVar "omEmpty"))) (DoLet false false (PVar "holes") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "mid") (PVar "d"))) (ERecordCreate "DrainFinding" ((fa "dfModule" (EVar "mid")) (fa "dfDiag" (EVar "d")) (fa "dfVerdict" (EVar "False")) (fa "dfLive" (EApp (EApp (EVar "isLiveSpan") (EVar "liveLocs")) (EApp (EVar "tcLoc") (EVar "d")))))))) (EApp (EVar "judgeEvidence") (EVar "ctxs")))) (DoLet false false PWild (EApp (EVar "materializeBinderTypes") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "stampCtxs")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EVar "savedPerRun"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "toggles")) (EVar "savedToggles"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EVar "savedModule"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "savedSupers"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "held") (EVar "verdicts")) (EVar "holes")))))
+(DFunDef false "drainStampQueue" (PWild) (EBlock (DoLet false false (PVar "ctxs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "stampCtxs") "value"))) (DoLet false false (PVar "savedPerRun") (EFieldAccess (EVar "perRun") "value")) (DoLet false false (PVar "savedModule") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value")) (DoLet false false (PVar "savedSupers") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (DoLet false false PWild (EApp (EVar "defaultLiveNumRoots") (ELit LUnit))) (DoLet false false (PVar "held") (EApp (EVar "judgeLiveGoals") (EVar "ctxs"))) (DoLet false false (PVar "verdicts") (EApp (EVar "runStampCtxs") (EVar "ctxs"))) (DoLet false false (PVar "liveLocs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EFieldAccess (EVar "c") "scLiveLocs"))) (EVar "ctxs"))) (EVar "omEmpty"))) (DoLet false false (PVar "holes") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "mid") (PVar "d"))) (ERecordCreate "DrainFinding" ((fa "dfModule" (EVar "mid")) (fa "dfDiag" (EVar "d")) (fa "dfVerdict" (EVar "False")) (fa "dfLive" (EApp (EApp (EVar "isLiveSpan") (EVar "liveLocs")) (EApp (EVar "tcLoc") (EVar "d")))))))) (EApp (EVar "judgeEvidence") (EVar "ctxs")))) (DoLet false false PWild (EApp (EVar "materializeBinderTypes") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "stampCtxs")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EVar "savedPerRun"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EVar "savedModule"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "savedSupers"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "held") (EVar "verdicts")) (EVar "holes")))))
 (DTypeSig false "judgeEvidence" (TyFun (TyApp (TyCon "List") (TyCon "StampCtx")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
 (DFunDef false "judgeEvidence" ((PVar "ctxs")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "lo") (EFieldAccess (EFieldAccess (EVar "g") "evJudged") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evJudged")) (EFieldAccess (EFieldAccess (EVar "g") "evCounter") "value"))) (DoLet false false (PVar "base") (EFieldAccess (EVar "g") "evBase")) (DoLet false false (PVar "cellHoles") (EApp (EApp (EApp (EApp (EVar "judgeCells") (EFieldAccess (EFieldAccess (EVar "g") "evCells") "value")) (EBinOp "-" (EVar "lo") (EVar "base"))) (EBinOp "-" (EFieldAccess (EFieldAccess (EVar "g") "evCounter") "value") (EVar "base"))) (EListLit))) (DoLet false false (PVar "goalHoles") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "judgeGoal") (EFieldAccess (EVar "c") "scModule"))) (EFieldAccess (EVar "c") "scGoals")))) (EVar "ctxs"))) (DoExpr (EApp (EApp (EVar "dedupBy") (EVar "holeKey")) (EBinOp "++" (EVar "cellHoles") (EVar "goalHoles"))))))
 (DTypeSig false "holeKey" (TyFun (TyTuple (TyCon "String") (TyCon "TcDiag")) (TyCon "String")))
@@ -73000,7 +72980,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "runStampCtx" (TyFun (TyCon "StampCtx") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
 (DFunDef false "runStampCtx" ((PVar "ctx")) (EBlock (DoLet false false PWild (EApp (EVar "enterStampCtx") (EVar "ctx"))) (DoLet false false PWild (EApp (EVar "refileDeterminedRows") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "runStampSteps") (EVar "ctx")) (EVar "moduleStampOrder"))) (DoLet false false PWild (EApp (EVar "recordEvidence") (EFieldAccess (EVar "ctx") "scGoals"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ctx") "scLiveLocs")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "verdictFinding") (EFieldAccess (EVar "ctx") "scModule")) (EApp (EApp (EVar "isLiveSpan") (EVar "live")) (EApp (EVar "tcLoc") (EVar "d")))) (EVar "d")))) (EApp (EVar "captureTypeErrors") (ELam (PWild) (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))))))))
 (DTypeSig false "enterStampCtx" (TyFun (TyCon "StampCtx") (TyCon "Unit")))
-(DFunDef false "enterStampCtx" ((PVar "ctx")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EFieldAccess (EVar "ctx") "scPerRun"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "toggles")) (EFieldAccess (EVar "ctx") "scToggles"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EFieldAccess (EVar "ctx") "scModule"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EFieldAccess (EVar "ctx") "scSuperDecls")))))
+(DFunDef false "enterStampCtx" ((PVar "ctx")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EFieldAccess (EVar "ctx") "scPerRun"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EFieldAccess (EVar "ctx") "scModule"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EFieldAccess (EVar "ctx") "scSuperDecls")))))
 (DTypeSig false "recordEvidence" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyCon "Unit")))
 (DFunDef false "recordEvidence" ((PVar "gs")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false PWild (EApp (EApp (EMethodRef "map") (EVar "noteEvidenceObservation")) (EVar "gs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evTable")) (EBinOp "++" (EApp (EVar "evEntriesOf") (EVar "gs")) (EFieldAccess (EFieldAccess (EVar "g") "evTable") "value"))))))
 (DTypeSig false "evEntriesOf" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyCon "EvTable")))
