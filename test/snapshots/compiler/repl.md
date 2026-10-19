@@ -265,8 +265,8 @@ runPipeline combined =
             flatMap snd modulesM,
           )
           ([], pubSchemes allSchemes, bindings, facts)
--- DRIVER-COLLAPSE Phase 3/4: eval via the 1-module wrapper (evalOneRootEnv
--- = evalModulesRootEnv over [("__repl__", combined)]) instead of the flat
+-- DRIVER-COLLAPSE Phase 3/4: eval via the 1-module wrapper (evalOneRootEnvFacts
+-- = evalModulesRootEnvFacts over [("__repl__", combined)]) instead of the flat
 -- evalProgram (preludeDecls ++ combined).  The prelude is installed
 -- GLOBALLY and the session decls as the root module's LOCALS; the returned
 -- frame is local ∪ imports ∪ globals — the same by-name surface evalProgram

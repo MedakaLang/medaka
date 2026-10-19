@@ -9,7 +9,7 @@
 -- then `elaborateModules` threads the marker + typecheck route-stamping through
 -- the loader's module graph (per-module-frame typecheck seeded in dependency
 -- order, EMethodAt routes stamped per module).  The elaborated trees are then run
--- through evalModules (per-module frames over the shared prelude) — eval narrows
+-- through evalModulesWith (per-module frames over the shared prelude) — eval narrows
 -- each return-position method occurrence (`pure`/`andThen` — the Parser monad) by
 -- its stamped RKey route instead of the untyped arg-tag fallback.  Forces the
 -- entry module's `main` for IO side-effects and prints the captured stdout.

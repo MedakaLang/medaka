@@ -2529,7 +2529,7 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- ── run ───────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `run` arm + eval_typed_modules_main.mdk: load the entry
 -- + its transitive imports (dependency-first), desugar each, elaborateModules
--- (marker + typecheck route-stamping over the module graph), then evalModules
+-- (marker + typecheck route-stamping over the module graph), then evalModulesWith
 -- forces `main` for IO and returns the captured stdout.  `main` must be a
 -- zero-arg value (`main = …`); top-level nullary bindings are LAZY (Phase-125),
 -- so only effects reached from main run.  Roots: the entry's dir (user modules
@@ -2973,7 +2973,7 @@ elaborateRun rtD coreD modsD =
     None => ()
   (analysis, report)
 
--- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
+-- B2 (RUN-EFFECTS): evalModulesOutputRunFacts is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main
 -- reaches here already rewritten by `executedTrees`.
 runProgramOutput : ProgramFacts ->

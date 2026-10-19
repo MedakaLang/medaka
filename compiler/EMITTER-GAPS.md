@@ -15,7 +15,7 @@ subfolder prefix) has been corrected to `compiler/types/private_mangle.mdk`.
 with record-and-skip ON over the REAL prelude + compiler source).
 **Pipeline:** the same typed front end the LLVM emit gates use
 (`desugar → elaborateDict`/`elaborateModules` route-stamping + `dict_pass` →
-`lowerProgram` → **EMIT**), with the emitter's `panic` gap sites rerouted to a
+`lowerProgramWithFacts` → **EMIT**), with the emitter's `panic` gap sites rerouted to a
 record-and-continue log so a SINGLE run surfaces EVERY unlowerable construct.
 **Entry:** `stdlib/runtime.mdk stdlib/core.mdk compiler/entries/all_modules_entry.mdk compiler`
 (the 15-module `all_modules_entry` closure the dispatch probes use).
@@ -637,9 +637,9 @@ source per unit of work**:
     pattern position the lowered Core IR carries (match arms, clauses, `CLam`, `CLet`,
     do-binds, guards, impls), and RECOMPILES each `CDecision` tree from the rewritten
     arms (PRec was a needs-guard wildcard arm; the rewritten `PCon` compiles to a clean
-    constructor switch). **EMIT-ONLY**: it lives in `lowerProgramEmit` (called by the four
+    constructor switch). **EMIT-ONLY**: it lives in `lowerProgramEmitWith` (called by the four
     LLVM emit drivers — `llvm_emit_main`/`_modules_main`/`_gaps_main`/`_typed_main`), NOT
-    the shared `lowerProgram` that `core_ir_main`/`core_ir_eval` use — because the
+    the shared `lowerProgramWithFacts` that `core_ir_main`/`core_ir_eval` use — because the
     tree-walker evaluates a record to a by-name `VRecord` and matches `PRec` by label, so
     a positional `PCon` must never reach it (core_ir/eval gates stay 20/20 byte-identical).
     **B: PRec 43→0 + field-cluster ~80→0 = 127 events. B TOTAL 215 → 88.** Fixtures

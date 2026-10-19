@@ -24,7 +24,7 @@
 -- terminal call swapped from eval.mdk's `evalModulesOutput` to
 -- ir.core_ir_eval's `cevalModulesOutput` — i.e. the ONLY variable between the two
 -- drivers is which of the two parallel module drivers runs.  Keep it that way:
--- AGENTS.md records `evalModules` and `cevalModules` as parallel drivers that must
+-- AGENTS.md records `evalModulesWith` and `cevalModules` as parallel drivers that must
 -- move in lockstep, and this driver is the instrument that can see them diverge.
 --
 -- Graded by test/diff_compiler_core_ir_typed_modules.sh.

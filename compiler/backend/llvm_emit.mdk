@@ -1495,7 +1495,7 @@ implFnName tag method = "mdk_impl_\{tag}_\{method}"
 -- The exact impl symbols exported by a standalone prelude object: the stamps of
 -- the prelude lowered on its own.  A later program can add a same-(method, head)
 -- impl, changing the whole-program answer; the program half lowers with these rows
--- as pins (`core_ir_lower.lowerProgramEmitPinned`), which is what keeps references
+-- as pins (`core_ir_lower.lowerProgramEmitPinnedWith`), which is what keeps references
 -- to the already-compiled object linkable.  The index is built once in
 -- O(entries log entries).
 export
@@ -2441,7 +2441,7 @@ emitIoExtern e env "flushStdout" args = match emitArgs e env args
 -- currently-buffered stdout (a pointer+length store; no allocation) so an
 -- abort can flush it; enableRunStdoutFlush arms that flush.  See
 -- runtime/medaka_rt.c's mdk_flush_run_stdout_on_abort and eval.mdk's
--- appendOutput/evalModulesOutputRun.
+-- appendOutput/evalModulesOutputRunFacts.
 emitIoExtern e env "stashRunStdout" args = match emitArgs e env args
   [s] =>
     let _ = emit e ("  call void @mdk_stash_run_stdout(i64 " ++ s ++ ")")

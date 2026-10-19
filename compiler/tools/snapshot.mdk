@@ -592,7 +592,7 @@ evalOf runtimeDecls coreDecls d =
 
 -- ── the emit path (BOTH backends, ONE lowered CProgram) ──────────────────────
 --
--- `elaborateModules` + `mangleUnitsEv` -> `lowerProgramEmit` runs ONCE and the resulting CProgram feeds
+-- `elaborateModules` + `mangleUnitsEv` -> `lowerProgramEmitWith` runs ONCE and the resulting CProgram feeds
 -- llvm_emit AND wasm_emit (whose colliding `emitProgram` is import-aliased to
 -- `wasmRecord` above).
 --

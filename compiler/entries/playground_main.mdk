@@ -592,7 +592,7 @@ data WrittenEntry = WrittenEntry { wePath : String, weSource : String }
 -- against the selected profile on it, as `check --target` does; a refusal is
 -- the verdict in either mode.  Compile then emits from that same elaboration;
 -- analyze prints its own marker and the same warnings JSON — no
--- lowerProgramEmit, no reach, no emitProgram.  See doEmit's obituary for the
+-- lowerProgramEmitWith, no reach, no emitProgram.  See doEmit's obituary for the
 -- discarded elaboration that once preceded this one: there is exactly one per
 -- run, on either path.
 finishClean : Bool ->

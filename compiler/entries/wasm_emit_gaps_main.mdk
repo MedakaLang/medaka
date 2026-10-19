@@ -11,7 +11,7 @@
 --
 --   driver.loader.loadProgram  (multi-file, dependency-first)
 --     -> types.typecheck.elaborateModules  (REAL core.mdk prelude + dict-passing)
---     -> ir.core_ir_lower.lowerProgramEmit
+--     -> ir.core_ir_lower.lowerProgramEmitWith
 --     -> ir.dce.dceFilter  (prunes the real prelude to reached decls)
 --     -> backend.wasm_emit.emitProgram
 --
@@ -27,7 +27,7 @@
 -- prerequisites, including the method arity needed to eta-expand the real prelude's
 -- point-free impls. LLVM's additional returns-self, callback-position, and split-half
 -- inputs have no Wasm analogue and stay omitted. Everything up
--- to lowerProgramEmit (loader, mangle, elaborateModules, dceFilter) is identical to
+-- to lowerProgramEmitWith (loader, mangle, elaborateModules, dceFilter) is identical to
 -- the LLVM modules driver.
 
 import frontend.ast.{Decl}

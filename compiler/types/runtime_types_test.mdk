@@ -48,11 +48,7 @@ rowsOf modules = do
 
 -- The table holding exactly [rows].
 tableOf : List BinderRow -> BinderTypeTable
-tableOf rows = tableInto rows emptyBinderTypes
-
-tableInto : List BinderRow -> BinderTypeTable -> BinderTypeTable
-tableInto [] acc = acc
-tableInto (row :: rest) acc = tableInto rest (addBinderRow row acc)
+tableOf rows = fold (acc row => addBinderRow row acc) emptyBinderTypes rows
 
 withRows : List (String, List String) ->
   (List BinderRow -> Expectation) ->

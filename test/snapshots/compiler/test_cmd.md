@@ -1,5 +1,5 @@
 # META
-source_lines=4808
+source_lines=4807
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -35,9 +35,8 @@ stages=DESUGAR,MARK
 --
 -- The doctest/prop phases route EVERY file through the multi-module path
 -- (DRIVER-COLLAPSE Phase 1+3): a no-import file uses the degenerate 1-module case
--- (elaborateOne/elaborateModules over [(rootId, decls)] + evalOne/
--- evalModulesRootEnv); an import-bearing file loads its real sibling graph
--- (the located loader + elaborateModules + evalModules), so cross-module
+-- (elaborateOne/elaborateModules over [(rootId, decls)] + evalModulesRootEnvFacts); an import-bearing file loads its real sibling graph
+-- (the located loader + elaborateModules + evalModulesWith), so cross-module
 -- instances/values resolve.  Neither path calls the flat
 -- elaborateDict/evalProgram anymore.  An import-bearing target loads and
 -- elaborates its graph exactly ONCE per invocation: `prepareMulti` owns that
@@ -1892,7 +1891,7 @@ elaborateModulesMangled runtimeDecls coreDecls modules =
     )
 
 -- Evaluate the file's `prop "…"` decls in the shared elaboration's root
--- environment.  `evalModulesRootEnv` exposes the prelude globals (eq/compare)
+-- environment.  `evalModulesRootEnvFacts` exposes the prelude globals (eq/compare)
 -- the prop bodies need, and the bodies themselves come from the ELABORATED root
 -- module (dict-passed call sites) so the file's own `=>`-constrained fns (set's
 -- `fromList`/`wellFormed`) get their leading dict argument — raw bodies would

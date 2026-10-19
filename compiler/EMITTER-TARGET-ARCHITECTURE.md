@@ -122,7 +122,7 @@ Every claim below was re-derived on 2026-09-03; the commands are the evidence.
         time (R4), checked by coreValidate (R6) before any emitter runs.
     |
     v
-  Plan  one immutable shared-analysis record built once by lowerProgramEmit
+  Plan  one immutable shared-analysis record built once by lowerProgramEmitWith
         (R5): reachability, lazy globals, TRMC groups, linkage, extern
         requirements, target choice.
     |                         |
@@ -175,7 +175,7 @@ derived from the spec before the PR is cut, never captured from an engine.
 
 ### R5. The shared plan record
 
-`lowerProgramEmit` builds one immutable record beside `CProgram` and both
+`lowerProgramEmitWith` builds one immutable record beside `CProgram` and both
 emitters take it as an argument. It holds what is already computed today in
 scattered places, moved rather than reinvented:
 
@@ -727,7 +727,7 @@ classification branch.
 ## 6. AP - validated ANF Plan
 
 > **SUPERSEDED 2026-09-03** by R5, the shared plan record built by
-> `lowerProgramEmit`. Section 6.1's shared-versus-physical table stands.
+> `lowerProgramEmitWith`. Section 6.1's shared-versus-physical table stands.
 
 The Validated ANF Plan is one immutable value containing ANF bodies plus
 separately validated whole-program analyses, manifests, and indexes. It is not
