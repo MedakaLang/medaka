@@ -328,3 +328,10 @@ different slug, that is noted.
 - **Ruling:** The project owner agreed with reading (a). This is a control for `comment.speculative`: an unenforced precondition is a hazard that exists now. Better wording states the precondition ("callers must be allPVar-gated; these arms fail closed"). The positive stays for code justified by a feature that does not exist ("exported so a future round-trip parser can import them", RB-0480). The dead arms are a separate `defensive.redundant` judgment.
 - **Class:** `comment.speculative` (control).
 - **Amends:** R20, refining `comment.speculative`.
+
+### R50: a comment excuses a copy only with a reason valid under R19
+
+- **Instance:** `compiler/backend/wasm_reach.mdk`, `canonKey` (comment added in `d4a46d95e`). It is a copy of `dce.canonRef` with the same three cases. Its comment says "Not shared with `dce.canonRef` … exporting it would put this wasm-only pass's lookup in that path's blast radius". `dce.mdk`'s own comment counts four mirrored copies of this canonicalization.
+- **Ruling:** "a". A comment that explains why a copy is not shared excuses it from `dup.cross-file` only if its reason is one of R19's four valid kinds: a concrete semantic difference, an independence requirement, a measured cost, or a verified language limitation. Any other reason does not excuse it. "Blast radius" with identical behaviour names a worry, not a difference, so `canonKey` stays a positive. Bare "deliberate", "kept on purpose" and "out of scope" fail as they do for a suppression.
+- **Class:** `dup.cross-file`. `dup.existing`'s exceptions are already of R19's kinds (a measured hot path, an oracle's independence).
+- **Amends:** R19, extending its test from lint suppressions to comments that justify a copy.
