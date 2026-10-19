@@ -1328,6 +1328,10 @@ def gen_comment_stale(it: dict) -> list[dict]:
                 ds = [d for d in ds if not d[0].startswith("test/")] or ds
             ds = sorted((d for d in ds if d not in own),
                         key=lambda d: (d[0] != path, str(Path(d[0]).parent) != here_dir, d[0], d[1]))
+            if not ds:
+                # Defined in the excerpt and otherwise only in the test/ shadows dropped above.
+                say(5, f"`{i}`: defined in the excerpt")
+                continue
             files = sorted({d[0] for d in ds})
             if len(files) > 4:
                 say(5, f"`{i}`: defined in {len(files)} files")
