@@ -323,8 +323,9 @@ playground is the site: static Cloudflare Pages, compiler in WasmGC. Deploy:
 - ⚠️ **[T-PERRUN-COMMENTS]** #829: after `fmt --write` on a comment-bearing record decl, diff
   the result by eye.
 - ⚠️ **[T-COMMENT-REGISTER]** A comment states a constraint the code can't show. No history,
-  PR litigation or emoji shouts in source. A relocation pointer names a repo-relative path.
-  Census: `make comment-census`.
+  PR litigation or emoji shouts in source. An issue number points at a live constraint; a
+  provenance tag is a finding. A relocation pointer names a repo-relative path. Rubric:
+  `docs/design/STYLE-RUBRIC.md`. Census: `make comment-census`.
 - ⚠️ **[T-SHARED-CORPUS]** Adding, moving or deleting a fixture enrols you in every gate that
   reads that directory. Enumerate them all (`test/wasm/*.sh` included).
 - ⚠️ **[T-SNAPSHOT-SELF]** Compiler source is in the snapshot corpus; bless it in the same PR
@@ -340,9 +341,8 @@ playground is the site: static Cloudflare Pages, compiler in WasmGC. Deploy:
   make -C "$PWD" medaka && sh test/capture_goldens.sh --frozen selfproc_legA
   sh test/snapshot_bless.sh --bless <moved source file>; git diff -- test/selfproc_goldens/legA test/snapshots  # additive-only
   ```
-- **[T-STDLIB-IMPORT]** The compiler may import `list`/`string` **selectively** (near-free).
-  Never `.*`-import two modules with colliding names. A new-type module like `map` has real
-  fixed cost. Don't route hot helpers through Foldable (`elem`/`any`/`length`).
+- **[T-STDLIB-IMPORT]** Default to the stdlib; a compiler-private twin needs a measured penalty
+  (Ir, not wall) cited in its suppression. Never `.*`-import two modules with colliding names.
 - **[T-TUPLES]** Tuples are `__tupleN__`-headed `TApp` spines, not `TTuple` (`archive/design/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`).
 - **[T-ERRORS-ACCUM]** Errors accumulate in `compiler/driver/diagnostics.mdk`. No early exits.
 - **[T-MAIN-ZERO-ARG]** `main = …` is a value; `main () = …` is an error on `run`/`build`.

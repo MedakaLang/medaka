@@ -31,7 +31,7 @@ body. Ignore that body's Claude-specific frontmatter and apply these mappings:
 | `sprint-implementer`, tricky `opus` slice or justified upgrade | `sprint_implementer` with explicit `gpt-5.6-sol`, `high` |
 | `sprint-reviewer` | `sprint_reviewer` (Sol, high) |
 | `sprint-retro` | `sprint_retro` (Terra, high) |
-| End-round style pass | General agent with Terra/high, loading `.claude/skills/style-review/SKILL.md`; read-only work, no build |
+| End-round style pass | General agent with Terra/high, loading `.claude/skills/style-review/SKILL.md`; read-only work, no build. The parent first runs the `review-diff` pass (`scripts/review_bench/review.py --rev <merge-base>..<SHA> --json`; it needs the `claude` CLI) and hands the agent the findings file. |
 
 These are workflow tiers using this repository's model choices, not a claim
 of model equivalence. Preserve an explicit user model selection. Record the

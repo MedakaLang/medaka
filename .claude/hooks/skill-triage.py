@@ -118,12 +118,18 @@ write_tests = re.search(
     prompt, re.IGNORECASE,
 )
 
-# Jev-shaped task: testing or tuning TypeSafe/Jev questions, or building a
-# Jev-backed tool. The loop and the question-tuning tips live in the
-# `jev-judgments` skill; nothing else routes there.
-jev = re.search(r"\bjev\b|\btypesafe\b|\bsystem ?one\b", prompt, re.IGNORECASE)
+# Style-rule task: adding or changing a rubric class, an exception or a ruling,
+# or relabelling review-bench fixtures. The procedure lives in `style-rule`.
+style_rule = re.search(r"\bstyle (rules?|rulings?|pass\w*)\b|\brubric\b|\bSTYLE-RU(BRIC|LINGS)\b"
+                       r"|\breview.?bench\b|\bslop\b", prompt, re.IGNORECASE)
 
-if not roadmap and not stdlib and not mcp and not sprint and not gates and not debug and not write_tests and not jev:
+# Craft-review task over a diff: the cheap measured Haiku pass (`review-diff`)
+# goes first, before `style-review` or `pr-review`.
+review = re.search(r"\b(style|craft|slop)[ -]review\b"
+                   r"|\breview\w*\b.{0,40}\b(diff|branch|sprint|PR|pull request)\b",
+                   prompt, re.IGNORECASE)
+
+if not (roadmap or stdlib or mcp or sprint or gates or debug or write_tests or style_rule or review):
     sys.exit(0)
 
 if roadmap:
@@ -240,16 +246,23 @@ if debug:
         "Triage reminder, not a directive."
     )
 
-if jev:
+if style_rule:
     print(
-        "Skill triage (Jev/TypeSafe task detected): load jev-judgments before "
-        "writing a question or reading a ranking -- it carries the loop "
-        "(enumerate in code, sample with a seed, write the label rule, label "
-        "by reading everything, ask batched+cached, read AUC then calibration "
-        "then the baseline, split or re-state on disagreement, ship with "
-        "numbers) and the state/question tuning tips. Tool: scripts/jev/ "
-        "(make jev-census, make jev-eval); design: docs/design/JEV-DESIGN.md; "
-        "epic #3117. Never a gate; Jev never generates the fix.\n"
+        "Skill triage (style-rule task detected): load style-rule before "
+        "editing docs/design/STYLE-RUBRIC.md or the review-bench fixtures -- "
+        "a rule needs Val's ruling (one question at a time, on a real "
+        "instance), a STYLE-RULINGS.md entry, fixtures checked with "
+        "scripts/review_bench/curate.py, and a dev measurement before test.\n"
+        "Triage reminder, not a directive."
+    )
+
+if review:
+    print(
+        "Skill triage (diff review detected): for craft (style, comments, "
+        "duplication, tests), load review-diff first -- a cheap measured Haiku "
+        "pass (scripts/review_bench/review.py, --dry-run for the cost) whose "
+        "findings are leads to verify against docs/design/STYLE-RUBRIC.md. "
+        "Then style-review (end of sprint) or pr-review (per PR).\n"
         "Triage reminder, not a directive."
     )
 

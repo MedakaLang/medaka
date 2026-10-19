@@ -1,5 +1,8 @@
 # Jev: the experiment ledger
 
+**Status:** SUPERSEDED, 2026-10-18. Jev was cut (Val) and its tooling deleted;
+see `archive/design/JEV-DESIGN.md`'s status. The paths below are as they were.
+
 What has been tried, what is still being iterated on, and what is settled and
 must not be relitigated. Epic #3117; the design and the measurement writeups
 are `docs/design/JEV-DESIGN.md`; the loop is the `jev-judgments` skill.

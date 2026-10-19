@@ -99,16 +99,17 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`GZIP-DESIGN.md`](design/GZIP-DESIGN.md) | DEFLATE / gzip — a compression codec in pure Medaka | PARTIAL |
 | [`INTEGER-TYPES-DESIGN.md`](design/INTEGER-TYPES-DESIGN.md) | The integer stack | — |
 | [`INTERFACE-CANDIDATES.md`](design/INTERFACE-CANDIDATES.md) | INTERFACE-CANDIDATES.md — which built-in constructs could generalize behind an interface | PARTIAL |
-| [`JEV-DESIGN.md`](design/JEV-DESIGN.md) | Jev judgment tools: calibrated judgments between lint and LLM review | PROPOSED, 2026-09-16 |
-| [`JEV-LEDGER.md`](design/JEV-LEDGER.md) | Jev: the experiment ledger | — |
 | [`LANGUAGE-SURFACE-AUDIT.md`](design/LANGUAGE-SURFACE-AUDIT.md) | LANGUAGE-SURFACE-AUDIT.md | OPEN |
 | [`MESSAGE-AUDIT.md`](design/MESSAGE-AUDIT.md) | MESSAGE-AUDIT.md | PARTIAL |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
 | [`PERF-CI-COVERAGE.md`](design/PERF-CI-COVERAGE.md) | PERF-CI-COVERAGE.md — a comprehensive design for catching quadratics in CI | DESIGN |
 | [`REFERENCES-RENAME-DESIGN.md`](design/REFERENCES-RENAME-DESIGN.md) | Cross-file `references` + `rename` (#254) — Design / Scoping | DESIGN |
 | [`REGEX-DESIGN.md`](design/REGEX-DESIGN.md) | Regular expressions in the stdlib | — |
+| [`REVIEW-WORKFLOW-DESIGN.md`](design/REVIEW-WORKFLOW-DESIGN.md) | Review workflow: a cheap reviewer and the benchmark that measures it | — |
 | [`RUNTIME-TRAP-UNIFY-DESIGN.md`](design/RUNTIME-TRAP-UNIFY-DESIGN.md) | Runtime-trap-format unification — design | OPEN, but the `Array.set`/`Vector.set` OOB row is discharged: `setInPlace` |
 | [`SOURCE-POSITION-DESIGN.md`](design/SOURCE-POSITION-DESIGN.md) | SOURCE-POSITION-DESIGN.md — principled, unified line:column (source-span) tracking; #331 as increment 1 | DESIGN |
+| [`STYLE-RUBRIC.md`](design/STYLE-RUBRIC.md) | Style rubric | — |
+| [`STYLE-RULINGS.md`](design/STYLE-RULINGS.md) | Style rulings | — |
 | [`TARGETS-DESIGN.md`](design/TARGETS-DESIGN.md) | Targets and host profiles | ratified 2026-10-01; the host-binding half |
 | [`TEST-SIBLING-ACCESS-DESIGN.md`](design/TEST-SIBLING-ACCESS-DESIGN.md) | Test siblings see their subject's private names | DECIDED 2026-10-18 |
 | [`TYPE-AWARE-LINT-DESIGN.md`](design/TYPE-AWARE-LINT-DESIGN.md) | Type-Aware Lint Tier — Design | PARTLY SHIPPED and RE-COSTED; TIER 1 UNBLOCKED, TIER 2 STILL BLOCKED |
@@ -250,6 +251,8 @@ IMPLEMENTED or SUPERSEDED work, kept for provenance. Links inside these docs are
 | [`HELPER-CENSUS.md`](../archive/design/HELPER-CENSUS.md) | compiler/ generic-helper census | PARTIAL |
 | [`INDEX-16-PLAN.md`](../archive/design/INDEX-16-PLAN.md) | INDEX-16-PLAN.md — concrete staged implementation plan for the Index arc, Phase #16 | IMPLEMENTED |
 | [`INDEX-DESIGN.md`](../archive/design/INDEX-DESIGN.md) | INDEX-DESIGN.md — Indexing (`a[i]` / `a[i] := v`) design pass | IMPLEMENTED |
+| [`JEV-DESIGN.md`](../archive/design/JEV-DESIGN.md) | Jev judgment tools: calibrated judgments between lint and LLM review | SUPERSEDED, 2026-10-18 |
+| [`JEV-LEDGER.md`](../archive/design/JEV-LEDGER.md) | Jev: the experiment ledger | SUPERSEDED, 2026-10-18 |
 | [`LAYOUT-BRACKETS-DESIGN.md`](../archive/design/LAYOUT-BRACKETS-DESIGN.md) | LAYOUT-BRACKETS-DESIGN — block expressions inside brackets | IMPLEMENTED |
 | [`LIB-REMOVAL-DESIGN.md`](../archive/design/LIB-REMOVAL-DESIGN.md) | LIB-REMOVAL-DESIGN — retiring the OCaml reference compiler (`lib/`+`bin/`+`gen/`) | IMPLEMENTED |
 | [`MAP-SET-AMBIGUITY-DESIGN.md`](../archive/design/MAP-SET-AMBIGUITY-DESIGN.md) | MAP-SET-AMBIGUITY-DESIGN.md — ambiguous unqualified-import occurrence (use-time / approach A) | IMPLEMENTED |

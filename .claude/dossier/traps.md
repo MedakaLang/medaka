@@ -138,22 +138,31 @@ blend of two derivations, and no gate can flag it: the golden IS the oracle, so 
 looking blend simply becomes the new expected output — the same rubber-stamp hazard as blessing a
 red gate, but arriving with no red gate and no prompt to bless.
 
-## [T-STDLIB-IMPORT] Per-module stdlib import cost measurements
+## [T-STDLIB-IMPORT] Stdlib import and Foldable cost measurements
 
-- Importing a module whose types' instances live in `core` (the always-present prelude) is
-  near-free — `import list`/`import string` drag no new instance surface, DCE trims to the
-  referenced standalone fns (−256 B, +2% ≈ noise).
-- Importing a module that defines a NEW type is not: DCE keeps every `DImpl`/`DInterface` whole
-  (runtime dict-passing → pruning an impl would be a silent miscompile), so `import map` drags
-  `Map`'s entire Eq/Ord/Debug/Display/Mappable/Monoid surface in (+34 KB binary, +4.8%
-  self-compile).
-- Anti-pattern, measured: delegating the compiler's hot monomorphic helpers (`elem`/`any`/`all`/
-  `length`) to prelude Foldable methods loses `||`/`&&` short-circuiting and becomes dict-passed
-  fold+closure — doing this to `util.mdk`'s hottest helpers cost +56% self-compile.
-- The imported module is re-typechecked on every compile and every fixpoint iteration; once the
-  compiler imports a stdlib module, any change there that perturbs emitted IR forces a seed
-  re-mint + fixpoint re-validation (a feature — converts silent `support/`-vs-`stdlib/` divergence
-  into a build-time gate — but it is churn).
+Re-measured 2026-10-17 at 5157d88ff: cachegrind Ir on
+`medaka check compiler/driver/medaka_cli.mdk`, one rebuilt binary per arm.
+
+- A stdlib module that defines a new type costs nothing measurable. `import set` into
+  `typecheck.mdk`, `llvm_emit.mdk` and `parser.mdk`: binary +0.17% (+15.5 KB), Ir 0.0%. `map`
+  was already in all three modules' closure: `compiler/support/ordmap.mdk` is
+  `type OrdMap a = Map String a`, so its fixed cost is paid tree-wide.
+- Delegating `compiler/support/util.mdk`'s hot list helpers (`elem`/`length`/`any`/`all`) to
+  the prelude `Foldable` methods: Ir +0.0 to +0.4%, binary -0.11%.
+- `omLookup`/`omHasKey` replaced by `map.get`/`has`: one sample, Ir +1.4% (about three noise
+  widths). Unconfirmed; take a second sample before acting on it.
+- The August figures these replace did not reproduce: +34 KB / +4.8% self-compile for
+  `import map` (#2352), +56% self-compile for Foldable delegation. Both predate
+  internal-linkage emit (#4100) and run-once loading, and both rested on self-compile wall time,
+  which varied 34% between identical-source rebuilds.
+
+Method: Ir is the signal. Identical-input Ir varies about ±0.4%; wall-clock CPU-seconds on this
+shared box vary about 15% run to run, which hides any effect smaller than that. Take two Ir
+samples per arm before calling a delta real.
+
+An imported module is re-typechecked on every compile, and a change there that perturbs
+emitted IR forces a seed re-mint and fixpoint re-validation. That is churn, not a reason to
+avoid the import.
 
 ## [T-GUARDS] Refutable-guard miscompile, fixed 2026-07-13
 
@@ -238,39 +247,19 @@ literal-character form to a 219-byte file produced 235 bytes, not 223.
 
 ## [T-STDLIB-IMPORT] — full rule text
 
-*Full `AGENTS.md` text as of 2026-10-03, moved here verbatim when AGENTS.md was slimmed; AGENTS.md keeps the rule and the command.*
-
-- **[T-STDLIB-IMPORT]** The compiler MAY import `stdlib/`, per module — MEASURED (#2352, on
-  `medaka check compiler/driver/medaka_cli.mdk`, median of 5 warm runs + cachegrind Ir,
-  `GC_INITIAL_HEAP_SIZE` pinned): a **selective** `list`/`string` import
-  (7-8 real, non-vestigial names) into `typecheck.mdk`/`llvm_emit.mdk`/`parser.mdk` moves wall
-  time by -1% to +9% and Ir by -0.6% to +1.1% vs. an 89.1B-Ir/16.6s baseline (two identical-
-  source `make medaka` rebuilds on this shared box varied 34% with zero code changes, so
-  self-compile wall time is NOT a usable signal for this; `check` wall-time + Ir is). The
-  **near-free license rests on the Ir figures** (-0.6% to +1.1%, genuinely flat) — the +9%
-  check-wall delta is measurement variance the methodology hasn't shown to be signal, not
-  evidence treated as noise. **DECISION: license `core`-instance modules (`list`/`string`) as
-  near-free, but SELECTIVE ONLY (`import mod.{names}`) — never `.*`-import two modules that
-  export colliding names into the same scope.** The general hazard is any two wildcard-imported
-  modules with overlapping export names (e.g. `import list.*` + `import string.*` both export
-  `startsWith` → `Ambiguous occurrence` compile error); `list`/`string` vs.
-  `support.util`/`support.char` (colliding on `contains`, `startsWith`, `isUpper`) is the
-  compiler's own concrete instance of this general rule, not the whole rule. This is not a
-  bootstrap-generation-specific failure mode: `compiler/entries/llvm_emit_modules_main.mdk`
-  (the exact program `test/build_native_medaka.sh` runs) applies no diagnostic gate of any
-  class — it emits IR at exit 0 for an ambiguous import exactly as it does for a plain type
-  error. That's the already-documented `[W-SOUNDNESS]` gap ("`make medaka` does not gate on
-  type errors"), already covered by CI's `compiler-soundness` job — not a new defect, and no
-  code fix was needed here. Separately, a module with a NEW type (e.g.
-  `map`) IS measurably costly relative to its own baseline: a bare `import map` (zero usage)
-  roughly DOUBLED both wall time (0.11s→0.21s) and Ir (608M→1.25B) on a trivial throwaway
-  program — real fixed overhead from `map`'s type + impls entering dispatch scope
-  ([P-IMPORT-BINDS]), though in absolute terms ~0.1s/~640M Ir is a small fraction of the
-  compiler's own ~16.6s/89B-Ir self-check, so a single `map` import into a hot module is
-  licensed too, just don't assume it's free on a small/fast-path module. ⚠️ Don't delegate
-  hot monomorphic helpers to prelude Foldable methods (`elem`/`any`/`all`/`length`). Migrating
-  `support/`→stdlib: a polymorphic empty must be a **nullary constructor**; harnesses need
-  `$STDLIB` too.
+- **[T-STDLIB-IMPORT]** Default to the stdlib, in the compiler as everywhere else. A
+  compiler-private twin of a stdlib function, or a `compiler/support/` reimplementation of a
+  stdlib facility, needs a measured penalty recorded in the suppression that keeps it: a number,
+  or a pointer to the measurement. "Hot path" without one is not a reason
+  (`docs/design/STYLE-RUBRIC.md` `dup.existing` and `suppress.invalid-reason`, R14/R15/R19).
+  Measure Ir, not wall time (the measurement section above).
+- Import selectively (`import mod.{names}`). Never `.*`-import two modules that export
+  colliding names into one scope: `list.*` with `string.*` both export `startsWith` and give
+  `Ambiguous occurrence`; `support.util`/`support.char` collide with `list`/`string` on
+  `contains`, `startsWith`, `isUpper`. `make medaka` does not gate on that error
+  ([W-SOUNDNESS]); the `compiler-soundness` CI job does.
+- Migrating `support/` to the stdlib: a polymorphic empty must be a **nullary constructor**;
+  harnesses need `$STDLIB` too.
 
 ## [DG-REMOVED] / [WT-VEHICLE] / [WT-SKILL] — full text
 
@@ -339,7 +328,7 @@ Typechecker bugs also answer `.claude/workstreams/TYPECHECK.md` (`ws:typecheck`)
 | **debug-pipeline** | Parse/typecheck/eval failure or a wrong value; first choice for [T-DISPATCH-LOADER]. Also carries the probe/flag catalogue and the two-arm differential recipe. |
 | **gates** | A gate or CI shard went red and you need to know what it proved; or you're adding a fixture, a golden, or a gate. |
 | **write-tests** | Asked to "write tests"/"add unit tests" for a module, or about to add ANY check — picks the vehicle (doctest / prop / `*_test.mdk` sibling / `kind = "native"` gate-test / shell) before you write one. Read it before `gates`, not after — see [WT-VEHICLE]. |
-| **jev-judgments** | Testing Jev (TypeSafe) against a class of fix candidates, adding or changing a question in `scripts/jev/`, or building a Jev-backed tool from `docs/design/JEV-DESIGN.md`'s roadmap — the enumerate / sample / label / ask / measure / iterate loop, and how to move a question's signal. Never a gate. |
+| **style-rule** | Adding or changing a style rule: a rubric class, an exception, or a ruling (`docs/design/STYLE-RUBRIC.md`, `docs/design/STYLE-RULINGS.md`); relabelling review-bench fixtures. Ruling first (Val, one question at a time), then fixtures (`scripts/review_bench/curate.py`), then a dev measurement. |
 | **harden-typechecker** | Typechecker-*internal*: `type_error`, constraint/coherence/unification. |
 | **perf-hunt** | Stage slow, or `diff_compiler_perf_scaling.sh` red. |
 | **benchmark-emitter** | `compiler/backend/*` change to measure, or a suspicious fixpoint failure. |
