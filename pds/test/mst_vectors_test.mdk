@@ -9,18 +9,17 @@
    `pds/nightly/mst_vectors_eval_engine_test.mdk`, over the same corpora and
    substrings from `pds/test/mst_vectors_support.mdk`.
 
-   The scaling test builds `performance_resource_main.mdk` once and times
+   The scaling test builds `performance_resource_main.mdk` once and runs
    three routes at 1000 and 2000 rows: `mstValidateBlocks` rejecting a
-   hostile corpus, `repoExportGraph` and `repoFromBlocks`. Each time is the
-   wall clock around the spawn, so it includes process start-up. The larger
-   run must stay under an absolute ceiling and within a ratio of the smaller
-   one; the export block counts and the rehydrated root CIDs are pinned, so a
-   walk that dropped nodes fails even when it is fast. `mstInsert` is graded
-   on bytes allocated by the insert loop, which a busy host cannot move,
-   rather than on time: the 2000-row figure must stay within a ratio of the
-   1000-row one. The same test measures the inbound request path's
-   allocation (`inbound-alloc`) and requires it under a fixed byte
-   threshold.
+   hostile corpus, `repoExportGraph` and `repoFromBlocks`. Each route is
+   graded on the bytes it allocates, which a busy host cannot move: the
+   2000-row figure must stay within a ratio of the 1000-row one. The 2000-row
+   wall time (process start-up included) must stay under an absolute ceiling
+   set far above the measured time, so it catches a hang and not load. The
+   export block counts and the rehydrated root CIDs are pinned, so a walk
+   that dropped nodes fails even when it is fast. `mstInsert` is graded the
+   same way and the same test measures the inbound request path's
+   allocation (`inbound-alloc`), requiring it under a fixed byte threshold.
 
    The page-cost test builds `synth_repo_main.mdk` corpora of 1000 and 10000
    records and reads the per-request figures
@@ -144,40 +143,50 @@ figureInWord key w =
   else
     None
 
-{- | One route of `performance_resource_main.mdk` timed at two sizes.
+{- | One route of `performance_resource_main.mdk` run at two sizes.
 
    `needs n` is what the run at `n` rows must print; `ceiling` bounds the
-   2000-row time in seconds and `ratio` the 2000-row time against the
-   1000-row time. -}
+   2000-row wall time in seconds, and `allocRatio` the bytes the route
+   allocates at 2000 rows against 1000. -}
 data TimedRoute = TimedRoute {
   mode : String,
   needs : Int -> List String,
   ceiling : Float,
-  ratio : Float,
+  allocRatio : Float,
 }
 
 -- `mst` times `mstValidateBlocks` REJECTING a hostile corpus. The other
 -- three reach the write path, the export path and the startup path, which
 -- the rejection never touches.
+--
+-- Bytes allocated by the route itself (the driver reads the counter around
+-- the call, after the corpus is built) are deterministic, so their ratio is
+-- a property of the code, not of the host: about 2.0 for a linear route and
+-- 4.0 for a quadratic one. Measured 1000 -> 2000 rows: mst 8745776 ->
+-- 17591696 (2.01x), export 59459888 -> 118190304 (1.99x), rehydrate
+-- 92397264 -> 172695632 (1.87x). Each bound is the measured ratio plus
+-- headroom, so it fails when growth moves toward quadratic; a ratio cannot
+-- see a constant-factor regression. The wall-clock ceilings sit an order of
+-- magnitude above the measured times, so they catch a hang, not a loaded host.
 timedRoutes : List TimedRoute
 timedRoutes = [
   TimedRoute {
     mode = "mst",
     needs = n => ["MST \{intToString n} UNREACHABLE"],
     ceiling = 3.5,
-    ratio = 3.2,
+    allocRatio = 2.4,
   },
   TimedRoute {
     mode = "export",
     needs = exportNeeds,
     ceiling = 1.5,
-    ratio = 2.5,
+    allocRatio = 2.4,
   },
   TimedRoute {
     mode = "rehydrate",
     needs = rehydrateNeeds,
     ceiling = 1.5,
-    ratio = 2.5,
+    allocRatio = 2.4,
   },
 ]
 
@@ -201,38 +210,49 @@ rehydrateNeeds 2000 = [
 ]
 rehydrateNeeds n = ["REHYDRATE \{intToString n} OK"]
 
--- One timed run of `route` at `n` rows: its wall time and the findings.
-timedRun : String -> TimedRoute -> Int -> <Clock, Exec> (Float, List String)
-timedRun bin route n =
+-- One run of `route` at `n` rows: bytes allocated, wall time, or findings.
+routeRun : String ->
+  TimedRoute ->
+  Int ->
+  <Clock, Exec> Result (List String) (Int, Float)
+routeRun bin route n =
   let label = "\{gate} (native \{route.mode} \{intToString n})"
   let t0 = monotonic ()
-  let (_, fs) = ranWith label bin [route.mode, intToString n] (route.needs n)
-  (elapsedSince t0, fs)
-
--- Runs of one route at one size; its time is the smallest of them, so a load
--- spike during one run cannot fail the ratio.
-timedRuns : Int
-timedRuns = 3
-
-bestTimedRun : String -> TimedRoute -> Int -> <Clock, Exec> (Float, List String)
-bestTimedRun bin route n =
-  let runs = map (_ => timedRun bin route n) (replicate timedRuns ())
-  match map fst runs
-    [] => (0.0, [])
-    t :: ts => (fold min t ts, flatMap snd runs)
+  let (out, fs) = ranWith label bin [route.mode, intToString n] (route.needs n)
+  let seconds = elapsedSince t0
+  match (fs, wordFigure "allocBytes=" out)
+    ([], Some bytes) => Ok (bytes, seconds)
+    ([], None) => Err ["\{label}: the probe printed no allocBytes figure"]
+    (_, _) => Err fs
 
 routeFindings : String -> TimedRoute -> <Clock, Exec> List String
-routeFindings bin route = match bestTimedRun bin route 1000
-  (small, []) => match bestTimedRun bin route 2000
-    (large, []) =>
-      boundFindings
-        "\{route.mode} scaling (seconds, 1000 vs 2000 rows, best of \{intToString timedRuns})"
-        small
-        large
-        route.ceiling
-        route.ratio
-    (_, fs) => fs
-  (_, fs) => fs
+routeFindings bin route = match (
+  routeRun bin route 1000,
+  routeRun bin route 2000,
+)
+  (Ok (small, _), Ok (large, seconds)) =>
+    allocScalingFindings route small large ++ ceilingFindings route seconds
+  (Err fs1, Err fs2) => fs1 ++ fs2
+  (Err fs, _) => fs
+  (_, Err fs) => fs
+
+allocScalingFindings : TimedRoute -> Int -> Int -> List String
+allocScalingFindings route small large =
+  if intToFloat large / intToFloat small <= route.allocRatio then
+    []
+  else
+    [
+      "\{gate}: \{route.mode} scaling (allocated bytes, 1000 vs 2000 rows) exceeded its bound: small=\{intToString small} large=\{intToString large} (at most \{floatToString route.allocRatio}x)",
+    ]
+
+ceilingFindings : TimedRoute -> Float -> List String
+ceilingFindings route seconds =
+  if seconds <= route.ceiling then
+    []
+  else
+    [
+      "\{gate}: \{route.mode} at 2000 rows took \{floatToString seconds} seconds (at most \{floatToString route.ceiling})",
+    ]
 
 -- Measured at 2.39 MB for N=4 requests of 256 body bytes when the bound was
 -- set; the threshold leaves more than 3x headroom, so it trips on a

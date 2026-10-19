@@ -110,10 +110,14 @@ runMst : Int -> <IO> Unit
 runMst n =
   let root = mstRootCid mstEmpty
   let rows = mstNodeBlocks mstEmpty ++ mstRows n 0 []
-  match mstValidateBlocks root rows
+  let a0 = allocBytes ()
+  let verdict = mstValidateBlocks root rows
+  let a1 = allocBytes ()
+  match verdict
     Err message =>
       if contains "unreachable" message then
-        println "MST \{intToString n} UNREACHABLE"
+        println
+          "MST \{intToString n} UNREACHABLE allocBytes=\{intToString (floatToInt (a1 - a0))}"
       else
         panic "performance_resource: MST scaling wrong route: \{message}"
     Ok () => panic "performance_resource: MST hostile rows were accepted"
@@ -249,10 +253,15 @@ runExport n =
   match blockStoreFromBlocks blocks
     Err message =>
       panic "performance_resource: export block store failed: \{message}"
-    Ok store => match repoExportGraph commitCid signed dataCid store
-      Ok (exported, _) =>
-        println "EXPORT \{intToString n} \{intToString (length exported)}"
-      Err message => panic "performance_resource: export failed: \{message}"
+    Ok store =>
+      let a0 = allocBytes ()
+      let exported = repoExportGraph commitCid signed dataCid store
+      let a1 = allocBytes ()
+      match exported
+        Ok (blocks, _) =>
+          println
+            "EXPORT \{intToString n} \{intToString (length blocks)} allocBytes=\{intToString (floatToInt (a1 - a0))}"
+        Err message => panic "performance_resource: export failed: \{message}"
 
 runRehydrate : Int -> <IO, Sign "commit"> Unit
 runRehydrate n =
@@ -261,11 +270,15 @@ runRehydrate n =
   let dataCid = mstRootCid tree
   let (commitCid, signed) = perfSignedCommit dataCid
   let blocks = perfGraphBlocks rows tree commitCid signed
-  match repoFromBlocks perfDid perfSecret commitCid blocks
+  let a0 = allocBytes ()
+  let rehydrated = repoFromBlocks perfDid perfSecret commitCid blocks
+  let a1 = allocBytes ()
+  match rehydrated
     Ok repo =>
       let recovered = repoCommitDataCid (repoLatestCommit repo)
       if cidEqual recovered dataCid then
-        println "REHYDRATE \{intToString n} OK root=\{cidToString recovered}"
+        println
+          "REHYDRATE \{intToString n} OK root=\{cidToString recovered} allocBytes=\{intToString (floatToInt (a1 - a0))}"
       else
         panic
           "performance_resource: rehydrate root CID mismatch: expected \{cidToString dataCid} got \{cidToString recovered}"
