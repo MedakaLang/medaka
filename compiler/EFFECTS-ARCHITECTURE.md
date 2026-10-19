@@ -197,7 +197,7 @@ listed here as proposed paths; presence in this table is not a delivery claim.
 Extraction is by ownership, not by a requirement that every module be pure.
 Stateful services receive narrow contexts: fresh identity allocation, inference
 level, current rigidity/scope, absorption observations and diagnostic reporting.
-They do not receive the entire PerRun record and never import the orchestrator
+They do not receive the entire ModuleCtx record and never import the orchestrator
 back into a leaf. Existing absorption checks remain until their replacement
 observes both arrow-spine and off-spine cases; deleting a post-hoc check before
 rigid checking covers that population would reopen laundering.

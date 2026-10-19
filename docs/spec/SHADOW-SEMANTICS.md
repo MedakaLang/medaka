@@ -2314,12 +2314,13 @@ same "which stage owns S4/S6" decision.
 > `definerShadowNamesRef` is scoped exactly as `checkModuleFullImpl` scopes it: it is the
 > USER module's shadow set (`buildDefinerShadows prog userProg`) and is toggled **empty
 > while a CORE-owned letrec group, or core's impl/default/prop/test bodies, is inferred**
-> (`flatShadowScopingRef` / `flatCoreFnNamesRef` / `flatUserShadowNamesRef`,
-> `scopeShadowsForGroup`). Every consumer of that ref — `definerShadowVarHead`,
+> (the flat-path scoping refs this paragraph names were retired with the flat check
+> mode). Every consumer of that ref — `definerShadowVarHead`,
 > `definerShadowArgHead`, `maybeStandaloneValueMono`, `recordImplObligation`'s skip arm,
-> `resolveRLocalSite` — becomes per-module for free. All three refs are cleared by
-> `resetState` and set ONLY by a `checkProgramSeededSplit` with a non-empty prelude, so the
-> multi-module path and every prelude-free probe path are byte-identical.
+> `resolveRLocalSite` — becomes per-module for free. Historically all three refs were
+> set ONLY by a `checkProgramSeededSplit` with a non-empty prelude, so the multi-module
+> path and every prelude-free probe path were byte-identical; the refs and the
+> per-module `resetState` that cleared them are gone.
 >
 > The `=>`-constrained-receiver carve-out (`definerReceiverIsDictVar`) is UNCHANGED and
 > still load-bearing — it is what keeps a *user's* constrained fn dispatching through its

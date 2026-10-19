@@ -1463,7 +1463,7 @@ analyzeToLines runtimeSrc coreSrc progSrc =
 --     module ISOLATED via `checkModuleFull` (only earlier modules' PUBLIC
 --     schemes/data are seeded) and harvests that module's own diagnostics by
 --     snapshotting the typeErrors/matchWarnings refs after its check (each module
---     starts with resetState ()).  This keeps a private same-named helper in one
+--     starts with a fresh `ModuleCtx`).  This keeps a private same-named helper in one
 --     module from colliding with a different-typed one in another — the
 --     per-module-frame property the OCaml `typecheck_module` has.  Resolve uses
 --     the exported per-module `resolveModule` directly (it threads exports).

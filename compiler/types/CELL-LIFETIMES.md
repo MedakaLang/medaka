@@ -1,6 +1,6 @@
 # Typechecker cell lifetimes
 
-One row per piece of mutable typechecker state: the module-level cells of `compiler/types/typecheck.mdk`, the fields of its four bundle records (declared in `compiler/types/tc_types.mdk`) and the fields of the context records that replace them (`DynCtx`, `SiteCtx`), and the cells outside the file that a drive reads or writes. It is the inventory the state-by-lifetime split works from.
+One row per piece of mutable typechecker state: the module-level cells of `compiler/types/typecheck.mdk`, the fields of its bundle records (`ModuleCtx`, `GraphRun`, `DriverState`, `CrossRun`, declared in `compiler/types/tc_types.mdk`) and the fields of the context records that replace them (`GroupCtx`, `DynCtx`, `SiteCtx`), and the cells outside the file that a drive reads or writes. It is the inventory the state-by-lifetime split works from.
 
 Columns: `name | holds | lifetime | owner-today | writers | reset | target | interface-fills | source | issue`.
 
@@ -17,7 +17,7 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | crossRun | container: the CrossRun bundle; fields have their own rows | graph | module-level | resetCrossModuleState, checkCoreMemoized (hit install), checkModulesChainReportFor (hit install), probes | resetCrossModuleState (graphPreamble) | delete | no | - | - |
 | typeErrorsSticky | build or run abort flag armed at the first recorded type error | process | module-level | recordTypeError | resetTypeErrorsSticky (snapshot.mdk and tests only; production never resets); rolled back by checkGraphFinish, captureTypeErrors, methodReturnOwnershipProbe | GraphCtx | no | - | - |
 | typeErrorsStickyDiags | the diagnostics behind the sticky flag | process | module-level | recordTypeError, replaceAmbiguityAt | resetTypeErrorsSticky (snapshot.mdk and tests only); rolled back by checkGraphFinish, captureTypeErrors, methodReturnOwnershipProbe | GraphCtx | no | - | - |
-| currentLoc | innermost ELoc span for diagnostics; written about 35 times in save and restore brackets; never reset to None | run | module-level | infer ELoc arm and save-restore brackets | never (not in resetState) | TcEnv | n/a | - | #1752 |
+| currentLoc | innermost ELoc span for diagnostics; written about 35 times in save and restore brackets; never reset to None | run | module-level | infer ELoc arm and save-restore brackets | never (not in freshModuleCtx) | TcEnv | n/a | - | #1752 |
 | assumptionTraceEnabled | test-only gate for the assumption trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
 | assumptionTraceEntries | test-only buffer for the assumption trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
 | numericPredicateTraceEnabled | test-only gate for the numeric predicate trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
@@ -27,14 +27,14 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | evidenceObservationEnabled | test-only gate for the evidence observation trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
 | evidenceObservationEntries | test-only buffer for the evidence observation trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
 | graphRun | container: the GraphRun bundle; fields have their own rows | graph | module-level | resetGraphLineage, markModules, memo hit installs, probes | resetGraphLineage (via resetGraphState) | delete | no | - | - |
-| perRun | container: the PerRun bundle; fields have their own rows | module | module-level | resetState, memo hit installs, enterStampCtx, drainStampQueue | resetState (checkBodyImpl) | delete | no | - | - |
+| perRun | container: the module shim, the last-minted ModuleCtx; fields have their own rows | module | module-level | checkBodyImpl mint, memo hit installs, enterStampCtx, drainStampQueue, test probes | freshModuleCtx (checkBodyImpl) | delete | no | - | - |
 | coreCheckMemoRef | process-wide core-pass memo, one entry | process | module-level | checkCoreMemoized | never (test helper methodReturnMemoTeardownStats clears and restores) | interner | no | - | - |
 | preludePreambleMemoRef | prelude preamble memo, one entry of pure values | process | module-level | preludePreambleStore | never | interner | no | - | - |
 | moduleChainMemoRef | module-chain prefix memo | process | module-level | checkModulesChainReportFor | never (test helper clears and restores) | interner | no | - | - |
 | DriverState.effectDomains | effect label to domain table; builtins seeded then user effect decls registered | graph | DriverState | seedEffectDomains, registerEffectDomain | never | GraphCtx | yes | none | - |
 | DriverState.ioJoin | atoms IO joins in this drive, taken from the selected profile | graph | DriverState | setIoJoin, (graphPreamble) | never | TcConfig | no | - | - |
 | DriverState.ioJoinProfile | name of the profile ioJoin was taken from; part of the memo keys | graph | DriverState | setIoJoin, (graphPreamble), preludePreambleStore | never | TcConfig | no | - | - |
-| DriverState.graphAdmittedMethodsRef | per module (dependency id, method) pairs deAliasMethodImports admitted for dispatch | module | DriverState | renameAliasedMethods | never | ModuleCtx | no | - | - |
+| DriverState.graphAdmittedMethodsRef | per module (dependency id, method) pairs deAliasMethodImports admitted for dispatch; renameAliasedMethods writes it before graphPreamble, and the two projection drives (checkModulesPreambleK, checkModulesPartialK) never call it yet read it through admittedIn, so they see the previous drive's map | graph | DriverState | renameAliasedMethods | never | GraphCtx | no | - | - |
 | DriverState.declEnvsRef | stage K declaration envelope for the whole graph (deOwnersBefore, deKindsBefore, deIfaces, deImpls, deModules) | graph | DriverState | graphPreamble | never | GraphCtx | yes | none | - |
 | DriverState.abstractRecordTypesRef | record types exported abstractly, seeded from decls | graph | DriverState | seedAbstractRecordTypes | never | GraphCtx | yes | none | - |
 | DriverState.argDispatchIdxByIdRef | interface method argument dispatch index, from the graph mark sets | graph | DriverState | markSetsOf | never | GraphCtx | yes | none | - |
@@ -46,18 +46,18 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | DriverState.stdlibOwnedModsRef | set of stdlib-owned module ids, from the driver module list | graph | DriverState | setStdlibOwnership | never | GraphCtx | no | - | - |
 | DriverState.flatEntryIsStdlibRef | flag: the flat entry is a stdlib module | graph | DriverState | setStdlibOwnership | never | GraphCtx | no | - | - |
 | DriverState.builtinExternNamesRef | builtin extern name to (type, arity) catalog from runtime decls | graph | DriverState | noteBuiltinExternNames, restoreCoreDriverFields | never (restoreCoreDriverFields reinstalls on a memo hit) | GraphCtx | yes | none | - |
-| DriverState.superDeclsRef | superclass declarations in scope for the module being checked | module | DriverState | checkBodyImpl, drainStampQueue, elabModuleStamp, enterStampCtx, graphModuleWorker, graphPreamble, restoreCoreDriverFields | never (rewritten per module; saved and restored by drainStampQueue) | ModuleCtx | no | - | - |
-| DriverState.standaloneValuesRef | standalone value names of the module being checked | module | DriverState | checkBodyImpl, restoreCoreDriverFields | never (rewritten per module by checkBodyImpl) | ModuleCtx | no | - | - |
-| DriverState.methodDispatchIdxByIdRef | method dispatch index scratch, set fresh per module | module | DriverState | checkBodyImpl, restoreCoreDriverFields | never (rewritten per module by checkBodyImpl) | ModuleCtx | no | - | - |
-| DriverState.matchOracle | constructor oracle for exhaustiveness checks of the current check group | group | DriverState | graphPreamble, restoreCoreDriverFields, seedCheckRun | graphPreamble (tree arm), seedCheckRun | GroupCtx | n/a | - | - |
-| DriverState.matchWarnings | match warnings accumulated for the current check group | group | DriverState | checkMatchExhaustive, checkRedundantGo, pushCoherenceWarning, restoreCoreDriverFields, seedCheckRun | seedCheckRun | GroupCtx | n/a | - | - |
+| ModuleCtx.superDeclsRef | superclass declarations in scope for the module being checked | module | ModuleCtx | freshModuleCtx, stampCtxOf, installSnapshotModuleCtx | never (rewritten per module by the mint) | ModuleCtx | no | - | - |
+| ModuleCtx.standaloneValuesRef | standalone value names of the module being checked | module | ModuleCtx | checkBodyImpl, installSnapshotModuleCtx | never (rewritten per module by checkBodyImpl) | ModuleCtx | no | - | - |
+| ModuleCtx.methodDispatchIdxByIdRef | method dispatch index scratch, set fresh per module | module | ModuleCtx | checkBodyImpl, installSnapshotModuleCtx | never (rewritten per module by checkBodyImpl) | ModuleCtx | no | - | - |
+| ModuleCtx.matchOracle | constructor oracle for exhaustiveness checks; installed once per module by the mint from the CheckRunSeed (seedCheckRun on both checkModuleFullDiags arms), while cmCheckWorker and the core pass carry the residue of the last record | module | ModuleCtx | graphPreamble, installSnapshotModuleCtx, freshModuleCtx | graphPreamble (tree arm), freshModuleCtx | ModuleCtx | n/a | - | - |
+| ModuleCtx.matchWarnings | match warnings accumulated for the module; reset once per module by the mint, appended after the module by pushCoherenceWarning (runFinalChecks), read by hadMatchWarnings after the whole check | module | ModuleCtx | checkMatchExhaustive, checkRedundantGo, pushCoherenceWarning, installSnapshotModuleCtx, freshModuleCtx | freshModuleCtx | ModuleCtx | n/a | - | - |
 | DriverState.promotionHarvestRef | names promoted during the graph, harvested at the end | graph | DriverState | graphModuleWorker, graphPreamble | graphPreamble | GraphCtx | no | - | - |
 | DriverState.mainSchemeRef | scheme of the entry main, read for autoprint and the emit path | graph | DriverState | graphModuleWorker, graphPreamble, setMainSchemeIfEntry | graphPreamble (tree arm clears) | GraphCtx | no | - | #2257 |
-| DriverState.sigNameSetRef | names with signatures in the module being checked | module | DriverState | processTopGroups, restoreCoreDriverFields | never (rewritten per module by processTopGroups) | ModuleCtx | no | - | - |
-| DriverState.sigTyMapRef | signature types of the module being checked | module | DriverState | processTopGroups, restoreCoreDriverFields | never (rewritten per module by processTopGroups) | ModuleCtx | no | - | - |
-| DriverState.currentModuleRef | module whose body checkBodyImpl is inferring, tags diagnostics | module | DriverState | checkBodyImpl, drainStampQueue, enterStampCtx | never (rewritten per module; saved and restored by drainStampQueue) | ModuleCtx | no | - | - |
+| ModuleCtx.sigNameSetRef | names with signatures in the module being checked | module | ModuleCtx | processTopGroups, installSnapshotModuleCtx | never (rewritten per module by processTopGroups) | ModuleCtx | no | - | - |
+| ModuleCtx.sigTyMapRef | signature types of the module being checked | module | ModuleCtx | processTopGroups, installSnapshotModuleCtx | never (rewritten per module by processTopGroups) | ModuleCtx | no | - | - |
+| ModuleCtx.currentModuleRef | module whose body checkBodyImpl is inferring, tags diagnostics | module | ModuleCtx | freshModuleCtx, stampCtxOf, checkBodyImpl | never (rewritten per module by the mint) | ModuleCtx | no | - | - |
 | DriverState.markSetsRef | graph mark sets; also the mode flag for grants (grantsEnabled) | graph | DriverState | markSetsOf | never (None until a preamble runs) | GraphCtx | yes | none | - |
-| DriverState.invocationViewRef | last checked module constructors and variance tables for lastInvocationOps | module | DriverState | recordInvocationView | never (rewritten per module) | ModuleCtx | no | - | - |
+| ModuleCtx.invocationViewRef | last checked module constructors and variance tables for lastInvocationOps | module | ModuleCtx | recordInvocationView | never (rewritten per module) | ModuleCtx | no | - | - |
 | CrossRun.universeFunNamesRef | names of functions registered by earlier modules | graph | CrossRun | appendUniverseAccums | resetCrossModuleState | GraphCtx | yes | derived(cpSchemes) | - |
 | CrossRun.universeMethodDispatchIdxByIdRef | interface dispatch-index universe keyed by (IfaceRef, method) | graph | CrossRun | appendUniverseAccums | resetCrossModuleState | GraphCtx | yes | none | - |
 | CrossRun.universeDataCtors | every registered head with its parameters and constructors, read by tyCarries | graph | CrossRun | recordCtors | resetCrossModuleState | GraphCtx | yes | none | - |
@@ -102,86 +102,82 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | GraphRun.liveNumRoots | the Num-constrained subset of liveRoots, emptied by every drain | graph | GraphRun | defaultLiveNumRoots, recordLiveRoots | resetGraphLineage | GraphCtx | no | - | - |
 | GraphRun.liveNumGoals | goals on liveNumRoots, emptied by every drain | graph | GraphRun | defaultLiveNumRoots, recordLiveRoots | resetGraphLineage | GraphCtx | no | - | - |
 | GraphRun.liveGoals | goals boundaries held on live variables, emptied by every drain | graph | GraphRun | judgeLiveGoals, recordLiveRoots | resetGraphLineage | GraphCtx | no | - | - |
-| PerRun.currentScope | cursor of the open binding scope | run | PerRun | closeScope, openScope | resetState | TcEnv | n/a | - | - |
-| PerRun.admittedOccObls | method occurrences whose spelling has two or more admitted declarations, checked once the receiver grounds | module | PerRun | pushAdmittedOccObl | resetState | ModuleCtx | no | - | #2705 |
-| PerRun.curEffect | effect rows performed by the expression being inferred | run | PerRun | performEffect, captureEffects | resetState | TcEnv | n/a | - | - |
-| PerRun.effectSummaries | effect summary solver state across scopes | module | PerRun | beginEffectSummaryScope, EffectSolver.* (solver value) | resetState | ModuleCtx | no | - | - |
-| PerRun.pendingJoinsRef | joins of alternatives with no shape yet, decided when the scope closes | group | PerRun | deferJoin, postponePendingJoins, resolvePendingJoins, settlePending, settlePendingJoins, takeJoinsShapedBy | resetState | GroupCtx | n/a | - | - |
-| PerRun.fileValueFlows | windowed file-value flows, cut by finishFileValueScope | module | PerRun | finishFileValueScope, recordFileValueFlow, unifySpineProbe | resetState | ModuleCtx | no | - | - |
-| PerRun.fileValueScopes | stack of open file-value scopes | run | PerRun | beginEffectSummaryScope, finishFileValueScope | resetState | TcEnv | n/a | - | - |
-| PerRun.rigidEffvarsRef | effect variables rigid inside the current contract | run | PerRun | beginEffectContract, finishEffectContract, processSCC, unifyRowPlain | finishEffectContract restores; resetState | TcEnv | n/a | - | - |
-| PerRun.rigidAuthvarsRef | authority variables rigid inside the current contract | run | PerRun | beginEffectContract, finishEffectContract, freshAuthSubstOpeningIn, processSCC | finishEffectContract restores; resetState | TcEnv | n/a | - | - |
-| PerRun.effectSitesRef | first site per (binding, label) that performed the label | module | PerRun | recordEffectSites | resetState | ModuleCtx | no | - | - |
-| PerRun.rowFailureReportedRef | bindings whose row failure the scoped solver already reported | module | PerRun | reportEffectSummaryFailures | resetState | ModuleCtx | no | - | - |
-| PerRun.typeErrorKeySetRef | dedup set of (code, location, message) triples | module | PerRun | pushTypeErrorAt | resetState | ModuleCtx | no | - | - |
-| PerRun.escapedExistentialsRef | existential cells reported as escaping their scope | module | PerRun | closeExistentialScope | resetState | ModuleCtx | no | - | - |
-| PerRun.openedAuthvarsRef | cells a pattern opened for an existential binder | module | PerRun | freshAuthSubstOpeningIn | resetState | ModuleCtx | no | - | - |
-| PerRun.indexSubstitutedRef | index variables an index equality substituted a term for | module | PerRun | substituteIndexLinked | resetState | ModuleCtx | no | - | - |
-| PerRun.extendedBindersRef | authority variables an argument extended on the right | module | PerRun | noteArgumentShape | resetState | ModuleCtx | no | - | - |
-| PerRun.displayHiddenBindersRef | authority variables an interpolation hid behind a non-prelude display | module | PerRun | noteArgumentShape | resetState | ModuleCtx | no | - | - |
-| PerRun.pendingEscapesRef | post-hoc escape findings held until the group solver scope closes | group | PerRun | checkEffectEscape, flushPendingEscapes | resetState | GroupCtx | n/a | - | - |
-| PerRun.openedExistentialsRef | existential cells opened at the pattern site being inferred | run | PerRun | openExistentials, parkOpenedExistentials, refuseOpenedExistentials, takeOpenedExistentials | resetState | TcEnv | n/a | - | - |
-| PerRun.openedExistentialsStackRef | stack of parked opened-existential lists | run | PerRun | parkOpenedExistentials, refuseOpenedExistentials | resetState | TcEnv | n/a | - | - |
-| PerRun.recordByNameRef | record infos by name, seeded each module from universeRecordPop | module | PerRun | loadDataUniverse, overrideScopedRecords, registerCachedRecord, registerRecordInfoKeyed | resetState | ModuleCtx | no | - | - |
-| PerRun.fieldOwnersRef | field name to owning records, seeded each module | module | PerRun | declEnvSeedDataUniverse, registerCachedRecord, registerRecordInfoKeyed | resetState | ModuleCtx | no | - | - |
-| PerRun.dataParamKindsRef | kinds of data type parameters, seeded each module | module | PerRun | declEnvSeedDataUniverse, recordParamKinds, withDeclParamKinds | resetState | ModuleCtx | no | - | - |
-| PerRun.dataParamNameIndexRef | name-only index over dataParamKindsRef keys | module | PerRun | declEnvSeedDataUniverse, recordParamKinds, withDeclParamKinds | resetState | ModuleCtx | no | - | #2158 |
-| PerRun.dataParamPolarityRef | variance twin of dataParamKindsRef | module | PerRun | declEnvSeedDataUniverse, recordParamPolarities, seedParamPolarityFixpointScoped | resetState | ModuleCtx | no | - | #1119 |
-| PerRun.dataParamRowAtomsRef | atoms each KRow parameter is charged at every occurrence | module | PerRun | declEnvSeedDataUniverse, recordParamRowAtoms | resetState | ModuleCtx | no | - | #2110 |
-| PerRun.aliasTableRef | type alias table, seeded each module | module | PerRun | loadDataUniverse, registerData | resetState | ModuleCtx | no | - | - |
-| PerRun.numLitFromIntAnchorRef | identity-selected prelude Num.fromInt descriptor row | module | PerRun | seedNumLitFromIntAnchor | resetState | ModuleCtx | no | - | - |
-| PerRun.definerShadowNamesRef | definer-shadow names in scope for the current group | group | PerRun | checkBodyImpl, scopeShadowsForGroup | resetState | GroupCtx | n/a | - | - |
-| PerRun.definerShadowSigsRef | signatures of definer-shadow names | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | - |
-| PerRun.bodyImplEnvRef | impl environment of the module body being checked | module | PerRun | checkBodyImpl, methodReturnProbeCodes, methodReturnProbeStamp, methodReturnResolutionMutationProbe | resetState | ModuleCtx | no | - | - |
-| PerRun.methodAliasEntriesRef | alias method spellings the imports supply, mapped to declaration entries | module | PerRun | checkBodyImpl, methodReturnProbeSpelling | resetState | ModuleCtx | no | - | #1386 |
-| PerRun.methodScopeCtxRef | this module decls and ordinal, inputs of methodScopeHere | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | #2563 |
-| PerRun.methodScopeMemoRef | methodScopeAt answers for spellings read in this module | module | PerRun | methodScopeHere | resetState | ModuleCtx | no | - | #2563 |
-| PerRun.aliasMethodOriginsRef | alias-qualified method spellings mapped to origin method names | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | #1386 |
-| PerRun.implObls | windowed impl obligation channel | module | PerRun | checkMethodBodyAgainst, inferUserImplBodies, pushExactReturnObl | resetState | ModuleCtx | no | - | #841 |
-| PerRun.poisonedVars | type variables poisoned by a mismatch, to suppress follow-on errors | module | PerRun | checkSigVarGoal, poisonMismatchVars, propagatePoison | resetState | ModuleCtx | no | - | - |
-| PerRun.deferrableVarIds | quantified variable ids of generalized schemes; undetermined goals on them defer into the scheme | module | PerRun | registerSchemeObligations | resetState | ModuleCtx | no | - | #838 |
-| PerRun.liveMemberMonosRef | types of closed top-level members that left a variable open | module | PerRun | liveMemberIds | resetState | ModuleCtx | no | - | - |
-| PerRun.quiescentGoalsRef | goals on live-member variables with their boundary data | module | PerRun | judgeQuiescentGoals, undeterminedVectorVerdict | resetState | ModuleCtx | no | - | - |
-| PerRun.heldLiveGoalsRef | goals a boundary held without a verdict | module | PerRun | undeterminedVectorVerdict | resetState | ModuleCtx | no | - | - |
-| PerRun.determinedRowsRef | impl row chosen by each determination commit, by variable | module | PerRun | fileDeterminedRow, refileDeterminedRows | resetState | ModuleCtx | no | - | - |
-| PerRun.declaredSigVarIds | variables a closed binder declares, held rigid | module | PerRun | declareRigidVars | resetState | ModuleCtx | no | - | - |
-| PerRun.tupleCallCandidates | tuple-call hint candidates | module | PerRun | inferAppExpr | resetState | ModuleCtx | no | - | - |
-| PerRun.numlitVarLocs | numeric literal variable locations | module | PerRun | recordNumlitLoc | resetState | ModuleCtx | no | - | - |
-| PerRun.patLitPending | integer literal patterns since the enclosing pattern site began | run | PerRun | inferIntLitPat, settlePatLitsOnly, takePatLits | resetState | TcEnv | n/a | - | - |
-| PerRun.patLitDeferred | integer literal patterns whose scrutinee type was unknown at their site | module | PerRun | settleDeferredPatLits, settlePatLitsGo | resetState | ModuleCtx | no | - | - |
-| PerRun.matchChecksDeferred | matches whose scrutinee type was unknown after their arms, checked at module end | module | PerRun | inferMatch | resetState | ModuleCtx | no | - | - |
-| PerRun.numlitRanges | source integer literals for the fixed-width range check | module | PerRun | recordNegatedLitRange, recordNumlitRange, settlePatLitsGo | resetState | ModuleCtx | no | - | - |
-| PerRun.wideLitRanges | wide literals for checkWideLiterals | module | PerRun | inferWideLit, recordNegatedLitRange | resetState | ModuleCtx | no | - | - |
-| PerRun.numlitUntainted | numeric literal locations not tainted by an operator | module | PerRun | markNumlitOpTaint, recordNumlitLoc | resetState | ModuleCtx | no | - | - |
-| PerRun.numlitOpLocs | operator locations of numeric literals | module | PerRun | taintAndDrop | resetState | ModuleCtx | no | - | - |
-| PerRun.numlitCtxTags | numeric literal locations tagged with join context | module | PerRun | tagLitLocsWithRoot | resetState | ModuleCtx | no | - | - |
-| PerRun.localBindRefs | local bindings with their types, for tooling tables | module | PerRun | recordLocalBind | resetState | ModuleCtx | no | - | - |
-| PerRun.localSchemesOut | local schemes captured for the entry tables (captureEntryTables) | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | - |
-| PerRun.seedSchemesOut | import seed schemes captured for the entry tables | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | - |
-| PerRun.funPredicateSlotsRef | function dictionary slots, seeded from crossRun and written back per module | module | PerRun | checkBodyImpl, setFunConstraintEntry, setFunPredicateSlots | resetState | ModuleCtx | no | - | - |
-| PerRun.funPredicateSlotsIdxRef | first-wins index over funPredicateSlotsRef | module | PerRun | setFunConstraintEntry, setFunPredicateSlots | resetState | ModuleCtx | no | - | - |
-| PerRun.funConstraintDeclaredRef | declared constraint prefixes, seeded from crossRun | module | PerRun | checkBodyImpl, dictPassModulesIfEnabled, dictPassModulesScoped | resetState | ModuleCtx | no | - | - |
-| PerRun.currentImportDefinersRef | imported definer names of this module imports | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | - |
-| PerRun.currentImportOriginsRef | imported origin names of this module imports | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | - |
-| PerRun.importedSchemeOblsRef | scheme contexts of this module imported bindings, by local spelling | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | #1114 |
-| PerRun.obls | windowed call obligation channel | module | PerRun | inferUserImplBodies, recordOblAt | resetState | ModuleCtx | no | - | #838 |
-| PerRun.absorptions | row-unifier atom-discard trail, write-only | module | PerRun | recordAbsorptions | resetState | ModuleCtx | no | - | #839 |
-| PerRun.schemeObligationsRef | scheme obligations keyed (name, binding id) | module | PerRun | registerSchemeObligations | resetState | ModuleCtx | no | - | #837 |
-| PerRun.schemeDefIdsRef | top-level value binder to binding id | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | #837 |
-| PerRun.methodPredicateSlotsRef | method predicate slots, seeded from crossRun | module | PerRun | checkBodyImpl, dictPassModulesIfEnabled, dictPassModulesScoped, methodReturnProbeSlotCase, setMethodPredicateSlotEntry | resetState | ModuleCtx | no | - | - |
-| PerRun.currentFn | top-level function whose body is being inferred | run | PerRun | inferMembers, inferMethodBody | resetState | TcEnv | n/a | - | - |
-| PerRun.currentImplBody | true while inferring an impl method body | run | PerRun | inferMethodBody | resetState | TcEnv | n/a | - | - |
-| PerRun.methodSiteFns | method site mono lists per function | module | PerRun | recordArgSiteFn, recordNumLitSite, recordSite | resetState | ModuleCtx | no | - | - |
-| PerRun.dictAppFns | dictionary application mono lists per function | module | PerRun | inferDeclaredDictAt, pushLocalDictApp | resetState | ModuleCtx | no | - | - |
-| PerRun.residualUnivRef | impl universe for residual predicate walks | module | PerRun | checkBodyImpl | resetState | ModuleCtx | no | - | - |
-| PerRun.promotedRef | names promoted by inference | module | PerRun | registerInferredFor | resetState | ModuleCtx | no | - | - |
-| PerRun.methodShadowNamesRef | method shadow names: never written, always empty; readers see the initial value | module | PerRun | - | resetState | delete | no | - | #4136 |
-| PerRun.flatShadowScopingRef | flag never written; always False | module | PerRun | - | resetState | delete | no | - | - |
-| PerRun.flatCoreFnNamesRef | set never written; always empty | module | PerRun | - | resetState | delete | no | - | - |
-| PerRun.flatUserShadowNamesRef | set never written; always empty | module | PerRun | - | resetState | delete | no | - | - |
-| PerRun.groupConstraintMonosRef | constraint monos of the group being processed | group | PerRun | processSCC | resetState | GroupCtx | n/a | - | - |
-| PerRun.fieldOwnerModulesRef | field-owner key to declaring module ids; comment says graph-global but it is re-minted per module | module | PerRun | declEnvSeedDataUniverse | resetState | ModuleCtx | no | - | #1597 |
-| PerRun.fieldOwnerReachRef | module ids this module can reach through DUse | module | PerRun | declEnvSeedDataUniverse | resetState | ModuleCtx | no | - | #1597 |
+| ModuleCtx.currentScope | cursor of the open binding scope | run | ModuleCtx | closeScope, openScope | freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.admittedOccObls | method occurrences whose spelling has two or more admitted declarations, checked once the receiver grounds | module | ModuleCtx | pushAdmittedOccObl | freshModuleCtx | ModuleCtx | no | - | #2705 |
+| ModuleCtx.curEffect | effect rows performed by the expression being inferred | run | ModuleCtx | performEffect, captureEffects | freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.effectSummaries | effect summary solver state across scopes | module | ModuleCtx | beginEffectSummaryScope, EffectSolver.* (solver value) | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.pendingJoinsRef | joins of alternatives with no shape yet, decided when the scope closes; a module channel keyed by level, drained by processSCC at its level, by processTopGroups at 0 and by finishEffectContract | module | ModuleCtx | deferJoin, postponePendingJoins, resolvePendingJoins, settlePending, settlePendingJoins, takeJoinsShapedBy | freshModuleCtx | ModuleCtx | n/a | - | - |
+| ModuleCtx.fileValueFlows | windowed file-value flows, cut by finishFileValueScope | module | ModuleCtx | finishFileValueScope, recordFileValueFlow, unifySpineProbe | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.fileValueScopes | stack of open file-value scopes | run | ModuleCtx | beginEffectSummaryScope, finishFileValueScope | freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.rigidEffvarsRef | effect variables rigid inside the current contract | run | ModuleCtx | beginEffectContract, finishEffectContract, processSCC, unifyRowPlain | finishEffectContract restores; freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.rigidAuthvarsRef | authority variables rigid inside the current contract | run | ModuleCtx | beginEffectContract, finishEffectContract, freshAuthSubstOpeningIn, processSCC | finishEffectContract restores; freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.effectSitesRef | first site per (binding, label) that performed the label | module | ModuleCtx | recordEffectSites | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.rowFailureReportedRef | bindings whose row failure the scoped solver already reported | module | ModuleCtx | reportEffectSummaryFailures | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.typeErrorKeySetRef | dedup set of (code, location, message) triples | module | ModuleCtx | pushTypeErrorAt | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.escapedExistentialsRef | existential cells reported as escaping their scope | module | ModuleCtx | closeExistentialScope | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.openedAuthvarsRef | cells a pattern opened for an existential binder | module | ModuleCtx | freshAuthSubstOpeningIn | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.indexSubstitutedRef | index variables an index equality substituted a term for | module | ModuleCtx | substituteIndexLinked | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.extendedBindersRef | authority variables an argument extended on the right | module | ModuleCtx | noteArgumentShape | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.displayHiddenBindersRef | authority variables an interpolation hid behind a non-prelude display | module | ModuleCtx | noteArgumentShape | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.openedExistentialsRef | existential cells opened at the pattern site being inferred | run | ModuleCtx | openExistentials, parkOpenedExistentials, refuseOpenedExistentials, takeOpenedExistentials | freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.openedExistentialsStackRef | stack of parked opened-existential lists | run | ModuleCtx | parkOpenedExistentials, refuseOpenedExistentials | freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.recordByNameRef | record infos by name, seeded each module from universeRecordPop | module | ModuleCtx | loadDataUniverse, overrideScopedRecords, registerCachedRecord, registerRecordInfoKeyed | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.fieldOwnersRef | field name to owning records, seeded each module | module | ModuleCtx | declEnvSeedDataUniverse, registerCachedRecord, registerRecordInfoKeyed | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.dataParamKindsRef | kinds of data type parameters, seeded each module | module | ModuleCtx | declEnvSeedDataUniverse, recordParamKinds, withDeclParamKinds | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.dataParamNameIndexRef | name-only index over dataParamKindsRef keys | module | ModuleCtx | declEnvSeedDataUniverse, recordParamKinds, withDeclParamKinds | freshModuleCtx | ModuleCtx | no | - | #2158 |
+| ModuleCtx.dataParamPolarityRef | variance twin of dataParamKindsRef | module | ModuleCtx | declEnvSeedDataUniverse, recordParamPolarities, seedParamPolarityFixpointScoped | freshModuleCtx | ModuleCtx | no | - | #1119 |
+| ModuleCtx.dataParamRowAtomsRef | atoms each KRow parameter is charged at every occurrence | module | ModuleCtx | declEnvSeedDataUniverse, recordParamRowAtoms | freshModuleCtx | ModuleCtx | no | - | #2110 |
+| ModuleCtx.aliasTableRef | type alias table, seeded each module | module | ModuleCtx | loadDataUniverse, registerData | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.numLitFromIntAnchorRef | identity-selected prelude Num.fromInt descriptor row | module | ModuleCtx | seedNumLitFromIntAnchor | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.definerShadowNamesRef | definer-shadow names in scope; written once per module by checkBodyImpl (the per-group writer was removed with the dead flat path) | module | ModuleCtx | checkBodyImpl | freshModuleCtx | ModuleCtx | n/a | - | - |
+| ModuleCtx.definerShadowSigsRef | signatures of definer-shadow names | module | ModuleCtx | checkBodyImpl | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.bodyImplEnvRef | impl environment of the module body being checked | module | ModuleCtx | checkBodyImpl, methodReturnProbeCodes, methodReturnProbeStamp, methodReturnResolutionMutationProbe | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.methodAliasEntriesRef | alias method spellings the imports supply, mapped to declaration entries | module | ModuleCtx | checkBodyImpl, methodReturnProbeSpelling | freshModuleCtx | ModuleCtx | no | - | #1386 |
+| ModuleCtx.methodScopeCtxRef | this module decls and ordinal, inputs of methodScopeHere | module | ModuleCtx | checkBodyImpl | freshModuleCtx | ModuleCtx | no | - | #2563 |
+| ModuleCtx.methodScopeMemoRef | methodScopeAt answers for spellings read in this module | module | ModuleCtx | methodScopeHere | freshModuleCtx | ModuleCtx | no | - | #2563 |
+| ModuleCtx.aliasMethodOriginsRef | alias-qualified method spellings mapped to origin method names | module | ModuleCtx | checkBodyImpl | freshModuleCtx | ModuleCtx | no | - | #1386 |
+| ModuleCtx.implObls | windowed impl obligation channel | module | ModuleCtx | checkMethodBodyAgainst, inferUserImplBodies, pushExactReturnObl | freshModuleCtx | ModuleCtx | no | - | #841 |
+| ModuleCtx.poisonedVars | type variables poisoned by a mismatch, to suppress follow-on errors | module | ModuleCtx | checkSigVarGoal, poisonMismatchVars, propagatePoison | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.deferrableVarIds | quantified variable ids of generalized schemes; undetermined goals on them defer into the scheme | module | ModuleCtx | registerSchemeObligations | freshModuleCtx | ModuleCtx | no | - | #838 |
+| ModuleCtx.liveMemberMonosRef | types of closed top-level members that left a variable open | module | ModuleCtx | liveMemberIds | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.quiescentGoalsRef | goals on live-member variables with their boundary data | module | ModuleCtx | judgeQuiescentGoals, undeterminedVectorVerdict | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.heldLiveGoalsRef | goals a boundary held without a verdict | module | ModuleCtx | undeterminedVectorVerdict | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.determinedRowsRef | impl row chosen by each determination commit, by variable | module | ModuleCtx | fileDeterminedRow, refileDeterminedRows | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.declaredSigVarIds | variables a closed binder declares, held rigid | module | ModuleCtx | declareRigidVars | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.tupleCallCandidates | tuple-call hint candidates | module | ModuleCtx | inferAppExpr | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.numlitVarLocs | numeric literal variable locations | module | ModuleCtx | recordNumlitLoc | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.patLitPending | integer literal patterns since the enclosing pattern site began | run | ModuleCtx | inferIntLitPat, settlePatLitsOnly, takePatLits | freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.patLitDeferred | integer literal patterns whose scrutinee type was unknown at their site | module | ModuleCtx | settleDeferredPatLits, settlePatLitsGo | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.matchChecksDeferred | matches whose scrutinee type was unknown after their arms, checked at module end | module | ModuleCtx | inferMatch | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.numlitRanges | source integer literals for the fixed-width range check | module | ModuleCtx | recordNegatedLitRange, recordNumlitRange, settlePatLitsGo | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.wideLitRanges | wide literals for checkWideLiterals | module | ModuleCtx | inferWideLit, recordNegatedLitRange | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.numlitUntainted | numeric literal locations not tainted by an operator | module | ModuleCtx | markNumlitOpTaint, recordNumlitLoc | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.numlitOpLocs | operator locations of numeric literals | module | ModuleCtx | taintAndDrop | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.numlitCtxTags | numeric literal locations tagged with join context | module | ModuleCtx | tagLitLocsWithRoot | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.localBindRefs | local bindings with their types, for tooling tables | module | ModuleCtx | recordLocalBind | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.localSchemesOut | local schemes captured for the entry tables (captureEntryTables) | module | ModuleCtx | checkBodyImpl | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.seedSchemesOut | import seed schemes captured for the entry tables | module | ModuleCtx | checkBodyImpl | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.funPredicateSlotsRef | function dictionary slots, seeded from crossRun and written back per module | module | ModuleCtx | checkBodyImpl, setFunConstraintEntry, setFunPredicateSlots | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.funPredicateSlotsIdxRef | first-wins index over funPredicateSlotsRef | module | ModuleCtx | setFunConstraintEntry, setFunPredicateSlots | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.funConstraintDeclaredRef | declared constraint prefixes, seeded from crossRun | module | ModuleCtx | checkBodyImpl, dictPassModulesIfEnabled, dictPassModulesScoped | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.currentImportDefinersRef | imported definer names of this module imports | module | ModuleCtx | checkBodyImpl | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.currentImportOriginsRef | imported origin names of this module imports | module | ModuleCtx | checkBodyImpl | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.importedSchemeOblsRef | scheme contexts of this module imported bindings, by local spelling | module | ModuleCtx | checkBodyImpl | freshModuleCtx | ModuleCtx | no | - | #1114 |
+| ModuleCtx.obls | windowed call obligation channel | module | ModuleCtx | inferUserImplBodies, recordOblAt | freshModuleCtx | ModuleCtx | no | - | #838 |
+| ModuleCtx.absorptions | row-unifier atom-discard trail, write-only | module | ModuleCtx | recordAbsorptions | freshModuleCtx | ModuleCtx | no | - | #839 |
+| ModuleCtx.schemeObligationsRef | scheme obligations keyed (name, binding id) | module | ModuleCtx | registerSchemeObligations | freshModuleCtx | ModuleCtx | no | - | #837 |
+| ModuleCtx.schemeDefIdsRef | top-level value binder to binding id | module | ModuleCtx | checkBodyImpl | freshModuleCtx | ModuleCtx | no | - | #837 |
+| ModuleCtx.methodPredicateSlotsRef | method predicate slots, seeded from crossRun | module | ModuleCtx | checkBodyImpl, dictPassModulesIfEnabled, dictPassModulesScoped, methodReturnProbeSlotCase, setMethodPredicateSlotEntry | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.currentFn | top-level function whose body is being inferred | run | ModuleCtx | inferMembers, inferMethodBody | freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.currentImplBody | true while inferring an impl method body | run | ModuleCtx | inferMethodBody | freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.methodSiteFns | method site mono lists per function | module | ModuleCtx | recordArgSiteFn, recordNumLitSite, recordSite | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.dictAppFns | dictionary application mono lists per function | module | ModuleCtx | inferDeclaredDictAt, pushLocalDictApp | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.residualUnivRef | impl universe for residual predicate walks | module | ModuleCtx | checkBodyImpl | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.promotedRef | names promoted by inference | module | ModuleCtx | registerInferredFor | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.fieldOwnerModulesRef | field-owner key to declaring module ids; comment says graph-global but it is re-minted per module | module | ModuleCtx | declEnvSeedDataUniverse | freshModuleCtx | ModuleCtx | no | - | #1597 |
+| ModuleCtx.fieldOwnerReachRef | module ids this module can reach through DUse | module | ModuleCtx | declEnvSeedDataUniverse | freshModuleCtx | ModuleCtx | no | - | #1597 |
+| GroupCtx.gcMonos | the group's constraint variables as (interface name, instantiated mono), read by definerReceiverIsDictVar to dispatch a definer-shadow occurrence through the dict | group | GroupCtx | processSCC | dropped when processSCC returns | GroupCtx | n/a | - | - |
+| GroupCtx.gcPendingEscapes | the retained post-hoc effect-escape walk's findings, held until the group's solver scope has closed | group | GroupCtx | processSCC, checkEffectEscapeIn, flushPendingEscapes | dropped when processSCC returns | GroupCtx | n/a | - | - |
 | DynCtx.dcJoin | the construct whose alternatives a value join is equating, which names the mismatch | run | DynCtx | joinValueEqual | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
 | DynCtx.dcNonCovariant | inside a non-covariant type argument, where two closed effect rows must be equal | run | DynCtx | paramVarianceGuard | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
 | DynCtx.dcSuppressRLocalRecord | typing a definer-shadow occurrence that heads an application, so recordRLocalSite pushes nothing | run | DynCtx | inferDefinerShadowAppAt | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
@@ -189,16 +185,17 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | DynCtx.dcShadowHeadCtx | typing a shadow occurrence that heads its own application, so the value-position standalone pin does not apply | run | DynCtx | shadowHeadEnv (callers: inferShadowAppHead, shadowVarHeadMethodScheme, inferDefinerStandaloneVarAppAt) | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
 | DynCtx.dcDo | inside a do-lowered chain, where a monad-shape mismatch reads as "do requires a monad" | run | DynCtx | infer (the EDoOrigin arm, which installs the DoCtx); recordDoMonadError (sets the Ref `doReported` in the installed DoCtx) | none for the field (immutable; a nested walk gets an updated copy); the `doReported` Ref inside it is mutable, set once per region by recordDoMonadError and fresh in each nested do | TcEnv | n/a | - | - |
 | DynCtx.dcMethodMismatch | unifying an interface default body against its declared type, so a leaf mismatch names the method | run | DynCtx | checkMethodBodyAgainst | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcGroup | the GroupCtx of the top-level binding group being inferred (its constraint monos and its held effect-escape findings); None outside a group | group | DynCtx | processSCC | none for the field (immutable; a nested walk gets an updated copy); the gcPendingEscapes Ref inside it is minted per group by processSCC | GroupCtx | n/a | - | - |
 | SiteCtx.sxSite | the span of the dispatch site being resolved, for a diagnostic raised where no span argument exists | run | SiteCtx | resolveArgStamps, resolveSites, resolveRLocalSites, resolveOpSites, resolveDictApps, checkEnteredReqs, checkImplHeadGoal, residualBoundPreds | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
 | SiteCtx.sxInner | the notes accumulator of the running stamp, which each route built below the top level is ORed into | run | SiteCtx | routeWalkMemoized, stampNoting (install the accumulator); noteInner (ORs into the Ref content) | none for the field (immutable; a nested walk gets an updated copy); the accumulator Ref content is mutable and ORed monotonically by noteInner during the stamp | TcEnv | n/a | - | - |
-| PerRun.typeErrors | windowed diagnostic output channel | module | PerRun | recordTypeError, replaceAmbiguityAt | resetState | ModuleCtx | no | - | #1146 |
-| PerRun.typeErrorMsgSetRef | membership index over typeErrors rendered messages | module | PerRun | recordTypeError, replaceAmbiguityAt | resetState | ModuleCtx | no | - | #2068 |
-| PerRun.ambiguitySitesRef | spans holding a T-AMBIGUOUS-INSTANCE | module | PerRun | pushAmbiguityAt | resetState | ModuleCtx | no | - | - |
-| PerRun.ambiguityVarsRef | boundary-owned variables already reported ambiguous | module | PerRun | pushBoundaryAmbiguity | resetState | ModuleCtx | no | - | - |
-| PerRun.errorsDetected | control signal counting detected type errors | module | PerRun | noteTypeErrorDetected | resetState | ModuleCtx | no | - | #1146 |
-| PerRun.occursCheckFailed | set by bindVar on an occurs failure, read and cleared by the caller | run | PerRun | bindValueUpper, bindVar, occursAdjustUnbound | resetState | TcEnv | n/a | - | - |
-| PerRun.currentLevel | inference level counter | run | PerRun | enterLevel, exitLevel, lowerToCurrent | resetState | TcEnv | n/a | - | - |
-| PerRun.markingRef | module marking from beginModuleMarking | module | PerRun | beginModuleMarking | resetState | ModuleCtx | no | - | - |
+| ModuleCtx.typeErrors | windowed diagnostic output channel | module | ModuleCtx | recordTypeError, replaceAmbiguityAt | freshModuleCtx | ModuleCtx | no | - | #1146 |
+| ModuleCtx.typeErrorMsgSetRef | membership index over typeErrors rendered messages | module | ModuleCtx | recordTypeError, replaceAmbiguityAt | freshModuleCtx | ModuleCtx | no | - | #2068 |
+| ModuleCtx.ambiguitySitesRef | spans holding a T-AMBIGUOUS-INSTANCE | module | ModuleCtx | pushAmbiguityAt | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.ambiguityVarsRef | boundary-owned variables already reported ambiguous | module | ModuleCtx | pushBoundaryAmbiguity | freshModuleCtx | ModuleCtx | no | - | - |
+| ModuleCtx.errorsDetected | control signal counting detected type errors | module | ModuleCtx | noteTypeErrorDetected | freshModuleCtx | ModuleCtx | no | - | #1146 |
+| ModuleCtx.occursCheckFailed | set by bindVar on an occurs failure, read and cleared by the caller | run | ModuleCtx | bindValueUpper, bindVar, occursAdjustUnbound | freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.currentLevel | inference level counter | run | ModuleCtx | enterLevel, exitLevel, lowerToCurrent | freshModuleCtx | TcEnv | n/a | - | - |
+| ModuleCtx.markingRef | module marking from beginModuleMarking | module | ModuleCtx | beginModuleMarking | freshModuleCtx | ModuleCtx | no | - | - |
 
 ## Cells outside the file
 

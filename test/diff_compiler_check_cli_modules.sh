@@ -631,7 +631,7 @@ esac
 #     Module A declares `effect MyEff Prefix`; module B uses `<MyEff "svc/*">` with a
 #     VALID prefix parameter.  This MUST be ACCEPTED: PR-A populates effect domains
 #     ONCE over the WHOLE import graph in the driver preamble (checkModulesPreambleK /
-#     elaborateModules) and stops resetState from re-seeding, so B sees A's declared
+#     elaborateModules) and stops the module mint from re-seeding, so B sees A's declared
 #     Prefix domain.  A naive per-module hoist of populateEffectDomains would wipe A's
 #     domain before B, leaving only builtins → B would FALSELY reject `MyEff` as
 #     atomic ("label 'MyEff' is atomic and takes no parameter").  So a spurious reject

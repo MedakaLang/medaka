@@ -3851,7 +3851,7 @@ comparing `irName`, and each would change behaviour if re-keyed:
   unchanged;
 - the **routing** goal (`pushDictApp`'s iface component, `resolveDictApps`) — a route word
   against the spelling-keyed `KeyBuckets`, kept that way by #1317 T1 / the closed S0 #1277;
-- `groupConstraintMonosRef`, whose only reader compares interface names.
+- `GroupCtx.gcMonos`, whose only reader compares interface names.
 
 ### 10.3a The method-keyed route word's prefix-vs-graph skew (why it is taken graph-globally)
 

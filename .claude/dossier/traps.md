@@ -73,7 +73,7 @@ reproduce**:
   **two past** the one it described, with the block's second line dangling onto the closing `}`.
 - **Long trailing comment**: on the same header shape, a trailing comment on `alpha` lands on
   `beta` after `fmt --write` — moved one field down.
-- **On the real `PerRun` record**, with its header artificially put into the two-line
+- **On the real `ModuleCtx` record (then named PerRun)**, with its header artificially put into the two-line
   `data PerRun =\n | PerRun { … }` shape (the shape `DriverState`, in this same file, is actually
   in today) and given ONE new field with a trailing comment plus one standalone two-line block
   elsewhere in the body: `fmt --write` shifted **every one of the record's ~60 trailing
@@ -88,7 +88,7 @@ reproduce**:
 
 Three things measured safe: adding a field with no comment at all (either header shape, byte-
 identical diff except the added line); adding a comment to a record whose header is already the
-single-line `data X = X { … }` form (verified directly on `PerRun` as it stands today — a new
+single-line `data X = X { … }` form (verified directly on `ModuleCtx` as it stands today — a new
 trailing-commented field and a new standalone two-line block each produced a diff containing only
 the intended edit, second `fmt --write` a no-op). The real-world workaround for the unsafe case is
 PR #1296 (still open, adding a new `Ref`-typed field to `DriverState`): add the field bare, put
