@@ -201,7 +201,7 @@ exists when F3 lands, F3 adds the full view to the interface under a format-vers
 
 | Id | Action | Acceptance |
 |---|---|---|
-| **F1** | A `frontend/` module, seeded from `resolve.mdk`'s `ExpNs` block, answers "may this importer see this name" from declarations plus a loader-supplied sibling flag; resolve and `private_mangle`'s import map read it. | Two-arm IR identity and the LEG A goldens unchanged; `resolve.mdk` shrinks. |
+| **F1** (landed in #4314) | A `frontend/` module, seeded from `resolve.mdk`'s `ExpNs` block, answers "may this importer see this name" from declarations plus a loader-supplied sibling flag; resolve and `private_mangle`'s import map read it. | Two-arm IR identity and the LEG A goldens unchanged; `resolve.mdk` shrinks. |
 | **F2** | The five `public*` projections in `types/typecheck.mdk` read the producer; the M-IDENTITY ladders are untouched. | No direct `pub`-flag projection remains outside the producer (a grep pin that may only fall); `types/typecheck.mdk` shrinks. |
 | **F3** | Test siblings see their subject's private names (the design's slice 3). | The design's slice 3 evidence. |
 
