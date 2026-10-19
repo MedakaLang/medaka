@@ -674,7 +674,7 @@ badLifetime = badField "lifetime" 2 lifetimeVocab
 
 ownerVocab : List String
 ownerVocab = [
-  "module-level", "PerRun", "GraphRun", "DriverState", "CrossRun", "DynCtx",
+  "module-level", "ModuleCtx", "GraphRun", "DriverState", "CrossRun", "DynCtx",
   "SiteCtx"
 ]
 
@@ -765,7 +765,7 @@ fieldNameOf l =
 
 bundleRecords : List String
 bundleRecords =
-  ["PerRun", "GraphRun", "DriverState", "CrossRun", "DynCtx", "SiteCtx"]
+  ["ModuleCtx", "GraphRun", "DriverState", "CrossRun", "DynCtx", "SiteCtx"]
 
 -- Field names of the bundle `rec`: the indented lines after its
 -- `public export data rec = rec {` header, up to the column-0 `}`.

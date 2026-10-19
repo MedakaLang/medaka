@@ -235,8 +235,8 @@ Do NOT "clean up" a hot scan by delegating to a prelude Foldable method — meas
 self-compile** (`compiler/AGENTS.md`). The consolidated helpers in #145/#146 must stay
 monomorphic `||`/`&&` loops or keyed lookups.
 
-### 7. resetState survivors are load-bearing — clearing is not a cleanup
-~37 Refs deliberately survive `resetState` (cross-module accumulators, per-module reseed tables,
+### 7. Module-mint survivors are load-bearing — clearing is not a cleanup
+~37 Refs deliberately survive the per-module `freshModuleCtx` mint (cross-module accumulators, per-module reseed tables,
 driver mode flags). Clearing one "for hygiene" reproduces the Phase-134 dropped-dict mode. The
 cross-module six get exactly ONE lifecycle owner via #143; everything else waits for #158's
 two-record split (a per-run record vs a cross-run record — #158 mints the actual names; they do

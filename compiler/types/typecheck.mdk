@@ -400,7 +400,8 @@ import types.tc_types.{
   PendingBinder(..),
   GivenScope(..),
   PendingJoin(..),
-  PerRun(..),
+  CheckRunSeed(..),
+  ModuleCtx(..),
   ReqWalk(..),
   WalkMemo(..),
   SolvedGoalEntry(..),
@@ -3743,7 +3744,7 @@ declaredEffectsOpen ty =
 
 -- Keyed indices — so the hot per-field-access read paths never walk a linear registry
 -- (issue #149).  #415 item 3: `registerRecordInfoKeyed` is the sole REGISTRATION writer of
--- both; they are cleared together by resetState; and the cross-module record floor is
+-- both; they are cleared together by `freshModuleCtx`; and the cross-module record floor is
 -- loaded by `loadDataUniverse` from `universeRecordPop`.
 --
 -- 🚨 THE LOCKSTEP WAS "STRUCTURAL, NOT AN OBLIGATION" UNTIL #1111 A-2.12 (#1319 unit 2),
@@ -3783,7 +3784,7 @@ declaredEffectsOpen ty =
 -- Names of record/named-field types exported ABSTRACTLY (`export data`/`export
 -- record` without `public`).  Seeded ONCE (over EVERY module's decls, prelude
 -- included) by the multi-module check drivers, BEFORE per-module checking, and
--- deliberately NOT cleared by resetState — it is whole-program metadata, not a
+-- deliberately NOT cleared by `freshModuleCtx` — it is whole-program metadata, not a
 -- per-module accumulator.  An abstract export brings the type NAME into scope but
 -- never registers its fields (publicDataDecls drops VisAbstract decls, so they never
 -- reach the record registry in an importer — its PARAM KINDS do travel, since #804/#1028, via
@@ -4028,7 +4029,7 @@ dropGoalsSince mark kinds =
 -- current module).  resolveSite consults it: a method site at a concrete receiver
 -- with NO impl, whose name is here, routes RLocal (eval reads the standalone) instead
 -- of RKey<head> (which would panic with no impl).
--- NOT cleared by resetState — elabModuleStamp rebuilds it per module.
+-- NOT cleared by `freshModuleCtx` — elabModuleStamp rebuilds it per module.
 
 -- DEFINER-shadow names (facet 2): the names THIS module declares as a top-level
 -- funDef that ALSO name an interface method (buildDefinerShadows) — e.g. a user
@@ -4039,7 +4040,7 @@ dropGoalsSince mark kinds =
 -- dispatch to the prelude `Eq (List a)` impl (`[1] ≠ [2]` → False) instead of the
 -- user's fn (True) — a run≠build divergence (the EMIT path already routes to the
 -- user's def).  resolveRLocalSite stamps these RLocal unconditionally.  Populated
--- per-module in checkModuleFullImpl from buildDefinerShadows; reset by resetState.
+-- per-module in checkModuleFullImpl from buildDefinerShadows; reset by `freshModuleCtx`.
 
 -- P0-19: the declared top-level SIGNATURES of definer-shadow standalones
 -- (`size : Int -> Int`), keyed by name.  When a definer-shadow occurrence resolves
@@ -4081,7 +4082,7 @@ dropGoalsSince mark kinds =
 -- bare standalone name and the rename that moves it runs later.  A consumer must no
 -- longer treat a non-empty map as "this is the emit path".
 -- Set once at the top of elaborateModules;
--- deliberately NOT cleared by resetState (checkModuleFullImpl's per-module resetState
+-- deliberately NOT cleared by `freshModuleCtx` (checkModuleFullImpl's per-module `freshModuleCtx`
 -- must not wipe it mid-graph) — the forward-construction membership check makes a
 -- stale value inert (no funDef matches → no entry).
 
@@ -4138,7 +4139,7 @@ recoveredShadowSym name tagRef =
 -- checkBodyImpl's Module arm and consumed by MEMBERSHIP/EXISTENCE/by-unique-
 -- key LOOKUP readers only, so appending a module's contribution is
 -- byte-identical to rebuilding over the full universe. They survive
--- per-module `resetState`, are cleared per RUN by `resetCrossModuleState`,
+-- per-module `freshModuleCtx`, are cleared per RUN by `resetCrossModuleState`,
 -- and are seeded by the core pass.
 --   * interface-method names (buildDefinerShadows / buildStandaloneShadows): not an
 --     accumulator; `methodNameDeclaredAt` reads `deMethods` at the reader's ordinal.
@@ -4185,13 +4186,13 @@ recoveredShadowSym name tagRef =
 -- Five structures persist (recordByName / fieldOwners / dataParamKinds /
 -- aliasTable / ctor ENV), seeded by the core pass, grown ONE module at a
 -- time by `appendDataUniverse`. Module k sees published interfaces 1..k-1,
--- never its own twice. Copied into `resetState`-wiped working refs and
+-- never its own twice. Copied into `freshModuleCtx`-wiped working refs and
 -- OVERLAID with prog0. First-wins order preserved: accumulated
 -- [pub_{k-1}..pub_1] + overlay prog0 -> [prog0, pub_{k-1}..pub_1], the same
 -- order the old left fold yielded. Stored tyvar ids never leak (every
 -- reader refreshes them); only the count shifts (registered once, not per
 -- module), invisible via ppMono/ppScheme normalization. Survive per-module
--- `resetState`; cleared per RUN by `resetCrossModuleState`.
+-- `freshModuleCtx`; cleared per RUN by `resetCrossModuleState`.
 --
 -- Constrained-receiver arm: the `=>`-constraint variables of the top-level
 -- group currently being inferred, as (interface name, the constraint's
@@ -4223,7 +4224,7 @@ recoveredShadowSym name tagRef =
 -- (`IfaceRef`, `irOrigin` included) and `dispatchIdxScoped` asks for ONE declaration —
 -- the one `methodIfaceHere` says this module admits.  A prior module's entry that this
 -- module cannot name is unreachable by construction rather than merely unqueried.
--- Survives per-module `resetState`; cleared per
+-- Survives per-module `freshModuleCtx`; cleared per
 -- RUN by `resetCrossModuleState`; seeded by the core pass (also Module mode).
 -- C5: arg-position method occurrences whose name is a standalone-shadow, recorded
 -- UNGATED (the ordinary arg-stamp machinery is emit-path-only, but eval also
@@ -4231,7 +4232,7 @@ recoveredShadowSym name tagRef =
 -- Each entry is (name, route ref, the discriminating-argument mono CELL);
 -- resolveRLocalSites reads the cell post-inference and stamps RLocal when the
 -- receiver grounds to a head with no impl.
--- Reset by resetState.
+-- Reset by `freshModuleCtx`.
 -- (name, routeRef, receiverMono, mangledSym, forceLocal) — mangledSym (P0-18) is the
 -- mangled standalone symbol read off the marked route at record time; resolveRLocalSite
 -- stamps `RLocal mangledSym` for a no-impl receiver.  "" on the un-mangled path.
@@ -5575,7 +5576,7 @@ deSeedNameParity mid =
 --   * `modB` declares `Beta` and its OWN `Shared` — same declared NAME, different
 --     module.  That pair is deliberate: the index is bare-name by construction
 --     (`tabKeyName`, matching the `tabHasName` scan it replaced — see the
---     `PerRun` field's comment), so the two `Shared` declarations must collapse
+--     `ModuleCtx` field's comment), so the two `Shared` declarations must collapse
 --     to ONE key.  A future edit that made the index identity-keyed would show up
 --     as two entries here, which is the point of asserting the key LIST rather
 --     than a membership Bool.
@@ -5714,7 +5715,7 @@ deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 -- `insertCtorPop`, `insertRecordPop`) writes `perRun`/`crossRun` refs as
 -- a side effect (`recordParamKinds`, `registerRecordInfoKeyed`, alias
 -- resolution through `perRun.value.aliasTableRef`) and emits diagnostics
--- deduped per module (`perRun.typeErrorMsgSetRef`, reset by `resetState`).
+-- deduped per module (`perRun.typeErrorMsgSetRef`, reset by `freshModuleCtx`).
 -- `buildDeclEnvs` runs in the driver preamble, before any module's own state
 -- exists, so calling those functions here would merge the diagnostic dedupe
 -- scope across the whole module graph and relocate the push outside any
@@ -7899,7 +7900,7 @@ aliasWitnessesMethod sites n ident =
 
 -- THIS module's answer for [n]: the reading module's declarations and ordinal are
 -- installed by `checkBodyImpl` (`methodScopeCtxRef`); before that point, and in a
--- `PerRun` no module installed, every spelling is absent.
+-- `ModuleCtx` no module installed, every spelling is absent.
 methodScopeHere : String -> MethodScope
 methodScopeHere n = match perRun.value.methodScopeCtxRef.value
   None => MsAbsent
@@ -7908,7 +7909,7 @@ methodScopeHere n = match perRun.value.methodScopeCtxRef.value
     None =>
       let s =
         methodScopeAt
-          (omHasKey n driverState.value.standaloneValuesRef.value)
+          (omHasKey n perRun.value.standaloneValuesRef.value)
           prog
           n
           cur
@@ -7994,21 +7995,12 @@ freshDriverState _ = DriverState {
   stdlibOwnedModsRef = Ref omEmpty,
   flatEntryIsStdlibRef = Ref False,
   builtinExternNamesRef = Ref omEmpty,
-  superDeclsRef = Ref [],
-  standaloneValuesRef = Ref omEmpty,
-  methodDispatchIdxByIdRef = Ref [],
-  matchOracle = Ref (buildOracle []),
-  matchWarnings = Ref [],
   promotionHarvestRef = Ref [],
   mainSchemeRef = Ref None,
-  sigNameSetRef = Ref omEmpty,
-  sigTyMapRef = Ref omEmpty,
-  currentModuleRef = Ref "",
   markSetsRef = Ref None,
-  invocationViewRef = Ref (InvocationView [] [] []),
 }
 
--- The single module-level cell holding the residual driver/module/group survivors.
+-- The single module-level cell holding the residual driver and graph survivors.
 driverState : Ref DriverState
 driverState = Ref (freshDriverState ())
 
@@ -8027,7 +8019,7 @@ driverState = Ref (freshDriverState ())
 -- them).  Measuring that length by walking the list was O(N) over an O(N) list once
 -- per group — O(N²), and the single hottest symbol in the typecheck stage on a large
 -- file.  #841 ports this channel onto `Windowed` (see `implObls` below): `wPush`,
--- `resetState` (whole-PerRun re-mint), and `wRestore` (checkMethodBodyAgainst's error
+-- the per-module `ModuleCtx` mint, and `wRestore` (checkMethodBodyAgainst's error
 -- rollback) are its only mutators, so the list and its length can no longer drift.
 
 -- The one and only way to add an obligation.  #991: this channel now stores the SAME
@@ -8060,7 +8052,7 @@ pushExactReturnObl request = wPush perRun.value.implObls UObligation {
 
 methodReturnOrigin : Option Loc -> GoalOrigin
 methodReturnOrigin loc =
-  let moduleId = driverState.value.currentModuleRef.value
+  let moduleId = perRun.value.currentModuleRef.value
   let binding =
     if perRun.value.currentFn.value == "" then
       None
@@ -8347,11 +8339,11 @@ recordBinderType bid name v arity signed = match bid
 wNew : Unit -> Windowed a
 wNew _ = Windowed { items = Ref [], n = Ref 0 }
 
--- the ONLY reset.  Unused — `freshPerRun` re-mints `obls`/`implObls` via
--- `wNew` rather than resetting an existing one (per-module reset is a whole-PerRun
+-- the ONLY reset.  Unused — `freshModuleCtx` re-mints `obls`/`implObls` via
+-- `wNew` rather than resetting an existing one (per-module reset is a whole-ModuleCtx
 -- re-mint here, not a per-field reset), so none of these channels ever needs a
 -- reset-in-place.  Kept as part of the `Windowed` API surface for a future channel
--- whose reset lifecycle is narrower than a whole-PerRun re-mint.
+-- whose reset lifecycle is narrower than a whole-ModuleCtx re-mint.
 wReset : Windowed a -> Unit
 -- lint-disable-next-line rule-dead-code
 wReset w =
@@ -8606,7 +8598,7 @@ uOblIsDecidableNow o =
 -- impl table — inferred constraints carried
 -- on a scheme and re-checked at every instantiation.
 
--- E6 (module emit path only): funPredicateSlotsRef is wiped by resetState at the start
+-- E6 (module emit path only): funPredicateSlotsRef is wiped by `freshModuleCtx` at the start
 -- of EACH module's typecheck, but a cross-module `=>`-constrained CALL site (entry
 -- calling an imported `clampU`) must still find the callee's generalized constraint
 -- slots so inferDictAt records a real pendingDictApp (→ the call gets its dict ARG).
@@ -8646,7 +8638,7 @@ uOblIsDecidableNow o =
 -- (UseName/UseGroup/UseAlias) are mapped — a wildcard `import mod.*` can't enumerate
 -- names here, and a re-exported fn's import source ≠ its definer, so both fall back to
 -- the bare table (correct, byte-identical; the qual path is the fix for the common
--- direct-import case).  Reset by resetState (per module).
+-- direct-import case).  Reset by `freshModuleCtx` (per module).
 
 -- WS-1c: the third field is the slot-parallel interface-name list (one per mono),
 -- so resolveDictApps can resolve an UNDETERMINED top-level constraint (a constraint
@@ -8666,7 +8658,7 @@ uOblIsDecidableNow o =
 -- PERF: this channel's length in O(1) — same O(N²)-per-group length scan the call
 -- channel had before #838 I1 ported it onto `Windowed` (see `wMark` above).  #841
 -- ports `pendingDictApps` onto `Windowed` too (see `dictApps` below); mutated ONLY
--- by `resetState` and `pushDictApp`.
+-- by `freshModuleCtx` and `pushDictApp`.
 
 -- Construct every field-Ref fresh (each reproduces its former top-level ref's initial).
 -- (This line used to carry a COUNT.  It was an encoded fact with no derivation and no
@@ -8727,7 +8719,7 @@ crossRun : Ref CrossRun
 crossRun = Ref (freshCrossRun initialEnv)
 
 -- ── the ONE lifecycle owner for the cross-module accumulators (#143/#144, #154) ──
--- These deliberately SURVIVE the per-module `resetState` (so dict arities/ifaces and
+-- These deliberately SURVIVE the per-module `freshModuleCtx` (so dict arities/ifaces and
 -- the universe/data/impl accumulators cross module boundaries within one graph — see the
 -- declaration comments above), but they must NOT survive a whole multi-module RUN: a
 -- long-lived process (LSP, playground, snapshot runner) drives the analyze/elaborate path
@@ -8740,7 +8732,7 @@ crossRun = Ref (freshCrossRun initialEnv)
 -- the next entry added cannot silently miss one — and so all are cleared symmetrically.
 -- Replacing `crossRun` with a fresh bundle IS the reset: freshCrossRun re-mints every
 -- field, so the set that resets == the set in CrossRun, enforced by the constructor.
--- Scoped to exactly these fields; do NOT fold into `resetState` (they must survive THAT).
+-- Scoped to exactly these fields; do NOT fold into `freshModuleCtx` (they must survive THAT).
 resetCrossModuleState : Unit -> Unit
 resetCrossModuleState _ =
   crossRun := freshCrossRun initialEnv
@@ -8771,7 +8763,7 @@ resetCrossModuleState _ =
 --                   by the retired promotion fixpoint to grow the dict-passed set
 --   dictEligibleRef: the USER fn names eligible for promotion (the prelude's
 --                   constrained fns stay arg-tag/RKey — out of scope).  Set by
---                   the old elaborator; NOT cleared by resetState (constant per run).
+--                   the old elaborator; NOT cleared by `freshModuleCtx` (constant per run).
 --
 -- PERF: both are INDEXED BY ENCLOSING FN rather than kept as flat (fn, mono) assoc
 -- lists.  Their sole reader, `inferredConstraintIds`, selects the entries of ONE fn,
@@ -8788,15 +8780,15 @@ consSiteFn fn x idx = omInsert fn (x :: sitesFor fn idx) idx
 sitesFor : String -> OrdMap (List a) -> List a
 sitesFor fn idx = optionOr [] (omLookup fn idx)
 
--- The graph's promoted names so far, in load order.  `resetState` clears
+-- The graph's promoted names so far, in load order.  `freshModuleCtx` clears
 -- `promotedRef` per module, so `graphModuleWorker`'s `GOutTrees` arm unions each
 -- module's `promotedRef.value` into here right after that module's check (before
--- the next module's `resetState` wipes it).  Its reader is `beginModuleMarking`: a
+-- the next module's `freshModuleCtx` wipes it).  Its reader is `beginModuleMarking`: a
 -- module's dict-name set is the bare set plus THIS list, which is what lets one
 -- sweep mark a promoted callee's cross-module call sites (ARCH §E).  Cleared at
 -- every Module-arm driver entry (`elaborateModules`, `checkModulesPreambleK`) so an
 -- earlier elaboration in the process cannot leak promoted names into a later mark
--- set; NOT touched by `resetState`.  `elaborateModules` reads it once more at the
+-- set; NOT touched by `freshModuleCtx`.  `elaborateModules` reads it once more at the
 -- end, for the set `dictPass` prepends dict params over (`markDictNames`).
 
 -- O(log n) membership index of dictEligibleRef.  #415 item 3: DERIVED from the list by
@@ -8809,7 +8801,7 @@ sitesFor fn idx = optionOr [] (omLookup fn idx)
 -- only for the old elaborate/dict path; off for the
 -- `=== TYPES ===` golden path (checkProgram) and the multi-module path
 -- (elaborateModules) so their scheme output stays byte-identical.  Deliberately
--- NOT reset by resetState — the entrypoint that owns the path sets it.
+-- NOT reset by `freshModuleCtx` — the entrypoint that owns the path sets it.
 
 -- ── D0.5 arg-position dispatch MEASUREMENT (probe-only) ─────────────────────
 -- Classify every ARGUMENT-position interface-method occurrence (the bare-EVar
@@ -9079,9 +9071,9 @@ resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
 -- See `recordTypeError` / `noteTypeErrorDetected` (the counter's sole writers) and
 -- `erredDuring` (its sole reader) below.
 
--- G1 (SOUNDNESS): a STICKY mirror of typeErrors that resetState does NOT clear.
+-- G1 (SOUNDNESS): a STICKY mirror of typeErrors that `freshModuleCtx` does NOT clear.
 -- The multi-module elaborate path (elaborateModules → checkModuleFullImpl) calls
--- resetState at the start of EACH module, wiping `typeErrors`, so after the whole
+-- `freshModuleCtx` at the start of EACH module, wiping `typeErrors`, so after the whole
 -- graph only the LAST module's errors survive there.  build/run must abort on a
 -- type error in ANY module, so `pushTypeError` also records into this accumulator,
 -- which only `resetTypeErrorsSticky` clears (the driver, once, before a run).  Read
@@ -9182,7 +9174,7 @@ recordTypeError raw =
   let d = writtenDiag raw
   typeErrorsSticky := True
   typeErrorsStickyDiags :=
-    (driverState.value.currentModuleRef.value, d) :: typeErrorsStickyDiags.value
+    (perRun.value.currentModuleRef.value, d) :: typeErrorsStickyDiags.value
   let _ = noteTypeErrorDetected ()
   perRun.value.typeErrorMsgSetRef :=
     omInsert
@@ -9491,7 +9483,7 @@ mainTypeIsFloat _ = match driverState.value.mainSchemeRef.value
 -- don't cover the scrutinee's type.  `matchOracle` is the ctor oracle the matrix
 -- recursion consults; `checkOneMatchToLines` seeds it from the program's
 -- data decls (so it sees the same user + builtin ctors check_match does) before
--- inference runs.  Neither is touched by `resetState` — the driver seeds them and
+-- inference runs.  Neither is touched by `freshModuleCtx` — the driver seeds them and
 -- reads `matchWarnings` after the typecheck pass; runs that ignore match warnings
 -- (the schemes/selfproc paths) simply never read it.
 -- #159: element type is now `TcDiag` (severity 2), carrying the span (formerly the
@@ -9537,7 +9529,7 @@ mainTypeIsFloat _ = match driverState.value.mainSchemeRef.value
 -- guess which of its own lines are diagnostics.
 export
 hadMatchWarnings : Unit -> Bool
-hadMatchWarnings _ = match driverState.value.matchWarnings.value
+hadMatchWarnings _ = match perRun.value.matchWarnings.value
   [] => False
   _ => True
 
@@ -10341,7 +10333,7 @@ freshEvId _ =
   let g = graphRun.value
   let n = g.evCounter.value
   g.evCounter := n + 1
-  EvId driverState.value.currentModuleRef.value n
+  EvId perRun.value.currentModuleRef.value n
 
 -- #2549 M2: start a new graph lineage.  The evidence ORDINAL is carried, so no id
 -- minted from here repeats one an earlier graph's tree still holds and a stray read
@@ -10547,7 +10539,7 @@ defaultBodyBinderNamesProbe _ =
   let savedGraph = graphRun.value
   let savedPerRun = perRun.value
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let iface =
     IfaceRef { irName = "Supply", irOrigin = OriginModule "owner-module" }
   let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = "copy" }
@@ -10572,9 +10564,8 @@ defaultBodyBinderNamesProbe _ =
 -- > defaultBodyBinderNamesProbe ()
 -- ["$dict_copy_0", "$dict_copy_1", "$self_copy"]
 
--- #2547 unit 3: the current module's givens.  The module id is `driverState`'s, set once
--- per module by `checkBodyImpl` before any body is inferred and copied by
--- `copyDriverState`, so both memo layers restore the key and the bucket together.
+-- #2547 unit 3: the givens of [sid]'s module.  The module id is the scope frame's,
+-- minted with the frame, so a replayed or restored scope keeps its key with it.
 givensForScope : ScopeId -> List GivenEntry
 givensForScope sid =
   optionOr
@@ -10663,7 +10654,7 @@ pushNumlit e =
 -- NO COUNT HERE, deliberately: a number written into this comment has twice gone stale
 -- without anyone touching the record — once by inheriting an already-wrong figure, once
 -- when a whole-file reflow moved the indentation this recipe anchors on.  Derive it:
---   sed -n '/^public export data PerRun = PerRun {$/,/^}/p' compiler/types/tc_types.mdk \
+--   sed -n '/^public export data ModuleCtx = ModuleCtx {$/,/^}/p' compiler/types/tc_types.mdk \
 --     | grep -cE '^  [a-zA-Z][A-Za-z0-9_]* : '            # fields
 --   ... | grep -cE '^  [a-zA-Z][A-Za-z0-9_]* : Ref '      # of which Refs
 -- Both anchors are load-bearing.  The END anchor is `/^}/`: this record's closing brace
@@ -10671,8 +10662,10 @@ pushNumlit e =
 -- instead.  The FIELD anchor is TWO leading spaces; the four-space form this recipe
 -- once used matches nothing and silently returns 0.
 -- A derivation is only honest if someone ran it — so run it, don't read a number here.
-freshPerRun : Unit -> PerRun
-freshPerRun _ = PerRun {
+-- The module fields start empty except the three the mint is given: the module id and
+-- the seed's oracle and warnings.
+freshModuleCtx : CheckRunSeed -> String -> ModuleCtx
+freshModuleCtx seed mid = ModuleCtx {
   currentScope = Ref ScopeClosed,
   admittedOccObls = Ref [],
   curEffect = Ref [],
@@ -10755,24 +10748,64 @@ freshPerRun _ = PerRun {
   occursCheckFailed = Ref False,
   currentLevel = Ref 0,
   markingRef = Ref None,
+  superDeclsRef = Ref [],
+  standaloneValuesRef = Ref omEmpty,
+  methodDispatchIdxByIdRef = Ref [],
+  matchOracle = Ref seed.crsOracle,
+  matchWarnings = Ref seed.crsWarnings,
+  sigNameSetRef = Ref omEmpty,
+  sigTyMapRef = Ref omEmpty,
+  currentModuleRef = Ref mid,
+  invocationViewRef = Ref (InvocationView [] [] []),
 }
 
--- The single module-level cell holding the current run's per-module accumulator bundle.
-perRun : Ref PerRun
-perRun = Ref (freshPerRun ())
+-- The module shim: the last-minted `ModuleCtx`, which every reader without a record
+-- of its own reads.  Effect domains are not a module field:
+-- `populateEffectDomainsGraph` fills them once over the whole import graph, before
+-- the first module, and a per-module mint must not wipe module A's declared domains
+-- before module B is checked.
+perRun : Ref ModuleCtx
+perRun = Ref (initialModuleCtx ())
 
--- Replacing `perRun` with a fresh bundle IS the per-module reset: freshPerRun re-mints
--- every field, so the set that resets == the set in PerRun, enforced by the constructor.
--- #80/#201: resetState does NOT (re-)seed effect domains.  effectDomains is now owned by
--- populateEffectDomains, called ONCE per compile over the WHOLE import graph
--- (`checkModulesPreambleK` / `elaborateModules` driver
--- preambles for the multi-module paths).  A per-module re-seed here would wipe module A's
--- declared effect domains before module B is checked — a module using an effect declared in A
--- would then see only builtins.  effectDomains has exactly ONE writer (populateEffectDomains →
--- seedEffectDomains + registerEffectDomain), so it persists untouched across the per-module
--- resets — and it is NOT a PerRun field, so freshPerRun cannot disturb it.
-resetState : Unit -> Unit
-resetState _ = perRun := freshPerRun ()
+-- The record a process starts from: no module, an empty oracle, no warnings.
+initialModuleCtx : Unit -> ModuleCtx
+initialModuleCtx _ =
+  freshModuleCtx
+    CheckRunSeed { crsOracle = buildOracle [], crsWarnings = [] }
+    ""
+
+-- The oracle and warnings [m] holds: the seed of a module checked without one
+-- (`cmCheckWorker` and the two core passes), which carries them forward unchanged.
+checkRunResidue : ModuleCtx -> CheckRunSeed
+checkRunResidue m = CheckRunSeed {
+  crsOracle = m.matchOracle.value,
+  crsWarnings = m.matchWarnings.value,
+}
+
+-- A record with fresh run fields and [m]'s module fields, copied by value: what a
+-- memo snapshot stores, and what a test probe runs in.
+carryModuleCtx : ModuleCtx -> ModuleCtx
+carryModuleCtx m =
+  let fresh = freshModuleCtx (checkRunResidue m) m.currentModuleRef.value
+  ModuleCtx { fresh |
+    superDeclsRef = Ref m.superDeclsRef.value,
+    standaloneValuesRef = Ref m.standaloneValuesRef.value,
+    methodDispatchIdxByIdRef = Ref m.methodDispatchIdxByIdRef.value,
+    sigNameSetRef = Ref m.sigNameSetRef.value,
+    sigTyMapRef = Ref m.sigTyMapRef.value,
+    invocationViewRef = Ref m.invocationViewRef.value,
+  }
+
+-- A memo hit's record: the snapshot's module fields, except the module id and the
+-- invocation view, which a hit never restored and which keep the live record's values.
+installSnapshotModuleCtx : ModuleCtx -> Unit
+installSnapshotModuleCtx snap =
+  let live = perRun.value
+  let m = carryModuleCtx snap
+  perRun := ModuleCtx { m |
+    currentModuleRef = Ref live.currentModuleRef.value,
+    invocationViewRef = Ref live.invocationViewRef.value,
+  }
 
 containsI : Int -> List Int -> Bool
 containsI _ [] = False
@@ -11588,7 +11621,7 @@ starSpelling n None = "`\{n}` pattern-ranging, `@L*` or `Authority L*`"
 -- ([key]).
 binderLabel : String -> String -> Option String -> Option String
 binderLabel fn n key =
-  let written = match omLookup fn driverState.value.sigTyMapRef.value
+  let written = match omLookup fn perRun.value.sigTyMapRef.value
     Some ty => binderLabelIn n ty
     None => None
   orElseOpt written (map labelKeyName key)
@@ -11701,7 +11734,7 @@ monoSpineDepth t = match normalize t
 -- `inferParamPolarities` has no constructor field to derive their invariance
 -- from.  They are therefore seeded, and seeded HERE rather than into the ref
 -- itself: the Module path REPLACES that whole list per module
--- (`declEnvSeedDataUniverse`), so a value planted in `freshPerRun` would survive
+-- (`declEnvSeedDataUniverse`), so a value planted in `freshModuleCtx` would survive
 -- on one entry path and be silently wiped on another — the exact
 -- single-file-vs-cross-module split a seed must not have.
 --
@@ -11735,7 +11768,7 @@ recordInvocationView env =
             (_, _, sch) => sch)
           cands)
       (IdMap.values (spRows crossRun.value.universeCtorPop.value))
-  driverState.value.invocationViewRef :=
+  perRun.value.invocationViewRef :=
     InvocationView
       (IdMap.values env.teCtors ++ universe)
       perRun.value.dataParamPolarityRef.value
@@ -11744,7 +11777,7 @@ recordInvocationView env =
 -- The summary's operations over the view of the entry the last drive checked.
 export
 lastInvocationOps : Unit -> InvocationOps
-lastInvocationOps _ = match driverState.value.invocationViewRef.value
+lastInvocationOps _ = match perRun.value.invocationViewRef.value
   InvocationView ctors pols kinds =>
     let byHead = ctorsByHead ctors
     InvocationOps {
@@ -12763,7 +12796,7 @@ coreOwnContexts _ =
 -- reaches the prelude store, so a buffer's own `isEven x = "s"` cannot pick up the
 -- prelude `isEven`'s context (#2054's shape).  The prelude's contexts are consulted
 -- ONLY for a name this module does not bind and whose per-run table has no entry
--- at all: on the module arm each module gets its own `resetState`, so the
+-- at all: on the module arm each module gets its own `freshModuleCtx`, so the
 -- prelude's obligations are not in `perRun`, and a prelude scheme would otherwise
 -- render without its `=>`.
 -- The third step reads [coreContexts], the prelude's contexts keyed by bare name.
@@ -14188,7 +14221,7 @@ qualifiedConstraintKinds : Option Loc ->
 qualifiedConstraintKinds _ scope [] = scope
 qualifiedConstraintKinds loc scope ((Constraint { constraintHead, constraintOrigin, constraintArgs }) :: rest) =
   let envs = driverState.value.declEnvsRef.value
-  let cur = declEnvsOrdOf driverState.value.currentModuleRef.value envs
+  let cur = declEnvsOrdOf perRun.value.currentModuleRef.value envs
   let key = regKeyOfTab (ifaceTabKey constraintOrigin constraintHead)
   let next = match ceLookupAt key cur envs.deIfaces
     None => scope
@@ -15224,7 +15257,7 @@ recordRLocalSite env name tagRef innerRef inst
         !currentLoc
         (captureScope ())
         (freshEvId ()))
-  | not (omHasKey name driverState.value.standaloneValuesRef.value) = ()
+  | not (omHasKey name perRun.value.standaloneValuesRef.value) = ()
   | otherwise = match methodDispatchIdx name
     None => ()
     Some idx => match nthArgMono idx inst
@@ -15286,7 +15319,7 @@ standaloneOccurrence env name sym origin =
 -- Ungated, unlike argDispatchOf — RLocal detection must run on the eval path too.
 methodDispatchIdx : String -> Option Int
 methodDispatchIdx name =
-  dispatchIdxScoped name driverState.value.methodDispatchIdxByIdRef.value
+  dispatchIdxScoped name perRun.value.methodDispatchIdxByIdRef.value
 
 -- the dispatch-arg index of an arg-position method, but only when stamping is
 -- enabled (the emit path) — off, every EMethodAt is a return-position site.
@@ -16814,7 +16847,7 @@ inferDeclaredDictAt name ev dc inst =
 calleeIsGeneralized : String -> Option (List CSlot) -> List (Int, Mono) -> Bool
 calleeIsGeneralized name q subst
   | isSome q = True
-  | otherwise = match omLookup name driverState.value.sigTyMapRef.value
+  | otherwise = match omLookup name perRun.value.sigTyMapRef.value
     Some ty => isNonEmptyL subst || isEmptyL (tyVarNames ty)
     None => False
 
@@ -17584,7 +17617,7 @@ ctorFieldConflict hk fname rname =
 ctorsOfHead : HeadKey -> Option (List String)
 ctorsOfHead hk = match ctorOracleKeyOf (Some hk)
   None => None
-  Some tk => oGetCtors driverState.value.matchOracle.value tk
+  Some tk => oGetCtors perRun.value.matchOracle.value tk
 
 -- Each constructor that declares `fname`, with the field's index in that
 -- constructor's declaration-order field list — the index both emitters read —
@@ -18922,7 +18955,7 @@ appendOp dyn lt rt =
 -- duplicate) a user's class would be the thing that TRIGGERS the operator's obligation.
 -- That is the capture I7 qualification 4 forbids, reached through the gate rather than
 -- through the payload, and it is the same reason the payload half already refuses to
--- read that table (see the `§8 I7` section below, and `PerRun.registeredIfacesRef`'s
+-- read that table (see the `§8 I7` section below, and `ModuleCtx.registeredIfacesRef`'s
 -- retirement note — #1569 removed the table itself once `ifaceRegistered` had no
 -- callers left).
 recordIfaceObligation : BuiltinClass -> Mono -> Unit
@@ -19753,7 +19786,7 @@ instantiateLegacyVarTracked x id s =
 --       baz) can never be misattributed.  It also gates on the cheap currentImportDefinersRef
 --       membership, so only a genuine import pays a scan — not every unconstrained/local var.
 --   (2) coreSchemeObligationsRef — core's OWN captured schemeObligationsRef (snapshotted right
---       after the core pass, before the first module's resetState).  Prelude names are
+--       after the core pass, before the first module's `freshModuleCtx`).  Prelude names are
 --       deliberately excluded from currentImportDefinersRef (importDefinersOf skips `core`),
 --       so qualConstraintFor cannot see them; this is the source-EXACT store for exactly that
 --       set (`println`/`print`), an O(log n) OrdMap lookup with ZERO wrong-module surface.
@@ -20002,7 +20035,7 @@ recordImplObligation x mono omitted
   -- `definerShadowNamesRef`, while the multi-module path sets `standaloneValuesRef`
   -- (importer ∪ definer) — so either alone would miss one path's shadows.
   | omHasKey x perRun.value.definerShadowNamesRef.value
-    || omHasKey x driverState.value.standaloneValuesRef.value = mono
+    || omHasKey x perRun.value.standaloneValuesRef.value = mono
   -- A bare spelling with TWO OR MORE admitted declarations in this module's scope
   -- (S2-DECL (d), `methodAdmittedHere`) names no single interface, and
   -- `methodEntryHere` answers no declaration for it: an obligation against any one
@@ -20200,7 +20233,7 @@ isSelection _ = False
 admittedReceiverMono : String -> List IfaceRef -> Mono -> Option Mono
 admittedReceiverMono _ [] _ = None
 admittedReceiverMono name (ir :: _) mono = do
-  k <- lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
+  k <- lookupIdxById ir name perRun.value.methodDispatchIdxByIdRef.value
   nthArgMono k mono
 
 -- An occurrence whose obligation is its admitted set's rather than one
@@ -20213,7 +20246,7 @@ admittedSetOccurrence env name s =
       (lookupLocalFlag env name
         || isMonoScheme s
         || omHasKey name perRun.value.definerShadowNamesRef.value
-        || omHasKey name driverState.value.standaloneValuesRef.value)
+        || omHasKey name perRun.value.standaloneValuesRef.value)
     && listLen (methodAdmittedHere name) >= 2
 
 recordMethodObligationGuarded : TcEnv ->
@@ -20235,7 +20268,7 @@ exactReturnRow env name scheme = match lookupMethodRow env name
     if lookupLocalFlag env name
       || isMonoScheme scheme
       || omHasKey name perRun.value.definerShadowNamesRef.value
-      || omHasKey name driverState.value.standaloneValuesRef.value
+      || omHasKey name perRun.value.standaloneValuesRef.value
       || isSome
         (Scopes.enclosingDefaultBody (currentScopeStore ()) (captureScope ()))
       || listLen (methodAdmittedHere name) >= 2 then
@@ -20939,7 +20972,7 @@ shadowStandaloneSpineHeadAt env f =
 -- the impl universe at all, so they are typaram-agnostic (ifaceMethodName).
 isShadowStandalone : TcEnv -> String -> Bool
 isShadowStandalone env name =
-  omHasKey name driverState.value.standaloneValuesRef.value
+  omHasKey name perRun.value.standaloneValuesRef.value
     && isSome (lookupImportedStandalone env name)
     && singleTyparamIfaceMethod name
 
@@ -21709,7 +21742,7 @@ ifaceSelfAndSupers iface =
   map
     (n => n.superIface.irName)
     (superClosure
-      (ir => ifaceSupersOf driverState.value.superDeclsRef.value ir.irName)
+      (ir => ifaceSupersOf perRun.value.superDeclsRef.value ir.irName)
       (_ _ _ => Some ())
       (ir _ => ir.irName)
       [(ifaceRefBare iface, ())])
@@ -22539,7 +22572,7 @@ isDoLoweredAndThenCalleeExpr _ = False
 -- application like `map (const (1, 2)) xs` also records) but the hint is only
 -- ever ATTACHED to a genuine downstream error, so a legit partial application —
 -- whose residual is consumed WITHOUT error — never shows it.  (residualMono,
--- help, optional (span, replacement) fix); reset by resetState.
+-- help, optional (span, replacement) fix); reset by `freshModuleCtx`.
 
 -- number of leading `->` arrows in a (normalized) type — its curried arity.
 funArity : Mono -> Int
@@ -23535,13 +23568,13 @@ nonExhaustiveMatchWarning =
 checkMatchExhaustive : Mono -> List Arm -> Unit
 checkMatchExhaustive scrutTy arms =
   let rows = nonGuardedRows arms
-  if useful driverState.value.matchOracle.value (matchCol0Type scrutTy) rows [
+  if useful perRun.value.matchOracle.value (matchCol0Type scrutTy) rows [
     PWild,
   ] then
     let (msg, help) = nonExhaustiveMsg scrutTy rows
-    driverState.value.matchWarnings :=
+    perRun.value.matchWarnings :=
       writtenDiag (TcDiag "W-NONEXHAUSTIVE" 2 !currentLoc msg help None)
-        :: driverState.value.matchWarnings.value
+        :: perRun.value.matchWarnings.value
 
 -- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
 -- An arm is unreachable when its pattern is already fully covered by an EARLIER
@@ -23582,10 +23615,10 @@ checkRedundantGo : Option TabKey ->
   Unit
 checkRedundantGo _ _ _ _ [] = ()
 checkRedundantGo col0 prec heads offCol ((Arm pat gs body) :: rest) =
-  let dp = desugarPat driverState.value.matchOracle.value pat
+  let dp = desugarPat perRun.value.matchOracle.value pat
   let _ =
     if armUnreachable col0 prec heads offCol dp then
-      driverState.value.matchWarnings :=
+      perRun.value.matchWarnings :=
         TcDiag
             "W-UNREACHABLE-ARM"
             2
@@ -23593,7 +23626,7 @@ checkRedundantGo col0 prec heads offCol ((Arm pat gs body) :: rest) =
             unreachableArmWarning
             None
             None
-          :: driverState.value.matchWarnings.value
+          :: perRun.value.matchWarnings.value
   -- Only UNGUARDED, range-free arms contribute to the covered set: a guarded arm
   -- may not fire, and a range collapses to a wildcard that over-states coverage
   -- (patHasRange) — either would produce a false "redundant" on a later arm.
@@ -23626,9 +23659,9 @@ armUnreachable : Option TabKey ->
 armUnreachable col0 prec heads offCol (PCon c args)
   | not offCol && not (omHasKey c heads) = False
   | otherwise =
-    patUnreachable driverState.value.matchOracle.value col0 prec (PCon c args)
+    patUnreachable perRun.value.matchOracle.value col0 prec (PCon c args)
 armUnreachable col0 prec _ _ dp =
-  patUnreachable driverState.value.matchOracle.value col0 prec dp
+  patUnreachable perRun.value.matchOracle.value col0 prec dp
 
 noteHeadCtor : Pat -> OrdMap Unit -> OrdMap Unit
 noteHeadCtor (PCon c _) heads = omInsert c () heads
@@ -23656,7 +23689,7 @@ armIsUnguarded (_ :: _) = False
 nonExhaustiveMsg : Mono -> List (List Pat) -> (String, Option String)
 nonExhaustiveMsg scrutTy rows =
   match (usefulWitness
-    driverState.value.matchOracle.value
+    perRun.value.matchOracle.value
     (matchCol0Type scrutTy)
     rows
     1)
@@ -23690,7 +23723,7 @@ isTupleTyName t = stringLength t >= 7 && stringSlice 0 7 t == "__tuple"
 nonGuardedRows : List Arm -> List (List Pat)
 nonGuardedRows [] = []
 nonGuardedRows ((Arm pat [] _) :: rest) =
-  [desugarPat driverState.value.matchOracle.value pat] :: nonGuardedRows rest
+  [desugarPat perRun.value.matchOracle.value pat] :: nonGuardedRows rest
 nonGuardedRows ((Arm _ _ _) :: rest) = nonGuardedRows rest
 
 -- the head type name of the scrutinee, for the matrix's column-0 oracle: a
@@ -24167,7 +24200,7 @@ registerVariants o env name params anns variants binders =
 -- The sole place that ADDS AN ENTRY to `dataParamKindsRef`.  (It is not the ref's only
 -- writer: `declEnvSeedDataUniverse` replaces the whole list with stage K's projection at
 -- the reading module's ordinal — it was `loadDataUniverse` copying a `crossRun`
--- accumulator until A-3.2b — and `freshPerRun`/`resetState` re-init it to `[]`.  Those set
+-- accumulator until A-3.2b — and `freshModuleCtx` re-inits it to `[]`.  Those set
 -- the TABLE; this is the only thing that registers a TYPE.)  Prepends, so a later
 -- registration shadows an earlier one
 -- under `lookupAssoc`'s first-match — the module's own decls are registered as a FRONT
@@ -26075,7 +26108,7 @@ clauseIsValue _ (FunClause _ _) = True
 -- core2 (dict-passed core) ++ the dict-passed module's decls.
 --
 -- The 1-module case automatically satisfies that shape's invariants — one
--- resetState (one module ⇒ one checkModuleFullImpl), zero imports ⇒ the full
+-- `freshModuleCtx` (one module ⇒ one checkModuleFullImpl), zero imports ⇒ the full
 -- constraint set, and elaborateModules runs the eval-dict layer unconditionally
 -- (ARGSTAMP-UNIFY Phase 4), so the return-position constrained-fn dict layer is
 -- present here too.
@@ -27133,7 +27166,7 @@ admittedDeclHitters env name (ir :: rest) ats =
 -- graph-global row set (`ieImplExistsForHeadOf` is `ieImplExistsForHead`'s own body).
 admittedDeclHits : ImplEnv -> String -> IfaceRef -> List Mono -> Option Bool
 admittedDeclHits env name ir ats = do
-  k <- lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
+  k <- lookupIdxById ir name perRun.value.methodDispatchIdxByIdRef.value
   at <- nthMono k ats
   hk <- headTyconMono at
   Some (ieImplExistsForHeadOf env name hk (Some [ir]))
@@ -27156,8 +27189,7 @@ importerDispatchIdxOuter name =
 admittedIdxMax : String -> List IfaceRef -> Option Int
 admittedIdxMax _ [] = None
 admittedIdxMax name (ir :: rest) =
-  let here =
-    lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
+  let here = lookupIdxById ir name perRun.value.methodDispatchIdxByIdRef.value
   match admittedIdxMax name rest
     None => here
     Some k => match here
@@ -27182,10 +27214,7 @@ groundAdmittedGo : TcEnv ->
 groundAdmittedGo _ _ [] _ _ = ()
 groundAdmittedGo env mname (ir :: rest) ats dloc =
   let _ =
-    match (lookupIdxById
-      ir
-      mname
-      driverState.value.methodDispatchIdxByIdRef.value)
+    match lookupIdxById ir mname perRun.value.methodDispatchIdxByIdRef.value
       None => ()
       Some k => match nthMono k ats
         None => ()
@@ -28930,8 +28959,7 @@ pushCoherenceWarning loc msg =
       msg
       (Some cohIncomparableHelp)
       None
-  driverState.value.matchWarnings :=
-    warning :: driverState.value.matchWarnings.value
+  perRun.value.matchWarnings := warning :: perRun.value.matchWarnings.value
 
 -- run coherence over USER decls; push at most one HARD conflict into typeErrors and
 -- at most one SOFT one onto the warning channel.  The impls are scanned in REVERSE
@@ -30641,7 +30669,7 @@ superHeadStep pat t = tyStep pat (stripTyWrap t)
 -- demotes the ⊑-incomparable class exactly as the per-module one does (F-3d).
 -- Callers that thread errs as a VALUE (`checkModulesEntryFromDiags`) prepend these
 -- themselves,
--- rather than relying on the typeErrors ref (cleared per-module by resetState).
+-- rather than relying on the typeErrors ref (cleared per-module by `freshModuleCtx`).
 --
 -- ⚠️ #414: this deliberately DROPS the blame-span `cohScan` returns.
 -- Both consumers attach the diagnostic to the ENTRY module, but the span belongs to
@@ -34363,17 +34391,25 @@ tupleUnifyClash a b = match (tupleSpine a, tupleSpine b)
 -- elaboration decision serves check, run, and emit. `mid` and `implDecls` carry the
 -- current module's identity and graph-visible impl universe; single-file callers use
 -- the same function through the one-module graph projections.
-checkBodyImpl : ModuleSeed ->
+--
+-- The module's `ModuleCtx` is minted here, before anything else runs.  [runSeed] is
+-- its match oracle and warnings (`seedCheckRun`); a driver that does not seed
+-- (`cmCheckWorker`, the core passes) passes `None`, and the record carries the
+-- previous record's oracle and warnings.
+checkBodyImpl : Option CheckRunSeed ->
+  ModuleSeed ->
   String ->
   List Decl ->
   List Decl ->
   (ModuleBindings, List Decl)
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
-checkBodyImpl moduleSeed mid implDecls prog0 =
+checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   let seed = moduleSeed.msSchemes
-  let _ = resetState ()
-  driverState.value.currentModuleRef := mid
+  let checkRun = match runSeed
+    Some s => s
+    None => checkRunResidue perRun.value
+  perRun := freshModuleCtx checkRun mid
   let moduleScope =
     Scopes.freshScope
       (currentScopeStore ())
@@ -34385,7 +34421,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   let _ = recordModuleStart mid
   -- #1675: this module's own `import`/`export import` decls, checked for a name the
   -- named dependency exports under two different definitions.  Here rather than in
-  -- `importSeed` because the seed is built BEFORE this `resetState ()` — see
+  -- `importSeed` because the seed is built BEFORE this `freshModuleCtx` — see
   -- `reportAmbiguousImports`.  Reads only `deAmbigValues`, so a driver with no graph
   -- envelope (Flat, single-file) is a no-op.
   let _ = reportAmbiguousImports prog0
@@ -34445,7 +34481,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   --     THIS module's own same-spelled interface decl outrank an earlier module's, which is the
   --     precedence the old single-program path had.
   let superDecls = prog ++ implDecls
-  driverState.value.superDeclsRef := superDecls
+  perRun.value.superDeclsRef := superDecls
   -- (BREAK #3) effect domains: FLAT populates inline; MODULE relies on the driver
   -- preamble (checkModulesPreambleK / elaborateModules) populating ONCE over the whole
   -- import graph — a per-module populate would wipe another module's domains.
@@ -34573,7 +34609,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- (#4 + #3-restore) mode-specific pre-inference ref setup (all pure/independent of the
   -- register+globalS block below, so order-safe).  Flat arms the per-body shadow-scoping
   -- flags; Module installs importer-shadow state and restores the cross-module dict
-  -- accumulators resetState just wiped.
+  -- accumulators `freshModuleCtx` just wiped.
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
   -- lint-disable-next-line rule-prefer-assign-op
 
@@ -34581,11 +34617,11 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- arm need this module's identity, and the arm can no longer discard it.
 
   let _ =
-    driverState.value.standaloneValuesRef :=
+    perRun.value.standaloneValuesRef :=
       namesToSet (importerShadows ++ definerShadows) omEmpty
     -- #1351: the per-module copy of the identity-keyed dispatch-index universe, read by
     -- `methodDispatchIdx` through `dispatchIdxScoped`.  Its bare-name peer was retired at L5.
-    driverState.value.methodDispatchIdxByIdRef :=
+    perRun.value.methodDispatchIdxByIdRef :=
       crossRun.value.universeMethodDispatchIdxByIdRef.value
     -- The list alone is seeded here and re-keyed twice below; nothing reads the
     -- name index until the final `setFunPredicateSlots` of this arm rebuilds it.
@@ -34677,7 +34713,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- accompany — `originMethodName`'s source.
     perRun.value.aliasMethodOriginsRef := omFromPairs aliasSpellings omEmpty
   -- Module arm: copy the seven persistent DATA-universe accumulators (prior modules'
-  -- public data + ctor env, each minted exactly once) into the resetState-wiped
+  -- public data + ctor env, each minted exactly once) into the `freshModuleCtx`-wiped
   -- working refs, then register ONLY this module's `prog0` as a transient FRONT
   -- overlay — O(|prog0|) per module, O(N) total. Ordering must stay [prog0,
   -- pub_{k-1}..pub_1] to preserve lookupAssoc (first-wins) / omInsert (last-write-wins)
@@ -35046,7 +35082,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- module's inference is complete (so the copy+overlay above saw pub 1..k-1 and NEVER this
   -- module's own pub twice) — the register-time mirror of foldModules' `accData ++
   -- publicDataDecls prog` threading.  appendDataUniverse clobbers the working table refs,
-  -- which are DEAD here (the next module's resetState wipes them).  Flat leaves it untouched.
+  -- which are DEAD here (the next module's `freshModuleCtx` wipes them).  Flat leaves it untouched.
   let _ =
     -- A-3.2b residual (#1512): `mid` is BOUND here now — `appendDataUniverse`'s
     -- reload reads the alias universe at this module's own ordinal.
@@ -35367,7 +35403,7 @@ implHeadParametric _ = False
 -- (Ord.lt/gt/min/max, Foldable.length/isEmpty, Filterable.filter, …) would
 -- silently accept a bad default body.  The constrained branch still registers dict slots (needed
 -- for the emit/dict path); the unconstrained branch only type-checks — safe on
--- the plain-check path (activeDictVars mutation is harmless; reset by resetState).
+-- the plain-check path (activeDictVars mutation is harmless; reset by `freshModuleCtx`).
 inferDefaultBodiesIfEnabled : TcEnv -> List Decl -> Unit
 inferDefaultBodiesIfEnabled env prog = inferDefaultBodies env prog
 
@@ -36930,7 +36966,7 @@ recordLiveRoots _ =
 -- variables.  A goal a later group grounded is the module's obligation check's.
 liveGoalsOf : List Mono -> List LiveGoal
 liveGoalsOf members =
-  let mid = driverState.value.currentModuleRef.value
+  let mid = perRun.value.currentModuleRef.value
   let owners = memberOfIds members
   filterMap
     ((rigidIds, window, o) =>
@@ -36975,8 +37011,8 @@ memberOfIds members =
 -- ground them, and each is judged as its boundary would have judged it had it owned
 -- the live variables (DICT-SEMANTICS §6.2 T4, R-SC3), in its own module's context.
 -- A binding gets one verdict: the first of its goals that draws one.
-judgeLiveGoals : List StampCtx -> List DrainFinding
-judgeLiveGoals ctxs =
+judgeLiveGoals : ModuleCtx -> List StampCtx -> List DrainFinding
+judgeLiveGoals live ctxs =
   let g = graphRun.value
   let goals = reverseL g.liveGoals.value
   g.liveGoals := []
@@ -36984,17 +37020,18 @@ judgeLiveGoals ctxs =
     []
   else
     let byModule = omFromPairs (map (c => (c.scModule, c)) ctxs) omEmpty
-    reverseL (fst (fold (judgeLiveGoal byModule) ([], omEmpty) goals))
+    reverseL (fst (fold (judgeLiveGoal live byModule) ([], omEmpty) goals))
 
-judgeLiveGoal : OrdMap StampCtx ->
+judgeLiveGoal : ModuleCtx ->
+  OrdMap StampCtx ->
   (List DrainFinding, OrdMap Unit) ->
   LiveGoal ->
   (List DrainFinding, OrdMap Unit)
-judgeLiveGoal byModule (found, judged) lg =
+judgeLiveGoal live byModule (found, judged) lg =
   let binding = "\{lg.lgModule}\t\{intToString lg.lgBinding}"
   match (omHasKey binding judged, omLookup lg.lgModule byModule)
     (False, Some ctx) =>
-      let _ = enterStampCtx ctx
+      let _ = enterStampCtx live ctx
       let rigidIds = lg.lgRigidIds
       let diags = captureTypeErrors (_ =>
         fold
@@ -38187,7 +38224,7 @@ noImplHintFor iface n
   -- linear scan re-run per no-impl diagnostic. `dataParamNameIndexRef` is the
   -- same bare-name membership question (built from `tabKeyName` over exactly
   -- the same keys, kept in lockstep at every dataParamKindsRef write site —
-  -- see the field's comment on `PerRun`), answered via `omHasKey` instead.
+  -- see the field's comment on `ModuleCtx`), answered via `omHasKey` instead.
   | omHasKey n perRun.value.dataParamNameIndexRef.value =
     Some (noImplAdvice iface n)
   | otherwise = None
@@ -42140,7 +42177,7 @@ indexOfIntGo x (y :: ys) i = if x == y then i else indexOfIntGo x ys (i + 1)
 -- freshly-instantiated carrier → first-match would select metadata from the wrong
 -- scheme build.  Keeping the FIRST (env-setup) registration — whose scheme is the one
 -- lookupVar returns at call sites — restores the flat path's single-registration
--- invariant.  resetState clears methodPredicateSlotsRef between modules, so this only
+-- invariant.  `freshModuleCtx` clears methodPredicateSlotsRef between modules, so this only
 -- de-dups WITHIN a pass.
 
 methodConstraintSlotIds : List String -> Ty -> List (String, Mono) -> List Int
@@ -42745,8 +42782,8 @@ processTopGroups : TcEnv ->
   OrdMap Unit ->
   (List (String, Scheme), OrdMap (List (List Pat, Expr)))
 processTopGroups env sigs defs names exported =
-  driverState.value.sigNameSetRef := sigNamesToSet sigs omEmpty
-  driverState.value.sigTyMapRef := omFromPairs (reverseL sigs) omEmpty
+  perRun.value.sigNameSetRef := sigNamesToSet sigs omEmpty
+  perRun.value.sigTyMapRef := omFromPairs (reverseL sigs) omEmpty
   let grouped = groupClauses defs
   let ordered = tarjanSCCs names (depGraphMap names grouped)
   let result = processSCCs env sigs grouped ordered
@@ -43177,10 +43214,7 @@ processSCC env sigs grouped0 members =
     None => grouped
   let _ = match marking
     Some _ =>
-      recordTopGrants
-        driverState.value.currentModuleRef.value
-        schemes
-        groupedOut
+      recordTopGrants perRun.value.currentModuleRef.value schemes groupedOut
     None => ()
   (extendTermBindings env schemes, schemes, groupedOut)
 
@@ -43296,7 +43330,7 @@ preunifySigsEx sigs (member :: rest) =
   let m = member.smName
   let v = member.smMono
   let (restRegs, restTvs) = preunifySigsEx sigs rest
-  match omLookup m driverState.value.sigTyMapRef.value
+  match omLookup m perRun.value.sigTyMapRef.value
     Some ty =>
       member.smSigned := True
       let (signedMono, tvs, forceBound) = instantiateSigTracked ty
@@ -43781,7 +43815,7 @@ inferMembers env sigs grouped (member :: rest) =
 -- declared arrow domains onto the clause params), None otherwise
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
 memberPeelSource sigs m v =
-  map (_ => v) (omLookup m driverState.value.sigNameSetRef.value)
+  map (_ => v) (omLookup m perRun.value.sigNameSetRef.value)
 
 -- peel up to [n] arrow domains off [t], normalizing at each level.  A signature
 -- with fewer arrows than the clause has params stops early and returns fewer
@@ -43906,7 +43940,7 @@ checkEffectEscapeIn : GroupCtx ->
   List Atom ->
   Unit
 checkEffectEscapeIn group sigs m effs =
-  match omLookup m driverState.value.sigTyMapRef.value
+  match omLookup m perRun.value.sigTyMapRef.value
     None => ()
     -- #797: a genuinely open declared row (free return-position tail var, no
     -- argument-side occurrence) has nothing to escape FROM — the row admits
@@ -44032,7 +44066,7 @@ quantifiableAuthorities env grouped members =
         memberRole
           -- the presence set, not a scan of every signature: this runs once
           -- per binding group (`sigNameSetRef`)
-          (omHasKey member.smName driverState.value.sigNameSetRef.value)
+          (omHasKey member.smName perRun.value.sigNameSetRef.value)
           (allList (memberClauseIsValue env) (clausesOf member.smName grouped)),
         member.smMono,
       ))
@@ -44279,7 +44313,7 @@ maybeInferConstraint : List (String, Ty) ->
   Unit
 maybeInferConstraint sigs callObls addedObls m scope sch
   | not (omHasKey m driverState.value.dictEligibleSetRef.value) = ()
-  | omHasKey m driverState.value.sigNameSetRef.value = ()
+  | omHasKey m perRun.value.sigNameSetRef.value = ()
   | otherwise =
     let boundIds = schemeIds sch
     -- Predicate vectors determine both slot existence and slot arguments. A recursive
@@ -45233,7 +45267,7 @@ scopeGivenProbe _ =
   let savedGraph = graphRun.value
   let savedPerRun = perRun.value
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let store = currentScopeStore ()
   let root = Scopes.freshScope store None 0 "given-probe" ModuleOwner
   let owner =
@@ -45457,7 +45491,7 @@ methodRowNumObservation caseName builtinDecls decls =
   let savedPerRun = perRun.value
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   crossRun.value.builtinClassesRef := builtinClassesOf builtinDecls
   let rows = ifaceMethodSchemeRows decls
   let _ = seedNumLitFromIntAnchor rows
@@ -45489,7 +45523,7 @@ observeMethodSchemeRowsForTest _ =
 
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let constrainedRow =
     firstMethodRow (ifaceMethodSchemeRows [methodRowTestFoldMapDecl])
   let constrainedIds = schemeIds constrainedRow.msrScheme
@@ -45502,7 +45536,7 @@ observeMethodSchemeRowsForTest _ =
 
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let counterBefore = graphRun.value.tyvarCounter.value
   let firstRow =
     firstMethodRow (ifaceMethodSchemeRows [methodRowTestFoldMapDecl])
@@ -45519,20 +45553,20 @@ observeMethodSchemeRowsForTest _ =
 
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let sameNameForward =
     methodRowSameNameView
       (ifaceMethodSchemeRows [methodRowTestSameA, methodRowTestSameB])
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let sameNameReverse =
     methodRowSameNameView
       (ifaceMethodSchemeRows [methodRowTestSameB, methodRowTestSameA])
 
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let constantRows = ifaceMethodSchemeRows [methodRowTestConstantDecl]
   let constantRow = firstMethodRow constantRows
   let constantBodyIsFunction =
@@ -45542,7 +45576,7 @@ observeMethodSchemeRowsForTest _ =
 
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let attributed = DAttrib [] methodRowTestFoldMapDecl
   let attributedRows = ifaceMethodSchemeRows [attributed]
   let attributedMethods =
@@ -45749,7 +45783,7 @@ methodReturnVectorCompletenessProbe _ =
   let savedPerRun = perRun.value
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let _ = methodReturnProbeScope "return-vector"
   let zeroRow =
     firstMethodRow
@@ -45804,7 +45838,7 @@ methodReturnTemplatePresenceProbe _ =
   let savedPerRun = perRun.value
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let present =
     firstMethodRow
       (ifaceMethodSchemeRows [
@@ -45849,7 +45883,7 @@ methodReturnTemplatePresenceProbe _ =
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
 methodReturnProbeCodes ownedRow impls =
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let _ = methodReturnProbeScope "return-owner-checker"
   let foreignRow =
     firstMethodRow
@@ -45877,7 +45911,7 @@ methodReturnProbeStamp : MethodSchemeRow ->
   (String, String, String)
 methodReturnProbeStamp ownedRow foreignRow impls =
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let scope = methodReturnProbeScope "return-owner-stamper"
   let request = methodReturnProbeRequest ownedRow
   let _ = methodReturnProbeSpelling foreignRow
@@ -45929,10 +45963,10 @@ methodReturnOwnershipProbe _ =
       "Foreign"
       (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let ownedRow = firstMethodRow (ifaceMethodSchemeRows [ownedDecl])
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let foreignRow = firstMethodRow (ifaceMethodSchemeRows [foreignDecl])
   let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
   let foreignImpl = methodReturnProbeImpl "return-foreign" "Foreign"
@@ -45964,7 +45998,7 @@ methodReturnResolutionMutationProbe _ =
   let savedPerRun = perRun.value
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let _ = methodReturnProbeScope "return-outcome-validation"
   let ownedDecl =
     methodReturnProbeIface
@@ -46062,7 +46096,7 @@ methodReturnProbeSlotCase : MethodSchemeRow ->
   (List String, List String)
 methodReturnProbeSlotCase ownedRow foreignRow retainOwner =
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let _ = methodReturnProbeScope "return-owner-slots"
   perRun.value.methodPredicateSlotsRef :=
     [(methodSlotKey foreignRow.msrIface "make", foreignRow.msrMethodSlots)]
@@ -46105,7 +46139,7 @@ methodReturnSlotOwnershipProbe _ =
   let savedPerRun = perRun.value
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let ownedRow =
     firstMethodRow
       (ifaceMethodSchemeRows [
@@ -46117,7 +46151,7 @@ methodReturnSlotOwnershipProbe _ =
             (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
       ])
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let emptyRow =
     firstMethodRow
       (ifaceMethodSchemeRows [
@@ -46127,7 +46161,7 @@ methodReturnSlotOwnershipProbe _ =
           (TyFun (tyConBuiltin "Unit" None) (TyVar "a")),
       ])
   graphRun := freshGraphRun ()
-  perRun := freshPerRun ()
+  perRun := carryModuleCtx perRun.value
   let foreignRow =
     firstMethodRow
       (ifaceMethodSchemeRows [
@@ -46401,7 +46435,7 @@ checkSigConstraintOne : List ConstraintReg ->
   Scheme ->
   Unit
 checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch =
-  match omLookup m driverState.value.sigTyMapRef.value
+  match omLookup m perRun.value.sigTyMapRef.value
     None => ()  -- unsigned member: its inferred constraints are promoted, not checked
     Some _ =>
       let declaredPairs = censusSuperClose (declaredPairsFor m regs)
@@ -46940,12 +46974,13 @@ typeErrorLines (e :: rest) = "TYPE ERROR: " ++ e :: typeErrorLines rest
 -- [oracleDecls] is the decl set the ctor oracle is built from: the ONE axis the callers
 -- legitimately differ on (the flat paths pass `prog`; checkModuleFullDiags passes
 -- `prog ++ accData` own-module-FIRST — see the P0-9 note there, that order is load-bearing).
--- matchWarnings is cleared explicitly because resetState does NOT clear it.
--- Call ORDER is preserved from the four bodies this replaces.
-seedCheckRun : List Decl -> Unit
-seedCheckRun oracleDecls =
-  driverState.value.matchWarnings := []
-  driverState.value.matchOracle := buildOracle oracleDecls
+-- The module's mint (`checkBodyImpl`) installs the seed: this oracle and an empty
+-- warnings list.
+seedCheckRun : List Decl -> CheckRunSeed
+seedCheckRun oracleDecls = CheckRunSeed {
+  crsOracle = buildOracle oracleDecls,
+  crsWarnings = [],
+}
 
 -- #415 item 1: seed-and-run for the three FLAT runtime-seeded entry points
 -- (the `checkOne*` wrappers). They
@@ -46988,7 +47023,7 @@ checkModuleFull : List (String, Scheme) ->
   List Decl ->
   (ModuleBindings, List Decl)
 checkModuleFull seedVars accData prog =
-  checkModuleFullImpl "" (plainModuleSeed seedVars) accData prog prog
+  checkModuleFullImpl None "" (plainModuleSeed seedVars) accData prog prog
 
 -- E5: like checkModuleFull but takes [implDecls] (core + every EARLIER module — NOT this
 -- module: foldModules only grows the accumulator for LATER modules, so a module is never in
@@ -47001,14 +47036,16 @@ checkModuleFull seedVars accData prog =
 -- resolveArgStamps then stamps RDict (via the requires dict registered by
 -- registerImplRequires).  The stage-K ClassEnv gives body inference the interface
 -- declarations, while [implDecls] lets a body dispatch against an earlier module's impl.
-checkModuleFullImpl : String ->
+-- [runSeed] is the module's check-run seed, passed to its mint (see `checkBodyImpl`).
+checkModuleFullImpl : Option CheckRunSeed ->
+  String ->
   ModuleSeed ->
   List Decl ->
   List Decl ->
   List Decl ->
   (ModuleBindings, List Decl)
-checkModuleFullImpl mid seedVars _accData implDecls prog =
-  let result = checkBodyImpl seedVars mid implDecls prog
+checkModuleFullImpl runSeed mid seedVars _accData implDecls prog =
+  let result = checkBodyImpl runSeed seedVars mid implDecls prog
   -- #2705 (M2 phase 2): solving is not optional.  Every module a Module-arm driver
   -- checks — `check`, `run`, `build`, the LSP alike — cuts its stamping context
   -- here, at the point its stampers used to run, for the one graph-end drain
@@ -47018,7 +47055,7 @@ checkModuleFullImpl mid seedVars _accData implDecls prog =
   let _ = enqueueStampCtx mid implDecls
   result
 -- C5: compute this module's standalone-shadow set BEFORE inference, so the
--- inferMethodAt arg-position record can gate on it (resetState cleared it via
+-- inferMethodAt arg-position record can gate on it (`freshModuleCtx` cleared it via
 -- pendingRLocalSites, but standaloneValuesRef is set fresh here per module).
 --
 -- Two flavours of standalone-shadow, BOTH needing RLocal recording so a method
@@ -47038,7 +47075,7 @@ checkModuleFullImpl mid seedVars _accData implDecls prog =
 --     method scheme — their local standalone scheme (`Map k v -> …`) is what the
 --     impl body types against.
 
--- E6: re-install the cross-module constraint accumulator that resetState just
+-- E6: re-install the cross-module constraint accumulator that `freshModuleCtx` just
 -- wiped, so this module's `=>`-constrained call sites into EARLIER modules resolve.
 -- Post-ARGSTAMP-UNIFY (Phase 4): eval and emit both thread dicts, so this runs
 -- UNCONDITIONALLY on every path (single elaboration mode).
@@ -47213,7 +47250,7 @@ appendUniverseAccums mid prog =
 -- pointing those refs at the persistent values, registering pubDecls over the accumulated
 -- ctor floor, and reading the results back into the two populations.  Called at the END
 -- of checkBodyImpl's Module arm, where the working table refs are DEAD (this module's
--- inference is done and the next module's resetState wipes them), so the clobber is
+-- inference is done and the next module's `freshModuleCtx` wipes them), so the clobber is
 -- invisible.  Registers each public decl exactly ONCE across the whole run — the O(N)
 -- replacing the Module arm's old per-module O(|accData|) re-registration.  Only
 -- publicDataDecls are folded in (private data stays module-local).
@@ -47251,7 +47288,7 @@ loadDataUniverse cur =
 -- during inference, and `registerAllDataScoped … pubDecls` below registers this module's
 -- PUBLIC records a SECOND time.  `addFieldOwners` conses without dedupe, so every own
 -- public record is DOUBLE-listed in `fieldOwnersRef` from that line until the next
--- `resetState`.  Unobservable today only because nothing reads the multimap in between
+-- `freshModuleCtx`.  Unobservable today only because nothing reads the multimap in between
 -- (the two population walkers read `env2` and `recordByNameRef`).  A doubled owner key is
 -- the shape `declEnvSeedChain`'s own-row note exists to prevent.  `fieldOwnerNames`
 -- `sortUniqS`es on read, so the doubling does not move an answer; a new reader of
@@ -49350,10 +49387,10 @@ graphAliasEntry a qual (localName, (defMid, origin)) =
 -- the first module downstream that does write the name is rejected there.  Nothing is
 -- laundered clean by passing through a silent hop.
 --
--- 🚨 CALLED FROM `checkBodyImpl`, AFTER ITS `resetState ()`, AND NOT FROM `importSeed`.
+-- Called from `checkBodyImpl`, after its module mint, and not from `importSeed`.
 -- `importSeed` is where the member resolution lives and was the first home for this, but
 -- the seed is computed in `foldModules` BEFORE the module's worker runs, and
--- `checkBodyImpl` opens with `resetState ()` — which clears `typeErrors`.  MEASURED on
+-- `checkBodyImpl` opens with `freshModuleCtx` — which clears `typeErrors`.  MEASURED on
 -- that version: `run` exited 1 with the unlocated "detected during elaboration … see
 -- issue #1812" fallback (the sticky flag survives the reset, the diagnostic does not)
 -- and `check`/`check --json` were both still SILENT at exit 0 on the whole repro.  A
@@ -50609,34 +50646,18 @@ copyDriverState d = DriverState {
   stdlibOwnedModsRef = Ref d.stdlibOwnedModsRef.value,
   flatEntryIsStdlibRef = Ref d.flatEntryIsStdlibRef.value,
   builtinExternNamesRef = Ref d.builtinExternNamesRef.value,
-  superDeclsRef = Ref d.superDeclsRef.value,
-  standaloneValuesRef = Ref d.standaloneValuesRef.value,
-  methodDispatchIdxByIdRef = Ref d.methodDispatchIdxByIdRef.value,
-  matchOracle = Ref d.matchOracle.value,
-  matchWarnings = Ref d.matchWarnings.value,
   promotionHarvestRef = Ref d.promotionHarvestRef.value,
   mainSchemeRef = Ref d.mainSchemeRef.value,
-  sigNameSetRef = Ref d.sigNameSetRef.value,
-  sigTyMapRef = Ref d.sigTyMapRef.value,
-  currentModuleRef = Ref d.currentModuleRef.value,
   markSetsRef = Ref d.markSetsRef.value,
-  invocationViewRef = Ref d.invocationViewRef.value,
 }
 
--- The driver fields the core pass (checkBodyImpl's Module arm and what it calls)
--- writes: the extern-name map it accumulates, and the per-module cells it leaves
--- holding core's values until the next module overwrites them.  Restored on a hit
--- so a hit leaves the driver exactly where a miss would.
+-- The driver field the core pass (checkBodyImpl and what it calls) writes: the
+-- extern-name map it accumulates.  Restored on a hit so a hit leaves the driver
+-- exactly where a miss would; the module fields core leaves ride the installed
+-- module record (`installSnapshotModuleCtx`).
 restoreCoreDriverFields : DriverState -> Unit
 restoreCoreDriverFields d =
   driverState.value.builtinExternNamesRef := d.builtinExternNamesRef.value
-  driverState.value.superDeclsRef := d.superDeclsRef.value
-  driverState.value.standaloneValuesRef := d.standaloneValuesRef.value
-  driverState.value.methodDispatchIdxByIdRef := d.methodDispatchIdxByIdRef.value
-  driverState.value.sigNameSetRef := d.sigNameSetRef.value
-  driverState.value.sigTyMapRef := d.sigTyMapRef.value
-  driverState.value.matchOracle := d.matchOracle.value
-  driverState.value.matchWarnings := d.matchWarnings.value
 
 -- The core pass proper, memoized.  Runs `checkModuleFull` over core and snapshots
 -- `coreSchemeObligationsRef` on a miss; installs the snapshot on a hit.  Beside the
@@ -50650,7 +50671,7 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
   Some m =>
     crossRun := copyCrossRun m.ccmCrossRun
     graphRun := copyGraphRun m.ccmGraphRun
-    perRun := freshPerRun ()
+    let _ = installSnapshotModuleCtx m.ccmModule
     let _ = restoreCoreDriverFields m.ccmDriver
     (m.ccmCoreSchemes, m.ccmCorePub)
   None =>
@@ -50667,7 +50688,7 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
       [] => ()
       f :: _ => panic "evidence hole in the prelude: \{tcMsg f.dfDiag}"
     -- #673: snapshot core's OWN obligations NOW — perRun.schemeObligationsRef still holds core's
-    -- bindings (the next module's resetState has not run yet).  This is the source-exact store a
+    -- bindings (the next module's `freshModuleCtx` has not run yet).  This is the source-exact store a
     -- plain-EVar use of a PRELUDE constrained fn (`println`) reads in instantiateVarTracked, so
     -- its Display obligation lands on the located check path instead of being dropped.
     -- #837: coreSchemeObligationsRef is NAME-keyed (declaredCrossModuleObls reads it by
@@ -50685,6 +50706,7 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
           ccmCrossRun = copyCrossRun crossRun.value,
           ccmGraphRun = copyGraphRunForMemo graphRun.value,
           ccmDriver = copyDriverState driverState.value,
+          ccmModule = carryModuleCtx perRun.value,
         }
     (coreSchemes, corePub)
 
@@ -50737,10 +50759,10 @@ graphPreamble : GraphOut ->
   (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), OrdMap (List VecObl), List Decl, MarkSets)
 graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- S-emit-interleave-leak (#2049), TREES only: THE EMIT DRIVER OWNS ITS OWN
-  -- (EMPTY) CTOR ORACLE.  `matchOracle` lives on `driverState`, which
-  -- `resetState`/`resetCrossModuleState` do NOT touch, and on the tree arm nothing
-  -- else seeds it (the seeding preamble is `seedCheckRun`, reached from
-  -- `checkModuleFullDiags` and the flat check entries).  So every `oGetCtors`
+  -- (empty) ctor oracle.  A module checked without a `CheckRunSeed` carries the
+  -- previous module record's `matchOracle`, and the tree arm's core pass is one
+  -- (the seed is `seedCheckRun`'s, reached from `checkModuleFullDiags`
+  -- only).  So every `oGetCtors`
   -- reader the tree arm reaches — `ctorSiblingWithholdingName`, `matchCol0Type` —
   -- would read whatever the LAST CHECK RUN IN THIS PROCESS left behind.
   --
@@ -50772,14 +50794,14 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   let _ = match sel
     GOutTrees =>
       driverState.value.mainSchemeRef := None
-      driverState.value.matchOracle := buildOracle []
+      perRun.value.matchOracle := buildOracle []
       ()
     GOutDiags => ()
   let _ = resetCrossModuleState ()
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
   -- loop, so a module using an effect declared in ANOTHER module sees its domain.
-  -- resetState no longer re-seeds, so this survives every per-module reset below.
+  -- `freshModuleCtx` no longer re-seeds, so this survives every per-module reset below.
   -- Must precede the core checkModuleFull (it runs checkEffectParams, reading these).
   --
   -- It must also precede the declaration ENVELOPE below, and that ordering is the
@@ -50827,14 +50849,6 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   let runtimeSeed = withDeclParamKinds coreDecls (u =>
     externSchemes (runtimeExternTyOriginScope coreDecls) runtimeDecls)
   let _ = seedAbstractRecordTypes coreDecls modules
-  -- TREES only: the interfaces in scope for the superclass census before the first
-  -- sweep.  The diags arm leaves `superDeclsRef` to `checkBodyImpl`'s own
-  -- `superDecls` binding.
-  let _ = match sel
-    GOutTrees =>
-      driverState.value.superDeclsRef := declEnvs.deAllDecls
-      ()
-    GOutDiags => ()
   -- #2705: BOTH arms MARK (solving is not optional), with the same sets, and each
   -- module is marked on the schedule inside `checkBodyImpl` — after any memo
   -- restore of `graphRun`, never before, which is what keeps a minted cell indexing
@@ -50938,7 +50952,7 @@ cmCheckWorker mid seed _accData _accAll prog =
   -- to red `diff_compiler_perf_scaling`'s `modules` row at 4.48 against a 4.2
   -- ceiling) and would re-solve the whole graph per hover.  The memoized solve that
   -- makes this path one driver with the others is #2719.
-  let (schemes, _) = checkBodyImpl seed mid [] prog
+  let (schemes, _) = checkBodyImpl None seed mid [] prog
   (schemes, publishOwn schemes.mbSchemes)
 
 -- The graph every Module-mode driver typechecks: type-constructor identity
@@ -51065,15 +51079,15 @@ cmFold runtimeSeed coreSchemes modules =
 -- module ISOLATED — only
 -- PUBLIC schemes/data of earlier modules are seeded (via seedVars/accData), so a
 -- private same-named helper in another module never collides (the bug the old
--- flat prefix-concat diagnostics path had).  checkModuleFull calls resetState (),
+-- flat prefix-concat diagnostics path had).  checkModuleFull calls `freshModuleCtx`,
 -- which clears typeErrors at module start, so the post-call typeErrors snapshot is
--- exactly THIS module's contribution; matchWarnings is cleared here explicitly
--- (resetState does NOT clear it).  Returns (own value schemes, errs, warns) so the
+-- exactly this module's contribution; matchWarnings starts from the seed's empty list
+-- (`seedCheckRun`).  Returns (own value schemes, errs, warns) so the
 -- driver can thread accV/accData exactly as foldModules does.
 --
 -- Precondition (#154 PR1/PR2): this is per-module, and the Module path consults the
 -- persistent universe accumulators (`universeFunNamesRef` / …), which survive the
--- per-module resetState.  They are grown by `appendUniverseAccums prog0` per module but
+-- per-module `freshModuleCtx`.  They are grown by `appendUniverseAccums prog0` per module but
 -- must be cleared once per run by `resetCrossModuleState` (and seeded by the core pass)
 -- before the first module.  Every existing caller goes through a driver that does exactly
 -- that (`driveGraphK` and the keyed chain's `chainGo`, both via `graphPreamble`'s
@@ -51142,7 +51156,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- the `UseGroup` rows must come FIRST for an explicitly named member to outrank a
   -- wildcard.  The `dataEnv` overlay takes `…LastWins` — opposite order, same rule,
   -- because that consumer is last-write-wins.  See `importedCtorTypeDeclsFirstWins`.
-  let _ =
+  let runSeed =
     seedCheckRun
       (prog
         ++ importedCtorTypeDeclsFirstWins
@@ -51173,7 +51187,8 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- residual #738 fixed only for the prelude/core coreSchemeObligationsRef flow).  The
   -- source-exact keying makes it MISS for a genuinely-unconstrained same-name import
   -- (#739's `q.f`, attributed nowhere), so no over-rejection is reintroduced.
-  let (schemes, marked) = checkModuleFullImpl mid seedVars accData accAll prog
+  let (schemes, marked) =
+    checkModuleFullImpl (Some runSeed) mid seedVars accData accAll prog
   -- #1557 A-3.5c: the whole-graph `CE`, read at THIS module's ordinal — the same
   -- `declEnvsOrdOf mid` key `seedCheckRun`'s overlay pool above and `moduleImplUniv`
   -- (`checkBodyImpl`) already read at.  ONE env for both members; they differ only in
@@ -51199,7 +51214,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
     schemes,
     marked,
     reverseL perRun.value.typeErrors.items.value,
-    reverseL driverState.value.matchWarnings.value,
+    reverseL perRun.value.matchWarnings.value,
   )
 -- Seed the ctor oracle over ALL data decls in scope (prelude + every imported
 -- module via accData, plus this module's own prog), NOT just `prog`.  The
@@ -51210,12 +51225,12 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- Option/Result false-warned "non-exhaustive".  buildOracle reads only DData
 -- and is duplicate-tolerant, so accData ++ prog is safe.
 
--- checkModuleFull → checkModuleFullImpl runs resetState () first (clears
+-- checkModuleFull → checkModuleFullImpl runs `freshModuleCtx` first (clears
 -- typeErrors + currentLevel), so the snapshot below is this module's own errors.
 
 -- coherence over this module's own decls (mirrors the one-module projection's
 -- checkCoherence coherenceUserDecls.value, which moduleTypeDiags set to the
--- module decls).  Pushes any conflict into typeErrors AFTER the resetState above.
+-- module decls).  Pushes any conflict into typeErrors AFTER the `freshModuleCtx` above.
 
 -- multi-module diagnostics driver: threads the runtime+core seed and per-module
 -- PUBLIC accumulators exactly as foldModules threads, but at each module harvests its
@@ -51238,12 +51253,11 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- CANNOT drift on the universe or the seed.
 --
 -- The `GOutTrees` writes are the only per-module divergence, and each is a
--- consequence of dict-passing rather than of checking: `superDeclsRef` holds the
--- interface decls of this module's universe, which the stampers' super-expansion
--- replays against (`drainStampQueue` restores them from `StampCtx.scSuperDecls`), `mainSchemeRef` is written Some-only so the last module binding
+-- consequence of dict-passing rather than of checking: `mainSchemeRef` is written
+-- Some-only so the last module binding
 -- `main` wins (the diags arm's `collect` writes it SET-OR-CLEAR on the entry module
 -- instead), and the promotion harvest unions THIS module's inferred-constraint
--- promotions before the next module's `resetState` wipes `promotedRef` —
+-- promotions before the next module's `freshModuleCtx` wipes `promotedRef` —
 -- `foldModules` calls the worker HEAD-first, which is what makes that read safe.
 --
 -- The impl universe is `accAll ++ prog`, NOT bare `accAll` — it includes THIS module.
@@ -51281,9 +51295,6 @@ graphModuleWorker : GraphOut ->
   (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag))
 graphModuleWorker sel mid seed accData accAll prog =
   let implDecls = accAll ++ prog
-  let _ = match sel
-    GOutTrees => driverState.value.superDeclsRef := implDecls
-    GOutDiags => ()
   let (schemes, marked, errs, warns) =
     checkModuleFullDiags mid seed accData implDecls prog
   let published = publishOwn schemes.mbSchemes
@@ -51596,7 +51607,7 @@ checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDe
     Some st =>
       crossRun := copyCrossRun st.csCrossRun
       graphRun := copyGraphRun st.csGraphRun
-      perRun := freshPerRun ()
+      let _ = installSnapshotModuleCtx st.csModule
       let _ = restoreCoreDriverFields st.csDriver
       (st.csDepEnv, st.csAccData, st.csAccAll, st.csResults)
   let n = listLen kept
@@ -51719,6 +51730,7 @@ chainGo baseSeed coreV depEnv accData accAll results open keys ((mid, prog) :: r
         csCrossRun = copyCrossRun crossRun.value,
         csGraphRun = copyGraphRunForMemo graphRun.value,
         csDriver = copyDriverState driverState.value,
+        csModule = carryModuleCtx perRun.value,
       }
       let (finalResults, finalOpen, moreSteps) =
         chainGo baseSeed coreV depEnv2 accData2 accAll2 results3 0 keys2 rest
@@ -52764,7 +52776,7 @@ elaborateModulesReport runtimeDecls coreDecls0 modulesIn =
 
 -- E5/E6: final dict-pass of the stamped module trees, on every path.
 -- [dictNames] is the prelude + module `=>`-constrained fn set.
--- E6: each module's typecheck calls resetState, which clears funConstraintsRef,
+-- E6: each module's typecheck calls `freshModuleCtx`, which clears funConstraintsRef,
 -- so by this final pass only the LAST module's constraint arities survive — a
 -- core-level constrained fn like `clamp` would get `dictArityOf` = 0 and NO leading
 -- param.  Re-seed funConstraintsRef from every constrained signature (core +
@@ -52784,7 +52796,7 @@ elaborateModulesReport runtimeDecls coreDecls0 modulesIn =
 -- importers ∪ core (the importer part covers a PUBLIC constrained fn referenced only
 -- by its importers; mangleUnits already de-collided PRIVATES).  promotedC = the
 -- joint-discovered promoted-fn slots (unsignatured, so constrainedSigPredicateSlots misses
--- them) carried across resetState in the cross-module function carrier.
+-- them) carried across `freshModuleCtx` in the cross-module function carrier.
 dictPassModulesIfEnabled : List String ->
   List Decl ->
   List (String, List Decl) ->
@@ -52801,7 +52813,7 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
     (scopePredicateSlots promotedQ allMods (core2 ++ allModDecls))
   -- 🚨 B-2.2-b1: THE SIDECAR IS CLEARED, NOT LEFT ALONE.  `f` shipped arguing that
   -- writing no companion here is "absence, which is correct"; it is not — FAIL-CLOSED
-  -- REQUIRES WRITING `[]`.  `resetState ()` fires at exactly two sites and neither runs
+  -- REQUIRES WRITING `[]`.  No module record is minted
   -- between the last `checkBodyImpl` and this call, so not writing leaves the PREVIOUS
   -- module's entries live: a reader in this phase would get a PRESENT, WRONG `CDPLen`,
   -- resolved by bare-name first-match against a differently-populated table, with no
@@ -53768,7 +53780,7 @@ markModules coreDecls modules =
 -- typecheck one module (seeded like checkModuleFull) AND immediately stamp the
 -- EMethodAt route refs it just recorded.  `recordModuleStart` marks the goal channel
 -- before inference, so on return the module's window holds exactly THIS module's
--- sites; the tyvar cells are still bound (the next module's resetState hasn't run
+-- sites; the tyvar cells are still bound (the next module's `freshModuleCtx` hasn't run
 -- yet), so resolveSites reads each site's resolved result type.
 -- E4: ALSO stamp this module's ARG-position sites
 -- (the `GKArgStamp` goals in the same window) from their now-
@@ -53787,10 +53799,9 @@ elabModuleStamp : String ->
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
 elabModuleStamp mid seedVars accData implDecls prog =
-  let _ = driverState.value.superDeclsRef := implDecls  -- WS-1b: interfaces in scope for super expansion
   -- Stampers execute after graph inference via `drainStampQueue`, not here.
   -- See `StampCtx` and `moduleStampOrder` for the replay mechanism.
-  checkModuleFullImpl mid (plainModuleSeed seedVars) accData implDecls prog
+  checkModuleFullImpl None mid (plainModuleSeed seedVars) accData implDecls prog
 
 -- USER modules do NOT come through `elabModuleStamp`: `graphModuleWorker` runs
 -- `checkModuleFullDiags` for them on both selections, so a user module's
@@ -53869,8 +53880,17 @@ stampCtxOf : String ->
   StampCtx
 stampCtxOf mid implDecls goals numlits = StampCtx {
   scModule = mid,
-  scPerRun = perRun.value,
-  scSuperDecls = filterList isInterfaceDecl implDecls,
+  scModuleCtx = ModuleCtx { perRun.value |
+    superDeclsRef = Ref (filterList isInterfaceDecl implDecls),
+    currentModuleRef = Ref mid,
+    standaloneValuesRef = Ref omEmpty,
+    methodDispatchIdxByIdRef = Ref [],
+    sigNameSetRef = Ref omEmpty,
+    sigTyMapRef = Ref omEmpty,
+    invocationViewRef = Ref (InvocationView [] [] []),
+    matchOracle = Ref (buildOracle []),
+    matchWarnings = Ref [],
+  },
   scRpNames = returnPosMethodNames implDecls,
   scGoals = goals,
   scNumlits = numlits,
@@ -54042,11 +54062,9 @@ drainStampQueue : Unit -> List DrainFinding
 drainStampQueue _ =
   let ctxs = reverseL graphRun.value.stampCtxs.value
   let savedPerRun = perRun.value
-  let savedModule = driverState.value.currentModuleRef.value
-  let savedSupers = driverState.value.superDeclsRef.value
   let _ = defaultLiveNumRoots ()
-  let held = judgeLiveGoals ctxs
-  let verdicts = runStampCtxs ctxs
+  let held = judgeLiveGoals savedPerRun ctxs
+  let verdicts = runStampCtxs savedPerRun ctxs
   let liveLocs = omFromNames (flatMap (c => c.scLiveLocs) ctxs) omEmpty
   let holes =
     map
@@ -54060,8 +54078,6 @@ drainStampQueue _ =
   let _ = materializeBinderTypes ()
   graphRun.value.stampCtxs := []
   perRun := savedPerRun
-  driverState.value.currentModuleRef := savedModule
-  driverState.value.superDeclsRef := savedSupers
   held ++ verdicts ++ holes
 
 -- The completeness judgment (`types/evidence_complete.mdk`) over the evidence this
@@ -54230,13 +54246,13 @@ cellHeadKey n (OriginModule m) = "module \{m}|\{n}"
 -- Stamps each context in turn and decides its admitted-set occurrences
 -- (`checkAdmittedOccObls`), with the selector their routes commit through, against
 -- the same final solution.
-runStampCtxs : List StampCtx -> List DrainFinding
-runStampCtxs ctxs =
-  reverseL (fold (acc ctx => reverseL (runStampCtx ctx) ++ acc) [] ctxs)
+runStampCtxs : ModuleCtx -> List StampCtx -> List DrainFinding
+runStampCtxs live ctxs =
+  reverseL (fold (acc ctx => reverseL (runStampCtx live ctx) ++ acc) [] ctxs)
 
-runStampCtx : StampCtx -> List DrainFinding
-runStampCtx ctx =
-  let _ = enterStampCtx ctx
+runStampCtx : ModuleCtx -> StampCtx -> List DrainFinding
+runStampCtx live ctx =
+  let _ = enterStampCtx live ctx
   let _ = refileDeterminedRows ()
   let _ = runStampSteps ctx moduleStampOrder
   let _ = recordEvidence ctx.scGoals
@@ -54245,16 +54261,19 @@ runStampCtx ctx =
     (d => verdictFinding ctx.scModule (isLiveSpan live (tcLoc d)) d)
     (captureTypeErrors (_ => checkAdmittedOccObls ()))
 
-enterStampCtx : StampCtx -> Unit
-enterStampCtx ctx =
-  perRun := ctx.scPerRun
+-- Installs [ctx]'s record, with the two module tables the drain reads taken from
+-- [live], the record current when the drain began: the stamp context holds no
+-- module's tables of its own (`StampCtx`).
+enterStampCtx : ModuleCtx -> StampCtx -> Unit
+enterStampCtx live ctx =
   -- Deferred goals select their `gGiven` bucket from their captured scope frames;
-  -- `currentModuleRef` remains the legacy routing context, and `superDeclsRef` is
-  -- the interface decls of the universe `graphModuleWorker` set for this module
-  -- (`StampCtx.scSuperDecls`), the only decls the stampers' super-expansion reads
-  -- (`elabModuleStamp` for the core pass, which is the only module still on it).
-  driverState.value.currentModuleRef := ctx.scModule
-  driverState.value.superDeclsRef := ctx.scSuperDecls
+  -- the record's `currentModuleRef` is the legacy routing context, and its
+  -- `superDeclsRef` the interface decls of the module's universe (`stampCtxOf`), the
+  -- only decls the stampers' super-expansion reads.
+  perRun := ModuleCtx { ctx.scModuleCtx |
+    standaloneValuesRef = live.standaloneValuesRef,
+    methodDispatchIdxByIdRef = live.methodDispatchIdxByIdRef,
+  }
 
 -- #2549 M2: publish this module's solved evidence, AFTER its stampers have run and
 -- READ BACK OUT OF THE CELLS THEY WROTE.  Deriving the table any other way would make
@@ -54304,7 +54323,7 @@ markSetsOf : PreludeMarkFacts ->
 markSetsOf pmf coreDecls modules allDecls =
   -- P0-18: recover the definer-shadow map from the (already-mangled on the emit path)
   -- decls BEFORE marking/typecheck reads it.  Empty on the un-mangled path.  Set once
-  -- here; per-module resetState (in checkModuleFullImpl) does NOT clear it.
+  -- here; per-module `freshModuleCtx` (in checkModuleFullImpl) does NOT clear it.
   let units = ("core", coreDecls) :: modules
   let userDecls = flatMap snd modules
   let shadowMap = computeMangledShadowMap allDecls units

@@ -745,7 +745,7 @@ DIAGBUCKET_N="${IR_DIAGBUCKET_N:-300}"
 #
 # #2158 replaced the scan with `dataParamNameIndexRef`, a name-keyed `OrdMap`
 # built and kept in lockstep with `dataParamKindsRef` at each of its three write
-# sites (freshPerRun / declEnvSeedDataUniverse / recordParamKinds), so
+# sites (freshModuleCtx / declEnvSeedDataUniverse / recordParamKinds), so
 # `noImplHintFor` is an `omHasKey` lookup instead of a re-scan. Re-measured
 # post-fix on this box: net Ir at N = 400/800/1600 was 871409915 / 1774831855 /
 # 3621459149, fitting net(N) = a*N + b*N^2 over 400->1600 gives a = 2.15e6,
