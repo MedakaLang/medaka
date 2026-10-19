@@ -81,6 +81,12 @@ class MovedTest(unittest.TestCase):
         self.assertEqual([], dropped)
         self.assertEqual(["double"], [s[3] for s in specs])
 
+    def test_copy_with_original_kept_is_not_skipped(self):
+        specs, dropped = self.specs({"a.mdk": self.OLD}, {"a.mdk": self.OLD, "b.mdk": self.OLD})
+        self.assertEqual([], dropped)
+        self.assertEqual(["double"], [s[3] for s in specs])
+        self.assertEqual(["b.mdk"], [s[0] for s in specs])
+
     def test_same_file_reorder_keeps_only_the_edited_declaration(self):
         base = "one x = x\n\ntwo x = x + 1\n"
         head = "two x = x + 1\n\none x = x + 2\n"

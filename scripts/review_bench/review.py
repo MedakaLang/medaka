@@ -234,29 +234,32 @@ def normalize_decl(text: str) -> str:
     return " ".join(t.lower().split())
 
 
-def base_index(a: str) -> dict[tuple[str, str], set[str]]:
-    """(kind, name) -> normalized texts of every named declaration in the .mdk files at `a`."""
-    tree = EV.Tree(a)
-    idx: dict[tuple[str, str], set[str]] = {}
+def decl_counts(rev: str) -> dict[tuple[str, str, str], int]:
+    """(kind, name, normalized text) -> how many named declarations in the .mdk files at `rev`."""
+    tree = EV.Tree(rev)
+    counts: dict[tuple[str, str, str], int] = {}
     for path in sorted(tree.files()):
         if not path.endswith(".mdk"):
             continue
         for d in tree.decls(path):
             if d.name and d.kind not in NEVER_MOVED:
-                idx.setdefault((d.kind, d.name), set()).add(normalize_decl(d.text()))
-    return idx
+                key = (d.kind, d.name, normalize_decl(d.text()))
+                counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
-def moved_unchanged(b: str, path: str, ch: set[int], idx: dict) -> tuple[set[int], list[dict]]:
+def moved_unchanged(b: str, path: str, ch: set[int], base: dict, head: dict) -> tuple[set[int], list[dict]]:
     """(changed lines left once unchanged-but-moved declarations are dropped, the
-    dropped declarations). A touched declaration is dropped when a declaration of the
-    same kind and name at the base, in this file or another, has the same normalized text."""
+    dropped declarations). A touched declaration is dropped when the base holds the same
+    kind, name and normalized text and the head holds no more copies of it than the base
+    did: a move, not a copy."""
     left, dropped = set(ch), []
     for d in EV.Tree(b).decls(path):
         span = range(d.start, d.end + 1)
         if not d.name or d.kind in NEVER_MOVED or not any(n in ch for n in span):
             continue
-        if normalize_decl(d.text()) in idx.get((d.kind, d.name), ()):
+        key = (d.kind, d.name, normalize_decl(d.text()))
+        if key in base and head.get(key, 0) <= base[key]:
             left -= set(span)
             dropped.append({"name": d.name, "file": path, "reason": "moved-unchanged"})
     return left, dropped
@@ -268,13 +271,13 @@ def unit_specs(a: str, b: str, files: list[str], merge: bool, skip_moved: bool =
     evidence is generated, and notes on files with nothing to review. With `skip_moved`,
     declarations unchanged from `a` bar a move are left out and appended to `dropped`."""
     specs, notes = [], []
-    idx = base_index(a) if skip_moved else {}
+    base, head = (decl_counts(a), decl_counts(b)) if skip_moved else ({}, {})
     for path in files:
         fl = EV.Tree(b).lines(path)
         # A changed blank line carries nothing to review.
         ch = {n for n in changed_lines(a, b, path) if n <= len(fl) and fl[n - 1].strip()}
         if ch and skip_moved:
-            ch, gone = moved_unchanged(b, path, ch, idx)
+            ch, gone = moved_unchanged(b, path, ch, base, head)
             if dropped is not None:
                 dropped += gone
         if not ch:
