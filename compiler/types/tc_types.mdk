@@ -2493,7 +2493,7 @@ public export data MStep k g s = MVar k | MKids (List (g, s)) | MOk | MFail
 -- demoting the whole arm would have widened acceptance past the spec, silently.
 -- §11's C1 row states the strength ("`cohAnonConflict` … falls through only on
 -- `cohStrictlyMoreSpecific` … so mutually-subsuming heads reach its `otherwise` arm
--- and are rejected — closing, in the implementation, the ladder hole §6.1.2's 
+-- and are rejected — closing, in the implementation, the ladder hole §6.1.2's
 -- records"), and §6.1.2 states why it matters: two **α-equal** heads are mutually ⊑,
 -- hence **⊑-COMPARABLE**, hence they SATISFY (a) — while §6 C1 rejects them outright
 -- ("so are α-equal duplicate heads (mutually ⊑, hence **two** ⊑-minimal elements,
