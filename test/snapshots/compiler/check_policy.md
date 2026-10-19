@@ -51,8 +51,8 @@ import frontend.desugar.{desugar}
 import types.repr.{Scheme(..), Mono(..), normalize}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import types.publish.{TcReport}
+import types.tc_types.{ElabResult}
 import types.typecheck.{
-  ElabResult,
   elaborateModulesWithReport,
   entrySplit,
   pubSchemes,
@@ -683,7 +683,8 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "ElabResult" false) (mem "elaborateModulesWithReport" false) (mem "entrySplit" false) (mem "pubSchemes" false) (mem "lastInvocationOps" false) (mem "decodeSetParam" false) (mem "bindingGrantArity" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "ElabResult" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModulesWithReport" false) (mem "entrySplit" false) (mem "pubSchemes" false) (mem "lastInvocationOps" false) (mem "decodeSetParam" false) (mem "bindingGrantArity" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnvWith" false) (mem "buildStampExterns" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false) (mem "anyList" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
@@ -824,7 +825,8 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "ElabResult" false) (mem "elaborateModulesWithReport" false) (mem "entrySplit" false) (mem "pubSchemes" false) (mem "lastInvocationOps" false) (mem "decodeSetParam" false) (mem "bindingGrantArity" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "ElabResult" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModulesWithReport" false) (mem "entrySplit" false) (mem "pubSchemes" false) (mem "lastInvocationOps" false) (mem "decodeSetParam" false) (mem "bindingGrantArity" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnvWith" false) (mem "buildStampExterns" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false) (mem "anyList" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
