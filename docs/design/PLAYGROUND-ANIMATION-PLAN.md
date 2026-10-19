@@ -85,11 +85,11 @@ canvas UI needed yet. One end review and fix round, then normal PR/merge flow.
 | Field | S4 — canvas-controller-and-playground |
 |---|---|
 | Mission | Wire the persistent runner to a canvas with bounded scheduling, input, lifecycle controls, and unchanged console behavior. |
-| Surface | Add `animation_controller.mjs`, `canvas_renderer.mjs` and sibling Node tests under `playground/`; extend `worker.js`, `main.js`, `index.html` and its existing stylesheet. Add `animation.spec.mjs` under `playground/e2e/` and wire the existing e2e orchestrator. Update asset/header paths immediately when imports are introduced. |
-| Acceptance shape | Five groups: (1) fake-clock controller proves one outstanding tick, pause time, zero resume delta, watchdog, stale compile/result rejection; (2) recording canvas proves drawing order, clearing, y-up transform and resize revision handling; (3) browser tests prove changing pixels and Run/Stop/Pause/Resume, runaway termination, error recovery and resize; (4) existing console/runaway/async regressions pass; (5) reduced motion, hidden-tab/manual-pause interaction and primary pointer cancellation work. |
+| Surface | Add `animation_controller.mjs`, `canvas_renderer.mjs`, `compile_dispatcher.mjs` and sibling Node tests under `playground/`; replace `getCompilerWorker`/`requestCompile` ownership in `main.js` with the dispatcher; extend `worker.js`, `index.html` and its existing stylesheet. The compiler-worker wire format stays unchanged. Add `animation.spec.mjs` under `playground/e2e/` and wire the existing e2e orchestrator. Update asset/header paths immediately when imports are introduced. |
+| Acceptance shape | Five groups: (1) fake-clock controller and actual compile-dispatcher tests prove one outstanding tick, pause time, watchdog, and A-start/Stop/B-start/A-reply/B-reply executes only B, settles both requests and sends B after consuming A; (2) recording canvas proves drawing order, clearing, y-up transform, later stale-revision rejection, plus initial-frame resize/zero-layout replay for static and continuous pictures without an extra Simulation update; (3) browser tests prove changing pixels and Run/Stop/Pause/Resume, runaway termination, error recovery and resize; (4) existing console/runaway/async regressions pass; (5) reduced motion, pause/resume before first presentation, hidden-tab/manual-pause interaction and primary pointer cancellation work. |
 | Model | Sol/high: lifecycle races and page/worker ownership are the main correctness decision. |
 | Depends-on / parallel-ok | Sprint A integrated; S3. Serial. |
-| Shape | Controller exports and dependency injection are fixed in design §3. The worker only routes and executes; the page never executes user WASM. `main.js` remains UI glue. |
+| Shape | Controller/dispatcher exports and dependency injection are fixed in design §3 and §6. The dispatcher retains one active and one latest pending request; cancelled transports retain their original reply ownership. The runner worker only routes and executes; the page never executes user WASM. `main.js` remains UI glue. |
 
 | Field | S5 — examples-and-browser-proof |
 |---|---|
@@ -221,7 +221,10 @@ chosen expected results:
 - Protocol integrity: transaction closes only on guest success, malformed values
   and budget overflows fail before presentation, direct extern calls obey rules.
 - Lifecycle races: Stop during compile, late compile completion, late worker
-  stdout/frame/error, pause in flight, resize in flight, and repeated Run.
+  stdout/frame/error, pause in flight, resize in flight, and repeated Run. Exercise
+  the real compile dispatcher with overlapping Run intentions, not only mocked
+  correlated promises; prove initial-frame resize cannot lose clock initialization
+  or advance a Simulation before its initial model is presented.
 - Containment: a guest loop can be terminated while controls remain usable;
   no unrestricted JS/DOM access is introduced through bindings.
 - Visual semantics: known geometric output, actual pixels change, pointer mapping

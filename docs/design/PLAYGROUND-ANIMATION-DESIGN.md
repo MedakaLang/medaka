@@ -53,7 +53,8 @@ page scheduler -- frame inputs --> runner worker / persistent WASM instance
 page canvas renderer <-- one completed frame batch
 ```
 
-Compilation remains unchanged. The runner instantiates once per Run and enters
+The compiler pipeline remains unchanged. Run requests use the serialized
+dispatcher specified in §6. The runner instantiates once per Run and enters
 the guest once per frame. No closure, record, Picture, or GC reference crosses
 the FFI. The Medaka renderer traverses a Picture and issues scalar calls into
 the worker's buffer. One structured-clone message carries the completed batch
@@ -77,6 +78,7 @@ files. Boundary signatures are contracts, not promised parser-valid declarations
 | `playground/` | `animation_protocol.mjs` | Protocol version, limits, validators for frame inputs and batches. Exports `PROTOCOL_VERSION`, `LIMITS`, `validateFrameInput`, `validateFrameBatch`. | No DOM, worker globals, compiler, or host runtime. |
 | `playground/` | `animation_host.mjs` | Per-session FFI binding factory: `createAnimationBindings() -> {bindings, beginInvocation(input), finishInvocation(), discard()}`. | Protocol only; no scheduling or DOM. |
 | `playground/` | `animation_controller.mjs` | Page state machine: `createAnimationController(deps) -> {start, pause, resume, stop, resize, pointer, dispose}`. Inject worker factory, clock/rAF, renderer, and status sink. | Protocol; no editor/compiler imports and no WASM evaluation on the page. |
+| `playground/` | `compile_dispatcher.mjs` | `createCompileDispatcher({createWorker}) -> {request, cancel, dispose}`; correlates and serializes Run compilations as specified in §6. | Worker messages only; no editor, canvas, or compiler implementation imports. |
 | `playground/` | `canvas_renderer.mjs` | `createCanvasRenderer(canvas) -> {resize(viewport), present(batch), clear(), dispose()}`. | Protocol and Canvas 2D only. |
 
 Extend `medaka_host.mjs` at its existing instantiation/entry seam to expose a
@@ -268,9 +270,33 @@ starting execution. A replacement cancels scheduling/listeners, invalidates the
 old generation, and terminates its runner. A Stop during compilation also makes
 the eventual result inert; compiler caching may remain alive.
 
+Generation checks require correctly correlated compilation results. Replace the
+current single-resolver `requestCompile` glue with a dispatcher that owns one
+active transport request and at most one pending request, retaining only the
+newest pending Run. `request({runId, source, assets})` returns a promise for
+`{kind:"compiled", result}` (the existing compiler reply, including diagnostics)
+or `{kind:"cancelled"}`. A worker failure rejects the promise. Replacing or
+`cancel(runId)` settles that request as cancelled immediately. If already sent,
+its transport slot stays occupied until its reply is consumed; cancellation must
+not install a new resolver for that reply. Only then may the latest pending Run
+be posted. A replaced pending request is settled, never left hanging.
+
+Install stable message/error handlers per compiler worker. Each reply consumes
+the dispatcher-owned active slot and can settle only its original request; the
+run generation still gates UI effects. A worker error rejects all outstanding
+non-cancelled requests, clears both slots, and drops the worker; the next Run
+creates a new one. `dispose()` settles cancellations, terminates the compiler
+worker, and ignores its late events by worker identity. This permits cache reuse
+without overlapping compiler entry or changing `compiler-worker.js`'s wire format.
+Test the actual dispatcher, not a controller mock that already returns correctly
+correlated promises: A-start, Stop, B-start, A-reply, B-reply must execute only B,
+settle both requests, and send B only after consuming A's reply.
+
 Use page rAF timestamps as the single clock. At most one tick is outstanding.
 Set the animation clock origin when frame 0 is first presented; asset loading,
 compilation, and instantiation do not count as animation time.
+The first-picture replay rule in §7 guarantees frame 0 remains presentable after
+a resize. Do not dispatch frame 1 until that initial presentation occurs.
 After a completed batch, present it on a browser animation opportunity and send
 the next tick when ready. Do not queue missed ticks or run a catch-up loop. A
 slow computation lowers frame rate without growing the queue. `elapsed` is active
@@ -285,7 +311,8 @@ animation opt-in, replace the total-session deadline with a 2-second deadline
 for each outstanding frame, armed on dispatch and cleared only on completion.
 There is no deadline while idle or paused. Opt-in alone cannot clear the startup
 deadline: the first entry must return successfully. Pause while a frame is in
-flight does not cancel its watchdog; hold its completed batch for resume. Stop
+flight does not cancel its watchdog; hold its completed batch for resume, except
+that the initial picture may present while paused as specified in §7. Stop
 remains available throughout. Tests inject shorter deadlines instead of waiting.
 
 On errors, discard partial drawing, retain the last completed canvas, flush
@@ -306,9 +333,27 @@ ratio is capped at 2 and backing dimensions at 2,048 per axis; reduce effective
 pixel scale to fit while preserving logical coordinates. Zero-sized canvases
 pause frame scheduling. Rendering resets the transform and state each frame,
 clears backing pixels, then establishes centered, y-up logical coordinates. A
-resize increments a viewport revision; old-revision batches are acknowledged but
-not presented, and the next input uses the new revision. Static pictures may be
-replayed in the new viewport without re-entering the guest.
+resize increments a viewport revision. Once a continuous animation has presented
+frame 0, old-revision batches are acknowledged but not presented; the next input
+uses the new revision.
+
+The initial picture has precedence over that stale-revision rule: retain its
+validated batch and replay its logical geometry in the current viewport, even
+if its input revision is old. The first image may use geometry computed for the
+original dimensions; the next tick uses the new dimensions. This preserves the
+initial Simulation model, without an extra update or another guest invocation.
+If layout is zero-sized or the page hidden, retain only this one initial batch
+until presentation becomes possible. Manual pause or reduced-motion pause permits
+this initial still image but no subsequent tick. Initialize the clock on actual
+presentation; if paused, active time remains zero until resume. Stop/replacement
+discards the retained batch. Static pictures use the same initial rule, retain
+their batch after done, and replay it on later resize without guest re-entry.
+
+Deterministic tests cover resize before frame 0 returns in both static and
+continuous modes, zero-size then visible layout, and Pause/Resume before first
+presentation. In every case the initial model is presented before any simulation
+update, replay never invokes the guest again, elapsed/delta begin at zero, and
+stale later continuous frames remain suppressed.
 
 Support one primary pointer via pointer events, including touch. Map coordinates
 through the measured canvas rectangle to logical coordinates. Capture the pointer
