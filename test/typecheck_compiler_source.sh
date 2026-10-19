@@ -967,13 +967,13 @@ crossRun.value.crossModuleMethodPredicateSlotsQualRef
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 methodDictArityOf : String -> Int
-resolveMethodDicts : List PendingMethodDict -> Unit
+resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
 pending.pmdRoutesRef :=
-methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
-methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
-realizeRecDictApps : List RecDictApp -> Unit
-recRoutes : String -> ScopeId -> Mono -> List PredicateSlot -> List Route
-recRoute : String -> ScopeId -> Mono -> PredicateSlot -> Route
+methodPredicateRoutes : SiteCtx ->
+methodPredicateRoute : SiteCtx -> String -> ScopeId -> PredicateSlot -> Route
+realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
+recRoutes : SiteCtx ->
+recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route
 scopePredicateSlots : List ((String, String), List PredicateSlot) ->
 scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
 attributeMethodModulePredicateSlots : String ->'
@@ -1154,9 +1154,9 @@ fi
 # cannot establish that the numeric arm still consumes its exact predicate.
 numeric_return_inst_body="$(sed -n '/^entailInst .*EKNumReturn/,/^entailInst .*EKNestedTop/p' "$predicate_slot_src")"
 numeric_return_inst_required='  let goals = predicate.predicateArguments
-  match ieSelectRowByIface env predicate.predicateInterface goals
+  match ieSelectRowByIface sx env predicate.predicateInterface goals
       let route = RKey (rowRouteKey row) []
-      let routes = implDictRoutesForRow encl useScope goals row'
+      let routes = implDictRoutesForRow sx encl useScope goals row'
 printf '%s\n' "$numeric_return_inst_required" | while IFS= read -r required; do
   if ! printf '%s\n' "$numeric_return_inst_body" | grep -Fq "$required"; then
     echo "FAIL: numeric return instance arm is missing required source: $required"
@@ -1208,7 +1208,7 @@ if ! grep -Fq '  SolverOutcome(..),' "$predicate_slot_src"; then
 fi
 
 ordinary_return_solver_body="$(sed -n '/^solveExactReturnOnce :/,/^exactReturnDefers :/p' "$predicate_slot_src")"
-ordinary_return_solver_required='solveExactReturnOnce request = match request.mrrResolution.value
+ordinary_return_solver_required='solveExactReturnOnce sx request = match request.mrrResolution.value
     request.mrrResolution := Some resolution
         mrrOutcome = Solved (assumAnswerEvidence answer)
         mrrOutcome =
@@ -1279,7 +1279,7 @@ ordinary_return_check_body="$(sed -n '/^checkCallObligationsU deferNonGround uni
 ordinary_return_arm="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/^    OpExactReturn request =>/,/^    _ =>/p')"
 ordinary_return_complete_check="$(printf '%s\n' "$ordinary_return_arm" | sed -n '/match methodReturnWanted request/,/ None =>/p')"
 ordinary_return_complete_flat="$(printf '%s\n' "$ordinary_return_complete_check" | tr '\n' ' ' | tr -s ' ')"
-ordinary_return_complete_required='match methodReturnWanted request Some _ => consumeExactReturnOutcome univ request (solveExactReturnOnce request) None =>'
+ordinary_return_complete_required='match methodReturnWanted request Some _ => consumeExactReturnOutcome univ request (solveExactReturnOnce noSite request) None =>'
 if ! printf '%s\n' "$ordinary_return_complete_flat" | grep -Fq "$ordinary_return_complete_required"; then
   echo "FAIL: complete ordinary return checker does not consume the one outcome: $ordinary_return_complete_required"
   exit 1
@@ -1300,10 +1300,10 @@ if ! printf '%s\n' "$ordinary_return_legacy_check" | grep -Fq 'checkOneCallOblig
 fi
 
 ordinary_return_stamp_body="$(sed -n '/^resolveExactReturnSite :/,/^resolveNumLitSite :/p' "$predicate_slot_src")"
-ordinary_return_stamp_required='      let resolution = solveExactReturnOnce request
-        exactReturnRoutes name encl scope (omHasKey name rpNames) resolution
-exactReturnRoutes name encl scope isReturnPosition resolution = match (
-    methodReturnEvidenceRoutes encl scope prerequisites,'
+ordinary_return_stamp_required='      let resolution = solveExactReturnOnce sx request
+        exactReturnRoutes sx name encl scope (omHasKey name rpNames) resolution
+exactReturnRoutes sx name encl scope isReturnPosition resolution = match (
+    methodReturnEvidenceRoutes sx encl scope prerequisites,'
 printf '%s\n' "$ordinary_return_stamp_required" | while IFS= read -r required; do
   if ! printf '%s\n' "$ordinary_return_stamp_body" | grep -Fq "$required"; then
     echo "FAIL: ordinary return route adapter is missing required source: $required"
@@ -1337,8 +1337,8 @@ fi
 numeric_operator_required='  let _ = recordBinopGoals op dref lt
 goalRequestOfKind _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
 entailAssumVar request m encl _ useScope (EKPredicateOp _ _ _) =
-entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
-  (stampPredicateOpRouteVal encl useScope name m tag predicate, [])'
+entailInst sx name m encl useScope tag (EKPredicateOp _ _ predicate) =
+  (stampPredicateOpRouteVal sx encl useScope name m tag predicate, [])'
 printf '%s\n' "$numeric_operator_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: exact numeric operator predicate transport is missing: $required"
@@ -1530,10 +1530,10 @@ if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
   exit 1
 fi
 
-operator_owner_required='stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
-argImplDictRoutesForEncl encl useScope dictName tag subject goals
-entailInst name m encl useScope tag (EKOp isBinop _) =
-(stampOpRouteVal isBinop encl useScope name m tag, [])'
+operator_owner_required='stampOpRouteVal : SiteCtx ->
+argImplDictRoutesForEncl sx encl useScope dictName tag subject goals
+entailInst sx name m encl useScope tag (EKOp isBinop _) =
+(stampOpRouteVal sx isBinop encl useScope name m tag, [])'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: operator route dropped its evidence owner: $required"

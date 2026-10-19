@@ -640,7 +640,7 @@ which is why it is written down here rather than left to be rediscovered.
 
 §2.3's blocker — `currentLoc` is set-on-enter and never restored — is **not a
 lint problem**. Three other workarounds already stand on the same defect:
-`goalSiteLoc` and its five drain-base-case clears (#1155/F-3c), the record-time
+the resolver walks' `sxSite` span context (#1155/F-3c), the record-time
 `Option Loc` snapshot duplicated across six tables, and
 `pushTypeErrorOnceAt`'s `Option Loc` parameter. Scoping the ref is the shared
 repair for all of them, and it serves component D (Diagnostics) directly.

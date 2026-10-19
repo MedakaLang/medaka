@@ -7401,7 +7401,7 @@ verbTable = [
 -- diagnostic's span is a property a change nowhere near the diagnostic can
 -- move: PR 1552 moved two of these fixtures' spans (`29:15` -> `29:25`,
 -- `46:15` -> `46:25`) while every code/value/verdict assertion in the tree
--- stayed green, because `goalSiteLoc` falls back to `currentLoc` and a
+-- stayed green, because `sxSite` falls back to `currentLoc` and a
 -- dedup-on-message push lets a badly-located site win. PIN THE SPAN, NOT THE
 -- MESSAGE -- prose is free to change (`DIAGNOSTIC-CODES-DESIGN.md`); `want`
 -- is matched against the FIRST `<file>:<line>:<col>:` prefix `medaka check`

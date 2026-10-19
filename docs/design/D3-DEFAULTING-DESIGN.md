@@ -482,7 +482,7 @@ the last boundary that owns every variable in it:
 
 | state after S4 | code | site | message |
 |---|---|---|---|
-| `U = ∅`, every variable owned | `T-NO-IMPL` | the goal's recording site (`goalSiteLoc`), as `T-REQUIRES-DEPTH` does | `No impl of Ix for _ Bool: no instance of \`Ix\` has \`Bool\` in its second position, so no type for the first position can satisfy it.` A variable position renders as `_`, not as a letter — the letter reads as a name the program wrote. |
+| `U = ∅`, every variable owned | `T-NO-IMPL` | the goal's recording site (`sxSite`), as `T-REQUIRES-DEPTH` does | `No impl of Ix for _ Bool: no instance of \`Ix\` has \`Bool\` in its second position, so no type for the first position can satisfy it.` A variable position renders as `_`, not as a letter — the letter reads as a name the program wrote. |
 | `U′ = ∅`, `U ≠ ∅` (joint consistency emptied it) | nothing here | — | the variable defaults in S3 and the closed goal is checked as today (`No impl of Ix for Int Bool`) |
 | `\|U′\| ≥ 2`, every variable owned, variable not a candidate | `T-AMBIGUOUS-INSTANCE`, message (1) | the goal's site | today's `ambiguousImplMsg`, with the goal vector rendered (`Ix _ Char`) and the two instances named, as message (2) already names its competitors |
 | any unowned variable | deferred (OD2) | the use site | today's behaviour; the caller's instantiation decides |
