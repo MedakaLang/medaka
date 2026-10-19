@@ -1,5 +1,5 @@
 # META
-source_lines=69
+source_lines=93
 stages=DESUGAR,MARK
 # SOURCE
 {- | Pure pictures in logical canvas coordinates.
@@ -39,35 +39,59 @@ public export data Picture = Picture {
 }
   deriving (Eq, Debug)
 
-{- | A point at the given horizontal and vertical coordinates. -}
+{- | A point at the given horizontal and vertical coordinates.
+
+   > point 3.0 4.0
+   Point { x = 3.0, y = 4.0 }
+   -}
 export
 point : Float -> Float -> Point
 point x y = Point { x = x, y = y }
 
 {- | A color with the given red, green, blue, and alpha components.
 
-   Values are preserved, including components outside the host's valid range. -}
+   Values are preserved, including components outside the host's valid range.
+
+   > rgba 1.0 0.5 0.0 1.0
+   Color { red = 1.0, green = 0.5, blue = 0.0, alpha = 1.0 }
+   -}
 export
 rgba : Float -> Float -> Float -> Float -> Color
 rgba red green blue alpha =
   Color { red = red, green = green, blue = blue, alpha = alpha }
 
-{- | A line whose width uses logical CSS pixels. -}
+{- | A line whose width uses logical CSS pixels.
+
+   > line (rgba 1.0 0.0 0.0 1.0) 2.0 (point 0.0 0.0) (point 5.0 5.0)
+   Line (Color { red = 1.0, green = 0.0, blue = 0.0, alpha = 1.0 }) 2.0 (Point { x = 0.0, y = 0.0 }) (Point { x = 5.0, y = 5.0 })
+   -}
 export
 line : Color -> Float -> Point -> Point -> Shape
 line color width from to = Line color width from to
 
-{- | A filled circle whose radius uses logical CSS pixels. -}
+{- | A filled circle whose radius uses logical CSS pixels.
+
+   > circle (rgba 0.0 0.5 1.0 1.0) (point 2.0 3.0) 4.0
+   Circle (Color { red = 0.0, green = 0.5, blue = 1.0, alpha = 1.0 }) (Point { x = 2.0, y = 3.0 }) 4.0
+   -}
 export
 circle : Color -> Point -> Float -> Shape
 circle color center radius = Circle color center radius
 
-{- | A filled polygon whose final point connects to its first point. -}
+{- | A filled polygon whose final point connects to its first point.
+
+   > polygon (rgba 0.0 1.0 0.0 1.0) [point 0.0 0.0, point 4.0 0.0, point 2.0 3.0]
+   Polygon (Color { red = 0.0, green = 1.0, blue = 0.0, alpha = 1.0 }) [Point { x = 0.0, y = 0.0 }, Point { x = 4.0, y = 0.0 }, Point { x = 2.0, y = 3.0 }]
+   -}
 export
 polygon : Color -> List Point -> Shape
 polygon color points = Polygon color points
 
-{- | A complete picture with shapes painted in their supplied order. -}
+{- | A complete picture with shapes painted in their supplied order.
+
+   > picture (rgba 0.0 0.0 0.0 1.0) [circle (rgba 1.0 1.0 1.0 1.0) (point 0.0 0.0) 2.0]
+   Picture { background = Color { red = 0.0, green = 0.0, blue = 0.0, alpha = 1.0 }, shapes = [Circle (Color { red = 1.0, green = 1.0, blue = 1.0, alpha = 1.0 }) (Point { x = 0.0, y = 0.0 }) 2.0] }
+   -}
 export
 picture : Color -> List Shape -> Picture
 picture background shapes = Picture { background = background, shapes = shapes }

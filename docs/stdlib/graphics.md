@@ -66,6 +66,11 @@ point x y
 
 A point at the given horizontal and vertical coordinates.
 
+```medaka
+> point 3.0 4.0
+Point { x = 3.0, y = 4.0 }
+```
+
 ## `rgba`
 
 ```
@@ -77,6 +82,11 @@ A color with the given red, green, blue, and alpha components.
 
 Values are preserved, including components outside the host's valid range.
 
+```medaka
+> rgba 1.0 0.5 0.0 1.0
+Color { red = 1.0, green = 0.5, blue = 0.0, alpha = 1.0 }
+```
+
 ## `line`
 
 ```
@@ -85,6 +95,11 @@ line color width from to
 ```
 
 A line whose width uses logical CSS pixels.
+
+```medaka
+> line (rgba 1.0 0.0 0.0 1.0) 2.0 (point 0.0 0.0) (point 5.0 5.0)
+Line (Color { red = 1.0, green = 0.0, blue = 0.0, alpha = 1.0 }) 2.0 (Point { x = 0.0, y = 0.0 }) (Point { x = 5.0, y = 5.0 })
+```
 
 ## `circle`
 
@@ -95,6 +110,11 @@ circle color center radius
 
 A filled circle whose radius uses logical CSS pixels.
 
+```medaka
+> circle (rgba 0.0 0.5 1.0 1.0) (point 2.0 3.0) 4.0
+Circle (Color { red = 0.0, green = 0.5, blue = 1.0, alpha = 1.0 }) (Point { x = 2.0, y = 3.0 }) 4.0
+```
+
 ## `polygon`
 
 ```
@@ -104,6 +124,11 @@ polygon color points
 
 A filled polygon whose final point connects to its first point.
 
+```medaka
+> polygon (rgba 0.0 1.0 0.0 1.0) [point 0.0 0.0, point 4.0 0.0, point 2.0 3.0]
+Polygon (Color { red = 0.0, green = 1.0, blue = 0.0, alpha = 1.0 }) [Point { x = 0.0, y = 0.0 }, Point { x = 4.0, y = 0.0 }, Point { x = 2.0, y = 3.0 }]
+```
+
 ## `picture`
 
 ```
@@ -112,3 +137,8 @@ picture background shapes
 ```
 
 A complete picture with shapes painted in their supplied order.
+
+```medaka
+> picture (rgba 0.0 0.0 0.0 1.0) [circle (rgba 1.0 1.0 1.0 1.0) (point 0.0 0.0) 2.0]
+Picture { background = Color { red = 0.0, green = 0.0, blue = 0.0, alpha = 1.0 }, shapes = [Circle (Color { red = 1.0, green = 1.0, blue = 1.0, alpha = 1.0 }) (Point { x = 0.0, y = 0.0 }) 2.0] }
+```

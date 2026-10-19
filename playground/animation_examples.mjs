@@ -49,6 +49,12 @@ main = animateWith scene
 import animation.{animateWith, Frame}
 import graphics.{Picture, Point, Shape, picture, rgba, line, circle, point}
 
+sampleCount : Int
+sampleCount = 96
+
+angleStep : Float
+angleStep = 2.0 * pi / intToFloat sampleCount
+
 sample : Frame -> Float -> Point
 sample frame u =
   point
@@ -57,15 +63,16 @@ sample frame u =
 
 segment : Frame -> Int -> Shape
 segment frame index =
-  let u = intToFloat index * 6.283185307179586 / 96.0
-  let v = intToFloat (index + 1) * 6.283185307179586 / 96.0
+  let u = intToFloat index * angleStep
+  let v = intToFloat (index + 1) * angleStep
   line (rgba 0.95 0.45 0.7 1.0) 2.0 (sample frame u) (sample frame v)
 
 scene : Frame -> Picture
 scene frame =
+  let lastIndex = sampleCount - 1
   picture
     (rgba 0.04 0.025 0.06 1.0)
-    (map (segment frame) [0..=95]
+    (map (segment frame) [0..=lastIndex]
       ++ [circle (rgba 1.0 0.9 0.6 1.0) (sample frame frame.elapsed) 5.0])
 
 main = animateWith scene
