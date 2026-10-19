@@ -330,6 +330,7 @@ import types.tc_types.{
   GoalPayload(..),
   Obligation(..),
   DynCtx(..),
+  GroupCtx(..),
   DoCtx(..),
   noDyn,
   SiteCtx(..),
@@ -4194,10 +4195,10 @@ recoveredShadowSym name tagRef =
 --
 -- Constrained-receiver arm: the `=>`-constraint variables of the top-level
 -- group currently being inferred, as (interface name, the constraint's
--- instantiated mono). Set by processSCC between preunifySigsEx and
--- inferMembers, cleared right after. Read by definerReceiverIsDictVar to
--- dispatch a definer-shadow occurrence through the dict rather than treat
--- it as a standalone.
+-- instantiated mono). Held in the group's `GroupCtx`, which processSCC mints
+-- after preunifySigsEx and hands to inferMembers in the env's `DynCtx`. Read by
+-- definerReceiverIsDictVar to dispatch a definer-shadow occurrence through the
+-- dict rather than treat it as a standalone.
 
 -- C5: method name → dispatch-arg index, built graph-wide from ALL interface decls
 -- (so a PRELUDE method like Foldable's `toList` — absent from a user module's own
@@ -10689,7 +10690,6 @@ freshPerRun _ = PerRun {
   indexSubstitutedRef = Ref Tip,
   extendedBindersRef = Ref Tip,
   displayHiddenBindersRef = Ref Tip,
-  pendingEscapesRef = Ref [],
   openedExistentialsRef = Ref [],
   openedExistentialsStackRef = Ref [],
   recordByNameRef = Ref omEmpty,
@@ -10749,7 +10749,6 @@ freshPerRun _ = PerRun {
   flatShadowScopingRef = Ref False,
   flatCoreFnNamesRef = Ref omEmpty,
   flatUserShadowNamesRef = Ref omEmpty,
-  groupConstraintMonosRef = Ref [],
   fieldOwnerModulesRef = Ref omEmpty,
   fieldOwnerReachRef = Ref omEmpty,
   typeErrors = wNew (),
@@ -21049,7 +21048,7 @@ inferShadowApp env mname arityRefs tagRefs f x =
       env.teDyn
       (importerShadowDomain env mname)
       tx
-      (definerReceiverIsDictVar mname tx)
+      (definerReceiverIsDictVar env.teDyn mname tx)
       dloc
   -- #2188 / S2-DECL (d): the cardinality decision, asked BEFORE the single-winner impl
   -- question below.  Inert (`AdDefer`, and `groundAdmittedReceivers` a no-op) for every
@@ -21156,7 +21155,7 @@ inferShadowAppAt env mname arityRefs tagRefs hd nodes f x =
       env.teDyn
       (importerShadowDomainAt env mname k)
       tx
-      (definerReceiverIsDictVar mname tx)
+      (definerReceiverIsDictVar env.teDyn mname tx)
       dloc
   -- #2188 / S2-DECL (d): [ats] is every argument up to and including THIS node's, so at
   -- the OUTERMOST admitted dispatch index (`importerDispatchIdxOuter`, the index this arm
@@ -21451,7 +21450,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
   -- constraint var dispatches through that dict — it must neither be typed against the
   -- standalone scheme nor stamped RLocal (which would send eval/emit to the standalone
   -- and, e.g., apply `sz n = n + 1` to a Bool).
-  let isDictVar = definerReceiverIsDictVar name xt
+  let isDictVar = definerReceiverIsDictVar env.teDyn name xt
   -- P0-20: ground an ungrounded receiver to the standalone's declared domain BEFORE the
   -- dispatch decision, so typecheck asks the impl question about the SAME head the
   -- post-inference route resolver will.  See groundShadowReceiver.
@@ -21462,7 +21461,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
       xt
       isDictVar
       dloc
-  let dispatches = definerReceiverDispatches name xt
+  let dispatches = definerReceiverDispatches env.teDyn name xt
   -- A dispatching occurrence names the interface whose method it selects, as an
   -- ordinary method occurrence does (`inferMethodCandidateAt`); the standalone arm
   -- names none.
@@ -21661,14 +21660,14 @@ isDefinerShadow name =
 --
 -- An IMPORTER shadow reaching here (via definerShadowArgHead's mangled-sym arm) keeps the
 -- OLD per-receiver rule — Fork 1.
-definerReceiverDispatches : String -> Mono -> Bool
-definerReceiverDispatches name xt
-  | isDefinerShadow name = definerReceiverIsDictVar name xt
+definerReceiverDispatches : DynCtx -> String -> Mono -> Bool
+definerReceiverDispatches dyn name xt
+  | isDefinerShadow name = definerReceiverIsDictVar dyn name xt
   | otherwise = match headTyconMono xt
     -- ARCH B-2.1-g: graph-global, off `bodyImplEnvRef` — see `ieImplExistsForHead`.
     -- The guard above means only the Fork-1 IMPORTER arm reaches here.
     Some head => ieImplExistsForHead perRun.value.bodyImplEnvRef.value name head
-    None => definerReceiverIsDictVar name xt
+    None => definerReceiverIsDictVar dyn name xt
 
 -- P0-19 (constrained-receiver arm): True iff an UNGROUNDED definer-shadow receiver is
 -- one of the ENCLOSING group's `=>`-constraint variables for the SHADOWED interface (or
@@ -21683,16 +21682,19 @@ definerReceiverDispatches name xt
 -- made core's `neq : Eq a => a -> a -> Bool` (`neq x y = not (eq x y)`) infer `eq x y :
 -- Int` and reject with `Type mismatch: Bool vs Int` at the top of the user's file.
 -- A higher-kinded receiver `t a` reads the written constraint on `t`.
-definerReceiverIsDictVar : String -> Mono -> Bool
-definerReceiverIsDictVar name xt = match headMonoNode xt
+definerReceiverIsDictVar : DynCtx -> String -> Mono -> Bool
+definerReceiverIsDictVar dyn name xt = match headMonoNode xt
   TVar cell => match methodEntryHere name
     Some (mIface, _, _, _) =>
-      dictVarSatisfiesIface
-        mIface.irName
-        (tyvarId cell)
-        perRun.value.groupConstraintMonosRef.value
+      dictVarSatisfiesIface mIface.irName (tyvarId cell) (groupMonos dyn)
     None => False
   _ => False
+
+-- The enclosing group's constraint monos; empty outside a group (a tail body).
+groupMonos : DynCtx -> List (String, Mono)
+groupMonos dyn = match dyn.dcGroup
+  None => []
+  Some group => group.gcMonos
 
 -- does any of the group's constraint vars BOTH normalize to tyvar [id] AND carry an
 -- interface whose (self + transitive supers) closure includes [mIface]?
@@ -21709,7 +21711,7 @@ monoIsTyvarId m id = match normalize m
 
 -- [iface] plus its transitive `requires` supers (a `Ord a =>` constraint also supplies
 -- the `Eq` dict, which its dictionary carries).  Prelude and user super chains alike.
--- Its callers hold interface SPELLINGS (`groupConstraintMonosRef` carries no origin), so
+-- Its callers hold interface SPELLINGS (`gcMonos` carries no origin), so
 -- the lookup is by spelling over `superDeclsRef`, first match; every other superclass
 -- reader looks interfaces up by identity (`superLookup`).
 ifaceSelfAndSupers : String -> List String
@@ -21742,7 +21744,7 @@ enforceStandaloneDomainAt env name xt dloc k =
   match standaloneShadowDomainAt name k
     None => ()
     Some dom =>
-      if definerReceiverIsDictVar name xt then
+      if definerReceiverIsDictVar env.teDyn name xt then
         ()
       else
         unifyStandaloneDomain env.teDyn dom xt dloc
@@ -22114,7 +22116,7 @@ inferDefinerShadowVarAppAt env name hd nodes f x =
   let dloc = !currentLoc
   let pre = inferSpineArgs env nodes
   let xt = infer env x
-  let isDictVar = definerReceiverIsDictVar name xt
+  let isDictVar = definerReceiverIsDictVar env.teDyn name xt
   -- P0-20: ground an ungrounded receiver to the standalone's declared domain BEFORE the
   -- dispatch decision (see groundShadowReceiver).  Still load-bearing under the inversion:
   -- it is what gives a bare `Num` literal receiver (`eq 1 2`) the standalone's domain
@@ -25211,7 +25213,7 @@ processLetGroup env binds =
     finishValueEffectsKeeping
       env.teDyn
       (map (letBindGeneralizes env) (zipL binds summaries))
-  let _ = flushPendingEscapes ()
+  let _ = flushPendingEscapes env.teDyn.dcGroup
   let _ = exitLevel ()
   -- PLAN.md #11 / D4, as a where block narrows it (#3487): ground the Num-only
   -- vars owned by this just-exited component that no member's type mentions
@@ -27202,7 +27204,7 @@ groundAdmittedGo env mname (ir :: rest) ats dloc =
             env.teDyn
             (importerShadowDomainAt env mname k)
             at
-            (definerReceiverIsDictVar mname at)
+            (definerReceiverIsDictVar env.teDyn mname at)
             dloc
   groundAdmittedGo env mname rest ats dloc
 
@@ -43074,18 +43076,21 @@ processSCC env sigs grouped0 members =
   -- the duration of body inference, so a definer-shadow method occurrence on one of
   -- them (`neq x y = not (eq x y)` under `neq : Eq a => …`) is seen as a DISPATCH and
   -- not monomorphised to the shadowing standalone's declared domain.
-  -- `groupConstraintMonosRef` answers a SPELLING question (`dictVarSatisfiesIface`
+  -- `gcMonos` answers a SPELLING question (`dictVarSatisfiesIface`
   -- compares interface NAMES), so U1b (#1482) projects back to the name here rather than
   -- widening a second ref for a reader that would only throw the identity away.
-  perRun.value.groupConstraintMonosRef :=
-    flatMap (r => flatMap ifaceMonoName (regIfaceMonosOf r)) regs
+  let groupCtx = GroupCtx {
+    gcMonos = flatMap (r => flatMap ifaceMonoName (regIfaceMonosOf r)) regs,
+    gcPendingEscapes = Ref [],
+  }
+  let groupEnv = { env2 | teDyn = { env2.teDyn | dcGroup = Some groupCtx } }
   -- #837: the schemeObligationsRef snapshot/restore window is RETIRED.  It existed
   -- because registerLocalScheme entries were NAME-KEYED and body-scoped: a prelude
   -- where-helper named `g` (core's `find`) leaked obligations onto an unrelated
   -- top-level `g` in a later body (a phantom `Num a =>` on types/numlit_bidir's
   -- signed fn).  Registration/lookup now key by (name, binding-id), so a top-level
   -- `g`'s use keys (g, its-id) and can never match a where-helper `g`'s (g, 0) entry.
-  let _ = inferMembers env2 sigs groupedStamped scopedMembers
+  let _ = inferMembers groupEnv sigs groupedStamped scopedMembers
   let _ =
     fold
       (_ member => checkRecursiveValue env.teDyn member.smOwned)
@@ -43102,11 +43107,10 @@ processSCC env sigs grouped0 members =
         scopedMembers)
   perRun.value.rigidEffvarsRef := savedRigidEffects
   perRun.value.rigidAuthvarsRef := savedRigidAuths
-  perRun.value.groupConstraintMonosRef := []
   let _ = checkSigsTooGeneral sigTvMaps
   let _ = checkSigsFixedByExpansive env2 groupedStamped scopedMembers sigTvMaps
   let _ = registerConstraintRegs regs
-  let _ = flushPendingEscapes ()
+  let _ = flushPendingEscapes (Some groupCtx)
   let _ = exitLevel ()
   -- PLAN.md #11 (locked §0.2): GROUP-LEVEL + per-binding Num defaulting.  Ground
   -- every ambiguous Num-only var to Int before this group generalizes.  A live var
@@ -43823,7 +43827,7 @@ inferMembers env sigs grouped (member :: rest) =
   -- A value signature constrains the returned value, not the cost of forcing
   -- its initializer. That cost travels on the binding and is checked at uses.
   let _ = match member.smForce
-    None => checkEffectEscape sigs m effs
+    None => checkEffectEscape env.teDyn sigs m effs
     Some _ => ()
   inferMembers env sigs grouped rest
 
@@ -43945,8 +43949,17 @@ zipBindFrom dyn _ _ = ()
 -- a signatured binding's body must not perform a concrete effect its signature
 -- doesn't declare; effect *variables* (polymorphic `<e>`) carry no labels and so
 -- never escape (Phase 79e)
-checkEffectEscape : List (String, Ty) -> String -> List Atom -> Unit
-checkEffectEscape sigs m effs =
+checkEffectEscape : DynCtx -> List (String, Ty) -> String -> List Atom -> Unit
+checkEffectEscape dyn sigs m effs = match dyn.dcGroup
+  None => ()
+  Some group => checkEffectEscapeIn group sigs m effs
+
+checkEffectEscapeIn : GroupCtx ->
+  List (String, Ty) ->
+  String ->
+  List Atom ->
+  Unit
+checkEffectEscapeIn group sigs m effs =
   match omLookup m driverState.value.sigTyMapRef.value
     None => ()
     -- #797: a genuinely open declared row (free return-position tail var, no
@@ -43965,7 +43978,7 @@ checkEffectEscape sigs m effs =
 
         [] => ()
         extras =>
-          perRun.value.pendingEscapesRef :=
+          group.gcPendingEscapes :=
             (
                 m,
                 !currentLoc,
@@ -43975,14 +43988,15 @@ checkEffectEscape sigs m effs =
                   (declaredEffectTail ty)
                   extras,
               )
-              :: perRun.value.pendingEscapesRef.value
+              :: group.gcPendingEscapes.value
 
 -- After a group's solver scope has closed: report the walk's finding for a
 -- member the solver said nothing about, and drop it for one it reported.
-flushPendingEscapes : Unit -> Unit
-flushPendingEscapes _ =
-  let pending = reverseL perRun.value.pendingEscapesRef.value
-  perRun.value.pendingEscapesRef := []
+flushPendingEscapes : Option GroupCtx -> Unit
+flushPendingEscapes None = ()
+flushPendingEscapes (Some group) =
+  let pending = reverseL group.gcPendingEscapes.value
+  group.gcPendingEscapes := []
   fold
     (_ entry =>
       let (m, loc, msg) = entry
@@ -46508,7 +46522,7 @@ regIfaceMonosOf : ConstraintReg -> List (IfaceRef, List Mono)
 regIfaceMonosOf reg = reg.crIfaceMonos
 
 -- U1b (#1482): project a reg's (interface occurrence, mono) pair back to the SPELLING
--- for `groupConstraintMonosRef`, whose only reader (`dictVarSatisfiesIface`) compares
+-- for `gcMonos`, whose only reader (`dictVarSatisfiesIface`) compares
 -- interface NAMES.
 -- ⚠️ S-dict-arity-contract: a reg entry is now ONE PREDICATE carrying ALL its bare-tyvar
 -- monos, so this fans back out to one (name, mono) pair per variable.  Collapsing the
