@@ -1659,7 +1659,7 @@ public export data GivenMatch =
 
 -- #2705 (M2 phase 2): the solver's working cells for ONE `EMethodAt` node, keyed by
 -- the node's `EvId`.  The node itself carries no cell any more — a reader outside
--- `compiler/types/typecheck.mdk` gets the answer from the published table (`evMethodRoutes`) — but the
+-- `compiler/types/typecheck.mdk` gets the answer from the published table (`evMethodRoutesIn`) — but the
 -- stampers still write through `Ref`s (every goal destination is an `EvDest` over
 -- one), so the cells live here, minted with the node (`mintMethodCell`) and read
 -- back by `methodCellEntries` when the table is published.  It owns five cells:
@@ -1667,7 +1667,7 @@ public export data GivenMatch =
 -- pre-use arrow arity, the dispatch route, the selected impl's `requires` dicts,
 -- and the method's own `=>` dicts.
 -- Two channels carry one fact: inside `compiler/types/typecheck.mdk` a reader dereferences the live
--- cell, outside it reads the installed snapshot, and "no cell is written after the
+-- cell, outside it reads the published snapshot, and "no cell is written after the
 -- last publish" is a discipline of the drain's schedule, not a type.  The mutable
 -- half is what the target's evidence-bindings step retires; until then it is the
 -- solver's working store and nothing else may write it.

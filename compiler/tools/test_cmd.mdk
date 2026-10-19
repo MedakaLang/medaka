@@ -85,7 +85,6 @@ import types.typecheck.{
   tcDiagGoalKey,
 }
 import driver.main_autoprint.{valueMainCandidate}
-import types.route_key.{withEvidencePreserved}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import types.program_facts.{ProgramFacts, factsOfElab, withFacts}
 import frontend.marker.{declRefs}
@@ -1486,24 +1485,23 @@ nativePropPhase pair target tsrc userDecls cases filterOpt file index leaf
   | not (hasProps userDecls) = []
   | otherwise = match pair
     TestPairErr _ => []
-    TestPair runtimeM rawCoreM coreM rawM modsM factsM => withEvidencePreserved
-      (_ =>
-        propsReportEnginesInProcess
-          leaf
-          [EngNative]
-          runtimeM
-          rawCoreM
-          coreM
-          rawM
-          modsM
-          factsM
-          target
-          tsrc
-          userDecls
-          cases
-          filterOpt
-          file
-          index)
+    TestPair runtimeM rawCoreM coreM rawM modsM factsM =>
+      propsReportEnginesInProcess
+        leaf
+        [EngNative]
+        runtimeM
+        rawCoreM
+        coreM
+        rawM
+        modsM
+        factsM
+        target
+        tsrc
+        userDecls
+        cases
+        filterOpt
+        file
+        index
 
 nativePropRowsOr : Option NativeArmResults ->
   (Unit -> <IO> List PropResult) ->
@@ -1914,29 +1912,28 @@ runPropsPinned engines pair native stdlibDir target tsrc userDecls cases filterO
     TestPairErr err =>
       let _ = ePutStrLn err
       False
-    TestPair runtimeM rawCoreM coreM rawM modsM factsM => withEvidencePreserved
-      (_ =>
-        printGradedPropRows
-          (gradeProps
-            index
-            file
-            (nativePropRowsOr native (_ =>
-              propsReportEngines
-                engines
-                stdlibDir
-                runtimeM
-                rawCoreM
-                coreM
-                rawM
-                modsM
-                factsM
-                target
-                tsrc
-                userDecls
-                cases
-                filterOpt
-                file
-                index))))
+    TestPair runtimeM rawCoreM coreM rawM modsM factsM =>
+      printGradedPropRows
+        (gradeProps
+          index
+          file
+          (nativePropRowsOr native (_ =>
+            propsReportEngines
+              engines
+              stdlibDir
+              runtimeM
+              rawCoreM
+              coreM
+              rawM
+              modsM
+              factsM
+              target
+              tsrc
+              userDecls
+              cases
+              filterOpt
+              file
+              index)))
 
 printGradedPropRows : List GradedProp -> <IO> Bool
 printGradedPropRows [] = True
@@ -2741,8 +2738,9 @@ propsReportPinned engines pair native stdlibDir target tsrc userDecls cases filt
   | not (hasProps userDecls) = []
   | otherwise = match pair
     TestPairErr _ => []
-    TestPair runtimeM rawCoreM coreM rawM modsM factsM => withEvidencePreserved
-      (_ => nativePropRowsOr native (_ =>
+    TestPair runtimeM rawCoreM coreM rawM modsM factsM => nativePropRowsOr
+      native
+      (_ =>
         propsReportEngines
           engines
           stdlibDir
@@ -2758,7 +2756,7 @@ propsReportPinned engines pair native stdlibDir target tsrc userDecls cases filt
           cases
           filterOpt
           file
-          index))
+          index)
 
 propsReportEnginesInProcess : NativePropLeaf ->
   List Engine ->
@@ -3059,22 +3057,22 @@ runEvalPropsWorkerSource target nonce requests runtimeSrc coreSrc stdlibDir tsrc
     match prepared
       (Some message, _) => evalWorkerDie (typecheckGateFail target message)
       (None, work) =>
-        let rows = withEvidencePreserved (_ =>
+        let rows =
           runEvalRequestRows
             (forcePrepared runtimeSrc coreSrc work)
             None
             target
             tsrc
             userDecls
-            requests)
+            requests
         emitEvalPropRows nonce rows
   else
     -- No gate here: the parent refused an ill-typed target before spawning
     -- this worker (`driveAll`).
-    let rows = withEvidencePreserved (_ =>
+    let rows =
       let (pair, diags) =
         prepareSingleDiags runtimeDecls coreDecls target roots userDecls
-      runEvalRequestRows pair (Some diags) target tsrc userDecls requests)
+      runEvalRequestRows pair (Some diags) target tsrc userDecls requests
     emitEvalPropRows nonce rows
 
 -- `held` is the diagnostics of the elaboration that built the pair, when that
@@ -3384,7 +3382,7 @@ helperElabDiags : List Decl ->
   List (String, List Decl) ->
   List (String, TcDiag)
 helperElabDiags runtimeM rawCoreM rawM =
-  match withEvidencePreserved (_ => elaborateModules runtimeM rawCoreM rawM)
+  match elaborateModules runtimeM rawCoreM rawM
     (_, _, perModule, residual, _, _, _) =>
       residual ++ perModuleErrors perModule []
 

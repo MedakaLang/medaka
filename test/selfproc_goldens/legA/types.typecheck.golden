@@ -2541,7 +2541,6 @@ publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding
 publicStandaloneNames : List Decl -> List String
 publicValNames : List Decl -> List String
 publishCore : Map String (List VecObl) -> List (String, Scheme) -> List (String, PubScheme)
-publishEvidence : Unit -> Unit
 publishMethodPredGivens : List String -> Ty -> MethodBodyInstance -> ScopeId -> Unit
 publishMethodReturnTrace : List EvEntry -> MethodReturnTraceEntry -> MethodReturnTraceEntry
 publishOwn : List (String, Scheme) -> List (String, PubScheme)

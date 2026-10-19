@@ -61,55 +61,45 @@ import frontend.ast.{
   authTermsSurface,
 }
 import support.util.{joinWith, escStr}
-import types.runtime_types.{installedBinderTable, restoreBinderTable}
 
--- ── the published evidence table (#2549 M2) ───────────────────────────────
+-- ── the evidence table (#2549 M2) ─────────────────────────────────────────
 -- `EDictAt` carries an `EvId`, not a route cell, so a reader answers "what did
--- the solver decide here" by looking the id up rather than by dereferencing a
--- pointer the typechecker handed it.  The lookup lives HERE because this module
--- is the one below all three readers of a solved route — `types/typecheck.mdk`
--- (dict passing), `eval/eval.mdk` and `ir/core_ir_lower.mdk` — exactly the three
--- the header above names as this seam's consumers.  A cell inside any one of
--- them would be unreachable from the other two, and `frontend/ast.mdk` (the only
--- lower module) imports nothing and holds no state.
+-- the solver decide here" by looking the id up in the elaboration's `EvIndex`
+-- rather than by dereferencing a pointer the typechecker handed it.  The lookup
+-- lives HERE because this module is the one below all three readers of a solved
+-- route -- `types/typecheck.mdk` (dict passing), `eval/eval.mdk` and
+-- `ir/core_ir_lower.mdk` -- and `frontend/ast.mdk` (the only lower module)
+-- imports nothing and holds no state.  No cell holds the index: each reader is
+-- handed the one its own elaboration built.
 --
--- Exactly one table is installed per elaboration, and every read of it completes
--- before the next elaboration installs: `test_cmd`'s `prepareMulti` / `prepareSingle` /
--- `runChosen` phases, `elaborateRun`, `runEmitWith`, `eval_autoprint_main.runElab`
--- and `playground_main.finishClean` each
--- elaborate, install, and finish reading before the next elaboration begins; a
--- diagnostics-only elaboration that runs between them (`test_cmd`'s helper validation)
--- runs inside `withEvidencePreserved`, which reinstalls the table it found.  A lookup
--- that cannot be answered is a panic on every arm:
+-- A lookup that cannot be answered is an `Err` here, and a panic in the readers:
 --
---   no table installed  -> panic.  `evidenceRef` holding `None` means no elaboration
---                          has run.
---   ordinal below span  -> panic: the id is from an earlier graph.
---   ordinal above span  -> panic.
---   in-span `None`      -> panic.
+--   no index            -> Err.  The caller holds `None`: no elaboration ran.
+--   ordinal below span  -> Err: the id is from an earlier graph.
+--   ordinal above span  -> Err.
+--   in-span `None`      -> Err.
 --
 -- This holds because the typechecker publishes an entry for EVERY `EDictAt` it mints,
 -- including an application of zero dictionaries (`EvMany []`, the #739 arm of
--- `inferDictAtFound`), so "no entry" can only mean a missing or stale table.
+-- `inferDictAtFound`), so "no entry" can only mean a missing or stale index.
 --
--- What the panic does NOT catch: a read that escaped the install ordering and landed
--- on an ordinal inside the installed span.  A memo hit rewinds the counter, so two
--- elaborations can publish overlapping spans, and such a read can land on ANOTHER
--- GOAL'S ROUTES — silently wrong, at exit 0.  The module half of the id, compared on
--- every hit, is the only tripwire for that, and it cannot fire for today's consumer.
--- The install ordering above is the protection.
+-- What the lookup does NOT catch: an id from another elaboration that lands on an
+-- ordinal inside this index's span.  A memo hit rewinds the counter, so two
+-- elaborations can publish overlapping spans, and such a read answers with
+-- ANOTHER GOAL'S ROUTES -- silently wrong, at exit 0.  The module half of the id,
+-- compared on every hit, is the only tripwire for that, and it cannot fire for
+-- today's consumer.  Handing each reader its own elaboration's index is the
+-- protection.
 --
 -- The index is an ARRAY over the id's ordinal, not a scan of the spine: the table
 -- has one entry per solver goal (838 on a four-file fixture), so a per-site linear
 -- scan would be the List-as-a-map quadratic `compiler/AGENTS.md` records thirteen
 -- instances of.  Ordinals are graph-global (see `freshEvId`), so the ordinal less the
 -- table's smallest one IS the index and carries uniqueness by itself; the array spans
--- the installed entries' ordinals, not every ordinal the process has minted.  The
--- id's MODULE half is compared on every hit as a tripwire, not as part of the key —
--- see `EvId` in `frontend/ast.mdk` for why it cannot fire for today's consumer and
--- must be kept anyway.
-evidenceRef : Ref (Option EvIndex)
-evidenceRef = Ref None
+-- the entries' ordinals, not every ordinal the process has minted.  The id's MODULE
+-- half is compared on every hit as a tripwire, not as part of the key -- see `EvId`
+-- in `frontend/ast.mdk` for why it cannot fire for today's consumer and must be
+-- kept anyway.
 
 -- The table indexed by ordinal less its smallest one: the lowest ordinal and the
 -- slots from it.
@@ -123,84 +113,6 @@ evIndexOf entries =
   let arr = arrayMake (evSlotCount entries lo - lo) None
   let _ = fillEvidence lo arr entries
   EvIndex lo arr
-
--- Replace the installed evidence with this elaboration's.  Called once per
--- elaboration, so the table never outlives the program it describes.
-export
-installEvidence : EvTable -> Unit
-installEvidence entries = evidenceRef := Some (evIndexOf entries)
-
--- The installed index, or the empty one when no elaboration has published one, so
--- a reader holding it answers as an untyped lowering does: no entry for any id.
-export
-installedEvidenceIndex : Unit -> EvIndex
-installedEvidenceIndex _ = match !evidenceRef
-  Some idx => idx
-  None => evIndexOf []
-
--- Test visibility (`typecheck_test.mdk`): the installed table's slot count, 0 when
--- none is installed.
-export
-installedEvidenceSlots : Unit -> Int
-installedEvidenceSlots _ = match !evidenceRef
-  None => 0
-  Some (EvIndex _ arr) => arrayLength arr
-
--- Rewrite every installed entry in place (#2809).  The emit path renames its top-level
--- symbols AFTER elaboration, and an `RLocal` route carries one.  `mangleUnitsEv`
--- returns the renamed table by value as well; this keeps the installed copy equal to
--- it for the readers that still read the installed table.
-export
-remapEvidence : (EvEntry -> EvEntry) -> Unit
-remapEvidence f = match !evidenceRef
-  None => ()
-  Some (EvIndex _ arr) => remapEvidenceGo f arr 0 (arrayLength arr)
-
-remapEvidenceGo : (EvEntry -> EvEntry) ->
-  Array (Option EvEntry) ->
-  Int ->
-  Int ->
-  Unit
-remapEvidenceGo f arr i n
-  | i >= n = ()
-  | otherwise =
-    let _ = match arrayGetUnsafe i arr
-      None => ()
-      Some e => arraySetUnsafe i (Some (f e)) arr
-    remapEvidenceGo f arr (i + 1) n
-
--- Every installed entry, in ordinal order: the table of installed entries.
--- Empty when no elaboration has published one.
-export
-installedEvidenceEntries : Unit -> List EvEntry
-installedEvidenceEntries _ = match !evidenceRef
-  None => []
-  Some (EvIndex _ arr) => evidenceEntriesFrom arr (arrayLength arr - 1) []
-
--- Helper elaboration temporarily replaces the process-global evidence table.
--- Restore the complete installed table afterward, including method-occurrence
--- entries that an elaborateModules return value does not carry.  The binder-type
--- table is replaced by the same elaborations and is put back with it.
-export
-withEvidencePreserved : (Unit -> <e> a) -> <e> a
-withEvidencePreserved action =
-  let before = installedEvidenceEntries ()
-  let binders = installedBinderTable ()
-  let result = action ()
-  let _ = installEvidence before
-  let _ = restoreBinderTable binders
-  result
-
-evidenceEntriesFrom : Array (Option EvEntry) ->
-  Int ->
-  List EvEntry ->
-  List EvEntry
-evidenceEntriesFrom arr i acc =
-  if i < 0 then
-    acc
-  else match arrayGetUnsafe i arr
-    None => evidenceEntriesFrom arr (i - 1) acc
-    Some e => evidenceEntriesFrom arr (i - 1) (e :: acc)
 
 -- one past the largest ordinal in [entries], at least [acc]
 evSlotCount : EvTable -> Int -> Int
@@ -235,24 +147,12 @@ neverPublished : String -> String -> Int -> Result String a
 neverPublished what m i =
   Err "evidence table: \{what} \{m}#\{intToString i} was never published"
 
--- The installed entry's answer for [ev], looked up as [what]; every miss panics.
-installedAnswer : String -> EvId -> EvVal
-installedAnswer what ev = match installedLookup what ev
-  Ok v => v
-  Err message => panic message
-
--- `installedAnswer` over an explicit index.
 answerIn : EvIndex -> String -> EvId -> EvVal
 answerIn idx what ev = match evidenceLookup (Some idx) what ev
   Ok v => v
   Err message => panic message
 
--- `installedAnswer`'s answer, or the reason the installed table has none.
-export
-installedLookup : String -> EvId -> Result String EvVal
-installedLookup what ev = evidenceLookup !evidenceRef what ev
-
--- The lookup over [table], the shape `evidenceRef` holds: `None` when no
+-- The lookup over [table], the shape a reader holds: `None` when no
 -- elaboration has published one, else the lowest ordinal and the slots from it.
 export
 evidenceLookup : Option EvIndex -> String -> EvId -> Result String EvVal
@@ -276,13 +176,8 @@ evidenceLookup (Some (EvIndex lo arr)) what (EvId m i) =
 --
 -- Every `EDictAt` has an entry; an application that needs no routing (the #739
 -- bare-name-collision arm of `inferDictAtFound`) is published as `EvMany []`.  An id
--- with no entry therefore means the installed table is not the one this node's
--- elaboration published, and it panics, as `evMethodRoutes` does.
-export
-evDictRoutes : EvId -> List Route
-evDictRoutes ev = evRoutesOf (installedAnswer "dictionary application" ev)
-
--- `evDictRoutes` over an explicit index.
+-- with no entry therefore means the index is not the one this node's
+-- elaboration published, and it panics, as `evMethodRoutesIn` does.
 export
 evDictRoutesIn : EvIndex -> EvId -> List Route
 evDictRoutesIn idx ev = evRoutesOf (answerIn idx "dictionary application" ev)
@@ -302,24 +197,12 @@ evRoutesOf (EvHead _) =
 
 -- The route solved for operator site [ev].  A site built after inference carries
 -- `unminted`: no route was ever decided for it, and it answers `RNone`, the
--- builtin operator.  Every other miss panics, as `evDictRoutes` does.
-export
-evSiteRoute : EvId -> Route
-evSiteRoute ev = match evSiteRouteResult ev
-  Ok r => r
-  Err message => panic message
-
--- `evSiteRoute` over an explicit index.
+-- builtin operator.  Every other miss panics, as `evDictRoutesIn` does.
 export
 evSiteRouteIn : EvIndex -> EvId -> Route
 evSiteRouteIn idx ev = match siteRouteResultIn (Some idx) ev
   Ok r => r
   Err message => panic message
-
--- `evSiteRoute`'s answer, or the reason the installed table has none.
-export
-evSiteRouteResult : EvId -> Result String Route
-evSiteRouteResult ev = siteRouteResultIn !evidenceRef ev
 
 siteRouteResultIn : Option EvIndex -> EvId -> Result String Route
 siteRouteResultIn table ev
@@ -334,22 +217,10 @@ siteRouteResultIn table ev
 -- A literal built after inference carries `unminted` and answers `(None, RNone)`,
 -- a plain `Int`.  Every other miss panics.
 export
-evSiteLit : EvId -> (Option Float, Route)
-evSiteLit ev = match evSiteLitResult ev
-  Ok answer => answer
-  Err message => panic message
-
--- `evSiteLit` over an explicit index.
-export
 evSiteLitIn : EvIndex -> EvId -> (Option Float, Route)
 evSiteLitIn idx ev = match siteLitResultIn (Some idx) ev
   Ok answer => answer
   Err message => panic message
-
--- `evSiteLit`'s answer, or the reason the installed table has none.
-export
-evSiteLitResult : EvId -> Result String (Option Float, Route)
-evSiteLitResult ev = siteLitResultIn !evidenceRef ev
 
 siteLitResultIn : Option EvIndex -> EvId -> Result String (Option Float, Route)
 siteLitResultIn table ev
@@ -364,22 +235,10 @@ siteLitResultIn table ev
 -- "" when inference never resolved one.  A site built after inference carries
 -- `unminted` and answers "".  Every other miss panics.
 export
-evSiteHead : EvId -> String
-evSiteHead ev = match evSiteHeadResult ev
-  Ok head => head
-  Err message => panic message
-
--- `evSiteHead` over an explicit index.
-export
 evSiteHeadIn : EvIndex -> EvId -> String
 evSiteHeadIn idx ev = match siteHeadResultIn (Some idx) ev
   Ok head => head
   Err message => panic message
-
--- `evSiteHead`'s answer, or the reason the installed table has none.
-export
-evSiteHeadResult : EvId -> Result String String
-evSiteHeadResult ev = siteHeadResultIn !evidenceRef ev
 
 siteHeadResultIn : Option EvIndex -> EvId -> Result String String
 siteHeadResultIn table ev
@@ -395,17 +254,11 @@ siteHeadResultIn table ev
 -- `requires` dicts and the method's own `=>` dicts.  The arity is fixed from the selected scheme before application can
 -- specialize its result.
 --
--- As with `evDictRoutes`, a miss here is LOUD on every arm.  The typechecker mints
+-- As with `evDictRoutesIn`, a miss here is LOUD on every arm.  The typechecker mints
 -- one entry per `EMethodAt` node at the moment it constructs the node and
--- publishes every one of them, so an id with no entry can only mean the table
--- installed is not the one this node's elaboration published — the install-
--- ordering hazard the header above describes, surfaced instead of answered with
--- an unrouted dispatch.
-export
-evMethodRoutes : EvId -> (String, Int, Route, List Route, List Route)
-evMethodRoutes ev = evMethodOf (installedAnswer "method occurrence" ev)
-
--- `evMethodRoutes` over an explicit index.
+-- publishes every one of them, so an id with no entry can only mean the index
+-- held is not the one this node's elaboration published, surfaced instead of
+-- answered with an unrouted dispatch.
 export
 evMethodRoutesIn : EvIndex ->
   EvId ->

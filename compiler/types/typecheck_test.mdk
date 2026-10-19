@@ -61,7 +61,6 @@ import types.disposition.{
   dispositionMethod,
   dispositionRows,
   instIdMid,
-  installedDispositions,
 }
 import types.repr.{IfaceRef(..), Scheme(..), ppMono, ppScheme}
 import types.solver_contract.{SolverOutcome(..), Wanted(..)}
@@ -118,7 +117,7 @@ import types.typecheck.{
   walkGoalSameProbe,
 }
 import types.target_profile.{selectProfile, selectedProfile}
-import types.route_key.{installedEvidenceSlots}
+import types.route_key.{EvIndex(..), evIndexOf}
 import support.ordmap.{omEmpty, omFromNames}
 import support.util.{
   contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
@@ -3548,10 +3547,9 @@ test "a generalized local is dictionary-abstracted: each use applies it to the g
   ]
 
 -- #1112 A-3: production-path observation of `buildDispositions`'
--- installed table, over a real multi-module elaboration. `elaborateModules`
--- installs the table it built via `installDispositions` before returning
--- (`types/typecheck.mdk`'s `driveGraphK`), so a caller reads it back with
--- `installedDispositions` exactly as X-E (#1403) will.
+-- table, over a real multi-module elaboration. `elaborateModules` returns the
+-- table it built (`types/typecheck.mdk`'s `driveGraphK`) as the sixth component
+-- of its result.
 --
 -- Rows are matched by MODULE ID rather than by exact `InstId` (which also
 -- carries a whole-graph-running `seq` the prelude's own impls advance), so a
@@ -3559,12 +3557,12 @@ test "a generalized local is dictionary-abstracted: each use applies it to the g
 -- numbers underneath the test.
 dispositionsAfter : List (String, String) -> DispositionTable
 dispositionsAfter sources =
-  let _ =
+  let (_, _, _, _, _, dispositions, _) =
     elaborateModules
       []
       (desugar (parse numericPreludeSource))
       (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
-  installedDispositions ()
+  dispositions
 
 sameIfaceSpelling : IfaceRef -> String -> Bool
 sameIfaceSpelling iface name = iface.irName == name
@@ -5722,14 +5720,16 @@ spanProgramModule = (
       ])),
 )
 
--- The method-cell index's length and the installed table's slot count after one
+-- The method-cell index's length and the returned table's slot count after one
 -- unkeyed `elaborateModules` drive.
 elaborateSpans : Unit -> (Int, Int)
 elaborateSpans _ =
-  let _ = elaborateModules [] (desugar (parse numericPreludeSource)) [
+  let (_, _, _, _, table, _, _) = elaborateModules [] (desugar
+    (parse numericPreludeSource)) [
     spanProgramModule,
   ]
-  (evCellsSpanProbe (), installedEvidenceSlots ())
+  match evIndexOf table
+    EvIndex _ arr => (evCellsSpanProbe (), arrayLength arr)
 
 -- The method-cell index's length after one unkeyed `checkOneDiags` drive.
 diagsSpan : Unit -> Int

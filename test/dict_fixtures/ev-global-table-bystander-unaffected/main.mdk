@@ -1,6 +1,6 @@
 -- THE [T-GLOBAL-TABLE] FIXTURE for the published evidence table (#2549 M2).
 --
--- `evidenceRef` (compiler/types/route_key.mdk) is a program-global table keyed by an
+-- `evIndexOf` (compiler/types/route_key.mdk) is a program-global table keyed by an
 -- `EvId`, and AGENTS.md's [T-GLOBAL-TABLE] names the required shape for a new one:
 -- "the construct is present but the assertion is about code that never touches it".
 -- Every other fixture in this corpus asserts a dispatch answer, so all of them read

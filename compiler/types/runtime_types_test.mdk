@@ -21,26 +21,38 @@ import types.runtime_types.{
   BinderRow(..),
   RuntimeType(..),
   binderOrdinal,
-  binderRow,
-  installedBinderRows,
+  binderRowIn,
+  addBinderRow,
+  emptyBinderTypes,
+  BinderTypeTable,
 }
+import map.{values}
 import list.{sortOn}
 import support.util.{joinNl, listLen}
 
--- Elaborate [modules] (module id, source lines) and return the installed rows.
+-- Elaborate [modules] (module id, source lines) and return the rows the elaboration
+-- returned.
 rowsOf : List (String, List String) ->
   <IO, FileRead> Result String (List BinderRow)
 rowsOf modules = do
   rsrc <- readFile (underRoot "stdlib/runtime.mdk")
   csrc <- readFile (underRoot "stdlib/core.mdk")
-  let _ =
+  let (_, _, _, _, _, _, binders) =
     elaborateModules
       (desugar (parse rsrc))
       (desugar (parse csrc))
       (map
         (m => (fst m, desugarIn (fst m) (parseLocated (joinNl (snd m)))))
         modules)
-  Ok (installedBinderRows ())
+  Ok (values binders)
+
+-- The table holding exactly [rows].
+tableOf : List BinderRow -> BinderTypeTable
+tableOf rows = tableInto rows emptyBinderTypes
+
+tableInto : List BinderRow -> BinderTypeTable -> BinderTypeTable
+tableInto [] acc = acc
+tableInto (row :: rest) acc = tableInto rest (addBinderRow row acc)
 
 withRows : List (String, List String) ->
   (List BinderRow -> Expectation) ->
@@ -247,9 +259,14 @@ test "a lookup answers by id, and an unminted id has no row" =
       expectEqual
         [Some RTInt]
         (map
-          (r => map (found => found.brType) (binderRow r.brId))
+          (r =>
+            map
+              (found => found.brType)
+              (binderRowIn (Some (tableOf rows)) r.brId))
           (named "main" "n" rows)),
       expectEqual
         None
-        (map (found => found.brType) (binderRow (BinderId "main" (0 - 1)))),
+        (map
+          (found => found.brType)
+          (binderRowIn (Some (tableOf rows)) (BinderId "main" (0 - 1)))),
     ])
