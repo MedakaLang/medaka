@@ -21,6 +21,7 @@ import frontend.exhaust.{exhaustToLines}
 import driver.loader.{loadProgram}
 import types.repr.{ppScheme}
 import types.scopes.{freshScopeStore}
+import types.program_facts.{emptyFacts}
 import eval.eval.{ppValue}
 import tools.check.{runCheck}
 import tools.codemod.{codemodSource}

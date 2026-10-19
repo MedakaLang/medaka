@@ -34,6 +34,7 @@ import frontend.ast.{
   EvTable,
 }
 import support.util.{reverseL}
+import types.route_key.{EvIndex(..)}
 
 -- The five answer kinds a published entry can have.
 public export data EvShape =
@@ -62,10 +63,6 @@ evShapeOf (EvMany _) = ShapeMany
 evShapeOf (EvMethod _ _ _ _ _) = ShapeMethod
 evShapeOf (EvLit _ _) = ShapeLit
 evShapeOf (EvHead _) = ShapeHead
-
--- The table indexed by ordinal less its smallest one, as `installEvidence` lays it
--- out; the first entry at an ordinal is kept.
-data EvIndex = EvIndex Int (Array (Option EvEntry))
 
 -- Every fault of [table] against [trees]: duplicated ordinals first, then each
 -- uncovered site in tree order.  With no trees (a drive that returns none) only

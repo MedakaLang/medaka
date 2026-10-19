@@ -22,6 +22,7 @@ tools.repl	6
 tools.target_parse	2
 tools.test_cmd	1
 types.disposition	1
+types.program_facts	1
 types.route_key	1
 types.runtime_types	1
 types.target_profile	1

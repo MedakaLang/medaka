@@ -108,18 +108,27 @@ import types.runtime_types.{installedBinderTable, restoreBinderTable}
 -- id's MODULE half is compared on every hit as a tripwire, not as part of the key —
 -- see `EvId` in `frontend/ast.mdk` for why it cannot fire for today's consumer and
 -- must be kept anyway.
-evidenceRef : Ref (Option (Int, Array (Option EvEntry)))
+evidenceRef : Ref (Option EvIndex)
 evidenceRef = Ref None
+
+-- The table indexed by ordinal less its smallest one: the lowest ordinal and the
+-- slots from it.
+public export data EvIndex = EvIndex Int (Array (Option EvEntry))
+
+-- The index of [entries]; two entries under one ordinal panic (`fillEvidence`).
+export
+evIndexOf : EvTable -> EvIndex
+evIndexOf entries =
+  let lo = evMinOrdinal entries
+  let arr = arrayMake (evSlotCount entries lo - lo) None
+  let _ = fillEvidence lo arr entries
+  EvIndex lo arr
 
 -- Replace the installed evidence with this elaboration's.  Called once per
 -- elaboration, so the table never outlives the program it describes.
 export
 installEvidence : EvTable -> Unit
-installEvidence entries =
-  let lo = evMinOrdinal entries
-  let arr = arrayMake (evSlotCount entries lo - lo) None
-  let _ = fillEvidence lo arr entries
-  evidenceRef := Some (lo, arr)
+installEvidence entries = evidenceRef := Some (evIndexOf entries)
 
 -- Test visibility (`typecheck_test.mdk`): the installed table's slot count, 0 when
 -- none is installed.
@@ -127,7 +136,7 @@ export
 installedEvidenceSlots : Unit -> Int
 installedEvidenceSlots _ = match !evidenceRef
   None => 0
-  Some (_, arr) => arrayLength arr
+  Some (EvIndex _ arr) => arrayLength arr
 
 -- Rewrite every installed entry in place (#2809).  The emit path renames its top-level
 -- symbols AFTER elaboration, and an `RLocal` route carries one -- but the table
@@ -139,7 +148,7 @@ export
 remapEvidence : (EvEntry -> EvEntry) -> Unit
 remapEvidence f = match !evidenceRef
   None => ()
-  Some (_, arr) => remapEvidenceGo f arr 0 (arrayLength arr)
+  Some (EvIndex _ arr) => remapEvidenceGo f arr 0 (arrayLength arr)
 
 remapEvidenceGo : (EvEntry -> EvEntry) ->
   Array (Option EvEntry) ->
@@ -160,7 +169,7 @@ export
 installedEvidenceEntries : Unit -> List EvEntry
 installedEvidenceEntries _ = match !evidenceRef
   None => []
-  Some (_, arr) => evidenceEntriesFrom arr (arrayLength arr - 1) []
+  Some (EvIndex _ arr) => evidenceEntriesFrom arr (arrayLength arr - 1) []
 
 -- Helper elaboration temporarily replaces the process-global evidence table.
 -- Restore the complete installed table afterward, including method-occurrence
@@ -226,6 +235,12 @@ installedAnswer what ev = match installedLookup what ev
   Ok v => v
   Err message => panic message
 
+-- `installedAnswer` over an explicit index.
+answerIn : EvIndex -> String -> EvId -> EvVal
+answerIn idx what ev = match evidenceLookup (Some idx) what ev
+  Ok v => v
+  Err message => panic message
+
 -- `installedAnswer`'s answer, or the reason the installed table has none.
 export
 installedLookup : String -> EvId -> Result String EvVal
@@ -234,14 +249,11 @@ installedLookup what ev = evidenceLookup !evidenceRef what ev
 -- The lookup over [table], the shape `evidenceRef` holds: `None` when no
 -- elaboration has published one, else the lowest ordinal and the slots from it.
 export
-evidenceLookup : Option (Int, Array (Option EvEntry)) ->
-  String ->
-  EvId ->
-  Result String EvVal
+evidenceLookup : Option EvIndex -> String -> EvId -> Result String EvVal
 evidenceLookup None what (EvId m i) =
   Err
     "evidence table: no elaboration has published one (looking up \{what} \{m}#\{intToString i})"
-evidenceLookup (Some (lo, arr)) what (EvId m i) =
+evidenceLookup (Some (EvIndex lo arr)) what (EvId m i) =
   if i < lo then
     Err "evidence table: \{what} \{m}#\{intToString i} is from an earlier graph"
   else if i - lo >= arrayLength arr then
@@ -263,6 +275,11 @@ evidenceLookup (Some (lo, arr)) what (EvId m i) =
 export
 evDictRoutes : EvId -> List Route
 evDictRoutes ev = evRoutesOf (installedAnswer "dictionary application" ev)
+
+-- `evDictRoutes` over an explicit index.
+export
+evDictRoutesIn : EvIndex -> EvId -> List Route
+evDictRoutesIn idx ev = evRoutesOf (answerIn idx "dictionary application" ev)
 
 evRoutesOf : EvVal -> List Route
 evRoutesOf (EvMany rs) = rs
@@ -286,12 +303,22 @@ evSiteRoute ev = match evSiteRouteResult ev
   Ok r => r
   Err message => panic message
 
+-- `evSiteRoute` over an explicit index.
+export
+evSiteRouteIn : EvIndex -> EvId -> Route
+evSiteRouteIn idx ev = match siteRouteResultIn (Some idx) ev
+  Ok r => r
+  Err message => panic message
+
 -- `evSiteRoute`'s answer, or the reason the installed table has none.
 export
 evSiteRouteResult : EvId -> Result String Route
-evSiteRouteResult ev
+evSiteRouteResult ev = siteRouteResultIn !evidenceRef ev
+
+siteRouteResultIn : Option EvIndex -> EvId -> Result String Route
+siteRouteResultIn table ev
   | isUnminted ev = Ok RNone
-  | otherwise = match installedLookup "operator site" ev
+  | otherwise = match evidenceLookup table "operator site" ev
     Ok (EvOne r) => Ok r
     Ok _ =>
       Err "evidence table: an operator site answered by another kind of entry"
@@ -306,12 +333,22 @@ evSiteLit ev = match evSiteLitResult ev
   Ok answer => answer
   Err message => panic message
 
+-- `evSiteLit` over an explicit index.
+export
+evSiteLitIn : EvIndex -> EvId -> (Option Float, Route)
+evSiteLitIn idx ev = match siteLitResultIn (Some idx) ev
+  Ok answer => answer
+  Err message => panic message
+
 -- `evSiteLit`'s answer, or the reason the installed table has none.
 export
 evSiteLitResult : EvId -> Result String (Option Float, Route)
-evSiteLitResult ev
+evSiteLitResult ev = siteLitResultIn !evidenceRef ev
+
+siteLitResultIn : Option EvIndex -> EvId -> Result String (Option Float, Route)
+siteLitResultIn table ev
   | isUnminted ev = Ok (None, RNone)
-  | otherwise = match installedLookup "literal site" ev
+  | otherwise = match evidenceLookup table "literal site" ev
     Ok (EvLit f r) => Ok (f, r)
     Ok _ =>
       Err "evidence table: a literal site answered by another kind of entry"
@@ -326,12 +363,22 @@ evSiteHead ev = match evSiteHeadResult ev
   Ok head => head
   Err message => panic message
 
+-- `evSiteHead` over an explicit index.
+export
+evSiteHeadIn : EvIndex -> EvId -> String
+evSiteHeadIn idx ev = match siteHeadResultIn (Some idx) ev
+  Ok head => head
+  Err message => panic message
+
 -- `evSiteHead`'s answer, or the reason the installed table has none.
 export
 evSiteHeadResult : EvId -> Result String String
-evSiteHeadResult ev
+evSiteHeadResult ev = siteHeadResultIn !evidenceRef ev
+
+siteHeadResultIn : Option EvIndex -> EvId -> Result String String
+siteHeadResultIn table ev
   | isUnminted ev = Ok ""
-  | otherwise = match installedLookup "record-head site" ev
+  | otherwise = match evidenceLookup table "record-head site" ev
     Ok (EvHead h) => Ok h
     Ok _ =>
       Err "evidence table: a record-head site answered by another kind of entry"
@@ -351,6 +398,13 @@ evSiteHeadResult ev
 export
 evMethodRoutes : EvId -> (String, Int, Route, List Route, List Route)
 evMethodRoutes ev = evMethodOf (installedAnswer "method occurrence" ev)
+
+-- `evMethodRoutes` over an explicit index.
+export
+evMethodRoutesIn : EvIndex ->
+  EvId ->
+  (String, Int, Route, List Route, List Route)
+evMethodRoutesIn idx ev = evMethodOf (answerIn idx "method occurrence" ev)
 
 evMethodOf : EvVal -> (String, Int, Route, List Route, List Route)
 evMethodOf (EvMethod iface arity r impls meths) =

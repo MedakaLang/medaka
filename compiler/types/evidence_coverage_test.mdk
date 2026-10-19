@@ -17,6 +17,7 @@ import list.{filter}
 import types.evidence_coverage.{EvShape(..), EvidenceFault(..), evidenceFaults}
 import types.publish.{graphReport, TcReport(..), noEntryTables}
 import types.disposition.{emptyDispositionTable}
+import types.runtime_types.{emptyBinderTypes}
 
 ev : Int -> EvId
 ev i = EvId "m" i
@@ -60,7 +61,15 @@ judged : Option (List Decl, List (String, List Decl)) ->
   (Bool, List EvidenceFault)
 judged ts table =
   let r =
-    graphReport [] [] [] (_ => table) emptyDispositionTable ts noEntryTables
+    graphReport
+      []
+      []
+      []
+      (_ => table)
+      emptyDispositionTable
+      emptyBinderTypes
+      ts
+      noEntryTables
   (isSome r.trChecked, r.trEvidenceFaults)
 
 test "a clean tree and table pass" = expectEqual (True, []) (judged trees clean)
