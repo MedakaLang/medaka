@@ -1,0 +1,3 @@
+import lib.m.{countdown}
+
+main = println (countdown 3)

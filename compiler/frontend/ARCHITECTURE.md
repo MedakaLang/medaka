@@ -16,6 +16,7 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 | `parser.mdk` | Monadic combinator parser over the token list; stratified operator ladder | `parse`, `parseLocated`, `parseResult` |
 | `desugar.mdk` | Lowers sugar (guards, sections, interpolation, comprehensions, do, `?`, deriving) to the core AST; runs after parse, before resolve; owns the shared `mapExpr`/`mapDecl` traversal | `desugar` |
 | `resolve.mdk` | Name environment and scope checks: unbound names, duplicates, privacy; single-file and multi-module paths | `resolveProgram`, `resolveModulesToLines` |
+| `visibility.mdk` | A module's export surface, built from its declarations and the surfaces of the modules it re-exports; imports no resolver state | `ModuleExports`, `buildExportsWith`, `coreExports` |
 | `marker.mdk` | Rewrites interface-method and constrained-function occurrences to marked nodes; not on `check`/`run`/`build` (typecheck marks per binding group) | `markWithPrelude` |
 | `exhaust.mdk` | Guard-fall-through check on the raw pre-desugar AST via the pattern-matrix `useful` recursion; match exhaustiveness is in `types/` | `checkGuardExhaustiveness` |
 | `parse_cache.mdk` | Source-keyed memo of the implicit prelude parse | `parsePrelude` |

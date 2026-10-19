@@ -1,6 +1,7 @@
 {- | Architecture boundary pins: layering, module-level cells, the hooks record,
-   the AST's cell-free shape, the A8 oversize list, and the import closures of the
-   leaf modules (laws A6 and A8, G3 and G7 of the architecture playbook).
+   the AST's cell-free shape, the A8 oversize list, the declaration-visibility
+   counts, and the import closures of the leaf modules (laws A6 and A8, G3 and G7
+   of the architecture playbook).
 
    Scope is every `compiler/**/*.mdk` except `*_test.mdk`; a module id is the
    path under `compiler/` without `.mdk`, `/` read as `.`. Only column-0 import
@@ -185,13 +186,18 @@ refHead kw s = match stripPrefix kw s
 cellCount : List String -> Int
 cellCount ls = length (filterMap cellName ls)
 
-cellRows : List (String, List String) -> List String
-cellRows mods =
+-- One `<prefix><module>\t<count>` row per module whose count is positive,
+-- sorted.
+countRows : String ->
+  (List String -> Int) ->
+  List (String, List String) ->
+  List String
+countRows prefix countFn mods =
   sort
     (filterMap
       ((m, ls) =>
-        let n = cellCount ls
-        if n > 0 then Some "\{m}\t\{n}" else None)
+        let n = countFn ls
+        if n > 0 then Some "\{prefix}\{m}\t\{n}" else None)
       mods)
 
 -- Lines of `frontend.ast` that hold the word `Ref` (as `grep -nw`) outside a
@@ -299,7 +305,7 @@ test "arch_boundaries: layering violations match layering.golden" =
   pin "layering.golden" (violations (buildGraph loadModules))
 
 test "arch_boundaries: module-level cells match cells.golden" =
-  pin "cells.golden" (cellRows loadModules)
+  pin "cells.golden" (countRows "" cellCount loadModules)
 
 test "arch_boundaries: hook field count matches hooks.golden" =
   pin "hooks.golden" ["hooks.fields\t\{hooksFieldCount loadModules}"]
@@ -335,10 +341,39 @@ oversizeRows mods =
 test "arch_boundaries: modules over 3,000 code lines match oversize.golden" =
   pin "oversize.golden" (oversizeRows loadModules)
 
+-- Substrings that mark a declaration's visibility: an exported `DFunDef`,
+-- `DTypeSig`, `DLetGroup` or `DUse` node, an `edPub` flag, a `VisPublic`
+-- constructor and a `dataVis` field. Each code-line occurrence is counted.
+visibilityPatterns : List String
+visibilityPatterns = [
+  "DFunDef True",
+  "DTypeSig True",
+  "DLetGroup True",
+  "DUse True",
+  "edPub = True",
+  "VisPublic",
+  "dataVis =",
+]
+
+visibilityCount : List String -> Int
+visibilityCount ls =
+  sum
+    (map
+      (l => sum (map (p => countOccurrences p l) visibilityPatterns))
+      (filter isCodeLine ls))
+
+test "arch_boundaries: declaration-visibility counts match visibility.golden" =
+  pin "visibility.golden" (countRows "visibility." visibilityCount loadModules)
+
 test "arch_boundaries: frontend.ast closure matches its golden" =
   pin
     "closure.frontend.ast.golden"
     (closureOf (buildGraph loadModules) "frontend.ast")
+
+test "arch_boundaries: frontend.visibility closure matches its golden" =
+  pin
+    "closure.frontend.visibility.golden"
+    (closureOf (buildGraph loadModules) "frontend.visibility")
 
 test "arch_boundaries: types.repr closure matches its golden" =
   pin

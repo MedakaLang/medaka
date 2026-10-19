@@ -1,0 +1,2 @@
+export import a.{T(..), unT, privCount}
+export import b.{U(..), unU}

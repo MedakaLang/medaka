@@ -156,7 +156,7 @@ Verified DISPROVED at `40e14b85` (a correction needs the same proof as a filing)
 - **User ctors shadowing `Ok`/`Some`/`Cons`… cannot alias the reserved tags** — the resolver
   rejects them (`Duplicate constructor`); the emitter comment claiming otherwise is stale (#361).
 - **`dce.mdk` and `core_ir_lower` collectors are clean**; `private_mangle`'s rename map is
-  already OrdMap (its one straggler is `pubFnNames`, in #352).
+  already OrdMap.
 - **`1e+300` prints and re-lexes** — #51 is CLOSED; the round-trip law currently holds where
   probed.
 - **Hash containers DO self-compile in llvm_emit now** (retested 2026-07-16, fixpoint C3a/C3b

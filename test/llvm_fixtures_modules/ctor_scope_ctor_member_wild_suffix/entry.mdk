@@ -30,7 +30,7 @@
 -- first — so `Kkw 1 2` would bind the nullary constructor instead of pmodw's arity-2
 -- one.  The clause ORDER is the trigger and must not be "tidied": qmodw must stay
 -- first.  The shipped fix does NOT expand at all on this path (it binds `Jjw` alone,
--- mirroring `frontend/resolve.expandMemberNames`), so this half is green both before
+-- mirroring `frontend/visibility.expandMemberNames`), so this half is green both before
 -- and after — it guards the next edit, not this one.
 import qmodw.{Jjw(..), unQW}
 import pmodw.{PW(..), unPW}

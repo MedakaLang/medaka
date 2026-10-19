@@ -1,0 +1,7 @@
+public export data T = J | K Int
+
+export
+unT : T -> Int
+unT t = match t
+  J => 1000
+  K n => n + 10

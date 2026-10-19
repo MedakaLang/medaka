@@ -1,0 +1,16 @@
+-- A constructor carried through a facade WITHOUT the type it belongs to.
+--
+-- m declares the type `Tq` (constructor `Mk`) and, separately, the type `Sq` whose
+-- constructor is also spelled `Tq`.  `export import m.{Tq, sumS}` carries the
+-- type `Tq` and the constructor `Tq` of `Sq`; the type `Sq` is not carried.  The
+-- ctor-export index (`types/private_mangle.ctorExportsFrom`) reads a constructor
+-- symbol per exported type, so this constructor reaches it only through the row for
+-- a constructor no carried type holds.
+--
+-- Expected output, derived by hand from the semantics: `Tq 3 4` is m's arity-2
+-- `Sq` constructor (the only `Tq` that takes two arguments), and
+-- `sumS (Tq 3 4)` = `3 + 4` = `7`.
+import facade.{Tq, sumS}
+
+main : <IO> Unit
+main = putStrLn (intToString (sumS (Tq 3 4)))
