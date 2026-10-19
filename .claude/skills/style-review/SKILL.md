@@ -31,7 +31,12 @@ explaining a rule here, it has been forked. Cite the source.
 - **Findings are ranked.** A reviewer who lists twenty equals has ranked
   nothing. Lead with the ones that would still be wrong in six months.
 - **Cheap first pass.** Run the `review-diff` skill over the sprint diff
-  first; verify each of its findings against the rubric before reporting it.
+  first (`--rev <merge-base>..<pinned SHA>`); verify each of its findings
+  against the rubric before reporting it. End the report with a **review-diff
+  ledger**: every finding it raised, marked kept or dismissed. Each dismissal
+  names the rubric exception, the DECLINED row, or "misread". Dismissals are
+  the reviewer's measured false positives. The `style-rule` skill turns them
+  into fixture controls.
 
 ## The checklist — each section, its single source
 

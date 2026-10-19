@@ -140,6 +140,10 @@ revise the packet and dispatch fresh after recovering useful owned edits.
 
 For the one end correctness review and style pass, start two jobs against the
 same pinned SHA and collect both results; the style job has read-only tools.
+Before starting the style job, the parent runs the `review-diff` pass itself
+(`python3 -I scripts/review_bench/review.py --rev <merge-base>..<SHA> --json`,
+`--dry-run` first; it needs the `claude` CLI). The style job is given the
+findings file to verify.
 Parallel writers still require the shared disjointness proof and serial
 integration. Children cannot delegate or ask interactive questions: they
 return BLOCKED and the parent resolves the question. Direct user

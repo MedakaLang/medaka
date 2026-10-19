@@ -59,6 +59,9 @@ Every item is real code from the tree, framed as "a diff adding this code".
 
 - **The ruled instance** is `label_strength: val`, `source.kind: val-ruling`,
   `ruling: R<n>`.
+- **Mine the sprint ledgers.** Each end-of-sprint style report ends with a
+  review-diff ledger (`style-review` § Scope). A dismissed finding is a
+  candidate control for its class, and a kept one is a candidate positive.
 - **Find more with a scan.** Targets: four or more positives, three or more
   controls when the row names an exception. Controls are the exceptions,
   after-fix states (which must be clean for the class, or the item is

@@ -178,7 +178,15 @@ by serialization.
    vehicle, placement, diagnostics, docs, CLI shape, each pointing at its own
    single source. It builds nothing and fixes nothing. It is **once per
    sprint, in this round only** — not per-slice, not per-PR, and never a
-   required CI check. Its DECLINED register is what stops it demanding churn;
+   required CI check.
+   Its brief carries the merge-base and the pinned SHA. Its first step is the
+   **`review-diff`** skill's Haiku pass over exactly that range:
+   `python3 -I scripts/review_bench/review.py --rev <merge-base>..<SHA> --json`.
+   It reads committed objects, so nothing gets checked out. Run `--dry-run`
+   first and set `--max-usd` from its estimate, because a sprint diff can pass
+   the $1 default. A sprint diff of about 70 units costs about $0.40 and takes
+   about 15 minutes. Its findings are leads that the style pass verifies
+   against the rubric. Its DECLINED register is what stops it demanding churn;
    if it returns a finding that register forbids, dismiss it with one NOTES.md
    line rather than dispatching a fix.
    Placement findings are measured against what the contract's Surface row
