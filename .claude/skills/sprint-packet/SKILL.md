@@ -104,6 +104,23 @@ finding, never a bless. Decide expected values from semantics before
 capturing anything — a captured golden records what the engine DID, not what
 is correct.
 
+**Verdict identity, not text identity, for a rejected program.** A §6 check
+over a program the compiler refuses demands the same verdict (accept or
+reject), exit code, diagnostic code and message class on both arms; location,
+envelope and ordering are free unless the slice is about them. Byte equality
+is demanded only for an accepted program's output. Phase 1's sprint 8 lost a
+fix round to a packet that demanded byte equality at `4:12` where the drive
+now reports at `4:0`.
+
+**Two standing checks sit outside the ceiling** because they are cheap and the
+record shows them red only at the merge queue: `medaka test <touched compiler
+directory>` (Phase 1 sprint 6: two in-language test reds in `compiler/types`)
+and `medaka gate verify` followed by
+`sh test/run_gates.sh diff_compiler_gate_registry diff_compiler_check_wrapper_callers`
+(sprint 7: two ledger reds found only by the unnarrowed run). They replace the
+old "touched directory's native test target" line; they are not an invitation
+to enumerate further.
+
 **Do not enumerate the gates the diff might have moved.** That list does not
 converge: across the sprint record the unnamed gate was a snapshot/LEG-A bless
 ten times, `registry_keying_ratchet.sh` six, `selfcompile_fixpoint` three,
@@ -188,9 +205,12 @@ that pass would otherwise raise a day later.
    reference is `docs/stdlib/index.md`, name-by-name; `rule-stdlib-reimpl` in
    `compiler/tools/lint.mdk` is a floor, not the check — it cannot see a
    renamed reimplementation.)
-2. **Where did the new code land, and does that match the placement the
-   contract stated?** Name the directory. If it differs from the contract, say
-   why in one line. (Ground truth: the `architecture` skill.)
+2. **Where did the new code land, and does that match the placement and
+   shape the contract stated?** Name the directory, and for a module the
+   contract gave a shape (responsibility, exports, forbidden imports), say
+   whether the exports match. If either differs from the contract, say why in
+   one line; that line is what the review judges. (Ground truth: the
+   `architecture` skill and the contract's Surface row.)
 3. **Which existing file did you EXTEND rather than extract from, and why was
    extending right there?** Name the file, or say "no existing file grew". If
    the file is in `make arch-census`'s largest-files table, the "why" is

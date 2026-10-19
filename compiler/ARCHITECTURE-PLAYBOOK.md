@@ -10,7 +10,7 @@ criterion that is a command, not a sentence.
 
 **How to read an action.** Every action has an id, what it changes, the mechanism, an
 acceptance check that can go red, a size, its dependencies and its owner issue. A size
-is one of: *slice* (one sprint slice, one PR), *sprint* (3 to 5 slices), *arc* (several
+is one of: *slice* (one sprint slice, one PR), *sprint* (one review's worth of slices, usually 3 to 5), *arc* (several
 sprints under an existing epic).
 
 **How this document is maintained.** When an action lands, its row gains a dated landing
@@ -20,7 +20,7 @@ commands before citing them.
 
 ---
 
-## 1. Where we are (measured 2026-10-15 at `e7f91529a`, the end of Phase 0)
+## 1. Where we are (measured 2026-10-18 at `c98fa3894`, the end of Phase 1)
 
 Re-derive with `make arch-census` and the census scripts archived with the evaluation at
 `archive/findings/architecture-evaluation-2026-10-15/census/` (run as
@@ -29,20 +29,21 @@ records the method and the full tables).
 
 | Measure | Value |
 |---|---|
-| Compiler source, non-test | 172 modules, 207,653 lines; median 216, p90 2,173 |
-| `types/typecheck.mdk` | 57,023 lines (30,597 code, 22,697 comment); 27.5% of the compiler; 83% of `types/` |
-| Extracted from it since August | 21 sibling modules, about 9,800 lines (as of Oct 14; not re-derived) |
-| Module-level `= Ref` cells | 108 in 28 modules (`test/arch_goldens/cells.golden`); typecheck 26 plus 147 fields in 4 bundles (bundles as of Oct 14) |
-| Import graph | 1,005 edges, 0 cycles, 3 layering violations (`layering.golden`) |
-| llvm_emit / wasm_emit twins | 94 named pairs out of 866 llvm names (`twins.golden`) |
-| Names defined in 2+ modules | 185 (0 identical bodies, pinned empty by `dupbodies.golden`) |
-| `lookupAssoc` call sites | 194 in 25 modules (85 in typecheck) |
-| Prelude cost | re-parsed and re-typechecked per process, about 90% of a hello-world `check` (as of Oct 14; the stage counts are now pinned by `stage_counts.golden`) |
-| Design docs in `compiler/` | 21 files, 19,577 lines (the keep list); 47 moved to `archive/design/` and `docs/design/` |
+| Compiler source, non-test | 180 modules, 213,087 lines; median 234, p90 2,257 |
+| `types/typecheck.mdk` | 57,406 lines (30,997 code, 22,662 comment); 27% of the compiler; 81% of `types/` |
+| Its growth during Phase 1 | +400 code lines (30,597 to 30,997) under 16 `Arch-Growth-Override:` commits, every one a Phase 1 sprint; about 10,000 lines a month before Phase 0 |
+| Modules over 3,000 code lines | 8 (`test/arch_goldens/oversize.golden`); 2 state a reason in their header (`frontend/resolve.mdk`, `tools/test_cmd.mdk`) |
+| Module-level `= Ref` cells | 108 in 28 modules (`test/arch_goldens/cells.golden`, unchanged since Phase 0); typecheck 26 plus 159 fields in 4 bundles (`PerRun` 88, `GraphRun` 30, `DriverState` 27, `CrossRun` 14) |
+| Import graph | 1,088 intra-compiler edges, 0 cycles, 3 layering violations (`layering.golden`) |
+| llvm_emit / wasm_emit twins | 93 named pairs (`twins.golden`) |
+| Identical bodies in 2+ modules | 0 (pinned empty by `dupbodies.golden`) |
+| `lookupAssoc` call sites | 195 in 24 modules (87 in typecheck) |
+| Prelude cost | re-parsed and re-typechecked per process, about 90% of a hello-world `check` (as of Oct 14; the stage counts are pinned by `stage_counts.golden`) |
+| CPU per verb, Phase 0 end to Phase 1 end | `check`/`run`/`build` of a value `main` 0.16/0.16/0.71 s to 0.07/0.09/0.52 s; `test stdlib/list.mdk` 1.86 s to 1.41 s; `check` of the 72-module CLI graph unchanged within noise (17 to 20 s, either binary on either tree) |
+| Design docs in `compiler/` | 21 files, 19,626 lines (the keep list) |
 
-Open milestones this plan draws on: M-SOLVER (5 open), M-PUBLISH (1), M-PIPELINE (2),
-M-CACHE (5), M-BOUNDARIES (3), M-IDENTITY (11); run-once O2 (10), O3 (4), O4 (8), O5 (5)
-(as of Oct 14; not re-derived).
+Open milestones this plan draws on (2026-10-18): M-PUBLISH (1 open), M-PIPELINE (1),
+M-CACHE (5), M-BOUNDARIES (3), M-IDENTITY (11); run-once O2 (2), O3 (2), O4 (8), O5 (5).
 
 ---
 
@@ -64,82 +65,89 @@ The guards now run in CI: `test/arch_ratchet.sh`, `test/arch_boundaries_test.mdk
 | **G4** | Documentation in three piles | 2026-10-15 (P0-D5): landed design docs in `archive/design/`, open proposals in `docs/design/`, nine `ARCHITECTURE.md` maps, `compiler/README.md` as the entry page with the old body in `archive/design/COMPILER-PORT-LOG.md`. #4204, PR #4226. |
 | **G5** | Helper dedup | 2026-10-15 (P0-D8, P0-D9): `dupbodies.golden` is empty; `typecheck.mdk` 30,609 to 30,597 code lines; exempt residue `ir/core_ir_eval.nthArm` and `backend/emit_support.nthArm`. #4205, PR #4222; residue #4229. |
 | **G6** | Pin compute-once | 2026-10-15: `test/stage_counts_test.mdk` pins per-verb stage counts (7 CLI probes, 4 LSP transcripts) from a write-only instrument, `support/stage_count.mdk`; counts above 1 are pinned at today's value with their owning issue (#4148, #4151, #4160). #4189, PR #4221; gaps #4228. |
+| **G7** | The A8 oversize list | 2026-10-18 (Phase 1 wrap): `oversize.golden` lists every module over 3,000 code lines (the ratchet's rule). It is a membership pin, not a line ratchet: a listed module may grow, and only a module newly crossing the line needs an `Arch-Pin-Raise:` trailer naming the reason its header states. The six listed modules whose headers state no reason owe one from the next sprint that touches each. |
 
 ---
 
-## 3. Phase 1: the typechecker's output is a value (A2)
+## 3. Phase 1: the typechecker's output is a value (A2) — met 2026-10-18
 
-This is M2 (#2549 phase 2) plus M-PUBLISH, already the plan of record. The playbook adds
-the acceptance shape and the order of consumers.
+**Exit criterion, met 2026-10-18 at `c98fa3894`** (epic #4206; eight sprints #4235 to
+#4241 and #4278, PRs #4242, #4246, #4258, #4260, #4265, #4277, #4286, #4296): no `Ref`
+field in `frontend/ast.mdk` (`ast_cells.golden` pins 0); a published scheme holds no live
+cell, and P then Q then P renders as cold P (`compiler/types/publish_test.mdk`); one
+`typecheck.drive` per verb per graph (`stage_counts.golden`), with the seven exception rows
+below. The cut rulings P1-D1 to P1-D22 and the exit outputs are on #4206.
 
-| Id | Action | Mechanism | Acceptance | Size | Needs |
-|---|---|---|---|---|---|
-| **V1** | Evidence side table | Every site-bearing AST node carries an `EvId` minted by the typechecker's mark pass from the graph evidence counter, idempotently (a later marker over an inferred tree keeps the id); the answer lives in a graph-owned site cell keyed by that id (the `EvCell` precedent) and is published into the one `EvTable`; `dictPass` and `core_ir_lower` read the table by id. Evidence storage is bounded to one graph first. One AST constructor per slice, `EBinOp` first. Landed 2026-10-17: sprints 3 and 4, PR #4258 and PR #4260; the AST carries no cell, and the answers are keyed by `EvId`. | Pinned as `ast_ref_fields 0` in `test/arch_goldens/ast_cells.golden`. | arc | Phase 0 G3 |
-| **V2** | Finalized publication | `CheckedProgram` and `TcReport` as in `TYPECHECK-CONTRACTS.md` §4, in a new leaf `types/publish.mdk`: a scheme is published with its own constraint context, frozen by copy at the end of the graph; a validator refuses a published scheme or evidence entry containing a live cell; a variable still free at graph end is a listed weak variable; partial analysis retained for the LSP. | `checkOneSchemeFullK` returns no live cell (a test over the stdlib and the `run_check_agreement` corpus); same-process P then Q then P equals cold P on schemes with context, diagnostics and evidence, with P rendered after Q (contract §7, #4053). | sprint | V1 for the evidence half only |
-| **V3** | One pipeline | `check`, `run`, `build`, `test`, LSP and MCP read one `CheckedProgram` per graph; the precheck's responsibilities (exhaustiveness, impl obligations) are covered by the pipeline before the precheck is deleted; `build`'s child consumes the artifact or runs the same pipeline (D4). | G6's call-count pins show one typecheck drive per verb per graph; `run_check_agreement` corpus stays green. | sprint | V2, D4 and D5 (ruled) |
+| Id | Action | Landed |
+|---|---|---|
+| **V1** | Evidence side table | 2026-10-17 (P1-D1, D2, D5 to D7, D16): every site-bearing node carries an `EvId` minted idempotently by the mark pass; answers live in graph-owned site cells published into the one `EvTable`, read through `types/route_key.mdk`; parity by two-arm IR identity per constructor. Sprints 3 and 4, PRs #4258, #4260; #700 closed. |
+| **V2** | Finalized publication | 2026-10-17/18 (P1-D4, D8 to D10): `types/publish.mdk` holds `TcReport`, `CheckedProgram`, `PubScheme`, `PartialAnalysis`, the deep zonk, freeze-by-copy at graph end and the live-cell validator; `types/evidence_coverage.mdk` validates the evidence against the trees. Sprints 5 and 6, PRs #4265, #4277; #4053 closed. |
+| **V3** | One pipeline | 2026-10-16 to 18 (D4 step one, D5a and D5b, P1-D3, D12 to D15, D19 to D22): `driver/diagnostics.mdk`'s `frontEnd` is the one pipeline function behind `check`, `run`, `build`'s child, `check-policy`, `manifest`, the LSP and MCP; the value-`main` print and the `Async` driver application are judged in the drive; `build --json` reports through `--diag-json`; `medaka test`, the REPL and hover drive each graph once. Sprints 1, 2, 7, 8, PRs #4242, #4246, #4286, #4296. |
 
-**Exit criterion.** No `Ref` field in `frontend/ast.mdk`; the stamper order is a policy
-over a value, not a write order into a tree; one typecheck drive per verb, counted by G6's
-`typecheck.drive` key.
+**Listed exceptions at the exit** (`typecheck.drive` above 1), each with an owner:
 
-**Amended 2026-10-16 (Phase 1 cut, at `7c03d2397`; rulings P1-D1 to P1-D17 on #4206).**
-Measured before cutting the sprints, and the reason the V1 and V2 rows above changed:
-- `EMethodAt` and `EDictAt` already carry an `EvId` (#2667, #2705). The AST holds 9 cells
-  in 8 constructors: the routes of `EBinOp`, `EUnOp`, `ENumLit`, `EWideLit`, `ENumLit`'s
-  float, the record heads of `EFieldAccess` and `ERecordUpdate` (written during inference,
-  not by a stamper), and dead fields on `ESlice` and `EIndex` (#700). The old acceptance
-  grep counted a comment and missed five of them.
-- The only reader of the four route cells is `dictPass`, in the writers' own file; the
-  record heads' only reader is `core_ir_lower`. Eval and the LSP read none, so there is no
-  consumer order to follow.
-- Resolve mints binding ids only; `EvId`s come from the typechecker's graph counter, and
-  the `EvId` contract forbids a second numbering. The mark pass already rebuilds every site
-  node once per drive, after desugar's copies.
-- The evidence table is read back out of the cells at drain time, so a cells-versus-table
-  validator cannot disagree; two-arm IR identity per constructor is the parity proof (Val).
-- On the unkeyed paths (elaboration, the REPL, the playground, `medaka test`) the evidence
-  array and `evCells` grow for the life of the process today; bounding them comes before V1
-  multiplies the ids.
-- The exit's "stamper order is a policy over a value" is half in Phase 1: V1 makes the drain
-  write graph-owned cells instead of the tree; stampers that return values instead of
-  writing destination cells are M-SOLVER's evidence-bindings step (#2705).
-- V2's schemes half needs nothing from V1 (today's `EvTable` holds no cells); #4053 is a
-  side table keyed by type-variable ids that the next drive overwrites.
-- #2874 (`build --json` checks in its parent) is in Phase 1 through a `--diag-json <path>`
-  side channel, as part of D4's first step (Val).
-- Seven sprints: two remove duplicate drives that need no artifact (V3), two do V1, one
-  does V2's schemes half, two move the consumers onto the report (V2's evidence half and
-  V3) and are re-cut after the fifth.
+| Row | Value | What it is | Owner |
+|---|---|---|---|
+| `test_probe`, `test_doc_native` | 2 | the parent's drive plus the native child's own: a value crossing a process boundary | Phase 3 C3 (#2732, #3902) |
+| `test_doc_eval`, `test_docimp_eval` | 2 | the doctest-injected program is a second graph (P1-D15) | Phase 3 C3 (#4279) |
+| `test_propsdoc_eval`, `test_arb_eval` | 4, 5 | the single-file test parent's gate and pair drives are two prelude universes, plus the doctest graph and the props worker's process | #4282 (precursor #4297), then C3 |
+| `lsp.c_didchange` | 4 | four requests, not a duplicate | none needed |
+
+**What Phase 1 did not do**, and where each residual now lives:
+- Lowering and eval still read the installed evidence table rather than `CheckedProgram`
+  (the emit path remaps it in place after mangling). A2's "consumers read the value" half is
+  therefore unchecked: Phase 2 **S4** (#2705).
+- Stampers still write destination cells inside the drive; "the stamper order is a policy
+  over a value" is M-SOLVER's evidence-bindings step (#2705, P1-D18).
+- Process-global cells (`selectedProfile`, `mainSchemeRef`) remain: Phase 2 S1 and S3.
+- `typecheck.mdk` grew by 400 code lines under override, all solver-side halves of V1, V2
+  and D5: Phase 2 **T1** and Phase 4.
+- Every drive Phase 1 removed had been a silent judge of something (sprint 1 F1, sprint 7
+  F1, sprint 8 F1: a mismatched `Async` driver built at exit 0). Each was caught by the
+  end-of-sprint review, none by a per-slice check or the corpora. The sprint-plan skill now
+  requires a deleted check to name a program only it rejects.
 
 ---
 
 ## 4. Phase 2: state by lifetime (A3)
 
 This is component X: `PerRun`'s 88 fields and `resetState` (#2547's three units and #2548
-landed 2026-09-03/04). It is the precondition of the file split (ruling 8) and of safe
-caching (A7).
+landed 2026-09-03/04). It is the precondition of the file split (ruling 8). Whether it is
+also the precondition of the interface artifact is what S1 decides (see the 2026-10-18
+amendment below).
 
 | Id | Action | Mechanism | Acceptance | Size | Needs |
 |---|---|---|---|---|---|
-| **S1** | Classify every cell | A table, committed in `types/ARCHITECTURE.md`, assigning each of the 26 loose cells and 147 bundle fields a lifetime: process, graph, module, group, solver run. Fields whose lifetime no one can state are listed as such. | The table covers every cell (G3's count is the denominator). | slice | G3 |
+| **S1** | Classify every cell | A table, committed in `types/ARCHITECTURE.md`, assigning each of the 26 loose cells and 159 bundle fields (`PerRun` 88, `GraphRun` 30, `DriverState` 27, `CrossRun` 14) a lifetime: process, graph, module, group, solver run. Fields whose lifetime no one can state are listed as such. The table also marks which cells a loaded `ModuleInterface` would have to fill, which is the input to the ordering decision below. | The table covers every cell (G3's count is the denominator). | slice | G3 |
+| **T1** | The data leaf, pulled forward from Phase 4 | `types/tc_types.mdk`: the 150 `data` declarations and S1's state records move out of `typecheck.mdk` into a leaf with a closure golden that contains no inference module. No state is threaded; this is the one Phase 4 extraction that needs nothing from S2. | `typecheck.mdk` falls by the moved lines; `closure.types.tc_types.golden` pinned; fixpoint; LEG A additive-only. | slice | S1 |
+| **S4** | Consumers read `CheckedProgram` | `core_ir_lower`, `eval` and the emit path read evidence, dispositions and runtime types from the `CheckedProgram` the drive returned, not from the installed tables; the in-place remap after mangling becomes a remap of the value. Closes A2's second half. | A2's check gains "no reader of an installed table outside `types/`" as a boundary pin; two-arm IR identity over the engines corpus. | sprint | S1, V2 (#2705) |
 | **S2** | Per-group state becomes an argument | A `GroupCtx` record created when `processSCC` enters a group and dropped when it leaves, holding the pending channels and the per-group inference state; `checkBodyImpl` and `infer` take it as a parameter. Threading is done group-at-a-time, never all 25 arms at once; a shim reads the bundle while a region is unmigrated. | `PerRun` field count falls as fields move (G3 pins it); byte-identical goldens; fixpoint; the M2 instruction-count instrument stays within its soft budget. | arc | S1, V1 |
 | **S3** | Per-module and per-graph state become records with owners | `ModuleCtx` minted by the module worker, `GraphCtx` by the graph driver; `resetState` is deleted because there is nothing ambient to reset; `Toggles` becomes an immutable `TcConfig` built once by the driver. | `grep -cE "^[a-z][A-Za-z0-9_']* *= *(Ref|newRef)" compiler/types/typecheck.mdk` is 0 outside interners; `resetState` does not exist; the memo layers no longer snapshot and reinstall mutable state. | sprint | S2 |
 
 **Exit criterion.** Zero module-level cells in the typechecker outside interners; every
 cell's lifetime is the record that holds it.
 
+**Amended 2026-10-18 (Phase 1 wrap): the order of Phases 2 and 3.** S1 runs first, as one
+slice. Then Phase 3's C1 and C2 run before S2, unless S1's table shows that a loaded
+interface would have to fill cells beyond the published value's own tables; in that case
+S2 and S3 run first and C1 waits. The reason: C1's dependency is V2 (its Needs column), not
+Phase 2; Phase 3 is the stated perf lever, and Phase 1's measured CPU change on the 72-module
+check was nil; S2 is the riskiest arc in the plan and should not gate the lever by default.
+T1 runs beside either order. Phase 4 proper still waits on S2 (ruling 8).
+
 ---
 
 ## 5. Phase 3: the interface artifact (A7)
 
 This is M-CACHE (#2732) plus run-once O3 and O5. It is also the single largest lever on
-the box's CPU-seconds, the stated perf goal.
+the box's CPU-seconds, the stated perf goal. Under the 2026-10-18 amendment it starts
+after S1 rather than after Phase 2.
 
 | Id | Action | Mechanism | Acceptance | Size | Needs |
 |---|---|---|---|---|---|
 | **C1** | `ModuleInterface` codec | Serialize a module's published export surface (schemes, interfaces, instances and their dispositions, the importer-visible evidence rows, declared effects) with a codec in the style of `ir/core_ir_sexp.mdk`, with a format version and the module's source fingerprint, the compiler fingerprint, the instance-environment key the contract requires (§5) and the IO join of the selected target profile (D7: the join's atom list, not the profile's name, so profiles with the same join share an entry). | Round-trip prop: decode (encode x) equals x for every stdlib module; a changed instance environment invalidates; an interface written under one join is never loaded under another, shown by a two-profile test over an unsigned binding whose type differs between them (the open-tail case in D7). | sprint | V2 |
 | **C2** | The prelude ships pre-checked | At `make medaka`, the prelude's interface file is produced beside `stdlib/core.mdk`, keyed by the source fingerprint the binary bakes; the loader resolves it from `exeDir` as it resolves `stdlib/` and prefers it when the fingerprint matches (D6, ruled: shipped files, not baked). Every verb loads it instead of re-checking `core.mdk`; the same step then covers every stdlib module. Files are content-addressed per (module, IO join) (D7): `make medaka` produces the full join and the playground's (`wasmgc/browser-worker`), joins whose interfaces are byte-identical share one file, and any other join falls back to a full check. | G6's pins show zero prelude typecheck drives per process; hello-world `check` instruction count falls by the measured prelude share; interface-on versus interface-off differential over the engines corpus is identical; a mismatched fingerprint falls back to a full check and says so on stderr. | sprint | C1 |
-| **C3** | Imports load interfaces | The loader consults the interface cache for every user import whose fingerprints match, falling back to a full check; the LSP, REPL and `medaka test` parent reuse it within a session; `build`'s parent hands the artifact to the child (D4, step two). | Multi-module `check` of `medaka_cli.mdk` re-typechecks only changed modules; the REPL's per-line drive count is 1; `build` parent plus child typecheck the graph once. | sprint | C2, V3 |
+| **C3** | Imports load interfaces | The loader consults the interface cache for every user import whose fingerprints match, falling back to a full check; the LSP, REPL and `medaka test` parent reuse it within a session; `build`'s parent hands the artifact to the child (D4, step two). | Multi-module `check` of `medaka_cli.mdk` re-typechecks only changed modules; the REPL's per-line drive count is 1; `build` parent plus child typecheck the graph once; the Phase 1 exception rows owned here (`test_probe`, `test_doc_native`, `test_doc_eval`, `test_docimp_eval`) fall to 1 because the doctest graph and the native child load the parent's interface instead of re-checking. | sprint | C2, V3 |
 
 **Exit criterion.** Nothing proven in one process is re-proven in the next for an
 unchanged input; the prelude is checked at build time only.
@@ -192,8 +200,8 @@ This is #1398's REVISION block and runs beside Phases 0 to 4; it needs nothing f
 | Playbook | Existing owner | Relationship |
 |---|---|---|
 | Phase 0 | epic #4206, milestone `Architecture: Phase 0 (the guards)`: G1 #4200, G2a #4201, G2b #4202, G3 #4203, G4 #4204, G5 #4205, G6 #4189 | adds the guards no existing plan has |
-| Phase 1 V1, V2, V3 | milestone `Architecture: Phase 1 (output is a value)`; #2549 phase 2, M-PUBLISH (#2544, #4053), M-PIPELINE (#2874), run-once #4151, #4152, #4154, #4160, #4157, #3901, #3902 | same work; this document adds the IR-identity parity proof, the evidence bound and the sprint order |
-| Phase 2 | component X (`PerRun`, `resetState`); #2547 and #2548 landed 2026-09-03/04 | same work; this document adds the cell-lifetime table and the exit grep |
+| Phase 1 V1, V2, V3 | milestone `Architecture: Phase 1 (output is a value)`; #2549 phase 2, M-PUBLISH (#2544, #4053), M-PIPELINE (#2874), run-once #4151, #4152, #4154, #4160, #4157, #3901, #3902 | landed 2026-10-18; residuals S4 (#2705), #4279, #4282 |
+| Phase 2 | component X (`PerRun`, `resetState`); #2547 and #2548 landed 2026-09-03/04; S4 is #2705; T1 is #2586's first leaf | same work; this document adds the cell-lifetime table and the exit grep |
 | Phase 3 | M-CACHE #2732, run-once O3 (#4160, #3902) and O5 (#4169 to #4172, #3903) | same work; prelude-first ordering and D6 |
 | Phase 4 | #2586, ruling 8 | same sequencing; this document names the layer axis and the per-module acceptance |
 | Phase 5 | #1398 R3 to R9, #4107 | unchanged |
@@ -225,7 +233,15 @@ later sprint executes them and does not re-ask.
   acceptance column as the contract's exit bar. Phase 0 guards are independent slices;
   G4 and G5 go to a cheap model.
 - Every sprint that touches `compiler/` records `make arch-census` at cut and at wrap-up;
-  the diff is the sprint's architectural footprint and goes in the sprint report.
+  the diff is the sprint's architectural footprint and goes in the sprint report. A phase's
+  wrap also records CPU-seconds per verb against the previous phase's end (the perf goal is
+  box throughput, not wall time).
+- An `Arch-Growth-Override:` reason names the sibling module the lines will leave to (a
+  Phase 4 leaf, or T1), so the override is a loan with a stated lender, not a toll. Phase 1
+  took 16 such loans for 400 lines; none named a destination.
+- A slice that deletes a check, a drive or a re-check names a program that only the deleted
+  check rejects, with base and head exit codes, or states that none could be built. "No
+  fixture changed" is not evidence that nothing judged (the `sprint-plan` skill, step 3).
 - A finding that a law is wrong amends `ARCHITECTURE.md` by a PR Val ratifies, never by a
   sprint report. A finding that the plan is wrong amends this file with a dated block, the
   way `EMITTER-TARGET-ARCHITECTURE.md`'s REVISION block did.

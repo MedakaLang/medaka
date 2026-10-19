@@ -115,8 +115,11 @@ instead.
      tolerated and fixed forward.
    - `REFUSED` — read the evidence. Usually the packet was wrong: fix the
      packet yourself (edit contract if the premise was the contract's, one
-     line in NOTES.md) and re-dispatch, upgrading sonnet→opus if the refusal
-     shows the slice is trickier than classified. If the refusal overturns
+     line in NOTES.md) and re-dispatch at the same tier; move up one tier
+     (haiku→sonnet→opus) only if the refusal shows the slice is trickier
+     than classified, and if the extra difficulty is a single decision inside
+     an otherwise mechanical slice, split it first (`sprint-plan` step 2)
+     rather than promoting the whole slice. If the refusal overturns
      the slice's premise entirely, mark it `dropped` and tell Val in your
      next status message.
    - `BLOCKED` — should now be rare (step 2 catches ordinary stale-main
@@ -180,7 +183,11 @@ by serialization.
    sprint, in this round only** — not per-slice, not per-PR, and never a
    required CI check. Its DECLINED register is what stops it demanding churn;
    if it returns a finding that register forbids, dismiss it with one NOTES.md
-   line rather than dispatching a fix.
+   line rather than dispatching a fix. Its brief restricts it to findings a
+   `grep` can reproduce (copies, twins, comment register, unnamed tuples,
+   hand-rolled stdlib); "move X beside Y" demands are declined, because the
+   pass never builds and cannot see the import cycle that sank two of six such
+   refactors in Phase 1 sprint 7.
    Placement findings are measured against what the contract's Surface row
    STATED (`sprint-plan` step 3) and the **`architecture`** skill
    (`.claude/skills/architecture/SKILL.md`), not against a reviewer's

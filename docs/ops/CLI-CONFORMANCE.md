@@ -580,9 +580,10 @@ through to the program as an ordinary argument (§2), and `medaka gate reach` tr
 separator. A dash-leading filename is passed with a path prefix (`./-weird.mdk`). Revisit only
 if a real caller needs `--` as a separator.
 
-**Splitting `medaka_cli.mdk` (line count: `make arch-census`) — out of scope.** That is
-#2282. This document makes it more tempting, not less; note findings there rather than
-acting on them.
+**Splitting `medaka_cli.mdk` (line count: `make arch-census`) — out of scope.** The
+de-grab-bag issue #2282 closed 2026-10-03; placement debt here is owned by the
+architecture epic #4206 (laws A8 and A10). This document makes it more tempting, not
+less; note findings there rather than acting on them.
 
 ---
 

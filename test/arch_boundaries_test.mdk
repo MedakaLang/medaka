@@ -1,6 +1,6 @@
 {- | Architecture boundary pins: layering, module-level cells, the hooks record,
-   the AST's cell-free shape, and the import closures of the leaf modules (law
-   A6, G3 of the architecture playbook).
+   the AST's cell-free shape, the A8 oversize list, and the import closures of the
+   leaf modules (laws A6 and A8, G3 and G7 of the architecture playbook).
 
    Scope is every `compiler/**/*.mdk` except `*_test.mdk`; a module id is the
    path under `compiler/` without `.mdk`, `/` read as `.`. Only column-0 import
@@ -315,6 +315,22 @@ test "arch_boundaries: no types/ module outside the allowlist reaches support.ho
             && elem "support.hooks" (closureOf g m))
         (M.keys g))
   expectEqual [] offenders
+
+-- Law A8: a module over 3,000 code lines (neither blank nor `--`-leading, the
+-- growth ratchet's rule) is a listed exception. The list may only fall; a module
+-- that crosses the line needs an `Arch-Pin-Raise:` trailer naming the reason its
+-- header states.
+isCodeLine : String -> Bool
+isCodeLine l = trimLeft l /= "" && not (isCommentLine l)
+
+oversizeRows : List (String, List String) -> List String
+oversizeRows mods =
+  filterMap
+    ((m, ls) => if length (filter isCodeLine ls) > 3000 then Some m else None)
+    mods
+
+test "arch_boundaries: modules over 3,000 code lines match oversize.golden" =
+  pin "oversize.golden" (oversizeRows loadModules)
 
 test "arch_boundaries: frontend.ast closure matches its golden" =
   pin
