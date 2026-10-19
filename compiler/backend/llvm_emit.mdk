@@ -314,7 +314,6 @@ import backend.trmc_analysis.{
   lastStmtExpr,
 }
 import types.private_mangle.{hashName, injectiveIdent}
-import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import types.route_key.{numIntWord}
 import backend.emit_plan.{
   EmitPlan(..),
@@ -940,6 +939,9 @@ data Emit = Emit {
   -- what every binder of the program holds (`DeclFacts.factBinders`), keyed by
   -- the ordinal of the row's id
   binderRows : BM.Map Int BinderRow,
+  -- the super count of each interface word (`DeclFacts.factSupers`); a word
+  -- absent from it has no supers
+  superCounts : OrdMap Int,
   -- each top-level value binding's stamped type, by name
   globalTys : OrdMap LTy,
   lams : Ref (List String),
@@ -8395,10 +8397,9 @@ takeRoutes _ _ = []
 
 -- The super dictionaries a dictionary of [ent]'s interface stores ahead of its
 -- `requires` dictionaries (see `dictWordOfRoute`).
-entrySuperCount : CImplEntry -> Int
-entrySuperCount ent = match installedDispositionsOpt ()
-  Some table => ifaceSuperCount (implEntryIfaceWord ent) table
-  None => 0
+entrySuperCount : Emit -> CImplEntry -> Int
+entrySuperCount e ent =
+  optionOr 0 (omLookup (implEntryIfaceWord ent) e.superCounts)
 
 -- load dict words [i, n) from the boxed dict cell `dictPtr`.  The head tag is the
 -- cell header (offset 0); field i is loaded by `loadField i` (offset 8*(i+1)), stored
@@ -8485,7 +8486,7 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     -- #1816: `implReqCount` is a direct `leadingDictPats` count and never negative;
     -- the clamp guards the `- lengthS methWords` subtraction.
     let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
-    let superCount = entrySuperCount ent
+    let superCount = entrySuperCount e ent
     -- an inherited default receives the dictionary that selected it
     let cellDicts =
       if isInheritedEntry ent then
@@ -14769,6 +14770,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     buf = Ref [],
     fnNames = Ref (collectFns groups),
     binderRows = rows,
+    superCounts = omFromPairs facts.factSupers omEmpty,
     globalTys = globalStampTys rows (filter (b => not (isFnBind b)) groups),
     lams = Ref [],
     implEntries = Ref implEntries,
