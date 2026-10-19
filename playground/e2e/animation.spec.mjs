@@ -211,6 +211,27 @@ try {
   const page = await open(browser);
   await geometryProof(page);
   await run(page); await waitCanvas(page);
+  const desktopWorkbench = await page.evaluate(() => {
+    const editor = document.getElementById('editor').getBoundingClientRect();
+    const canvas = document.getElementById('canvas-pane').getBoundingClientRect();
+    const buttons = ['pause-btn', 'stop-btn'].map(id => {
+      const button = document.getElementById(id);
+      return { className: button.className, radius: getComputedStyle(button).borderRadius };
+    });
+    return { editor, canvas, buttons };
+  });
+  assert.ok(desktopWorkbench.editor.width > 300 && desktopWorkbench.editor.right < desktopWorkbench.canvas.left,
+    'desktop animation view keeps the editor beside the canvas');
+  assert.ok(desktopWorkbench.buttons.every(button => button.className === 'btn-ghost' && button.radius === '6px'),
+    'Pause and Stop use the playground ghost-button style');
+  await page.setViewportSize({ width: 600, height: 800 });
+  await page.waitForFunction(() => {
+    const editor = document.getElementById('editor').getBoundingClientRect();
+    const canvas = document.getElementById('canvas-pane').getBoundingClientRect();
+    return editor.width > 0 && canvas.width > 0 && editor.bottom <= canvas.top;
+  });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  console.log('PASS animation view keeps code visible beside canvas and styles controls consistently');
   const first = await still(page); await pause(350);
   assert.notDeepEqual(await still(page), first, 'animation must change real canvas pixels');
   await page.click('#pause-btn'); await pause(100);
