@@ -1870,7 +1870,7 @@ collectPropLines ((DProp _ name _ body) :: rest) =
 collectPropLines (_ :: rest) = collectPropLines rest
 
 -- ── #1292: elaborate, then rename cross-unit-colliding constructors ──────────
--- `eval.evalModulesRootEnvWith` / `evalModulesWith` apply this rename themselves,
+-- `eval.evalModulesRootEnvFacts` / `evalModulesWith` apply this rename themselves,
 -- but applying it only there is not enough for `medaka test`: the `test "…"` and
 -- prop phases pull their BODIES out of the SAME elaborated module list they hand
 -- the driver (`elaboratedRootProps`, `collectTests`) and evaluate them in the

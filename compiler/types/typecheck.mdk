@@ -26084,7 +26084,7 @@ elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOne runtimeDecls coreDecls prog =
   fst (elaborateOneFacts runtimeDecls coreDecls prog)
 
--- `elaborateOne` with the facts its elaboration installed, for a caller that lowers
+-- `elaborateOne` with the `ProgramFacts` value its elaboration built, for a caller that lowers
 -- the flat decls.
 export
 elaborateOneFacts : List Decl ->

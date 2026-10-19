@@ -37,7 +37,7 @@
 #   3. the THREE parallel engine module-state builders' frame-seeding parity,
 #      plus exact delegation by the two root-environment wrappers
 #      (evalModulesWith / buildRootModuleStateWith / cevalModules;
-#      evalModulesRootEnvWith / evalModulesRootEvalEnvWith)
+#      evalModulesRootEnvFacts / evalModulesRootEvalEnvFacts)
 #   4. #1112 A-3.4 the IE namespace ratchet
 #   5. #1519 A-3.3 the CE construction ratchet
 #   6. #2796 Module-mode ENTRY PARITY: `checkModulesPreambleK` and
@@ -607,7 +607,7 @@ echo "  ok: all 4 frame operations appear in exactly 3 places total (no phantom 
 # it here is what took the total from 1 to 3. What the asymmetry actually
 # protects is UNCHANGED and is the tree-walk state builders plus their root
 # wrappers below: evalModulesWith, buildRootModuleStateWith,
-# evalModulesRootEnvWith and evalModulesRootEvalEnvWith must stay at 0.
+# evalModulesRootEnvFacts and evalModulesRootEvalEnvFacts must stay at 0.
 # eval.mdk:1823-1835's own
 # comment: the tree-walk `run` path's ERecordCreate arm (eval.mdk:1518-1522)
 # looks up ctorFieldOrdersRef and falls back to `VRecord` when the table has
@@ -680,7 +680,7 @@ if [ "$ceval_cfo" -ne 1 ] || [ "$withA_cfo" -ne 0 ] || [ "$root_builder_cfo" -ne
    [ "$cevalMainOf_cfo" -ne 1 ] || [ "$cevalOutputOf_cfo" -ne 1 ] || [ "$total_cfo" -ne 3 ]; then
   echo "FAIL: the ctorFieldOrdersRef asymmetry changed shape (cevalModules=$ceval_cfo,"
   echo "  evalModulesWith=$withA_cfo, buildRootModuleStateWith=$root_builder_cfo,"
-  echo "  evalModulesRootEnvWith=$root_env_cfo, evalModulesRootEvalEnvWith=$root_eval_env_cfo,"
+  echo "  evalModulesRootEnvFacts=$root_env_cfo, evalModulesRootEvalEnvFacts=$root_eval_env_cfo,"
   echo "  cevalMainOf=$cevalMainOf_cfo, cevalOutputOf=$cevalOutputOf_cfo, total=$total_cfo;"
   echo "  expected 1/0/0/0/0/1/1/3 -- the three writers are cevalModules, cevalMainOf and"
   echo "  cevalOutputOf, all in core_ir_eval.mdk). This table's seeding just moved"

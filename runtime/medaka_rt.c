@@ -995,7 +995,7 @@ void mdk_print_unit(void)       { printf("()\n"); }
  * pointer + length into an already-allocated, GC-owned, IMMUTABLE string
  * cell -- storing the pointer performs no allocation and no observable
  * effect) after every print.  mdk_enable_run_stdout_flush is called exactly
- * once, only by the real `medaka run` CLI driver (evalModulesOutputRun /
+ * once, only by the real `medaka run` CLI driver (evalModulesOutputRunFacts /
  * evalModulesOutputAsync) -- never by the pure differential-oracle eval
  * probes, which share this exact source but never call it, so their
  * captured output (many goldens pin an EMPTY capture for a deliberately

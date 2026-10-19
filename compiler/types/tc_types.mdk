@@ -3021,7 +3021,7 @@ public export data ChainMemo = ChainMemo {
 -- What a whole-graph drive produces, for either output selection.  `gdPerMod`,
 -- `gdCoreSchemes` and `gdCoreContexts` are filled on both; `gdCore`, `gdModules`
 -- and `gdResidual` are the tree arm's and are empty on `GOutDiags`.  `gdEvTable`
--- is the whole evidence table the tree arm installs (what `ElabResult` returns, and
+-- is the whole evidence table the tree arm returns (what `ElabResult` carries, and
 -- the report's `cpEvidence`), and on `GOutDiags` the goal half only (the drain's
 -- per-goal entries).
 public export data GraphDrive = GraphDrive {
@@ -3064,13 +3064,13 @@ public export data GraphDrive = GraphDrive {
 -- instead of a deflection; the emit driver's #2089 gate prints it.  It is the
 -- same list the sticky channel holds, cut to this call.
 -- #2549 M2: the fifth component is the EVIDENCE TABLE — the whole table this
--- elaboration installed, keyed by `EvId`: every goal it solved, every method
+-- elaboration produced, keyed by `EvId`: every goal it solved, every method
 -- occurrence and every minted site.  It is the table before `mangleUnitsEv`
 -- renames the trees, so a caller that lowers mangled trees lowers against the
 -- table that call returns.
 -- #1112 A-3: the sixth component is the whole-graph per-method DISPOSITION
 -- TABLE (`compiler/types/disposition.mdk`).  The seventh is the BINDER-TYPE
--- table the elaboration installed.  `program_facts.factsOfElab` reads all three.
+-- table the elaboration produced.  `program_facts.factsOfElab` reads all three.
 export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable, BinderTypeTable)
 
 -- E4/E6: prePass a module rewriting ARG-position method occurrences to EMethodAt
