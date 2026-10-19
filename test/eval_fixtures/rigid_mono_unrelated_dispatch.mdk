@@ -5,9 +5,9 @@
 -- Verified, not assumed — all five consumers stop before `types/typecheck.mdk`:
 --   compiler/entries/eval_main.mdk:19   evalMain (desugar (parse src))
 --   compiler/entries/core_ir_main.mdk:33
---   compiler/entries/core_ir_roundtrip_main.mdk:28
---                                       lowerProgram (annotateProgram (desugar (parse src)))
---   compiler/tools/snapshot.mdk:588     cprogramToSexp (lowerProgram (annotateProgram d))
+--   compiler/entries/core_ir_roundtrip_main.mdk:34
+--                                       lowerProgramWithFacts emptyFacts (annotateProgram (desugar (parse src)))
+--   compiler/tools/snapshot.mdk:584     cprogramToSexp (lowerProgramWithFacts emptyFacts (annotateProgram d))
 -- None imports `types.typecheck`; `types/annotate.mdk`, `ir/core_ir_lower.mdk`,
 -- `ir/core_ir_eval.mdk` and `eval/eval.mdk` have ZERO word-bounded `Mono` hits;
 -- and this fixture's own snapshot header reads `stages=CORE_IR` with no TYPES

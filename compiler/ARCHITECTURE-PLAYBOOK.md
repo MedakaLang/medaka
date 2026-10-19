@@ -94,9 +94,9 @@ below. The cut rulings P1-D1 to P1-D22 and the exit outputs are on #4206.
 | `lsp.c_didchange` | 4 | four requests, not a duplicate | none needed |
 
 **What Phase 1 did not do**, and where each residual now lives:
-- Lowering and eval still read the installed evidence table rather than `CheckedProgram`
-  (the emit path remaps it in place after mangling). A2's "consumers read the value" half is
-  therefore unchecked: Phase 2 **S4** (#2705).
+- Lowering and eval now read `ProgramFacts` values rather than an installed evidence table
+  (the emit path remaps the value after mangling); the reader half of Phase 2 **S4** (#2705)
+  landed in sprint arch-p2-2.
 - Stampers still write destination cells inside the drive; "the stamper order is a policy
   over a value" is M-SOLVER's evidence-bindings step (#2705, P1-D18).
 - Process-global cells (`selectedProfile`, `mainSchemeRef`) remain: Phase 2 S1 and S3.

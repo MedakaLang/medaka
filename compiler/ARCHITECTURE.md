@@ -85,13 +85,12 @@ published one.
   in the one evidence table. Every drive returns a `TcReport` whose `CheckedProgram` holds
   schemes frozen by copy at graph end, validated to contain no live cell; `check`, `run`,
   `build`, `test`, the LSP and MCP read it from one pipeline function and drive each graph
-  once. What remains: lowering and eval read the installed evidence table rather than the
-  value (playbook S4, #2705), and stampers still write destination cells inside the drive
-  (#2705).
+  once. Lowering and eval read `ProgramFacts` values rather than an installed table;
+  stampers still write destination cells inside the drive (#2705).
 - *Check:* `frontend/ast.mdk` declares no `Ref` field (`ast_cells.golden`); a published
   scheme contains no unresolved cell (`types/publish_test.mdk`); one `typecheck.drive` per
-  verb per graph (`stage_counts.golden`). Owed: no reader of an installed table outside
-  `types/` (S4).
+  verb per graph (`stage_counts.golden`). Nothing outside `types/` reads an installed
+  table; readers read `ProgramFacts` values.
 
 ### A3. State has a declared lifetime
 

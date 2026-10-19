@@ -200,14 +200,15 @@ evRoutesOf (EvHead _) =
 -- builtin operator.  Every other miss panics, as `evDictRoutesIn` does.
 export
 evSiteRouteIn : EvIndex -> EvId -> Route
-evSiteRouteIn idx ev = match siteRouteResultIn (Some idx) ev
+evSiteRouteIn idx ev = match siteRouteResultIn idx ev
   Ok r => r
   Err message => panic message
 
-siteRouteResultIn : Option EvIndex -> EvId -> Result String Route
-siteRouteResultIn table ev
+export
+siteRouteResultIn : EvIndex -> EvId -> Result String Route
+siteRouteResultIn idx ev
   | isUnminted ev = Ok RNone
-  | otherwise = match evidenceLookup table "operator site" ev
+  | otherwise = match evidenceLookup (Some idx) "operator site" ev
     Ok (EvOne r) => Ok r
     Ok _ =>
       Err "evidence table: an operator site answered by another kind of entry"
@@ -218,14 +219,15 @@ siteRouteResultIn table ev
 -- a plain `Int`.  Every other miss panics.
 export
 evSiteLitIn : EvIndex -> EvId -> (Option Float, Route)
-evSiteLitIn idx ev = match siteLitResultIn (Some idx) ev
+evSiteLitIn idx ev = match siteLitResultIn idx ev
   Ok answer => answer
   Err message => panic message
 
-siteLitResultIn : Option EvIndex -> EvId -> Result String (Option Float, Route)
-siteLitResultIn table ev
+export
+siteLitResultIn : EvIndex -> EvId -> Result String (Option Float, Route)
+siteLitResultIn idx ev
   | isUnminted ev = Ok (None, RNone)
-  | otherwise = match evidenceLookup table "literal site" ev
+  | otherwise = match evidenceLookup (Some idx) "literal site" ev
     Ok (EvLit f r) => Ok (f, r)
     Ok _ =>
       Err "evidence table: a literal site answered by another kind of entry"
@@ -236,14 +238,15 @@ siteLitResultIn table ev
 -- `unminted` and answers "".  Every other miss panics.
 export
 evSiteHeadIn : EvIndex -> EvId -> String
-evSiteHeadIn idx ev = match siteHeadResultIn (Some idx) ev
+evSiteHeadIn idx ev = match siteHeadResultIn idx ev
   Ok head => head
   Err message => panic message
 
-siteHeadResultIn : Option EvIndex -> EvId -> Result String String
-siteHeadResultIn table ev
+export
+siteHeadResultIn : EvIndex -> EvId -> Result String String
+siteHeadResultIn idx ev
   | isUnminted ev = Ok ""
-  | otherwise = match evidenceLookup table "record-head site" ev
+  | otherwise = match evidenceLookup (Some idx) "record-head site" ev
     Ok (EvHead h) => Ok h
     Ok _ =>
       Err "evidence table: a record-head site answered by another kind of entry"

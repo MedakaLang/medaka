@@ -1,5 +1,5 @@
 # META
-source_lines=4003
+source_lines=4005
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -784,7 +784,9 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- leaves a method to its interface's default therefore gets no body for it here.  A
 -- driver that typechecks lowers through `lowerTypedProgramWith`.
 --
--- Evidence and binder rows are read from [facts]; its dispositions are ignored.
+-- Evidence and binder rows are read from [facts]; the CProgram ignores its
+-- dispositions, but `lowerProgramWith` still passes `(factsNow ()).pfDispositions` to
+-- `installDispatchTables`.
 export
 lowerProgramWithFacts : ProgramFacts -> List Decl -> CProgram
 lowerProgramWithFacts facts prog = withFacts facts (_ =>

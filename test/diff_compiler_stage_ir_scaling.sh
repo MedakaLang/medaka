@@ -81,7 +81,7 @@
 #
 # ── NETTING ──────────────────────────────────────────────────────────────────
 #
-# `lowerProgramEmit`/`emitProgram` process the PRELUDE as well as the target, so a
+# `lowerProgramEmitWith`/`emitProgram` process the PRELUDE as well as the target, so a
 # stage's raw count carries a large fixed term (emit's floor is 5.9e8 Ir — bigger
 # than the whole shape-attributable cost at N=1000). Netting is therefore still
 # required, per stage:
@@ -467,7 +467,7 @@ desugar=mdk_frontend_desugar__desugar \
 resolve=mdk_frontend_resolve__resolveToLines \
 mark=mdk_frontend_marker__markWithPrelude \
 typecheck=mdk_types_typecheck__checkOneToLinesWithRuntime \
-lower=mdk_ir_core_ir_lower__lowerProgramEmit \
+lower=mdk_ir_core_ir_lower__lowerProgramEmitWith \
 emit=mdk_backend_llvm_emit__emitProgram \
 plan=mdk_backend_emit_plan__buildEmitPlan \
 mangle=mdk_types_private_mangle__mangleUnits \

@@ -105,7 +105,7 @@ removing it:
   `runEmitWith` / `emitElaborated` (`compiler/entries/entry_support.mdk`) run
   `elaborateModules` on the graph the user wrote, then the #2089 residual gate, then
   `mangleUnitsEv` (`compiler/types/private_mangle.mdk`) over the
-  elaborated, dict-passed trees and the installed evidence table — so the emitter child's
+  elaborated, dict-passed trees and the evidence table (a `ProgramFacts` value) — so the emitter child's
   verdict equals `check`'s by construction rather than by a table-by-table audit, and no
   diagnostic it renders can carry a mangled spelling. Read every "the mangler ran first"
   claim in this file and in `compiler/` comments as history: `TYPECHECK-TARGET-ARCHITECTURE.md`

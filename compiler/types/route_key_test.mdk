@@ -14,6 +14,9 @@ import types.route_key.{
   evSiteLitIn,
   evSiteRouteIn,
   evidenceLookup,
+  siteHeadResultIn,
+  siteLitResultIn,
+  siteRouteResultIn,
 }
 import frontend.ast.{EvId(..), EvVal(..), EvEntry(..), Route(..), unminted}
 
@@ -155,4 +158,28 @@ test "a lookup over an index says why it has no answer" =
     expectEqual
       "ok"
       (missOf (evidenceLookup (Some idx) "operator site" (EvId "m" 10))),
+  ]
+
+test "a site reader refuses an entry of another kind and passes a miss through" =
+  let idx = evIndexOf [
+    EvEntry (EvId "m" 10) (EvOne RNone),
+    EvEntry (EvId "m" 12) (EvMany []),
+  ]
+  expectAll [
+    expectEqual
+      "evidence table: an operator site answered by another kind of entry"
+      (missOf (siteRouteResultIn idx (EvId "m" 12))),
+    expectEqual
+      "evidence table: a literal site answered by another kind of entry"
+      (missOf (siteLitResultIn idx (EvId "m" 10))),
+    expectEqual
+      "evidence table: literal site m#9 is from an earlier graph"
+      (missOf (siteLitResultIn idx (EvId "m" 9))),
+    expectEqual
+      "evidence table: a record-head site answered by another kind of entry"
+      (missOf (siteHeadResultIn idx (EvId "m" 10))),
+    expectEqual
+      "evidence table: record-head site m#9 is from an earlier graph"
+      (missOf (siteHeadResultIn idx (EvId "m" 9))),
+    expectEqual "ok" (missOf (siteRouteResultIn idx (EvId "m" 10))),
   ]
