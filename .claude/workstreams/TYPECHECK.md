@@ -65,7 +65,7 @@ removing it:
   *"is the key scoped?"* but *"what does it out-rank, and should it?"*.
 - **The P0-9 cross-module constructor fix patched `compiler/eval/eval.mdk` and left its parallel
   driver `compiler/ir/core_ir_eval.mdk` broken for months** — documented in `AGENTS.md`'s
-  `evalModules`/`cevalModules` trap.
+  `evalModulesWith`/`cevalModules` trap.
 - **#1381 (issue #1319 unit 3) drained a false REJECT and created #1382 (S0) + #1383 (S1).** The
   front end became identity-correct for a record-namespace collision (`Type mismatch: Cfg vs Cfg`
   no longer fires on legal programs) — every gate green: 29-gate preflight, `selfproc` 16 ok,

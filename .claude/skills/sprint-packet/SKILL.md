@@ -73,7 +73,7 @@ short — but everything NOT in it that the work rests on, the implementer
 verifies first-hand.
 
 **§5 Sites.** The files/functions to change, best-effort complete, including
-known mirrors — the paired eval drivers (`evalModules`/`cevalModules` must
+known mirrors — the paired eval drivers (`evalModulesWith`/`cevalModules` must
 move in lockstep), wildcard `_ =>` arms audited as a SET when an AST ctor is
 touched, printer/fmt/lsp surfaces for syntax work. A site the packet missed
 that answers the same question as the named sites is a refusal moment, not a

@@ -1,5 +1,5 @@
 # META
-source_lines=5623
+source_lines=5543
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -67,7 +67,7 @@ import types.route_key.{
 import types.disposition.{DispositionTable, InstanceShape(..), inheritorsOf}
 import types.program_facts.{
   ProgramFacts(..),
-  factsInstalled,
+  emptyFacts,
   factsNow,
   withFacts,
 }
@@ -2870,8 +2870,8 @@ defaultNamesOf (IfaceMethod _ _ None _) = []
 
 -- DRIVER-COLLAPSE Phase 5: the flat single-frame evalProgram is DELETED.  Its
 -- one-by-name-frame install (prelude+user merged) is subsumed by the 1-module
--- case of evalModules (evalOne); the shared helpers it used (cellResult,
--- installGroups, installConsts, coalesceImpls, …) are retained by evalModules.
+-- case of evalModulesWith (evalOneFacts); the shared helpers it used (cellResult,
+-- installGroups, installConsts, coalesceImpls, …) are retained by evalModulesWith.
 
 export
 cellResult : (String, Ref (Value e)) -> (String, Value e)
@@ -3330,7 +3330,7 @@ appendOutput s =
   -- abort can flush it.  Called from BOTH the real `medaka run` path and the
   -- pure differential-oracle path (this function is shared), which is fine:
   -- the stash is inert unless `enableRunStdoutFlush` was also called, and
-  -- only `evalModulesOutputRun` (never the oracle probes) calls that.
+  -- only `evalModulesOutputRunFacts` (never the oracle probes) calls that.
   let _ = stashRunStdout !outputRef
   VUnit
 
@@ -4336,29 +4336,25 @@ export
 noMainMsg : String
 noMainMsg = "no `main` in this file; add `main = ...`"
 
+-- The pretty-printed value of [prog]'s `main`.  Untyped programs only: no
+-- evidence, no dispositions, no binders.  A typed program uses `evalOneFacts`.
 export
 evalMain : List Decl -> String
-evalMain prog =
-  let facts = factsInstalled ()
-  withFacts
-    facts
-    (_ => match lookupBinding "main" (evalOneFacts facts [] ("__main__", prog))
+evalMain prog = withFacts
+  emptyFacts
+  (_ =>
+    match lookupBinding "main" (evalOneFacts emptyFacts [] ("__main__", prog))
       Some v => ppValue (force v)
       None => runtimePanic "E-NO-MAIN" noMainMsg)
 
 -- Run the program for its OUTPUT (forcing `main`, whose IO side-effects append
 -- to outputRef) and return the captured stdout — diffs against === EVAL ===.
--- DRIVER-COLLAPSE Phase 5: the flat evalOutput is DELETED; evalOneOutput (the
--- 1-module case of evalModules) is the surviving OUTPUT entry point.
+-- DRIVER-COLLAPSE Phase 5: the flat evalOutput is DELETED; evalOneOutputFacts (the
+-- 1-module case of evalModulesWith) is the surviving OUTPUT entry point.
 
 -- Like evalOutput, but drops any prelude function the user program redefines
 -- (mirrors the reference's prelude_for shadow-drop) so a user `sum` doesn't
 -- coalesce with the prelude's point-free `sum` into a mixed-arity VMulti.
-export
-evalOutputWith : List Decl -> List Decl -> String
-evalOutputWith preludeDecls userDecls =
-  evalOutputWithFacts (factsInstalled ()) preludeDecls userDecls
-
 export
 evalOutputWithFacts : ProgramFacts -> List Decl -> List Decl -> String
 evalOutputWithFacts facts preludeDecls userDecls = evalOneOutputFacts facts [] (
@@ -4411,13 +4407,6 @@ runMainForEffect binds = match lookupBinding "main" binds
 -- kind-inference note on `Value`
 data ModInfo v =
   | ModInfo String (List Decl) (List (String, List (List Pat, Expr, Loc))) (List (String, Ref v)) (EvalEnv v)
-
-export
-evalModules : List Decl ->
-  List (String, List Decl) ->
-  <e> List (String, Value e)
-evalModules preludeDecls modules =
-  evalModulesWith (factsInstalled ()) [] preludeDecls modules
 
 -- ── S1-PRELUDE (a): a prelude standalone never shadows a user interface method ──
 -- docs/spec/SHADOW-SEMANTICS.md rows 46-49.  A bare occurrence whose name equals a
@@ -4731,34 +4720,19 @@ rootLocals [] = []
 rootLocals [ModInfo _ _ _ cells _] = map cellResult cells
 rootLocals (_ :: rest) = rootLocals rest
 
--- Like evalModules but returns the root module's FULL eval frame — local ∪
+-- Like evalModulesWith but returns the root module's FULL eval frame — local ∪
 -- imports ∪ globals — flattened to (name, value).  The prop runner evaluates a
 -- prop body against this single frame, and a prop references not only the
 -- file's own helpers (locals) and imported names but also prelude methods like
 -- `eq`/`compare` (globals), which rootLocals alone omits.
-export
-evalModulesRootEnv : List Decl ->
-  List (String, List Decl) ->
-  <e> List (String, Value e)
-evalModulesRootEnv preludeDecls modules =
-  evalModulesRootEnvWith [] preludeDecls modules
-
+--
 -- B2 (RUN-EFFECTS), root-env variant: mirror of evalModulesWith for the
 -- rootFullEnv path (prop runner + `test "…"` phase + repl).  Installs
 -- `externBindings () ++ extraExterns` so a per-driver capability policy
 -- (testCapableExterns) can override the frozen clock/GC constants without those
 -- prims reaching the differential-oracle probes.  Kept in LOCKSTEP with
 -- evalModulesWith — the two module drivers are deliberate parallel copies.
-export
-evalModulesRootEnvWith : List (String, Value e) ->
-  List Decl ->
-  List (String, List Decl) ->
-  <e> List (String, Value e)
-evalModulesRootEnvWith extraExterns preludeDecls modules =
-  evalModulesRootEnvFacts (factsInstalled ()) extraExterns preludeDecls modules
-
--- `evalModulesRootEnvWith` over [facts]; the caller forces the returned values
--- inside `withFacts facts`.
+-- The caller forces the returned values inside `withFacts facts`.
 export
 evalModulesRootEnvFacts : ProgramFacts ->
   List (String, Value e) ->
@@ -4770,20 +4744,8 @@ evalModulesRootEnvFacts facts extraExterns preludeDecls modules =
     buildRootModuleStateWith facts extraExterns preludeDecls modules
   rootFullEnv mods globalCells
 
-export
-evalModulesRootEvalEnvWith : List (String, Value e) ->
-  List Decl ->
-  List (String, List Decl) ->
-  <e> EvalEnv (Value e)
-evalModulesRootEvalEnvWith extraExterns preludeDecls modules =
-  evalModulesRootEvalEnvFacts
-    (factsInstalled ())
-    extraExterns
-    preludeDecls
-    modules
-
--- `evalModulesRootEvalEnvWith` over [facts]; the caller evaluates in the returned
--- environment inside `withFacts facts`.
+-- `evalModulesRootEnvFacts` returning the root environment itself; the caller
+-- evaluates in it inside `withFacts facts`.
 export
 evalModulesRootEvalEnvFacts : ProgramFacts ->
   List (String, Value e) ->
@@ -5165,11 +5127,13 @@ firstOrEmpty (x :: _) = x
 
 -- Run a multi-module program for its OUTPUT (the loader-driven analog of
 -- evalOutput): evaluate every module in dependency order, force the root
--- module's `main` for its IO side-effects, return the captured stdout.
+-- module's `main` for its IO side-effects, return the captured stdout.  Untyped
+-- programs only: no evidence, no dispositions, no binders.  A typed program uses
+-- `evalModulesOutputFacts`.
 export
 evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutput preludeDecls modules =
-  evalModulesOutputFacts (factsInstalled ()) preludeDecls modules
+  evalModulesOutputFacts emptyFacts preludeDecls modules
 
 export
 evalModulesOutputFacts : ProgramFacts ->
@@ -5184,7 +5148,7 @@ evalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
 
 -- ── run-path real-I/O externs (B2, RUN-EFFECTS) ────────────────────────────
 -- Real-I/O primitives installed ONLY by `medaka run`'s driver
--- (evalModulesOutputRun) — never by the differential-oracle drivers, so the
+-- (evalModulesOutputRunFacts) — never by the differential-oracle drivers, so the
 -- oracle never performs real I/O regardless of what `e` is otherwise instantiated at.
 --
 -- OVERRIDE SEMANTICS: evalModulesWith installs `externBindings () ++ extraExterns`
@@ -5268,7 +5232,7 @@ pSleepMsIO _ = panic "sleepMs: expected Int"
 -- a SUCCESS status, abandoning every doctest after it — exactly the
 -- per-driver hazard test/CAPABILITY-EXCEPTIONS.txt flagged this extern as
 -- "DEFERRED ON PURPOSE" for. Scoping it to ioExternBindings (installed only by
--- evalModulesOutputRun, `medaka run`'s own driver) avoids that: the pure
+-- evalModulesOutputRunFacts, `medaka run`'s own driver) avoids that: the pure
 -- oracle and the batch test/repl drivers still see "unbound identifier: exit"
 -- (unchanged, pre-existing behavior), while `medaka run` — the one driver that
 -- ever runs exactly ONE program per process — gets the real thing.
@@ -5524,15 +5488,10 @@ testCapableExterns _ = [
   ("ePutStrLn", prim1M pEPutStrLn),
 ]
 
--- `medaka run`'s output driver: evalModulesOutput plus the real-I/O externs.
+-- `medaka run`'s output driver: evalModulesOutputFacts plus the real-I/O externs.
 -- The row is the coarse `IO` alias: ioExternBindings now spans FileRead/FileWrite/
 -- Env/Stdin/Stderr/Clock, and `IO` in a BOUND expands to exactly that join
 -- (typecheck.expandIoInBound), so writing them out one by one would buy nothing.
-export
-evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String
-evalModulesOutputRun preludeDecls modules =
-  evalModulesOutputRunFacts (factsInstalled ()) preludeDecls modules
-
 export
 evalModulesOutputRunFacts : ProgramFacts ->
   List Decl ->
@@ -5550,22 +5509,14 @@ evalModulesOutputRunFacts facts preludeDecls modules = withFacts
     let _ = runMainForEffect binds
     !outputRef)
 
--- ── Phase 0 (DRIVER-COLLAPSE): 1-module eval wrappers over evalModules ──────
--- evalOne / evalOneOutput / evalOneRootEnv run a SINGLE program as the degenerate
--- 1-element module map [(rootId, prog)] through the multi-module eval path,
--- mirroring evalProgram / evalOutput / evalModulesRootEnv respectively.  The
--- multi-module driver installs the prelude GLOBALLY and the one module's funDefs as
--- LOCALS over a per-module frame; for a single module with zero imports the root
--- frame is locals ∪ globals, the same surface evalProgram exposes by-name.  The
--- key behavioural difference Phase 0 must characterize: evalProgram merges prelude
--- + user into ONE by-name frame and forces nullary thunks after every impl
--- installs, whereas evalModules uses separate prelude/module install order — the
--- binding/install/thunk-force hazard class (phases 96/103/121/125/134).
-export
-evalOne : List Decl -> (String, List Decl) -> <e> List (String, Value e)
-evalOne preludeDecls (rootId, prog) = evalModules preludeDecls [(rootId, prog)]
-
--- `evalOne` over [facts]; the caller forces the returned values inside
+-- ── Phase 0 (DRIVER-COLLAPSE): 1-module eval wrappers over evalModulesWith ──
+-- evalOneFacts / evalOneOutputFacts / evalOneRootEnvFacts run a SINGLE program as
+-- the degenerate 1-element module map [(rootId, prog)] through the multi-module
+-- eval path.  The multi-module driver installs the prelude GLOBALLY and the one
+-- module's funDefs as LOCALS over a per-module frame; for a single module with
+-- zero imports the root frame is locals ∪ globals.  It uses separate prelude/module
+-- install order — the binding/install/thunk-force hazard class (phases
+-- 96/103/121/125/134).  The caller forces the returned values inside
 -- `withFacts facts`.
 export
 evalOneFacts : ProgramFacts ->
@@ -5575,48 +5526,17 @@ evalOneFacts : ProgramFacts ->
 evalOneFacts facts preludeDecls (rootId, prog) =
   evalModulesWith facts [] preludeDecls [(rootId, prog)]
 
--- 1-module wrapper over evalModulesWith: the doctest single-file path passes a
--- capability list (testCapableExterns) so a prelude-only doctest sees the same
--- real clock/stderr as `medaka run`.
-export
-evalOneWith : List (String, Value e) ->
-  List Decl ->
-  (String, List Decl) ->
-  <e> List (String, Value e)
-evalOneWith extraExterns preludeDecls (rootId, prog) =
-  evalModulesWith (factsInstalled ()) extraExterns preludeDecls [(rootId, prog)]
-
--- run a single program for OUTPUT (mirror evalOutput): the 1-module evalModules
--- already forces the root module's `main` for effects and returns captured stdout.
-export
-evalOneOutput : List Decl -> (String, List Decl) -> String
-evalOneOutput preludeDecls (rootId, prog) =
-  evalModulesOutput preludeDecls [(rootId, prog)]
-
+-- run a single program for OUTPUT: the 1-module driver already forces the root
+-- module's `main` for effects and returns captured stdout.
 export
 evalOneOutputFacts : ProgramFacts -> List Decl -> (String, List Decl) -> String
 evalOneOutputFacts facts preludeDecls (rootId, prog) =
   evalModulesOutputFacts facts preludeDecls [(rootId, prog)]
 
--- the root module's FULL frame (locals ∪ imports ∪ globals), mirror
--- evalModulesRootEnv — the prop runner needs prelude methods (eq/compare) visible.
-export
-evalOneRootEnv : List Decl -> (String, List Decl) -> <e> List (String, Value e)
-evalOneRootEnv preludeDecls (rootId, prog) =
-  evalModulesRootEnv preludeDecls [(rootId, prog)]
-
--- 1-module wrapper over evalModulesRootEnvWith: repl installs a capability list
--- (testCapableExterns) so an interactive session sees the real clock/stderr.
-export
-evalOneRootEnvWith : List (String, Value e) ->
-  List Decl ->
-  (String, List Decl) ->
-  <e> List (String, Value e)
-evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
-  evalModulesRootEnvWith extraExterns preludeDecls [(rootId, prog)]
-
--- `evalOneRootEnvWith` over [facts]; the caller forces the returned values inside
--- `withFacts facts`.
+-- the root module's FULL frame (locals ∪ imports ∪ globals) over [extraExterns]:
+-- the prop runner needs prelude methods (eq/compare) visible, and repl installs a
+-- capability list (testCapableExterns) so an interactive session sees the real
+-- clock/stderr.
 export
 evalOneRootEnvFacts : ProgramFacts ->
   List (String, Value e) ->
@@ -5629,7 +5549,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false))))
-(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "factsInstalled" false) (mem "factsNow" false) (mem "withFacts" false))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "factsNow" false) (mem "withFacts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false))))
@@ -7167,9 +7087,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "noMainMsg" (TyCon "String"))
 (DFunDef false "noMainMsg" () (ELit (LString "no `main` in this file; add `main = ...`")))
 (DTypeSig true "evalMain" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
-(DFunDef false "evalMain" ((PVar "prog")) (EBlock (DoLet false false (PVar "facts") (EApp (EVar "factsInstalled") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EApp (EApp (EApp (EVar "evalOneFacts") (EVar "facts")) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "prog")))) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-MAIN"))) (EVar "noMainMsg")))))))))
-(DTypeSig true "evalOutputWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
-(DFunDef false "evalOutputWith" ((PVar "preludeDecls") (PVar "userDecls")) (EApp (EApp (EApp (EVar "evalOutputWithFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "preludeDecls")) (EVar "userDecls")))
+(DFunDef false "evalMain" ((PVar "prog")) (EApp (EApp (EVar "withFacts") (EVar "emptyFacts")) (ELam (PWild) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EApp (EApp (EApp (EVar "evalOneFacts") (EVar "emptyFacts")) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "prog")))) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-MAIN"))) (EVar "noMainMsg")))))))
 (DTypeSig true "evalOutputWithFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
 (DFunDef false "evalOutputWithFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "userDecls")) (EApp (EApp (EApp (EVar "evalOneOutputFacts") (EVar "facts")) (EListLit)) (ETuple (ELit (LString "__main__")) (EBinOp "++" (EApp (EApp (EVar "dropShadowed") (EApp (EVar "funNamesOf") (EVar "userDecls"))) (EVar "preludeDecls")) (EVar "userDecls")))))
 (DTypeSig true "funNamesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -7185,8 +7103,6 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "runMainForEffect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "runMainForEffect" ((PVar "binds")) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EVar "binds")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "force") (EVar "v"))) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-MAIN"))) (EVar "noMainMsg")))))
 (DData Private "ModInfo" ("v") ((variant "ModInfo" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyCon "EvalEnv") (TyVar "v"))))) ())
-(DTypeSig true "evalModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalModules" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EListLit)) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "preludeShadowNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "preludeShadowNames" ((PVar "moduleDecls")) (EApp (EVar "implMethodNames") (EVar "moduleDecls")))
 (DTypeSig false "groupsNamedIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))))))
@@ -7237,14 +7153,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "rootLocals" ((PList)) (EListLit))
 (DFunDef false "rootLocals" ((PList (PCon "ModInfo" PWild PWild PWild (PVar "cells") PWild))) (EApp (EApp (EVar "map") (EVar "cellResult")) (EVar "cells")))
 (DFunDef false "rootLocals" ((PCons PWild (PVar "rest"))) (EApp (EVar "rootLocals") (EVar "rest")))
-(DTypeSig true "evalModulesRootEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalModulesRootEnv" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EListLit)) (EVar "preludeDecls")) (EVar "modules")))
-(DTypeSig true "evalModulesRootEnvWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "evalModulesRootEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "evalModulesRootEnvFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "evalModulesRootEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "mods") (PVar "globalCells")) (EApp (EApp (EApp (EApp (EVar "buildRootModuleStateWith") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "rootFullEnv") (EVar "mods")) (EVar "globalCells")))))
-(DTypeSig true "evalModulesRootEvalEnvWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalModulesRootEvalEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EApp (EVar "evalModulesRootEvalEnvFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "evalModulesRootEvalEnvFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "evalModulesRootEvalEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "mods") (PVar "globalCells")) (EApp (EApp (EApp (EApp (EVar "buildRootModuleStateWith") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "rootFullEvalEnv") (EVar "mods")) (EVar "globalCells")))))
 (DTypeSig false "buildRootModuleStateWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))))))
@@ -7316,7 +7226,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "firstOrEmpty" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOrEmpty" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "evalModulesOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
-(DFunDef false "evalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules")))
+(DFunDef false "evalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EVar "emptyFacts")) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "evalModulesOutputFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "evalModulesOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EListLit)) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))))
 (DTypeSig false "pReadFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
@@ -7442,31 +7352,19 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ioHostExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "Follow")) (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "Follow")) (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "FollowPanic")) (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "Follow")) (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "FollowPanic")) (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "Follow")) (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "Follow")) (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "granted2") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "granted2") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "granted3") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "granted2") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EApp (EApp (EVar "granted1") (EVar "True")) (EVar "Entry")) (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EApp (EApp (EVar "granted1") (EVar "True")) (EVar "Entry")) (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EApp (EApp (EVar "granted1") (EVar "True")) (EVar "Entry")) (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "grantedPair") (EVar "pRename"))) (ETuple (ELit (LString "fsync")) (EApp (EApp (EApp (EVar "granted1") (EVar "True")) (EVar "Follow")) (EVar "pFsync"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdoutIO"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
 (DTypeSig true "testCapableExterns" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))
 (DFunDef false "testCapableExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn")))))
-(DTypeSig true "evalModulesOutputRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "evalModulesOutputRun" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "evalModulesOutputRunFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "evalModulesOutputRunFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "evalModulesOutputRunFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "enableRunStdoutFlush") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EApp (EVar "ioExternBindings") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))))
-(DTypeSig true "evalOne" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalOne" ((PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EVar "evalModules") (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "evalOneFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EListLit)) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
-(DTypeSig true "evalOneWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "evalOneWith" ((PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
-(DTypeSig true "evalOneOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "String"))))
-(DFunDef false "evalOneOutput" ((PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EVar "evalModulesOutput") (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneOutputFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "String")))))
 (DFunDef false "evalOneOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EVar "facts")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
-(DTypeSig true "evalOneRootEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalOneRootEnv" ((PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EVar "evalModulesRootEnv") (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
-(DTypeSig true "evalOneRootEnvWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "evalOneRootEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneRootEnvFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "evalOneRootEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false))))
-(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "factsInstalled" false) (mem "factsNow" false) (mem "withFacts" false))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "factsNow" false) (mem "withFacts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false))))
@@ -9004,9 +8902,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "noMainMsg" (TyCon "String"))
 (DFunDef false "noMainMsg" () (ELit (LString "no `main` in this file; add `main = ...`")))
 (DTypeSig true "evalMain" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
-(DFunDef false "evalMain" ((PVar "prog")) (EBlock (DoLet false false (PVar "facts") (EApp (EVar "factsInstalled") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EApp (EApp (EApp (EVar "evalOneFacts") (EVar "facts")) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "prog")))) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-MAIN"))) (EVar "noMainMsg")))))))))
-(DTypeSig true "evalOutputWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
-(DFunDef false "evalOutputWith" ((PVar "preludeDecls") (PVar "userDecls")) (EApp (EApp (EApp (EVar "evalOutputWithFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "preludeDecls")) (EVar "userDecls")))
+(DFunDef false "evalMain" ((PVar "prog")) (EApp (EApp (EVar "withFacts") (EVar "emptyFacts")) (ELam (PWild) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EApp (EApp (EApp (EVar "evalOneFacts") (EVar "emptyFacts")) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "prog")))) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-MAIN"))) (EVar "noMainMsg")))))))
 (DTypeSig true "evalOutputWithFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
 (DFunDef false "evalOutputWithFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "userDecls")) (EApp (EApp (EApp (EVar "evalOneOutputFacts") (EVar "facts")) (EListLit)) (ETuple (ELit (LString "__main__")) (EBinOp "++" (EApp (EApp (EVar "dropShadowed") (EApp (EVar "funNamesOf") (EVar "userDecls"))) (EVar "preludeDecls")) (EVar "userDecls")))))
 (DTypeSig true "funNamesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -9022,8 +8918,6 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "runMainForEffect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "runMainForEffect" ((PVar "binds")) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EVar "binds")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "force") (EVar "v"))) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-MAIN"))) (EVar "noMainMsg")))))
 (DData Private "ModInfo" ("v") ((variant "ModInfo" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyCon "EvalEnv") (TyVar "v"))))) ())
-(DTypeSig true "evalModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalModules" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EListLit)) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "preludeShadowNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "preludeShadowNames" ((PVar "moduleDecls")) (EApp (EVar "implMethodNames") (EVar "moduleDecls")))
 (DTypeSig false "groupsNamedIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))))))
@@ -9074,14 +8968,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "rootLocals" ((PList)) (EListLit))
 (DFunDef false "rootLocals" ((PList (PCon "ModInfo" PWild PWild PWild (PVar "cells") PWild))) (EApp (EApp (EMethodRef "map") (EVar "cellResult")) (EVar "cells")))
 (DFunDef false "rootLocals" ((PCons PWild (PVar "rest"))) (EApp (EVar "rootLocals") (EVar "rest")))
-(DTypeSig true "evalModulesRootEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalModulesRootEnv" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EListLit)) (EVar "preludeDecls")) (EVar "modules")))
-(DTypeSig true "evalModulesRootEnvWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "evalModulesRootEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "evalModulesRootEnvFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "evalModulesRootEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "mods") (PVar "globalCells")) (EApp (EApp (EApp (EApp (EVar "buildRootModuleStateWith") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "rootFullEnv") (EVar "mods")) (EVar "globalCells")))))
-(DTypeSig true "evalModulesRootEvalEnvWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalModulesRootEvalEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EApp (EVar "evalModulesRootEvalEnvFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "evalModulesRootEvalEnvFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "evalModulesRootEvalEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "mods") (PVar "globalCells")) (EApp (EApp (EApp (EApp (EVar "buildRootModuleStateWith") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "rootFullEvalEnv") (EVar "mods")) (EVar "globalCells")))))
 (DTypeSig false "buildRootModuleStateWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))))))
@@ -9153,7 +9041,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "firstOrEmpty" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOrEmpty" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "evalModulesOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
-(DFunDef false "evalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules")))
+(DFunDef false "evalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EVar "emptyFacts")) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "evalModulesOutputFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "evalModulesOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EListLit)) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))))
 (DTypeSig false "pReadFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
@@ -9279,23 +9167,11 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ioHostExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "Follow")) (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "Follow")) (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "FollowPanic")) (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "Follow")) (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "FollowPanic")) (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "Follow")) (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EApp (EApp (EVar "granted1") (EVar "False")) (EVar "Follow")) (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "granted2") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "granted2") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "granted3") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "granted2") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EApp (EApp (EVar "granted1") (EVar "True")) (EVar "Entry")) (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EApp (EApp (EVar "granted1") (EVar "True")) (EVar "Entry")) (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EApp (EApp (EVar "granted1") (EVar "True")) (EVar "Entry")) (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "grantedPair") (EVar "pRename"))) (ETuple (ELit (LString "fsync")) (EApp (EApp (EApp (EVar "granted1") (EVar "True")) (EVar "Follow")) (EVar "pFsync"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdoutIO"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
 (DTypeSig true "testCapableExterns" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))
 (DFunDef false "testCapableExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn")))))
-(DTypeSig true "evalModulesOutputRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "evalModulesOutputRun" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "evalModulesOutputRunFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "evalModulesOutputRunFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "evalModulesOutputRunFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "enableRunStdoutFlush") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EApp (EVar "ioExternBindings") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))))
-(DTypeSig true "evalOne" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalOne" ((PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EVar "evalModules") (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "evalOneFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EListLit)) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
-(DTypeSig true "evalOneWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "evalOneWith" ((PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
-(DTypeSig true "evalOneOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "String"))))
-(DFunDef false "evalOneOutput" ((PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EVar "evalModulesOutput") (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneOutputFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "String")))))
 (DFunDef false "evalOneOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EVar "facts")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
-(DTypeSig true "evalOneRootEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalOneRootEnv" ((PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EVar "evalModulesRootEnv") (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
-(DTypeSig true "evalOneRootEnvWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "evalOneRootEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneRootEnvFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "evalOneRootEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))

@@ -1,5 +1,5 @@
 # META
-source_lines=811
+source_lines=813
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR evaluator — STAGE2-DESIGN §2.1's "trivial Core-IR tree-walker" that
@@ -56,7 +56,7 @@ import ir.core_ir_lower.{
   instanceReqCounts,
   declaredMethodArities,
 }
-import types.program_facts.{ProgramFacts(..), factsInstalled, withFacts}
+import types.program_facts.{ProgramFacts(..), emptyFacts, withFacts}
 import support.util.{isEmptyL, dedup, contains, filterList}
 import support.ordmap.{OrdMap}
 import types.private_mangle.{mangleCtorCollisions}
@@ -601,7 +601,7 @@ cRunMainForEffect binds = match lookupBinding "main" binds
 -- `declaredRecordFieldOrders` instead), so lowering has no business seeding it.
 -- `cevalModules` already seeds it for the multi-module path; these two wrappers
 -- are the single-program analog, so every `ceval*` entry point gets the table
--- from an INTERPRETER driver rather than as a side effect of `lowerProgram`.
+-- from an INTERPRETER driver rather than as a side effect of lowering.
 -- Callers pass the SAME decl list they lowered — for the elaborated corpora that
 -- is the post-`annotateProgram` / post-`elaborate*` list, not the raw parameters.
 export
@@ -797,11 +797,13 @@ cRootLocals (_ :: rest) = cRootLocals rest
 
 -- Run a multi-module Core-IR program for its OUTPUT (the loader-driven analog of
 -- cevalOutput): evaluate every module in dependency order, force the root module's
--- `main` for its IO side-effects, return the captured stdout.
+-- `main` for its IO side-effects, return the captured stdout.  Untyped programs
+-- only: no evidence, no dispositions, no binders.  A typed program uses
+-- `cevalModulesOutputFacts`.
 export
 cevalModulesOutput : List Decl -> List (String, List Decl) -> String
 cevalModulesOutput preludeDecls modules =
-  cevalModulesOutputFacts (factsInstalled ()) preludeDecls modules
+  cevalModulesOutputFacts emptyFacts preludeDecls modules
 
 export
 cevalModulesOutputFacts : ProgramFacts ->
@@ -817,7 +819,7 @@ cevalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true) (mem "noBinderId" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroupsWith" false) (mem "lowerImplsWithFacts" false) (mem "instanceReqCounts" false) (mem "declaredMethodArities" false))))
-(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "factsInstalled" false) (mem "withFacts" false))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "withFacts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false) (mem "contains" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisions" false))))
@@ -1013,14 +1015,14 @@ cevalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
 (DFunDef false "cRootLocals" ((PList (PCon "CModInfo" PWild PWild PWild PWild (PVar "cells") PWild))) (EApp (EApp (EVar "map") (EVar "cellResult")) (EVar "cells")))
 (DFunDef false "cRootLocals" ((PCons PWild (PVar "rest"))) (EApp (EVar "cRootLocals") (EVar "rest")))
 (DTypeSig true "cevalModulesOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
-(DFunDef false "cevalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "cevalModulesOutputFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules")))
+(DFunDef false "cevalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "cevalModulesOutputFacts") (EVar "emptyFacts")) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "cevalModulesOutputFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "cevalModulesOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EVar "cevalModules") (EVar "facts")) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true) (mem "noBinderId" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroupsWith" false) (mem "lowerImplsWithFacts" false) (mem "instanceReqCounts" false) (mem "declaredMethodArities" false))))
-(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "factsInstalled" false) (mem "withFacts" false))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "emptyFacts" false) (mem "withFacts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false) (mem "contains" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisions" false))))
@@ -1216,6 +1218,6 @@ cevalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
 (DFunDef false "cRootLocals" ((PList (PCon "CModInfo" PWild PWild PWild PWild (PVar "cells") PWild))) (EApp (EApp (EMethodRef "map") (EVar "cellResult")) (EVar "cells")))
 (DFunDef false "cRootLocals" ((PCons PWild (PVar "rest"))) (EApp (EVar "cRootLocals") (EVar "rest")))
 (DTypeSig true "cevalModulesOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
-(DFunDef false "cevalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "cevalModulesOutputFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules")))
+(DFunDef false "cevalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "cevalModulesOutputFacts") (EVar "emptyFacts")) (EVar "preludeDecls")) (EVar "modules")))
 (DTypeSig true "cevalModulesOutputFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "cevalModulesOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EVar "cevalModules") (EVar "facts")) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))))

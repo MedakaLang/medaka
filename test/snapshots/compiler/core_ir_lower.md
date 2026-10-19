@@ -1,5 +1,5 @@
 # META
-source_lines=4045
+source_lines=4003
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -111,7 +111,6 @@ import types.disposition.{
 }
 import types.program_facts.{
   ProgramFacts(..),
-  factsInstalled,
   factsNow,
   withFacts,
 }
@@ -783,13 +782,9 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- section).  It cannot see an inherited default: which instance inherits which
 -- default is instance identity, and only elaboration establishes that.  An impl that
 -- leaves a method to its interface's default therefore gets no body for it here.  A
--- driver that typechecks lowers through `lowerTypedProgram`.
-export
-lowerProgram : List Decl -> CProgram
-lowerProgram prog = lowerProgramWithFacts (factsInstalled ()) prog
-
--- `lowerProgram` reading evidence and binder rows from [facts].  Its dispositions
--- are ignored, as `lowerProgram` lowers without them.
+-- driver that typechecks lowers through `lowerTypedProgramWith`.
+--
+-- Evidence and binder rows are read from [facts]; its dispositions are ignored.
 export
 lowerProgramWithFacts : ProgramFacts -> List Decl -> CProgram
 lowerProgramWithFacts facts prog = withFacts facts (_ =>
@@ -800,10 +795,6 @@ lowerProgramWithFacts facts prog = withFacts facts (_ =>
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
 -- when none was published instead of silently lowering every inherited default away.
-export
-lowerTypedProgram : List Decl -> CProgram
-lowerTypedProgram prog = lowerTypedProgramWith (factsInstalled ()) prog
-
 export
 lowerTypedProgramWith : ProgramFacts -> List Decl -> CProgram
 lowerTypedProgramWith facts prog =
@@ -817,7 +808,7 @@ lowerTypedProgramWith facts prog =
       (refoldProgram noLetCheck (lowerProgramWith (Some dispositions) [] prog)))
 
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
--- probe; see `lowerProgram`).  Refutable lets are still one-arm decisions here
+-- probe; see `lowerProgramWithFacts`).  Refutable lets are still one-arm decisions here
 -- (`letDecision`); each public lowering decides which of them to keep, and ends
 -- with `finishLowering`.  It reads the facts of the bracket its caller opened.
 lowerProgramWith : Option DispositionTable ->
@@ -841,7 +832,7 @@ lowerProgramWith dispositions pins prog =
       noDeclFacts)
 
 -- ── which refutable lets keep their decision (see `letDecision`) ─────────────
--- The emitting lowering (`lowerProgramEmit`, both backends) tests a refutable `let`
+-- The emitting lowering (`lowerProgramEmitWith`, both backends) tests a refutable `let`
 -- through its decision; every other consumer gets the plain `CLet`/`CSLet` back,
 -- unchanged.  The decision is kept only where the pattern can really miss, by the
 -- program's constructor table, so a `let` on a single-constructor type keeps its
@@ -1041,26 +1032,17 @@ isSomeLoc None = False
 -- This is an EMIT-ONLY transform: the tree-walking core_ir_eval evaluates a record
 -- to a by-name `VRecord` and matches `PRec` by label, so it must NOT see the
 -- positional `PCon` rewrite (a `PCon` would not match a `VRecord`).  Hence it lives
--- in `lowerProgramEmit` — which the LLVM emit drivers call — NOT in the shared
--- `lowerProgram` that core_ir_main / core_ir_eval use.  The field-order map is
+-- in `lowerProgramEmitWith` — which the LLVM emit drivers call — NOT in the shared
+-- `lowerProgramWithFacts` that core_ir_main / core_ir_eval use.  The field-order map is
 -- DECLARED order (DData named-field variants), the same order
 -- the emitters' record cell layout uses (each `CField` carries its ordinal), so
 -- the positional indices line up with the cell's stored field offsets (verified by the fixture byte-diff).
 export
-lowerProgramEmit : List Decl -> CProgram
-lowerProgramEmit prog = lowerProgramEmitPinned [] prog
-
-export
 lowerProgramEmitWith : ProgramFacts -> List Decl -> CProgram
 lowerProgramEmitWith facts prog = lowerProgramEmitPinnedWith facts [] prog
 
--- `lowerProgramEmit` against a prelude object already compiled: [pins] are that
+-- `lowerProgramEmitWith` against a prelude object already compiled: [pins] are that
 -- object's (method, key, symTag) impl rows (see `stampImplSymbols`).
-export
-lowerProgramEmitPinned : List (String, String, String) -> List Decl -> CProgram
-lowerProgramEmitPinned pins prog =
-  lowerProgramEmitPinnedWith (factsInstalled ()) pins prog
-
 export
 lowerProgramEmitPinnedWith : ProgramFacts ->
   List (String, String, String) ->
@@ -1132,10 +1114,6 @@ stampBinders lowering table prog =
 
 -- [prog] with every binder stamped as an untyped lowering stamps it, for a driver
 -- that builds Core by hand.
-export
-stampUntypedBinders : CProgram -> CProgram
-stampUntypedBinders prog = stampUntypedBindersWith (factsInstalled ()) prog
-
 export
 stampUntypedBindersWith : ProgramFacts -> CProgram -> CProgram
 stampUntypedBindersWith facts prog =
@@ -2404,7 +2382,7 @@ bindUpdateTemps fields body base =
 -- @mdk_impl_<tag>_<method>()`, re-running the body — duplicating any side effect
 -- (issue #719, silent run /= build on the LLVM and WasmGC backends).
 --
--- Fix (emit-only, so BOTH backends inherit it via lowerProgramEmit — the eval arm
+-- Fix (emit-only, so BOTH backends inherit it via lowerProgramEmitWith — the eval arm
 -- already memoises): HOIST each such occurrence to a synthesized top-level value
 -- binding `$memo_<tag>_<method> = <the nullary CMethod>` and replace the occurrence
 -- with a reference to it.  The existing top-level value-global CAF machinery (#561
@@ -2739,13 +2717,9 @@ cInitialRows [] _ = []
 cInitialRows ((CArm pat _ _) :: rest) i =
   ([canonPat pat], i) :: cInitialRows rest (i + 1)
 
--- the top-level function-group half of lowerProgram, exposed for the multi-module
--- driver (core_ir_eval.cevalModules), which lowers each module's groups separately
--- (per-module local frames) rather than as one flat program.
-export
-lowerGroups : List Decl -> List CBind
-lowerGroups prog = lowerGroupsWith (factsInstalled ()) prog
-
+-- the top-level function-group half of lowerProgramWithFacts, exposed for the
+-- multi-module driver (core_ir_eval.cevalModules), which lowers each module's
+-- groups separately (per-module local frames) rather than as one flat program.
 export
 lowerGroupsWith : ProgramFacts -> List Decl -> List CBind
 lowerGroupsWith facts prog =
@@ -3027,22 +3001,6 @@ implHeadKey m tag = "\{m}\n\{tag}"
 -- module's impls against it.
 -- [arities] is `declaredMethodArities` of every module's decls, built jointly for
 -- the same reason.
-export
-lowerImplsWith : List ((String, String, String), List Int) ->
-  OrdMap Int ->
-  OrdMap Int ->
-  Option DispositionTable ->
-  List Decl ->
-  List CImplEntry
-lowerImplsWith disp reqCounts arities dispositions prog =
-  lowerImplsWithFacts
-    (factsInstalled ())
-    disp
-    reqCounts
-    arities
-    dispositions
-    prog
-
 export
 lowerImplsWithFacts : ProgramFacts ->
   List ((String, String, String), List Int) ->
@@ -4056,7 +4014,7 @@ nodeTag _ = "?"
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "emptyDispositionTable" false) (mem "ifaceSuperCount" false) (mem "inheritorsOf" false))))
-(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "factsInstalled" false) (mem "factsNow" false) (mem "withFacts" false))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "factsNow" false) (mem "withFacts" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false) (mem "exprStartLoc" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false) (mem "range" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omKeys" false))))
@@ -4316,12 +4274,8 @@ nodeTag _ = "?"
 (DFunDef false "lowerStmt" ((PCon "DoLet" PWild (PVar "recFlag") (PVar "pat") (PVar "e") PWild)) (EApp (EApp (EApp (EVar "CSLet") (EVar "recFlag")) (EVar "pat")) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" ((PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir lower: unsupported block statement"))))
-(DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgram" ((PVar "prog")) (EApp (EApp (EVar "lowerProgramWithFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "prog")))
 (DTypeSig true "lowerProgramWithFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
 (DFunDef false "lowerProgramWithFacts" ((PVar "facts") (PVar "prog")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EApp (EApp (EApp (EVar "finishLowering") (EVar "UntypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "None")) (EListLit)) (EVar "prog")))))))
-(DTypeSig true "lowerTypedProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerTypedProgram" ((PVar "prog")) (EApp (EApp (EVar "lowerTypedProgramWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "prog")))
 (DTypeSig true "lowerTypedProgramWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
 (DFunDef false "lowerTypedProgramWith" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "dispositions") (EMatch (EFieldAccess (EVar "facts") "pfDispositions") (arm (PCon "Some" (PVar "table")) () (EVar "table")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "disposition table: no elaboration has published one")))))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EApp (EApp (EApp (EVar "finishLowering") (EVar "TypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "Some") (EVar "dispositions"))) (EListLit)) (EVar "prog")))))))))
 (DTypeSig false "lowerProgramWith" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))))
@@ -4408,12 +4362,8 @@ nodeTag _ = "?"
 (DTypeSig false "isSomeLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))
 (DFunDef false "isSomeLoc" ((PCon "Some" PWild)) (EVar "True"))
 (DFunDef false "isSomeLoc" ((PCon "None")) (EVar "False"))
-(DTypeSig true "lowerProgramEmit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EApp (EApp (EVar "lowerProgramEmitPinned") (EListLit)) (EVar "prog")))
 (DTypeSig true "lowerProgramEmitWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
 (DFunDef false "lowerProgramEmitWith" ((PVar "facts") (PVar "prog")) (EApp (EApp (EApp (EVar "lowerProgramEmitPinnedWith") (EVar "facts")) (EListLit)) (EVar "prog")))
-(DTypeSig true "lowerProgramEmitPinned" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerProgramEmitPinned" ((PVar "pins") (PVar "prog")) (EApp (EApp (EApp (EVar "lowerProgramEmitPinnedWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "pins")) (EVar "prog")))
 (DTypeSig true "lowerProgramEmitPinnedWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))))
 (DFunDef false "lowerProgramEmitPinnedWith" ((PVar "facts") (PVar "pins") (PVar "prog")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoLet false false (PVar "sited") (EApp (EVar "siteTrapCalls") (EVar "prog"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoLet false false (PVar "raw") (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EVar "emitDeclFacts") (EVar "facts")) (EVar "sited"))) (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "dispositions")) (EVar "pins")) (EVar "sited")))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoLet false false (PVar "lowering") (EMatch (EVar "dispositions") (arm (PCon "Some" PWild) () (EVar "TypedLowering")) (arm (PCon "None") () (EVar "UntypedLowering")))) (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EApp (EVar "finishLowering") (EVar "lowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten")))))))))
 (DTypeSig false "emitDeclFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DeclFacts"))))
@@ -4422,8 +4372,6 @@ nodeTag _ = "?"
 (DFunDef false "withDeclFacts" ((PVar "facts") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))
 (DTypeSig false "stampBinders" (TyFun (TyCon "Lowering") (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyFun (TyCon "CProgram") (TyCon "CProgram")))))
 (DFunDef false "stampBinders" ((PVar "lowering") (PVar "table") (PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "Ref") (EVar "BM.Tip"))) (DoLet false false (PVar "stamped") (EApp (EApp (EVar "mapProgramBinders") (EApp (EApp (EApp (EVar "stampVisit") (EVar "lowering")) (EVar "table")) (EVar "rows"))) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "withBinderRows") (EApp (EVar "BM.values") (EUnOp "!" (EVar "rows")))) (EVar "stamped")))))
-(DTypeSig true "stampUntypedBinders" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "stampUntypedBinders" ((PVar "prog")) (EApp (EApp (EVar "stampUntypedBindersWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "prog")))
 (DTypeSig true "stampUntypedBindersWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "stampUntypedBindersWith" ((PVar "facts") (PVar "prog")) (EApp (EApp (EApp (EVar "stampBinders") (EVar "UntypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EVar "prog")))
 (DData Private "Lowering" () ((variant "TypedLowering" (ConPos)) (variant "UntypedLowering" (ConPos))) ())
@@ -4973,8 +4921,6 @@ nodeTag _ = "?"
 (DTypeSig false "cInitialRows" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "cInitialRows" ((PList) PWild) (EListLit))
 (DFunDef false "cInitialRows" ((PCons (PCon "CArm" (PVar "pat") PWild PWild) (PVar "rest")) (PVar "i")) (EBinOp "::" (ETuple (EListLit (EApp (EVar "canonPat") (EVar "pat"))) (EVar "i")) (EApp (EApp (EVar "cInitialRows") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
-(DTypeSig true "lowerGroups" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind"))))
-(DFunDef false "lowerGroups" ((PVar "prog")) (EApp (EApp (EVar "lowerGroupsWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "prog")))
 (DTypeSig true "lowerGroupsWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind")))))
 (DFunDef false "lowerGroupsWith" ((PVar "facts") (PVar "prog")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EApp (EApp (EVar "map") (EApp (EVar "refoldBind") (EVar "noLetCheck"))) (EApp (EVar "lowerGroupsRaw") (EVar "prog"))))))
 (DTypeSig false "lowerGroupsRaw" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind"))))
@@ -5049,8 +4995,6 @@ nodeTag _ = "?"
 (DFunDef false "collidingHeads" ((PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "firstKey") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (EVar "firstKey")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (EVar "key")) (EVar "firstKey"))) (EVar "acc"))) (arm (PCon "Some" (PVar "k0")) () (EIf (EBinOp "==" (EVar "k0") (EVar "key")) (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EVar "firstKey")) (EVar "acc")) (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EVar "firstKey")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (ELit LUnit)) (EVar "acc")))))))
 (DTypeSig false "implHeadKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "implHeadKey" ((PVar "m") (PVar "tag")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString ""))))
-(DTypeSig true "lowerImplsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry"))))))))
-(DFunDef false "lowerImplsWith" ((PVar "disp") (PVar "reqCounts") (PVar "arities") (PVar "dispositions") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lowerImplsWithFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "disp")) (EVar "reqCounts")) (EVar "arities")) (EVar "dispositions")) (EVar "prog")))
 (DTypeSig true "lowerImplsWithFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))))))
 (DFunDef false "lowerImplsWithFacts" ((PVar "facts") (PVar "disp") (PVar "reqCounts") (PVar "arities") (PVar "dispositions") (PVar "prog")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EApp (EApp (EVar "map") (EApp (EVar "refoldImpl") (EVar "noLetCheck"))) (EApp (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EVar "disp")) (EVar "reqCounts")) (EVar "arities")) (EVar "dispositions")) (EVar "prog"))))))
 (DTypeSig false "lowerImplsRaw" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry"))))))))
@@ -5389,7 +5333,7 @@ nodeTag _ = "?"
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "emptyDispositionTable" false) (mem "ifaceSuperCount" false) (mem "inheritorsOf" false))))
-(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "factsInstalled" false) (mem "factsNow" false) (mem "withFacts" false))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true) (mem "factsNow" false) (mem "withFacts" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false) (mem "exprStartLoc" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false) (mem "range" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omKeys" false))))
@@ -5649,12 +5593,8 @@ nodeTag _ = "?"
 (DFunDef false "lowerStmt" ((PCon "DoLet" PWild (PVar "recFlag") (PVar "pat") (PVar "e") PWild)) (EApp (EApp (EApp (EVar "CSLet") (EVar "recFlag")) (EVar "pat")) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" ((PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir lower: unsupported block statement"))))
-(DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgram" ((PVar "prog")) (EApp (EApp (EVar "lowerProgramWithFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "prog")))
 (DTypeSig true "lowerProgramWithFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
 (DFunDef false "lowerProgramWithFacts" ((PVar "facts") (PVar "prog")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EApp (EApp (EApp (EVar "finishLowering") (EVar "UntypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "None")) (EListLit)) (EVar "prog")))))))
-(DTypeSig true "lowerTypedProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerTypedProgram" ((PVar "prog")) (EApp (EApp (EVar "lowerTypedProgramWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "prog")))
 (DTypeSig true "lowerTypedProgramWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
 (DFunDef false "lowerTypedProgramWith" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "dispositions") (EMatch (EFieldAccess (EVar "facts") "pfDispositions") (arm (PCon "Some" (PVar "table")) () (EVar "table")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "disposition table: no elaboration has published one")))))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EApp (EApp (EApp (EVar "finishLowering") (EVar "TypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "Some") (EVar "dispositions"))) (EListLit)) (EVar "prog")))))))))
 (DTypeSig false "lowerProgramWith" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))))
@@ -5741,12 +5681,8 @@ nodeTag _ = "?"
 (DTypeSig false "isSomeLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))
 (DFunDef false "isSomeLoc" ((PCon "Some" PWild)) (EVar "True"))
 (DFunDef false "isSomeLoc" ((PCon "None")) (EVar "False"))
-(DTypeSig true "lowerProgramEmit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EApp (EApp (EVar "lowerProgramEmitPinned") (EListLit)) (EVar "prog")))
 (DTypeSig true "lowerProgramEmitWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
 (DFunDef false "lowerProgramEmitWith" ((PVar "facts") (PVar "prog")) (EApp (EApp (EApp (EVar "lowerProgramEmitPinnedWith") (EVar "facts")) (EListLit)) (EVar "prog")))
-(DTypeSig true "lowerProgramEmitPinned" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerProgramEmitPinned" ((PVar "pins") (PVar "prog")) (EApp (EApp (EApp (EVar "lowerProgramEmitPinnedWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "pins")) (EVar "prog")))
 (DTypeSig true "lowerProgramEmitPinnedWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))))
 (DFunDef false "lowerProgramEmitPinnedWith" ((PVar "facts") (PVar "pins") (PVar "prog")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoLet false false (PVar "sited") (EApp (EVar "siteTrapCalls") (EVar "prog"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoLet false false (PVar "raw") (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EVar "emitDeclFacts") (EVar "facts")) (EVar "sited"))) (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "dispositions")) (EVar "pins")) (EVar "sited")))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoLet false false (PVar "lowering") (EMatch (EVar "dispositions") (arm (PCon "Some" PWild) () (EVar "TypedLowering")) (arm (PCon "None") () (EVar "UntypedLowering")))) (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EApp (EVar "finishLowering") (EVar "lowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten")))))))))
 (DTypeSig false "emitDeclFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DeclFacts"))))
@@ -5755,8 +5691,6 @@ nodeTag _ = "?"
 (DFunDef false "withDeclFacts" ((PVar "facts") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))
 (DTypeSig false "stampBinders" (TyFun (TyCon "Lowering") (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyFun (TyCon "CProgram") (TyCon "CProgram")))))
 (DFunDef false "stampBinders" ((PVar "lowering") (PVar "table") (PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "Ref") (EVar "BM.Tip"))) (DoLet false false (PVar "stamped") (EApp (EApp (EVar "mapProgramBinders") (EApp (EApp (EApp (EVar "stampVisit") (EVar "lowering")) (EVar "table")) (EVar "rows"))) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "withBinderRows") (EApp (EVar "BM.values") (EUnOp "!" (EVar "rows")))) (EVar "stamped")))))
-(DTypeSig true "stampUntypedBinders" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "stampUntypedBinders" ((PVar "prog")) (EApp (EApp (EVar "stampUntypedBindersWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "prog")))
 (DTypeSig true "stampUntypedBindersWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "stampUntypedBindersWith" ((PVar "facts") (PVar "prog")) (EApp (EApp (EApp (EVar "stampBinders") (EVar "UntypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EVar "prog")))
 (DData Private "Lowering" () ((variant "TypedLowering" (ConPos)) (variant "UntypedLowering" (ConPos))) ())
@@ -6306,8 +6240,6 @@ nodeTag _ = "?"
 (DTypeSig false "cInitialRows" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "cInitialRows" ((PList) PWild) (EListLit))
 (DFunDef false "cInitialRows" ((PCons (PCon "CArm" (PVar "pat") PWild PWild) (PVar "rest")) (PVar "i")) (EBinOp "::" (ETuple (EListLit (EApp (EVar "canonPat") (EVar "pat"))) (EVar "i")) (EApp (EApp (EVar "cInitialRows") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
-(DTypeSig true "lowerGroups" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind"))))
-(DFunDef false "lowerGroups" ((PVar "prog")) (EApp (EApp (EVar "lowerGroupsWith") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "prog")))
 (DTypeSig true "lowerGroupsWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind")))))
 (DFunDef false "lowerGroupsWith" ((PVar "facts") (PVar "prog")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldBind") (EVar "noLetCheck"))) (EApp (EVar "lowerGroupsRaw") (EVar "prog"))))))
 (DTypeSig false "lowerGroupsRaw" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind"))))
@@ -6382,8 +6314,6 @@ nodeTag _ = "?"
 (DFunDef false "collidingHeads" ((PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "firstKey") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (EVar "firstKey")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (EVar "key")) (EVar "firstKey"))) (EVar "acc"))) (arm (PCon "Some" (PVar "k0")) () (EIf (EBinOp "==" (EVar "k0") (EVar "key")) (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EVar "firstKey")) (EVar "acc")) (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EVar "firstKey")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (ELit LUnit)) (EVar "acc")))))))
 (DTypeSig false "implHeadKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "implHeadKey" ((PVar "m") (PVar "tag")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString ""))))
-(DTypeSig true "lowerImplsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry"))))))))
-(DFunDef false "lowerImplsWith" ((PVar "disp") (PVar "reqCounts") (PVar "arities") (PVar "dispositions") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lowerImplsWithFacts") (EApp (EVar "factsInstalled") (ELit LUnit))) (EVar "disp")) (EVar "reqCounts")) (EVar "arities")) (EVar "dispositions")) (EVar "prog")))
 (DTypeSig true "lowerImplsWithFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))))))
 (DFunDef false "lowerImplsWithFacts" ((PVar "facts") (PVar "disp") (PVar "reqCounts") (PVar "arities") (PVar "dispositions") (PVar "prog")) (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldImpl") (EVar "noLetCheck"))) (EApp (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EVar "disp")) (EVar "reqCounts")) (EVar "arities")) (EVar "dispositions")) (EVar "prog"))))))
 (DTypeSig false "lowerImplsRaw" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry"))))))))

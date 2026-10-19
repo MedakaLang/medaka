@@ -125,27 +125,16 @@ evalMain : List Decl -> String
 evalMatch : Loc -> EvalEnv (Value a) -> Value a -> List Arm -> <a> Value a
 evalMethodAt : EvalEnv (Value a) -> String -> String -> Route -> List Route -> List Route -> <a> Value a
 evalMethodAtEv : EvalEnv (Value a) -> String -> (String, Int, Route, List Route, List Route) -> <a> Value a
-evalModules : List Decl -> List (String, List Decl) -> <a> List (String, Value a)
 evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutputFacts : ProgramFacts -> List Decl -> List (String, List Decl) -> String
-evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String
 evalModulesOutputRunFacts : ProgramFacts -> List Decl -> List (String, List Decl) -> <IO> String
-evalModulesRootEnv : List Decl -> List (String, List Decl) -> <a> List (String, Value a)
 evalModulesRootEnvFacts : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> List (String, Value a)
-evalModulesRootEnvWith : List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> List (String, Value a)
 evalModulesRootEvalEnvFacts : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> EvalEnv (Value a)
-evalModulesRootEvalEnvWith : List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> EvalEnv (Value a)
 evalModulesWith : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> List (String, Value a)
-evalOne : List Decl -> (String, List Decl) -> <a> List (String, Value a)
 evalOneFacts : ProgramFacts -> List Decl -> (String, List Decl) -> <a> List (String, Value a)
-evalOneOutput : List Decl -> (String, List Decl) -> String
 evalOneOutputFacts : ProgramFacts -> List Decl -> (String, List Decl) -> String
-evalOneRootEnv : List Decl -> (String, List Decl) -> <a> List (String, Value a)
 evalOneRootEnvFacts : ProgramFacts -> List (String, Value a) -> List Decl -> (String, List Decl) -> <a> List (String, Value a)
-evalOneRootEnvWith : List (String, Value a) -> List Decl -> (String, List Decl) -> <a> List (String, Value a)
-evalOneWith : List (String, Value a) -> List Decl -> (String, List Decl) -> <a> List (String, Value a)
 evalOr : EvalEnv (Value a) -> Value a -> Expr -> <a> Value a
-evalOutputWith : List Decl -> List Decl -> String
 evalOutputWithFacts : ProgramFacts -> List Decl -> List Decl -> String
 evalRange : Value a -> Value a -> Bool -> (List Int -> Value a) -> Value a
 evalRecLet : EvalEnv (Value a) -> String -> Expr -> Expr -> <a> Value a

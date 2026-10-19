@@ -314,7 +314,7 @@ playground is the site: static Cloudflare Pages, compiler in WasmGC. Deploy:
 - ⚠️ **[T-DISPATCH-LOADER]** A dispatch bug that shows only via the loader is usually the
   EVAL DRIVER. Regressions go in the `eval_modules_fixtures` rows of
   `test/diff_compiler_eval_test.mdk`.
-- ⚠️ **[T-EVAL-LOCKSTEP]** `evalModules` and `cevalModules` are parallel drivers; fix both.
+- ⚠️ **[T-EVAL-LOCKSTEP]** `evalModulesWith` and `cevalModules` are parallel drivers; fix both.
   Cross-module tables key per module, never by bare name.
 - 🚨 **[T-GLOBAL-TABLE]** For a new global table or AST ctor, add a fixture showing that
   unrelated code still behaves. Audit every `_ =>` arm. Key tables by scope (`<iface>@<slot>`).
