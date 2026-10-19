@@ -209,7 +209,7 @@ bash test/diff_compiler_eval.sh            # the typechecker loads the real stdl
 If a change rejects something the stdlib relies on, the prelude fails to load and
 many gates break at once — that's the signal your rule is too broad. The usual
 culprit is feeding a new global impl check the *seeded* impls instead of
-`coherenceUserDecls`.
+`diCoherenceUserDecls`.
 
 **The compiler's own source is in the snapshot corpus**, so a change to
 `typecheck.mdk` moves its own golden — bless it (by naming the path) in the same

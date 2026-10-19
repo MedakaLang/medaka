@@ -56,7 +56,7 @@ semantics with no first/last-wins hazard, unlike the `typecheck.mdk`-internal
 | `funConstraintDeclaredRef` | PerRun | 1 (lookupAssoc) + 1 field decl | `OrdMap` |
 | `currentImportOriginsRef` | PerRun | 1 (lookupAssoc) + 1 field decl | `OrdMap` |
 | `userIfaceNamesRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
-| `stdlibOwnedModsRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
+| `tcStdlibOwned` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
 | `promotionHarvestRef` | DriverState | 1 (dedup) + 1 field decl | n/a — dedup |
 | `abstractRecordTypesRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
 | module list (`modules`/`allModules`/`modPaths`) | (loader/typecheck/resolve param) | 4 (lookupAssoc-family) | `OrdMap` keyed by module id |
@@ -547,8 +547,8 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:7264 | Ref (List | `dictEligibleRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7266 | Ref (List | `mangledShadowMapRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7268 | Ref (List | `userIfaceNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7269 | Ref (List | `coherenceUserDecls` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7270 | Ref (List | `stdlibOwnedModsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7269 | Ref (List | `diCoherenceUserDecls` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7270 | Ref (List | `tcStdlibOwned` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7273 | Ref (List | `superDeclsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7274 | Ref (List | `standaloneValuesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7275 | Ref (List | `methodDispatchIdxByIdRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
@@ -1086,7 +1086,7 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:32292 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:32394 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:32598 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:32821 | contains/elem/dedup | `driverState.value.stdlibOwnedModsRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:32821 | contains/elem/dedup | `driverState.value.config.value.tcStdlibOwned` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:34130 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:34443 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:34483 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
