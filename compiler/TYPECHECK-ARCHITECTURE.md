@@ -287,7 +287,7 @@ this is the #158/#176 design, and it landed.
 | `CrossRun` | 25 | 15 `universe*` accumulators, 6 `crossModule*` constraint tables (each a bare/`Qual` **pair**), 3 `obUniv*`, and `coreSchemeObligationsRef` | survives `resetState` by design |
 | `DriverState` | 18 | driver-mode flags, the match oracle + warnings, promotion harvest, `main` scheme, dict-eligibility sets | survives; re-minted per driver entry |
 | toggles *(now `DynCtx`)* | 3 | dynamic-scope suppression flags, now the `DynCtx` fields `dcSuppressRLocalRecord`, `dcSuppressArgStamp`, `dcShadowHeadCtx` that `TcEnv` carries, so no save/restore remains | none: `initialEnv` and `withCtors` start from `noDyn` |
-| *(loose)* | **9** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, and the toggles cell, since deleted) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc`, `currentDoOrigin`, `currentMethodMismatch` | varies |
+| *(loose)* | **7** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, and the toggles cell, since deleted) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc` | varies |
 
 **The seven cells with no single owning function** (≥6 distinct writers) are the residual
 state-discipline debt: `perRun` (56 writers), `driverState` (14), `currentLoc` (8),

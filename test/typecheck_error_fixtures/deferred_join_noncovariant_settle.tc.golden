@@ -1,0 +1,1 @@
+TYPE ERROR: effect row mismatch inside a non-covariant type argument: <> vs <Stdout>; the two rows must be equal here, so write the same row on both sides, or eta-expand a freshly built function, `(s => f s)`
