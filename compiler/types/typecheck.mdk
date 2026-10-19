@@ -8735,8 +8735,8 @@ freshCrossRun env = CrossRun {
 crossRun : Ref CrossRun
 crossRun = Ref (freshCrossRun initialEnv)
 
--- ── the ONE lifecycle owner for the 23 cross-module accumulators (#143/#144, #154) ──
--- These 23 deliberately SURVIVE the per-module `resetState` (so dict arities/ifaces and
+-- ── the ONE lifecycle owner for the cross-module accumulators (#143/#144, #154) ──
+-- These deliberately SURVIVE the per-module `resetState` (so dict arities/ifaces and
 -- the universe/data/impl accumulators cross module boundaries within one graph — see the
 -- declaration comments above), but they must NOT survive a whole multi-module RUN: a
 -- long-lived process (LSP, playground, snapshot runner) drives the analyze/elaborate path
@@ -8749,7 +8749,7 @@ crossRun = Ref (freshCrossRun initialEnv)
 -- the next entry added cannot silently miss one — and so all are cleared symmetrically.
 -- Replacing `crossRun` with a fresh bundle IS the reset: freshCrossRun re-mints every
 -- field, so the set that resets == the set in CrossRun, enforced by the constructor.
--- Scoped to exactly these 22; do NOT fold into `resetState` (they must survive THAT).
+-- Scoped to exactly these fields; do NOT fold into `resetState` (they must survive THAT).
 resetCrossModuleState : Unit -> Unit
 resetCrossModuleState _ =
   crossRun := freshCrossRun initialEnv

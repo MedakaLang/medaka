@@ -40,8 +40,10 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 | `effect_policy.mdk` | Does an entry's invocation summary fit a policy | `policyRefusals`, `viaChain` |
 
 ## Cell lifetimes
-Filled by playbook S1 (A3). Until then the per-module counts of module-level `Ref` cells are
-`test/arch_goldens/cells.golden`.
+`CELL-LIFETIMES.md` lists every typechecker cell (26 module-level cells and the 159 fields of
+`PerRun`, `GraphRun`, `DriverState`, `CrossRun`) with its measured lifetime, target home and whether
+an interface load would have to fill it. Lifetimes: process 9, graph 60, module 81, group 6, run 29.
+The per-module cell counts are in `test/arch_goldens/cells.golden`.
 
 ## Laws that bind it
 - **A1** — types imports `frontend/` and `support/`; `ir/` and `eval/` must reach its facts through `disposition`, `runtime_types` and `route_key`, not `typecheck.mdk`.

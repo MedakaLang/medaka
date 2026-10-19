@@ -1348,7 +1348,7 @@ public export data PendingMethodDict = PendingMethodDict {
   pmdInner : Ref Inner,
 }
 
--- #158 PR2: the 22 per-run cross-module accumulators declared above (the six
+-- #158 PR2: the per-run cross-module accumulators declared above (the six
 -- crossModule* dict-arity mirrors of #143/#144, plus the #154 universe*/obUniv* universe
 -- accumulators) are bundled into ONE typed record so their survive/clear lifecycle is a
 -- TYPE FACT, not prose.  `freshCrossRun` constructs exactly the field-Refs that
@@ -1828,7 +1828,7 @@ public export data GivenScope =
   -- comes from `activeDictPredOf` one rung later, off a different first match.
   | GSImplRequires
 
--- #158 PR3: the ~58 per-RUN accumulators/counters that `resetState` clears are bundled
+-- #158 PR3: the per-RUN accumulators/counters that `resetState` clears are bundled
 -- into ONE typed record so their reset lifecycle is a TYPE FACT, not a hand-maintained
 -- block.  `freshPerRun` constructs exactly the field-Refs `resetState` installs, so "what
 -- resetState clears" == "what PerRun holds" — enforced by the constructor: a new per-module
@@ -1836,7 +1836,7 @@ public export data GivenScope =
 -- is a record OF Refs (fields stay `Ref …`), NOT a record of values: the hot accumulators
 -- (typeErrors, poisonedVars, localBindRefs, …) are pushed with
 -- `setRef x (v :: x.value)`, so the field must be a Ref for that to stay one Ref-write — a
--- record of values would rebuild the whole 58-field record on every push.  (`obls`,
+-- record of values would rebuild the whole record on every push.  (`obls`,
 -- `implObls` — #838 I1 / #841 — are the exceptions: each a small `Windowed
 -- a` VALUE whose own two fields are Refs — see `wPush` — so pushing through one is
 -- still one Ref-write, not a whole-record rebuild.)
