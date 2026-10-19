@@ -1,6 +1,6 @@
 ---
 name: sprint-plan
-description: Cut a sprint — choose 3–5 coherent slices and write the contract sprint-orchestrator executes. Run once per sprint, before orchestration, on Opus.
+description: Cut a sprint — choose a coherent, reasonably sized set of slices (usually 3–5, more if small, fewer if large) and write the contract sprint-orchestrator executes, module shape and exports included. Run once per sprint, before orchestration, on Opus.
 ---
 
 # Sprint planning — cutting the slice set
@@ -35,15 +35,30 @@ This skill produces ONE artifact: `/var/tmp/medaka-sprints/<stage>/CONTRACT.md`
   docs/ .claude/`) — a one-directional citation once scoped a slice that was
   verbatim another arc's claimed work.
 
-## Step 2 — choose the SET: 3–5 coherent slices
+## Step 2 — choose the SET: coherent, and sized for one review
 
 Write the sprint's one question down first ("retire the method-keyed
 selector"). A slice belongs iff it advances that question, shares context
 (subsystem/spec/file neighborhood) with the others, and its dependencies are
 inside the sprint or already landed. Sites that answer one decision move in one
-slice — never split "to balance sizes". Fewer than 3 slices: skip the sprint,
-land them as ordinary PRs. More than ~5: it's two sprints — the ceiling is
-what one end-of-sprint review round can genuinely attack in one pass.
+slice — never split "to balance sizes".
+
+**The count is not the rule; the size is** (Val, 2026-10-18). A sprint is
+bounded by what one end-of-sprint review round can genuinely attack in one
+pass, and by coherence. Usually that is 3–5 slices. Go above 5 when many of
+them are small (a pin, a move, a rename, a caller sweep, a doc row); go below
+3 when the work only makes sense as large items. One large slice plus its
+mechanical subslices is still one sprint. A sprint of two unrelated large
+slices is two sprints.
+
+**Split a decision from its mechanics.** Where a slice holds one opus-grade
+decision (a semantic choice, coupled sites, a wrong-but-plausible transform)
+and a tail of mechanical work (rewiring callers, pins and goldens, doc rows,
+comment rewrites, a probe corpus), cut the tail as its own subslice on a
+cheaper model, sequenced after the decision lands (or before it, when the
+tail is preparatory and independent). Name the pair `S-foo` / `S-foo-mech`.
+Evidence: Phase 1's largest opus reports (22–26 KB) were mostly the mechanical
+tail written up at opus prices; the decision each contained fit in a page.
 
 ## Step 3 — the contract, at boundary depth
 
@@ -57,9 +72,34 @@ deeper than this measured ~75% rework.
    an approximation. If the sites can't be named confidently, flag
    `SPIKE-FIRST`: the slice's first dispatch explores and reports instead of
    implementing.
+   **A relayed premise is not a fact.** Any Surface or §4 claim that came from
+   a review, a spike report, a prior contract or a NOTES row carries the
+   `path:line` the planner opened at THIS sprint's base (`Checked-at:`); a row
+   without one is `SPIKE-FIRST`, and splitting or re-modelling a slice resets
+   the check. Phase 1 lost three opus rounds to relayed claims (a hover
+   context that lived in a frozen file, "gate drive = pair drive", "no program
+   depends on it"); every one was refutable with one `grep` at cut time.
+   **A deletion names its victim.** A slice that deletes a check, a drive or a
+   re-check names, in §4, one program that only the deleted check rejects,
+   with base and head exit codes, or states that none could be built, which is
+   itself a finding. "No fixture changed" and "IR identical" are not evidence
+   that nothing judged: every drive Phase 1 removed had been the only judge of
+   something (sprint 1 F1, sprint 7 F1, sprint 8 F1, an S0 miscompile that
+   passed 2,761 differential cases and an unnarrowed CI).
    ⚠️ **A slice that adds a file, a subcommand, a subsystem, or a helper must
-   STATE ITS PLACEMENT here** — which directory owns the new code, and if it
-   extends an existing file rather than adding one, why. Ground truth is the
+   STATE ITS PLACEMENT AND SHAPE here** — which directory owns the new code,
+   and if it extends an existing file rather than adding one, why. **Shape is
+   the plan's job, not the implementer's** (Val, 2026-10-18): for each module
+   the slice creates or materially changes, the contract states its one-line
+   responsibility, the exports it provides (names, and signatures at boundary
+   depth: the types that cross the boundary, not bodies), and what it may not
+   import (its closure golden, if it is a leaf). That is where the architecture
+   is decided, on Opus, against the laws, before any code exists. The
+   implementer may deviate on contact with evidence the plan lacked (a cycle,
+   a cost, a missing fact), and records the deviation as a Notes row the
+   review judges; an undeclared deviation is a finding. Bodies, helper names
+   and exact sites stay out of the contract; they are the packet's and the
+   implementer's. Ground truth is the
    **`architecture`** skill (`.claude/skills/architecture/SKILL.md`): what
    each `compiler/` directory is for, the placement rules, and the standing
    DECLINED register — read it before writing the row, and do not relitigate
@@ -73,7 +113,10 @@ deeper than this measured ~75% rework.
    (layers, output as a value, state lifetime, one fact one producer); a
    contract that conflicts with a law says why in the row. A slice that
    touches `compiler/types/typecheck.mdk` leaves it no larger than it found
-   it or carries the `Arch-Growth-Override:` reason (D1, #4200). Record
+   it or carries the `Arch-Growth-Override:` reason (D1, #4200), and that
+   reason names the sibling module the lines will leave to (playbook §10).
+   A module newly over 3,000 code lines needs an `Arch-Pin-Raise:` for
+   `oversize.golden` and a header reason (law A8). Record
    `make arch-census` at cut; wrap-up diffs against it
    (`compiler/ARCHITECTURE-PLAYBOOK.md` §10).
 4. **Acceptance shape** — how we'll know it worked ("a `test` case in
@@ -81,9 +124,16 @@ deeper than this measured ~75% rework.
    byte-identical"), not exact commands. Pick the vehicle with the
    `write-tests` skill; a shell gate needs its `shell-because:` reason.
 5. **Model** — name the selected harness role, model/reasoning and a one-line
-   tier justification. **Claude:** `sonnet` by default, `opus` for genuinely
-   tricky slices (cross-cutting semantics, coupled sites, wrong-but-plausible
-   transformations); when unsure start sonnet and upgrade on a refusal.
+   tier justification. **Claude:** three tiers. `haiku` for a mechanical slice
+   whose transform, sites and expected values are all written down (a rename
+   or move, a pin or golden capture, a probe, a caller sweep a grep lists, a
+   doc row); `sonnet` by default; `opus` for genuinely tricky slices
+   (cross-cutting semantics, coupled sites, wrong-but-plausible
+   transformations). A refusal with evidence of real difficulty moves the
+   slice up one tier (haiku to sonnet to opus) with one NOTES.md line; a
+   refusal because the packet was wrong is re-dispatched at the same tier on
+   a corrected packet. No slice starts on opus that step 2's split rule could
+   have made a sonnet decision plus a haiku tail.
    **Codex / Pi:** use `.codex/SPRINT.md` or `.pi/SPRINT.md`, respectively,
    instead of that Claude rubric. Terra/high is the default, including
    coupled-site work with a settled remedy. Sol/high must name the unresolved

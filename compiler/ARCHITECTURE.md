@@ -67,8 +67,9 @@ a check is a wish; the playbook's Phase 0 adds the checks that are missing.
 `types` and a shared data module only. `driver`, `tools` and `entries` sit on top and
 nothing below them imports them. Import cycles stay forbidden by the loader.
 
-- *Today:* 7 violating edges in 994. Four are imports of `backend.private_mangle` from
-  `types`, `ir` and `eval`; two are `ir -> eval`; one is `eval -> driver`.
+- *Today (2026-10-18):* 3 violating edges in 1,088: two are `ir -> eval`, one is
+  `eval -> driver` (`test/arch_goldens/layering.golden`). The four `private_mangle` edges
+  closed in Phase 0.
 - *Check:* a pinned count of violating edges that may only fall (Phase 0, G3).
 
 ### A2. Every stage's output is a value
@@ -79,15 +80,18 @@ inference variables, and they are resolved (zonked) before a result is published
 live cell escapes `CheckedProgram`, and no later request can change the meaning of a
 published one.
 
-- *Today:* the AST carries no cells. Dispatch routes, literal answers and record heads are
-  answers keyed by an `EvId` the mark pass mints; the typechecker writes them during
-  inference and they are published in the evidence table. The module-graph drivers and
-  `checkOneSchemeFullK` publish frozen copies of schemes that hold no live cell; the LSP's
-  locals and import seed still hand out live schemes until sprint 6. `run` and `build`
-  typecheck twice because the evaluator and the lowering read a tree that may be
-  half-stamped.
-- *Check:* `frontend/ast.mdk` declares no `Ref` field (Phase 1); a published scheme
-  contains no unresolved cell (Phase 1 validator).
+- *Today (2026-10-18, Phase 1 met):* the AST carries no cells. Dispatch routes, literal
+  answers and record heads are answers keyed by an `EvId` the mark pass mints, published
+  in the one evidence table. Every drive returns a `TcReport` whose `CheckedProgram` holds
+  schemes frozen by copy at graph end, validated to contain no live cell; `check`, `run`,
+  `build`, `test`, the LSP and MCP read it from one pipeline function and drive each graph
+  once. What remains: lowering and eval read the installed evidence table rather than the
+  value (playbook S4, #2705), and stampers still write destination cells inside the drive
+  (#2705).
+- *Check:* `frontend/ast.mdk` declares no `Ref` field (`ast_cells.golden`); a published
+  scheme contains no unresolved cell (`types/publish_test.mdk`); one `typecheck.drive` per
+  verb per graph (`stage_counts.golden`). Owed: no reader of an installed table outside
+  `types/` (S4).
 
 ### A3. State has a declared lifetime
 
@@ -97,9 +101,10 @@ cell creates it on entry and drops it on exit, and the cell is unreachable after
 No module-level cell holds per-module or per-group state. Configuration is an immutable
 record the driver builds once.
 
-- *Today:* `types/typecheck.mdk` holds 26 module-level cells plus 147 `Ref` fields in
-  four bundle records (`PerRun`, `DriverState`, `GraphRun`, `CrossRun`), all reachable
-  from anywhere; one function reads or writes 93% of them.
+- *Today (2026-10-18):* `types/typecheck.mdk` holds 26 module-level cells plus 159 `Ref`
+  fields in four bundle records (`PerRun` 88, `GraphRun` 30, `DriverState` 27, `CrossRun`
+  14), all reachable from anywhere; Phase 1 added the graph-owned site cells to `GraphRun`.
+  The tree holds 108 module-level cells in 28 modules, unchanged since Phase 0.
 - *Check:* module-level `= Ref` cells per module, pinned and falling (Phase 0, G3);
   Phase 2 ends with zero in the typechecker outside interners.
 
@@ -110,9 +115,9 @@ position, reachability, linkage) is computed once by a named producer, carried a
 of the value (Core IR or the Plan), and checked by a validator arm. Consumers transcribe
 it. No consumer re-derives a fact from a spelling or a declaration scan.
 
-- *Today:* the fact ledger F1 to F6 has landed and both emitters shrank; 95 named twin
-  functions remain between `llvm_emit.mdk` and `wasm_emit.mdk`; the Plan record (R5) is
-  cut but not run.
+- *Today (2026-10-18):* the fact ledger F1 to F6 has landed and both emitters shrank; 93
+  named twin functions remain between `llvm_emit.mdk` and `wasm_emit.mdk`
+  (`twins.golden`); the Plan record (R5) landed 2026-10-14 (playbook B1).
 - *Check:* the twin count, pinned and falling (Phase 0, G3); `core_validate` runs before
   either emitter writes text, on every test.
 
@@ -154,10 +159,13 @@ environment it depends on and the selected target profile's IO join (D7); the pr
 ships pre-checked. Cache validity is a contract
 (`TYPECHECK-CONTRACTS.md` §5), not a prefix hash.
 
-- *Today:* the prelude is re-typechecked in every process (about 90% of a hello-world
-  `check`); a value `main` is typechecked 3 to 4 times per verb; `build`'s child redoes
-  the parent's front end; the O1 call-count wins are pinned by no gate (#4189).
-- *Check:* callgrind call-count pins per verb (Phase 0, G6); prelude typechecks per
+- *Today (2026-10-18):* the prelude is re-typechecked in every process (about 90% of a
+  hello-world `check`). Within a process the duplicates are gone: a value `main` and an
+  `Async` main drive once on every verb, `build`'s child owns the front end and the parent
+  does none, and the per-verb stage counts are pinned (G6). Phase 1 halved the CPU of
+  `check`, `run` and `build` on a value `main` and left the 72-module check unchanged; the
+  prelude is the remaining lever.
+- *Check:* per-verb stage-count pins (`stage_counts.golden`, G6); prelude typechecks per
   process equals zero (Phase 3).
 
 ### A8. Modules are concerns, and the typechecker splits by layer
@@ -173,9 +181,14 @@ compiler's largest file may not grow: `types/typecheck.mdk` does not grow in any
 explicit opt-out); the growth rule is the one mechanism in any of the three reference
 compilers that stops a hot file from becoming the compiler.
 
-- *Today:* 57,032 lines, 30,601 of them code; growth of about 10k lines a month against
-  about 9.8k lines extracted into sibling modules since August.
-- *Check:* the growth ratchet (Phase 0, G1; owner decision D1).
+- *Today (2026-10-18):* 57,406 lines, 30,997 of them code. Under the ratchet the file grew
+  400 code lines during Phase 1, all under override and all solver-side halves of the
+  Phase 1 work, against about 10k lines a month before Phase 0. Eight modules are over
+  3,000 code lines; two state a reason in their header.
+- *Check:* the growth ratchet (Phase 0, G1; owner decision D1); the oversize membership
+  list (`test/arch_goldens/oversize.golden`, G7): a module newly over the line needs an
+  `Arch-Pin-Raise:` trailer and a header reason. An override reason names the sibling
+  module the lines will leave to (playbook §10).
 
 ### A9. Boundaries are checked by goldens, not prose
 
@@ -198,8 +211,9 @@ run at every phase transition on every test, not in a separate gate.
 Rationale that explains why code is the way it is lives beside the code, as it already
 does in this tree. A design document is a proposal; once landed it is history.
 
-- *Today:* 66 files and 40,015 lines flat in `compiler/`, 36 of them tagged IMPLEMENTED,
-  beside the three current maps.
+- *Today (2026-10-18):* 21 files and 19,626 lines in `compiler/`, exactly the Phase 0 keep
+  list: nine directory maps, the destinations, this file, the playbook and `AGENTS.md`;
+  47 landed or open designs moved to `archive/design/` and `docs/design/`.
 
 ---
 

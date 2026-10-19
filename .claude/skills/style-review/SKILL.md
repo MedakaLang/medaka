@@ -82,9 +82,11 @@ size threshold, extending instead of extracting needs a **stated reason**),
 and the standing DECLINED register. `make arch-census` for the current
 largest-files table.
 
-The sprint contract was obliged to state placement before the code existed
-(`sprint-plan` step 3). If the diff's placement differs from the contract's,
-that mismatch is the finding — not your own preferred filing.
+The sprint contract was obliged to state placement and shape (a module's
+responsibility, its exports, what it may not import) before the code existed
+(`sprint-plan` step 3). If the diff's placement or exports differ from the
+contract's and the report's self-check does not say why, that mismatch is the
+finding — not your own preferred filing.
 
 ### 5. Diagnostics — does a new error message meet the rubric?
 
@@ -135,7 +137,8 @@ settled; do not reopen it inside a sprint.
 | **Findings about untouched code** | Diff-scoped only (see Scope). At most one neighbour line. |
 | **"Remove this suppression"** where the suppression carries a rationale | A `-- lint-disable-next-line <rule>` with a stated reason is the **correct** outcome, not debt. A suppression with no rationale is the finding; the suppression itself is not. |
 | **"Add a lint rule for this"** | Not this reviewer's to implement — see the shrink rule below. It lands through its own filed issue and PR, gated either by the max ratchet (`GATED_LINT_RULES`, a rule the tree is already clean of) or, when it is not, by the per-(file, rule) count baseline (`BASELINED_LINT_RULES` + `test/lint_baseline.toml`, #2619 (lint count baseline)). |
-| **Reopening a standing architecture decision** | The `architecture` skill's DECLINED register — hard size ratchets, the `typecheck.mdk` split's sequencing (#2586 (typecheck refactor), which superseded the closed #2284), the `driver`/`tools` de-grab-bag's ownership (#2282), skill-tree mirroring (#2313). |
+| **Reopening a standing architecture decision** | The `architecture` skill's DECLINED register — hard size ratchets, the `typecheck.mdk` split's sequencing (#2586 (typecheck refactor), which superseded the closed #2284), `driver`/`tools` placement debt (owned by the architecture epic #4206 since #2282 closed), skill-tree mirroring (#2313). |
+| **"Move X beside Y" placement demands the contract did not state** | This pass never builds, so it cannot see the import cycle or the loader refusal a move runs into; two of six such refactors in Phase 1 sprint 7 were dropped for exactly that. Placement is settled by the contract's Surface row and the `architecture` skill. A finding here is the mismatch between the diff and the contract, never a move of your own. Restrict findings to what a `grep` can reproduce: copies, twins, comment register, unnamed tuples, hand-rolled stdlib. |
 | **A comment-length or comment-count ratchet** | Declined on record (#2281): a length ratchet teaches agents to write short bad comments. |
 
 ## The shrink rule — this checklist must get SHORTER

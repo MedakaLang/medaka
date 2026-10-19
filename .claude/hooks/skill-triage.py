@@ -181,7 +181,7 @@ if sprint:
         "machinery (v8) is defined in skills + agent definitions — do not "
         "re-derive the workflow from ORCHESTRATING.md prose:\n"
         "- Planning/cutting a NEW sprint (choosing the slice set) -> load "
-        "sprint-plan (coherent set of 3-5 slices, boundary-depth contract; "
+        "sprint-plan (coherent set of slices sized for one review, usually 3-5; boundary-depth contract with module shape and exports; "
         "Opus 5 minimum).\n"
         "- Running a sprint -> load sprint-orchestrator (single-session "
         "front seat, NO persistent daughters; serial implementers with "
