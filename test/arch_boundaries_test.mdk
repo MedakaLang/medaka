@@ -11,16 +11,19 @@
    to rewrite them from the tree instead of comparing. -}
 import fs.{walkDir}
 import list.{
-  drop, dropWhile, dropWhileEnd, filterMap, nub, reverse, sort, takeWhile
+  drop, dropWhile, dropWhileEnd, filterMap, lookup, nub, reverse, sort,
+  takeWhile
 }
 import map as M
 import set as S
 import string.{
   capitalize, countOccurrences, endsWith, fromChars, split, toChars, isAlphaNum,
-  isSpace, join, lines, replace, startsWith, stripPrefix, trimLeft, unlines,
-  words
+  isSpace, join, lines, replace, startsWith, stripPrefix, stripSuffix, trim,
+  trimLeft, unlines, words
 }
-import test.{Expectation, expectAtLeast, expectEqual, expectGolden, fail, pass}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEqual, expectGolden, fail, pass
+}
 import test_process.{underRoot}
 
 -- The only `types/` modules allowed to reach `support.hooks` through their
@@ -342,6 +345,11 @@ test "arch_boundaries: types.repr closure matches its golden" =
     "closure.types.repr.golden"
     (closureOf (buildGraph loadModules) "types.repr")
 
+test "arch_boundaries: types.tc_types closure matches its golden" =
+  pin
+    "closure.types.tc_types.golden"
+    (closureOf (buildGraph loadModules) "types.tc_types")
+
 test "arch_boundaries: ir.core_ir closure matches its golden" =
   pin
     "closure.ir.core_ir.golden"
@@ -586,3 +594,183 @@ test "arch_boundaries: identical-body names match dupbodies.golden" =
   -- `length (filter (rows => length rows >= 2) (M.values idx))` in a scratch
   -- `println` when the number is wanted.
   pin "dupbodies.golden" (identicalNames idx)
+
+-- The `## Typechecker cells` section of CELL-LIFETIMES.md: from its heading to
+-- the next `## ` heading.
+typecheckerSection : List String -> List String
+typecheckerSection ls =
+  takeWhile
+    (l => not (startsWith "## " l))
+    (drop 1 (dropWhile (/= "## Typechecker cells") ls))
+
+-- Data rows of a markdown table: the header and the `|---|` separator are not.
+isDataRow : String -> Bool
+isDataRow l = startsWith "| " l && not (startsWith "| name |" l)
+
+-- The cells of a `| a | b |` row, outer pipes stripped, split on ` | `.
+rowCells : String -> List String
+rowCells l = match stripPrefix "|" (trim l)
+  None => []
+  Some rest => match stripSuffix "|" (trim rest)
+    None => []
+    Some body => split " | " (trim body)
+
+nameOf : List String -> String
+nameOf [] = ""
+nameOf (c :: _) = c
+
+lifetimeVocab : List String
+lifetimeVocab =
+  ["process", "config", "graph", "module", "group", "run", "unknown"]
+
+cellAt : Int -> List String -> String
+cellAt i cells = match drop i cells
+  [] => ""
+  c :: _ => c
+
+-- Some "<row>: <label> <value>" when column `i` of the row is outside `vocab`.
+badField : String -> Int -> List String -> List String -> Option String
+badField label i vocab cells =
+  let v = cellAt i cells
+  if elem v vocab then None else Some "\{nameOf cells}: \{label} \{v}"
+
+badLifetime : List String -> Option String
+badLifetime = badField "lifetime" 2 lifetimeVocab
+
+ownerVocab : List String
+ownerVocab = ["module-level", "PerRun", "GraphRun", "DriverState", "CrossRun"]
+
+targetVocab : List String
+targetVocab = [
+  "TcEnv", "GroupCtx", "ModuleCtx", "GraphCtx", "TcConfig", "interner", "delete"
+]
+
+fillsVocab : List String
+fillsVocab = ["yes", "no", "n/a"]
+
+sourceFields : List String
+sourceFields =
+  ["cpSchemes", "cpCore", "cpEvidence", "cpDispositions", "cpBinders"]
+
+-- `-`, `none`, `derived(<field>)`, or a comma-separated non-empty field list.
+goodSource : String -> Bool
+goodSource s =
+  s == "-"
+    || s == "none"
+    || derivedField s
+    || fieldList (map trim (split "," s))
+
+derivedField : String -> Bool
+derivedField s = match stripPrefix "derived(" s
+  None => False
+  Some rest => match stripSuffix ")" rest
+    None => False
+    Some f => elem f sourceFields
+
+fieldList : List String -> Bool
+fieldList parts =
+  parts /= [] && filter (p => not (elem p sourceFields)) parts == []
+
+badSource : List String -> Option String
+badSource cells =
+  let v = cellAt 8 cells
+  if goodSource v then None else Some "\{nameOf cells}: source \{v}"
+
+badVocab : List String -> List String
+badVocab cells =
+  filterMap
+    (f => f cells)
+    [
+      badLifetime,
+      badField "owner-today" 3 ownerVocab,
+      badField "target" 6 targetVocab,
+      badField "interface-fills" 7 fillsVocab,
+      badSource,
+    ]
+
+badWidth : List String -> Option String
+badWidth cells =
+  if length cells == 10 then
+    None
+  else
+    Some "\{nameOf cells}: \{length cells} cells, not 10"
+
+-- The `## Cells outside the file` section: from its heading to the next `## `.
+sideSection : List String -> List String
+sideSection ls =
+  takeWhile
+    (l => not (startsWith "## " l))
+    (drop 1 (dropWhile (/= "## Cells outside the file") ls))
+
+sideNames : List String
+sideNames = [
+  "selectedProfile",
+  "evidenceRef",
+  "dispositionsRef",
+  "binderTypesRef",
+  "binderOrdinalRef",
+  "preludeScopeMemoRef",
+  "loadedSourcesRef",
+]
+
+-- The field name of an indented `name :` line; comment lines give None.
+fieldNameOf : String -> Option String
+fieldNameOf l =
+  if not (startsWith " " l) then
+    None
+  else
+    let body = toList (toChars (trimLeft l))
+    let name = takeWhile identChar body
+    match name
+      [] => None
+      _ => match dropWhile isSpace (dropWhile identChar body)
+        ':' :: _ => Some (fromChars name)
+        _ => None
+
+bundleRecords : List String
+bundleRecords = ["PerRun", "GraphRun", "DriverState", "CrossRun"]
+
+-- Field names of the bundle `rec`: the indented lines after its
+-- `public export data rec = rec {` header, up to the column-0 `}`.
+bundleNames : List String -> List String
+bundleNames ls = flatMap (recName => bundleFieldNames ls recName) bundleRecords
+
+bundleFieldNames : List String -> String -> List String
+bundleFieldNames ls recName =
+  let header = "public export data \{recName} = \{recName} {"
+  let after = drop 1 (dropWhile (/= header) ls)
+  let body = takeWhile (l => not (startsWith "}" l)) after
+  map (f => "\{recName}.\{f}") (filterMap fieldNameOf body)
+
+-- The cell census: the column-0 `name = Ref` cells of `types.typecheck`, then
+-- the `Bundle.field` names of the four `tc_types` bundles.
+cellCensus : List (String, List String) -> List String
+cellCensus mods =
+  let linesFor m = optionOr [] (lookup m mods)
+  filterMap cellName (linesFor "types.typecheck")
+    ++ bundleNames (linesFor "types.tc_types")
+
+-- Names in exactly one of the two lists, sorted.
+symmetricDifference : List String -> List String -> List String
+symmetricDifference a b =
+  let sa = S.fromList a
+  let sb = S.fromList b
+  sort (toList (S.difference sa sb) ++ toList (S.difference sb sa))
+
+test "arch_boundaries: CELL-LIFETIMES rows equal the cell census" =
+  match readFile (underRoot "compiler/types/CELL-LIFETIMES.md")
+    Err e => fail "could not read CELL-LIFETIMES.md: \{e}"
+    Ok text =>
+      let rows =
+        map rowCells (filter isDataRow (typecheckerSection (lines text)))
+      let sideRows = map rowCells (filter isDataRow (sideSection (lines text)))
+      let allRows = rows ++ sideRows
+      let census = cellCensus loadModules
+      expectAll [
+        expectAtLeast 150 (length census),
+        expectEqual [] (symmetricDifference census (map nameOf rows)),
+        expectEqual (length census) (length rows),
+        expectEqual sideNames (map nameOf sideRows),
+        expectEqual [] (flatMap badVocab allRows),
+        expectEqual [] (filterMap badWidth allRows),
+      ]

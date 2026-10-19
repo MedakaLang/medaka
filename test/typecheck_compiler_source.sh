@@ -919,13 +919,9 @@ echo "  ok: $prim_n distinct tconBuiltin head(s), all in resolve's primitiveType
 # (`activeDictPreds`, `implReqPredicateSlots`) are retired below: they were the SAME pair
 # in opposite orders, i.e. the split authority this ratchet exists to forbid.
 predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
+tc_types_src="$ROOT/compiler/types/tc_types.mdk"
 eval_src="$ROOT/compiler/eval/eval.mdk"
-predicate_slot_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
-data PredicateRequest = PredicateRequest {
-data PredicateSlot = PredicateSlot {
-data MethodPredicateSlot = MethodPredicateSlot {
-data PendingMethodDict = PendingMethodDict {
-registerReqSlots : ScopeId ->
+predicate_slot_required='registerReqSlots : ScopeId ->
   List (String, Mono) ->
   Int ->
   List Require ->
@@ -939,22 +935,9 @@ dedupPredicateSlotEntry : (String, List PredicateSlot) ->
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
 && sameIfaceDecl request.prIface slot.psIface
 monoVecSameGiven requestArgs slotArgs
-data GivenEntry = GivenEntry {
-  geSlot : PredicateSlot,
-  geMatch : GivenMatch,
-data GivenMatch =
-  | GMPredicate
-  | GMIdWitnessed
-data GivenProvenance =
-  | DirectGiven
-  | ProjectedGiven EvidenceBinderId (List Int)
-gGiven : Ref (OrdMap (List GivenEntry)),
 givensForScope : ScopeId -> List GivenEntry
 pushGiven : GivenMatch ->
 pushGiven gm provenance slot binder =
-data GivenScope =
-  | GSPredicateOnly
-  | GSImplRequires
 givenInScope : GivenScope -> GivenEntry -> Bool
 registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
 activeFunDictPredOf : PredicateRequest -> ScopeId -> Option AssumAnswer
@@ -975,12 +958,6 @@ firstPredForEnclAt : GivenScope ->
 entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ rest) =
 goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
 anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
-funPredicateSlotsRef : Ref (List (String, List PredicateSlot))
-methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
-crossModuleFunPredicateSlotsRef : Ref (List (String, List PredicateSlot))
-crossModuleFunPredicateSlotsQualRef : Ref (List ((String, String), List PredicateSlot))
-crossModuleMethodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
-crossModuleMethodPredicateSlotsQualRef : Ref (List ((String, String), List MethodPredicateSlot))
 perRun.value.funPredicateSlotsRef :=
 perRun.value.methodPredicateSlotsRef :=
 crossRun.value.crossModuleFunPredicateSlotsRef
@@ -1008,6 +985,37 @@ printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
   fi
 done || exit 1
 
+predicate_slot_types_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
+data PredicateRequest = PredicateRequest {
+data PredicateSlot = PredicateSlot {
+data MethodPredicateSlot = MethodPredicateSlot {
+data PendingMethodDict = PendingMethodDict {
+data GivenEntry = GivenEntry {
+  geSlot : PredicateSlot,
+  geMatch : GivenMatch,
+data GivenMatch =
+  | GMPredicate
+  | GMIdWitnessed
+data GivenProvenance =
+  | DirectGiven
+  | ProjectedGiven EvidenceBinderId (List Int)
+gGiven : Ref (OrdMap (List GivenEntry)),
+data GivenScope =
+  | GSPredicateOnly
+  | GSImplRequires
+funPredicateSlotsRef : Ref (List (String, List PredicateSlot))
+methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
+crossModuleFunPredicateSlotsRef : Ref (List (String, List PredicateSlot))
+crossModuleFunPredicateSlotsQualRef : Ref (List ((String, String), List PredicateSlot))
+crossModuleMethodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
+crossModuleMethodPredicateSlotsQualRef : Ref (List ((String, String), List MethodPredicateSlot))'
+printf '%s\n' "$predicate_slot_types_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$tc_types_src"; then
+    echo "FAIL: #1318 predicate-slot producer authority is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
 # Match the whole condition inside its owning function. Embedded newlines in a
 # grep pattern are alternatives, so a multiline pattern would accept any one
 # surviving argument even if the visibility call itself had been removed.
@@ -1027,15 +1035,7 @@ done
 # #2549 method-row preparation: declaration identity, scheme, and method-level slots
 # are built in one row walk.  The Module-only driver reads its visible rows from
 # `implDecls`; positional key/scheme zips and graph-lived row state are retired.
-method_row_required='data MethodSchemeRow = MethodSchemeRow {
-  msrIface : IfaceRef,
-  msrName : String,
-  msrTyparams : List String,
-  msrType : Ty,
-  msrScheme : Scheme,
-  msrMethodSlots : List MethodPredicateSlot,
-  numLitFromIntAnchorRef : Ref (Option MethodSchemeRow),
-ifaceMethodSchemeRows : List Decl -> List MethodSchemeRow
+method_row_required='ifaceMethodSchemeRows : List Decl -> List MethodSchemeRow
 methodSchemeRows : List (String, List Kind) ->
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
@@ -1048,6 +1048,21 @@ admittedSchemeFor : String -> Registry MethodSchemeRow -> Option Scheme
 
 printf '%s\n' "$method_row_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: #2549 method-row preparation is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+method_row_types_required='data MethodSchemeRow = MethodSchemeRow {
+  msrIface : IfaceRef,
+  msrName : String,
+  msrTyparams : List String,
+  msrType : Ty,
+  msrScheme : Scheme,
+  msrMethodSlots : List MethodPredicateSlot,
+  numLitFromIntAnchorRef : Ref (Option MethodSchemeRow),'
+printf '%s\n' "$method_row_types_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$tc_types_src"; then
     echo "FAIL: #2549 method-row preparation is missing required source: $required"
     exit 1
   fi
@@ -1094,15 +1109,22 @@ done || exit 1
 # through checking and return stamping.  Each former OblProjection reader states
 # explicitly whether the unary numeric population participates.
 numeric_predicate_required='  ClassPredicate(..),
-  | SKNumReturn ClassPredicate Mono
-  | OpNumLit Mono
-  | EKNumReturn ClassPredicate Mono Bool (Option Loc)
-public export data NumericPredicateTraceEntry = NumericPredicateTraceEntry {
 beginNumericPredicateTrace : Unit -> Unit
 finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry'
 
 printf '%s\n' "$numeric_predicate_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: numeric return predicate migration is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+numeric_predicate_types_required='  | SKNumReturn ClassPredicate Mono
+  | OpNumLit Mono
+  | EKNumReturn ClassPredicate Mono Bool (Option Loc)
+public export data NumericPredicateTraceEntry = NumericPredicateTraceEntry {'
+printf '%s\n' "$numeric_predicate_types_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$tc_types_src"; then
     echo "FAIL: numeric return predicate migration is missing required source: $required"
     exit 1
   fi
@@ -1169,7 +1191,7 @@ require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpNumLit oc
 # Complete ordinary returns install one solver outcome on their request.  The checker
 # consumes it, while the route adapter projects the already-selected row and semantic
 # prerequisites without entering the legacy entailment ladder or selecting again.
-ordinary_return_resolution_body="$(sed -n '/^data MethodReturnResolution =/,/^}/p' "$predicate_slot_src")"
+ordinary_return_resolution_body="$(sed -n '/^public export data MethodReturnResolution =/,/^}/p' "$tc_types_src")"
 ordinary_return_resolution_required='  mrrWanted : Wanted
   mrrOutcome : SolverOutcome
   mrrSelectedRow : Option ImplRow'
@@ -1299,7 +1321,7 @@ fi
 
 # A queued descriptor retains one request-owned result cell, never the producer's
 # live Scheme or a second, independently mutable route destination.
-ordinary_return_request_body="$(sed -n '/^data MethodReturnRequest =/,/^}/p' "$predicate_slot_src")"
+ordinary_return_request_body="$(sed -n '/^public export data MethodReturnRequest =/,/^}/p' "$tc_types_src")"
 if [ -z "$ordinary_return_request_body" ] || printf '%s\n' "$ordinary_return_request_body" | grep -Eq ':.*(Scheme|SolverOutcome|SolverEvidence)'; then
   echo "FAIL: ordinary return request is absent or embeds a scheme or duplicate outcome"
   exit 1
@@ -1312,16 +1334,23 @@ fi
 # Arithmetic with a prelude Num declaration carries that exact predicate through
 # its single route goal. The scalar-only recorder remains only as the fallback
 # inside recordBinopGoals for prelude-free arithmetic.
-numeric_operator_required='  | SKPredicateOp Bool ClassPredicate
-  | EKPredicateOp Bool Bool ClassPredicate
-  | NPTArithmetic
-  let _ = recordBinopGoals op dref lt
+numeric_operator_required='  let _ = recordBinopGoals op dref lt
 goalRequestOfKind _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
 entailAssumVar request m encl _ useScope (EKPredicateOp _ _ _) =
 entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
   (stampPredicateOpRouteVal encl useScope name m tag predicate, [])'
 printf '%s\n' "$numeric_operator_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: exact numeric operator predicate transport is missing: $required"
+    exit 1
+  fi
+done || exit 1
+
+numeric_operator_types_required='  | SKPredicateOp Bool ClassPredicate
+  | EKPredicateOp Bool Bool ClassPredicate
+  | NPTArithmetic'
+printf '%s\n' "$numeric_operator_types_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$tc_types_src"; then
     echo "FAIL: exact numeric operator predicate transport is missing: $required"
     exit 1
   fi
