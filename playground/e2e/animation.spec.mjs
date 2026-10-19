@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { ANIMATION_EXAMPLES } from '../animation_examples.mjs';
 
@@ -210,28 +212,50 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {
   const page = await open(browser);
   await geometryProof(page);
-  await run(page); await waitCanvas(page);
-  const desktopWorkbench = await page.evaluate(() => {
-    const editor = document.getElementById('editor').getBoundingClientRect();
-    const canvas = document.getElementById('canvas-pane').getBoundingClientRect();
-    const buttons = ['pause-btn', 'stop-btn'].map(id => {
-      const button = document.getElementById(id);
-      return { className: button.className, radius: getComputedStyle(button).borderRadius };
+  await run(page, ANIMATION_EXAMPLES.cube); await waitCanvas(page);
+  await mkdir(screenshotDir, { recursive: true });
+  for (const [width, height] of [[1440, 900], [1280, 720]]) {
+    await page.setViewportSize({ width, height });
+    const desktopWorkbench = await page.evaluate(() => {
+      const editor = document.getElementById('editor').getBoundingClientRect();
+      const canvas = document.getElementById('canvas-pane').getBoundingClientRect();
+      const console = document.getElementById('console-pane').getBoundingClientRect();
+      const scroller = document.querySelector('.cm-scroller');
+      const buttons = ['pause-btn', 'stop-btn'].map(id => {
+        const button = document.getElementById(id);
+        return { className: button.className, radius: getComputedStyle(button).borderRadius };
+      });
+      return { editor, canvas, console, buttons, codeFits: scroller.scrollWidth <= scroller.clientWidth };
     });
-    return { editor, canvas, buttons };
-  });
-  assert.ok(desktopWorkbench.editor.width > 300 && desktopWorkbench.editor.right < desktopWorkbench.canvas.left,
-    'desktop animation view keeps the editor beside the canvas');
-  assert.ok(desktopWorkbench.buttons.every(button => button.className === 'btn-ghost' && button.radius === '6px'),
-    'Pause and Stop use the playground ghost-button style');
+    assert.ok(desktopWorkbench.editor.width >= 700 && desktopWorkbench.editor.height >= 440
+      && desktopWorkbench.editor.right < desktopWorkbench.canvas.left,
+      `${width}px desktop keeps a readable editor beside the canvas`);
+    assert.ok(desktopWorkbench.canvas.width >= 450 && desktopWorkbench.editor.width >= desktopWorkbench.canvas.width * 1.45,
+      'the split prioritizes readable code while keeping a useful canvas');
+    assert.ok(desktopWorkbench.codeFits, 'the cube source fits without horizontal scrolling');
+    assert.ok(desktopWorkbench.console.height <= 120, 'the animation console leaves room for the code');
+    assert.ok(desktopWorkbench.buttons.every(button => button.className === 'btn-ghost' && button.radius === '6px'),
+      'Pause and Stop use the playground ghost-button style');
+    await pause(100);
+    await page.screenshot({ path: join(screenshotDir, `animation_layout_${width}.png`), fullPage: true });
+  }
   await page.setViewportSize({ width: 600, height: 800 });
   await page.waitForFunction(() => {
     const editor = document.getElementById('editor').getBoundingClientRect();
     const canvas = document.getElementById('canvas-pane').getBoundingClientRect();
     return editor.width > 0 && canvas.width > 0 && editor.bottom <= canvas.top;
   });
+  assert.ok(await page.evaluate(() => {
+    const editor = document.getElementById('editor').getBoundingClientRect();
+    const pane = document.getElementById('canvas-pane').getBoundingClientRect();
+    const canvas = document.getElementById('animation-canvas').getBoundingClientRect();
+    return editor.height >= 320 && canvas.height <= pane.height && canvas.width <= pane.width;
+  }), 'narrow screens keep a readable editor and an unclipped canvas');
+  await pause(100);
+  await page.screenshot({ path: join(screenshotDir, 'animation_layout_600.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
   console.log('PASS animation view keeps code visible beside canvas and styles controls consistently');
+  await run(page); await waitCanvas(page);
   const first = await still(page); await pause(350);
   assert.notDeepEqual(await still(page), first, 'animation must change real canvas pixels');
   await page.click('#pause-btn'); await pause(100);
@@ -248,6 +272,7 @@ try {
     const rect = canvas.getBoundingClientRect();
     return canvas.width > 0 && canvas.width <= 2048 && Math.abs(rect.width / rect.height - 16 / 9) < 0.01;
   }));
+  await page.locator('#animation-canvas').scrollIntoViewIfNeeded();
   const bounds = await page.locator('#animation-canvas').boundingBox();
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
   await page.mouse.down(); await pause(100);

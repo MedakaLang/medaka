@@ -328,9 +328,20 @@
     }
     #canvas-pane[hidden] { display: none; }
     #animation-canvas { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; touch-action: none; }
+    .b-wrap:has(#canvas-pane:not([hidden])) { width: min(1640px, 100%); }
+    #workbench:has(#canvas-pane:not([hidden])) { flex: 1; gap: 14px; }
+    #workbench:has(#canvas-pane:not([hidden])) #editor { flex: 3 1 0; }
+    #workbench:has(#canvas-pane:not([hidden])) #canvas-pane { flex: 2 1 0; }
+    .b-wrap:has(#canvas-pane:not([hidden])) #console-pane { flex: 0 0 clamp(80px, 12vh, 120px); }
+    @media (max-width: 1100px) {
+      body:has(#canvas-pane:not([hidden])) { height: auto; min-height: 100dvh; overflow: auto; }
+      .b-wrap:has(#canvas-pane:not([hidden])) { flex: none; overflow: visible; }
+      #workbench:has(#canvas-pane:not([hidden])) { flex: none; flex-direction: column; }
+      #workbench:has(#canvas-pane:not([hidden])) #editor { flex: none; height: max(320px, 52dvh); }
+      #workbench:has(#canvas-pane:not([hidden])) #canvas-pane { flex: none; aspect-ratio: 16 / 9; }
+    }
     @media (max-width: 700px) {
-      #workbench { flex-direction: column; }
-      #editor, #canvas-pane { flex: 1 1 0; width: 100%; }
+      .b-toolbar { flex-wrap: wrap; }
     }
   </style>
 </head>
