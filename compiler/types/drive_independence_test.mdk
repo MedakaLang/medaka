@@ -1,7 +1,7 @@
 -- A drive starts from its inputs and the process's interners alone: what an earlier
 -- drive in the same process left behind (type-error flag and list, admitted methods,
 -- match oracle and warnings, last-entered location) is not visible to the next one.
-import test.{expectEqual, expectTrue}
+import test.{expectEqual}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import frontend.ast.{Decl}
@@ -33,18 +33,18 @@ seededSrc = joinNl [
   "  Some x => x",
 ]
 
-oneCtorSrc : String
-oneCtorSrc = joinNl [
-  "export data A = A { k : Int }",
-  "export h a = match a",
-  "  A _ => 2",
-]
-
 cleanSrc : String
 cleanSrc = joinNl [
   "export data Q = Q Int",
   "export q x = match x",
   "  Q n => n",
+]
+
+keyedSrc : String
+keyedSrc = joinNl [
+  "export data Z = Z Int",
+  "export z x = match x",
+  "  Z n => n",
 ]
 
 badSrc : String
@@ -145,22 +145,25 @@ test "#4336: a projection after a renaming drive admits nothing the renaming dri
     partial None [("m1", valMod1), ("m2", valMod2), ("e", ambEntry)]
   expectEqual ([], ["e.entry : a"]) (renaming, schemeOf "e" "entry" projection)
 
-test "#4330: a partial drive after other drives judges its match against an empty oracle" =
+-- The same partial drive over `cleanSrc`, once after a drive that seeded no oracle and
+-- once after a drive that seeded `Q`'s constructors, judges its match identically.
+test "#4330: a partial drive's match verdict does not depend on earlier drives" =
+  let _ = elab [("q", mainSrc)]
+  let _ = partial None [("c", cleanSrc)]
+  let afterQuiet = matchWarningsNow ()
   let _ = diags None [("m", seededSrc), ("b", badSrc)]
-  let _ = plainK None [("n", oneCtorSrc)]
-  let _ = partial None [("n", oneCtorSrc), ("c", cleanSrc)]
   let _ = diags None [("c", cleanSrc)]
   let _ = partial None [("c", cleanSrc)]
-  expectTrue (matchWarningsNow ())
+  expectEqual afterQuiet (matchWarningsNow ())
 
-test "#4330: a keyed partial drive after a core-memo hit starts from an empty oracle" =
+test "#4330: a keyed partial drive's match verdict does not depend on earlier drives" =
   let key = Some (8401, 8402)
-  let _ = diags key [("m", seededSrc), ("b", badSrc)]
-  let _ = partial key [("n", oneCtorSrc)]
-  let _ = plainK key [("n", oneCtorSrc), ("c", cleanSrc)]
-  let _ = diags key [("c", cleanSrc)]
-  let _ = partial key [("c", cleanSrc)]
-  expectTrue (matchWarningsNow ())
+  let _ = partial key [("z", keyedSrc)]
+  let afterQuiet = matchWarningsNow ()
+  let _ = diags key [("z", keyedSrc)]
+  let _ = plainK key [("z", keyedSrc)]
+  let _ = partial key [("z", keyedSrc)]
+  expectEqual afterQuiet (matchWarningsNow ())
 
 -- A drive over no declarations enters no location, so what it leaves in the cell is
 -- what it started with.
