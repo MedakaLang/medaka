@@ -50959,15 +50959,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- empty, so no reader can see a previous run's residue, no matter which arm (or
   -- none) ran before.  It is what the core pass below runs against; each user
   -- module then overwrites it from its own decls (`checkModuleFullDiags` →
-  -- `seedCheckRun`).  The tree arm's write below is dead for that reason (the mint
-  -- replaces the record it writes); it stays while the per-verb `exhaust.oracle`
-  -- count, which counts it, is pinned (`test/arch_goldens/stage_counts.golden` may
-  -- fall only by a re-capture).
-  let _ = match sel
-    GOutTrees =>
-      perRun.value.matchOracle := buildOracle []
-      ()
-    GOutDiags => ()
+  -- `seedCheckRun`).
   mintGraphCtx inputs admitted
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules

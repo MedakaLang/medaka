@@ -36,7 +36,7 @@ check_json_three_mod.typecheck.module	6
 run_hello.exit	0
 run_hello.desugar	4
 run_hello.exhaust.guards	1
-run_hello.exhaust.oracle	4
+run_hello.exhaust.oracle	3
 run_hello.lex.offsets	2
 run_hello.lex.pairs	1
 run_hello.load.located	1
@@ -47,7 +47,7 @@ run_hello.typecheck.module	2
 build_hello.exit	0
 build_hello.desugar	3
 build_hello.exhaust.guards	1
-build_hello.exhaust.oracle	4
+build_hello.exhaust.oracle	3
 build_hello.lex.offsets	2
 build_hello.lex.pairs	1
 build_hello.lex.tokenize	2
@@ -59,7 +59,7 @@ build_hello.typecheck.module	2
 test_probe.exit	0
 test_probe.desugar	17
 test_probe.exhaust.guards	7
-test_probe.exhaust.oracle	23
+test_probe.exhaust.oracle	21
 test_probe.lex.offsets	2
 test_probe.lex.pairs	14
 test_probe.lex.tokenize	2
@@ -89,7 +89,7 @@ check_bad.typecheck.module	2
 run_bad.exit	1
 run_bad.desugar	4
 run_bad.exhaust.guards	1
-run_bad.exhaust.oracle	4
+run_bad.exhaust.oracle	3
 run_bad.lex.offsets	2
 run_bad.lex.pairs	1
 run_bad.load.located	1
@@ -100,7 +100,7 @@ run_bad.typecheck.module	2
 build_bad.exit	1
 build_bad.desugar	3
 build_bad.exhaust.guards	1
-build_bad.exhaust.oracle	4
+build_bad.exhaust.oracle	3
 build_bad.lex.offsets	2
 build_bad.lex.pairs	1
 build_bad.lex.tokenize	2
@@ -123,7 +123,7 @@ check_vm.typecheck.module	2
 run_vm.exit	0
 run_vm.desugar	4
 run_vm.exhaust.guards	1
-run_vm.exhaust.oracle	4
+run_vm.exhaust.oracle	3
 run_vm.lex.offsets	2
 run_vm.lex.pairs	1
 run_vm.load.located	1
@@ -134,7 +134,7 @@ run_vm.typecheck.module	2
 build_vm.exit	0
 build_vm.desugar	3
 build_vm.exhaust.guards	1
-build_vm.exhaust.oracle	4
+build_vm.exhaust.oracle	3
 build_vm.lex.offsets	2
 build_vm.lex.pairs	1
 build_vm.lex.tokenize	2
@@ -158,7 +158,7 @@ check_vmm.typecheck.module	3
 run_vmm.exit	0
 run_vmm.desugar	4
 run_vmm.exhaust.guards	2
-run_vmm.exhaust.oracle	6
+run_vmm.exhaust.oracle	5
 run_vmm.lex.offsets	2
 run_vmm.lex.pairs	2
 run_vmm.load.located	1
@@ -170,7 +170,7 @@ run_vmm.typecheck.module	3
 build_vmm.exit	0
 build_vmm.desugar	4
 build_vmm.exhaust.guards	2
-build_vmm.exhaust.oracle	6
+build_vmm.exhaust.oracle	5
 build_vmm.lex.offsets	2
 build_vmm.lex.pairs	2
 build_vmm.lex.tokenize	2
@@ -183,7 +183,7 @@ build_vmm.typecheck.module	3
 run_async.exit	0
 run_async.desugar	12
 run_async.exhaust.guards	10
-run_async.exhaust.oracle	22
+run_async.exhaust.oracle	21
 run_async.lex.offsets	2
 run_async.lex.pairs	10
 run_async.load.located	1
@@ -195,7 +195,7 @@ run_async.typecheck.module	11
 build_async.exit	0
 build_async.desugar	12
 build_async.exhaust.guards	10
-build_async.exhaust.oracle	22
+build_async.exhaust.oracle	21
 build_async.lex.offsets	2
 build_async.lex.pairs	10
 build_async.lex.tokenize	2
@@ -208,7 +208,7 @@ build_async.typecheck.module	11
 checkpolicy_hello.exit	1
 checkpolicy_hello.desugar	3
 checkpolicy_hello.exhaust.guards	1
-checkpolicy_hello.exhaust.oracle	4
+checkpolicy_hello.exhaust.oracle	3
 checkpolicy_hello.lex.offsets	2
 checkpolicy_hello.lex.pairs	1
 checkpolicy_hello.load.located	1
@@ -220,7 +220,7 @@ checkpolicy_hello.typecheck.module	2
 manifest_hello.exit	0
 manifest_hello.desugar	3
 manifest_hello.exhaust.guards	1
-manifest_hello.exhaust.oracle	4
+manifest_hello.exhaust.oracle	3
 manifest_hello.lex.offsets	2
 manifest_hello.lex.pairs	1
 manifest_hello.load.located	1
@@ -244,7 +244,7 @@ check_target_three.typecheck.module	6
 build_json_hello.exit	0
 build_json_hello.desugar	4
 build_json_hello.exhaust.guards	1
-build_json_hello.exhaust.oracle	4
+build_json_hello.exhaust.oracle	3
 build_json_hello.lex.offsets	2
 build_json_hello.lex.pairs	1
 build_json_hello.lex.tokenize	2
@@ -255,7 +255,7 @@ build_json_hello.typecheck.drive	1
 build_json_hello.typecheck.module	2
 repl_one_line.exit	0
 repl_one_line.desugar	3
-repl_one_line.exhaust.oracle	3
+repl_one_line.exhaust.oracle	2
 repl_one_line.lex.offsets	2
 repl_one_line.lex.tokenize	2
 repl_one_line.parse.prescan	2
@@ -264,7 +264,7 @@ repl_one_line.typecheck.module	2
 test_doc_eval.exit	0
 test_doc_eval.desugar	5
 test_doc_eval.exhaust.guards	1
-test_doc_eval.exhaust.oracle	5
+test_doc_eval.exhaust.oracle	4
 test_doc_eval.lex.offsets	2
 test_doc_eval.lex.pairs	3
 test_doc_eval.lint.comments	1
@@ -275,7 +275,7 @@ test_doc_eval.typecheck.module	4
 test_docimp_eval.exit	0
 test_docimp_eval.desugar	6
 test_docimp_eval.exhaust.guards	2
-test_docimp_eval.exhaust.oracle	8
+test_docimp_eval.exhaust.oracle	7
 test_docimp_eval.lex.offsets	2
 test_docimp_eval.lex.pairs	4
 test_docimp_eval.lint.comments	1
@@ -288,7 +288,7 @@ test_docimp_eval.typecheck.module	6
 test_propsdoc_eval.exit	0
 test_propsdoc_eval.desugar	8
 test_propsdoc_eval.exhaust.guards	1
-test_propsdoc_eval.exhaust.oracle	10
+test_propsdoc_eval.exhaust.oracle	7
 test_propsdoc_eval.lex.offsets	4
 test_propsdoc_eval.lex.pairs	4
 test_propsdoc_eval.lint.comments	2
@@ -299,7 +299,7 @@ test_propsdoc_eval.typecheck.module	8
 test_arb_eval.exit	0
 test_arb_eval.desugar	11
 test_arb_eval.exhaust.guards	1
-test_arb_eval.exhaust.oracle	12
+test_arb_eval.exhaust.oracle	8
 test_arb_eval.lex.offsets	4
 test_arb_eval.lex.pairs	7
 test_arb_eval.lint.comments	2
@@ -310,7 +310,7 @@ test_arb_eval.typecheck.module	10
 test_tonly_native.exit	0
 test_tonly_native.desugar	11
 test_tonly_native.exhaust.guards	6
-test_tonly_native.exhaust.oracle	14
+test_tonly_native.exhaust.oracle	13
 test_tonly_native.lex.offsets	2
 test_tonly_native.lex.pairs	13
 test_tonly_native.lex.tokenize	2
@@ -323,7 +323,7 @@ test_tonly_native.typecheck.module	7
 test_doc_native.exit	0
 test_doc_native.desugar	9
 test_doc_native.exhaust.guards	3
-test_doc_native.exhaust.oracle	9
+test_doc_native.exhaust.oracle	8
 test_doc_native.lex.offsets	2
 test_doc_native.lex.pairs	6
 test_doc_native.lex.tokenize	2

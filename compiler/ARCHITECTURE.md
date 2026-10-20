@@ -100,11 +100,11 @@ cell creates it on entry and drops it on exit, and the cell is unreachable after
 No module-level cell holds per-module or per-group state. Configuration is an immutable
 record the driver builds once.
 
-- *Today (2026-10-20):* `types/typecheck.mdk` holds 5 module-level cells (`graphCtx`, `perRun`
-  are shims; three memos) plus the `Ref`
+- *Today (2026-10-20):* `types/typecheck.mdk` holds 6 module-level cells (`graphCtx`, `perRun`
+  are shims; `interners` is the process-wide lineage and extern catalog; three memos) plus the `Ref`
   fields of the bundle records (`ModuleCtx` 91, `GraphRun` 30, `CrossRun` 14, `GraphCtx` 20,
-  of which 2 are the sub-records `crossRun` and `graphRun` and `trace` is an `Option TraceSink`, not a `Ref`), the immutable `TcConfig` (5), `DriveInputs` (5) and `TraceSink` (8), and `GroupCtx` (2 fields) is minted per group; Phase 1 added the graph-owned site cells to `GraphRun`.
-  The tree holds 85 module-level cells in 26 modules (`test/arch_goldens/cells.golden`); Phase 0 counted 108 in 28.
+  of which 2 are the sub-records `crossRun` and `graphRun` and `trace` is an `Option TraceSink`, not a `Ref`), the `Interners` (2) and `Lineage` (3) records, the immutable `TcConfig` (5), `DriveInputs` (6) and `TraceSink` (8), and `GroupCtx` (2 fields) is minted per group; Phase 1 added the graph-owned site cells to `GraphRun`. A drive starts from its inputs and the interners alone: the mint reads no field of the previous drive's record.
+  The tree holds 86 module-level cells in 26 modules (`test/arch_goldens/cells.golden`); Phase 0 counted 108 in 28.
 - *Check:* module-level `= Ref` cells per module, pinned and falling (Phase 0, G3);
   Phase 2 ends with zero in the typechecker outside interners.
 
