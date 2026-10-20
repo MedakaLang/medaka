@@ -957,13 +957,18 @@ public export data GraphCtx = GraphCtx {
 -- The typechecker's configuration for one drive: immutable, built once by
 -- `graphPreamble` from the selected profile and the driver inputs.  `tcIoJoin` is
 -- what `IO` joins (`ioJoinAtoms`) and `tcIoJoinProfile` the name of the profile it
--- was taken from (`""` for none), which also keys the memos.  The other two are
--- the stdlib ownership of `DriveInputs`, copied at the same point.
+-- was taken from (`""` for none).  The next two are the stdlib ownership of
+-- `DriveInputs`, copied at the same point.  `tcKey` digests the profile name and
+-- both ownership fields once, at construction (profile, flat flag, then the
+-- sorted owned module ids joined by `,`, separated by newlines); the three
+-- cross-drive memos key on it, so a hit is only served to the configuration it was
+-- computed under.
 public export data TcConfig = TcConfig {
   tcIoJoin : List Atom,
   tcIoJoinProfile : String,
   tcStdlibOwned : OrdMap Unit,
   tcFlatEntryIsStdlib : Bool,
+  tcKey : String,
 }
 
 -- The trace gates and buffers a test builds before a drive and reads after it.

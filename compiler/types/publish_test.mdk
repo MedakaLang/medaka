@@ -3,8 +3,8 @@
 -- shadowing binding's context (#2054); published schemes holding no Link; and
 -- the partial analysis a drive returns (locals, seed, module).
 import test.{
-  expectEqual, expectEach, expectTrue, expectFalse, expectGreaterThan,
-  Expectation, fail
+  expectEqual, expectNotEqual, expectEach, expectTrue, expectFalse,
+  expectGreaterThan, Expectation, fail
 }
 import frontend.ast.{
   TyConOrigin(..), EvId(..), EvVal(..), EvEntry(..), Route(..), Loc(..), Decl
@@ -33,7 +33,7 @@ import types.evidence_coverage.{EvShape(..), evShapeOf}
 import types.runtime_types.{binderOrdinal, emptyBinderTypes}
 import map.{values}
 import types.tc_types.{
-  MethodReturnMemoView(..), DriveOutputs(..), InvocationView(..)
+  MethodReturnMemoView(..), DriveOutputs(..), InvocationView(..), TcConfig(..)
 }
 import types.typecheck.{
   defaultDriveInputs, checkOneSchemeFullK, checkModulesDiagsChain,
@@ -41,7 +41,7 @@ import types.typecheck.{
   methodReturnMemoCurrentViews, methodReturnMemoRetentionStats,
   chainMemoReplayedSteps, tcCode, tcMsg, checkModulesChainReportFor,
   checkOneReportK, checkModulesPartialK, elaborateModulesWithReport,
-  resetTypeErrorsSticky
+  resetTypeErrorsSticky, driveInputsFor, tcConfigOf
 }
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
@@ -1135,3 +1135,61 @@ test "hover answers on a single-file buffer with a resolve or type error" =
         ),
       ]
     _ => fail "could not read the prelude pair"
+
+ownRuntime : String
+ownRuntime = "extern rtAdd : Int -> Int -> Int"
+
+ownMod : String
+ownMod = joinNl [
+  "export",
+  "extern userX : Int -> Int",
+  "export",
+  "useX : Int -> Int",
+  "useX n = userX n",
+]
+
+ownDrive : List String -> List String
+ownDrive owned =
+  let (report, _) =
+    checkModulesChainReportFor
+      (driveInputsFor None False owned)
+      False
+      (Some (4337, 4338))
+      "own-chain"
+      [Some "m-step", None]
+      (desugar (parse ownRuntime))
+      (desugar (parse numPrelude))
+      [
+        ("m", desugar (parseLocated ownMod)),
+        (
+          "e",
+          desugar (parseLocated "import m.{useX}\nentry = useX 1\n"),
+        ),
+      ]
+  flatMap (md => map tcCode (ownErrs md)) report.trDiagnostics
+
+ownErrs : ModDiags -> List TcDiag
+ownErrs (_, (_, errs, _)) = errs
+
+test "the chain memo does not serve a hit across a stdlib ownership change" =
+  let _ = resetTypeErrorsSticky ()
+  let owned = ownDrive ["m"]
+  let user = ownDrive []
+  expectEach [
+    ("stdlib-owned extern is not stamped", expectEqual [] owned),
+    (
+      "the same chain under no ownership misses and reports",
+      expectEqual ["T-FFI-UNLABELLED"] user,
+    ),
+  ]
+
+test "equal configurations digest to equal memo keys" =
+  let key = owned => (tcConfigOf (driveInputsFor None False owned)).tcKey
+  expectEach [
+    ("same ownership", expectEqual (key ["b", "a"]) (key ["a", "b"])),
+    ("different ownership", expectNotEqual (key ["a"]) (key [])),
+    (
+      "flat flag",
+      expectNotEqual (tcConfigOf (driveInputsFor None True [])).tcKey (key []),
+    ),
+  ]
