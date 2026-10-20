@@ -22,7 +22,7 @@ browser feature. They are playground modules, not standard-library modules.
 
 This program runs in the playground's canvas host:
 
-```medaka
+```medaka-nocheck: uses the playground-only animation and graphics modules
 import animation.{animate}
 import graphics.{Color(..), Picture(..), Point(..), Shape(..)}
 

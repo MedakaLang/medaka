@@ -257,9 +257,9 @@ printf '%s\n' 'Some 42' 'Some (-17)' 'None' 'None' 'Some 3.5' > "$WORK/expected"
 check_imports_program string-to-int
 cat > "$WORK/input.mdk" <<'EOF2'
 import animation.{Frame}
-import graphics.{point}
+import graphics.{Point(..)}
 
-main = println (debug (point 1.0 2.0))
+main = println (debug (Point { x = 1.0, y = 2.0 }))
 EOF2
 printf '%s\n' 'Point { x = 1.0, y = 2.0 }' > "$WORK/expected"
 check_imports_program playground-animation-modules
