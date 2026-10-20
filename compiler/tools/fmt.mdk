@@ -719,31 +719,92 @@ formatSourceChecked src toks pairs = match prescanErrorPairs src toks pairs
 -- double-quoted spelling (`printLit`, tools/printer.mdk) — the AST's `Lit`
 -- type has no room to remember that a literal was written `"""..."""`.  This
 -- restores the original spelling as a pure TEXT patch applied AFTER
--- formatting: a `TString` token's start offset is always its opening quote, so
--- a token whose source starts `"""` is a triple-quoted literal.  Formatting
--- never adds, removes, or reorders string literals, so the Nth `TString` token
--- in the original source is the Nth in the formatted output; the correlation
--- is by ORDER alone.  Only the non-interpolated form is restored; an
--- interpolated triple string never produces a `TString` token and is untouched.
+-- formatting: a literal's span starts at its opening quote, so a literal whose
+-- source starts `"""` is triple-quoted.  Formatting never adds, removes, or
+-- reorders string literals, so the Nth literal in the original source is the
+-- Nth in the formatted output; the correlation is by ORDER alone.  Interpolated
+-- literals are restored too (see stringLitSpans).
 
 isTripleStringAt : String -> Int -> Bool
 isTripleStringAt src pos = stringSlice pos (pos + 3) src == "\"\"\""
 
-stringTokenInfo : String -> List Token -> List (Int, Int) -> List (Bool, String)
-stringTokenInfo _ [] _ = []
-stringTokenInfo _ _ [] = []
-stringTokenInfo src ((TString _) :: ts) ((s, e) :: ps) =
-  let triple = isTripleStringAt src s
-  (triple, if triple then stringSlice s e src else "")
-    :: stringTokenInfo src ts ps
-stringTokenInfo src (_ :: ts) (_ :: ps) = stringTokenInfo src ts ps
+-- Each string literal in source order as (start, end).  A plain literal is one
+-- `TString` token.  An interpolated literal is the run from its opening quote
+-- to the `TInterpEnd` that closes it, nested interpolations included.  Its
+-- `TInterpOpen` span starts at the `\{`, not the quote, so the quote is found
+-- from the end of the token before it.
+stringLitSpans : String -> List Token -> List (Int, Int) -> List (Int, Int)
+stringLitSpans src toks spans = stringLitGo src 0 toks spans
 
-stringTokenSpans : List Token -> List (Int, Int) -> List (Int, Int)
-stringTokenSpans [] _ = []
-stringTokenSpans _ [] = []
-stringTokenSpans ((TString _) :: ts) ((s, e) :: ps) =
-  (s, e) :: stringTokenSpans ts ps
-stringTokenSpans (_ :: ts) (_ :: ps) = stringTokenSpans ts ps
+stringLitGo : String -> Int -> List Token -> List (Int, Int) -> List (Int, Int)
+stringLitGo _ _ [] _ = []
+stringLitGo _ _ _ [] = []
+stringLitGo src _ ((TString _) :: ts) ((s, e) :: ps) =
+  (s, e) :: stringLitGo src e ts ps
+stringLitGo src prevEnd ((TInterpOpen _) :: ts) (_ :: ps) =
+  match interpLitEnd 1 ts ps
+    None => []
+    Some (end, ts2, ps2) =>
+      (openingQuoteAfter src prevEnd, end) :: stringLitGo src end ts2 ps2
+stringLitGo src _ (_ :: ts) ((_, e) :: ps) = stringLitGo src e ts ps
+
+-- The end of the interpolated literal whose opening was just consumed, and the
+-- tokens after it.  `depth` counts the literals still open (the outer one is 1).
+interpLitEnd : Int ->
+  List Token ->
+  List (Int, Int) ->
+  Option (Int, List Token, List (Int, Int))
+interpLitEnd _ [] _ = None
+interpLitEnd _ _ [] = None
+interpLitEnd depth ((TInterpEnd _) :: ts) ((_, e) :: ps) =
+  if depth == 1 then Some (e, ts, ps) else interpLitEnd (depth - 1) ts ps
+interpLitEnd depth ((TInterpOpen _) :: ts) (_ :: ps) =
+  interpLitEnd (depth + 1) ts ps
+interpLitEnd depth (_ :: ts) (_ :: ps) = interpLitEnd depth ts ps
+
+-- Only whitespace and comments sit between two tokens, so the next literal's
+-- opening quote is the first `"` after `pos` that is not inside a comment.
+openingQuoteAfter : String -> Int -> Int
+openingQuoteAfter src pos =
+  if pos >= stringLength src then
+    pos
+  else if stringSlice pos (pos + 1) src == "\"" then
+    pos
+  else if stringSlice pos (pos + 2) src == "--" then
+    openingQuoteAfter src (lineEndAfter src pos)
+  else if stringSlice pos (pos + 2) src == "{-" then
+    openingQuoteAfter src (blockCommentEnd src (pos + 2) 1)
+  else
+    openingQuoteAfter src (pos + 1)
+
+lineEndAfter : String -> Int -> Int
+lineEndAfter src pos =
+  if pos >= stringLength src then
+    pos
+  else if stringSlice pos (pos + 1) src == "\n" then
+    pos + 1
+  else
+    lineEndAfter src (pos + 1)
+
+-- `pos` is just past a `{-`; `depth` is how many comments are still open.
+blockCommentEnd : String -> Int -> Int -> Int
+blockCommentEnd src pos depth =
+  if pos >= stringLength src || depth == 0 then
+    pos
+  else if stringSlice pos (pos + 2) src == "{-" then
+    blockCommentEnd src (pos + 2) (depth + 1)
+  else if stringSlice pos (pos + 2) src == "-}" then
+    blockCommentEnd src (pos + 2) (depth - 1)
+  else
+    blockCommentEnd src (pos + 1) depth
+
+-- Whether each literal is triple-quoted, paired with its source text (empty
+-- for a plain literal, which is never restored).
+tripleLitInfo : String -> List (Int, Int) -> List (Bool, String)
+tripleLitInfo _ [] = []
+tripleLitInfo src ((s, e) :: ls) =
+  let triple = isTripleStringAt src s
+  (triple, if triple then stringSlice s e src else "") :: tripleLitInfo src ls
 
 -- Zip the original literal order against the formatted output's literal
 -- spans, keeping only the ones that need restoring.  A token-count mismatch
@@ -781,6 +842,6 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
   Some _ => match tokenizeWithOffsetPairs src
     (origToks, origSpans) => match tokenizeWithOffsetPairs formatted
       (fmtToks, fmtSpans) =>
-        let origInfo = stringTokenInfo src origToks origSpans
-        let fmtStrSpans = stringTokenSpans fmtToks fmtSpans
+        let origInfo = tripleLitInfo src (stringLitSpans src origToks origSpans)
+        let fmtStrSpans = stringLitSpans formatted fmtToks fmtSpans
         applyTripleSubs (tripleStringSubs origInfo fmtStrSpans) formatted

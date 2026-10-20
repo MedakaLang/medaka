@@ -2,7 +2,7 @@
 -- parser): expression-level let forms, if-let, impl hints, as-pattern lambda
 -- params, the two `where` placements, and nested record update.
 
-annotatedLet x = let y = x + 1 : Int in y * 2
+annotatedLet x = let y : Int = x + 1 in y * 2
 recLet n = go n
   where
     go = k => go k

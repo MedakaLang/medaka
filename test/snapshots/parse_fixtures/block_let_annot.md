@@ -17,8 +17,8 @@ plain =
 (DFunDef false "plain" () (EBlock (DoLet false false (PVar "s") (ELit (LInt 5))) (DoExpr (EVar "s"))))
 # PRINTER
 annotated =
-  let p = 5 : Int
-  let q = addOne : Int -> Int
+  let p : Int = 5
+  let q : Int -> Int = addOne
   q p
 plain =
   let s = 5

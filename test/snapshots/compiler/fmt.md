@@ -1,5 +1,5 @@
 # META
-source_lines=786
+source_lines=847
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — `formatProgram`, the driver over
@@ -723,31 +723,92 @@ formatSourceChecked src toks pairs = match prescanErrorPairs src toks pairs
 -- double-quoted spelling (`printLit`, tools/printer.mdk) — the AST's `Lit`
 -- type has no room to remember that a literal was written `"""..."""`.  This
 -- restores the original spelling as a pure TEXT patch applied AFTER
--- formatting: a `TString` token's start offset is always its opening quote, so
--- a token whose source starts `"""` is a triple-quoted literal.  Formatting
--- never adds, removes, or reorders string literals, so the Nth `TString` token
--- in the original source is the Nth in the formatted output; the correlation
--- is by ORDER alone.  Only the non-interpolated form is restored; an
--- interpolated triple string never produces a `TString` token and is untouched.
+-- formatting: a literal's span starts at its opening quote, so a literal whose
+-- source starts `"""` is triple-quoted.  Formatting never adds, removes, or
+-- reorders string literals, so the Nth literal in the original source is the
+-- Nth in the formatted output; the correlation is by ORDER alone.  Interpolated
+-- literals are restored too (see stringLitSpans).
 
 isTripleStringAt : String -> Int -> Bool
 isTripleStringAt src pos = stringSlice pos (pos + 3) src == "\"\"\""
 
-stringTokenInfo : String -> List Token -> List (Int, Int) -> List (Bool, String)
-stringTokenInfo _ [] _ = []
-stringTokenInfo _ _ [] = []
-stringTokenInfo src ((TString _) :: ts) ((s, e) :: ps) =
-  let triple = isTripleStringAt src s
-  (triple, if triple then stringSlice s e src else "")
-    :: stringTokenInfo src ts ps
-stringTokenInfo src (_ :: ts) (_ :: ps) = stringTokenInfo src ts ps
+-- Each string literal in source order as (start, end).  A plain literal is one
+-- `TString` token.  An interpolated literal is the run from its opening quote
+-- to the `TInterpEnd` that closes it, nested interpolations included.  Its
+-- `TInterpOpen` span starts at the `\{`, not the quote, so the quote is found
+-- from the end of the token before it.
+stringLitSpans : String -> List Token -> List (Int, Int) -> List (Int, Int)
+stringLitSpans src toks spans = stringLitGo src 0 toks spans
 
-stringTokenSpans : List Token -> List (Int, Int) -> List (Int, Int)
-stringTokenSpans [] _ = []
-stringTokenSpans _ [] = []
-stringTokenSpans ((TString _) :: ts) ((s, e) :: ps) =
-  (s, e) :: stringTokenSpans ts ps
-stringTokenSpans (_ :: ts) (_ :: ps) = stringTokenSpans ts ps
+stringLitGo : String -> Int -> List Token -> List (Int, Int) -> List (Int, Int)
+stringLitGo _ _ [] _ = []
+stringLitGo _ _ _ [] = []
+stringLitGo src _ ((TString _) :: ts) ((s, e) :: ps) =
+  (s, e) :: stringLitGo src e ts ps
+stringLitGo src prevEnd ((TInterpOpen _) :: ts) (_ :: ps) =
+  match interpLitEnd 1 ts ps
+    None => []
+    Some (end, ts2, ps2) =>
+      (openingQuoteAfter src prevEnd, end) :: stringLitGo src end ts2 ps2
+stringLitGo src _ (_ :: ts) ((_, e) :: ps) = stringLitGo src e ts ps
+
+-- The end of the interpolated literal whose opening was just consumed, and the
+-- tokens after it.  `depth` counts the literals still open (the outer one is 1).
+interpLitEnd : Int ->
+  List Token ->
+  List (Int, Int) ->
+  Option (Int, List Token, List (Int, Int))
+interpLitEnd _ [] _ = None
+interpLitEnd _ _ [] = None
+interpLitEnd depth ((TInterpEnd _) :: ts) ((_, e) :: ps) =
+  if depth == 1 then Some (e, ts, ps) else interpLitEnd (depth - 1) ts ps
+interpLitEnd depth ((TInterpOpen _) :: ts) (_ :: ps) =
+  interpLitEnd (depth + 1) ts ps
+interpLitEnd depth (_ :: ts) (_ :: ps) = interpLitEnd depth ts ps
+
+-- Only whitespace and comments sit between two tokens, so the next literal's
+-- opening quote is the first `"` after `pos` that is not inside a comment.
+openingQuoteAfter : String -> Int -> Int
+openingQuoteAfter src pos =
+  if pos >= stringLength src then
+    pos
+  else if stringSlice pos (pos + 1) src == "\"" then
+    pos
+  else if stringSlice pos (pos + 2) src == "--" then
+    openingQuoteAfter src (lineEndAfter src pos)
+  else if stringSlice pos (pos + 2) src == "{-" then
+    openingQuoteAfter src (blockCommentEnd src (pos + 2) 1)
+  else
+    openingQuoteAfter src (pos + 1)
+
+lineEndAfter : String -> Int -> Int
+lineEndAfter src pos =
+  if pos >= stringLength src then
+    pos
+  else if stringSlice pos (pos + 1) src == "\n" then
+    pos + 1
+  else
+    lineEndAfter src (pos + 1)
+
+-- `pos` is just past a `{-`; `depth` is how many comments are still open.
+blockCommentEnd : String -> Int -> Int -> Int
+blockCommentEnd src pos depth =
+  if pos >= stringLength src || depth == 0 then
+    pos
+  else if stringSlice pos (pos + 2) src == "{-" then
+    blockCommentEnd src (pos + 2) (depth + 1)
+  else if stringSlice pos (pos + 2) src == "-}" then
+    blockCommentEnd src (pos + 2) (depth - 1)
+  else
+    blockCommentEnd src (pos + 1) depth
+
+-- Whether each literal is triple-quoted, paired with its source text (empty
+-- for a plain literal, which is never restored).
+tripleLitInfo : String -> List (Int, Int) -> List (Bool, String)
+tripleLitInfo _ [] = []
+tripleLitInfo src ((s, e) :: ls) =
+  let triple = isTripleStringAt src s
+  (triple, if triple then stringSlice s e src else "") :: tripleLitInfo src ls
 
 -- Zip the original literal order against the formatted output's literal
 -- spans, keeping only the ones that need restoring.  A token-count mismatch
@@ -785,8 +846,8 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
   Some _ => match tokenizeWithOffsetPairs src
     (origToks, origSpans) => match tokenizeWithOffsetPairs formatted
       (fmtToks, fmtSpans) =>
-        let origInfo = stringTokenInfo src origToks origSpans
-        let fmtStrSpans = stringTokenSpans fmtToks fmtSpans
+        let origInfo = tripleLitInfo src (stringLitSpans src origToks origSpans)
+        let fmtStrSpans = stringLitSpans formatted fmtToks fmtSpans
         applyTripleSubs (tripleStringSubs origInfo fmtStrSpans) formatted
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Decl" true))))
@@ -949,16 +1010,29 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DFunDef false "formatSourceChecked" ((PVar "src") (PVar "toks") (PVar "pairs")) (EMatch (EApp (EApp (EApp (EVar "prescanErrorPairs") (EVar "src")) (EVar "toks")) (EVar "pairs")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "toks")) (EVar "pairs")) (arm (PCon "Some" (PVar "parsed")) () (EApp (EVar "Ok") (EApp (EApp (EVar "formatParsed") (EVar "src")) (EVar "parsed")))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EApp (EApp (EVar "formatSourcePairs") (EVar "src")) (EVar "toks")) (EVar "pairs")))) (EApp (EApp (EApp (EVar "parseResultPairs") (EVar "src")) (EVar "toks")) (EVar "pairs"))))))))
 (DTypeSig false "isTripleStringAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "isTripleStringAt" ((PVar "src") (PVar "pos")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "src")) (ELit (LString "\"\"\""))))
-(DTypeSig false "stringTokenInfo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "String")))))))
-(DFunDef false "stringTokenInfo" (PWild (PList) PWild) (EListLit))
-(DFunDef false "stringTokenInfo" (PWild PWild (PList)) (EListLit))
-(DFunDef false "stringTokenInfo" ((PVar "src") (PCons (PCon "TString" PWild) (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps"))) (EBlock (DoLet false false (PVar "triple") (EApp (EApp (EVar "isTripleStringAt") (EVar "src")) (EVar "s"))) (DoExpr (EBinOp "::" (ETuple (EVar "triple") (EIf (EVar "triple") (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EVar "e")) (EVar "src")) (ELit (LString "")))) (EApp (EApp (EApp (EVar "stringTokenInfo") (EVar "src")) (EVar "ts")) (EVar "ps"))))))
-(DFunDef false "stringTokenInfo" ((PVar "src") (PCons PWild (PVar "ts")) (PCons PWild (PVar "ps"))) (EApp (EApp (EApp (EVar "stringTokenInfo") (EVar "src")) (EVar "ts")) (EVar "ps")))
-(DTypeSig false "stringTokenSpans" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "stringTokenSpans" ((PList) PWild) (EListLit))
-(DFunDef false "stringTokenSpans" (PWild (PList)) (EListLit))
-(DFunDef false "stringTokenSpans" ((PCons (PCon "TString" PWild) (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps"))) (EBinOp "::" (ETuple (EVar "s") (EVar "e")) (EApp (EApp (EVar "stringTokenSpans") (EVar "ts")) (EVar "ps"))))
-(DFunDef false "stringTokenSpans" ((PCons PWild (PVar "ts")) (PCons PWild (PVar "ps"))) (EApp (EApp (EVar "stringTokenSpans") (EVar "ts")) (EVar "ps")))
+(DTypeSig false "stringLitSpans" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "stringLitSpans" ((PVar "src") (PVar "toks") (PVar "spans")) (EApp (EApp (EApp (EApp (EVar "stringLitGo") (EVar "src")) (ELit (LInt 0))) (EVar "toks")) (EVar "spans")))
+(DTypeSig false "stringLitGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))))
+(DFunDef false "stringLitGo" (PWild PWild (PList) PWild) (EListLit))
+(DFunDef false "stringLitGo" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "stringLitGo" ((PVar "src") PWild (PCons (PCon "TString" PWild) (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps"))) (EBinOp "::" (ETuple (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "stringLitGo") (EVar "src")) (EVar "e")) (EVar "ts")) (EVar "ps"))))
+(DFunDef false "stringLitGo" ((PVar "src") (PVar "prevEnd") (PCons (PCon "TInterpOpen" PWild) (PVar "ts")) (PCons PWild (PVar "ps"))) (EMatch (EApp (EApp (EApp (EVar "interpLitEnd") (ELit (LInt 1))) (EVar "ts")) (EVar "ps")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "end") (PVar "ts2") (PVar "ps2"))) () (EBinOp "::" (ETuple (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EVar "prevEnd")) (EVar "end")) (EApp (EApp (EApp (EApp (EVar "stringLitGo") (EVar "src")) (EVar "end")) (EVar "ts2")) (EVar "ps2"))))))
+(DFunDef false "stringLitGo" ((PVar "src") PWild (PCons PWild (PVar "ts")) (PCons (PTuple PWild (PVar "e")) (PVar "ps"))) (EApp (EApp (EApp (EApp (EVar "stringLitGo") (EVar "src")) (EVar "e")) (EVar "ts")) (EVar "ps")))
+(DTypeSig false "interpLitEnd" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))))))))
+(DFunDef false "interpLitEnd" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "interpLitEnd" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "interpLitEnd" ((PVar "depth") (PCons (PCon "TInterpEnd" PWild) (PVar "ts")) (PCons (PTuple PWild (PVar "e")) (PVar "ps"))) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 1))) (EApp (EVar "Some") (ETuple (EVar "e") (EVar "ts") (EVar "ps"))) (EApp (EApp (EApp (EVar "interpLitEnd") (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "ts")) (EVar "ps"))))
+(DFunDef false "interpLitEnd" ((PVar "depth") (PCons (PCon "TInterpOpen" PWild) (PVar "ts")) (PCons PWild (PVar "ps"))) (EApp (EApp (EApp (EVar "interpLitEnd") (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "ts")) (EVar "ps")))
+(DFunDef false "interpLitEnd" ((PVar "depth") (PCons PWild (PVar "ts")) (PCons PWild (PVar "ps"))) (EApp (EApp (EApp (EVar "interpLitEnd") (EVar "depth")) (EVar "ts")) (EVar "ps")))
+(DTypeSig false "openingQuoteAfter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "openingQuoteAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\""))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EVar "pos"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))))))
+(DTypeSig false "lineEndAfter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "lineEndAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\n"))) (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))))
+(DTypeSig false "blockCommentEnd" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "blockCommentEnd" ((PVar "src") (PVar "pos") (PVar "depth")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "-}"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth"))))))
+(DTypeSig false "tripleLitInfo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "String"))))))
+(DFunDef false "tripleLitInfo" (PWild (PList)) (EListLit))
+(DFunDef false "tripleLitInfo" ((PVar "src") (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ls"))) (EBlock (DoLet false false (PVar "triple") (EApp (EApp (EVar "isTripleStringAt") (EVar "src")) (EVar "s"))) (DoExpr (EBinOp "::" (ETuple (EVar "triple") (EIf (EVar "triple") (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EVar "e")) (EVar "src")) (ELit (LString "")))) (EApp (EApp (EVar "tripleLitInfo") (EVar "src")) (EVar "ls"))))))
 (DTypeSig false "tripleStringSubs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "tripleStringSubs" ((PCons (PTuple (PCon "True") (PVar "raw")) (PVar "is")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ss"))) (EBinOp "::" (ETuple (EVar "s") (EVar "e") (EVar "raw")) (EApp (EApp (EVar "tripleStringSubs") (EVar "is")) (EVar "ss"))))
 (DFunDef false "tripleStringSubs" ((PCons (PTuple (PCon "False") PWild) (PVar "is")) (PCons PWild (PVar "ss"))) (EApp (EApp (EVar "tripleStringSubs") (EVar "is")) (EVar "ss")))
@@ -969,7 +1043,7 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DFunDef false "applyTripleGo" ((PList) (PVar "out") (PVar "cursor") (PVar "acc")) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "cursor")) (EApp (EVar "stringLength") (EVar "out"))) (EVar "out")) (EVar "acc"))))
 (DFunDef false "applyTripleGo" ((PCons (PTuple (PVar "s") (PVar "e") (PVar "raw")) (PVar "rest")) (PVar "out") (PVar "cursor") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "applyTripleGo") (EVar "rest")) (EVar "out")) (EVar "e")) (EBinOp "::" (EVar "raw") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "cursor")) (EVar "s")) (EVar "out")) (EVar "acc")))))
 (DTypeSig false "restoreTripleQuotedStrings" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "restoreTripleQuotedStrings" ((PVar "src") (PVar "formatted")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\"\"\""))) (EVar "src")) (arm (PCon "None") () (EVar "formatted")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "origToks") (PVar "origSpans")) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "formatted")) (arm (PTuple (PVar "fmtToks") (PVar "fmtSpans")) () (EBlock (DoLet false false (PVar "origInfo") (EApp (EApp (EApp (EVar "stringTokenInfo") (EVar "src")) (EVar "origToks")) (EVar "origSpans"))) (DoLet false false (PVar "fmtStrSpans") (EApp (EApp (EVar "stringTokenSpans") (EVar "fmtToks")) (EVar "fmtSpans"))) (DoExpr (EApp (EApp (EVar "applyTripleSubs") (EApp (EApp (EVar "tripleStringSubs") (EVar "origInfo")) (EVar "fmtStrSpans"))) (EVar "formatted")))))))))))
+(DFunDef false "restoreTripleQuotedStrings" ((PVar "src") (PVar "formatted")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\"\"\""))) (EVar "src")) (arm (PCon "None") () (EVar "formatted")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "origToks") (PVar "origSpans")) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "formatted")) (arm (PTuple (PVar "fmtToks") (PVar "fmtSpans")) () (EBlock (DoLet false false (PVar "origInfo") (EApp (EApp (EVar "tripleLitInfo") (EVar "src")) (EApp (EApp (EApp (EVar "stringLitSpans") (EVar "src")) (EVar "origToks")) (EVar "origSpans")))) (DoLet false false (PVar "fmtStrSpans") (EApp (EApp (EApp (EVar "stringLitSpans") (EVar "formatted")) (EVar "fmtToks")) (EVar "fmtSpans"))) (DoExpr (EApp (EApp (EVar "applyTripleSubs") (EApp (EApp (EVar "tripleStringSubs") (EVar "origInfo")) (EVar "fmtStrSpans"))) (EVar "formatted")))))))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Decl" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "render" false) (mem "printDecl" false) (mem "printDataDeclCommented" false) (mem "printNamedFieldData" false) (mem "PComment" true) (mem "setComments" false) (mem "takeLeftoverComments" false) (mem "commentsPlaced" false) (mem "setTrailingCommas" false) (mem "setImportForced" false) (mem "setUnitStarts" false))))
@@ -1131,16 +1205,29 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DFunDef false "formatSourceChecked" ((PVar "src") (PVar "toks") (PVar "pairs")) (EMatch (EApp (EApp (EApp (EVar "prescanErrorPairs") (EVar "src")) (EVar "toks")) (EVar "pairs")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "toks")) (EVar "pairs")) (arm (PCon "Some" (PVar "parsed")) () (EApp (EVar "Ok") (EApp (EApp (EVar "formatParsed") (EVar "src")) (EVar "parsed")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EApp (EApp (EVar "formatSourcePairs") (EVar "src")) (EVar "toks")) (EVar "pairs")))) (EApp (EApp (EApp (EVar "parseResultPairs") (EVar "src")) (EVar "toks")) (EVar "pairs"))))))))
 (DTypeSig false "isTripleStringAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "isTripleStringAt" ((PVar "src") (PVar "pos")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "src")) (ELit (LString "\"\"\""))))
-(DTypeSig false "stringTokenInfo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "String")))))))
-(DFunDef false "stringTokenInfo" (PWild (PList) PWild) (EListLit))
-(DFunDef false "stringTokenInfo" (PWild PWild (PList)) (EListLit))
-(DFunDef false "stringTokenInfo" ((PVar "src") (PCons (PCon "TString" PWild) (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps"))) (EBlock (DoLet false false (PVar "triple") (EApp (EApp (EVar "isTripleStringAt") (EVar "src")) (EVar "s"))) (DoExpr (EBinOp "::" (ETuple (EVar "triple") (EIf (EVar "triple") (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EVar "e")) (EVar "src")) (ELit (LString "")))) (EApp (EApp (EApp (EVar "stringTokenInfo") (EVar "src")) (EVar "ts")) (EVar "ps"))))))
-(DFunDef false "stringTokenInfo" ((PVar "src") (PCons PWild (PVar "ts")) (PCons PWild (PVar "ps"))) (EApp (EApp (EApp (EVar "stringTokenInfo") (EVar "src")) (EVar "ts")) (EVar "ps")))
-(DTypeSig false "stringTokenSpans" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "stringTokenSpans" ((PList) PWild) (EListLit))
-(DFunDef false "stringTokenSpans" (PWild (PList)) (EListLit))
-(DFunDef false "stringTokenSpans" ((PCons (PCon "TString" PWild) (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps"))) (EBinOp "::" (ETuple (EVar "s") (EVar "e")) (EApp (EApp (EVar "stringTokenSpans") (EVar "ts")) (EVar "ps"))))
-(DFunDef false "stringTokenSpans" ((PCons PWild (PVar "ts")) (PCons PWild (PVar "ps"))) (EApp (EApp (EVar "stringTokenSpans") (EVar "ts")) (EVar "ps")))
+(DTypeSig false "stringLitSpans" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "stringLitSpans" ((PVar "src") (PVar "toks") (PVar "spans")) (EApp (EApp (EApp (EApp (EVar "stringLitGo") (EVar "src")) (ELit (LInt 0))) (EVar "toks")) (EVar "spans")))
+(DTypeSig false "stringLitGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))))
+(DFunDef false "stringLitGo" (PWild PWild (PList) PWild) (EListLit))
+(DFunDef false "stringLitGo" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "stringLitGo" ((PVar "src") PWild (PCons (PCon "TString" PWild) (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps"))) (EBinOp "::" (ETuple (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "stringLitGo") (EVar "src")) (EVar "e")) (EVar "ts")) (EVar "ps"))))
+(DFunDef false "stringLitGo" ((PVar "src") (PVar "prevEnd") (PCons (PCon "TInterpOpen" PWild) (PVar "ts")) (PCons PWild (PVar "ps"))) (EMatch (EApp (EApp (EApp (EVar "interpLitEnd") (ELit (LInt 1))) (EVar "ts")) (EVar "ps")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "end") (PVar "ts2") (PVar "ps2"))) () (EBinOp "::" (ETuple (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EVar "prevEnd")) (EVar "end")) (EApp (EApp (EApp (EApp (EVar "stringLitGo") (EVar "src")) (EVar "end")) (EVar "ts2")) (EVar "ps2"))))))
+(DFunDef false "stringLitGo" ((PVar "src") PWild (PCons PWild (PVar "ts")) (PCons (PTuple PWild (PVar "e")) (PVar "ps"))) (EApp (EApp (EApp (EApp (EVar "stringLitGo") (EVar "src")) (EVar "e")) (EVar "ts")) (EVar "ps")))
+(DTypeSig false "interpLitEnd" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))))))))
+(DFunDef false "interpLitEnd" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "interpLitEnd" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "interpLitEnd" ((PVar "depth") (PCons (PCon "TInterpEnd" PWild) (PVar "ts")) (PCons (PTuple PWild (PVar "e")) (PVar "ps"))) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 1))) (EApp (EVar "Some") (ETuple (EVar "e") (EVar "ts") (EVar "ps"))) (EApp (EApp (EApp (EVar "interpLitEnd") (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "ts")) (EVar "ps"))))
+(DFunDef false "interpLitEnd" ((PVar "depth") (PCons (PCon "TInterpOpen" PWild) (PVar "ts")) (PCons PWild (PVar "ps"))) (EApp (EApp (EApp (EVar "interpLitEnd") (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "ts")) (EVar "ps")))
+(DFunDef false "interpLitEnd" ((PVar "depth") (PCons PWild (PVar "ts")) (PCons PWild (PVar "ps"))) (EApp (EApp (EApp (EVar "interpLitEnd") (EVar "depth")) (EVar "ts")) (EVar "ps")))
+(DTypeSig false "openingQuoteAfter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "openingQuoteAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\""))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EVar "pos"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))))))
+(DTypeSig false "lineEndAfter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "lineEndAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\n"))) (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))))
+(DTypeSig false "blockCommentEnd" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "blockCommentEnd" ((PVar "src") (PVar "pos") (PVar "depth")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "-}"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth"))))))
+(DTypeSig false "tripleLitInfo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "String"))))))
+(DFunDef false "tripleLitInfo" (PWild (PList)) (EListLit))
+(DFunDef false "tripleLitInfo" ((PVar "src") (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ls"))) (EBlock (DoLet false false (PVar "triple") (EApp (EApp (EVar "isTripleStringAt") (EVar "src")) (EVar "s"))) (DoExpr (EBinOp "::" (ETuple (EVar "triple") (EIf (EVar "triple") (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EVar "e")) (EVar "src")) (ELit (LString "")))) (EApp (EApp (EVar "tripleLitInfo") (EVar "src")) (EVar "ls"))))))
 (DTypeSig false "tripleStringSubs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "tripleStringSubs" ((PCons (PTuple (PCon "True") (PVar "raw")) (PVar "is")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ss"))) (EBinOp "::" (ETuple (EVar "s") (EVar "e") (EVar "raw")) (EApp (EApp (EVar "tripleStringSubs") (EVar "is")) (EVar "ss"))))
 (DFunDef false "tripleStringSubs" ((PCons (PTuple (PCon "False") PWild) (PVar "is")) (PCons PWild (PVar "ss"))) (EApp (EApp (EVar "tripleStringSubs") (EVar "is")) (EVar "ss")))
@@ -1151,4 +1238,4 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DFunDef false "applyTripleGo" ((PList) (PVar "out") (PVar "cursor") (PVar "acc")) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "cursor")) (EApp (EVar "stringLength") (EVar "out"))) (EVar "out")) (EVar "acc"))))
 (DFunDef false "applyTripleGo" ((PCons (PTuple (PVar "s") (PVar "e") (PVar "raw")) (PVar "rest")) (PVar "out") (PVar "cursor") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "applyTripleGo") (EVar "rest")) (EVar "out")) (EVar "e")) (EBinOp "::" (EVar "raw") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "cursor")) (EVar "s")) (EVar "out")) (EVar "acc")))))
 (DTypeSig false "restoreTripleQuotedStrings" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "restoreTripleQuotedStrings" ((PVar "src") (PVar "formatted")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\"\"\""))) (EVar "src")) (arm (PCon "None") () (EVar "formatted")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "origToks") (PVar "origSpans")) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "formatted")) (arm (PTuple (PVar "fmtToks") (PVar "fmtSpans")) () (EBlock (DoLet false false (PVar "origInfo") (EApp (EApp (EApp (EVar "stringTokenInfo") (EVar "src")) (EVar "origToks")) (EVar "origSpans"))) (DoLet false false (PVar "fmtStrSpans") (EApp (EApp (EVar "stringTokenSpans") (EVar "fmtToks")) (EVar "fmtSpans"))) (DoExpr (EApp (EApp (EVar "applyTripleSubs") (EApp (EApp (EVar "tripleStringSubs") (EVar "origInfo")) (EVar "fmtStrSpans"))) (EVar "formatted")))))))))))
+(DFunDef false "restoreTripleQuotedStrings" ((PVar "src") (PVar "formatted")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\"\"\""))) (EVar "src")) (arm (PCon "None") () (EVar "formatted")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "origToks") (PVar "origSpans")) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "formatted")) (arm (PTuple (PVar "fmtToks") (PVar "fmtSpans")) () (EBlock (DoLet false false (PVar "origInfo") (EApp (EApp (EVar "tripleLitInfo") (EVar "src")) (EApp (EApp (EApp (EVar "stringLitSpans") (EVar "src")) (EVar "origToks")) (EVar "origSpans")))) (DoLet false false (PVar "fmtStrSpans") (EApp (EApp (EApp (EVar "stringLitSpans") (EVar "formatted")) (EVar "fmtToks")) (EVar "fmtSpans"))) (DoExpr (EApp (EApp (EVar "applyTripleSubs") (EApp (EApp (EVar "tripleStringSubs") (EVar "origInfo")) (EVar "fmtStrSpans"))) (EVar "formatted")))))))))))

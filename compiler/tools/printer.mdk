@@ -1570,9 +1570,7 @@ printDoStmt (DoExpr e) = printExprBody e
 printDoStmt (DoLet isMut False pat e _) =
   Cat
     (text "let ")
-    (Cat
-      (if isMut then text "mut " else Nil)
-      (Cat (printLetBinderPat pat) (sepBody " =" e)))
+    (Cat (if isMut then text "mut " else Nil) (letBindingDoc pat e))
 printDoStmt (DoLet isMut True pat e _) = printDoLetRec isMut pat e
 printDoStmt (DoAssign x e) = Cat (text x) (sepBody " =" e)
 printDoStmt (DoFieldAssign x fields e) =
@@ -1644,8 +1642,31 @@ printELet True (PVar f _ _) rhs e2 = match unwrapLams [] rhs
           (text f)
           (concatD (map (p => Cat (text " ") (printPatAtom p)) args)))
     letInDoc headD body e2
-printELet _ pat e1 e2 =
-  letInDoc (Cat (text "let ") (printLetBinderPat pat)) e1 e2
+printELet _ pat e1 e2 = match letAnnotRhs pat e1
+  Some (ty, inner) =>
+    letInDoc
+      (Cat (text "let ") (Cat (printLetBinderPat pat) (annotSuffixDoc ty)))
+      inner
+      e2
+  None => letInDoc (Cat (text "let ") (printLetBinderPat pat)) e1 e2
+
+-- `let x : T = e` parses to `EAnnot e T` on the rhs (parser.mdk, letIdentBody).
+-- Printed as `e : T` the annotation lands on the rhs's last piece (a lambda
+-- body), so the binder form is the one that keeps it covering the whole rhs.
+letAnnotRhs : Pat -> Expr -> Option (Ty, Expr)
+letAnnotRhs (PVar _ _ _) e = match stripLocE e
+  EAnnot inner ty => Some (ty, inner)
+  _ => None
+letAnnotRhs _ _ = None
+
+letBindingDoc : Pat -> Expr -> Doc
+letBindingDoc pat e = match letAnnotRhs pat e
+  Some (ty, inner) =>
+    Cat (printLetBinderPat pat) (Cat (annotSuffixDoc ty) (sepBody " =" inner))
+  None => Cat (printLetBinderPat pat) (sepBody " =" e)
+
+annotSuffixDoc : Ty -> Doc
+annotSuffixDoc ty = Cat (text " : ") (printType ty)
 
 letInDoc : Doc -> Expr -> Expr -> Doc
 letInDoc headD rhs e2 =
@@ -1829,7 +1850,27 @@ printMatchArms arms = indentBlock (joinHard (pieceDocsHard (map armPiece arms)))
 matchArmDoc : Arm -> Doc
 matchArmDoc (Arm pat guards body) =
   let guardsD = noClaimDoc (_ => matchGuardsDoc guards)
-  Cat (printPatArm pat) (Cat guardsD (sepBody " =>" body))
+  Cat (printPatArm pat) (Cat guardsD (armBodyDoc body))
+
+-- An arm's own `where` with several bindings prints as `where` at the end of the
+-- arm line, bindings indented under it.  The nested `let rec … in` spelling
+-- (`letRecInDoc`) scopes each binding over only the ones after it, so a
+-- binding that refers to a later one would stop resolving.  A single binding
+-- nests safely and keeps that spelling.
+armBodyDoc : Expr -> Doc
+armBodyDoc body = match stripLocE body
+  ELetGroup binds inner =>
+    if isMultiBindGroup binds then
+      Cat
+        (sepBody " =>" inner)
+        (Cat (text " where") (Nest 2 (letGroupClauses binds)))
+    else
+      sepBody " =>" body
+  _ => sepBody " =>" body
+
+isMultiBindGroup : List LetBind -> Bool
+isMultiBindGroup (_ :: _ :: _) = True
+isMultiBindGroup _ = False
 
 matchGuardsDoc : List Guard -> Doc
 matchGuardsDoc [] = Nil
@@ -1841,12 +1882,20 @@ guardDoc (GBool g) = condExprDoc g
 guardDoc (GBind gp g) = Cat (printPat gp) (Cat (text " <- ") (condExprDoc g))
 
 -- A condition (`if c then`, a guard) is followed by more text on its last line,
--- so a `match` there must keep its parentheses: its arms block would
--- otherwise swallow what follows.
+-- so a form that carries its own trailing text (`match` arms, `if … then`,
+-- `let … in`, a `: ty` annotation) keeps its parentheses: it would otherwise
+-- swallow what follows.
 condExprDoc : Expr -> Doc
 condExprDoc c = match stripLocE c
-  EMatch _ _ => Cat (text "(") (Cat (printExpr precTop c) (text ")"))
+  EMatch _ _ => parenCondDoc c
+  EIf _ _ _ => parenCondDoc c
+  ELet _ _ _ _ _ => parenCondDoc c
+  ELetGroup _ _ => parenCondDoc c
+  EAnnot _ _ => parenCondDoc c
   _ => printExpr precTop c
+
+parenCondDoc : Expr -> Doc
+parenCondDoc c = Cat (text "(") (Cat (printExpr precTop c) (text ")"))
 
 -- Function/where guard arms: indented block of `| guards = body`.
 guardArmPiece : GuardArm -> Piece
@@ -2184,8 +2233,8 @@ padBindersP [] _ = []
 padBindersP (_ :: vs) (b :: bs) = b :: padBindersP vs bs
 padBindersP (_ :: vs) [] = [] :: padBindersP vs []
 
--- `Name { … }` with an optional deriving clause that stays inline when the
--- record fits one line and drops to its own indented line when it breaks.
+-- `Name { … }` with an optional deriving clause that stays on the closing
+-- brace's line whether the record fits one line or breaks.
 recordVariantDoc : String ->
   List (String, KindAnn) ->
   List Field ->
@@ -2199,20 +2248,13 @@ recordVariantDoc name binders fields nameOmitted derives =
     else
       Cat (text name) (Cat (bindersDoc binders) (text " {"))
   let sep = Cat (text ",") Line
-  let derivesTail =
-    if isEmptyL derives then
-      Nil
-    else
-      FlatAlt
-        (nest (Cat Line (printDerives derives)))
-        (Cat (text " ") (printDerives derives))
   group
     (Cat
       namePart
       (Cat
         (nest
           (Cat Line (Cat (sepBy sep (map fieldTyDoc fields)) trailingCommaDoc)))
-        (Cat Line (Cat (text "}") derivesTail))))
+        (Cat Line (Cat (text "}") (derivesInline derives)))))
 
 fieldTyDoc : Field -> Doc
 fieldTyDoc (Field fn ft) = Cat (text fn) (Cat (text " : ") (printType ft))
@@ -2249,9 +2291,7 @@ printNamedFieldData vis n params kinds [Variant cname (ConNamed fields nameOmitt
         (concatD
           (map (f => Cat Hardline (Cat (fieldTyDoc f) (text ","))) fields)))
       (Cat Hardline (text "}"))
-  let deriveDoc =
-    if isEmptyL derives then Nil else indentBlock (printDerives derives)
-  Cat (visPrefix vis) (Cat head (Cat body deriveDoc))
+  Cat (visPrefix vis) (Cat head (Cat body (derivesInline derives)))
 printNamedFieldData vis n params kinds variants binders derives =
   printDecl (dDataUnresolved vis n params kinds variants binders derives)
 
@@ -2277,11 +2317,14 @@ visPrefix VisPrivate = Nil
 --     | Bar
 --     | Baz
 --     deriving (Eq)
--- A single record variant never gets a bar; it breaks inside its braces:
+-- A single constructor takes no bar, so it sits on its own line after `=`:
+--   data Foo =
+--     Bar
+-- A single record variant breaks inside its braces, and the deriving clause
+-- stays on the closing brace's line:
 --   data Cfg = Cfg {
 --     name : String,
---   }
---     deriving (Eq)
+--   } deriving (Eq)
 dataBodyDoc : List Variant ->
   List (List (String, KindAnn)) ->
   List DeriveRef ->
@@ -2289,6 +2332,11 @@ dataBodyDoc : List Variant ->
 dataBodyDoc [] _ derives = derivesInline derives
 dataBodyDoc [Variant name (ConNamed fields nameOmitted)] [[]] derives =
   Cat (text " = ") (recordVariantDoc name [] fields nameOmitted derives)
+dataBodyDoc [v] [b] derives =
+  group
+    (Cat
+      (text " =")
+      (nest (Cat (Cat Line (printVariant b v)) (derivesLineOrInline derives))))
 dataBodyDoc (v :: vs) (b :: bs) derives =
   group
     (Cat
