@@ -401,6 +401,8 @@ import types.tc_types.{
   EvCell(..),
   SiteCell(..),
   GraphRun(..),
+  Lineage(..),
+  Interners(..),
   PendingBinder(..),
   GivenScope(..),
   PendingJoin(..),
@@ -8013,15 +8015,14 @@ emptyTcConfig = TcConfig {
   tcKey = "\n\n",
 }
 
--- The process's first graph record, before any drive minted one.  `env` is the
+-- A graph record with every field fresh and [run] as its graph run: the process's
+-- first record, before any drive, and the base each mint builds on.  `env` is the
 -- initial TcEnv (always `initialEnv`), a parameter for the reason `freshCrossRun`
--- states: the `graphCtx` initializer must name `initialEnv` in its own body.  Every
--- `Ref` built here is the one every later record carries (`mintGraphCtx`), except
--- `builtinExternNamesRef`, which a memo hit replaces (`restoreGraphCtx`).
-initialGraphCtx : TcEnv -> GraphCtx
-initialGraphCtx env = GraphCtx {
+-- states: the `graphCtx` initializer must name `initialEnv` in its own body.
+initialGraphCtx : TcEnv -> GraphRun -> GraphCtx
+initialGraphCtx env run = GraphCtx {
   crossRun = freshCrossRun env,
-  graphRun = freshGraphRun (),
+  graphRun = run,
   effectDomains = Ref [],
   config = Ref emptyTcConfig,
   trace = None,
@@ -8044,25 +8045,44 @@ initialGraphCtx env = GraphCtx {
 
 -- The graph shim: the module-level cell holding the current drive's record.
 graphCtx : Ref GraphCtx
-graphCtx = Ref (initialGraphCtx initialEnv)
+graphCtx = Ref (initialGraphCtx initialEnv (freshGraphRun ()))
+
+-- The process's interners (see `Interners`): the lineage objects and the extern
+-- catalog of the graph record installed last.  Every install below writes it, so
+-- the next mint continues from whatever record was installed before it: a mint, a
+-- memo hit's restored record, `markModules`' run, or a probe's restore.
+interners : Ref Interners
+interners = Ref (internersOf graphCtx.value)
+
+internersOf : GraphCtx -> Interners
+internersOf c = Interners {
+  lineage = Lineage {
+    lnEvCounter = c.graphRun.evCounter,
+    lnLocalAbs = c.graphRun.localAbs,
+    lnGrants = c.graphRun.grants,
+  },
+  externCatalog = c.builtinExternNamesRef,
+}
 
 -- Install [c] as the cross-module accumulators, keeping the rest of the record.
 installCross : CrossRun -> Unit
-installCross c = graphCtx := GraphCtx { graphCtx.value | crossRun = c }
+installCross c = installGraphCtx GraphCtx { graphCtx.value | crossRun = c }
 
 -- Install [r] as the graph lineage, keeping the rest of the record.
 installRun : GraphRun -> Unit
-installRun r = graphCtx := GraphCtx { graphCtx.value | graphRun = r }
+installRun r = installGraphCtx GraphCtx { graphCtx.value | graphRun = r }
 
--- Install [c] as the current drive's record: the one write a memo hit's returned
--- value goes through.
+-- Install [c] as the current drive's record, and its lineage and catalog as the
+-- interners: the one write every install goes through.
 installGraphCtx : GraphCtx -> Unit
-installGraphCtx c = graphCtx := c
+installGraphCtx c =
+  graphCtx := c
+  interners := internersOf c
 
 -- Install both sub-records, keeping the rest of the record.
 installSubRecords : CrossRun -> GraphRun -> Unit
 installSubRecords c r =
-  graphCtx := GraphCtx { graphCtx.value | crossRun = c, graphRun = r }
+  installGraphCtx GraphCtx { graphCtx.value | crossRun = c, graphRun = r }
 
 -- one entry per occurrence of a registered interface method: (iface, typarams,
 -- declared method Ty, the occurrence's instantiated mono).  Resolved post-inference.
@@ -9087,43 +9107,32 @@ resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
 -- (elaborateModules → checkModuleFullImpl) calls `freshModuleCtx` at the start of each
 -- module, wiping `typeErrors`, so after the whole graph only the last module's errors
 -- survive there.  build/run must abort on a type error in any module, so
--- `pushTypeError` also records into this accumulator, which only
--- `resetTypeErrorsSticky` clears (snapshot.mdk and tests; no production driver calls it).  Read via
--- `hadTypeErrors` to gate the CLI exit code before emit/eval.
+-- `pushTypeError` also records into this accumulator, which the drive's mint
+-- starts `False`.  Read via `hadTypeErrors` to gate the CLI exit code before
+-- emit/eval.
 --
 -- #2089 / #2544 (M4): `GraphCtx.typeErrorsStickyDiags` holds the diagnostics behind
 -- the flag, newest first, across every module of the graph.  `perRun.typeErrors` is
 -- wiped per module, so this is the only place a caller with no per-module hook can
 -- read what armed the sticky flag rather than merely that it was armed — it is what
 -- `elaborateModules` returns as its residual, each entry with its own `Loc`.  Written
--- only by `recordTypeError`, cleared only by `resetTypeErrorsSticky`, and rolled back
+-- only by `recordTypeError`, started empty by the drive's mint, and rolled back
 -- wherever the flag is (`checkGraphFinish`) — the same pairing obligation the
--- detection counter states.  The mint carries both, so they outlive a drive.
+-- detection counter states.  Both are the drive's own.
 
--- Clear the sticky accumulator.  Called by snapshot.mdk and tests; the production drivers carry it across drives.
-export
-resetTypeErrorsSticky : Unit -> Unit
-resetTypeErrorsSticky _ =
-  graphCtx.value.typeErrorsSticky := False
-  graphCtx.value.typeErrorsStickyDiags := []
-
--- #2544 (M4): every diagnostic that armed the sticky gate since the last reset, each
--- tagged with the module it was recorded in, in push order, deduplicated PER GOAL —
+-- #2544 (M4): every diagnostic that armed the sticky gate in the drive, each tagged
+-- with the module it was recorded in, in push order, deduplicated PER GOAL —
 -- module, code, location and text together — never by text alone (a text key would
 -- re-introduce the suppressed-check shape OD5 forbids: two goals at two sites with
 -- the same rendering are two findings).
 export
 stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
-stickyTypeErrorDiags o = dedupBy tcDiagGoalKey (reverseL o.doStickyDiags)
+stickyTypeErrorDiags o = stickyDiagsInPushOrder o.doStickyDiags
 
--- The diagnostics pushed since `before` was read off `typeErrorsStickyDiags` — the
--- list is consed at the head, so they are its first `now - before` entries.
-stickyTypeErrorDiagsSince : List (String, TcDiag) -> List (String, TcDiag)
-stickyTypeErrorDiagsSince before =
-  let now = graphCtx.value.typeErrorsStickyDiags.value
-  dedupBy
-    tcDiagGoalKey
-    (reverseL (takeFirst (listLen now - listLen before) now))
+-- [diags] (newest first, as the sticky list holds them) in push order, deduplicated
+-- per goal.
+stickyDiagsInPushOrder : List (String, TcDiag) -> List (String, TcDiag)
+stickyDiagsInPushOrder diags = dedupBy tcDiagGoalKey (reverseL diags)
 
 export
 tcDiagGoalKey : (String, TcDiag) -> String
@@ -9135,8 +9144,7 @@ locGoalKey None = ""
 locGoalKey (Some (Loc file sl sc el ec)) =
   "\{file}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
 
--- True iff any type error was pushed since the last resetTypeErrorsSticky, as the
--- drive left it.
+-- True iff the drive recorded a type error, as the drive left it.
 export
 hadTypeErrors : DriveOutputs -> Bool
 hadTypeErrors o = o.doHadTypeErrors
@@ -9196,8 +9204,7 @@ recordTypeError raw =
 -- Called from `recordTypeError` (stored) and from all three dedup short-circuits
 -- (detected, suppressed as a duplicate).  It deliberately does NOT arm
 -- `typeErrorsSticky`: a short-circuit means an identical message is already in the
--- channel, which armed it at its own push, and only `resetTypeErrorsSticky` (once per
--- build/run, before any inference) clears it.
+-- channel, which armed it at its own push, and nothing clears it within the drive.
 noteTypeErrorDetected : Unit -> Unit
 noteTypeErrorDetected _ =
   perRun.value.errorsDetected := perRun.value.errorsDetected.value + 1
@@ -9591,6 +9598,7 @@ defaultDriveInputs = DriveInputs {
   diTrace = None,
   diIoJoinGrants = ioJoinGrants None,
   diProfileName = "",
+  diMarked = None,
 }
 
 -- The drive inputs a driver builds from the profile it selected and the loader's
@@ -9620,6 +9628,7 @@ driveInputsFor profile flatEntry mods = DriveInputs {
   diProfileName = match profile
     None => ""
     Some p => profileName p,
+  diMarked = None,
 }
 
 -- A sink with every gate off and fresh buffers; each `begin*` turns one gate on.
@@ -10410,30 +10419,36 @@ freshEvId _ =
   g.evCounter := n + 1
   EvId perRun.value.currentModuleRef.value n
 
--- #2549 M2: start a new graph lineage.  The evidence ORDINAL is carried, so no id
--- minted from here repeats one an earlier graph's tree still holds and a stray read
--- of such an id fails loudly instead of answering for another node.  What is indexed
--- by ordinal is not carried: `evBase` moves up to the counter and `evCells` starts
--- empty, so a long-lived process's arrays span one graph rather than its whole life.
+-- #2549 M2: start a new graph lineage from [lineage], the interners' (the run
+-- installed last).  The evidence ORDINAL continues from that run's counter, so an
+-- id minted from here does not repeat one the previous drive's tree holds, and a
+-- stray read of such an id fails loudly instead of answering for another node.  It
+-- is not monotone across a core-memo hit: the hit installs a copy of its snapshot's
+-- run, whose counter is the snapshot's, so the next ordinals rewind to it (the
+-- rewind `freshEvId` states).  What is indexed by ordinal is not carried: `evBase`
+-- moves up to the counter and `evCells` starts empty, so a long-lived process's
+-- arrays span one graph rather than its whole life.
 --
 -- Nothing reads the cell arrays across a new lineage.  Every driver's mint
 -- (`mintGraphCtx`) starts one before it marks, except after `markModules`, which
--- starts one itself, marks, and hands the trees to a driver whose mint lands here:
--- that lineage is `markedAhead`, and the mint keeps its base and cells.  Trees
--- outlive their drive only through the facts the drive returned, so a caller that
--- runs a second elaboration before it reads the first's trees keeps the first's facts.
+-- starts one itself, marks, and returns its run for the driver that checks those
+-- trees: that driver's inputs carry it as [marked], and the mint keeps its base and
+-- cells.  Trees outlive their drive only through the facts the drive returned, so a
+-- caller that runs a second elaboration before it reads the first's trees keeps the
+-- first's facts.
 --
--- [keepMarked]: keep [prior]'s base and cell arrays rather than starting them empty
--- at the counter.  The binder-name and grant state are [prior]'s own objects,
--- cleared in place below.
-graphLineageRun : Bool -> GraphRun -> GraphRun
-graphLineageRun keepMarked prior =
-  let n = prior.evCounter.value
-  let base = if keepMarked then prior.evBase else n
-  let localAbs = prior.localAbs
-  let grants = prior.grants
+-- The binder-name and grant state are the lineage's own objects, cleared in place
+-- below.
+graphLineageRun : Option GraphRun -> Lineage -> GraphRun
+graphLineageRun marked lineage =
+  let n = lineage.lnEvCounter.value
+  let base = match marked
+    Some run => run.evBase
+    None => n
+  let localAbs = lineage.lnLocalAbs
+  let grants = lineage.lnGrants
   let fresh = freshGraphRun ()
-  let kept = if keepMarked then prior else fresh
+  let kept = optionOr fresh marked
   fresh.evCounter := n
   -- The cells below the base belong to an earlier drive, which judged them or never
   -- solved them; this drive judges only the cells of its own lineage.
@@ -48866,19 +48881,21 @@ aliasEntriesFor _ _ _ = []
 -- values and an `import m.{…m's methods…}` is appended beside it, so the origin name is
 -- in scope for the occurrence `resolveAliasMethodSpellings` resolves it to.  A member
 -- alias's `DUse` is rewritten to its origin name by that same restore, after inference.
+-- Beside the rewritten modules it returns each module's admissions, which the drive's
+-- mint installs (`GraphCtx.graphAdmittedMethodsRef`, read by `admittedIn`).
 renameAliasedMethods : List Decl ->
   List (String, List Decl) ->
-  List (String, List Decl)
+  (OrdMap (List (String, String)), List (String, List Decl))
 renameAliasedMethods coreDecls modules =
   let coreEntry = ("core", declMethodNames coreDecls)
   let methodsPerMid = coreEntry :: methodsPerMidGo [coreEntry] modules
-  graphCtx.value.graphAdmittedMethodsRef :=
+  let admitted =
     omFromPairs
       (map
         ((mid, prog) => (mid, synthesizedAdmissions methodsPerMid prog))
         modules)
       omEmpty
-  map (renameAliasedMethodsIn methodsPerMid) modules
+  (admitted, map (renameAliasedMethodsIn methodsPerMid) modules)
 
 admittedIn : String -> List (String, String)
 admittedIn mid =
@@ -48959,8 +48976,8 @@ reexportedMethodsOf _ _ = []
 -- index, is overwritten whole at every Module-mode driver entry — there is one,
 -- `graphPreamble` — never merged, so compile N's rows cannot reach compile N+1, and a
 -- driver that skipped the write would read an empty index; (b) nothing resets it in
--- between — `GraphCtx` has no reset point, which is why the index is not on
--- `CrossRun` (`mintGraphCtx` cleared it between write and read: F1).  Both
+-- between — nothing resets a `GraphCtx` field within a drive, which is why the
+-- index is not on `CrossRun` (`mintGraphCtx` cleared it between write and read: F1).  Both
 -- halves, or neither.
 --
 -- No `pub` filter: a private interface's methods are carried too (F3), unlike
@@ -50871,34 +50888,41 @@ tcConfigOf domains inputs = TcConfig {
     "\{inputs.diProfileName}\n\{inputs.diFlatEntryIsStdlib}\n\{joinWith "," (omKeys inputs.diStdlibOwned)}",
 }
 
--- Mint the drive's graph record, once, at the head of `graphPreamble`.  The
--- cross-module accumulators survive the per-module `freshModuleCtx` (dict arities,
--- the universe, data and impl accumulators cross module boundaries within one
--- graph) but must not survive a drive: a long-lived process (LSP, playground,
--- snapshot runner) drives repeatedly, and drive K+1 would seed its first module from
--- drive K's residue while the `*Qual` mirrors grew without bound.  So `crossRun` is
--- fresh (`freshCrossRun` re-mints every field, so what resets is what `CrossRun`
--- holds) and `graphRun` starts a new lineage (`graphLineageRun`, keeping a
--- `markModules` lineage), and the trace sink is the drive's own.  Every `Ref` field
--- is carried by identity: the preamble writes the graph-derived ones in place below,
--- and the sticky pair and the rest keep the previous drive's values.
-mintGraphCtx : DriveInputs -> Unit
-mintGraphCtx inputs =
-  let prior = graphCtx.value
-  graphCtx := GraphCtx { prior |
-    crossRun = freshCrossRun initialEnv,
-    graphRun = graphLineageRun prior.graphRun.markedAhead prior.graphRun,
+-- Mint the drive's graph record, once, at the head of `graphPreamble`, from the
+-- drive's [inputs], the [admitted] map its driver computed (`renameAliasedMethods`;
+-- empty on the projections) and the interners, and nothing else of an earlier
+-- drive: a long-lived process (LSP, playground, snapshot runner, `medaka test`)
+-- drives repeatedly, and drive K+1 must not start from drive K's residue.  Every
+-- field is fresh (`initialGraphCtx`) except the trace sink and the admitted map,
+-- which are this drive's, the extern catalog, which is the interners' (a union over
+-- the process; see `noteBuiltinExternNames`), and `graphRun`, a new lineage from
+-- the interners' (`graphLineageRun`, keeping the base and cells of the run
+-- `markModules` returned when [inputs] carry it).  The module record restarts from
+-- the initial one, so a module checked without a seed (the core pass) starts from
+-- an empty oracle and no warnings.
+mintGraphCtx : DriveInputs -> OrdMap (List (String, String)) -> Unit
+mintGraphCtx inputs admitted =
+  let carried = interners.value
+  let base =
+    initialGraphCtx initialEnv (graphLineageRun inputs.diMarked carried.lineage)
+  perRun := initialModuleCtx ()
+  installGraphCtx GraphCtx { base |
     trace = inputs.diTrace,
+    graphAdmittedMethodsRef = Ref admitted,
+    builtinExternNamesRef = carried.externCatalog,
   }
 
+-- [admitted]: the per-module method admissions `renameAliasedMethods` computed for
+-- the drive's graph, or `omEmpty` on a drive that does not rename.
 graphPreamble : DriveInputs ->
+  OrdMap (List (String, String)) ->
   GraphOut ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), OrdMap (List VecObl), List Decl, MarkSets)
-graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
+graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- S-emit-interleave-leak (#2049), TREES only: THE EMIT DRIVER OWNS ITS OWN
   -- (empty) ctor oracle.  A module checked without a `CheckRunSeed` carries the
   -- previous module record's `matchOracle`, and the tree arm's core pass is one
@@ -50923,22 +50947,20 @@ graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
   -- `runEmitWith`'s own path (`compiler/entries/entry_support.mdk`), which never
   -- reads `hadTypeErrors` after the call.  Clean exit 0, SIGSEGV at runtime.
   --
-  -- Minting the empty oracle here means no reader can see a previous run's residue,
-  -- no matter which arm (or none) ran before.  It is what the CORE pass below runs
-  -- against; each USER module then overwrites it from its own decls
-  -- (`checkModuleFullDiags` → `seedCheckRun`).
-  --
-  -- `mainSchemeRef` is cleared for the same class of reason: the tree arm's
-  -- per-module write is Some-only (last module binding `main` wins), so without
-  -- this an earlier run's `main` would survive a graph that binds none.  The diags
-  -- arm needs no clear — its write is SET-OR-CLEAR (`setMainSchemeIfEntry`).
+  -- The mint below starts the module record from `initialModuleCtx`, whose oracle is
+  -- empty, so no reader can see a previous run's residue, no matter which arm (or
+  -- none) ran before.  It is what the core pass below runs against; each user
+  -- module then overwrites it from its own decls (`checkModuleFullDiags` →
+  -- `seedCheckRun`).  The tree arm's write below is dead for that reason (the mint
+  -- replaces the record it writes); it stays while the per-verb `exhaust.oracle`
+  -- count, which counts it, is pinned (`test/arch_goldens/stage_counts.golden` may
+  -- fall only by a re-capture).
   let _ = match sel
     GOutTrees =>
-      graphCtx.value.mainSchemeRef := None
       perRun.value.matchOracle := buildOracle []
       ()
     GOutDiags => ()
-  mintGraphCtx inputs
+  mintGraphCtx inputs admitted
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
   -- loop, so a module using an effect declared in ANOTHER module sees its domain.
@@ -50974,7 +50996,7 @@ graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
   graphCtx.value.mangledFunDefsPresentRef :=
     prelude.ppMangledFunDefs || graphCarriesMangledFunDefs modules
   -- #1112 A-3.1: the whole-graph declaration envelope, under the same two-part
-  -- property as the line above (`GraphCtx` has no reset point, and the
+  -- property as the line above (nothing resets it within the drive, and the
   -- Module-mode driver entry writes it unconditionally).  See `buildDeclEnvs`.  It
   -- carries the method namespace (`deMethods`) and the constructor export index
   -- (`deData.deCtorExports`), so it is written before any module — the core pass
@@ -51005,8 +51027,8 @@ graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
   -- through its own dictionary parameter on every verb.  The completeness judgment
   -- reads those routes, and a check driver that left such a body unpromoted would
   -- see `RNone` where the tree arm sees `RDict`.  The eligible set is written and
-  -- the harvest cleared on every drive, because `GraphCtx` has no reset point
-  -- and `maybeInferConstraint` reads the set.
+  -- the harvest cleared at the entry of every drive, which `maybeInferConstraint`
+  -- reads.
   let _ = setDictEligible (moduleUserFnNames modules)
   graphCtx.value.promotionHarvestRef := []
   -- The core pass.  The diags arm memoizes it under the caller's prelude key (see
@@ -51045,7 +51067,14 @@ checkModulesPreambleK : DriveInputs ->
   (List (String, Scheme), ModuleBindings)
 checkModulesPreambleK inputs preludeKey runtimeDecls coreDecls modules =
   let (runtimeSeed, coreSchemes, _, _, _, _) =
-    graphPreamble inputs GOutDiags preludeKey runtimeDecls coreDecls modules
+    graphPreamble
+      inputs
+      omEmpty
+      GOutDiags
+      preludeKey
+      runtimeDecls
+      coreDecls
+      modules
   (runtimeSeed, coreSchemes)
 
 -- worker: plain per-module typecheck (no diagnostics harvest, no accAll).  Surfaces
@@ -51184,7 +51213,14 @@ checkModulesPartialK : DriveInputs ->
 checkModulesPartialK inputs preludeKey runtimeDecls coreDecls0 modules0 =
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modules0
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _) =
-    graphPreamble inputs GOutDiags preludeKey runtimeDecls coreDecls modules
+    graphPreamble
+      inputs
+      omEmpty
+      GOutDiags
+      preludeKey
+      runtimeDecls
+      coreDecls
+      modules
   let rows = cmFold runtimeSeed coreSchemes modules
   partialAnalysis
     rows
@@ -51747,11 +51783,12 @@ checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys ru
   -- occurrence of such a name resolves to a different declaration than on the arm
   -- that renames.  A module's rewrite reads only its dependencies' method sets, so
   -- it is stable under the prefix the step memo resumes from.
-  let (coreDecls, modules) =
-    stampGraphDecls coreDecls0 (renameAliasedMethods coreDecls0 modules0)
+  let (admitted, modulesAliased) = renameAliasedMethods coreDecls0 modules0
+  let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _) =
     graphPreamble
       inputs
+      admitted
       GOutDiags
       (Some (rk, ck))
       runtimeDecls
@@ -52083,7 +52120,6 @@ driveGraphK : DriveInputs ->
   List (String, List Decl) ->
   GraphDrive
 driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn =
-  let stickyBefore = graphCtx.value.typeErrorsStickyDiags.value
   -- IMPORT ALIASING of an interface/impl METHOD — a method is global-by-name, so an
   -- alias of one is a second SPELLING, not a second binding.  A member alias and a
   -- module alias both keep their spelling through inference and are resolved at the
@@ -52094,7 +52130,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
   -- not a spelling one, so a selection that skips it typechecks a different program.
   -- Only the RESTORE (`resolveAliasMethodSpellings`) is tree-arm-only: it rewrites
   -- occurrences in trees the diags arm does not emit.
-  let modulesAliased = renameAliasedMethods coreDecls0 modulesIn
+  let (admitted, modulesAliased) = renameAliasedMethods coreDecls0 modulesIn
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  It is HERE, not in the preamble, because this is the seam the
@@ -52105,7 +52141,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
   -- minting in its final shape and no later pass has to re-mint.
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, coreTree, ms) =
-    graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules
+    graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: the worker reads BOTH accData (buildOracle `prog ++ accData`) and
   -- accAll (checkModuleFullImpl implDecls), and
   -- both are order-observable (oracle first-wins, implDecls scan order), so both
@@ -52192,7 +52228,8 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       -- Only the user modules go through it: core imports nothing, so it holds no
       -- alias-qualified spelling to restore.
       let modulesOut = map resolveAliasMethodSpellings modules3
-      let residual = stickyTypeErrorDiagsSince stickyBefore
+      let residual =
+        stickyDiagsInPushOrder graphCtx.value.typeErrorsStickyDiags.value
       -- read after `dictPass`, so it carries the `EMethodAt` nodes `dictPass` minted
       let evidence = drivenEvidence ()
       GraphDrive {
@@ -54050,19 +54087,20 @@ shadowBareName sm n = match lookupAssoc n sm
 -- The mark sub-phase of elaborateModules (RKey-only): compute rpNames over the
 -- full module graph and prePassDict each module.  Exported so profiling drivers
 -- can bracket the mark phase vs the typecheck phase separately.  It opens the graph
--- lineage the cells it mints belong to and leaves it `markedAhead`, so the driver
--- it feeds (`checkModules`) keeps those cells when its preamble resets the graph.
+-- lineage the cells it mints belong to and returns that run beside the marked
+-- trees; the driver it feeds (`checkModules`) takes the run as `diMarked` and keeps
+-- those cells when its preamble mints the graph.
 export
 markModules : List Decl ->
   List (String, List Decl) ->
-  (List Decl, List (String, List Decl))
+  (List Decl, List (String, List Decl), GraphRun)
 markModules coreDecls modules =
-  installRun (graphLineageRun False graphCtx.value.graphRun)
+  installRun (graphLineageRun None interners.value.lineage)
   let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
   let core2 = prePassDict rpNames [] coreDecls
   let modules2 = map (prePassModulePair rpNames) modules
   installRun GraphRun { graphCtx.value.graphRun | markedAhead = True }
-  (core2, modules2)
+  (core2, modules2, graphCtx.value.graphRun)
 
 -- typecheck one module (seeded like checkModuleFull) AND immediately stamp the
 -- EMethodAt route refs it just recorded.  `recordModuleStart` marks the goal channel

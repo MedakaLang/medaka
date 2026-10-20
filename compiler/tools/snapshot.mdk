@@ -187,7 +187,6 @@ import types.typecheck.{
   mainTypeIsFloat,
   hadTypeErrors,
   hadMatchWarnings,
-  resetTypeErrorsSticky,
 }
 import types.tc_types.{DriveOutputs}
 import types.target_profile.{selectedProfile}
@@ -495,7 +494,6 @@ markOf coreDecls d = programToSexp (markWithPrelude coreDecls d)
 -- "TYPE ERROR:" is one reworded message away from silently becoming blessable.
 typesOf : List Decl -> List Decl -> (String, Bool)
 typesOf runtimeDecls d =
-  let _ = resetTypeErrorsSticky ()
   -- coreDecls is always [] here (prelude-free), so there is no prelude-scheme
   -- to lose crossing to the Module arm's checkOneToLinesWithRuntime -- the
   -- rendered set is `d`'s own schemes either way (S-migrate-tool-consumers-remainder).
@@ -535,7 +533,6 @@ typesOf runtimeDecls d =
 -- section still reports the diagnostic (and stays unblessable).
 typesUserOf : List Decl -> List Decl -> List Decl -> (String, Bool)
 typesUserOf runtimeDecls coreDecls d =
-  let _ = resetTypeErrorsSticky ()
   -- checkOneToLinesWithRuntime (Module arm) already renders ONLY the target
   -- module's own scheme lines (never coreDecls'), matching what the userNames
   -- filter below would otherwise have to strip out of the Flat arm's full

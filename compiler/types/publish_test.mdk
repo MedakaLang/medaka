@@ -41,7 +41,7 @@ import types.typecheck.{
   methodReturnMemoCurrentViews, methodReturnMemoRetentionStats,
   chainMemoReplayedSteps, tcCode, tcMsg, checkModulesChainReportFor,
   checkOneReportK, checkModulesPartialK, elaborateModulesWithReport,
-  resetTypeErrorsSticky, driveInputsFor, tcConfigOf
+  driveInputsFor, tcConfigOf
 }
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
@@ -903,10 +903,8 @@ test "a drive's outputs hold no live cell and survive a later drive" =
   ]
 
 test "a drive's outputs answer for its own main and its own effect domains" =
-  resetTypeErrorsSticky ()
   let outputs = outputsOf "o" outputsSrc
   let rejected = outputsOf "q" "bad : Int\nbad = \"x\"\n"
-  resetTypeErrorsSticky ()
   expectEach [
     ("an Int main is not Unit", expectFalse outputs.doMainIsUnit),
     ("an Int main is not Float", expectFalse outputs.doMainIsFloat),
@@ -1172,7 +1170,6 @@ ownErrs : ModDiags -> List TcDiag
 ownErrs (_, (_, errs, _)) = errs
 
 test "the chain memo does not serve a hit across a stdlib ownership change" =
-  resetTypeErrorsSticky ()
   let owned = ownDrive ["m"]
   let user = ownDrive []
   expectEach [

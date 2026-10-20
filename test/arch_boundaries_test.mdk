@@ -675,7 +675,8 @@ badLifetime = badField "lifetime" 2 lifetimeVocab
 ownerVocab : List String
 ownerVocab = [
   "module-level", "ModuleCtx", "GroupCtx", "GraphRun", "GraphCtx", "CrossRun",
-  "TcConfig", "DriveInputs", "TraceSink", "DynCtx", "SiteCtx"
+  "Interners", "Lineage", "TcConfig", "DriveInputs", "TraceSink", "DynCtx",
+  "SiteCtx"
 ]
 
 targetVocab : List String
@@ -770,6 +771,8 @@ bundleRecords = [
   "GraphRun",
   "GraphCtx",
   "CrossRun",
+  "Interners",
+  "Lineage",
   "TcConfig",
   "DriveInputs",
   "TraceSink",
