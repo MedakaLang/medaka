@@ -241,7 +241,7 @@ names, not the numbers."*
 | Logical declarations | 1,478 — **1,443 functions**, 33 `data`, 2 type aliases |
 | Exported | 70 (50 functions reachable as entry points) |
 | Banner sections | 75 (**not** a valid partition — §2) |
-| State cells | **118** at this census (the itemised rows below sum to 116: the loose row lists 7 of the 9 loose cells) — `PerRun` 63 (since `ModuleCtx`), `CrossRun` 25, `DriverState` 18, 3 dynamic-context toggles (now `DynCtx` fields), loose module-level **9** |
+| State cells | **118** at this census (the itemised rows below sum to 116: the loose row lists 7 of the 9 loose cells) — `PerRun` 63 (since `ModuleCtx`), `CrossRun` 25, `DriverState` 18 *(since replaced by `GraphCtx`)*, 3 dynamic-context toggles (now `DynCtx` fields), loose module-level **9** |
 | Functions touching any state | **244 of 1,443** — the other 1,199 are pure |
 | Cells written from ≥6 functions | **7 of 118** |
 | Inbound imports | 11 modules (§7.7) |
@@ -287,12 +287,12 @@ this is the #158/#176 design, and it landed.
 |---|---|---|---|
 | `PerRun` *(now `ModuleCtx`)* | 63 | HM counters + level; the 8 `pending*` route channels; 4 `Windowed` obligation channels; the 5 `numlit*` defaulting cells; shadow tables; per-module registries | `resetState` re-mints via `freshPerRun` *(both since gone: `checkBodyImpl` mints `freshModuleCtx` once per module)* |
 | `CrossRun` | 25 | 15 `universe*` accumulators, 6 `crossModule*` constraint tables (each a bare/`Qual` **pair**), 3 `obUniv*`, and `coreSchemeObligationsRef` | survives the per-module mint by design (`resetState`, since deleted) |
-| `DriverState` | 18 | driver-mode flags, the match oracle + warnings, promotion harvest, `main` scheme, dict-eligibility sets | survives; re-minted per driver entry |
+| `DriverState` *(since replaced by `GraphCtx`, which `mintGraphCtx` re-mints per graph drive)* | 18 | driver-mode flags, the match oracle + warnings, promotion harvest, `main` scheme, dict-eligibility sets | survives; re-minted per driver entry |
 | toggles *(now `DynCtx`)* | 3 | dynamic-scope suppression flags, now the `DynCtx` fields `dcSuppressRLocalRecord`, `dcSuppressArgStamp`, `dcShadowHeadCtx` that `TcEnv` carries, so no save/restore remains | none: `initialEnv` and `withCtors` start from `noDyn` |
 | *(loose)* | **7** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, and the toggles cell, since deleted; the bundles have since been reorganised, see `types/CELL-LIFETIMES.md`) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc` | varies |
 
 **The seven cells with no single owning function** (≥6 distinct writers) are the residual
-state-discipline debt: `perRun` (56 writers), `driverState` (14), `currentLoc` (8),
+state-discipline debt: `perRun` (56 writers), `driverState` (14, since `graphCtx`), `currentLoc` (8),
 `typeErrorsSticky` (8), `crossRun` (7), the toggles cell (6, since deleted), `funConstraintsRef` (6).
 
 ⚠️ Two granularities are mixed in that list: `funConstraintsRef` is a `PerRun` *field* (now `ModuleCtx`), so
