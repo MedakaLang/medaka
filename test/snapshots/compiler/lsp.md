@@ -1,5 +1,5 @@
 # META
-source_lines=2332
+source_lines=2338
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -84,7 +84,10 @@ import types.publish.{
   pubSchemes,
   ppPubScheme,
 }
-import types.typecheck.{checkOneReportK, entrySplit, entryOwnSchemes}
+import types.typecheck.{
+  driveInputsFor, checkOneReportK, entrySplit, entryOwnSchemes
+}
+import types.target_profile.{selectedProfile}
 import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
 import list.{sortBy, zipWith}
@@ -730,7 +733,10 @@ docEnv runtimeSrc coreSrc src =
       let userDecls = desugar userRaw
       let preludeKey =
         Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
-      let report = checkOneReportK False preludeKey runtimeDecls coreDecls (
+      let report = checkOneReportK (driveInputsFor
+        !selectedProfile
+        False
+        []) False preludeKey runtimeDecls coreDecls (
         "__user__",
         userDecls,
       )
@@ -1842,7 +1848,7 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.
   match keyed
-    Some (report, graph) =>
+    Some ((report, _), graph) =>
       if report.trPartial.paModule == graph.giEntry then
         Some (KeptGraph text graph report.trPartial)
       else
@@ -2349,7 +2355,8 @@ unit = ()
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
 (DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "PartialAnalysis" true) (mem "TcReport" true) (mem "pubSchemes" false) (mem "ppPubScheme" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneReportK" false) (mem "entrySplit" false) (mem "entryOwnSchemes" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneReportK" false) (mem "entrySplit" false) (mem "entryOwnSchemes" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "zipWith" false))))
@@ -2491,7 +2498,7 @@ unit = ()
 (DFunDef false "defZipLocOr" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "jRangeOfLoc") (EVar "l")))
 (DFunDef false "defZipLocOr" ((PCon "None") (PVar "p")) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EApp (EVar "declPosEndLine") (EVar "p"))) (ELit (LInt 0))))
 (DTypeSig false "docEnv" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "HoverEnv"))))))
-(DFunDef false "docEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EVar "checkOneReportK") (EVar "False")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "reportEnv") (EVar "report"))))))))))
+(DFunDef false "docEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneReportK") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "False")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "reportEnv") (EVar "report"))))))))))
 (DTypeSig false "reportEnv" (TyFun (TyCon "TcReport") (TyCon "HoverEnv")))
 (DFunDef false "reportEnv" ((PVar "report")) (EBlock (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes") PWild PWild) (EApp (EVar "entrySplit") (EVar "report"))) (DoExpr (EApp (EApp (EVar "hoverEnvOf") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (EFieldAccess (EVar "report") "trPartial")))))
 (DTypeSig false "docEnvFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyApp (TyCon "Option") (TyCon "HoverEnv"))))))))
@@ -2744,7 +2751,7 @@ unit = ()
 (DFunDef false "headOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "headOr" (PWild (PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig false "publishProjectDiagnostics" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Kept")))))))))
-(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOfPath") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectKeyed") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "True")) (EListLit)) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EVar "publishEach") (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PVar "report") (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOfPath") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectKeyed") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "True")) (EListLit)) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EVar "publishEach") (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PTuple (PVar "report") PWild) (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "lspMedakaRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "lspMedakaRoot" ((PVar "dflt")) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EVar "dflt") (EVar "v"))) (arm (PCon "None") () (EVar "dflt"))))
 (DTypeSig false "publishEach" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyCon "Unit"))))
@@ -2831,7 +2838,8 @@ unit = ()
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
 (DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "PartialAnalysis" true) (mem "TcReport" true) (mem "pubSchemes" false) (mem "ppPubScheme" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneReportK" false) (mem "entrySplit" false) (mem "entryOwnSchemes" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneReportK" false) (mem "entrySplit" false) (mem "entryOwnSchemes" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "zipWith" false))))
@@ -2973,7 +2981,7 @@ unit = ()
 (DFunDef false "defZipLocOr" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "jRangeOfLoc") (EVar "l")))
 (DFunDef false "defZipLocOr" ((PCon "None") (PVar "p")) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EApp (EVar "declPosEndLine") (EVar "p"))) (ELit (LInt 0))))
 (DTypeSig false "docEnv" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "HoverEnv"))))))
-(DFunDef false "docEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EVar "checkOneReportK") (EVar "False")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "reportEnv") (EVar "report"))))))))))
+(DFunDef false "docEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneReportK") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "False")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "reportEnv") (EVar "report"))))))))))
 (DTypeSig false "reportEnv" (TyFun (TyCon "TcReport") (TyCon "HoverEnv")))
 (DFunDef false "reportEnv" ((PVar "report")) (EBlock (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes") PWild PWild) (EApp (EVar "entrySplit") (EVar "report"))) (DoExpr (EApp (EApp (EVar "hoverEnvOf") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (EFieldAccess (EVar "report") "trPartial")))))
 (DTypeSig false "docEnvFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyApp (TyCon "Option") (TyCon "HoverEnv"))))))))
@@ -3226,7 +3234,7 @@ unit = ()
 (DFunDef false "headOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "headOr" (PWild (PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig false "publishProjectDiagnostics" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Kept")))))))))
-(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOfPath") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectKeyed") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "True")) (EListLit)) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EVar "publishEach") (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PVar "report") (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOfPath") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectKeyed") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "True")) (EListLit)) (EVar "projectCache")) (EVar "projectParseCache")) (EVar "read")) (EVar "rootFile")) (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EVar "publishEach") (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PTuple (PVar "report") PWild) (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "lspMedakaRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "lspMedakaRoot" ((PVar "dflt")) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EVar "dflt") (EVar "v"))) (arm (PCon "None") () (EVar "dflt"))))
 (DTypeSig false "publishEach" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyCon "Unit"))))

@@ -78,11 +78,14 @@ import driver.loader.{
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
 import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
+  driveInputsFor,
   elaborateModules,
-  elaborateModulesWithSchemes,
+  elaborateModulesWithReport,
   TcDiag(..),
   tcDiagGoalKey,
 }
+import types.tc_types.{DriveOutputs}
+import types.target_profile.{selectedProfile}
 import driver.main_autoprint.{valueMainCandidate}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import types.program_facts.{ProgramFacts, factsOfElab, withFacts}
@@ -606,10 +609,11 @@ gateOfPerModule : Bool ->
   List Decl ->
   List Decl ->
   List (String, String, List Decl) ->
+  DriveOutputs ->
   List (String, (List TcDiag, List TcDiag)) ->
   <IO> Option String
-gateOfPerModule True _ _ _ _ = None
-gateOfPerModule False runtimeDecls coreDecls mods perModule =
+gateOfPerModule True _ _ _ _ _ = None
+gateOfPerModule False runtimeDecls coreDecls mods outputs perModule =
   renderGate
     (projectDiagsFromTc
       noStdlibExports
@@ -618,6 +622,7 @@ gateOfPerModule False runtimeDecls coreDecls mods perModule =
       runtimeDecls
       coreDecls
       mods
+      outputs
       perModule)
 
 -- A load failure reaches the gate as the diagnostic `analyzeProject` attributes
@@ -825,15 +830,17 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
   let runtimeDecls = desugaredPrelude rsrc
   let coreDecls = desugaredPrelude csrc
   let rawModules = desugaredModPairs mods
-  let (elaborated, _, _) =
-    elaborateModulesWithSchemes
+  let (elaborated, _, outputs) =
+    elaborateModulesWithReport
+      (driveInputsFor !selectedProfile False [])
       (valueMainCandidate coreDecls rawModules)
+      None
       runtimeDecls
       coreDecls
       rawModules
   match elaborated
     (coreE, modulesE, perModule, _, _, _, _) => (
-      gateOfPerModule exempt runtimeDecls coreDecls mods perModule,
+      gateOfPerModule exempt runtimeDecls coreDecls mods outputs perModule,
       PreparedPair
         (uncurryPair
           runtimeDecls
@@ -893,7 +900,11 @@ forceInjected : String ->
 forceInjected rsrc csrc mods synthDecls =
   let injected = injectIntoLast synthDecls (desugaredModPairs mods)
   let elab =
-    elaborateModules (desugaredPrelude rsrc) (desugaredPrelude csrc) injected
+    elaborateModules
+      (driveInputsFor !selectedProfile False [])
+      (desugaredPrelude rsrc)
+      (desugaredPrelude csrc)
+      injected
   match elab
     (coreE, modulesE, perModule, _, _, _, _) =>
       injectedExampleDiags := exampleDiagLines perModule
@@ -1671,7 +1682,12 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
       dropShadowedExp (funNamesOf allUser) coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
-  let elab = elaborateModules runtimeDecls livePrelude [(rootId, allUser)]
+  let elab = elaborateModules (driveInputsFor
+    !selectedProfile
+    False
+    []) runtimeDecls livePrelude [
+    (rootId, allUser),
+  ]
   let (coreE, modulesE, perModule, _, _, _, _) = elab
   let elaborated = coreE ++ flatMap snd modulesE
   let facts = factsOfElab elab
@@ -1878,7 +1894,12 @@ elaborateModulesMangled : List Decl ->
   List (String, List Decl) ->
   ((List Decl, List (String, List Decl)), ProgramFacts, List (String, TcDiag))
 elaborateModulesMangled runtimeDecls coreDecls modules =
-  let elab = elaborateModules runtimeDecls coreDecls modules
+  let elab =
+    elaborateModules
+      (driveInputsFor !selectedProfile False [])
+      runtimeDecls
+      coreDecls
+      modules
   match elab
     (coreE, modulesE, perModule, residual, _, _, _) => (
       mangleCtorCollisionsPair (coreE, modulesE),
@@ -3381,7 +3402,11 @@ helperElabDiags : List Decl ->
   List (String, List Decl) ->
   List (String, TcDiag)
 helperElabDiags runtimeM rawCoreM rawM =
-  match elaborateModules runtimeM rawCoreM rawM
+  match (elaborateModules
+    (driveInputsFor !selectedProfile False [])
+    runtimeM
+    rawCoreM
+    rawM)
     (_, _, perModule, residual, _, _, _) =>
       residual ++ perModuleErrors perModule []
 

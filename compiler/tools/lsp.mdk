@@ -80,7 +80,10 @@ import types.publish.{
   pubSchemes,
   ppPubScheme,
 }
-import types.typecheck.{checkOneReportK, entrySplit, entryOwnSchemes}
+import types.typecheck.{
+  driveInputsFor, checkOneReportK, entrySplit, entryOwnSchemes
+}
+import types.target_profile.{selectedProfile}
 import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
 import list.{sortBy, zipWith}
@@ -726,7 +729,10 @@ docEnv runtimeSrc coreSrc src =
       let userDecls = desugar userRaw
       let preludeKey =
         Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
-      let report = checkOneReportK False preludeKey runtimeDecls coreDecls (
+      let report = checkOneReportK (driveInputsFor
+        !selectedProfile
+        False
+        []) False preludeKey runtimeDecls coreDecls (
         "__user__",
         userDecls,
       )
@@ -1838,7 +1844,7 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.
   match keyed
-    Some (report, graph) =>
+    Some ((report, _), graph) =>
       if report.trPartial.paModule == graph.giEntry then
         Some (KeptGraph text graph report.trPartial)
       else

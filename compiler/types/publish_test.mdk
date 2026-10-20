@@ -3,7 +3,8 @@
 -- shadowing binding's context (#2054); published schemes holding no Link; and
 -- the partial analysis a drive returns (locals, seed, module).
 import test.{
-  expectEqual, expectEach, expectTrue, expectGreaterThan, Expectation, fail
+  expectEqual, expectNotEqual, expectEach, expectTrue, expectFalse,
+  expectGreaterThan, Expectation, fail
 }
 import frontend.ast.{
   TyConOrigin(..), EvId(..), EvVal(..), EvEntry(..), Route(..), Loc(..), Decl
@@ -31,12 +32,16 @@ import types.disposition.{
 import types.evidence_coverage.{EvShape(..), evShapeOf}
 import types.runtime_types.{binderOrdinal, emptyBinderTypes}
 import map.{values}
-import types.tc_types.{MethodReturnMemoView(..)}
+import types.tc_types.{
+  MethodReturnMemoView(..), DriveOutputs(..), InvocationView(..), TcConfig(..)
+}
 import types.typecheck.{
-  checkOneSchemeFullK, checkModulesDiagsChain, checkModulesAllLines,
-  elaborateModulesReport, checkModules, methodReturnMemoCurrentViews,
-  methodReturnMemoRetentionStats, chainMemoReplayedSteps, tcCode, tcMsg,
-  checkModulesChainReportFor, checkOneReportK, checkModulesPartialK
+  defaultDriveInputs, checkOneSchemeFullK, checkModulesDiagsChain,
+  checkModulesAllLines, elaborateModulesReport, checkModules,
+  methodReturnMemoCurrentViews, methodReturnMemoRetentionStats,
+  chainMemoReplayedSteps, tcCode, tcMsg, checkModulesChainReportFor,
+  checkOneReportK, checkModulesPartialK, elaborateModulesWithReport,
+  resetTypeErrorsSticky, driveInputsFor, tcConfigOf
 }
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
@@ -245,8 +250,10 @@ qSrc = joinNl [
 
 drive : String -> String -> List (String, PubScheme)
 drive mid src =
-  let (_, own) =
-    checkOneSchemeFullK None [] [] (mid, desugar (parseLocated src))
+  let (_, own) = checkOneSchemeFullK defaultDriveInputs None [] [] (
+    mid,
+    desugar (parseLocated src),
+  )
   own
 
 rendered : List (String, PubScheme) -> List String
@@ -286,7 +293,7 @@ shadowedPrelude = joinNl [
 ]
 
 test "#2054: a shadowing buffer binding carries its own context, not the prelude's" =
-  let (core, own) = checkOneSchemeFullK None [] (desugar
+  let (core, own) = checkOneSchemeFullK defaultDriveInputs None [] (desugar
     (parse shadowedPrelude)) (
     "buffer",
     desugar (parseLocated "isEven x = \"s\""),
@@ -347,8 +354,9 @@ accDrive : String ->
   String ->
   (TcReport, List MethodReturnMemoView)
 accDrive chainKey prefixSource entrySource stepKey =
-  let report =
+  let (report, _) =
     checkModulesChainReportFor
+      defaultDriveInputs
       False
       (Some (4053, 4055))
       chainKey
@@ -511,6 +519,7 @@ weakChainSteps held =
   ]
   let _ =
     checkModulesDiagsChain
+      defaultDriveInputs
       (Some (4053, 4056))
       "acc-weak-\{held}"
       [Some src, None]
@@ -557,6 +566,7 @@ instErrors key withImpl =
   let bSrc = instHolder withImpl
   let mods =
     checkModulesDiagsChain
+      defaultDriveInputs
       (Some (4266, 4267))
       key
       [Some instIface, Some instUse, Some bSrc, None]
@@ -614,8 +624,9 @@ markEntry = "import a.{useA}\nimport b.{bval}\nentry = bval\n"
 markDrive : String -> Bool -> List String
 markDrive key constrained =
   let bSrc = markB constrained
-  let report =
+  let (report, _) =
     checkModulesChainReportFor
+      defaultDriveInputs
       False
       (Some (4266, 4267))
       key
@@ -650,6 +661,7 @@ replayDrive key entrySrc =
   let bSrc = instHolder True
   let _ =
     checkModulesChainReportFor
+      defaultDriveInputs
       False
       (Some (4266, 4267))
       key
@@ -748,7 +760,8 @@ isLinkCell (LinkCell _ _ _) = True
 isLinkCell _ = False
 
 test "checkModules publishes no live Link" =
-  let mods = checkModules [] [] [("p", desugar (parseLocated pSrc))]
+  let mods =
+    checkModules defaultDriveInputs [] [] [("p", desugar (parseLocated pSrc))]
   let found =
     flatMap (m => flatMap (e => liveCells (fst e) (snd e)) (snd m)) mods
   expectEqual [] (filter isLinkCell found)
@@ -756,7 +769,7 @@ test "checkModules publishes no live Link" =
 test "checkModulesAllLines shows useSpeak's context under its module" =
   let ls =
     lines
-      (checkModulesAllLines [] [] [
+      (checkModulesAllLines defaultDriveInputs [] [] [
         ("p", desugar (parseLocated pSrc)),
         ("q", desugar (parseLocated "other = 1")),
       ])
@@ -783,7 +796,8 @@ talkBuffer : String
 talkBuffer = "own x = talk x\nuse = talk 1\nn = 1 + 2\n"
 
 talkReport : Unit -> TcReport
-talkReport _ = elaborateModulesReport [] (desugar (parse talkPrelude)) [
+talkReport _ = elaborateModulesReport defaultDriveInputs [] (desugar
+  (parse talkPrelude)) [
   ("b", desugar (parseLocated talkBuffer)),
 ]
 
@@ -846,6 +860,68 @@ dedupSorted (a :: b :: rest) =
   if a == b then dedupSorted (b :: rest) else a :: dedupSorted (b :: rest)
 dedupSorted xs = xs
 
+-- ── a drive's outputs ────────────────────────────────────────────────────────
+-- `DriveOutputs` is booleans, immutable tables and an `InvocationView`; the view's
+-- schemes are the only fields whose type reaches a cell, so they are walked as a
+-- `CheckedProgram`'s are.
+
+outputsSrc : String
+outputsSrc = joinNl [
+  "data Box a = Box a | Hollow",
+  "unbox : Box Int -> Int",
+  "unbox (Box n) = n",
+  "unbox Hollow = 0",
+  "main = 1",
+]
+
+outputsOf : String -> String -> DriveOutputs
+outputsOf mid src =
+  match (elaborateModulesWithReport defaultDriveInputs False None [] [] [
+    (mid, desugar (parseLocated src)),
+  ])
+    (_, _, outputs) => outputs
+
+viewSchemes : InvocationView -> List Scheme
+viewSchemes (InvocationView ctors _ _) = ctors
+
+test "a drive's outputs hold no live cell and survive a later drive" =
+  let outputs = outputsOf "o" outputsSrc
+  let ctors = viewSchemes outputs.doInvocationView
+  let rendered = map ppScheme ctors
+  let found = flatMap (s => liveCells "ctor" (pub s)) ctors
+  let _ = outputsOf "p" "data Other = A | B Int\nz = B 1\n"
+  expectEach [
+    (
+      "the view lists the program's constructors",
+      expectGreaterThan 0 (length ctors),
+    ),
+    ("no link and no free cell is reachable", expectEqual [] found),
+    (
+      "a later drive leaves the schemes as rendered",
+      expectEqual rendered (map ppScheme ctors),
+    ),
+  ]
+
+test "a drive's outputs answer for its own main and its own effect domains" =
+  resetTypeErrorsSticky ()
+  let outputs = outputsOf "o" outputsSrc
+  let rejected = outputsOf "q" "bad : Int\nbad = \"x\"\n"
+  resetTypeErrorsSticky ()
+  expectEach [
+    ("an Int main is not Unit", expectFalse outputs.doMainIsUnit),
+    ("an Int main is not Float", expectFalse outputs.doMainIsFloat),
+    ("an Int main is not Async", expectFalse outputs.doMainIsAsync),
+    ("a clean program armed nothing", expectFalse outputs.doHadTypeErrors),
+    (
+      "a rejected program armed the sticky flag",
+      expectTrue rejected.doHadTypeErrors,
+    ),
+    (
+      "the builtin domains are registered",
+      expectGreaterThan 0 (length outputs.doEffectDomains),
+    ),
+  ]
+
 test "#4267: the tree arm publishes the prelude's context" =
   let core = (talkReport ()).trPartial.paCore
   expectEqual
@@ -887,11 +963,11 @@ talkCore : List Decl
 talkCore = desugar (parse talkPrelude)
 
 test "diags arm: the captured locals and seed render as the hover renderers did" =
-  let one = checkOneReportK False None [] talkCore (
+  let one = checkOneReportK defaultDriveInputs False None [] talkCore (
     "b",
     desugar (parseLocated localBuffer),
   )
-  let project = checkModulesPartialK None [] talkCore [
+  let project = checkModulesPartialK defaultDriveInputs None [] talkCore [
     ("b", desugar (parseLocated localBuffer)),
   ]
   expectEach [
@@ -1059,3 +1135,63 @@ test "hover answers on a single-file buffer with a resolve or type error" =
         ),
       ]
     _ => fail "could not read the prelude pair"
+
+ownRuntime : String
+ownRuntime = "extern rtAdd : Int -> Int -> Int"
+
+ownMod : String
+ownMod = joinNl [
+  "export",
+  "extern userX : Int -> Int",
+  "export",
+  "useX : Int -> Int",
+  "useX n = userX n",
+]
+
+ownDrive : List String -> List String
+ownDrive owned =
+  let (report, _) =
+    checkModulesChainReportFor
+      (driveInputsFor None False owned)
+      False
+      (Some (4337, 4338))
+      "own-chain"
+      [Some "m-step", None]
+      (desugar (parse ownRuntime))
+      (desugar (parse numPrelude))
+      [
+        ("m", desugar (parseLocated ownMod)),
+        (
+          "e",
+          desugar (parseLocated "import m.{useX}\nentry = useX 1\n"),
+        ),
+      ]
+  flatMap (md => map tcCode (ownErrs md)) report.trDiagnostics
+
+ownErrs : ModDiags -> List TcDiag
+ownErrs (_, (_, errs, _)) = errs
+
+test "the chain memo does not serve a hit across a stdlib ownership change" =
+  resetTypeErrorsSticky ()
+  let owned = ownDrive ["m"]
+  let user = ownDrive []
+  expectEach [
+    ("stdlib-owned extern is not stamped", expectEqual [] owned),
+    (
+      "the same chain under no ownership misses and reports",
+      expectEqual ["T-FFI-UNLABELLED"] user,
+    ),
+  ]
+
+test "equal configurations digest to equal memo keys" =
+  let key = owned => (tcConfigOf [] (driveInputsFor None False owned)).tcKey
+  expectEach [
+    ("same ownership", expectEqual (key ["b", "a"]) (key ["a", "b"])),
+    ("different ownership", expectNotEqual (key ["a"]) (key [])),
+    (
+      "flat flag",
+      expectNotEqual
+        (tcConfigOf [] (driveInputsFor None True [])).tcKey
+        (key []),
+    ),
+  ]

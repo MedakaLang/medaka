@@ -26,6 +26,7 @@ import ir.core_ir_sexp.{cprogramToSexpWith, faithfulSexpMode}
 import ir.dce.{dceFilter}
 import entries.entry_support.{driveModulesLocated, runEmitWith}
 import types.program_facts.{ProgramFacts}
+import types.tc_types.{DriveOutputs}
 
 main : <IO> Unit
 main = driveModulesLocated (runEmitWith "runAsyncMain" emitTail)
@@ -33,12 +34,13 @@ main = driveModulesLocated (runEmitWith "runAsyncMain" emitTail)
 -- The llvm_emit_modules_main emitTail with `putStr (emitProgram …)` swapped for
 -- the S-expression serializer; no side-table installs (they feed the emitter,
 -- not the lowering).
-emitTail : ProgramFacts ->
+emitTail : DriveOutputs ->
+  ProgramFacts ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-emitTail facts _ coreD modules2 =
+emitTail _ facts _ coreD modules2 =
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
   -- #686: this is the DEBUG probe, so serialize in the faithful nested-route

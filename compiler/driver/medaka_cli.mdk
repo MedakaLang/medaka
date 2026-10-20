@@ -203,9 +203,10 @@ import types.publish.{TcReport(..)}
 import types.program_facts.{ProgramFacts, factsOfChecked}
 import types.typecheck.{
   TcDiag,
-  mainTypeIsUnit,
-  setStdlibOwnership,
+  lastInvocationOps,
+  driveInputsFor,
 }
+import types.tc_types.{DriveInputs(..), DriveOutputs}
 import driver.main_autoprint.{
   asyncMainShapeError,
   shouldAutoPrintMain,
@@ -743,16 +744,18 @@ runCheckCmd argv =
                 Ok modsWithPath =>
                   let mods = map dropPathTriple modsWithPath
                   let trusted = projectTrustedMods target roots stdlibDir mods
-                  -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
-                  -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
-                  -- one is stdlib-root ownership with NO `allow-internal` opt-out.
+                  -- #2072: the FFI-stamp discriminator, handed to typecheck alongside the
+                  -- #1713 reference-trust set above.  Different predicate, deliberately: this
+                  -- one is stdlib-root ownership with no `allow-internal` opt-out.
                   let (flatStdlib, ownedStdlib) =
                     stdlibOwnership target roots stdlibDir mods
-                  let _ = setStdlibOwnership flatStdlib ownedStdlib
+                  let inputs =
+                    driveInputsFor !selectedProfile flatStdlib ownedStdlib
                   let perfTLoad = now ()
                   let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
                   let _ =
                     checkRoute
+                      inputs
                       typesMode
                       allowInternal
                       trusted
@@ -958,7 +961,8 @@ residualJsonTriples entryFile pathMap ((mid, d) :: rest) =
 -- internal-extern calls unless the flag is passed every time.
 -- S-3/#164: the single-file arm analyses the loader's parsed, real-span `decls`
 -- for its one module, so the entry is not parsed a second time.
-checkRoute : Bool ->
+checkRoute : DriveInputs ->
+  Bool ->
   Bool ->
   List String ->
   List String ->
@@ -968,7 +972,7 @@ checkRoute : Bool ->
   String ->
   List (String, String, List Decl) ->
   <IO> Unit
-checkRoute typesMode allowInternal trusted roots rsrc csrc tsrc target modsWithPath =
+checkRoute inputs typesMode allowInternal trusted roots rsrc csrc tsrc target modsWithPath =
   -- One desugar per module for the whole check: resolve, the drive and the entry
   -- exhaust read these same trees.
   let program = match modsWithPath
@@ -977,6 +981,7 @@ checkRoute typesMode allowInternal trusted roots rsrc csrc tsrc target modsWithP
   let front = frontEnd cliStdlibExportsEnv (checkFrontDrive
     target
     roots) FrontInput {
+    fiInputs = inputs,
     fiAllowInternal = allowInternal,
     fiTrusted = trusted,
     fiRuntimeSrc = rsrc,
@@ -1146,20 +1151,20 @@ checkTargetRefusal rsrc csrc target paths drive = match !selectedProfile
   Some profile =>
     targetRefusal profile target paths (checkTargetInputs rsrc csrc drive)
 
--- The target verdict's inputs, off a check drive.  Called right after the drive:
--- `shouldAutoPrintMain` reads the drive's `main` type.  The preludes are the
--- memoized trees the drive read.
+-- The target verdict's inputs, off a check drive: `shouldAutoPrintMain` reads
+-- the drive's outputs for its `main` type.  The preludes are the memoized trees
+-- the drive read.
 checkTargetInputs : String -> String -> CheckDrive -> TargetInputs
 checkTargetInputs rsrc csrc drive =
   let core = desugaredPrelude csrc
   let printed =
-    if shouldAutoPrintMain core drive.cdMods then
+    if shouldAutoPrintMain drive.cdOutputs core drive.cdMods then
       lookupAssoc "println" drive.cdCoreSchemes
     else
       None
   TargetInputs {
     tiSchemes = drive.cdEntrySchemes ++ drive.cdCoreSchemes,
-    tiOps = drive.cdOps,
+    tiOps = lastInvocationOps drive.cdOutputs,
     tiEntryDecls = match lastModPair drive.cdMods
       Some (_, decls) => decls
       None => [],
@@ -1167,6 +1172,7 @@ checkTargetInputs rsrc csrc drive =
     tiCore = core,
     tiModules = drive.cdMods,
     tiRuntime = desugaredPrelude rsrc,
+    tiOutputs = drive.cdOutputs,
   }
 
 -- `check --json`'s copy of the same refusal, folded into the entry's file.  A
@@ -2775,12 +2781,12 @@ runRunCmd argv =
       let coreD = desugaredPrelude csrc
       let modsD = map desugarPair mods
       let trusted = projectTrustedMods target roots stdlibDir mods
-      -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
-      -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
-      -- one is stdlib-root ownership with NO `allow-internal` opt-out.
+      -- #2072: the FFI-stamp discriminator, handed to typecheck alongside the
+      -- #1713 reference-trust set above.  Different predicate, deliberately: this
+      -- one is stdlib-root ownership with no `allow-internal` opt-out.
       let (flatStdlib, ownedStdlib) =
         stdlibOwnership target roots stdlibDir mods
-      let _ = setStdlibOwnership flatStdlib ownedStdlib
+      let inputs = driveInputsFor !selectedProfile flatStdlib ownedStdlib
       let perfTLoad = now ()
       let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
       -- One front-end run (`frontEnd`), the same raw-tree passes and resolve
@@ -2805,8 +2811,9 @@ runRunCmd argv =
       let front =
         frontEnd
           cliStdlibExportsEnv
-          (_ => elaborateRun rtD coreD modsD)
+          (d => elaborateRun d.fdInputs rtD coreD modsD)
           FrontInput {
+            fiInputs = inputs,
             fiAllowInternal = allowInternal,
             fiTrusted = frontTrusted,
             fiRuntimeSrc = rsrc,
@@ -2847,8 +2854,11 @@ runRunCmd argv =
                   -- so widening here widens both in lockstep.  The
                   -- multi-module arm below keeps `projWarns` on the
                   -- coherence allowlist.
-                  let executed =
-                    executedFromReport report "runAsyncMain" (coreD, modsD)
+                  let executed = executedFromReport
+                    front.foOutputs
+                    report
+                    "runAsyncMain"
+                    (coreD, modsD)
                   match executed
                     Err msg => runAbort msg
                     Ok trees =>
@@ -2928,8 +2938,11 @@ runRunCmd argv =
                   let perfTCheck = now ()
                   let _ =
                     emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                  let executed =
-                    executedFromReport report "runAsyncMain" (coreD, modsD)
+                  let executed = executedFromReport
+                    front.foOutputs
+                    report
+                    "runAsyncMain"
+                    (coreD, modsD)
                   match executed
                     Err msg => runAbort msg
                     Ok trees =>
@@ -2954,24 +2967,25 @@ desugarPair (mid, p) = (mid, desugarIn mid p)
 
 -- (modId, path, decls) → (modId, path): the per-module file map threaded into the
 -- `run`'s one elaboration: the analysis its gate reads, and the auto-print
--- evidence `executedTrees` wraps the elaborated trees with.  It leaves
--- mainSchemeRef populated for the main-shape warnings `finishRunEval` reads.
-elaborateRun : List Decl ->
+-- evidence `executedTrees` wraps the elaborated trees with.
+elaborateRun : DriveInputs ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  <IO> (EntryAnalysis, TcReport)
-elaborateRun rtD coreD modsD =
-  let (analysis, report) =
+  <IO> (EntryAnalysis, TcReport, DriveOutputs)
+elaborateRun inputs rtD coreD modsD =
+  let (analysis, report, outputs) =
     analyzeProgramReport
+      inputs
       (valueMainCandidate coreD modsD)
       (Some "runAsyncMain")
       rtD
       coreD
       modsD
-  let _ = match asyncMainShapeError modsD
+  let _ = match asyncMainShapeError outputs modsD
     Some msg => runAbort msg
     None => ()
-  (analysis, report)
+  (analysis, report, outputs)
 
 -- B2 (RUN-EFFECTS): evalModulesOutputRunFacts is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main
@@ -3554,14 +3568,16 @@ analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
   let front =
     frontEnd
       (stdlibExportsReader stdlibDir)
-      (_ =>
+      (d =>
         analyzeProgramReport
+          d.fdInputs
           (valueMainCandidate coreD modsD)
           None
           rtD
           coreD
           modsD)
       FrontInput {
+        fiInputs = driveInputsFor !selectedProfile False [],
         fiAllowInternal = False,
         fiTrusted = trusted,
         fiRuntimeSrc = rsrc,

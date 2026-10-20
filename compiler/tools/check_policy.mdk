@@ -47,7 +47,7 @@ import frontend.desugar.{desugar}
 import types.repr.{Scheme(..), Mono(..), normalize}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import types.publish.{TcReport}
-import types.tc_types.{ElabResult}
+import types.tc_types.{ElabResult, DriveInputs(..), DriveOutputs(..)}
 import types.typecheck.{
   elaborateModulesWithReport,
   entrySplit,
@@ -325,15 +325,15 @@ lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 -- `--fn <name>` is arbitrary CLI input looked up directly by bare name
 -- (`lookupAssoc` is a first-match scan), so an entry redefinition of a prelude
 -- name must win, and a prelude name (`--fn println`) must be present rather
--- than read as effect-free.  `tiOps` is read straight after the drive, since
--- `lastInvocationOps` describes whichever drive ran last, and so is
--- `tiAutoPrintCall`: when the drivers that run the program print a value `main`
+-- than read as effect-free.  `tiOps` is taken from the drive's own outputs, and
+-- so is `tiAutoPrintCall`: when the drivers that run the program print a value `main`
 -- (`shouldAutoPrintMain` reads the drive's `main` type), the scheme of the
 -- prelude `println` the wrap applies to it.  The binding rule reads the
 -- program the drive read: `tiCore` and `tiModules` are its desugared prelude and
 -- module graph (the entry last), and `tiRuntime` is `stdlib/runtime.mdk`, whose
 -- externs are the built-ins: a module that declares one again runs the
--- built-in, not a foreign call.
+-- built-in, not a foreign call.  `tiOutputs` is the drive's own outputs, which
+-- the effect domains and the grants flag are read from.
 public export data TargetInputs = TargetInputs {
   tiSchemes : List (String, Scheme),
   tiOps : InvocationOps,
@@ -342,6 +342,7 @@ public export data TargetInputs = TargetInputs {
   tiCore : List Decl,
   tiModules : List (String, List Decl),
   tiRuntime : List Decl,
+  tiOutputs : DriveOutputs,
 }
 
 public export data EntryAnalysis = EntryAnalysis {
@@ -349,36 +350,41 @@ public export data EntryAnalysis = EntryAnalysis {
   eaTarget : TargetInputs,
 }
 
--- [valueMain] is the drive's value-main candidate: a caller that reports the
--- analysis' diagnostics passes `valueMainCandidate`, so they carry a value
--- `main`'s auto-print obligation.  [executes] names the `async` driver of a
--- caller that runs or emits the elaborated program (`elaborateModulesWithReport`).
+-- [inputs] is the drive's configuration, which the caller decided.  [valueMain]
+-- is the drive's value-main candidate: a caller that reports the analysis'
+-- diagnostics passes `valueMainCandidate`, so they carry a value `main`'s
+-- auto-print obligation.  [executes] names the `async` driver of a caller that
+-- runs or emits the elaborated program (`elaborateModulesWithReport`).
 export
-analyzeProgram : Bool ->
+analyzeProgram : DriveInputs ->
+  Bool ->
   Option String ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   EntryAnalysis
-analyzeProgram valueMain executes rtD coreD modsD =
-  fst (analyzeProgramReport valueMain executes rtD coreD modsD)
+analyzeProgram inputs valueMain executes rtD coreD modsD =
+  match analyzeProgramReport inputs valueMain executes rtD coreD modsD
+    (analysis, _, _) => analysis
 
--- `analyzeProgram` handing back its drive's whole report beside the analysis.
+-- `analyzeProgram` handing back its drive's whole report and outputs beside the
+-- analysis.
 export
-analyzeProgramReport : Bool ->
+analyzeProgramReport : DriveInputs ->
+  Bool ->
   Option String ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (EntryAnalysis, TcReport)
-analyzeProgramReport valueMain executes rtD coreD modsD =
-  let (elaborated, report) =
-    elaborateModulesWithReport valueMain executes rtD coreD modsD
+  (EntryAnalysis, TcReport, DriveOutputs)
+analyzeProgramReport inputs valueMain executes rtD coreD modsD =
+  let (elaborated, report, outputs) =
+    elaborateModulesWithReport inputs valueMain executes rtD coreD modsD
   let (preludePub, ownPub, _, _) = entrySplit report
   let preludeSchemes = pubSchemes preludePub
-  let ops = lastInvocationOps ()
+  let ops = lastInvocationOps outputs
   let autoPrintCall =
-    if shouldAutoPrintMain coreD modsD then
+    if shouldAutoPrintMain outputs coreD modsD then
       lookupAssoc "println" preludeSchemes
     else
       None
@@ -393,9 +399,11 @@ analyzeProgramReport valueMain executes rtD coreD modsD =
         tiCore = coreD,
         tiModules = modsD,
         tiRuntime = rtD,
+        tiOutputs = outputs,
       },
     },
     report,
+    outputs,
   )
 
 -- The entry module's decls: the last of the loader's dependency-first list.
@@ -435,7 +443,8 @@ policyVerdict policy analysis fnName =
     None => PolicyReject "rejected. no '\{fnName}' entry found\n"
     Some fnScheme =>
       let fnEffects = invocationSummary analysis.eaTarget.tiOps fnScheme
-      match policyRefusals fnEffects policy
+      let outputs = analysis.eaTarget.tiOutputs
+      match policyRefusals outputs.doEffectDomains fnEffects policy
         PolicyAdmitted =>
           let effStr =
             if listIsEmpty fnEffects then
@@ -450,7 +459,7 @@ policyVerdict policy analysis fnName =
               if takesAndReturnsString fnScheme then
                 runPlugin
                   fnName
-                  (bindingGrantArity fnName fnScheme)
+                  (bindingGrantArity outputs fnName fnScheme)
                   analysis.eaElab
               else
                 "   no sample run: '\{fnName}' is not a String -> String entry\n"

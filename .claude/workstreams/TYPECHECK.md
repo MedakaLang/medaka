@@ -225,7 +225,7 @@ the others — and the miss is path-specific (LSP-only, emit-only), the hardest 
 Before pushing, grep every member of the family you touched (table above) and patch all of them.
 
 ### 5. Coherence must NEVER see seeded impls
-`checkCoherence` runs over **user decls only** (`diCoherenceUserDecls`) — a user impl deliberately
+`checkCoherence` runs over **the module's own impl rows** (`cohRowsOwnedBy`, beside the prelude's `cohPreludeRows`) — a user impl deliberately
 overrides a seeded prelude impl. Feed the unified final-checks helper (#152) the seeded set and it
 false-positives on the stdlib itself, breaking dozens of gates at once. Pass the decls explicitly;
 no defaulting to the whole program.

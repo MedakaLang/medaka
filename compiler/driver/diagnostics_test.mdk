@@ -19,6 +19,8 @@ import driver.diagnostics.{
   checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
   FrontOutput(..), Diag(..)
 }
+import types.typecheck.{defaultDriveInputs}
+import types.tc_types.{emptyDriveOutputs}
 import frontend.parser.{parseLocated}
 import fs.{fixtureFiles}
 import list.{sort, somes}
@@ -296,8 +298,8 @@ test "a check drive built from a report holds that report's schemes after a late
       let b = reportOf rsrc csrc dir "export\nbetaOnly : Int\nbetaOnly = 2\n"
       match (a, b)
         (Some ra, Some rb) =>
-          let da = graphCheckDrive ra [] []
-          let db = graphCheckDrive rb [] []
+          let da = graphCheckDrive ra (emptyDriveOutputs ()) [] []
+          let db = graphCheckDrive rb (emptyDriveOutputs ()) [] []
           expectEach [
             ("first program", expectEqual ["alphaOnly"] (entryNames da)),
             ("second program", expectEqual ["betaOnly"] (entryNames db)),
@@ -325,6 +327,7 @@ frontOfFile : String -> String -> String -> FrontOutput CheckDump
 frontOfFile rsrc csrc src = frontEnd noStdlibExports (checkFrontDrive
   "main.mdk"
   []) FrontInput {
+  fiInputs = defaultDriveInputs,
   fiAllowInternal = False,
   fiTrusted = [],
   fiRuntimeSrc = rsrc,

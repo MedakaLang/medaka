@@ -31,7 +31,10 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveProgram, ppResError}
 import types.repr.{ppScheme, Scheme(..)}
-import types.typecheck.{elaborateModulesWithSchemes, pubSchemes, tcMsg}
+import types.typecheck.{
+  driveInputsFor, elaborateModulesWithSchemes, pubSchemes, tcMsg
+}
+import types.target_profile.{selectedProfile}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import types.program_facts.{ProgramFacts, emptyFacts, factsOfElab, withFacts}
 import eval.eval.{
@@ -243,11 +246,14 @@ runPipeline combined =
       -- One drive yields the diagnostics, the entry's own schemes and the
       -- elaborated trees; the session's shadowed prelude names are dropped
       -- before it, so a redefinition is checked against what will run.
-      let (elab, _, allSchemes) = elaborateModulesWithSchemes
+      let (elab, _, allSchemes) = elaborateModulesWithSchemes (driveInputsFor
+        !selectedProfile
         False
-        runtimeDecls
-        (dropShadowedExp (funNamesOf combined) preludeDecls)
-        [("__repl__", combined)]
+        []) False runtimeDecls (dropShadowedExp
+        (funNamesOf combined)
+        preludeDecls) [
+        ("__repl__", combined),
+      ]
       let (coreE, modulesE, diagsE, _, _, _, _) = elab
       let tcErrs = flatMap (d => fst (snd d)) diagsE
       match tcErrs

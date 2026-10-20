@@ -20,7 +20,7 @@ import test.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{elaborateOneFacts, grantWholeDomain}
+import types.typecheck.{defaultDriveInputs, elaborateOneFacts, grantWholeDomain}
 import types.program_facts.{factsOfElabWith}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import frontend.ast.{
@@ -50,7 +50,7 @@ import driver.loader.{
   loadProgramFilesLocatedE,
   stdlibOwnership,
 }
-import types.typecheck.{elaborateModules, setStdlibOwnership}
+import types.typecheck.{elaborateModules, driveInputsFor}
 import frontend.desugar.{desugarIn}
 import test_process.{underRoot}
 import support.util.{listLen}
@@ -200,7 +200,8 @@ src =
 
 typed : CProgram
 typed =
-  let (decls, facts) = elaborateOneFacts [] (desugar (parse prelude)) (
+  let (decls, facts) = elaborateOneFacts defaultDriveInputs [] (desugar
+    (parse prelude)) (
     "sexp",
     grantWholeDomain (desugar (parse src)),
   )
@@ -303,7 +304,8 @@ fnSrc =
 
 test "a function's return type survives the round trip" =
   let typed =
-    let (decls, facts) = elaborateOneFacts [] (desugar (parse prelude)) (
+    let (decls, facts) = elaborateOneFacts defaultDriveInputs [] (desugar
+      (parse prelude)) (
       "sexp",
       grantWholeDomain (desugar (parse fnSrc)),
     )
@@ -364,9 +366,9 @@ loweredEntry runtimeDecls coreDecls entry roots =
       let pairs = map dropPathTriple mods
       let (flatStdlib, ownedStdlib) =
         stdlibOwnership entry roots (underRoot "stdlib") pairs
-      let _ = setStdlibOwnership flatStdlib ownedStdlib
       let elab =
         elaborateModules
+          (driveInputsFor None flatStdlib ownedStdlib)
           runtimeDecls
           coreDecls
           (map (p => (fst p, desugarIn (fst p) (snd p))) pairs)

@@ -16,6 +16,7 @@
 
 import frontend.ast.{Decl}
 import types.typecheck.{elaborateModulesWithReport}
+import types.tc_types.{DriveInputs(..)}
 import types.publish.{TcReport(..)}
 import types.program_facts.{factsOfElab}
 import eval.eval.{evalModulesOutputFacts}
@@ -29,10 +30,15 @@ oracleMain () = driveModules runElab
 -- Elaborate once as an executing drive, which returns the auto-print evidence,
 -- then wrap the elaborated trees (a bare non-Unit value main is printed, an
 -- `Async` main takes the scheduler driver, #2506) and force them.
-runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
-runElab runtimeDecls coreDecls modules =
-  let (elab, report) =
+runElab : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+runElab inputs runtimeDecls coreDecls modules =
+  let (elab, report, outputs) =
     elaborateModulesWithReport
+      inputs
       (valueMainCandidate coreDecls modules)
       (Some "runAsyncMain")
       runtimeDecls
@@ -41,6 +47,7 @@ runElab runtimeDecls coreDecls modules =
   let (coreE, modulesE, _, _, _, _, _) = elab
   let executed =
     executedTrees
+      outputs
       report.trAutoPrint
       "runAsyncMain"
       (coreDecls, modules)

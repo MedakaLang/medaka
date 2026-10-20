@@ -1,5 +1,5 @@
 # META
-source_lines=346
+source_lines=366
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/types/effect_policy.mdk — does an entry's invocation summary fit a
@@ -34,6 +34,7 @@ import types.effect_rows.{
   effrowLabels,
 }
 import types.repr.{Scheme(..), Mono(..), normalize}
+import types.effect_domain.{Param}
 import types.typecheck.{decodeWrittenParam, atomOfLabel}
 import types.target_profile.{hostLabels}
 import support.util.{
@@ -51,29 +52,40 @@ public export data PolicyVerdict =
   | PolicyAdmitted
   | PolicyRefused (List String) (List String)
 
--- The one call: the atoms an entry may perform against a policy.  The
--- explanation lines are built only on a refusal.
+-- The one call: the atoms an entry may perform against a policy, with each
+-- label's domain read off [domains] (`doEffectDomains` of the drive that
+-- registered them).  The explanation lines are built only on a refusal.
 export
-policyRefusals : List Atom -> List (String, EffParamTy) -> PolicyVerdict
-policyRefusals atoms policy = match filterForbidden atoms policy
+policyRefusals : List (String, Param) ->
+  List Atom ->
+  List (String, EffParamTy) ->
+  PolicyVerdict
+policyRefusals domains atoms policy = match filterForbidden domains atoms policy
   [] => PolicyAdmitted
   labels =>
     PolicyRefused
       labels
-      (policyProblems atoms policy ++ notProvenLines atoms policy)
+      (policyProblems domains atoms policy
+        ++ notProvenLines domains atoms policy)
 
-filterForbidden : List Atom -> List (String, EffParamTy) -> List String
-filterForbidden [] _ = []
-filterForbidden (a :: rest) policy = match permitOf a policy
-  Permitted => filterForbidden rest policy
-  _ => atomLabel a :: filterForbidden rest policy
+filterForbidden : List (String, Param) ->
+  List Atom ->
+  List (String, EffParamTy) ->
+  List String
+filterForbidden _ [] _ = []
+filterForbidden domains (a :: rest) policy = match permitOf domains a policy
+  Permitted => filterForbidden domains rest policy
+  _ => atomLabel a :: filterForbidden domains rest policy
 
 -- Why each refused atom's policy entry could not be read, one report line per
 -- malformed entry the verdict met.
-policyProblems : List Atom -> List (String, EffParamTy) -> List String
-policyProblems effs policy =
+policyProblems : List (String, Param) ->
+  List Atom ->
+  List (String, EffParamTy) ->
+  List String
+policyProblems domains effs policy =
   flatMap
-    (a => match permitOf a policy
+    (a => match permitOf domains a policy
       Malformed m => ["   policy entry for \{atomLabel a}: \{m}\n"]
       _ => [])
     effs
@@ -86,19 +98,23 @@ export data Permit = Permitted | Forbidden | Malformed String
 -- manifest boundary is not proven and is not permitted, and an entry the
 -- domain does not admit permits nothing.
 export
-permitOf : Atom -> List (String, EffParamTy) -> Permit
-permitOf a policy = match (atomLabel a == "IO", policyEntriesFor a policy)
-  (True, []) => permitIoAsJoin policy
+permitOf : List (String, Param) -> Atom -> List (String, EffParamTy) -> Permit
+permitOf domains a policy = match (
+  atomLabel a == "IO",
+  policyEntriesFor a policy,
+)
+  (True, []) => permitIoAsJoin domains policy
   (_, []) => Forbidden
-  (_, written) => match allOk (map (decodeWrittenParam (atomLabelOf a)) written)
-    -- The entries are read exactly, however many there are: a set is never
-    -- folded, so a manifest of any size is accepted back as a policy.
-    Ok pps =>
-      if authSub (atomAuth a) (authJoinAll (map AConst pps)) then
-        Permitted
-      else
-        Forbidden
-    Err m => Malformed m
+  (_, written) =>
+    match allOk (map (decodeWrittenParam domains (atomLabelOf a)) written)
+      -- The entries are read exactly, however many there are: a set is never
+      -- folded, so a manifest of any size is accepted back as a policy.
+      Ok pps =>
+        if authSub (atomAuth a) (authJoinAll (map AConst pps)) then
+          Permitted
+        else
+          Forbidden
+      Err m => Malformed m
 
 -- Here `IO` is the join of the eleven host labels, so an `IO` atom under a
 -- policy with no `IO` entry is permitted exactly when the policy admits every
@@ -107,9 +123,10 @@ permitOf a policy = match (atomLabel a == "IO", policyEntriesFor a policy)
 -- caller that passes a profile's grants, `tools.target_check`, never passes an
 -- `IO` atom, because the typechecker has already bounded `IO` by that
 -- profile's join.
-permitIoAsJoin : List (String, EffParamTy) -> Permit
-permitIoAsJoin policy =
-  firstNotPermitted (map (l => permitOf (atomOfLabel l) policy) hostLabels)
+permitIoAsJoin : List (String, Param) -> List (String, EffParamTy) -> Permit
+permitIoAsJoin domains policy =
+  firstNotPermitted
+    (map (l => permitOf domains (atomOfLabel domains l) policy) hostLabels)
 
 firstNotPermitted : List Permit -> Permit
 firstNotPermitted [] = Permitted
@@ -119,10 +136,13 @@ firstNotPermitted (p :: _) = p
 -- An atom whose authority is still a variable at the host boundary, refused
 -- by a policy entry narrower than the whole label: the entry may well cover
 -- what the caller will choose, but nothing proves it.
-notProvenLines : List Atom -> List (String, EffParamTy) -> List String
-notProvenLines effs policy =
+notProvenLines : List (String, Param) ->
+  List Atom ->
+  List (String, EffParamTy) ->
+  List String
+notProvenLines domains effs policy =
   flatMap
-    (a => match (authHasVars (atomAuth a), permitOf a policy)
+    (a => match (authHasVars (atomAuth a), permitOf domains a policy)
       (True, Forbidden) => match policyEntriesFor a policy
         _ :: _ =>
           let unresolved =
@@ -353,29 +373,30 @@ firstWithEffect effTable label (c :: rest) =
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false) (mem "authJoinAll" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "decodeWrittenParam" false) (mem "atomOfLabel" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "filterList" false) (mem "contains" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DData Public "PolicyVerdict" () ((variant "PolicyAdmitted" (ConPos)) (variant "PolicyRefused" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))) ())
-(DTypeSig true "policyRefusals" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "PolicyVerdict"))))
-(DFunDef false "policyRefusals" ((PVar "atoms") (PVar "policy")) (EMatch (EApp (EApp (EVar "filterForbidden") (EVar "atoms")) (EVar "policy")) (arm (PList) () (EVar "PolicyAdmitted")) (arm (PVar "labels") () (EApp (EApp (EVar "PolicyRefused") (EVar "labels")) (EBinOp "++" (EApp (EApp (EVar "policyProblems") (EVar "atoms")) (EVar "policy")) (EApp (EApp (EVar "notProvenLines") (EVar "atoms")) (EVar "policy")))))))
-(DTypeSig false "filterForbidden" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "filterForbidden" ((PList) PWild) (EListLit))
-(DFunDef false "filterForbidden" ((PCons (PVar "a") (PVar "rest")) (PVar "policy")) (EMatch (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy")) (arm (PCon "Permitted") () (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy"))) (arm PWild () (EBinOp "::" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy"))))))
-(DTypeSig false "policyProblems" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "policyProblems" ((PVar "effs") (PVar "policy")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EMatch (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy")) (arm (PCon "Malformed" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   policy entry for ")) (EApp (EVar "display") (EApp (EVar "atomLabel") (EVar "a")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))))) (arm PWild () (EListLit))))) (EVar "effs")))
+(DTypeSig true "policyRefusals" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "PolicyVerdict")))))
+(DFunDef false "policyRefusals" ((PVar "domains") (PVar "atoms") (PVar "policy")) (EMatch (EApp (EApp (EApp (EVar "filterForbidden") (EVar "domains")) (EVar "atoms")) (EVar "policy")) (arm (PList) () (EVar "PolicyAdmitted")) (arm (PVar "labels") () (EApp (EApp (EVar "PolicyRefused") (EVar "labels")) (EBinOp "++" (EApp (EApp (EApp (EVar "policyProblems") (EVar "domains")) (EVar "atoms")) (EVar "policy")) (EApp (EApp (EApp (EVar "notProvenLines") (EVar "domains")) (EVar "atoms")) (EVar "policy")))))))
+(DTypeSig false "filterForbidden" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "filterForbidden" (PWild (PList) PWild) (EListLit))
+(DFunDef false "filterForbidden" ((PVar "domains") (PCons (PVar "a") (PVar "rest")) (PVar "policy")) (EMatch (EApp (EApp (EApp (EVar "permitOf") (EVar "domains")) (EVar "a")) (EVar "policy")) (arm (PCon "Permitted") () (EApp (EApp (EApp (EVar "filterForbidden") (EVar "domains")) (EVar "rest")) (EVar "policy"))) (arm PWild () (EBinOp "::" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EApp (EVar "filterForbidden") (EVar "domains")) (EVar "rest")) (EVar "policy"))))))
+(DTypeSig false "policyProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "policyProblems" ((PVar "domains") (PVar "effs") (PVar "policy")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EMatch (EApp (EApp (EApp (EVar "permitOf") (EVar "domains")) (EVar "a")) (EVar "policy")) (arm (PCon "Malformed" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   policy entry for ")) (EApp (EVar "display") (EApp (EVar "atomLabel") (EVar "a")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))))) (arm PWild () (EListLit))))) (EVar "effs")))
 (DData Abstract "Permit" () ((variant "Permitted" (ConPos)) (variant "Forbidden" (ConPos)) (variant "Malformed" (ConPos (TyCon "String")))) ())
-(DTypeSig true "permitOf" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit"))))
-(DFunDef false "permitOf" ((PVar "a") (PVar "policy")) (EMatch (ETuple (EBinOp "==" (EApp (EVar "atomLabel") (EVar "a")) (ELit (LString "IO"))) (EApp (EApp (EVar "policyEntriesFor") (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PList)) () (EApp (EVar "permitIoAsJoin") (EVar "policy"))) (arm (PTuple PWild (PList)) () (EVar "Forbidden")) (arm (PTuple PWild (PVar "written")) () (EMatch (EApp (EVar "allOk") (EApp (EApp (EVar "map") (EApp (EVar "decodeWrittenParam") (EApp (EVar "atomLabelOf") (EVar "a")))) (EVar "written"))) (arm (PCon "Ok" (PVar "pps")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EVar "AConst")) (EVar "pps")))) (EVar "Permitted") (EVar "Forbidden"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Malformed") (EVar "m")))))))
-(DTypeSig false "permitIoAsJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit")))
-(DFunDef false "permitIoAsJoin" ((PVar "policy")) (EApp (EVar "firstNotPermitted") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EApp (EApp (EVar "permitOf") (EApp (EVar "atomOfLabel") (EVar "l"))) (EVar "policy")))) (EVar "hostLabels"))))
+(DTypeSig true "permitOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit")))))
+(DFunDef false "permitOf" ((PVar "domains") (PVar "a") (PVar "policy")) (EMatch (ETuple (EBinOp "==" (EApp (EVar "atomLabel") (EVar "a")) (ELit (LString "IO"))) (EApp (EApp (EVar "policyEntriesFor") (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PList)) () (EApp (EApp (EVar "permitIoAsJoin") (EVar "domains")) (EVar "policy"))) (arm (PTuple PWild (PList)) () (EVar "Forbidden")) (arm (PTuple PWild (PVar "written")) () (EMatch (EApp (EVar "allOk") (EApp (EApp (EVar "map") (EApp (EApp (EVar "decodeWrittenParam") (EVar "domains")) (EApp (EVar "atomLabelOf") (EVar "a")))) (EVar "written"))) (arm (PCon "Ok" (PVar "pps")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EVar "AConst")) (EVar "pps")))) (EVar "Permitted") (EVar "Forbidden"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Malformed") (EVar "m")))))))
+(DTypeSig false "permitIoAsJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit"))))
+(DFunDef false "permitIoAsJoin" ((PVar "domains") (PVar "policy")) (EApp (EVar "firstNotPermitted") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EApp (EApp (EApp (EVar "permitOf") (EVar "domains")) (EApp (EApp (EVar "atomOfLabel") (EVar "domains")) (EVar "l"))) (EVar "policy")))) (EVar "hostLabels"))))
 (DTypeSig false "firstNotPermitted" (TyFun (TyApp (TyCon "List") (TyCon "Permit")) (TyCon "Permit")))
 (DFunDef false "firstNotPermitted" ((PList)) (EVar "Permitted"))
 (DFunDef false "firstNotPermitted" ((PCons (PCon "Permitted") (PVar "rest"))) (EApp (EVar "firstNotPermitted") (EVar "rest")))
 (DFunDef false "firstNotPermitted" ((PCons (PVar "p") PWild)) (EVar "p"))
-(DTypeSig false "notProvenLines" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "notProvenLines" ((PVar "effs") (PVar "policy")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EMatch (ETuple (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PCon "Forbidden")) () (EMatch (EApp (EApp (EVar "policyEntriesFor") (EVar "a")) (EVar "policy")) (arm (PCons PWild PWild) () (EBlock (DoLet false false (PVar "unresolved") (EApp (EApp (EVar "Atom") (EApp (EVar "atomLabelOf") (EVar "a"))) (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EVar "AVar")) (EApp (EVar "authVars") (EApp (EVar "atomAuth") (EVar "a"))))))) (DoExpr (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   not proven: ")) (EApp (EVar "display") (EApp (EVar "renderAtom") (EVar "unresolved")))) (ELit (LString " ("))) (EApp (EVar "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ")\n"))))))) (arm (PList) () (EListLit)))) (arm PWild () (EListLit))))) (EVar "effs")))
+(DTypeSig false "notProvenLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "notProvenLines" ((PVar "domains") (PVar "effs") (PVar "policy")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EMatch (ETuple (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EApp (EApp (EVar "permitOf") (EVar "domains")) (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PCon "Forbidden")) () (EMatch (EApp (EApp (EVar "policyEntriesFor") (EVar "a")) (EVar "policy")) (arm (PCons PWild PWild) () (EBlock (DoLet false false (PVar "unresolved") (EApp (EApp (EVar "Atom") (EApp (EVar "atomLabelOf") (EVar "a"))) (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EVar "AVar")) (EApp (EVar "authVars") (EApp (EVar "atomAuth") (EVar "a"))))))) (DoExpr (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   not proven: ")) (EApp (EVar "display") (EApp (EVar "renderAtom") (EVar "unresolved")))) (ELit (LString " ("))) (EApp (EVar "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ")\n"))))))) (arm (PList) () (EListLit)))) (arm PWild () (EListLit))))) (EVar "effs")))
 (DTypeSig true "unresolvedWhy" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "unresolvedWhy" ((PVar "a")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "authvarDefaultName") (EVar "v"))) (ELit (LString "`"))))) (EApp (EVar "authVars") (EApp (EVar "atomAuth") (EVar "a"))))) (DoExpr (EMatch (EVar "names") (arm (PList (PVar "one")) () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variable ")) (EApp (EVar "display") (EVar "one"))) (ELit (LString "")))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variables ")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "names")))) (ELit (LString ""))))))))
 (DTypeSig false "policyEntriesFor" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "EffParamTy")))))
@@ -482,29 +503,30 @@ firstWithEffect effTable label (c :: rest) =
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false) (mem "authJoinAll" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "decodeWrittenParam" false) (mem "atomOfLabel" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "filterList" false) (mem "contains" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DData Public "PolicyVerdict" () ((variant "PolicyAdmitted" (ConPos)) (variant "PolicyRefused" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))) ())
-(DTypeSig true "policyRefusals" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "PolicyVerdict"))))
-(DFunDef false "policyRefusals" ((PVar "atoms") (PVar "policy")) (EMatch (EApp (EApp (EVar "filterForbidden") (EVar "atoms")) (EVar "policy")) (arm (PList) () (EVar "PolicyAdmitted")) (arm (PVar "labels") () (EApp (EApp (EVar "PolicyRefused") (EVar "labels")) (EBinOp "++" (EApp (EApp (EVar "policyProblems") (EVar "atoms")) (EVar "policy")) (EApp (EApp (EVar "notProvenLines") (EVar "atoms")) (EVar "policy")))))))
-(DTypeSig false "filterForbidden" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "filterForbidden" ((PList) PWild) (EListLit))
-(DFunDef false "filterForbidden" ((PCons (PVar "a") (PVar "rest")) (PVar "policy")) (EMatch (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy")) (arm (PCon "Permitted") () (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy"))) (arm PWild () (EBinOp "::" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy"))))))
-(DTypeSig false "policyProblems" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "policyProblems" ((PVar "effs") (PVar "policy")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EMatch (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy")) (arm (PCon "Malformed" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   policy entry for ")) (EApp (EMethodRef "display") (EApp (EVar "atomLabel") (EVar "a")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))))) (arm PWild () (EListLit))))) (EVar "effs")))
+(DTypeSig true "policyRefusals" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "PolicyVerdict")))))
+(DFunDef false "policyRefusals" ((PVar "domains") (PVar "atoms") (PVar "policy")) (EMatch (EApp (EApp (EApp (EVar "filterForbidden") (EVar "domains")) (EVar "atoms")) (EVar "policy")) (arm (PList) () (EVar "PolicyAdmitted")) (arm (PVar "labels") () (EApp (EApp (EVar "PolicyRefused") (EVar "labels")) (EBinOp "++" (EApp (EApp (EApp (EVar "policyProblems") (EVar "domains")) (EVar "atoms")) (EVar "policy")) (EApp (EApp (EApp (EVar "notProvenLines") (EVar "domains")) (EVar "atoms")) (EVar "policy")))))))
+(DTypeSig false "filterForbidden" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "filterForbidden" (PWild (PList) PWild) (EListLit))
+(DFunDef false "filterForbidden" ((PVar "domains") (PCons (PVar "a") (PVar "rest")) (PVar "policy")) (EMatch (EApp (EApp (EApp (EVar "permitOf") (EVar "domains")) (EVar "a")) (EVar "policy")) (arm (PCon "Permitted") () (EApp (EApp (EApp (EVar "filterForbidden") (EVar "domains")) (EVar "rest")) (EVar "policy"))) (arm PWild () (EBinOp "::" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EApp (EVar "filterForbidden") (EVar "domains")) (EVar "rest")) (EVar "policy"))))))
+(DTypeSig false "policyProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "policyProblems" ((PVar "domains") (PVar "effs") (PVar "policy")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EMatch (EApp (EApp (EApp (EVar "permitOf") (EVar "domains")) (EVar "a")) (EVar "policy")) (arm (PCon "Malformed" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   policy entry for ")) (EApp (EMethodRef "display") (EApp (EVar "atomLabel") (EVar "a")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))))) (arm PWild () (EListLit))))) (EVar "effs")))
 (DData Abstract "Permit" () ((variant "Permitted" (ConPos)) (variant "Forbidden" (ConPos)) (variant "Malformed" (ConPos (TyCon "String")))) ())
-(DTypeSig true "permitOf" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit"))))
-(DFunDef false "permitOf" ((PVar "a") (PVar "policy")) (EMatch (ETuple (EBinOp "==" (EApp (EVar "atomLabel") (EVar "a")) (ELit (LString "IO"))) (EApp (EApp (EVar "policyEntriesFor") (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PList)) () (EApp (EVar "permitIoAsJoin") (EVar "policy"))) (arm (PTuple PWild (PList)) () (EVar "Forbidden")) (arm (PTuple PWild (PVar "written")) () (EMatch (EApp (EVar "allOk") (EApp (EApp (EMethodRef "map") (EApp (EVar "decodeWrittenParam") (EApp (EVar "atomLabelOf") (EVar "a")))) (EVar "written"))) (arm (PCon "Ok" (PVar "pps")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EVar "AConst")) (EVar "pps")))) (EVar "Permitted") (EVar "Forbidden"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Malformed") (EVar "m")))))))
-(DTypeSig false "permitIoAsJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit")))
-(DFunDef false "permitIoAsJoin" ((PVar "policy")) (EApp (EVar "firstNotPermitted") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EApp (EApp (EVar "permitOf") (EApp (EVar "atomOfLabel") (EVar "l"))) (EVar "policy")))) (EVar "hostLabels"))))
+(DTypeSig true "permitOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit")))))
+(DFunDef false "permitOf" ((PVar "domains") (PVar "a") (PVar "policy")) (EMatch (ETuple (EBinOp "==" (EApp (EVar "atomLabel") (EVar "a")) (ELit (LString "IO"))) (EApp (EApp (EVar "policyEntriesFor") (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PList)) () (EApp (EApp (EVar "permitIoAsJoin") (EVar "domains")) (EVar "policy"))) (arm (PTuple PWild (PList)) () (EVar "Forbidden")) (arm (PTuple PWild (PVar "written")) () (EMatch (EApp (EVar "allOk") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "decodeWrittenParam") (EVar "domains")) (EApp (EVar "atomLabelOf") (EVar "a")))) (EVar "written"))) (arm (PCon "Ok" (PVar "pps")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EVar "AConst")) (EVar "pps")))) (EVar "Permitted") (EVar "Forbidden"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Malformed") (EVar "m")))))))
+(DTypeSig false "permitIoAsJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit"))))
+(DFunDef false "permitIoAsJoin" ((PVar "domains") (PVar "policy")) (EApp (EVar "firstNotPermitted") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EApp (EApp (EApp (EVar "permitOf") (EVar "domains")) (EApp (EApp (EVar "atomOfLabel") (EVar "domains")) (EVar "l"))) (EVar "policy")))) (EVar "hostLabels"))))
 (DTypeSig false "firstNotPermitted" (TyFun (TyApp (TyCon "List") (TyCon "Permit")) (TyCon "Permit")))
 (DFunDef false "firstNotPermitted" ((PList)) (EVar "Permitted"))
 (DFunDef false "firstNotPermitted" ((PCons (PCon "Permitted") (PVar "rest"))) (EApp (EVar "firstNotPermitted") (EVar "rest")))
 (DFunDef false "firstNotPermitted" ((PCons (PVar "p") PWild)) (EVar "p"))
-(DTypeSig false "notProvenLines" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "notProvenLines" ((PVar "effs") (PVar "policy")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EMatch (ETuple (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PCon "Forbidden")) () (EMatch (EApp (EApp (EVar "policyEntriesFor") (EVar "a")) (EVar "policy")) (arm (PCons PWild PWild) () (EBlock (DoLet false false (PVar "unresolved") (EApp (EApp (EVar "Atom") (EApp (EVar "atomLabelOf") (EVar "a"))) (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EVar "AVar")) (EApp (EVar "authVars") (EApp (EVar "atomAuth") (EVar "a"))))))) (DoExpr (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   not proven: ")) (EApp (EMethodRef "display") (EApp (EVar "renderAtom") (EVar "unresolved")))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ")\n"))))))) (arm (PList) () (EListLit)))) (arm PWild () (EListLit))))) (EVar "effs")))
+(DTypeSig false "notProvenLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "notProvenLines" ((PVar "domains") (PVar "effs") (PVar "policy")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EMatch (ETuple (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EApp (EApp (EVar "permitOf") (EVar "domains")) (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PCon "Forbidden")) () (EMatch (EApp (EApp (EVar "policyEntriesFor") (EVar "a")) (EVar "policy")) (arm (PCons PWild PWild) () (EBlock (DoLet false false (PVar "unresolved") (EApp (EApp (EVar "Atom") (EApp (EVar "atomLabelOf") (EVar "a"))) (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EVar "AVar")) (EApp (EVar "authVars") (EApp (EVar "atomAuth") (EVar "a"))))))) (DoExpr (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   not proven: ")) (EApp (EMethodRef "display") (EApp (EVar "renderAtom") (EVar "unresolved")))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ")\n"))))))) (arm (PList) () (EListLit)))) (arm PWild () (EListLit))))) (EVar "effs")))
 (DTypeSig true "unresolvedWhy" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "unresolvedWhy" ((PVar "a")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "authvarDefaultName") (EVar "v"))) (ELit (LString "`"))))) (EApp (EVar "authVars") (EApp (EVar "atomAuth") (EVar "a"))))) (DoExpr (EMatch (EVar "names") (arm (PList (PVar "one")) () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variable ")) (EApp (EMethodRef "display") (EVar "one"))) (ELit (LString "")))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variables ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "names")))) (ELit (LString ""))))))))
 (DTypeSig false "policyEntriesFor" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "EffParamTy")))))

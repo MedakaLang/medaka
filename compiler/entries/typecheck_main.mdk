@@ -10,7 +10,9 @@
 
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{checkOneToLines, checkOneToLinesWithRuntime}
+import types.typecheck.{
+  defaultDriveInputs, checkOneToLines, checkOneToLinesWithRuntime
+}
 
 export
 oracleMain : Unit -> <IO> Unit
@@ -23,7 +25,7 @@ oracleMain () = match args ()
 
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
-  Ok src => putStr (checkOneToLines (desugar (parse src)))
+  Ok src => putStr (checkOneToLines defaultDriveInputs (desugar (parse src)))
   Err msg => ePutStrLn msg
 
 withRuntime : String -> String -> <IO> Unit
@@ -35,7 +37,13 @@ withRuntimeTarget : String -> String -> <IO> Unit
 withRuntimeTarget rsrc targetPath = match readFile targetPath
   Ok src =>
     let desugared = desugar (parse src)
-    putStr (checkOneToLinesWithRuntime (desugar (parse rsrc)) [] desugared)
+    putStr
+      (fst
+        (checkOneToLinesWithRuntime
+          defaultDriveInputs
+          (desugar (parse rsrc))
+          []
+          desugared))
   Err msg => ePutStrLn msg
 
 main = oracleMain ()
