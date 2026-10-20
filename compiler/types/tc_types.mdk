@@ -3000,9 +3000,9 @@ public export data ModuleSeed = ModuleSeed {
 -- what the pass produced instead of recomputing it:
 --   * `coreSchemes` (the return value);
 --   * `GraphCtx.crossRun` — the core pass fills the universe accumulators and, right
---     after it, `coreSchemeObligationsRef`; a hit installs a DETACHED copy of the
---     snapshot (fresh Refs, `copyCrossRun`) so the user modules that follow
---     mutate the copy and the memo stays what the miss left;
+--     after it, `coreSchemeObligationsRef`; a hit returns a record carrying a
+--     DETACHED copy of the snapshot (fresh Refs, `copyCrossRun`) so the user
+--     modules that follow mutate the copy and the memo stays what the miss left;
 --   * the one graph field the core pass writes, `builtinExternNamesRef`
 --     (`ccmBuiltinExternNames`);
 --   * core's module record: the `ModuleCtx` a hit installs carries the module
@@ -3093,8 +3093,9 @@ public export data GraphOut = GOutDiags | GOutTrees
 -- module is snapshotted under that module's key, and the next call resumes from
 -- the longest matching prefix, checking only what follows.  Each step holds what a
 -- miss would have left behind at that point: the fold's `depEnv`/`accData`/
--- `accAll`, the results collected so far, DETACHED copies of the `crossRun` and `graphRun`
--- sub-records, and the graph field and the module record the core-check memo also
+-- `accAll`, the results collected so far, one `GraphCtx` snapshot (`snapshotGraphCtx`:
+-- DETACHED copies of the `crossRun` and `graphRun` sub-records and the extern-name
+-- map; a hit reads only those three) and the module record the core-check memo also
 -- restores.
 -- Keys come from the caller: a chain key (which prelude generations, which entry
 -- and roots) and one `Option String` per module (mid + path + the EXACT source
@@ -3109,9 +3110,7 @@ public export data ChainStep = ChainStep {
   csAccData : List Decl,
   csAccAll : List Decl,
   csResults : List ModDiags,
-  csCrossRun : CrossRun,
-  csGraphRun : GraphRun,
-  csBuiltinExternNames : OrdMap (Ty, List (String, Int)),
+  csCtx : GraphCtx,
   csModule : ModuleCtx,
 }
 

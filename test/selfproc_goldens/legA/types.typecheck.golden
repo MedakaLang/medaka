@@ -428,7 +428,7 @@ checkBodyImpl : Option CheckRunSeed -> ModuleSeed -> String -> List Decl -> List
 checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : List String -> String -> List FunClause -> Unit
 checkCoherence : ImplEnv -> Int -> Unit
-checkCoreMemoized : Option (Int, Int) -> List Decl -> List (String, Scheme) -> (ModuleBindings, List (String, PubScheme))
+checkCoreMemoized : Option (Int, Int) -> List Decl -> List (String, Scheme) -> (ModuleBindings, List (String, PubScheme), GraphCtx)
 checkDeclAuthorityDomains : List (String, Param) -> List (String, KindAnn) -> List Ty -> Unit
 checkDeclAuthorityUses : List Decl -> Unit
 checkDeclAuthorityUsesDecl : Decl -> Unit
@@ -1770,6 +1770,7 @@ insertUnivImplKeys : List TabKey -> List Ty -> List Require -> ImplUniverse -> I
 instRefMid : InstRef -> String
 instRefSeq : InstRef -> Int
 installCross : CrossRun -> Unit
+installGraphCtx : GraphCtx -> Unit
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
 installRun : GraphRun -> Unit
 installSnapshotModuleCtx : ModuleCtx -> Unit
@@ -2873,6 +2874,7 @@ resolveRecMono : SiteCtx -> String -> ScopeId -> IfaceRef -> Mono -> Route
 resolveSite : SiteCtx -> Map String Unit -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option Loc -> ScopeId -> Unit
 resolveSites : SiteCtx -> Map String Unit -> List PendingEntry -> Unit
 restAtoms : List (List Atom) -> List (List Atom)
+restoreGraphCtx : GraphCtx -> CrossRun -> GraphRun -> Map String (Ty, List (String, Int)) -> GraphCtx
 resultAfterArrows : Int -> Mono -> Option Mono
 retOccsEscape : List Atom -> List (String, List Atom) -> List Atom
 returnPosMethod : List String -> IfaceMethod -> List String
@@ -3081,6 +3083,7 @@ slotLabelsNaming : String -> List Kind -> List Ty -> List String
 slotOtherThan : Int -> List (String, Int, RecordInfo) -> Option (String, Int)
 slotVariance : Option Polarity -> Option Kind -> Variance
 slotVariances : Option (List Polarity) -> Option (List Kind) -> Option (List Variance)
+snapshotGraphCtx : GraphCtx -> GraphCtx
 solveExactReturn : SiteCtx -> MethodReturnRequest -> MethodReturnResolution
 solveExactReturnInstance : SiteCtx -> MethodReturnRequest -> Wanted -> List Mono -> MethodReturnResolution
 solveExactReturnOnce : SiteCtx -> MethodReturnRequest -> MethodReturnResolution

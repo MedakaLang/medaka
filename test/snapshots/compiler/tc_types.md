@@ -1,5 +1,5 @@
 # META
-source_lines=3394
+source_lines=3393
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -3004,9 +3004,9 @@ public export data ModuleSeed = ModuleSeed {
 -- what the pass produced instead of recomputing it:
 --   * `coreSchemes` (the return value);
 --   * `GraphCtx.crossRun` — the core pass fills the universe accumulators and, right
---     after it, `coreSchemeObligationsRef`; a hit installs a DETACHED copy of the
---     snapshot (fresh Refs, `copyCrossRun`) so the user modules that follow
---     mutate the copy and the memo stays what the miss left;
+--     after it, `coreSchemeObligationsRef`; a hit returns a record carrying a
+--     DETACHED copy of the snapshot (fresh Refs, `copyCrossRun`) so the user
+--     modules that follow mutate the copy and the memo stays what the miss left;
 --   * the one graph field the core pass writes, `builtinExternNamesRef`
 --     (`ccmBuiltinExternNames`);
 --   * core's module record: the `ModuleCtx` a hit installs carries the module
@@ -3097,8 +3097,9 @@ public export data GraphOut = GOutDiags | GOutTrees
 -- module is snapshotted under that module's key, and the next call resumes from
 -- the longest matching prefix, checking only what follows.  Each step holds what a
 -- miss would have left behind at that point: the fold's `depEnv`/`accData`/
--- `accAll`, the results collected so far, DETACHED copies of the `crossRun` and `graphRun`
--- sub-records, and the graph field and the module record the core-check memo also
+-- `accAll`, the results collected so far, one `GraphCtx` snapshot (`snapshotGraphCtx`:
+-- DETACHED copies of the `crossRun` and `graphRun` sub-records and the extern-name
+-- map; a hit reads only those three) and the module record the core-check memo also
 -- restores.
 -- Keys come from the caller: a chain key (which prelude generations, which entry
 -- and roots) and one `Option String` per module (mid + path + the EXACT source
@@ -3113,9 +3114,7 @@ public export data ChainStep = ChainStep {
   csAccData : List Decl,
   csAccAll : List Decl,
   csResults : List ModDiags,
-  csCrossRun : CrossRun,
-  csGraphRun : GraphRun,
-  csBuiltinExternNames : OrdMap (Ty, List (String, Int)),
+  csCtx : GraphCtx,
   csModule : ModuleCtx,
 }
 
@@ -3582,7 +3581,7 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "CoreCheckMemo" () ((variant "CoreCheckMemo" (ConNamed (field "ccmKey" (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (field "ccmCoreSchemes" (TyCon "ModuleBindings")) (field "ccmCorePub" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "ccmCrossRun" (TyCon "CrossRun")) (field "ccmGraphRun" (TyCon "GraphRun")) (field "ccmBuiltinExternNames" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "ccmModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "PreludePreamble" () ((variant "PreludePreamble" (ConNamed (field "ppEnvAcc" (TyCon "DeclEnvAcc")) (field "ppMangledFunDefs" (TyCon "Bool")) (field "ppMarkFacts" (TyCon "PreludeMarkFacts"))))) ())
 (DData Public "GraphOut" () ((variant "GOutDiags" (ConPos)) (variant "GOutTrees" (ConPos))) ())
-(DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCrossRun" (TyCon "CrossRun")) (field "csGraphRun" (TyCon "GraphRun")) (field "csBuiltinExternNames" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "csModule" (TyCon "ModuleCtx"))))) ())
+(DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCtx" (TyCon "GraphCtx")) (field "csModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "ChainMemo" () ((variant "ChainMemo" (ConNamed (field "chKey" (TyCon "String")) (field "chSteps" (TyApp (TyCon "List") (TyCon "ChainStep"))) (field "chReplayed" (TyCon "Int"))))) ())
 (DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport")) (field "gdGraph" (TyCon "GraphCtx"))))) ())
 (DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "BinderTypeTable")))
@@ -3781,7 +3780,7 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "CoreCheckMemo" () ((variant "CoreCheckMemo" (ConNamed (field "ccmKey" (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (field "ccmCoreSchemes" (TyCon "ModuleBindings")) (field "ccmCorePub" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "ccmCrossRun" (TyCon "CrossRun")) (field "ccmGraphRun" (TyCon "GraphRun")) (field "ccmBuiltinExternNames" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "ccmModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "PreludePreamble" () ((variant "PreludePreamble" (ConNamed (field "ppEnvAcc" (TyCon "DeclEnvAcc")) (field "ppMangledFunDefs" (TyCon "Bool")) (field "ppMarkFacts" (TyCon "PreludeMarkFacts"))))) ())
 (DData Public "GraphOut" () ((variant "GOutDiags" (ConPos)) (variant "GOutTrees" (ConPos))) ())
-(DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCrossRun" (TyCon "CrossRun")) (field "csGraphRun" (TyCon "GraphRun")) (field "csBuiltinExternNames" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "csModule" (TyCon "ModuleCtx"))))) ())
+(DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCtx" (TyCon "GraphCtx")) (field "csModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "ChainMemo" () ((variant "ChainMemo" (ConNamed (field "chKey" (TyCon "String")) (field "chSteps" (TyApp (TyCon "List") (TyCon "ChainStep"))) (field "chReplayed" (TyCon "Int"))))) ())
 (DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport")) (field "gdGraph" (TyCon "GraphCtx"))))) ())
 (DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "BinderTypeTable")))
