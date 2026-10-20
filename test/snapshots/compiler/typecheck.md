@@ -1,5 +1,5 @@
 # META
-source_lines=54922
+source_lines=54930
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -9578,11 +9578,19 @@ export
 hadMatchWarnings : DriveOutputs -> Bool
 hadMatchWarnings o = o.doHadMatchWarnings
 
--- `hadMatchWarnings` of the last module checked.
+-- `hadMatchWarnings` of the last module checked: the only read of a drive that returns no
+-- outputs (the projections).
+export
 matchWarningsNow : Unit -> Bool
 matchWarningsNow _ = match perRun.value.matchWarnings.value
   [] => False
   _ => True
+
+-- True iff a location has been entered since the current drive started: a read for
+-- the drive-independence tests (`currentLocRef` is minted `None` per drive).
+export
+currentLocIsSet : Unit -> Bool
+currentLocIsSet _ = isSome graphCtx.value.currentLocRef.value
 
 -- The drive inputs of a driver that loads no stdlib ownership and selects no
 -- profile: no module stdlib-owned, the flat entry not stdlib, every trace off, and
@@ -56472,8 +56480,10 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "mainIsFloatNow" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Float")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "hadMatchWarnings" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
 (DFunDef false "hadMatchWarnings" ((PVar "o")) (EFieldAccess (EVar "o") "doHadMatchWarnings"))
-(DTypeSig false "matchWarningsNow" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DTypeSig true "matchWarningsNow" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "matchWarningsNow" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchWarnings") "value") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
+(DTypeSig true "currentLocIsSet" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DFunDef false "currentLocIsSet" (PWild) (EApp (EVar "isSome") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "currentLocRef") "value")))
 (DTypeSig true "defaultDriveInputs" (TyCon "DriveInputs"))
 (DFunDef false "defaultDriveInputs" () (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EVar "omEmpty")) (fa "diFlatEntryIsStdlib" (EVar "False")) (fa "diTrace" (EVar "None")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "None"))) (fa "diProfileName" (ELit (LString ""))) (fa "diMarked" (EVar "None")))))
 (DTypeSig true "driveInputsFor" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "DriveInputs")))))
@@ -65799,8 +65809,10 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "mainIsFloatNow" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Float")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "hadMatchWarnings" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
 (DFunDef false "hadMatchWarnings" ((PVar "o")) (EFieldAccess (EVar "o") "doHadMatchWarnings"))
-(DTypeSig false "matchWarningsNow" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DTypeSig true "matchWarningsNow" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "matchWarningsNow" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchWarnings") "value") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
+(DTypeSig true "currentLocIsSet" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DFunDef false "currentLocIsSet" (PWild) (EApp (EVar "isSome") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "currentLocRef") "value")))
 (DTypeSig true "defaultDriveInputs" (TyCon "DriveInputs"))
 (DFunDef false "defaultDriveInputs" () (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EVar "omEmpty")) (fa "diFlatEntryIsStdlib" (EVar "False")) (fa "diTrace" (EVar "None")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "None"))) (fa "diProfileName" (ELit (LString ""))) (fa "diMarked" (EVar "None")))))
 (DTypeSig true "driveInputsFor" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "DriveInputs")))))
