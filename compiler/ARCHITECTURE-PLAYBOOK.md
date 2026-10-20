@@ -33,7 +33,7 @@ records the method and the full tables).
 | `types/typecheck.mdk` | 57,406 lines (30,997 code, 22,662 comment); 27% of the compiler; 81% of `types/` |
 | Its growth during Phase 1 | +400 code lines (30,597 to 30,997) under 16 `Arch-Growth-Override:` commits, every one a Phase 1 sprint; about 10,000 lines a month before Phase 0 |
 | Modules over 3,000 code lines | 8 (`test/arch_goldens/oversize.golden`); 2 state a reason in their header (`frontend/resolve.mdk`, `tools/test_cmd.mdk`) |
-| Module-level `= Ref` cells | 108 in 28 modules (`test/arch_goldens/cells.golden`, unchanged since Phase 0); typecheck 26 plus 153 fields in 4 bundles (`ModuleCtx` 91, `GraphRun` 30, `DriverState` 18, `CrossRun` 14; Phase 0 counted 159 with `PerRun` 88, `DriverState` 27) |
+| Module-level `= Ref` cells | 87 in 26 modules (`test/arch_goldens/cells.golden`; Phase 0 counted 108 in 28); typecheck 7 plus 153 fields in 4 bundles (`ModuleCtx` 91, `GraphRun` 30, `GraphCtx` 18, `CrossRun` 14) and the records `TcConfig` 5, `DriveInputs` 4, `TraceSink` 8; Phase 0 counted 159 fields with `PerRun` 88 and `DriverState` 27 |
 | Import graph | 1,088 intra-compiler edges, 0 cycles, 3 layering violations (`layering.golden`) |
 | llvm_emit / wasm_emit twins | 93 named pairs (`twins.golden`) |
 | Identical bodies in 2+ modules | 0 (pinned empty by `dupbodies.golden`) |

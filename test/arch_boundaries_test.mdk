@@ -674,8 +674,8 @@ badLifetime = badField "lifetime" 2 lifetimeVocab
 
 ownerVocab : List String
 ownerVocab = [
-  "module-level", "ModuleCtx", "GroupCtx", "GraphRun", "DriverState",
-  "GraphCtx", "CrossRun", "DynCtx", "SiteCtx"
+  "module-level", "ModuleCtx", "GroupCtx", "GraphRun", "GraphCtx", "CrossRun",
+  "TcConfig", "DriveInputs", "TraceSink", "DynCtx", "SiteCtx"
 ]
 
 targetVocab : List String
@@ -770,6 +770,9 @@ bundleRecords = [
   "GraphRun",
   "GraphCtx",
   "CrossRun",
+  "TcConfig",
+  "DriveInputs",
+  "TraceSink",
   "DynCtx",
   "SiteCtx",
 ]
@@ -787,7 +790,7 @@ bundleFieldNames ls recName =
   map (f => "\{recName}.\{f}") (filterMap fieldNameOf body)
 
 -- The cell census: the column-0 `name = Ref` cells of `types.typecheck`, then
--- the `Bundle.field` names of the four `tc_types` bundles.
+-- the `Bundle.field` names of the `tc_types` bundles.
 cellCensus : List (String, List String) -> List String
 cellCensus mods =
   let linesFor m = optionOr [] (lookup m mods)
