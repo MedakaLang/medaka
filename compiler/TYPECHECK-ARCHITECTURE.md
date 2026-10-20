@@ -288,7 +288,7 @@ this is the #158/#176 design, and it landed.
 | `PerRun` *(now `ModuleCtx`)* | 63 | HM counters + level; the 8 `pending*` route channels; 4 `Windowed` obligation channels; the 5 `numlit*` defaulting cells; shadow tables; per-module registries | `resetState` re-mints via `freshPerRun` *(both since gone: `checkBodyImpl` mints `freshModuleCtx` once per module)* |
 | `CrossRun` | 25 | 15 `universe*` accumulators, 6 `crossModule*` constraint tables (each a bare/`Qual` **pair**), 3 `obUniv*`, and `coreSchemeObligationsRef` | survives the per-module mint by design (`resetState`, since deleted) |
 | `DriverState` *(since replaced by `GraphCtx`, which `mintGraphCtx` re-mints per graph drive)* | 18 | driver-mode flags, the match oracle + warnings, promotion harvest, `main` scheme, dict-eligibility sets | survives; re-minted per driver entry |
-| toggles *(now `DynCtx`)* | 3 | dynamic-scope suppression flags, now the `DynCtx` fields `dcSuppressRLocalRecord`, `dcSuppressArgStamp`, `dcShadowHeadCtx` that `TcEnv` carries, so no save/restore remains | none: `initialEnv` and `withCtors` start from `noDyn` |
+| toggles *(now `DynCtx`)* | 3 | dynamic-scope suppression flags, now the `DynCtx` fields `dcSuppressRLocalRecord`, `dcSuppressArgStamp`, `dcShadowHeadCtx` that `TcEnv` carries, so no save/restore remains | none: `envFor` and `withCtors` start from `dynFor` |
 | *(loose)* | **7** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, and the toggles cell, since deleted; the bundles have since been reorganised, see `types/CELL-LIFETIMES.md`) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc` | varies |
 
 **The seven cells with no single owning function** (≥6 distinct writers) are the residual

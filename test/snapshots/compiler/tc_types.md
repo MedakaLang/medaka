@@ -1,5 +1,5 @@
 # META
-source_lines=3476
+source_lines=3485
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -1916,11 +1916,13 @@ public export data CheckRunSeed = CheckRunSeed {
   crsWarnings : List TcDiag,
 }
 
--- One module's state.  `checkBodyImpl` mints it once per module (`freshModuleCtx`), so
--- the constructor is the reset: a new per-module field cannot be added without
--- appearing in `freshModuleCtx`.  The `perRun` cell holds the last-minted record, and
--- every read after a module (the graph-level diagnostics, and `driveOutputsNow`,
--- which freezes `lastInvocationOps`' view and `hadMatchWarnings`' answer) reads that one.  This is a record OF Refs (fields stay `Ref …`),
+-- One module's state.  `checkBodyImpl` mints it once per module (`freshModuleCtx`) and
+-- returns it, so the constructor is the reset: a new per-module field cannot be added
+-- without appearing in `freshModuleCtx`, nor without a class in the module-field
+-- partition (`moduleCtxFrom`).  The drivers hand the record to every reader after the
+-- module (the graph-level diagnostics, and `driveOutputsNow`, which freezes
+-- `lastInvocationOps`' view); a reader not yet handed one reads the `perRun` cell, which
+-- holds the same record.  This is a record OF Refs (fields stay `Ref …`),
 -- NOT a record of values: the hot accumulators (typeErrors, poisonedVars,
 -- localBindRefs, …) are pushed with `setRef x (v :: x.value)`, so the field must be a
 -- Ref for that to stay one Ref-write — a record of values would rebuild the whole
@@ -2224,6 +2226,8 @@ public export data TcEnv = TcEnv {
 --     declared type: a leaf mismatch names the method.
 --   dcGroup — inside the inference of a top-level binding group: that group's
 --     record.  Absent in a tail body and anywhere outside a group.
+--   dcModule — the record of the module the walk is checking (or of the stamp
+--     context the drain entered).
 public export data DoCtx = DoCtx {
   doLoc : Loc,
   doDeferred : Bool,
@@ -2252,12 +2256,13 @@ public export data DynCtx = DynCtx {
   dcDo : Option DoCtx,
   dcMethodMismatch : Option String,
   dcGroup : Option GroupCtx,
+  dcModule : ModuleCtx,
 }
 
--- The context outside every construct that sets one.
+-- The context outside every construct that sets one, in the module [mctx].
 export
-noDyn : DynCtx
-noDyn = DynCtx {
+dynFor : ModuleCtx -> DynCtx
+dynFor mctx = DynCtx {
   dcJoin = None,
   dcNonCovariant = False,
   dcSuppressRLocalRecord = False,
@@ -2266,6 +2271,7 @@ noDyn = DynCtx {
   dcDo = None,
   dcMethodMismatch = None,
   dcGroup = None,
+  dcModule = mctx,
 }
 
 -- The context of one resolver walk: what the dispatch site being resolved tells
@@ -2279,15 +2285,18 @@ noDyn = DynCtx {
 --   sxInner — the notes accumulator of the running stamp: each route built below
 --     the destination's top level is ORed in.  Absent outside a stamp, where the
 --     notes are not wanted.
+--   sxModule — the record of the module the walk resolves in (a stamp's record
+--     inside the drain).
 public export data SiteCtx = SiteCtx {
   sxSite : Option Loc,
   sxInner : Option (Ref Inner),
+  sxModule : ModuleCtx,
 }
 
--- The context outside every stamp and every site.
+-- The context outside every stamp and every site, in the module [mctx].
 export
-noSite : SiteCtx
-noSite = SiteCtx { sxSite = None, sxInner = None }
+siteFor : ModuleCtx -> SiteCtx
+siteFor mctx = SiteCtx { sxSite = None, sxInner = None, sxModule = mctx }
 
 -- a constrained-function occurrence (`f` where `f : C a => …`): instantiate f's
 -- scheme (the call's type), and record the routes ref + the instantiated
@@ -3611,12 +3620,12 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "TcEnv" () ((variant "TcEnv" (ConNamed (field "teVars" (TyApp (TyCon "OrdMap") (TyCon "EnvBinding"))) (field "teCtors" (TyApp (TyCon "OrdMap") (TyCon "Scheme"))) (field "teAlphaLets" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder")))) (field "teIsLocal" (TyApp (TyCon "OrdMap") (TyCon "Bool"))) (field "teDyn" (TyCon "DynCtx"))))) ())
 (DData Public "DoCtx" () ((variant "DoCtx" (ConNamed (field "doLoc" (TyCon "Loc")) (field "doDeferred" (TyCon "Bool")) (field "doReported" (TyApp (TyCon "Ref") (TyCon "Bool")))))) ())
 (DData Public "GroupCtx" () ((variant "GroupCtx" (ConNamed (field "gcMonos" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))) (field "gcPendingEscapes" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))))))) ())
-(DData Public "DynCtx" () ((variant "DynCtx" (ConNamed (field "dcJoin" (TyApp (TyCon "Option") (TyCon "JoinContext"))) (field "dcNonCovariant" (TyCon "Bool")) (field "dcSuppressRLocalRecord" (TyCon "Bool")) (field "dcSuppressArgStamp" (TyCon "Bool")) (field "dcShadowHeadCtx" (TyCon "Bool")) (field "dcDo" (TyApp (TyCon "Option") (TyCon "DoCtx"))) (field "dcMethodMismatch" (TyApp (TyCon "Option") (TyCon "String"))) (field "dcGroup" (TyApp (TyCon "Option") (TyCon "GroupCtx")))))) ())
-(DTypeSig true "noDyn" (TyCon "DynCtx"))
-(DFunDef false "noDyn" () (ERecordCreate "DynCtx" ((fa "dcJoin" (EVar "None")) (fa "dcNonCovariant" (EVar "False")) (fa "dcSuppressRLocalRecord" (EVar "False")) (fa "dcSuppressArgStamp" (EVar "False")) (fa "dcShadowHeadCtx" (EVar "False")) (fa "dcDo" (EVar "None")) (fa "dcMethodMismatch" (EVar "None")) (fa "dcGroup" (EVar "None")))))
-(DData Public "SiteCtx" () ((variant "SiteCtx" (ConNamed (field "sxSite" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "sxInner" (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Inner"))))))) ())
-(DTypeSig true "noSite" (TyCon "SiteCtx"))
-(DFunDef false "noSite" () (ERecordCreate "SiteCtx" ((fa "sxSite" (EVar "None")) (fa "sxInner" (EVar "None")))))
+(DData Public "DynCtx" () ((variant "DynCtx" (ConNamed (field "dcJoin" (TyApp (TyCon "Option") (TyCon "JoinContext"))) (field "dcNonCovariant" (TyCon "Bool")) (field "dcSuppressRLocalRecord" (TyCon "Bool")) (field "dcSuppressArgStamp" (TyCon "Bool")) (field "dcShadowHeadCtx" (TyCon "Bool")) (field "dcDo" (TyApp (TyCon "Option") (TyCon "DoCtx"))) (field "dcMethodMismatch" (TyApp (TyCon "Option") (TyCon "String"))) (field "dcGroup" (TyApp (TyCon "Option") (TyCon "GroupCtx"))) (field "dcModule" (TyCon "ModuleCtx"))))) ())
+(DTypeSig true "dynFor" (TyFun (TyCon "ModuleCtx") (TyCon "DynCtx")))
+(DFunDef false "dynFor" ((PVar "mctx")) (ERecordCreate "DynCtx" ((fa "dcJoin" (EVar "None")) (fa "dcNonCovariant" (EVar "False")) (fa "dcSuppressRLocalRecord" (EVar "False")) (fa "dcSuppressArgStamp" (EVar "False")) (fa "dcShadowHeadCtx" (EVar "False")) (fa "dcDo" (EVar "None")) (fa "dcMethodMismatch" (EVar "None")) (fa "dcGroup" (EVar "None")) (fa "dcModule" (EVar "mctx")))))
+(DData Public "SiteCtx" () ((variant "SiteCtx" (ConNamed (field "sxSite" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "sxInner" (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Inner")))) (field "sxModule" (TyCon "ModuleCtx"))))) ())
+(DTypeSig true "siteFor" (TyFun (TyCon "ModuleCtx") (TyCon "SiteCtx")))
+(DFunDef false "siteFor" ((PVar "mctx")) (ERecordCreate "SiteCtx" ((fa "sxSite" (EVar "None")) (fa "sxInner" (EVar "None")) (fa "sxModule" (EVar "mctx")))))
 (DData Public "LocalAbs" () ((variant "LocalAbs" (ConNamed (field "laScope" (TyCon "ScopeId")) (field "laSlots" (TyApp (TyCon "List") (TyCon "PredicateSlot"))) (field "laParams" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "LocalAbsState" () ((variant "LocalAbsState" (ConNamed (field "lasBinders" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "LocalAbs"))))) (field "lasRecOccs" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "EvId") (TyCon "ScopeId")))))) (field "lasCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "lasQuantified" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
 (DData Public "GrantBinder" () ((variant "TopGrantBinder" (ConPos (TyCon "String") (TyCon "String"))) (variant "LocalGrantBinder" (ConPos (TyCon "String"))) (variant "BodyGrantBinder" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))) ())
@@ -3815,12 +3824,12 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "TcEnv" () ((variant "TcEnv" (ConNamed (field "teVars" (TyApp (TyCon "OrdMap") (TyCon "EnvBinding"))) (field "teCtors" (TyApp (TyCon "OrdMap") (TyCon "Scheme"))) (field "teAlphaLets" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder")))) (field "teIsLocal" (TyApp (TyCon "OrdMap") (TyCon "Bool"))) (field "teDyn" (TyCon "DynCtx"))))) ())
 (DData Public "DoCtx" () ((variant "DoCtx" (ConNamed (field "doLoc" (TyCon "Loc")) (field "doDeferred" (TyCon "Bool")) (field "doReported" (TyApp (TyCon "Ref") (TyCon "Bool")))))) ())
 (DData Public "GroupCtx" () ((variant "GroupCtx" (ConNamed (field "gcMonos" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))) (field "gcPendingEscapes" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))))))) ())
-(DData Public "DynCtx" () ((variant "DynCtx" (ConNamed (field "dcJoin" (TyApp (TyCon "Option") (TyCon "JoinContext"))) (field "dcNonCovariant" (TyCon "Bool")) (field "dcSuppressRLocalRecord" (TyCon "Bool")) (field "dcSuppressArgStamp" (TyCon "Bool")) (field "dcShadowHeadCtx" (TyCon "Bool")) (field "dcDo" (TyApp (TyCon "Option") (TyCon "DoCtx"))) (field "dcMethodMismatch" (TyApp (TyCon "Option") (TyCon "String"))) (field "dcGroup" (TyApp (TyCon "Option") (TyCon "GroupCtx")))))) ())
-(DTypeSig true "noDyn" (TyCon "DynCtx"))
-(DFunDef false "noDyn" () (ERecordCreate "DynCtx" ((fa "dcJoin" (EVar "None")) (fa "dcNonCovariant" (EVar "False")) (fa "dcSuppressRLocalRecord" (EVar "False")) (fa "dcSuppressArgStamp" (EVar "False")) (fa "dcShadowHeadCtx" (EVar "False")) (fa "dcDo" (EVar "None")) (fa "dcMethodMismatch" (EVar "None")) (fa "dcGroup" (EVar "None")))))
-(DData Public "SiteCtx" () ((variant "SiteCtx" (ConNamed (field "sxSite" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "sxInner" (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Inner"))))))) ())
-(DTypeSig true "noSite" (TyCon "SiteCtx"))
-(DFunDef false "noSite" () (ERecordCreate "SiteCtx" ((fa "sxSite" (EVar "None")) (fa "sxInner" (EVar "None")))))
+(DData Public "DynCtx" () ((variant "DynCtx" (ConNamed (field "dcJoin" (TyApp (TyCon "Option") (TyCon "JoinContext"))) (field "dcNonCovariant" (TyCon "Bool")) (field "dcSuppressRLocalRecord" (TyCon "Bool")) (field "dcSuppressArgStamp" (TyCon "Bool")) (field "dcShadowHeadCtx" (TyCon "Bool")) (field "dcDo" (TyApp (TyCon "Option") (TyCon "DoCtx"))) (field "dcMethodMismatch" (TyApp (TyCon "Option") (TyCon "String"))) (field "dcGroup" (TyApp (TyCon "Option") (TyCon "GroupCtx"))) (field "dcModule" (TyCon "ModuleCtx"))))) ())
+(DTypeSig true "dynFor" (TyFun (TyCon "ModuleCtx") (TyCon "DynCtx")))
+(DFunDef false "dynFor" ((PVar "mctx")) (ERecordCreate "DynCtx" ((fa "dcJoin" (EVar "None")) (fa "dcNonCovariant" (EVar "False")) (fa "dcSuppressRLocalRecord" (EVar "False")) (fa "dcSuppressArgStamp" (EVar "False")) (fa "dcShadowHeadCtx" (EVar "False")) (fa "dcDo" (EVar "None")) (fa "dcMethodMismatch" (EVar "None")) (fa "dcGroup" (EVar "None")) (fa "dcModule" (EVar "mctx")))))
+(DData Public "SiteCtx" () ((variant "SiteCtx" (ConNamed (field "sxSite" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "sxInner" (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Inner")))) (field "sxModule" (TyCon "ModuleCtx"))))) ())
+(DTypeSig true "siteFor" (TyFun (TyCon "ModuleCtx") (TyCon "SiteCtx")))
+(DFunDef false "siteFor" ((PVar "mctx")) (ERecordCreate "SiteCtx" ((fa "sxSite" (EVar "None")) (fa "sxInner" (EVar "None")) (fa "sxModule" (EVar "mctx")))))
 (DData Public "LocalAbs" () ((variant "LocalAbs" (ConNamed (field "laScope" (TyCon "ScopeId")) (field "laSlots" (TyApp (TyCon "List") (TyCon "PredicateSlot"))) (field "laParams" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "LocalAbsState" () ((variant "LocalAbsState" (ConNamed (field "lasBinders" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "LocalAbs"))))) (field "lasRecOccs" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "EvId") (TyCon "ScopeId")))))) (field "lasCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "lasQuantified" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
 (DData Public "GrantBinder" () ((variant "TopGrantBinder" (ConPos (TyCon "String") (TyCon "String"))) (variant "LocalGrantBinder" (ConPos (TyCon "String"))) (variant "BodyGrantBinder" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))) ())

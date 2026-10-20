@@ -1287,7 +1287,7 @@ ordinary_return_check_body="$(sed -n '/^checkCallObligationsU deferNonGround uni
 ordinary_return_arm="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/^    OpExactReturn request =>/,/^    _ =>/p')"
 ordinary_return_complete_check="$(printf '%s\n' "$ordinary_return_arm" | sed -n '/match methodReturnWanted request/,/ None =>/p')"
 ordinary_return_complete_flat="$(printf '%s\n' "$ordinary_return_complete_check" | tr '\n' ' ' | tr -s ' ')"
-ordinary_return_complete_required='match methodReturnWanted request Some _ => consumeExactReturnOutcome univ request (solveExactReturnOnce noSite request) None =>'
+ordinary_return_complete_required='match methodReturnWanted request Some _ => consumeExactReturnOutcome univ request (solveExactReturnOnce (siteFor perRun.value) request) None =>'
 if ! printf '%s\n' "$ordinary_return_complete_flat" | grep -Fq "$ordinary_return_complete_required"; then
   echo "FAIL: complete ordinary return checker does not consume the one outcome: $ordinary_return_complete_required"
   exit 1

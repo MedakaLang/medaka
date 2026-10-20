@@ -824,3 +824,50 @@ test "arch_boundaries: CELL-LIFETIMES rows equal the cell census" =
         expectEqual [] (flatMap badVocab allRows),
         expectEqual [] (filterMap badWidth allRows),
       ]
+
+-- The module-field partition (`moduleCtxFrom` in `types.typecheck`): each field it
+-- builds, with the class argument it is taken from, read off its body's
+-- `field = <class>.field` and `field = refFrom detach <class>.field` lines.
+partitionHeader : String
+partitionHeader = "moduleCtxFrom detach run tables drain ident = ModuleCtx {"
+
+partitionClasses : List String
+partitionClasses = ["run", "tables", "drain", "ident"]
+
+partitionRows : List String -> List (String, String)
+partitionRows ls =
+  let after = drop 1 (dropWhile (/= partitionHeader) ls)
+  filterMap partitionRow (takeWhile (l => not (startsWith "}" l)) after)
+
+-- Some (field, class) for a `field = … class.field,` line.
+partitionRow : String -> Option (String, String)
+partitionRow l = match split " = " (trim l)
+  [field, rhs] => classOf field (lastWord (words rhs))
+  _ => None
+
+-- Some (field, class) when [w] is `class.field` (its trailing comma dropped).
+classOf : String -> String -> Option (String, String)
+classOf field w = match split "." (optionOr w (stripSuffix "," w))
+  [cls, f] if f == field => Some (field, cls)
+  _ => None
+
+lastWord : List String -> String
+lastWord ws = match reverse ws
+  [] => ""
+  w :: _ => w
+
+-- A new `ModuleCtx` field is unclassified until the partition names its class: the
+-- partition and the record have the same fields, each once, each in a class.
+test "arch_boundaries: the module-field partition classifies every ModuleCtx field" =
+  let mods = loadModules
+  let linesFor m = optionOr [] (lookup m mods)
+  let fields = bundleFieldNames (linesFor "types.tc_types") "ModuleCtx"
+  let rows = partitionRows (linesFor "types.typecheck")
+  expectAll [
+    expectAtLeast 90 (length fields),
+    expectEqual
+      []
+      (symmetricDifference fields (map (r => "ModuleCtx.\{fst r}") rows)),
+    expectEqual (length fields) (length rows),
+    expectEqual [] (filter (r => not (elem (snd r) partitionClasses)) rows),
+  ]
