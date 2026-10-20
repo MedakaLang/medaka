@@ -717,7 +717,6 @@ ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
 ctorSiblingWithholds : HeadKey -> String -> String -> Bool
 ctorsByHead : List Scheme -> Map String (List (List Mono, List Mono))
 ctorsOfHead : HeadKey -> Option (List String)
-currentLoc : Ref (Option Loc)
 currentModuleMarks : Unit -> GraphMarks
 currentScopeStore : Unit -> ScopeStore
 cyclicSuperIfaceMsg : List String -> String
