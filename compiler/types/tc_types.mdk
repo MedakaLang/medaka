@@ -948,6 +948,10 @@ public export data GraphCtx = GraphCtx {
   -- schedule.  `None` until a preamble has run; a Module arm reading `None` is a
   -- driver that skipped its preamble, and fails loud.
   markSetsRef : Ref (Option MarkSets),
+  -- The innermost ELoc span the inference walk has entered (the walk's current
+  -- location), `None` until the first one.  Carried by identity from one drive's
+  -- record to the next, like every other `Ref` field here.
+  currentLocRef : Ref (Option Loc),
   -- Armed by every recorded type error (`recordTypeError`), read by
   -- `typeErrorsArmed` and `driveOutputsNow`; the diagnostics behind it, newest first, each with its module.
   typeErrorsSticky : Ref Bool,
