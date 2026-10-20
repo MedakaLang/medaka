@@ -9574,11 +9574,19 @@ export
 hadMatchWarnings : DriveOutputs -> Bool
 hadMatchWarnings o = o.doHadMatchWarnings
 
--- `hadMatchWarnings` of the last module checked.
+-- `hadMatchWarnings` of the last module checked: the only read of a drive that returns no
+-- outputs (the projections).
+export
 matchWarningsNow : Unit -> Bool
 matchWarningsNow _ = match perRun.value.matchWarnings.value
   [] => False
   _ => True
+
+-- True iff a location has been entered since the current drive started: a read for
+-- the drive-independence tests (`currentLocRef` is minted `None` per drive).
+export
+currentLocIsSet : Unit -> Bool
+currentLocIsSet _ = isSome graphCtx.value.currentLocRef.value
 
 -- The drive inputs of a driver that loads no stdlib ownership and selects no
 -- profile: no module stdlib-owned, the flat entry not stdlib, every trace off, and
