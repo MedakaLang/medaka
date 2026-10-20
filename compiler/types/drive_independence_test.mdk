@@ -1,0 +1,174 @@
+-- A drive starts from its inputs and the process's interners alone: what an earlier
+-- drive in the same process left behind (type-error flag and list, admitted methods,
+-- match oracle and warnings, last-entered location) is not visible to the next one.
+import test.{expectEqual}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse, parseLocated}
+import frontend.ast.{Decl}
+import list.{filter}
+import support.util.{joinNl}
+import types.publish.{ppPubScheme, PartialAnalysis(..)}
+import types.typecheck.{
+  defaultDriveInputs, checkModulesPartialK, checkModulesChainReportFor,
+  checkModulesK, elaborateModulesWithReport, hadTypeErrors, matchWarningsNow,
+  currentLocIsSet
+}
+
+preludeSrc : String
+preludeSrc = joinNl [
+  "interface Num a where",
+  "  fromInt : Int -> a",
+  "impl Num Int where",
+  "  fromInt _ = 0",
+  "data Option a = None | Some a",
+]
+
+seededSrc : String
+seededSrc = joinNl [
+  "export data A = A { k : Int } | B { k : Int, j : Int }",
+  "export f : A -> Int",
+  "f a = match a",
+  "  A _ => 1",
+  "g o = match o",
+  "  Some x => x",
+]
+
+cleanSrc : String
+cleanSrc = joinNl [
+  "export data Q = Q Int",
+  "export q x = match x",
+  "  Q n => n",
+]
+
+keyedSrc : String
+keyedSrc = joinNl [
+  "export data Z = Z Int",
+  "export z x = match x",
+  "  Z n => n",
+]
+
+badSrc : String
+badSrc = joinNl [
+  "export data Q = Q Int",
+  "export bad : Q -> Int",
+  "bad x = x",
+]
+
+mainSrc : String
+mainSrc = joinNl [
+  "export data Q = Q Int",
+  "main = ()",
+]
+
+prelude : Unit -> List Decl
+prelude _ = desugar (parse preludeSrc)
+
+mods : List (String, String) -> List (String, List Decl)
+mods ms = map ((m, s) => (m, desugar (parseLocated s))) ms
+
+-- The tree arm's verdict: (had type errors, residual error count).
+elab : List (String, String) -> (Bool, Int)
+elab ms =
+  let ((_, _, _, residual, _, _, _), _, o) =
+    elaborateModulesWithReport
+      defaultDriveInputs
+      False
+      None
+      []
+      (prelude ())
+      (mods ms)
+  (hadTypeErrors o, length residual)
+
+partial : Option (Int, Int) -> List (String, String) -> PartialAnalysis
+partial key ms =
+  checkModulesPartialK defaultDriveInputs key [] (prelude ()) (mods ms)
+
+plainK : Option (Int, Int) -> List (String, String) -> Int
+plainK key ms =
+  length (checkModulesK defaultDriveInputs key [] (prelude ()) (mods ms))
+
+diags : Option (Int, Int) -> List (String, String) -> List String
+diags key ms =
+  let (r, _) =
+    checkModulesChainReportFor
+      defaultDriveInputs
+      False
+      key
+      ""
+      (map (_ => None) ms)
+      []
+      (prelude ())
+      (mods ms)
+  flatMap ((mid, (_, errs, _)) => map (_ => mid) errs) r.trDiagnostics
+
+-- The published scheme of `mid.name` in a projection, rendered.
+schemeOf : String -> String -> PartialAnalysis -> List String
+schemeOf mid name pa =
+  flatMap
+    (r =>
+      if fst r == mid then
+        map
+          (e => "\{mid}.\{fst e} : \{ppPubScheme (snd e)}")
+          (filter (e => fst e == name) (snd r))
+      else
+        [])
+    pa.paSchemes
+
+test "#4335: a clean drive after an erroring drive reports no type errors and no residual" =
+  let erroring = elab [("b", badSrc)]
+  let clean = elab [("q", mainSrc)]
+  expectEqual (True, (False, 0)) (fst erroring, clean)
+
+ifaceMod : String
+ifaceMod = joinNl [
+  "export interface Mth a where",
+  "  mth : a -> Int",
+  "impl Mth Int where",
+  "  mth _ = 1",
+]
+
+aliasEntry : String
+aliasEntry = joinNl ["import m1 as A", "entry = A.mth (1 : Int)", ""]
+
+valMod1 : String
+valMod1 = joinNl ["export mth : Int -> Int", "mth n = n", ""]
+
+valMod2 : String
+valMod2 = joinNl ["export mth : Int -> Int", "mth n = n + 1", ""]
+
+ambEntry : String
+ambEntry = joinNl ["import m1.{mth}", "import m2.{mth}", "entry = mth 1", ""]
+
+test "#4336: a projection after a renaming drive admits nothing the renaming drive admitted" =
+  let renaming = diags None [("m1", ifaceMod), ("e", aliasEntry)]
+  let projection =
+    partial None [("m1", valMod1), ("m2", valMod2), ("e", ambEntry)]
+  expectEqual ([], ["e.entry : a"]) (renaming, schemeOf "e" "entry" projection)
+
+-- The same partial drive over `cleanSrc`, once after a drive that seeded no oracle and
+-- once after a drive that seeded `Q`'s constructors, judges its match identically.
+test "#4330: a partial drive's match verdict does not depend on earlier drives" =
+  let _ = elab [("q", mainSrc)]
+  let _ = partial None [("c", cleanSrc)]
+  let afterQuiet = matchWarningsNow ()
+  let _ = diags None [("m", seededSrc), ("b", badSrc)]
+  let _ = diags None [("c", cleanSrc)]
+  let _ = partial None [("c", cleanSrc)]
+  expectEqual afterQuiet (matchWarningsNow ())
+
+test "#4330: a keyed partial drive's match verdict does not depend on earlier drives" =
+  let key = Some (8401, 8402)
+  let _ = partial key [("z", keyedSrc)]
+  let afterQuiet = matchWarningsNow ()
+  let _ = diags key [("z", keyedSrc)]
+  let _ = plainK key [("z", keyedSrc)]
+  let _ = partial key [("z", keyedSrc)]
+  expectEqual afterQuiet (matchWarningsNow ())
+
+-- A drive over no declarations enters no location, so what it leaves in the cell is
+-- what it started with.
+test "a drive starts with no location entered, whatever the previous drive entered" =
+  let _ = diags None [("b", badSrc)]
+  let located = currentLocIsSet ()
+  let _ = checkModulesPartialK defaultDriveInputs None [] [] []
+  expectEqual (True, False) (located, currentLocIsSet ())

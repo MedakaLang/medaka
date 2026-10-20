@@ -1299,7 +1299,7 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    same inputs in `driveModulesGo`, taking the stdlib root as `dirOf coreP` — the CLI shape
    hands the child the stdlib's own `core.mdk`. The census is DERIVED, not asserted: the
    exported publishers of driver state in `types/typecheck.mdk` that `driver/medaka_cli.mdk`
-   calls were exactly three at this unit's landing — `resetTypeErrorsSticky`,
+   calls were exactly three at this unit's landing — `resetTypeErrorsSticky` (since deleted by arch-p2-6b S-cross-drive),
    `setLocalPinDisabled`, `setStdlibOwnership` — and the child called all three.
    HISTORICAL: `setLocalPinDisabled` and the local pin it toggled are deleted under
    #1082 (2026-09-26); a re-derivation of this census now finds two publishers, not

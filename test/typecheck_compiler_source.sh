@@ -1671,8 +1671,8 @@ fi
 # shards pass on an ill-typed compiler" — was vetting the compiler with an
 # instrument blind to a whole class of ill-typedness.  This pass closes that:
 # it puts the compiler's own closure through the elaborate driver's gate, which
-# is exactly what `medaka build` does (typecheckGateRoute, medaka_cli.mdk:
-# `resetTypeErrorsSticky` → `elaborateModules` → `hadTypeErrors`).
+# is exactly what `medaka build` does: it elaborates the modules and gates on the
+# type errors they recorded.
 #
 # WHY THE WHOLE `build`, AND NOT SOMETHING NARROWER.  No entry point exposes
 # "elaborate + hadTypeErrors" on its own: the emit drivers (entry_support.mdk's

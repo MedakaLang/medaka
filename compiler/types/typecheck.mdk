@@ -401,6 +401,8 @@ import types.tc_types.{
   EvCell(..),
   SiteCell(..),
   GraphRun(..),
+  Lineage(..),
+  Interners(..),
   PendingBinder(..),
   GivenScope(..),
   PendingJoin(..),
@@ -1209,7 +1211,7 @@ recordEffectSites eff =
       perRun.value.effectSitesRef :=
         omInsert
           key
-          ((atomAuth atom, !currentLoc) :: sites)
+          ((atomAuth atom, graphCtx.value.currentLocRef.value) :: sites)
           perRun.value.effectSitesRef.value)
     ()
     (fst (rowFlat eff))
@@ -1254,7 +1256,7 @@ recordEffectBody summary lower =
 
 obligationSiteHere : Bool -> ObligationSite
 obligationSiteHere covering = ObligationSite {
-  osLoc = !currentLoc,
+  osLoc = graphCtx.value.currentLocRef.value,
   osFn = perRun.value.currentFn.value,
   osCovering = covering,
 }
@@ -1313,9 +1315,9 @@ finishEffectSummaryScopeKeeping roles retained borrowed =
 reportEffectSummaryFailures : List (SummaryFailure ObligationSite) -> Unit
 reportEffectSummaryFailures [] = ()
 reportEffectSummaryFailures (failure :: rest) =
-  let saved = !currentLoc
+  let saved = graphCtx.value.currentLocRef.value
   let fn = failure.esfContext.osFn
-  currentLoc :=
+  graphCtx.value.currentLocRef :=
     orElseLoc
       (effectSiteOf fn failure.esfLabel (failureBound failure))
       failure.esfContext.osLoc
@@ -1324,11 +1326,15 @@ reportEffectSummaryFailures (failure :: rest) =
       if mentionsEscaped lo || mentionsEscaped hi then
         ()
       else if failure.esfExact then
-        reportIndexFailure failure.esfContext.osCovering !currentLoc lo hi
+        reportIndexFailure
+          failure.esfContext.osCovering
+          graphCtx.value.currentLocRef.value
+          lo
+          hi
       else
         pushTypeErrorAt
           "T-AUTHORITY"
-          !currentLoc
+          graphCtx.value.currentLocRef.value
           (authorityFailureMsg
             fn
             failure.esfLabel
@@ -1340,7 +1346,7 @@ reportEffectSummaryFailures (failure :: rest) =
       perRun.value.rowFailureReportedRef :=
         omInsert fn () perRun.value.rowFailureReportedRef.value
       reportRowFailure failure
-  currentLoc := saved
+  graphCtx.value.currentLocRef := saved
   reportEffectSummaryFailures rest
 
 -- The authority the failing label was admitted at: the obligation's upper
@@ -3391,10 +3397,10 @@ checkEachEffectAtom (a :: rest) =
     EPTop => ()
     p =>
       let l = EffLabel a.eatLabel a.eatOrigin
-      let saved = !currentLoc
-      currentLoc := orElseLoc a.eatLoc saved
+      let saved = graphCtx.value.currentLocRef.value
+      graphCtx.value.currentLocRef := orElseLoc a.eatLoc saved
       let _ = checkOneEffectParam a.eatLabel (dtopFor l) p
-      currentLoc := saved
+      graphCtx.value.currentLocRef := saved
   checkEachEffectAtom rest
 
 -- A row keeps the elements it writes for one label as a set, at most
@@ -3412,10 +3418,10 @@ checkWrittenElementCap (a :: rest) =
   let top = dtopFor l
   let _ = match writtenSetProblem (flatMap (writtenElement top) (a :: same))
     Some why =>
-      let saved = !currentLoc
-      currentLoc := orElseLoc a.eatLoc saved
+      let saved = graphCtx.value.currentLocRef.value
+      graphCtx.value.currentLocRef := orElseLoc a.eatLoc saved
       pushTypeError "T-EFFECT-PARAM" (effectParamMsg a.eatLabel why)
-      currentLoc := saved
+      graphCtx.value.currentLocRef := saved
     None => ()
   checkWrittenElementCap others
 
@@ -3528,8 +3534,8 @@ checkAuthorityBinder n a rest =
 checkBinderDomain : String -> Ty -> Option EffAtomTy -> Unit
 checkBinderDomain _ _ None = ()
 checkBinderDomain n a (Some l) =
-  let saved = !currentLoc
-  currentLoc := orElseLoc l.eatLoc saved
+  let saved = graphCtx.value.currentLocRef.value
+  graphCtx.value.currentLocRef := orElseLoc l.eatLoc saved
   let _ =
     if isStringTy a then match dtopFor (EffLabel l.eatLabel l.eatOrigin)
       PUnit =>
@@ -3543,7 +3549,7 @@ checkBinderDomain n a (Some l) =
             (patternDomainMsg ("@" ++ l.eatLabel ++ "*") l.eatLabel)
     else
       pushTypeError "T-AUTHORITY-BINDER" (binderDomainTypeMsg n (ppTy a))
-  currentLoc := saved
+  graphCtx.value.currentLocRef := saved
 
 binderDomainTypeMsg : String -> String -> String
 binderDomainTypeMsg n ty =
@@ -8009,15 +8015,14 @@ emptyTcConfig = TcConfig {
   tcKey = "\n\n",
 }
 
--- The process's first graph record, before any drive minted one.  `env` is the
+-- A graph record with every field fresh and [run] as its graph run: the process's
+-- first record, before any drive, and the base each mint builds on.  `env` is the
 -- initial TcEnv (always `initialEnv`), a parameter for the reason `freshCrossRun`
--- states: the `graphCtx` initializer must name `initialEnv` in its own body.  Every
--- `Ref` built here is the one every later record carries (`mintGraphCtx`), except
--- `builtinExternNamesRef`, which a memo hit replaces (`restoreGraphCtx`).
-initialGraphCtx : TcEnv -> GraphCtx
-initialGraphCtx env = GraphCtx {
+-- states: the `graphCtx` initializer must name `initialEnv` in its own body.
+initialGraphCtx : TcEnv -> GraphRun -> GraphCtx
+initialGraphCtx env run = GraphCtx {
   crossRun = freshCrossRun env,
-  graphRun = freshGraphRun (),
+  graphRun = run,
   effectDomains = Ref [],
   config = Ref emptyTcConfig,
   trace = None,
@@ -8033,31 +8038,51 @@ initialGraphCtx env = GraphCtx {
   promotionHarvestRef = Ref [],
   mainSchemeRef = Ref None,
   markSetsRef = Ref None,
+  currentLocRef = Ref None,
   typeErrorsSticky = Ref False,
   typeErrorsStickyDiags = Ref [],
 }
 
 -- The graph shim: the module-level cell holding the current drive's record.
 graphCtx : Ref GraphCtx
-graphCtx = Ref (initialGraphCtx initialEnv)
+graphCtx = Ref (initialGraphCtx initialEnv (freshGraphRun ()))
+
+-- The process's interners (see `Interners`): the lineage objects and the extern
+-- catalog of the graph record installed last.  Every install below writes it, so
+-- the next mint continues from whatever record was installed before it: a mint, a
+-- memo hit's restored record, `markModules`' run, or a probe's restore.
+interners : Ref Interners
+interners = Ref (internersOf graphCtx.value)
+
+internersOf : GraphCtx -> Interners
+internersOf c = Interners {
+  lineage = Lineage {
+    lnEvCounter = c.graphRun.evCounter,
+    lnLocalAbs = c.graphRun.localAbs,
+    lnGrants = c.graphRun.grants,
+  },
+  externCatalog = c.builtinExternNamesRef,
+}
 
 -- Install [c] as the cross-module accumulators, keeping the rest of the record.
 installCross : CrossRun -> Unit
-installCross c = graphCtx := GraphCtx { graphCtx.value | crossRun = c }
+installCross c = installGraphCtx GraphCtx { graphCtx.value | crossRun = c }
 
 -- Install [r] as the graph lineage, keeping the rest of the record.
 installRun : GraphRun -> Unit
-installRun r = graphCtx := GraphCtx { graphCtx.value | graphRun = r }
+installRun r = installGraphCtx GraphCtx { graphCtx.value | graphRun = r }
 
--- Install [c] as the current drive's record: the one write a memo hit's returned
--- value goes through.
+-- Install [c] as the current drive's record, and its lineage and catalog as the
+-- interners: the one write every install goes through.
 installGraphCtx : GraphCtx -> Unit
-installGraphCtx c = graphCtx := c
+installGraphCtx c =
+  graphCtx := c
+  interners := internersOf c
 
 -- Install both sub-records, keeping the rest of the record.
 installSubRecords : CrossRun -> GraphRun -> Unit
 installSubRecords c r =
-  graphCtx := GraphCtx { graphCtx.value | crossRun = c, graphRun = r }
+  installGraphCtx GraphCtx { graphCtx.value | crossRun = c, graphRun = r }
 
 -- one entry per occurrence of a registered interface method: (iface, typarams,
 -- declared method Ty, the occurrence's instantiated mono).  Resolved post-inference.
@@ -8196,7 +8221,7 @@ methodReturnRequest : MethodSchemeRow ->
   Option EvId ->
   MethodReturnRequest
 methodReturnRequest row occurrence subst goalEv =
-  let loc = !currentLoc
+  let loc = graphCtx.value.currentLocRef.value
   let scope = captureScope ()
   let qualifiedBody = match row.msrScheme
     Forall _ _ _ _ _ body =>
@@ -8569,7 +8594,7 @@ recordAbsorptions (a :: rest) cell =
   let _ = wPush perRun.value.absorptions AbsorptionEvent {
     atom = a,
     cell = cell,
-    loc = !currentLoc,
+    loc = graphCtx.value.currentLocRef.value,
   }
   recordAbsorptions rest cell
 
@@ -8956,7 +8981,7 @@ recordArgStamp suppressed name tagRef implRef innerRef idx mono omitted
           am
           perRun.value.currentFn.value
           (SKArg implRef mono omitted)
-          !currentLoc
+          graphCtx.value.currentLocRef.value
           (captureScope ())
           (freshEvId ()))
     None => ()
@@ -9049,7 +9074,7 @@ resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
 -- actual link (preventing a cyclic union-find entry).
 -- B.10.2b: each accumulated error carries the `currentLoc` span in effect at the
 -- push site (its `Option Loc`), captured at the RAISE site rather than reading the
--- global last-entered loc afterwards.  `pushTypeError` captures `currentLoc.value`
+-- global last-entered loc afterwards.  `pushTypeError` captures `graphCtx.value.currentLocRef.value`
 -- so locs don't drift as inference continues past the error.  severity = 1.
 --
 -- issue 1146 — THE CHANNEL IS SPLIT BY ROLE.  "Which diagnostics are REPORTED"
@@ -9082,43 +9107,32 @@ resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
 -- (elaborateModules → checkModuleFullImpl) calls `freshModuleCtx` at the start of each
 -- module, wiping `typeErrors`, so after the whole graph only the last module's errors
 -- survive there.  build/run must abort on a type error in any module, so
--- `pushTypeError` also records into this accumulator, which only
--- `resetTypeErrorsSticky` clears (snapshot.mdk and tests; no production driver calls it).  Read via
--- `hadTypeErrors` to gate the CLI exit code before emit/eval.
+-- `pushTypeError` also records into this accumulator, which the drive's mint
+-- starts `False`.  Read via `hadTypeErrors` to gate the CLI exit code before
+-- emit/eval.
 --
 -- #2089 / #2544 (M4): `GraphCtx.typeErrorsStickyDiags` holds the diagnostics behind
 -- the flag, newest first, across every module of the graph.  `perRun.typeErrors` is
 -- wiped per module, so this is the only place a caller with no per-module hook can
 -- read what armed the sticky flag rather than merely that it was armed — it is what
 -- `elaborateModules` returns as its residual, each entry with its own `Loc`.  Written
--- only by `recordTypeError`, cleared only by `resetTypeErrorsSticky`, and rolled back
+-- only by `recordTypeError`, started empty by the drive's mint, and rolled back
 -- wherever the flag is (`checkGraphFinish`) — the same pairing obligation the
--- detection counter states.  The mint carries both, so they outlive a drive.
+-- detection counter states.  Both are the drive's own.
 
--- Clear the sticky accumulator.  Called by snapshot.mdk and tests; the production drivers carry it across drives.
-export
-resetTypeErrorsSticky : Unit -> Unit
-resetTypeErrorsSticky _ =
-  graphCtx.value.typeErrorsSticky := False
-  graphCtx.value.typeErrorsStickyDiags := []
-
--- #2544 (M4): every diagnostic that armed the sticky gate since the last reset, each
--- tagged with the module it was recorded in, in push order, deduplicated PER GOAL —
+-- #2544 (M4): every diagnostic that armed the sticky gate in the drive, each tagged
+-- with the module it was recorded in, in push order, deduplicated PER GOAL —
 -- module, code, location and text together — never by text alone (a text key would
 -- re-introduce the suppressed-check shape OD5 forbids: two goals at two sites with
 -- the same rendering are two findings).
 export
 stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
-stickyTypeErrorDiags o = dedupBy tcDiagGoalKey (reverseL o.doStickyDiags)
+stickyTypeErrorDiags o = stickyDiagsInPushOrder o.doStickyDiags
 
--- The diagnostics pushed since `before` was read off `typeErrorsStickyDiags` — the
--- list is consed at the head, so they are its first `now - before` entries.
-stickyTypeErrorDiagsSince : List (String, TcDiag) -> List (String, TcDiag)
-stickyTypeErrorDiagsSince before =
-  let now = graphCtx.value.typeErrorsStickyDiags.value
-  dedupBy
-    tcDiagGoalKey
-    (reverseL (takeFirst (listLen now - listLen before) now))
+-- [diags] (newest first, as the sticky list holds them) in push order, deduplicated
+-- per goal.
+stickyDiagsInPushOrder : List (String, TcDiag) -> List (String, TcDiag)
+stickyDiagsInPushOrder diags = dedupBy tcDiagGoalKey (reverseL diags)
 
 export
 tcDiagGoalKey : (String, TcDiag) -> String
@@ -9130,8 +9144,7 @@ locGoalKey None = ""
 locGoalKey (Some (Loc file sl sc el ec)) =
   "\{file}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
 
--- True iff any type error was pushed since the last resetTypeErrorsSticky, as the
--- drive left it.
+-- True iff the drive recorded a type error, as the drive left it.
 export
 hadTypeErrors : DriveOutputs -> Bool
 hadTypeErrors o = o.doHadTypeErrors
@@ -9191,8 +9204,7 @@ recordTypeError raw =
 -- Called from `recordTypeError` (stored) and from all three dedup short-circuits
 -- (detected, suppressed as a duplicate).  It deliberately does NOT arm
 -- `typeErrorsSticky`: a short-circuit means an identical message is already in the
--- channel, which armed it at its own push, and only `resetTypeErrorsSticky` (once per
--- build/run, before any inference) clears it.
+-- channel, which armed it at its own push, and nothing clears it within the drive.
 noteTypeErrorDetected : Unit -> Unit
 noteTypeErrorDetected _ =
   perRun.value.errorsDetected := perRun.value.errorsDetected.value + 1
@@ -9224,7 +9236,8 @@ erredDuring act =
 -- Push one type-error message, snapshotting the current ELoc span (B.10.2b).
 pushTypeError : String -> String -> Unit
 pushTypeError code msg =
-  recordTypeError (TcDiag code 1 !currentLoc msg None None)
+  recordTypeError
+    (TcDiag code 1 graphCtx.value.currentLocRef.value msg None None)
 
 -- Push one type-error message attributed to [loc] rather than the live
 -- `currentLoc` (#414).  Same non-deduping semantics as `pushTypeError` — the
@@ -9239,7 +9252,7 @@ pushTypeError code msg =
 -- still keeps one report per binding.
 pushTypeErrorAt : String -> Option Loc -> String -> Unit
 pushTypeErrorAt code loc msg =
-  let at = orElseLoc loc !currentLoc
+  let at = orElseLoc loc graphCtx.value.currentLocRef.value
   let key = "\{code}\t\{perRun.value.currentFn.value}\t\{locKey at}\t\{msg}"
   if isSome at && omHasKey key perRun.value.typeErrorKeySetRef.value then
     noteTypeErrorDetected ()
@@ -9303,7 +9316,14 @@ pushTypeErrorOnceAt code loc msg =
   if omHasKey msg perRun.value.typeErrorMsgSetRef.value then
     noteTypeErrorDetected ()
   else
-    recordTypeError (TcDiag code 1 (orElseLoc loc !currentLoc) msg None None)
+    recordTypeError
+      (TcDiag
+        code
+        1
+        (orElseLoc loc graphCtx.value.currentLocRef.value)
+        msg
+        None
+        None)
 
 -- Like `pushTypeErrorOnceAt`, but the duplicate test is per SITE: the same text at
 -- another span is a second diagnostic, the same text at the same span (a signature
@@ -9312,7 +9332,7 @@ pushTypeErrorOnceAt code loc msg =
 -- folds on its span instead (`pushAmbiguityAt`).
 pushTypeErrorOncePerSite : String -> Option Loc -> String -> Unit
 pushTypeErrorOncePerSite code loc msg =
-  let at = orElseLoc loc !currentLoc
+  let at = orElseLoc loc graphCtx.value.currentLocRef.value
   if alreadyReportedAt msg at then
     noteTypeErrorDetected ()
   else
@@ -9326,7 +9346,7 @@ pushTypeErrorOncePerSite code loc msg =
 -- ([namesGoal]) is kept.  An unlocated one folds on its text.
 pushAmbiguityAt : Bool -> Option Loc -> String -> Unit
 pushAmbiguityAt namesGoal loc msg =
-  let at = orElseLoc loc !currentLoc
+  let at = orElseLoc loc graphCtx.value.currentLocRef.value
   let code = "T-AMBIGUOUS-INSTANCE"
   if isNone at then
     pushTypeErrorOnceAt code at msg
@@ -9397,15 +9417,19 @@ pushTypeErrorHelpFixAt code loc msg help fix =
     noteTypeErrorDetected ()
   else
     recordTypeError
-      (TcDiag code 1 (orElseLoc loc !currentLoc) msg (Some help) fix)
+      (TcDiag
+        code
+        1
+        (orElseLoc loc graphCtx.value.currentLocRef.value)
+        msg
+        (Some help)
+        fix)
 
 -- Source-location attribution (Phase B.10.2): the innermost ELoc span the
 -- `infer` walk has entered.  Set by infer's transparent ELoc arm before
--- recursing.  Surfaced through
--- Diag / the LSP via `pushTypeError`.  `None` until the first ELoc is entered
--- (top-level decls aren't ELoc-wrapped).
-currentLoc : Ref (Option Loc)
-currentLoc = Ref None
+-- recursing.  Surfaced through Diag / the LSP via `pushTypeError`.  It is the
+-- graph shim's `currentLocRef` field (`graphCtx.value.currentLocRef`), `None`
+-- until the first ELoc is entered (top-level decls aren't ELoc-wrapped).
 
 -- ASYNC-DESIGN Stage 2 (D5): the entry program's inferred `main` scheme, stashed
 -- by `graphModuleWorker`'s `GOutTrees` arm so the native `run` driver can detect a
@@ -9550,11 +9574,19 @@ export
 hadMatchWarnings : DriveOutputs -> Bool
 hadMatchWarnings o = o.doHadMatchWarnings
 
--- `hadMatchWarnings` of the last module checked.
+-- `hadMatchWarnings` of the last module checked: the only read of a drive that returns no
+-- outputs (the projections).
+export
 matchWarningsNow : Unit -> Bool
 matchWarningsNow _ = match perRun.value.matchWarnings.value
   [] => False
   _ => True
+
+-- True iff a location has been entered since the current drive started: a read for
+-- the drive-independence tests (`currentLocRef` is minted `None` per drive).
+export
+currentLocIsSet : Unit -> Bool
+currentLocIsSet _ = isSome graphCtx.value.currentLocRef.value
 
 -- The drive inputs of a driver that loads no stdlib ownership and selects no
 -- profile: no module stdlib-owned, the flat entry not stdlib, every trace off, and
@@ -9574,6 +9606,7 @@ defaultDriveInputs = DriveInputs {
   diTrace = None,
   diIoJoinGrants = ioJoinGrants None,
   diProfileName = "",
+  diMarked = None,
 }
 
 -- The drive inputs a driver builds from the profile it selected and the loader's
@@ -9603,6 +9636,7 @@ driveInputsFor profile flatEntry mods = DriveInputs {
   diProfileName = match profile
     None => ""
     Some p => profileName p,
+  diMarked = None,
 }
 
 -- A sink with every gate off and fresh buffers; each `begin*` turns one gate on.
@@ -10376,8 +10410,8 @@ currentScopeStore _ = graphCtx.value.graphRun.scopeStore
 -- #2549 M2: the next evidence id for the module currently being inferred.  The
 -- module component comes from `perRun`, which `checkBodyImpl` sets once per
 -- module before any body of it is inferred; the ordinal is this run's counter.
--- `evCounter` is graph-global and monotone, and `graphLineageRun` carries it across
--- every new lineage, so the ordinal alone is what makes an id unique — the module half does
+-- `evCounter` is graph-global, and `graphLineageRun` carries it across every new
+-- lineage (a memo hit rewinds it to its snapshot's), so the ordinal alone is what makes an id unique — the module half does
 -- not scope it, and `evDictRoutesIn` indexes on the ordinal without consulting it.
 -- The module half is a tripwire for that lookup (see `EvId` in `frontend/ast.mdk`):
 -- do not make ordinals per-module in the belief that the pair still separates them.
@@ -10393,30 +10427,36 @@ freshEvId _ =
   g.evCounter := n + 1
   EvId perRun.value.currentModuleRef.value n
 
--- #2549 M2: start a new graph lineage.  The evidence ORDINAL is carried, so no id
--- minted from here repeats one an earlier graph's tree still holds and a stray read
--- of such an id fails loudly instead of answering for another node.  What is indexed
--- by ordinal is not carried: `evBase` moves up to the counter and `evCells` starts
--- empty, so a long-lived process's arrays span one graph rather than its whole life.
+-- #2549 M2: start a new graph lineage from [lineage], the interners' (the run
+-- installed last).  The evidence ORDINAL continues from that run's counter, so an
+-- id minted from here does not repeat one the previous drive's tree holds, and a
+-- stray read of such an id fails loudly instead of answering for another node.  It
+-- is not monotone across a memo hit (core or chain): the hit installs a copy of its
+-- snapshot's run, whose counter is the snapshot's, so the next ordinals rewind to it (the
+-- rewind `freshEvId` states).  What is indexed by ordinal is not carried: `evBase`
+-- moves up to the counter and `evCells` starts empty, so a long-lived process's
+-- arrays span one graph rather than its whole life.
 --
 -- Nothing reads the cell arrays across a new lineage.  Every driver's mint
 -- (`mintGraphCtx`) starts one before it marks, except after `markModules`, which
--- starts one itself, marks, and hands the trees to a driver whose mint lands here:
--- that lineage is `markedAhead`, and the mint keeps its base and cells.  Trees
--- outlive their drive only through the facts the drive returned, so a caller that
--- runs a second elaboration before it reads the first's trees keeps the first's facts.
+-- starts one itself, marks, and returns its run for the driver that checks those
+-- trees: that driver's inputs carry it as [marked], and the mint keeps its base and
+-- cells.  Trees outlive their drive only through the facts the drive returned, so a
+-- caller that runs a second elaboration before it reads the first's trees keeps the
+-- first's facts.
 --
--- [keepMarked]: keep [prior]'s base and cell arrays rather than starting them empty
--- at the counter.  The binder-name and grant state are [prior]'s own objects,
--- cleared in place below.
-graphLineageRun : Bool -> GraphRun -> GraphRun
-graphLineageRun keepMarked prior =
-  let n = prior.evCounter.value
-  let base = if keepMarked then prior.evBase else n
-  let localAbs = prior.localAbs
-  let grants = prior.grants
+-- The binder-name and grant state are the lineage's own objects, cleared in place
+-- below.
+graphLineageRun : Option GraphRun -> Lineage -> GraphRun
+graphLineageRun marked lineage =
+  let n = lineage.lnEvCounter.value
+  let base = match marked
+    Some run => run.evBase
+    None => n
+  let localAbs = lineage.lnLocalAbs
+  let grants = lineage.lnGrants
   let fresh = freshGraphRun ()
-  let kept = if keepMarked then prior else fresh
+  let kept = optionOr fresh marked
   fresh.evCounter := n
   -- The cells below the base belong to an earlier drive, which judged them or never
   -- solved them; this drive judges only the cells of its own lineage.
@@ -11474,9 +11514,17 @@ wantAuthorityOne origin exact covering lower upper
     True => ()
     False =>
       if exact then
-        reportIndexFailure covering !currentLoc lower upper
+        reportIndexFailure
+          covering
+          graphCtx.value.currentLocRef.value
+          lower
+          upper
       else
-        reportAuthorityFailure !currentLoc origin lower upper
+        reportAuthorityFailure
+          graphCtx.value.currentLocRef.value
+          origin
+          lower
+          upper
 
 -- Outside a scope, a flexible upper variable takes the lower bound as its
 -- solution, widened as the scoped solver widens a solution
@@ -12082,7 +12130,7 @@ typeMismatchReportJoin dyn a b = match dyn.dcJoin
   Some JoinElselessIf =>
     pushTypeErrorHelpFixAt
       "T-TYPE-MISMATCH"
-      !currentLoc
+      graphCtx.value.currentLocRef.value
       "type mismatch: \{ppMono a} vs \{ppMono b}; \{elselessIfHelp}"
       elselessIfHelp
       None
@@ -12090,7 +12138,7 @@ typeMismatchReportJoin dyn a b = match dyn.dcJoin
     (None, Some help) =>
       pushTypeErrorHelpFixAt
         "T-TYPE-MISMATCH"
-        !currentLoc
+        graphCtx.value.currentLocRef.value
         "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
         help
         None
@@ -12144,7 +12192,7 @@ typeMismatchReportRest dyn a b = match activeDo dyn
     Some (help, fix) =>
       pushTypeErrorHelpFixAt
         "T-TYPE-MISMATCH"
-        !currentLoc
+        graphCtx.value.currentLocRef.value
         "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
         help
         fix
@@ -12157,7 +12205,7 @@ typeMismatchReportRest dyn a b = match activeDo dyn
       Some help =>
         pushTypeErrorHelpFixAt
           "T-TYPE-MISMATCH"
-          !currentLoc
+          graphCtx.value.currentLocRef.value
           "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
           help
           None
@@ -13124,10 +13172,10 @@ astTypeFreshTbl ty = atSignature ty (_ =>
 -- lands on the signature, not on whatever the walk last visited.
 atSignature : Ty -> (Unit -> a) -> a
 atSignature ty body =
-  let saved = !currentLoc
-  currentLoc := orElseLoc (firstTyLoc ty) saved
+  let saved = graphCtx.value.currentLocRef.value
+  graphCtx.value.currentLocRef := orElseLoc (firstTyLoc ty) saved
   let result = body ()
-  currentLoc := saved
+  graphCtx.value.currentLocRef := saved
   result
 
 freshTvMap : List String -> List (String, Mono)
@@ -14669,7 +14717,11 @@ inferPat _ PWild = (freshVar (), [])
 inferPat _ (PLit (LInt n)) = inferIntLitPat n
 inferPat _ (PLit (LU64 hi lo)) = inferU64LitPat hi lo
 inferPat _ (PLit (LI64 hi lo)) =
-  let _ = refuseBoxedLitPat "I64" (i64HalvesLiteral hi lo) !currentLoc
+  let _ =
+    refuseBoxedLitPat
+      "I64"
+      (i64HalvesLiteral hi lo)
+      graphCtx.value.currentLocRef.value
   (tconBuiltin "I64", [])
 inferPat _ (PLit l) = (litType l, [])
 inferPat env (PCon name pats) = inferPatCon env name pats
@@ -14778,7 +14830,8 @@ inferIntLitPat : Int -> (Mono, List (String, Scheme))
 inferIntLitPat n =
   let a = freshVar ()
   perRun.value.patLitPending :=
-    (a, n, !currentLoc) :: perRun.value.patLitPending.value
+    (a, n, graphCtx.value.currentLocRef.value)
+      :: perRun.value.patLitPending.value
   (a, [])
 
 -- Open a pattern site: park the literals of any enclosing site and start
@@ -14828,7 +14881,7 @@ refuseOpenedExistentials _ =
     cell :: _ =>
       pushTypeErrorAt
         "T-AUTHORITY-EXISTENTIAL-SCOPE"
-        !currentLoc
+        graphCtx.value.currentLocRef.value
         (existentialScopeMsg (authvarName cell))
   match perRun.value.openedExistentialsStackRef.value
     outer :: rest =>
@@ -14858,10 +14911,10 @@ settlePatLitsGo dyn final ((a, n, loc) :: rest) =
       perRun.value.patLitDeferred :=
         (a, n, loc) :: perRun.value.patLitDeferred.value
     _ =>
-      let saved = !currentLoc
-      currentLoc := orElseLoc loc saved
+      let saved = graphCtx.value.currentLocRef.value
+      graphCtx.value.currentLocRef := orElseLoc loc saved
       let _ = unifyIn dyn (tconBuiltin "Int") a
-      currentLoc := saved
+      graphCtx.value.currentLocRef := saved
   settlePatLitsGo dyn final rest
 
 -- The module's inference is complete: every deferred literal pattern takes the
@@ -14912,14 +14965,18 @@ refuseBoxedLitPat tag lit loc =
     (TcDiag
       "T-TYPE-MISMATCH"
       1
-      (orElseLoc loc !currentLoc)
+      (orElseLoc loc graphCtx.value.currentLocRef.value)
       "the literal pattern `\{lit}` cannot match \{if isI64Head tag then "an" else "a"} `\{tag}`; compare in a guard instead"
       (Some "compare in a guard instead: `x if x == \{lit}`")
       None)
 
 inferU64LitPat : Int -> Int -> (Mono, List (String, Scheme))
 inferU64LitPat hi lo =
-  let _ = refuseBoxedLitPat "U64" ("0x" ++ u64HalvesHex hi lo) !currentLoc
+  let _ =
+    refuseBoxedLitPat
+      "U64"
+      ("0x" ++ u64HalvesHex hi lo)
+      graphCtx.value.currentLocRef.value
   (tconBuiltin "U64", [])
 
 inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
@@ -15050,9 +15107,9 @@ infer env (EHeadAnnot e ty) = inferHeadAnnot env e ty
 -- span of the subexpression it is about, not whichever leaf inside it was
 -- entered last.
 infer env (ELoc l e) =
-  currentLoc := Some l
+  graphCtx.value.currentLocRef := Some l
   let t = infer env e
-  currentLoc := Some l
+  graphCtx.value.currentLocRef := Some l
   t
 -- Phase 150: a do-lowered chain.  Record the do-block loc so a monad-shape
 -- mismatch during inference is retargeted to the tailored "do requires a monad"
@@ -15116,7 +15173,7 @@ inferMethodAtCell env name c =
   let st = graphCtx.value.graphRun.grants
   st.gsLastMethodInst := None
   st.gsLastStandalone := None
-  c.ecLoc := !currentLoc
+  c.ecLoc := graphCtx.value.currentLocRef.value
   c.ecName := name
   let t =
     inferMethodAt
@@ -15175,7 +15232,12 @@ inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef innerRef =
       let _ = rejectAdmittedValueOccurrence name
       let sym = routeLocalSym !tagRef
       let occurrence =
-        instantiateStandaloneOccurrence env name sym !currentLoc value
+        instantiateStandaloneOccurrence
+          env
+          name
+          sym
+          graphCtx.value.currentLocRef.value
+          value
       let inst = occurrence.svoInstance
       let dicts = occurrence.svoDicts
       graphCtx.value.graphRun.grants.gsLastStandalone :=
@@ -15194,7 +15256,7 @@ inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef innerRef =
             receiver
             perRun.value.currentFn.value
             (SKRLocal sym True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs)
-            !currentLoc
+            graphCtx.value.currentLocRef.value
             (captureScope ())
             (freshEvId ()))
       inst.mtiBody
@@ -15321,7 +15383,7 @@ recordRLocalSite env name tagRef innerRef inst
         inst
         perRun.value.currentFn.value
         (SKRLocal (routeLocalSym !tagRef) True [] [] [])
-        !currentLoc
+        graphCtx.value.currentLocRef.value
         (captureScope ())
         (freshEvId ()))
   | not (omHasKey name perRun.value.standaloneValuesRef.value) = ()
@@ -15351,7 +15413,7 @@ recordRLocalSite env name tagRef innerRef inst
               dicts.sdMonos
               dicts.sdIfaces
               dicts.sdArgVecs)
-            !currentLoc
+            graphCtx.value.currentLocRef.value
             (captureScope ())
             (freshEvId ()))
       None => ()
@@ -15688,7 +15750,7 @@ recordSite env name scheme ifaceRef tagRef implRef methodRef innerRef methodType
             SKAdmittedReturn ifaceRef implRef methodType
           else
             SKReturn implRef methodType)
-      !currentLoc
+      graphCtx.value.currentLocRef.value
       (captureScope ())
       siteEv)
   perRun.value.methodSiteFns :=
@@ -15909,7 +15971,7 @@ pushLocalDictApp name ev la subst useScope =
     pdaIfaces = map (s => s.psIface) la.laSlots,
     pdaArgVecs = map (localSlotArgs subst) la.laSlots,
     pdaEncl = perRun.value.currentFn.value,
-    pdaLoc = !currentLoc,
+    pdaLoc = graphCtx.value.currentLocRef.value,
     pdaScope = useScope,
     pdaCallee = localSourceName name,
   }
@@ -16843,7 +16905,7 @@ inferDictAtFound name ev inst =
       pdaIfaces = [],
       pdaArgVecs = [],
       pdaEncl = perRun.value.currentFn.value,
-      pdaLoc = !currentLoc,
+      pdaLoc = graphCtx.value.currentLocRef.value,
       pdaScope = captureScope (),
       pdaCallee = localSourceName name,
     }
@@ -16891,7 +16953,7 @@ inferDeclaredDictAt name ev dc inst =
     pdaIfaces = map (s => s.csIface) expanded,
     pdaArgVecs = argVecs,
     pdaEncl = perRun.value.currentFn.value,
-    pdaLoc = !currentLoc,
+    pdaLoc = graphCtx.value.currentLocRef.value,
     pdaScope = captureScope (),
     pdaCallee = localSourceName name,
   }
@@ -16961,7 +17023,7 @@ recordCallObligations (s :: ss) (mono :: ms) []
         }
         0
         PCallSlot
-        !currentLoc
+        graphCtx.value.currentLocRef.value
     recordCallObligations ss ms []
 recordCallObligations (s :: ss) (mono :: ms) (args :: rest)
   | s.csIface.irName == "" = recordCallObligations ss ms rest
@@ -16991,7 +17053,7 @@ recordCallObligations (s :: ss) (mono :: ms) (args :: rest)
         Predicate { iface = s.csIface, args = goalArgs }
         0
         PCallSlot
-        !currentLoc
+        graphCtx.value.currentLocRef.value
     recordCallObligations ss ms rest
 
 -- instantiate a scheme, returning both the mono and the (quantified id → fresh
@@ -18606,10 +18668,10 @@ pushUnknownFieldMaybeSuggest fname rname declared =
     Some sug =>
       pushTypeErrorHelpFixAt
         "T-UNKNOWN-FIELD"
-        !currentLoc
+        graphCtx.value.currentLocRef.value
         (unknownFieldMsg fname rname ++ "; did you mean `\{sug}`?")
         "did you mean `\{sug}`?"
-        (fieldFixFrom !currentLoc fname sug)
+        (fieldFixFrom graphCtx.value.currentLocRef.value fname sug)
 
 -- "did you mean" for a record field: nearest declared field name by
 -- Levenshtein distance, within a fixed distance of 2.  Skip names < 3 chars
@@ -18795,7 +18857,7 @@ inferBinopE env op l r dref =
   -- comparison/Eq/Ord `typeMismatch` binop errors squiggle the operator
   -- expression rather than a lone operand.
   let _ = match binopSpanLoc l r
-    Some sp => currentLoc := Some sp
+    Some sp => graphCtx.value.currentLocRef := Some sp
     None => ()
   let _ = recordBinopGoals op dref lt
   if op == "|>" then pipeOp env l r lt rt else inferBinop env.teDyn op lt rt
@@ -18829,7 +18891,7 @@ recordBinopSite op dref m = match binopMethod op
         m
         perRun.value.currentFn.value
         (SKOp perRun.value.currentImplBody.value)
-        !currentLoc
+        graphCtx.value.currentLocRef.value
         (captureScope ())
         (freshEvId ()))
   None => ()
@@ -18860,7 +18922,7 @@ recordBinopGoals op dref m = match arithDispatchMethod op
           NPTProduced
           predicate
           scope
-          !currentLoc
+          graphCtx.value.currentLocRef.value
           None
           None
           []
@@ -18874,7 +18936,7 @@ recordBinopGoals op dref m = match arithDispatchMethod op
             m
             perRun.value.currentFn.value
             (SKPredicateOp perRun.value.currentImplBody.value predicate)
-            !currentLoc
+            graphCtx.value.currentLocRef.value
             scope
             (freshEvId ()))
       ()
@@ -18930,7 +18992,7 @@ recordUnopSite op dref m = match unopMethod op
         m
         perRun.value.currentFn.value
         kind
-        !currentLoc
+        graphCtx.value.currentLocRef.value
         (captureScope ())
         (freshEvId ()))
   None => ()
@@ -19040,7 +19102,7 @@ recordIfaceObligation c lt
       lt
       []
       POperator
-      !currentLoc
+      graphCtx.value.currentLocRef.value
   | otherwise = ()
 
 -- the spelling each built-in class has in the prelude.  It is a CONSTANT of the
@@ -19277,7 +19339,8 @@ inferWideLit : TcEnv -> Int -> Int -> EvId -> String -> Mono
 inferWideLit env hi lo ev lx =
   let a = inferNumLitVar env lo (Ref None) (siteRouteCell ev)
   perRun.value.wideLitRanges :=
-    (a, lx, hi, lo, False, !currentLoc) :: perRun.value.wideLitRanges.value
+    (a, lx, hi, lo, False, graphCtx.value.currentLocRef.value)
+      :: perRun.value.wideLitRanges.value
   a
 
 inferNumLitVar : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
@@ -19322,7 +19385,7 @@ inferNumLitMethod anchor tagRef =
     predicateArguments =
       dispatchMonosOf anchor.msrTyparams anchor.msrType occurrence,
   }
-  let origin = currentLoc.value
+  let origin = graphCtx.value.currentLocRef.value
   let scope = captureScope ()
   let _ =
     noteNumericPredicateTrace NPTProduced predicate scope origin None None []
@@ -19353,7 +19416,7 @@ inferNumLitBare n fref =
     predicateInterface = builtinIfaceRef BNum,
     predicateArguments = [a],
   }
-  let origin = currentLoc.value
+  let origin = graphCtx.value.currentLocRef.value
   let scope = captureScope ()
   let _ =
     noteNumericPredicateTrace NPTProduced predicate scope origin None None []
@@ -19368,7 +19431,8 @@ inferNumLitBare n fref =
 recordNumlitRange : Mono -> Int -> Unit
 recordNumlitRange a n =
   perRun.value.numlitRanges :=
-    (a, n, !currentLoc) :: perRun.value.numlitRanges.value
+    (a, n, graphCtx.value.currentLocRef.value)
+      :: perRun.value.numlitRanges.value
 
 -- INTEGER-TYPES-DESIGN §3.2 item 2: a literal whose type grounded to a fixed-width
 -- head must lie in that head's range, or it is `L-INT-OVERFLOW` naming the type and
@@ -19387,7 +19451,7 @@ checkFixedWidthLiterals ((m, n, loc) :: rest) =
             (TcDiag
               "L-INT-OVERFLOW"
               1
-              (orElseLoc loc !currentLoc)
+              (orElseLoc loc graphCtx.value.currentLocRef.value)
               "integer literal \{n} does not fit \{tag} (\{lo}..\{hi})"
               None
               None)
@@ -19397,7 +19461,7 @@ checkFixedWidthLiterals ((m, n, loc) :: rest) =
             (TcDiag
               "L-INT-OVERFLOW"
               1
-              (orElseLoc loc !currentLoc)
+              (orElseLoc loc graphCtx.value.currentLocRef.value)
               "integer literal \{n} does not fit U64 (\{u64RangeText})"
               None
               None)
@@ -19427,7 +19491,7 @@ wideFitsI64 hi lo negated =
 checkWideLiterals : List (Mono, String, Int, Int, Bool, Option Loc) -> Unit
 checkWideLiterals [] = ()
 checkWideLiterals ((m, lx, hi, lo, negated, loc) :: rest) =
-  let at = orElseLoc loc !currentLoc
+  let at = orElseLoc loc graphCtx.value.currentLocRef.value
   let shown = if negated then "-" ++ lx else lx
   let pow62 = hi == 1073741824 && lo == 0
   let _ = match normalize m
@@ -19489,7 +19553,7 @@ wideAnnotateHelp shown negated =
   "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(\{shown} : \{ty})`"
 
 recordNumlitLoc : Mono -> Unit
-recordNumlitLoc a = match !currentLoc
+recordNumlitLoc a = match graphCtx.value.currentLocRef.value
   Some l =>
     perRun.value.numlitVarLocs := (a, l) :: perRun.value.numlitVarLocs.value
     perRun.value.numlitUntainted := (a, l) :: perRun.value.numlitUntainted.value
@@ -19643,8 +19707,8 @@ consOp dyn lt rt =
   TApp
     (tconBuiltin "List")
     (joinValueTypes dyn JoinCons [
-      (!currentLoc, lt),
-      (!currentLoc, tailElem),
+      (graphCtx.value.currentLocRef.value, lt),
+      (graphCtx.value.currentLocRef.value, tailElem),
     ])
 
 -- `x |> f` is `f x` spelled backwards, and the argument's syntax reaches the
@@ -20010,7 +20074,7 @@ recordSchemeCallObligations originId (o :: rest) subst =
           }
           originId
           PSchemeReinst
-          !currentLoc
+          graphCtx.value.currentLocRef.value
       recordSchemeCallObligations originId rest subst
     None => recordSchemeCallObligations originId rest subst
 
@@ -20176,7 +20240,14 @@ recordImplObligation x mono omitted
       -- `test/dict_fixtures/i4-xmod-method-occurrence-{foreign-iface-rejected,
       -- own-iface-control}`.
       let _ =
-        pushPendingObl iface typarams mty mono omitted PMethodOcc !currentLoc
+        pushPendingObl
+          iface
+          typarams
+          mty
+          mono
+          omitted
+          PMethodOcc
+          graphCtx.value.currentLocRef.value
       -- #818 (#838 I3): also record each method-level `=>` constraint slot (e.g.
       -- `Ord b` on `peer : Ord b => a -> b -> b -> Bool`) as its OWN obligation, so an
       -- unsatisfiable slot (`Ord NoOrd`) is rejected by the unified checker at check
@@ -20219,7 +20290,8 @@ recordImplObligation x mono omitted
 pushAdmittedOccObl : String -> Mono -> Unit
 pushAdmittedOccObl name mono =
   perRun.value.admittedOccObls :=
-    (name, mono, !currentLoc) :: perRun.value.admittedOccObls.value
+    (name, mono, graphCtx.value.currentLocRef.value)
+      :: perRun.value.admittedOccObls.value
 
 checkAdmittedOccObls : Unit -> Unit
 checkAdmittedOccObls _ =
@@ -20486,7 +20558,7 @@ recordMethodLevelSlotObls (c :: rest) subst =
         }
         0
         PMethodLevel
-        !currentLoc
+        graphCtx.value.currentLocRef.value
   recordMethodLevelSlotObls rest subst
 
 -- Expected-type propagation for an application whose argument is a lambda.
@@ -20632,9 +20704,9 @@ unifySpineProbeGo dyn ft (a :: rest) =
 -- other program is inferred exactly as before, so no diagnostic moves.
 inferExpected : TcEnv -> Expr -> Mono -> Mono
 inferExpected env (ELoc l e) expected =
-  currentLoc := Some l
+  graphCtx.value.currentLocRef := Some l
   let t = inferExpected env e expected
-  currentLoc := Some l
+  graphCtx.value.currentLocRef := Some l
   t
 -- A lambda meeting a known arrow takes the arrow's domains as its parameters
 -- before its body is inferred, so a signed `f = p => …` sees `String @κ` the
@@ -20642,7 +20714,7 @@ inferExpected env (ELoc l e) expected =
 inferExpected env (ELam pats body) expected = match normalize expected
   TFun _ _ _ =>
     let _ = match exprLoc body
-      Some l => currentLoc := Some l
+      Some l => graphCtx.value.currentLocRef := Some l
       None => ()
     inferLamChecked env (Some (normalize expected)) pats body
   _ => infer env (ELam pats body)
@@ -20743,9 +20815,9 @@ unifyIntoOrd dyn valueFirst pos e a =
   let _ =
     if monoHasArrowInSlot e || monoHasArrowInSlot a then
       if pos then
-        recordFileValueFlow !currentLoc e a
+        recordFileValueFlow graphCtx.value.currentLocRef.value e a
       else
-        recordFileValueFlow !currentLoc a e
+        recordFileValueFlow graphCtx.value.currentLocRef.value a e
   unifyIntoStep dyn valueFirst pos e a
 
 -- Capture a directed judgment once; recursive descent does not rescan every
@@ -20814,9 +20886,9 @@ bindValueUpper dyn cell lower =
           dyn
           JoinArgument
           collectValueAllowance) [
-          (!currentLoc, lower),
+          (graphCtx.value.currentLocRef.value, lower),
         ])
-    let _ = recordFileValueFlow !currentLoc upper lower
+    let _ = recordFileValueFlow graphCtx.value.currentLocRef.value upper lower
     bindVar dyn cell upper
 
 collectValueAllowance : DynCtx -> List EffRow -> EffRow
@@ -21134,7 +21206,7 @@ inferShadowApp : TcEnv ->
 inferShadowApp env mname arityRefs tagRefs f x =
   -- capture the application's loc BEFORE inferring the argument (which moves currentLoc),
   -- so a domain mismatch localizes to the call site, not the argument.
-  let dloc = !currentLoc
+  let dloc = graphCtx.value.currentLocRef.value
   let tx = infer env x
   -- The dict-var carve-out (S5/Fork 2) applies to importer shadows too: a receiver that is
   -- the enclosing fn's `=>`-bound constraint var DISPATCHES through that dict, so it must
@@ -21192,7 +21264,7 @@ inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
           env
           mname
           ""
-          (orElseLoc (appSpineHeadLoc f) !currentLoc)
+          (orElseLoc (appSpineHeadLoc f) graphCtx.value.currentLocRef.value)
           value
       let _ = recordStandaloneAt mname f occurrence
       let smono = occurrence.svoInstance.mtiBody
@@ -21244,7 +21316,7 @@ inferShadowAppAt : TcEnv ->
   Expr ->
   Mono
 inferShadowAppAt env mname arityRefs tagRefs hd nodes f x =
-  let dloc = !currentLoc
+  let dloc = graphCtx.value.currentLocRef.value
   let pre = inferSpineArgs env nodes
   let k = listLen pre
   let tx = infer env x
@@ -21301,7 +21373,7 @@ inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx =
           env
           mname
           ""
-          (orElseLoc (appSpineHeadLoc f) !currentLoc)
+          (orElseLoc (appSpineHeadLoc f) graphCtx.value.currentLocRef.value)
           value
       let _ = recordStandaloneAt mname hd occurrence
       let smono = occurrence.svoInstance.mtiBody
@@ -21369,7 +21441,7 @@ recordSelectedStandaloneRoutes mname dicts ((r, inner) :: rest) tx =
           dicts.sdMonos
           dicts.sdIfaces
           dicts.sdArgVecs)
-        !currentLoc
+        graphCtx.value.currentLocRef.value
         (captureScope ())
         (freshEvId ()))
   recordSelectedStandaloneRoutes mname dicts rest tx
@@ -21523,7 +21595,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
   let sym = recoveredShadowSym name tagRef
   -- P0-19: capture the application's location BEFORE inferring the argument (which
   -- moves currentLoc), so a standalone-domain mismatch reports at the call site.
-  let dloc = !currentLoc
+  let dloc = graphCtx.value.currentLocRef.value
   -- #1815: the arguments the spine already applied, inferred in source order (exactly
   -- the order the recursive walk visited them in before).
   let pre = inferSpineArgs env nodes
@@ -21654,7 +21726,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
             dicts.sdMonos
             dicts.sdIfaces
             dicts.sdArgVecs)
-          !currentLoc
+          graphCtx.value.currentLocRef.value
           (captureScope ())
           (freshEvId ()))
   let _ = match argDispatchOf name
@@ -21673,7 +21745,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
           xt
           perRun.value.currentFn.value
           (SKArg implRef (if dispatches then ft else xt) [])
-          !currentLoc
+          graphCtx.value.currentLocRef.value
           (captureScope ())
           (freshEvId ()))
     None => ()
@@ -21699,7 +21771,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
   else
     standaloneSchemeFor env name sym)
     Some _ =>
-      currentLoc := dloc
+      graphCtx.value.currentLocRef := dloc
       unifySpineResult env f ft (pre ++ [(x, xt)])
     None =>
       let _ = if sym == "" then enforceStandaloneDomainAt env name xt dloc k
@@ -21903,7 +21975,7 @@ shadowDomainForAt env _ sym k = match lookupVar env sym
 -- unify the standalone domain against the argument at the call's location.
 unifyStandaloneDomain : DynCtx -> Mono -> Mono -> Option Loc -> Unit
 unifyStandaloneDomain dyn dom xt dloc =
-  currentLoc := dloc
+  graphCtx.value.currentLocRef := dloc
   unifyIn dyn dom xt
 
 -- a definer-shadow standalone's declared parameter type, freshly instantiated (so a
@@ -21949,7 +22021,7 @@ maybeStandaloneValueMono env name =
         env
         name
         ""
-        !currentLoc
+        graphCtx.value.currentLocRef.value
         value).svoInstance.mtiBody)
     (standaloneValueBinding env name)
 
@@ -21964,7 +22036,8 @@ rejectAdmittedValueOccurrence name
   | isDefinerShadow name = ()
   | otherwise =
     let ifs = methodAdmittedHere name
-    if listLen ifs >= 2 then pushAmbiguousShadowDecl name ifs !currentLoc
+    if listLen ifs >= 2 then
+      pushAmbiguousShadowDecl name ifs graphCtx.value.currentLocRef.value
 
 instantiateStandaloneOccurrence : TcEnv ->
   String ->
@@ -21973,7 +22046,7 @@ instantiateStandaloneOccurrence : TcEnv ->
   ValueScheme ->
   SelectedValueOccurrence
 instantiateStandaloneOccurrence env name sym origin value =
-  currentLoc := origin
+  graphCtx.value.currentLocRef := origin
   let inst = instantiateValueTracked name value.vsScheme
   let declared = declaredEffectsAt inst value.vsDeclared
   let _ = match declared
@@ -22211,7 +22284,7 @@ inferDefinerShadowVarAppAt : TcEnv ->
   Expr ->
   Mono
 inferDefinerShadowVarAppAt env name hd nodes f x =
-  let dloc = !currentLoc
+  let dloc = graphCtx.value.currentLocRef.value
   let pre = inferSpineArgs env nodes
   let xt = infer env x
   let isDictVar = definerReceiverIsDictVar env.teDyn name xt
@@ -22274,7 +22347,7 @@ inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc =
   match standaloneOccurrence env name "" (orElseLoc (appSpineHeadLoc f) dloc)
     Some occurrence =>
       let _ = recordStandaloneAt name hd occurrence
-      currentLoc := dloc
+      graphCtx.value.currentLocRef := dloc
       -- #1815: consume the WHOLE applied prefix, not just the receiver.  Unifying the
       -- standalone's declared type against `TFun xt … r` when the receiver is argument 1
       -- is what equated `Int -> Int -> Int` (the standalone) with `b -> r` (the annotated
@@ -22416,7 +22489,7 @@ constraintArgVarName _ = None
 -- a bare unlocated lambda doesn't blank out an enclosing position.
 setLocIfSome : Option Loc -> Unit
 setLocIfSome None = ()
-setLocIfSome (Some l) = currentLoc := Some l
+setLocIfSome (Some l) = graphCtx.value.currentLocRef := Some l
 
 -- peek through an ELoc wrapper to a lambda; returns its loc, params and body.
 -- Non-lambda arguments (the common case) take the ordinary inference path.
@@ -22814,7 +22887,12 @@ inferApp env appExpr ft xt =
         let hint =
           if isDoBind then doBindArgHint scalarTy else containerArgHint scalarTy
         let _ =
-          pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" !currentLoc msg hint None
+          pushTypeErrorHelpFixAt
+            "T-TYPE-MISMATCH"
+            graphCtx.value.currentLocRef.value
+            msg
+            hint
+            None
         -- Poison the container tyvar + element vars (in ft) exactly as the generic
         -- unify sink would (`monoUnboundIds a ++ b`), so the dangling `Mappable f`
         -- obligation sees a poisoned var and suppresses its own cascade.
@@ -22827,7 +22905,7 @@ inferApp env appExpr ft xt =
         -- `currentLoc` after inferring the arg is its last atom; refine it to the
         -- whole argument span so `len 5` (len : String -> Int) squiggles the `5`.
         let _ = match appArgLoc appExpr
-          Some al => currentLoc := Some al
+          Some al => graphCtx.value.currentLocRef := Some al
           None => ()
         -- The argument flows INTO the callee's domain, so a closed~closed row
         -- pair there is checked directionally (`unifyInto`): a purer argument in
@@ -23032,14 +23110,14 @@ inferAppNotFunction appExpr ft r =
       else
         pushTypeErrorHelpFixAt
           "T-NOT-A-FUNCTION"
-          currentLoc.value
+          graphCtx.value.currentLocRef.value
           (notAFunctionMsgFor (Some name) (ppMono (normalize ft)))
           (notAFunctionHint (Some name))
           None
     None =>
       pushTypeErrorHelpFixAt
         "T-NOT-A-FUNCTION"
-        currentLoc.value
+        graphCtx.value.currentLocRef.value
         (notAFunctionMsg (ppMono (normalize ft)))
         (notAFunctionHint None)
         None
@@ -23055,7 +23133,7 @@ inferLam env pats body =
   -- body loc before inferring the patterns, so the error lands on the right
   -- clause (the body re-sets `currentLoc` via its own ELoc arm afterwards).
   let _ = match exprLoc body
-    Some l => currentLoc := Some l
+    Some l => graphCtx.value.currentLocRef := Some l
     None => ()
   inferLamChecked env None pats body
 
@@ -23477,11 +23555,11 @@ checkRecursiveValue dyn owned =
 
 joinValueEqual : DynCtx -> JoinContext -> Option Loc -> Mono -> Mono -> Unit
 joinValueEqual dyn context loc left right =
-  let saved = !currentLoc
+  let saved = graphCtx.value.currentLocRef.value
   let _ = setLocIfSome loc
   let _ = noteNumlitCtx left right context
   let _ = unifyIn { dyn | dcJoin = Some context } left right
-  currentLoc := saved
+  graphCtx.value.currentLocRef := saved
 
 producedSlotCovariants : Mono -> List Bool
 producedSlotCovariants head = match headTyconMono head
@@ -23604,7 +23682,8 @@ inferMatch env scrutTy arms =
   let _ = match normalize scrutTy
     TVar _ =>
       perRun.value.matchChecksDeferred :=
-        (scrutTy, arms, !currentLoc) :: perRun.value.matchChecksDeferred.value
+        (scrutTy, arms, graphCtx.value.currentLocRef.value)
+          :: perRun.value.matchChecksDeferred.value
     _ => checkMatchChecks scrutTy arms
   result
 
@@ -23620,10 +23699,10 @@ checkMatchChecks scrutTy arms =
 checkDeferredMatches : List (Mono, List Arm, Option Loc) -> Unit
 checkDeferredMatches [] = ()
 checkDeferredMatches ((scrutTy, arms, loc) :: rest) =
-  let saved = !currentLoc
-  currentLoc := loc
+  let saved = graphCtx.value.currentLocRef.value
+  graphCtx.value.currentLocRef := loc
   let _ = checkMatchChecks scrutTy arms
-  currentLoc := saved
+  graphCtx.value.currentLocRef := saved
   checkDeferredMatches rest
 -- Type-aware exhaustiveness (`check_match`): run AFTER the arms have unified
 -- the scrutinee type, so `scrutTy` is fully resolved when we read its head.
@@ -23648,7 +23727,14 @@ checkMatchExhaustive scrutTy arms =
   ] then
     let (msg, help) = nonExhaustiveMsg scrutTy rows
     perRun.value.matchWarnings :=
-      writtenDiag (TcDiag "W-NONEXHAUSTIVE" 2 !currentLoc msg help None)
+      writtenDiag
+          (TcDiag
+            "W-NONEXHAUSTIVE"
+            2
+            graphCtx.value.currentLocRef.value
+            msg
+            help
+            None)
         :: perRun.value.matchWarnings.value
 
 -- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
@@ -23697,7 +23783,7 @@ checkRedundantGo col0 prec heads offCol ((Arm pat gs body) :: rest) =
         TcDiag
             "W-UNREACHABLE-ARM"
             2
-            (orElseLoc (exprLoc body) !currentLoc)
+            (orElseLoc (exprLoc body) graphCtx.value.currentLocRef.value)
             unreachableArmWarning
             None
             None
@@ -24954,12 +25040,12 @@ addVariants env tvs etbl paramTyIds rowEffvarIds authvarIds result ((Variant cna
   let _ = reportUnboundAuthorityNamesIn (payloadAstTypes payload) ctorEtbl
   -- a report from elaborating a field (a pattern slot a binder cannot fill)
   -- points at the constructor's fields
-  let saved = !currentLoc
+  let saved = graphCtx.value.currentLocRef.value
   let _ = match firstTyLocList (payloadAstTypes payload)
-    Some l => currentLoc := Some l
+    Some l => graphCtx.value.currentLocRef := Some l
     None => ()
   let ctorType = foldrFun (payloadTypesE ctorEtbl tvs payload) result
-  currentLoc := saved
+  graphCtx.value.currentLocRef := saved
   let env2 =
     addCtor
       env
@@ -29047,7 +29133,7 @@ pushCoherenceWarning loc msg =
     TcDiag
       "W-INCOMPARABLE-IMPLS"
       2
-      (orElseLoc loc !currentLoc)
+      (orElseLoc loc graphCtx.value.currentLocRef.value)
       msg
       (Some cohIncomparableHelp)
       None
@@ -43928,7 +44014,7 @@ inferClauseEff env peel (pats, body) =
   -- clause's (or a previous function's) body inference — mis-blaming an innocent
   -- sibling clause.  See the twin note in inferLam.
   let _ = match exprLoc body
-    Some l => currentLoc := Some l
+    Some l => graphCtx.value.currentLocRef := Some l
     None => ()
   let lits = takePatLits ()
   let pr = inferPats env pats
@@ -44009,7 +44095,7 @@ checkEffectEscapeIn group sigs m effs =
           group.gcPendingEscapes :=
             (
                 m,
-                !currentLoc,
+                graphCtx.value.currentLocRef.value,
                 effectEscapeMsg
                   m
                   (declaredEffects ty)
@@ -48803,19 +48889,21 @@ aliasEntriesFor _ _ _ = []
 -- values and an `import m.{…m's methods…}` is appended beside it, so the origin name is
 -- in scope for the occurrence `resolveAliasMethodSpellings` resolves it to.  A member
 -- alias's `DUse` is rewritten to its origin name by that same restore, after inference.
+-- Beside the rewritten modules it returns each module's admissions, which the drive's
+-- mint installs (`GraphCtx.graphAdmittedMethodsRef`, read by `admittedIn`).
 renameAliasedMethods : List Decl ->
   List (String, List Decl) ->
-  List (String, List Decl)
+  (OrdMap (List (String, String)), List (String, List Decl))
 renameAliasedMethods coreDecls modules =
   let coreEntry = ("core", declMethodNames coreDecls)
   let methodsPerMid = coreEntry :: methodsPerMidGo [coreEntry] modules
-  graphCtx.value.graphAdmittedMethodsRef :=
+  let admitted =
     omFromPairs
       (map
         ((mid, prog) => (mid, synthesizedAdmissions methodsPerMid prog))
         modules)
       omEmpty
-  map (renameAliasedMethodsIn methodsPerMid) modules
+  (admitted, map (renameAliasedMethodsIn methodsPerMid) modules)
 
 admittedIn : String -> List (String, String)
 admittedIn mid =
@@ -48896,8 +48984,8 @@ reexportedMethodsOf _ _ = []
 -- index, is overwritten whole at every Module-mode driver entry — there is one,
 -- `graphPreamble` — never merged, so compile N's rows cannot reach compile N+1, and a
 -- driver that skipped the write would read an empty index; (b) nothing resets it in
--- between — `GraphCtx` has no reset point, which is why the index is not on
--- `CrossRun` (`mintGraphCtx` cleared it between write and read: F1).  Both
+-- between — nothing resets a `GraphCtx` field within a drive, which is why the
+-- index is not on `CrossRun` (`mintGraphCtx` cleared it between write and read: F1).  Both
 -- halves, or neither.
 --
 -- No `pub` filter: a private interface's methods are carried too (F3), unlike
@@ -50677,9 +50765,11 @@ copyCrossRun c = CrossRun {
 }
 
 -- One chain step's graph snapshot: detached copies of the two sub-records and the
--- extern-name map, the rest of the record carried (a hit reads only those three).
+-- extern-name map (a hit reads only those three).  The other fields are the initial
+-- record's, not [c]'s: a step that carried them would keep its drive's whole
+-- declaration environment alive for as long as the memo holds the step.
 snapshotGraphCtx : GraphCtx -> GraphCtx
-snapshotGraphCtx c = GraphCtx { c |
+snapshotGraphCtx c = GraphCtx { initialGraphCtx initialEnv (freshGraphRun ()) |
   crossRun = copyCrossRun c.crossRun,
   graphRun = copyGraphRunForMemo c.graphRun,
   builtinExternNamesRef = Ref c.builtinExternNamesRef.value,
@@ -50808,34 +50898,41 @@ tcConfigOf domains inputs = TcConfig {
     "\{inputs.diProfileName}\n\{inputs.diFlatEntryIsStdlib}\n\{joinWith "," (omKeys inputs.diStdlibOwned)}",
 }
 
--- Mint the drive's graph record, once, at the head of `graphPreamble`.  The
--- cross-module accumulators survive the per-module `freshModuleCtx` (dict arities,
--- the universe, data and impl accumulators cross module boundaries within one
--- graph) but must not survive a drive: a long-lived process (LSP, playground,
--- snapshot runner) drives repeatedly, and drive K+1 would seed its first module from
--- drive K's residue while the `*Qual` mirrors grew without bound.  So `crossRun` is
--- fresh (`freshCrossRun` re-mints every field, so what resets is what `CrossRun`
--- holds) and `graphRun` starts a new lineage (`graphLineageRun`, keeping a
--- `markModules` lineage), and the trace sink is the drive's own.  Every `Ref` field
--- is carried by identity: the preamble writes the graph-derived ones in place below,
--- and the sticky pair and the rest keep the previous drive's values.
-mintGraphCtx : DriveInputs -> Unit
-mintGraphCtx inputs =
-  let prior = graphCtx.value
-  graphCtx := GraphCtx { prior |
-    crossRun = freshCrossRun initialEnv,
-    graphRun = graphLineageRun prior.graphRun.markedAhead prior.graphRun,
+-- Mint the drive's graph record, once, at the head of `graphPreamble`, from the
+-- drive's [inputs], the [admitted] map its driver computed (`renameAliasedMethods`;
+-- empty on the projections) and the interners, and nothing else of an earlier
+-- drive: a long-lived process (LSP, playground, snapshot runner, `medaka test`)
+-- drives repeatedly, and drive K+1 must not start from drive K's residue.  Every
+-- field is fresh (`initialGraphCtx`) except the trace sink and the admitted map,
+-- which are this drive's, the extern catalog, which is the interners' (a union over
+-- the process; see `noteBuiltinExternNames`), and `graphRun`, a new lineage from
+-- the interners' (`graphLineageRun`, keeping the base and cells of the run
+-- `markModules` returned when [inputs] carry it).  The module record restarts from
+-- the initial one, so a module checked without a seed (the core pass) starts from
+-- an empty oracle and no warnings.
+mintGraphCtx : DriveInputs -> OrdMap (List (String, String)) -> Unit
+mintGraphCtx inputs admitted =
+  let carried = interners.value
+  let base =
+    initialGraphCtx initialEnv (graphLineageRun inputs.diMarked carried.lineage)
+  perRun := initialModuleCtx ()
+  installGraphCtx GraphCtx { base |
     trace = inputs.diTrace,
+    graphAdmittedMethodsRef = Ref admitted,
+    builtinExternNamesRef = carried.externCatalog,
   }
 
+-- [admitted]: the per-module method admissions `renameAliasedMethods` computed for
+-- the drive's graph, or `omEmpty` on a drive that does not rename.
 graphPreamble : DriveInputs ->
+  OrdMap (List (String, String)) ->
   GraphOut ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), OrdMap (List VecObl), List Decl, MarkSets)
-graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
+graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- S-emit-interleave-leak (#2049), TREES only: THE EMIT DRIVER OWNS ITS OWN
   -- (empty) ctor oracle.  A module checked without a `CheckRunSeed` carries the
   -- previous module record's `matchOracle`, and the tree arm's core pass is one
@@ -50860,22 +50957,12 @@ graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
   -- `runEmitWith`'s own path (`compiler/entries/entry_support.mdk`), which never
   -- reads `hadTypeErrors` after the call.  Clean exit 0, SIGSEGV at runtime.
   --
-  -- Minting the empty oracle here means no reader can see a previous run's residue,
-  -- no matter which arm (or none) ran before.  It is what the CORE pass below runs
-  -- against; each USER module then overwrites it from its own decls
-  -- (`checkModuleFullDiags` → `seedCheckRun`).
-  --
-  -- `mainSchemeRef` is cleared for the same class of reason: the tree arm's
-  -- per-module write is Some-only (last module binding `main` wins), so without
-  -- this an earlier run's `main` would survive a graph that binds none.  The diags
-  -- arm needs no clear — its write is SET-OR-CLEAR (`setMainSchemeIfEntry`).
-  let _ = match sel
-    GOutTrees =>
-      graphCtx.value.mainSchemeRef := None
-      perRun.value.matchOracle := buildOracle []
-      ()
-    GOutDiags => ()
-  mintGraphCtx inputs
+  -- The mint below starts the module record from `initialModuleCtx`, whose oracle is
+  -- empty, so no reader can see a previous run's residue, no matter which arm (or
+  -- none) ran before.  It is what the core pass below runs against; each user
+  -- module then overwrites it from its own decls (`checkModuleFullDiags` →
+  -- `seedCheckRun`).
+  mintGraphCtx inputs admitted
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
   -- loop, so a module using an effect declared in ANOTHER module sees its domain.
@@ -50911,7 +50998,7 @@ graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
   graphCtx.value.mangledFunDefsPresentRef :=
     prelude.ppMangledFunDefs || graphCarriesMangledFunDefs modules
   -- #1112 A-3.1: the whole-graph declaration envelope, under the same two-part
-  -- property as the line above (`GraphCtx` has no reset point, and the
+  -- property as the line above (nothing resets it within the drive, and the
   -- Module-mode driver entry writes it unconditionally).  See `buildDeclEnvs`.  It
   -- carries the method namespace (`deMethods`) and the constructor export index
   -- (`deData.deCtorExports`), so it is written before any module — the core pass
@@ -50942,8 +51029,8 @@ graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
   -- through its own dictionary parameter on every verb.  The completeness judgment
   -- reads those routes, and a check driver that left such a body unpromoted would
   -- see `RNone` where the tree arm sees `RDict`.  The eligible set is written and
-  -- the harvest cleared on every drive, because `GraphCtx` has no reset point
-  -- and `maybeInferConstraint` reads the set.
+  -- the harvest cleared at the entry of every drive, which `maybeInferConstraint`
+  -- reads.
   let _ = setDictEligible (moduleUserFnNames modules)
   graphCtx.value.promotionHarvestRef := []
   -- The core pass.  The diags arm memoizes it under the caller's prelude key (see
@@ -50982,7 +51069,14 @@ checkModulesPreambleK : DriveInputs ->
   (List (String, Scheme), ModuleBindings)
 checkModulesPreambleK inputs preludeKey runtimeDecls coreDecls modules =
   let (runtimeSeed, coreSchemes, _, _, _, _) =
-    graphPreamble inputs GOutDiags preludeKey runtimeDecls coreDecls modules
+    graphPreamble
+      inputs
+      omEmpty
+      GOutDiags
+      preludeKey
+      runtimeDecls
+      coreDecls
+      modules
   (runtimeSeed, coreSchemes)
 
 -- worker: plain per-module typecheck (no diagnostics harvest, no accAll).  Surfaces
@@ -51121,7 +51215,14 @@ checkModulesPartialK : DriveInputs ->
 checkModulesPartialK inputs preludeKey runtimeDecls coreDecls0 modules0 =
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modules0
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _) =
-    graphPreamble inputs GOutDiags preludeKey runtimeDecls coreDecls modules
+    graphPreamble
+      inputs
+      omEmpty
+      GOutDiags
+      preludeKey
+      runtimeDecls
+      coreDecls
+      modules
   let rows = cmFold runtimeSeed coreSchemes modules
   partialAnalysis
     rows
@@ -51684,11 +51785,12 @@ checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys ru
   -- occurrence of such a name resolves to a different declaration than on the arm
   -- that renames.  A module's rewrite reads only its dependencies' method sets, so
   -- it is stable under the prefix the step memo resumes from.
-  let (coreDecls, modules) =
-    stampGraphDecls coreDecls0 (renameAliasedMethods coreDecls0 modules0)
+  let (admitted, modulesAliased) = renameAliasedMethods coreDecls0 modules0
+  let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _) =
     graphPreamble
       inputs
+      admitted
       GOutDiags
       (Some (rk, ck))
       runtimeDecls
@@ -52020,7 +52122,6 @@ driveGraphK : DriveInputs ->
   List (String, List Decl) ->
   GraphDrive
 driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn =
-  let stickyBefore = graphCtx.value.typeErrorsStickyDiags.value
   -- IMPORT ALIASING of an interface/impl METHOD — a method is global-by-name, so an
   -- alias of one is a second SPELLING, not a second binding.  A member alias and a
   -- module alias both keep their spelling through inference and are resolved at the
@@ -52031,7 +52132,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
   -- not a spelling one, so a selection that skips it typechecks a different program.
   -- Only the RESTORE (`resolveAliasMethodSpellings`) is tree-arm-only: it rewrites
   -- occurrences in trees the diags arm does not emit.
-  let modulesAliased = renameAliasedMethods coreDecls0 modulesIn
+  let (admitted, modulesAliased) = renameAliasedMethods coreDecls0 modulesIn
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  It is HERE, not in the preamble, because this is the seam the
@@ -52042,7 +52143,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
   -- minting in its final shape and no later pass has to re-mint.
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, coreTree, ms) =
-    graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules
+    graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: the worker reads BOTH accData (buildOracle `prog ++ accData`) and
   -- accAll (checkModuleFullImpl implDecls), and
   -- both are order-observable (oracle first-wins, implDecls scan order), so both
@@ -52129,7 +52230,8 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       -- Only the user modules go through it: core imports nothing, so it holds no
       -- alias-qualified spelling to restore.
       let modulesOut = map resolveAliasMethodSpellings modules3
-      let residual = stickyTypeErrorDiagsSince stickyBefore
+      let residual =
+        stickyDiagsInPushOrder graphCtx.value.typeErrorsStickyDiags.value
       -- read after `dictPass`, so it carries the `EMethodAt` nodes `dictPass` minted
       let evidence = drivenEvidence ()
       GraphDrive {
@@ -52232,16 +52334,16 @@ autoPrintWanted True executes findings perMod coreDecls modules =
         let scope =
           Scopes.freshScope (currentScopeStore ()) None 0 mid ModuleOwner
         let _ = openScope scope
-        let savedLoc = !currentLoc
+        let savedLoc = graphCtx.value.currentLocRef.value
         let loc = mainBodySpan entry
-        currentLoc := loc
+        graphCtx.value.currentLocRef := loc
         let posed = Ref None
         let diags = captureTypeErrors (_ =>
           posed := Some (judgeAutoPrintUse iface scheme loc))
         let ev = match (executes, diags, posed.value)
           (Some _, [], Some tau) => Some (autoPrintEvidence mid scope iface tau)
           _ => None
-        currentLoc := savedLoc
+        graphCtx.value.currentLocRef := savedLoc
         let _ = closeScope ()
         let reported = driveErrs findings perMod
         let kept =
@@ -52296,12 +52398,12 @@ asyncDriverFindings executes mid entry scheme perMod =
       let scope =
         Scopes.freshScope (currentScopeStore ()) None 0 mid ModuleOwner
       let _ = openScope scope
-      let savedLoc = !currentLoc
-      currentLoc := mainBodySpan entry
+      let savedLoc = graphCtx.value.currentLocRef.value
+      graphCtx.value.currentLocRef := mainBodySpan entry
       let diags = captureTypeErrors (_ =>
         let _ = judgeMainUse (asyncDriverUse driver) scheme
         ())
-      currentLoc := savedLoc
+      graphCtx.value.currentLocRef := savedLoc
       let _ = closeScope ()
       map (verdictFinding mid False) diags
     _ => []
@@ -53987,19 +54089,20 @@ shadowBareName sm n = match lookupAssoc n sm
 -- The mark sub-phase of elaborateModules (RKey-only): compute rpNames over the
 -- full module graph and prePassDict each module.  Exported so profiling drivers
 -- can bracket the mark phase vs the typecheck phase separately.  It opens the graph
--- lineage the cells it mints belong to and leaves it `markedAhead`, so the driver
--- it feeds (`checkModules`) keeps those cells when its preamble resets the graph.
+-- lineage the cells it mints belong to and returns that run beside the marked
+-- trees; the driver it feeds (`checkModules`) takes the run as `diMarked` and keeps
+-- those cells when its preamble mints the graph.
 export
 markModules : List Decl ->
   List (String, List Decl) ->
-  (List Decl, List (String, List Decl))
+  (List Decl, List (String, List Decl), GraphRun)
 markModules coreDecls modules =
-  installRun (graphLineageRun False graphCtx.value.graphRun)
+  installRun (graphLineageRun None interners.value.lineage)
   let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
   let core2 = prePassDict rpNames [] coreDecls
   let modules2 = map (prePassModulePair rpNames) modules
   installRun GraphRun { graphCtx.value.graphRun | markedAhead = True }
-  (core2, modules2)
+  (core2, modules2, graphCtx.value.graphRun)
 
 -- typecheck one module (seeded like checkModuleFull) AND immediately stamp the
 -- EMethodAt route refs it just recorded.  `recordModuleStart` marks the goal channel

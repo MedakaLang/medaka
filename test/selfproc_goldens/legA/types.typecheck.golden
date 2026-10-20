@@ -717,7 +717,7 @@ ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
 ctorSiblingWithholds : HeadKey -> String -> String -> Bool
 ctorsByHead : List Scheme -> Map String (List (List Mono, List Mono))
 ctorsOfHead : HeadKey -> Option (List String)
-currentLoc : Ref (Option Loc)
+currentLocIsSet : Unit -> Bool
 currentModuleMarks : Unit -> GraphMarks
 currentScopeStore : Unit -> ScopeStore
 cyclicSuperIfaceMsg : List String -> String
@@ -1380,10 +1380,10 @@ graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCollect : GraphOut -> Bool -> String -> (List Decl, List (String, PubScheme), List TcDiag, List TcDiag) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag))) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)))
 graphCtx : Ref GraphCtx
-graphLineageRun : Bool -> GraphRun -> GraphRun
+graphLineageRun : Option GraphRun -> Lineage -> GraphRun
 graphMarksNow : Unit -> GraphMarks
 graphModuleWorker : GraphOut -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag))
-graphPreamble : DriveInputs -> GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), Map String (List VecObl), List Decl, MarkSets)
+graphPreamble : DriveInputs -> Map String (List (String, String)) -> GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), Map String (List VecObl), List Decl, MarkSets)
 graphPubDefiners : String -> List (String, (String, String))
 groundAdmittedGo : TcEnv -> String -> List IfaceRef -> List Mono -> Option Loc -> Unit
 groundAdmittedReceivers : TcEnv -> String -> List Mono -> Option Loc -> Unit
@@ -1759,7 +1759,7 @@ inferredPredicateSlotsProbe : Unit -> List (String, List String, List String)
 inferredSlotBuckets : List PredicateSlot -> Map String (List PredicateSlot) -> Map String (List PredicateSlot)
 inferredSlotCoveredIds : List PredicateSlot -> Map String Unit -> Map String Unit
 initialEnv : TcEnv
-initialGraphCtx : TcEnv -> GraphCtx
+initialGraphCtx : TcEnv -> GraphRun -> GraphCtx
 initialModuleCtx : Unit -> ModuleCtx
 innerAliases : Obligation -> EvCell -> Bool
 innerDefaultMethod : String -> String
@@ -1805,6 +1805,8 @@ instantiateVarTrackedWithSubst : TcEnv -> String -> Int -> Scheme -> MethodTrack
 instantiatedMethodPredicate : MethodPredicateSlot -> List (Int, Mono) -> List (Int, Mono) -> PredicateSlot
 instantiatedMethodPredicateArgs : PredicateSlotArgs -> List (Int, Mono) -> PredicateSlotArgs
 intercalateComma : List String -> String
+interners : Ref Interners
+internersOf : GraphCtx -> Interners
 interpEVars : InterpPart -> List String
 intersectDeclAtoms : List (List Atom) -> List Atom
 invocationHeadKey : Mono -> String
@@ -2007,7 +2009,7 @@ markBinders : Ref (Map Int Unit) -> List (Ref Authvar) -> Unit
 markClauseWith : ArgRw -> (List Pat, Expr) -> (List Pat, Expr)
 markDictNames : List String -> List Decl -> List (String, List Decl) -> List String
 markGroupClauses : ModuleMarking -> TcEnv -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
-markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), GraphRun)
 markNumlitOpTaint : Mono -> Unit
 markRecursiveOccurrences : ModuleMarking -> List (String, Mono) -> List ScopedMember -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 markSetsOf : PreludeMarkFacts -> List Decl -> List (String, List Decl) -> List Decl -> MarkSets
@@ -2203,7 +2205,7 @@ methodsPerMidGo : List (String, List String) -> List (String, List Decl) -> List
 minLevelOf : List (Ref Effvar) -> Int
 mintDictAt : (String -> EvId -> Unit) -> String -> Expr
 mintGrantOnly : String -> Expr
-mintGraphCtx : DriveInputs -> Unit
+mintGraphCtx : DriveInputs -> Map String (List (String, String)) -> Unit
 mintHeadSite : Unit -> EvId
 mintLitSite : Unit -> EvId
 mintMethodCell : String -> EvId
@@ -2789,7 +2791,7 @@ rejectCyclicAliases : Unit -> Unit
 rejectUndeterminedVectors : Map String Unit -> Map String Unit -> List UObligation -> List UObligation -> Unit
 rejectWithheldAmbiguity : Map String Unit -> List Mono -> List UObligation -> Unit
 removeAllS : List String -> List String -> List String
-renameAliasedMethods : List Decl -> List (String, List Decl) -> List (String, List Decl)
+renameAliasedMethods : List Decl -> List (String, List Decl) -> (Map String (List (String, String)), List (String, List Decl))
 renameAliasedMethodsIn : List (String, List String) -> (String, List Decl) -> (String, List Decl)
 renameMethodVar : List (String, String) -> List (String, String) -> Expr -> Expr
 renameParam : Mono -> Mono -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
@@ -2850,7 +2852,6 @@ requiresNonShrinkingFuel : Int
 requiresRouteWalkCut : ReqStep -> List Route
 requiresUnroutedMsg : IfaceRef -> List Mono -> String
 requiringImplLabel : IfaceRef -> List Mono -> String
-resetTypeErrorsSticky : Unit -> Unit
 residualBoundPreds : SiteCtx -> Bool -> List Int -> IfaceRef -> List Mono -> Option Loc -> List (IfaceRef, List Int, List Mono)
 residualFailureMsg : String -> String -> String -> String
 residualInferredPredOf : List Int -> (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
@@ -3140,8 +3141,8 @@ standaloneValueBindingEmit : TcEnv -> String -> Ref Route -> Option ValueScheme
 standaloneValueFor : TcEnv -> String -> String -> Option ValueScheme
 standaloneValuePinned : TcEnv -> String -> Bool
 starSpelling : String -> Option String -> String
+stickyDiagsInPushOrder : List (String, TcDiag) -> List (String, TcDiag)
 stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
-stickyTypeErrorDiagsSince : List (String, TcDiag) -> List (String, TcDiag)
 stmtCalleeName : Expr -> Option String
 stripArrows : Mono -> Mono
 stripEff : Ty -> Ty

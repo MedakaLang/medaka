@@ -115,7 +115,6 @@ import types.typecheck.{
   methodReturnMemoRetentionStats,
   methodReturnMemoTeardownStats,
   methodReturnTemplatePresenceProbe,
-  resetTypeErrorsSticky,
   scopeFrameStats,
   scopeTraceContext,
   spanKeys,
@@ -4022,11 +4021,8 @@ drainCheck inputs body =
 
 drainStickyObserved : List String -> List String
 drainStickyObserved body =
-  let _ = resetTypeErrorsSticky ()
   let outputs = drainCheck defaultDriveInputs body
-  let raised = map (entry => tcMsg (snd entry)) (stickyTypeErrorDiags outputs)
-  let _ = resetTypeErrorsSticky ()
-  raised
+  map (entry => tcMsg (snd entry)) (stickyTypeErrorDiags outputs)
 
 drainInferredSchemeSource : List String
 drainInferredSchemeSource = [
@@ -5876,9 +5872,15 @@ preMarkedModules = [
 ]
 
 -- The profiler's order: the mark pre-pass on its own, then the typecheck of the
--- marked trees, whose preamble resets the graph.
+-- marked trees, whose inputs carry the marked run.
 test "checkModules completes over modules markModules marked first" =
-  let (core2, mods2) = markModules [] preMarkedModules
+  let (core2, mods2, marked) = markModules [] preMarkedModules
   expectEqual
     ["pre_a", "pre_b"]
-    (map fst (checkModules defaultDriveInputs [] core2 mods2))
+    (map
+      fst
+      (checkModules
+        { defaultDriveInputs | diMarked = Some marked }
+        []
+        core2
+        mods2))
