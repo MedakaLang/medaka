@@ -8030,6 +8030,11 @@ installCross c = graphCtx := GraphCtx { graphCtx.value | crossRun = c }
 installRun : GraphRun -> Unit
 installRun r = graphCtx := GraphCtx { graphCtx.value | graphRun = r }
 
+-- Install [c] as the current drive's record: the one write a memo hit's returned
+-- value goes through.
+installGraphCtx : GraphCtx -> Unit
+installGraphCtx c = graphCtx := c
+
 -- Install both sub-records, keeping the rest of the record.
 installSubRecords : CrossRun -> GraphRun -> Unit
 installSubRecords c r =
@@ -50635,26 +50640,54 @@ copyCrossRun c = CrossRun {
   crossModuleSchemeOblsQualRef = Ref c.crossModuleSchemeOblsQualRef.value,
 }
 
+-- One chain step's graph snapshot: detached copies of the two sub-records and the
+-- extern-name map, the rest of the record carried (a hit reads only those three).
+snapshotGraphCtx : GraphCtx -> GraphCtx
+snapshotGraphCtx c = GraphCtx { c |
+  crossRun = copyCrossRun c.crossRun,
+  graphRun = copyGraphRunForMemo c.graphRun,
+  builtinExternNamesRef = Ref c.builtinExternNamesRef.value,
+}
+
+-- The record a memo hit continues from: [cur] (this drive's, whose preamble fields
+-- this drive derived) with detached copies of the snapshot's sub-records and
+-- extern-name map applied.  Never the stored record whole.
+restoreGraphCtx : GraphCtx ->
+  CrossRun ->
+  GraphRun ->
+  OrdMap (Ty, List (String, Int)) ->
+  GraphCtx
+restoreGraphCtx cur cross run externs = GraphCtx { cur |
+  crossRun = copyCrossRun cross,
+  graphRun = copyGraphRun run,
+  builtinExternNamesRef = Ref externs,
+}
+
 -- The core pass proper, memoized.  Runs `checkModuleFull` over core and snapshots
--- `coreSchemeObligationsRef` on a miss; installs the snapshot on a hit: copies of
--- the two sub-records, core's module record, and the one graph field the core pass
--- (checkBodyImpl and what it calls) writes, the extern-name map, so a hit leaves the
--- record exactly where a miss would.  Beside the
--- bindings inference reads, it returns the prelude's published rows, frozen once
--- after the drain closed core; a hit returns the stored frozen copy.
+-- `coreSchemeObligationsRef` on a miss; on a hit it restores core's module record
+-- and returns the record to continue from (`restoreGraphCtx`: copies of the two
+-- sub-records and the one graph field the core pass (checkBodyImpl and what it
+-- calls) writes, the extern-name map), so a hit leaves the record exactly where a
+-- miss would; on a miss the record is the current one, written in place.  The
+-- caller installs it.  Beside the bindings inference reads, it returns the
+-- prelude's published rows, frozen once after the drain closed core; a hit returns
+-- the stored frozen copy.
 checkCoreMemoized : Option (Int, Int) ->
   List Decl ->
   List (String, Scheme) ->
-  (ModuleBindings, List (String, PubScheme))
+  (ModuleBindings, List (String, PubScheme), GraphCtx)
 checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
   Some m =>
-    let _ =
-      installSubRecords
-        (copyCrossRun m.ccmCrossRun)
-        (copyGraphRun m.ccmGraphRun)
     let _ = installSnapshotModuleCtx m.ccmModule
-    graphCtx.value.builtinExternNamesRef := m.ccmBuiltinExternNames
-    (m.ccmCoreSchemes, m.ccmCorePub)
+    (
+      m.ccmCoreSchemes,
+      m.ccmCorePub,
+      restoreGraphCtx
+        graphCtx.value
+        m.ccmCrossRun
+        m.ccmGraphRun
+        m.ccmBuiltinExternNames,
+    )
   None =>
     -- #2705: core is marked inside the pass, on the miss, with the unsplit set
     -- (`moduleMarkCtx`'s core arm) — so its cells are minted into the graph the
@@ -50689,7 +50722,7 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
           ccmBuiltinExternNames = graphCtx.value.builtinExternNamesRef.value,
           ccmModule = carryModuleCtx perRun.value,
         }
-    (coreSchemes, corePub)
+    (coreSchemes, corePub, graphCtx.value)
 
 preludePreambleMemoRef : Ref (Option (((Int, Int), String), PreludePreamble))
 preludePreambleMemoRef = Ref None
@@ -50886,8 +50919,9 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- written to `CrossRun.coreSchemeObligationsRef`, which inference reads.
   let (coreSchemes, corePub, coreContexts, coreTree) = match sel
     GOutDiags =>
-      let (bindings, published) =
+      let (bindings, published, ctx) =
         checkCoreMemoized preludeKey coreDecls runtimeSeed
+      let _ = installGraphCtx ctx
       (
         bindings,
         Some published,
@@ -51432,7 +51466,7 @@ methodReturnMemoGraphStats graph = (
 methodReturnChainStats : List ChainStep -> (Int, Int, Int)
 methodReturnChainStats [] = (0, 0, 0)
 methodReturnChainStats (step :: rest) =
-  let (carriers, summaries) = methodReturnMemoGraphStats step.csGraphRun
+  let (carriers, summaries) = methodReturnMemoGraphStats step.csCtx.graphRun
   let (restCarriers, restSummaries, restSteps) = methodReturnChainStats rest
   (carriers + restCarriers, summaries + restSummaries, restSteps + 1)
 
@@ -51609,16 +51643,22 @@ checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDe
     None => []
   let (kept, restored) =
     matchingStepPrefix (st => st.csKey) steps stepKeys (listLen modules)
-  let (depEnv, accData, accAll, results) = match restored
-    None => ([], publicDataDecls coreDecls, coreDecls, [])
+  let (depEnv, accData, accAll, results, resumeCtx) = match restored
+    None => ([], publicDataDecls coreDecls, coreDecls, [], graphCtx.value)
     Some st =>
-      let _ =
-        installSubRecords
-          (copyCrossRun st.csCrossRun)
-          (copyGraphRun st.csGraphRun)
       let _ = installSnapshotModuleCtx st.csModule
-      graphCtx.value.builtinExternNamesRef := st.csBuiltinExternNames
-      (st.csDepEnv, st.csAccData, st.csAccAll, st.csResults)
+      (
+        st.csDepEnv,
+        st.csAccData,
+        st.csAccAll,
+        st.csResults,
+        restoreGraphCtx
+          graphCtx.value
+          st.csCtx.crossRun
+          st.csCtx.graphRun
+          st.csCtx.builtinExternNamesRef.value,
+      )
+  let _ = installGraphCtx resumeCtx
   let n = listLen kept
   -- A restored step's rows were frozen when it was recorded, so nothing is open.
   let (finalResults, open, newSteps) =
@@ -51736,9 +51776,7 @@ chainGo baseSeed coreV depEnv accData accAll results open keys ((mid, prog) :: r
         csAccData = accData2,
         csAccAll = accAll2,
         csResults = results3,
-        csCrossRun = copyCrossRun graphCtx.value.crossRun,
-        csGraphRun = copyGraphRunForMemo graphCtx.value.graphRun,
-        csBuiltinExternNames = graphCtx.value.builtinExternNamesRef.value,
+        csCtx = snapshotGraphCtx graphCtx.value,
         csModule = carryModuleCtx perRun.value,
       }
       let (finalResults, finalOpen, moreSteps) =
