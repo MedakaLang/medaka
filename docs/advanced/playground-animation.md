@@ -24,12 +24,15 @@ This program runs in the playground's canvas host:
 
 ```medaka
 import animation.{animate}
-import graphics.{Picture, picture, rgba, circle, point}
+import graphics.{Color(..), Picture(..), Point(..), Shape(..)}
 
 scene : Float -> Picture
 scene seconds =
-  picture (rgba 0.02 0.04 0.08 1.0)
-    [circle (rgba 0.3 0.85 1.0 1.0) (point (80.0 * sin seconds) 0.0) 20.0]
+  Picture {
+    background = Color { red = 0.02, green = 0.04, blue = 0.08, alpha = 1.0 },
+    shapes = [Circle (Color { red = 0.3, green = 0.85, blue = 1.0, alpha = 1.0 })
+      (Point { x = 80.0 * sin seconds, y = 0.0 }) 20.0],
+  }
 
 main = animate scene
 ```

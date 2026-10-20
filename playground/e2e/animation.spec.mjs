@@ -7,22 +7,41 @@ import { ANIMATION_EXAMPLES } from '../animation_examples.mjs';
 const [, , baseUrl, screenshotDir] = process.argv;
 if (!baseUrl || !screenshotDir) throw new Error('usage: node animation.spec.mjs <base-url> <screenshots-dir>');
 const scene = `import animation.{animateWith, Frame}
-import graphics.{Picture, picture, rgba, circle, point, polygon}
+import graphics.{Color(..), Picture(..), Point(..), Shape(..)}
 
 scene : Frame -> Picture
 scene frame =
   let red = if frame.pointer.down then 1.0 else 0.0
-  picture (rgba red 0.0 0.0 1.0)
-    [circle (rgba 0.0 1.0 0.0 1.0) (point (frame.elapsed * 80.0) 0.0) 20.0,
-      polygon (rgba 0.0 0.5 1.0 1.0) [point -35.0 -25.0, point -5.0 -25.0, point -20.0 5.0]]
+  let green = Color {
+    red = 0.0, green = 1.0, blue = 0.0, alpha = 1.0,
+  }
+  let blue = Color {
+    red = 0.0, green = 0.5, blue = 1.0, alpha = 1.0,
+  }
+  Picture {
+    background = Color { red = red, green = 0.0, blue = 0.0, alpha = 1.0 },
+    shapes = [
+      Circle green (Point { x = frame.elapsed * 80.0, y = 0.0 }) 20.0,
+      Polygon blue [
+        Point { x = -35.0, y = -25.0 },
+        Point { x = -5.0, y = -25.0 },
+        Point { x = -20.0, y = 5.0 },
+      ],
+    ],
+  }
 
 main = animateWith scene
 `;
 const staticPicture = `import animation.{drawing}
-import graphics.{picture, rgba, point, polygon}
-main = drawing (picture (rgba 0.0 0.0 0.0 1.0) [
-  polygon (rgba 0.0 0.5 1.0 1.0) [point -35.0 -25.0, point -5.0 -25.0, point -20.0 5.0],
-])
+import graphics.{Color(..), Picture(..), Point(..), Shape(..)}
+main = drawing (Picture {
+  background = Color { red = 0.0, green = 0.0, blue = 0.0, alpha = 1.0 },
+  shapes = [Polygon (Color { red = 0.0, green = 0.5, blue = 1.0, alpha = 1.0 }) [
+    Point { x = -35.0, y = -25.0 },
+    Point { x = -5.0, y = -25.0 },
+    Point { x = -20.0, y = 5.0 },
+  ]],
+})
 `;
 const runaway = `loop : Int -> Int
 loop n = loop (n + 1)

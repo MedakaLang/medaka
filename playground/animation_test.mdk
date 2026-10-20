@@ -1,5 +1,5 @@
 import animation.{Frame(..), Pointer(..), Simulation, simulation}
-import graphics.{Picture, circle, picture, point, rgba}
+import graphics.{Color(..), Picture(..), Point(..), Shape(..)}
 import test.{expectAll, expectEqual, expectWithin}
 
 frame : Frame
@@ -15,9 +15,15 @@ update : Frame -> Float -> Float
 update input model = model + input.delta * 20.0
 
 view : Frame -> Float -> Picture
-view input model = picture (rgba 0.0 0.0 0.0 0.0) [
-  circle (rgba 1.0 0.0 0.0 1.0) (point model input.pointer.y) 5.0,
-]
+view input model = Picture {
+  background = Color { red = 0.0, green = 0.0, blue = 0.0, alpha = 0.0 },
+  shapes = [
+    Circle
+      Color { red = 1.0, green = 0.0, blue = 0.0, alpha = 1.0 }
+      Point { x = model, y = input.pointer.y }
+      5.0,
+  ],
+}
 
 countedUpdate : Ref Int -> Frame -> Float -> Float
 countedUpdate calls input model =
@@ -42,9 +48,15 @@ test "pointer retains centered coordinates and button state" =
 
 test "initial model view uses the model without an update" =
   expectEqual
-    (picture (rgba 0.0 0.0 0.0 0.0) [
-      circle (rgba 1.0 0.0 0.0 1.0) (point 10.0 -20.0) 5.0,
-    ])
+    Picture {
+      background = Color { red = 0.0, green = 0.0, blue = 0.0, alpha = 0.0 },
+      shapes = [
+        Circle
+          Color { red = 1.0, green = 0.0, blue = 0.0, alpha = 1.0 }
+          Point { x = 10.0, y = -20.0 }
+          5.0,
+      ],
+    }
     (view frame 10.0)
 
 test "one update then view uses the delivered delta once" =
@@ -52,9 +64,15 @@ test "one update then view uses the delivered delta once" =
   expectAll [
     expectWithin 11.0 next 1e-06,
     expectEqual
-      (picture (rgba 0.0 0.0 0.0 0.0) [
-        circle (rgba 1.0 0.0 0.0 1.0) (point 11.0 -20.0) 5.0,
-      ])
+      Picture {
+        background = Color { red = 0.0, green = 0.0, blue = 0.0, alpha = 0.0 },
+        shapes = [
+          Circle
+            Color { red = 1.0, green = 0.0, blue = 0.0, alpha = 1.0 }
+            Point { x = 11.0, y = -20.0 }
+            5.0,
+        ],
+      }
       (view frame next),
   ]
 

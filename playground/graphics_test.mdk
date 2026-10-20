@@ -1,51 +1,11 @@
-import graphics.{
-  Color(..), Picture(..), Point(..), Shape(..), circle, line, picture, point,
-  polygon, rgba
-}
-import test.{expectAll, expectEqual, expectWithin}
+import graphics.{Color(..)}
+import test.{expectAll, expectWithin}
 
-ink : Color
-ink = rgba 0.2 0.4 0.6 0.8
-
-test "point preserves logical coordinates" =
-  expectEqual Point { x = -12.5, y = 30.0 } (point -12.5 30.0)
-
-test "rgba preserves straight color channels" =
-  expectEqual Color { red = 0.2, green = 0.4, blue = 0.6, alpha = 0.8 } ink
-
-test "line preserves stroke width and endpoints" =
-  expectEqual
-    (Line ink 2.0 (point 1.0 2.0) (point 3.0 4.0))
-    (line ink 2.0 (point 1.0 2.0) (point 3.0 4.0))
-
-test "circle preserves center and radius" =
-  expectEqual (Circle ink (point 3.0 4.0) 5.0) (circle ink (point 3.0 4.0) 5.0)
-
-test "polygon preserves vertex order" =
-  let points = [point 0.0 0.0, point 10.0 0.0, point 0.0 10.0]
-  expectEqual (Polygon ink points) (polygon ink points)
-
-test "picture preserves background and painting order" =
-  let shapes = [circle ink (point 0.0 0.0) 4.0, polygon ink []]
-  expectEqual Picture { background = ink, shapes = shapes } (picture ink shapes)
-
-test "degenerate shapes remain ordinary pure data" = expectAll [
-  expectEqual (Circle ink (point 0.0 0.0) 0.0) (circle ink (point 0.0 0.0) 0.0),
-  expectEqual (Polygon ink []) (polygon ink []),
-  expectEqual (Polygon ink [point 1.0 2.0]) (polygon ink [point 1.0 2.0]),
-  expectEqual
-    (Polygon ink [point 1.0 2.0, point 3.0 4.0])
-    (polygon ink [point 1.0 2.0, point 3.0 4.0]),
-]
-
-test "invalid shape scalars are preserved for host validation" =
-  let invalid = rgba -1.0 2.0 0.0 1.5
+test "public color constructor preserves channels for host validation" =
+  let color = Color { red = -1.0, green = 2.0, blue = 0.0, alpha = 1.5 }
   expectAll [
-    expectWithin -1.0 invalid.red 0.0,
-    expectEqual
-      (Line invalid 0.0 (point 1000001.0 0.0) (point 0.0 0.0))
-      (line invalid 0.0 (point 1000001.0 0.0) (point 0.0 0.0)),
-    expectEqual
-      (Circle ink (point 0.0 0.0) -2.0)
-      (circle ink (point 0.0 0.0) -2.0),
+    expectWithin -1.0 color.red 0.0,
+    expectWithin 2.0 color.green 0.0,
+    expectWithin 0.0 color.blue 0.0,
+    expectWithin 1.5 color.alpha 0.0,
   ]

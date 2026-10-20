@@ -1,7 +1,7 @@
 export const ANIMATION_EXAMPLES = {
   cube: `-- Eight vertices and twelve edges, rotated before perspective projection.
 import animation.{animateWith, Frame}
-import graphics.{Picture, Point, picture, rgba, line, point}
+import graphics.{Color(..), Picture(..), Point(..), Shape(..)}
 
 data Vec3 = Vec3 Float Float Float
 
@@ -14,7 +14,7 @@ project angle tilt size (Vec3 x y z) =
   let sx = rx * cos 0.12 - ry * sin 0.12
   let sy = rx * sin 0.12 + ry * cos 0.12
   let scale = size * 8.0 / (8.0 + depth)
-  point (sx * scale) (sy * scale)
+  Point { x = sx * scale, y = sy * scale }
 
 scene : Frame -> Picture
 scene frame =
@@ -30,27 +30,33 @@ scene frame =
   let f = project angle tilt size (Vec3 1.0 -1.0 1.0)
   let g = project angle tilt size (Vec3 1.0 1.0 1.0)
   let h = project angle tilt size (Vec3 -1.0 1.0 1.0)
-  let ink = rgba 0.3 0.85 1.0 1.0
-  picture (rgba 0.025 0.035 0.07 1.0) [
-    line ink 2.0 a b,
-    line ink 2.0 b c,
-    line ink 2.0 c d,
-    line ink 2.0 d a,
-    line ink 2.0 e f,
-    line ink 2.0 f g,
-    line ink 2.0 g h,
-    line ink 2.0 h e,
-    line ink 2.0 a e,
-    line ink 2.0 b f,
-    line ink 2.0 c g,
-    line ink 2.0 d h,
-  ]
+  let ink = Color { red = 0.3, green = 0.85, blue = 1.0, alpha = 1.0 }
+  let background = Color {
+    red = 0.025,
+    green = 0.035,
+    blue = 0.07,
+    alpha = 1.0,
+  }
+  Picture { background = background, shapes = [
+    Line ink 2.0 a b,
+    Line ink 2.0 b c,
+    Line ink 2.0 c d,
+    Line ink 2.0 d a,
+    Line ink 2.0 e f,
+    Line ink 2.0 f g,
+    Line ink 2.0 g h,
+    Line ink 2.0 h e,
+    Line ink 2.0 a e,
+    Line ink 2.0 b f,
+    Line ink 2.0 c g,
+    Line ink 2.0 d h,
+  ] }
 
 main = animateWith scene
 `,
   lissajous: `-- A closed curve sampled at 96 evenly spaced parameter values.
 import animation.{animateWith, Frame}
-import graphics.{Picture, Point, Shape, picture, rgba, line, circle, point}
+import graphics.{Color(..), Picture(..), Point(..), Shape(..)}
 
 sampleCount : Int
 sampleCount = 96
@@ -60,29 +66,31 @@ angleStep = 2.0 * pi / intToFloat sampleCount
 
 sample : Frame -> Float -> Point
 sample frame u =
-  point
-    (frame.width * 0.38 * sin (3.0 * u + frame.elapsed))
-    (frame.height * 0.38 * sin (2.0 * u))
+  Point {
+    x = frame.width * 0.38 * sin (3.0 * u + frame.elapsed),
+    y = frame.height * 0.38 * sin (2.0 * u),
+  }
 
 segment : Frame -> Int -> Shape
 segment frame index =
   let u = intToFloat index * angleStep
   let v = intToFloat (index + 1) * angleStep
-  line (rgba 0.95 0.45 0.7 1.0) 2.0 (sample frame u) (sample frame v)
+  Line (Color { red = 0.95, green = 0.45, blue = 0.7, alpha = 1.0 }) 2.0 (sample frame u) (sample frame v)
 
 scene : Frame -> Picture
 scene frame =
   let lastIndex = sampleCount - 1
-  picture
-    (rgba 0.04 0.025 0.06 1.0)
-    (map (segment frame) [0..=lastIndex]
-      ++ [circle (rgba 1.0 0.9 0.6 1.0) (sample frame frame.elapsed) 5.0])
+  Picture {
+    background = Color { red = 0.04, green = 0.025, blue = 0.06, alpha = 1.0 },
+    shapes = map (segment frame) [0..=lastIndex]
+      ++ [Circle (Color { red = 1.0, green = 0.9, blue = 0.6, alpha = 1.0 }) (sample frame frame.elapsed) 5.0],
+  }
 
 main = animateWith scene
 `,
   balls: `-- Deterministic wall bounces. Hold the primary pointer to pull the balls.
 import animation.{Frame, Simulation, simulation, runSimulation}
-import graphics.{Picture, Color, Shape, picture, rgba, circle, point}
+import graphics.{Color(..), Picture(..), Point(..), Shape(..)}
 
 data Ball = Ball {
   x : Float,
@@ -101,7 +109,7 @@ initial = [
     vx = 110.0,
     vy = 75.0,
     radius = 14.0,
-    color = rgba 0.3 0.85 1.0 1.0,
+    color = Color { red = 0.3, green = 0.85, blue = 1.0, alpha = 1.0 },
   },
   Ball {
     x = 65.0,
@@ -109,7 +117,7 @@ initial = [
     vx = -85.0,
     vy = 120.0,
     radius = 20.0,
-    color = rgba 1.0 0.55 0.3 1.0,
+    color = Color { red = 1.0, green = 0.55, blue = 0.3, alpha = 1.0 },
   },
   Ball {
     x = 0.0,
@@ -117,7 +125,7 @@ initial = [
     vx = 65.0,
     vy = -95.0,
     radius = 11.0,
-    color = rgba 0.65 1.0 0.45 1.0,
+    color = Color { red = 0.65, green = 1.0, blue = 0.45, alpha = 1.0 },
   },
 ]
 
@@ -145,10 +153,13 @@ update : Frame -> List Ball -> List Ball
 update frame balls = map (stepBall frame) balls
 
 drawBall : Ball -> Shape
-drawBall ball = circle ball.color (point ball.x ball.y) ball.radius
+drawBall ball = Circle ball.color (Point { x = ball.x, y = ball.y }) ball.radius
 
 view : Frame -> List Ball -> Picture
-view _ balls = picture (rgba 0.025 0.05 0.045 1.0) (map drawBall balls)
+view _ balls = Picture {
+  background = Color { red = 0.025, green = 0.05, blue = 0.045, alpha = 1.0 },
+  shapes = map drawBall balls,
+}
 
 -- Keep this binding outside main so the model survives the next frame.
 app : Simulation (List Ball)
