@@ -288,11 +288,11 @@ this is the #158/#176 design, and it landed.
 | `PerRun` *(now `ModuleCtx`)* | 63 | HM counters + level; the 8 `pending*` route channels; 4 `Windowed` obligation channels; the 5 `numlit*` defaulting cells; shadow tables; per-module registries | `resetState` re-mints via `freshPerRun` *(both since gone: `checkBodyImpl` mints `freshModuleCtx` once per module)* |
 | `CrossRun` | 25 | 15 `universe*` accumulators, 6 `crossModule*` constraint tables (each a bare/`Qual` **pair**), 3 `obUniv*`, and `coreSchemeObligationsRef` | survives the per-module mint by design (`resetState`, since deleted) |
 | `DriverState` *(since replaced by `GraphCtx`, which `mintGraphCtx` re-mints per graph drive)* | 18 | driver-mode flags, the match oracle + warnings, promotion harvest, `main` scheme, dict-eligibility sets | survives; re-minted per driver entry |
-| toggles *(now `DynCtx`)* | 3 | dynamic-scope suppression flags, now the `DynCtx` fields `dcSuppressRLocalRecord`, `dcSuppressArgStamp`, `dcShadowHeadCtx` that `TcEnv` carries, so no save/restore remains | none: `initialEnv` and `withCtors` start from `noDyn` |
+| toggles *(now `DynCtx`)* | 3 | dynamic-scope suppression flags, now the `DynCtx` fields `dcSuppressRLocalRecord`, `dcSuppressArgStamp`, `dcShadowHeadCtx` that `TcEnv` carries, so no save/restore remains | none: `envFor` and `withCtors` start from `dynFor` |
 | *(loose)* | **7** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, and the toggles cell, since deleted; the bundles have since been reorganised, see `types/CELL-LIFETIMES.md`) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc` | varies |
 
 **The seven cells with no single owning function** (≥6 distinct writers) are the residual
-state-discipline debt: `perRun` (56 writers), `driverState` (14, since `graphCtx`), `currentLoc` (8),
+state-discipline debt (`perRun` since replaced by `ModuleCtx` as a parameter): `perRun` (56 writers), `driverState` (14, since `graphCtx`), `currentLoc` (8),
 `typeErrorsSticky` (8), `crossRun` (7), the toggles cell (6, since deleted), `funConstraintsRef` (6).
 
 ⚠️ Two granularities are mixed in that list: `funConstraintsRef` is a `PerRun` *field* (now `ModuleCtx`), so
@@ -586,7 +586,7 @@ One function, 347 lines, reached from `checkModuleFullImpl`. It dominates **835
 functions / 10,917 lines — 58% of the file — and 110 of 118 state cells (93%)**.
 It directly touches 46 cells.
 
-It opens with the `ModuleCtx` mint (`perRun := freshModuleCtx …`); `mid`, `implDecls`, and `prog0` carry the current
+It opens with the `ModuleCtx` mint (`checkBodyImpl` mints `freshModuleCtx …` and passes it down as `mctx`; the former `perRun` cell is deleted); `mid`, `implDecls`, and `prog0` carry the current
 module and its graph-visible declaration universe. The phases are:
 
 ```

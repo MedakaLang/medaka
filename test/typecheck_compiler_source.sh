@@ -921,60 +921,48 @@ echo "  ok: $prim_n distinct tconBuiltin head(s), all in resolve's primitiveType
 predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
 tc_types_src="$ROOT/compiler/types/tc_types.mdk"
 eval_src="$ROOT/compiler/eval/eval.mdk"
-predicate_slot_required='registerReqSlots : ScopeId ->
+predicate_slot_required='registerReqSlots : ModuleCtx ->
   List (String, Mono) ->
   Int ->
   List Require ->
   Unit
     psArgs = PSArgsKnown argMonos,
     psBoundIds = ids,
-setFunConstraintEntry : String -> List PredicateSlot -> Unit
+setFunConstraintEntry : ModuleCtx -> String -> List PredicateSlot -> Unit
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
-recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
-dedupPredicateSlotEntry : (String, List PredicateSlot) ->
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
 && sameIfaceDecl request.prIface slot.psIface
 monoVecSameGiven requestArgs slotArgs
 givensForScope : ScopeId -> List GivenEntry
-pushGiven : GivenMatch ->
 pushGiven gm provenance slot binder =
 givenInScope : GivenScope -> GivenEntry -> Bool
 registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
 activeFunDictPredOf : PredicateRequest -> ScopeId -> Option AssumAnswer
 activeFunDictPredOf request useScope =
-goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
-goalPredOf : String -> Mono -> Option PredicateRequest
-goalPredOfOp : String -> Option PredicateRequest
-activeDictVarOfEncl : Option PredicateRequest ->
-activeDictVarOfEncl None m encl useScope =
+goalRequestOfKind : ModuleCtx -> String -> EntailKind -> Option PredicateRequest
+goalPredOf : ModuleCtx -> String -> Mono -> Option PredicateRequest
+goalPredOfOp : ModuleCtx -> String -> Option PredicateRequest
+activeDictVarOfEncl mctx None m encl useScope =
 map LegacyScalar (activeDictVarForEncl m useScope)
-activeDictVarOfEncl (Some request) m encl useScope =
-enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
-enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
-enclSlotIndex (Some request) target encl =
-implReqDictVarOf : Option PredicateRequest ->
+activeDictVarOfEncl mctx (Some request) m encl useScope =
+enclSlotIndex mctx None target encl = indexOfId target (enclSlotIds mctx encl)
+enclSlotIndex mctx (Some request) target encl =
 implReqDictVarOf (Some request) m useScope
-firstPredForEnclAt : GivenScope ->
-entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ rest) =
+entailAssumVar mctx _ m encl _ useScope (EKNestedTop iface _ _ rest) =
 goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
 anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
-perRun.value.funPredicateSlotsRef :=
-perRun.value.methodPredicateSlotsRef :=
+mctx.funPredicateSlotsRef :=
+mctx.methodPredicateSlotsRef :=
 graphCtx.value.crossRun.crossModuleFunPredicateSlotsRef
 graphCtx.value.crossRun.crossModuleFunPredicateSlotsQualRef
 graphCtx.value.crossRun.crossModuleMethodPredicateSlotsRef :=
 graphCtx.value.crossRun.crossModuleMethodPredicateSlotsQualRef
-installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
-setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
-methodDictArityOf : String -> Int
+methodDictArityOf : ModuleCtx -> String -> Int
 resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
 pending.pmdRoutesRef :=
 methodPredicateRoute : SiteCtx -> String -> ScopeId -> PredicateSlot -> Route
 realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
-recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route
-scopePredicateSlots : List ((String, String), List PredicateSlot) ->
-scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
-attributeMethodModulePredicateSlots : String ->'
+recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route'
 
 printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
@@ -982,6 +970,34 @@ printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
     exit 1
   fi
 done || exit 1
+
+# A signature the formatter wraps one parameter per line is compared whole, against the
+# source with line breaks and runs of blanks collapsed; a first-line prefix would stop
+# constraining the signature after its first parameter. Each pin starts with a blank
+# so it matches at a line start only.
+predicate_slot_src_flat="$(tr '\n' ' ' < "$predicate_slot_src" | tr -s ' ')"
+require_signature_flat() {
+  if ! printf '%s\n' "$predicate_slot_src_flat" | grep -Fq " $1"; then
+    echo "FAIL: typechecker signature is missing or changed: $1"
+    exit 1
+  fi
+}
+require_signature_flat 'registerReqSlots : ModuleCtx -> ScopeId -> List (String, Mono) -> Int -> List Require -> Unit'
+require_signature_flat 'recordCallObligations : ModuleCtx -> List CSlot -> List Mono -> List (List Mono) -> Unit'
+require_signature_flat 'dedupPredicateSlotEntry : (String, List PredicateSlot) -> (String, List PredicateSlot)'
+require_signature_flat 'pushGiven : GivenMatch -> GivenProvenance -> PredicateSlot -> EvidenceBinderId -> Unit'
+require_signature_flat 'activeDictVarOfEncl : ModuleCtx -> Option PredicateRequest -> Mono -> String -> ScopeId -> Option AssumAnswer'
+require_signature_flat 'enclSlotIndex : ModuleCtx -> Option PredicateRequest -> Int -> String -> Option Int'
+require_signature_flat 'implReqDictVarOf : Option PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer'
+require_signature_flat 'firstPredForEnclAt : GivenScope -> Int -> PredicateRequest -> ScopeId -> List GivenEntry -> Option AssumAnswer'
+require_signature_flat 'installMethodPredicateSlots : ModuleCtx -> String -> List MethodPredicateSlot -> Unit'
+require_signature_flat 'setMethodPredicateSlotEntry : ModuleCtx -> String -> List MethodPredicateSlot -> Unit'
+require_signature_flat 'scopePredicateSlots : List ((String, String), List PredicateSlot) -> OrdMap Unit -> List Decl -> List (String, List PredicateSlot)'
+require_signature_flat 'scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) -> OrdMap Unit -> List (String, List MethodPredicateSlot)'
+require_signature_flat 'attributeMethodModulePredicateSlots : String -> List Decl -> List (String, List MethodPredicateSlot) -> List ((String, String), List MethodPredicateSlot)'
+require_signature_flat 'methodSchemeRows : ModuleCtx -> List (String, List Kind) -> IfaceRef -> List String -> List IfaceMethod -> List MethodSchemeRow'
+require_signature_flat 'pickSchemesByDecl : ModuleCtx -> List String -> List (String, Scheme) -> Registry MethodSchemeRow -> OrdMap Scheme -> List (String, EnvBinding)'
+require_signature_flat 'admittedSchemeFor : ModuleCtx -> String -> Registry MethodSchemeRow -> Option Scheme'
 
 predicate_slot_types_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
 data PredicateRequest = PredicateRequest {
@@ -1033,16 +1049,12 @@ done
 # #2549 method-row preparation: declaration identity, scheme, and method-level slots
 # are built in one row walk.  The Module-only driver reads its visible rows from
 # `implDecls`; positional key/scheme zips and graph-lived row state are retired.
-method_row_required='ifaceMethodSchemeRows : List Decl -> List MethodSchemeRow
-methodSchemeRows : List (String, List Kind) ->
+method_row_required='ifaceMethodSchemeRows : ModuleCtx -> List Decl -> List MethodSchemeRow
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
-installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
-seedNumLitFromIntAnchor : List MethodSchemeRow -> Unit
-pickSchemesByDecl : List String ->
-admittedSchemeFor : String -> Registry MethodSchemeRow -> Option Scheme
+seedNumLitFromIntAnchor : ModuleCtx -> List MethodSchemeRow -> Unit
   List MethodSchemeRow ->
-  let currentMethodRows = ifaceMethodSchemeRows prog
-  let visibleMethodRows = ifaceMethodSchemeRows implDecls'
+  let currentMethodRows = ifaceMethodSchemeRows mctx prog
+  let visibleMethodRows = ifaceMethodSchemeRows mctx implDecls'
 
 printf '%s\n' "$method_row_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
@@ -1066,12 +1078,12 @@ printf '%s\n' "$method_row_types_required" | while IFS= read -r required; do
   fi
 done || exit 1
 
-method_row_current_count="$(grep -Fc 'ifaceMethodSchemeRows prog' "$predicate_slot_src")"
+method_row_current_count="$(grep -Fc 'ifaceMethodSchemeRows mctx prog' "$predicate_slot_src")"
 if [ "$method_row_current_count" -ne 1 ]; then
   echo "FAIL: expected exactly one current-module ifaceMethodSchemeRows construction, got $method_row_current_count"
   exit 1
 fi
-method_row_module_count="$(grep -Fc 'ifaceMethodSchemeRows implDecls' "$predicate_slot_src")"
+method_row_module_count="$(grep -Fc 'ifaceMethodSchemeRows mctx implDecls' "$predicate_slot_src")"
 if [ "$method_row_module_count" -ne 1 ]; then
   echo "FAIL: expected exactly one visible-module ifaceMethodSchemeRows construction, got $method_row_module_count"
   exit 1
@@ -1153,8 +1165,8 @@ done || exit 1
 # slots under the instantiation's substitution; arguments between the slots and the
 # substitution (the destination refs) are not part of the contract.
 numlit_method_flat="$(sed -n '/^inferNumLitMethod :/,/^inferNumLitBare :/p' "$predicate_slot_src" | tr '\n' ' ' | tr -s ' ')"
-if ! printf '%s\n' "$numlit_method_flat" | grep -Eq 'recordMethodDictsFromSlots anchor\.msrMethodSlots( \([^()]*\))* \(snd inst\)'; then
-  echo "FAIL: inferNumLitMethod no longer records the anchor's method dictionaries: recordMethodDictsFromSlots anchor.msrMethodSlots ... (snd inst)"
+if ! printf '%s\n' "$numlit_method_flat" | grep -Eq 'recordMethodDictsFromSlots mctx anchor\.msrMethodSlots( \([^()]*\))* \(snd inst\)'; then
+  echo "FAIL: inferNumLitMethod no longer records the anchor's method dictionaries: recordMethodDictsFromSlots mctx anchor.msrMethodSlots ... (snd inst)"
   exit 1
 fi
 
@@ -1179,6 +1191,19 @@ require_typecheck_arm() {
   reader_end="$2"
   reader_arm="$3"
   reader_body="$(sed -n "/^$reader_start :/,/^$reader_end :/p" "$predicate_slot_src")"
+  if ! printf '%s\n' "$reader_body" | grep -Fq "$reader_arm"; then
+    echo "FAIL: typechecker reader $reader_start is missing: $reader_arm"
+    exit 1
+  fi
+}
+
+# The flat variant compares a reader's body with line breaks collapsed, for a call the
+# formatter wraps one argument per line.
+require_typecheck_arm_flat() {
+  reader_start="$1"
+  reader_end="$2"
+  reader_arm="$3"
+  reader_body="$(sed -n "/^$reader_start :/,/^$reader_end :/p" "$predicate_slot_src" | tr '\n' ' ' | tr -s ' ')"
   if ! printf '%s\n' "$reader_body" | grep -Fq "$reader_arm"; then
     echo "FAIL: typechecker reader $reader_start is missing: $reader_arm"
     exit 1
@@ -1280,19 +1305,19 @@ require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpE
 require_typecheck_arm oblPredOf vecOblOfPred 'OpExactReturn request => match methodReturnArgs request'
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpExactReturn request => match normalize request.mrrOccurrence'
 
-ordinary_return_check_body="$(sed -n '/^checkCallObligationsU deferNonGround univ (o :: rest) =/,/^solveExactReturnOnce :/p' "$predicate_slot_src")"
+ordinary_return_check_body="$(sed -n '/^checkCallObligationsU mctx deferNonGround univ (o :: rest) =/,/^solveExactReturnOnce :/p' "$predicate_slot_src")"
 # The complete arm (`methodReturnWanted` is `Some`) is compared whitespace-flattened,
 # so the call's line breaks are not part of the contract; its whole body must be the
 # consumption of the one solver outcome.
 ordinary_return_arm="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/^    OpExactReturn request =>/,/^    _ =>/p')"
-ordinary_return_complete_check="$(printf '%s\n' "$ordinary_return_arm" | sed -n '/match methodReturnWanted request/,/ None =>/p')"
+ordinary_return_complete_check="$(printf '%s\n' "$ordinary_return_arm" | sed -n '/match methodReturnWanted mctx request/,/ None =>/p')"
 ordinary_return_complete_flat="$(printf '%s\n' "$ordinary_return_complete_check" | tr '\n' ' ' | tr -s ' ')"
-ordinary_return_complete_required='match methodReturnWanted request Some _ => consumeExactReturnOutcome univ request (solveExactReturnOnce noSite request) None =>'
+ordinary_return_complete_required='match methodReturnWanted mctx request Some _ => consumeExactReturnOutcome mctx univ request (solveExactReturnOnce (siteFor mctx) request) None =>'
 if ! printf '%s\n' "$ordinary_return_complete_flat" | grep -Fq "$ordinary_return_complete_required"; then
   echo "FAIL: complete ordinary return checker does not consume the one outcome: $ordinary_return_complete_required"
   exit 1
 fi
-if ! printf '%s\n' "$ordinary_return_arm" | grep -Fq 'noteMethodReturnTrace MRTChecked request None []'; then
+if ! printf '%s\n' "$ordinary_return_arm" | grep -Fq 'noteMethodReturnTrace mctx MRTChecked request None []'; then
   echo "FAIL: ordinary return checker no longer records its checked trace"
   exit 1
 fi
@@ -1301,8 +1326,8 @@ if printf '%s\n' "$ordinary_return_complete_check" | grep -Fq 'checkOneCallOblig
   exit 1
 fi
 # The absent-formals and non-return projections are the licensed legacy arms.
-ordinary_return_legacy_check="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/      None =>/,/    _ =>/p')"
-if ! printf '%s\n' "$ordinary_return_legacy_check" | grep -Fq 'checkOneCallObligation deferNonGround univ iface occs loc o.uoScope'; then
+ordinary_return_legacy_check="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/      None =>/,/    _ =>/p' | tr '\n' ' ' | tr -s ' ')"
+if ! printf '%s\n' "$ordinary_return_legacy_check" | grep -Fq 'checkOneCallObligation mctx deferNonGround univ iface occs loc o.uoScope'; then
   echo "FAIL: absent-formals ordinary return no longer retains the legacy checker"
   exit 1
 fi
@@ -1342,9 +1367,9 @@ fi
 # Arithmetic with a prelude Num declaration carries that exact predicate through
 # its single route goal. The scalar-only recorder remains only as the fallback
 # inside recordBinopGoals for prelude-free arithmetic.
-numeric_operator_required='  let _ = recordBinopGoals op dref lt
-goalRequestOfKind _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
-entailAssumVar request m encl _ useScope (EKPredicateOp _ _ _) =
+numeric_operator_required='  let _ = recordBinopGoals env.teDyn.dcModule op dref lt
+goalRequestOfKind mctx _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
+entailAssumVar mctx request m encl _ useScope (EKPredicateOp _ _ _) =
 entailInst sx name m encl useScope tag (EKPredicateOp _ _ predicate) =
   (stampPredicateOpRouteVal sx encl useScope name m tag predicate, [])'
 printf '%s\n' "$numeric_operator_required" | while IFS= read -r required; do
@@ -1391,20 +1416,20 @@ printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
   require_typecheck_arm "$reader" "$next" 'nbMembers ='
   require_typecheck_arm "$reader" "$next" 'nbSurvivingIds ='
   if [ "$reader" = settleClosedBody ]; then
-    require_typecheck_arm inferPropBodiesGo inferTestBodies 'let _ = exitLevel ()'
-    require_typecheck_arm inferPropBodiesGo inferTestBodies 'let _ = settleClosedBody (tconBuiltin "Bool")'
-    require_typecheck_arm inferTestBodies settleClosedBody 'let _ = exitLevel ()'
-    require_typecheck_arm inferTestBodies settleClosedBody 'settleClosedBody (tconUnresolved "Expectation")'
-    require_typecheck_arm "$reader" "$next" 'let level = perRun.value.currentLevel.value + 1'
+    require_typecheck_arm inferPropBodiesGo inferTestBodies 'let _ = exitLevel env.teDyn.dcModule ()'
+    require_typecheck_arm_flat inferPropBodiesGo inferTestBodies 'let _ = settleClosedBody env.teDyn.dcModule (tconBuiltin "Bool")'
+    require_typecheck_arm inferTestBodies settleClosedBody 'let _ = exitLevel env.teDyn.dcModule ()'
+    require_typecheck_arm_flat inferTestBodies settleClosedBody 'settleClosedBody env.teDyn.dcModule (tconUnresolved "Expectation")'
+    require_typecheck_arm "$reader" "$next" 'let level = mctx.currentLevel.value + 1'
     require_typecheck_arm "$reader" "$next" 'NumBoundaryOwnedMethodBody level'
     continue
   fi
-  require_typecheck_arm "$reader" "$next" 'let _ = exitLevel ()'
+  require_typecheck_arm "$reader" "$next" 'let _ = exitLevel env.teDyn.dcModule ()'
   if [ "$disposition" = NumBoundaryOwnedMethodBody ]; then
-    require_typecheck_arm "$reader" "$next" 'let bodyLevel = perRun.value.currentLevel.value'
+    require_typecheck_arm "$reader" "$next" 'let bodyLevel = env.teDyn.dcModule.currentLevel.value'
     require_typecheck_arm "$reader" "$next" 'NumBoundaryOwnedMethodBody bodyLevel'
   else
-    require_typecheck_arm "$reader" "$next" '(perRun.value.currentLevel.value + 1)'
+    require_typecheck_arm "$reader" "$next" '(env.teDyn.dcModule.currentLevel.value + 1)'
   fi
 done || exit 1
 

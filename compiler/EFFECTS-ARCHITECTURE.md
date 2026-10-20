@@ -552,7 +552,7 @@ What landed, in the order the decision record prescribed:
    resolver checks lexical binder scope (`R-UNBOUND-AUTHORITY`,
    `R-MISPLACED-AUTHORITY-BINDER`).
 5. **Checking.** A signature's named binder elaborates to a rigid `κ` inside the
-   body (`ScopedMember.smDeclaredAuths`, `perRun.rigidAuthvarsRef`); the domain
+   body (`ScopedMember.smDeclaredAuths`, `ModuleCtx.rigidAuthvarsRef`); the domain
    is `String @κ` (`T-AUTHORITY-BINDER`, `T-AUTHORITY-DOMAIN` on ill-formed
    binders). `argumentInto` is the one proof route: an argument flowing into a
    qualified domain wants `α(argument) ⊑ q` (`types/effect_infer.mdk`), through
@@ -661,7 +661,7 @@ session"):
 5. **Existentials.** A constructor's leading `(p : Authority L)` groups are
    `dataCtorBinders`/`newtypeCtorBinders` (positional with the constructors,
    as `dataParamKinds` is with the parameters); their cells are quantified in
-   the scheme and their ids recorded in `perRun.ctorExistentialsRef`, keyed by
+   the scheme and their ids recorded in `GraphRun.ctorExistentialsRef`, keyed by
    id so a same-named constructor elsewhere cannot answer. A pattern
    instantiates them RIGID (`instantiateCtorPattern`,
    `instantiateRecordOpening`) and parks them at the pattern site
