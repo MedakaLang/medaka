@@ -1165,7 +1165,7 @@ stdlibOwnedMods entry roots stdlibRoot mods =
 -- (is the ENTRY module stdlib-owned?, the stdlib-owned modIds).  The first
 -- component exists because typecheck's FLAT arm carries no module id at all, so
 -- the entry's ownership has to travel separately from the per-module list — see
--- `setStdlibOwnership` (`types/typecheck.mdk`).  `mods` is dependency-first with
+-- `driveInputsFor` (`types/typecheck.mdk`).  `mods` is dependency-first with
 -- the ENTRY LAST, the order every `loadProgram*` returns.
 export
 stdlibOwnership : String ->

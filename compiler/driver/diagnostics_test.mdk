@@ -19,6 +19,7 @@ import driver.diagnostics.{
   checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
   FrontOutput(..), Diag(..)
 }
+import types.typecheck.{defaultDriveInputs}
 import frontend.parser.{parseLocated}
 import fs.{fixtureFiles}
 import list.{sort, somes}
@@ -325,6 +326,7 @@ frontOfFile : String -> String -> String -> FrontOutput CheckDump
 frontOfFile rsrc csrc src = frontEnd noStdlibExports (checkFrontDrive
   "main.mdk"
   []) FrontInput {
+  fiInputs = defaultDriveInputs,
   fiAllowInternal = False,
   fiTrusted = [],
   fiRuntimeSrc = rsrc,

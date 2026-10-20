@@ -15,7 +15,8 @@
 -- `medaka` binary and not in the emitter seed graph — so it owes no re-mint.
 
 import frontend.ast.{Decl}
-import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
+import types.typecheck.{elaborateModulesWithReport}
+import types.tc_types.{DriveInputs(..)}
 import types.publish.{TcReport(..)}
 import types.program_facts.{factsOfElab}
 import eval.eval.{evalModulesOutputFacts}
@@ -29,11 +30,15 @@ oracleMain () = driveModules runElab
 -- Elaborate once as an executing drive, which returns the auto-print evidence,
 -- then wrap the elaborated trees (a bare non-Unit value main is printed, an
 -- `Async` main takes the scheduler driver, #2506) and force them.
-runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
-runElab runtimeDecls coreDecls modules =
+runElab : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+runElab inputs runtimeDecls coreDecls modules =
   let (elab, report) =
     elaborateModulesWithReport
-      defaultDriveInputs
+      inputs
       (valueMainCandidate coreDecls modules)
       (Some "runAsyncMain")
       runtimeDecls

@@ -136,7 +136,7 @@ import entries.entry_support.{
 import support.util.{startsWith, splitOnChar, filterList}
 import types.publish.{PubScheme(..), ppPubScheme}
 import types.typecheck.{
-  defaultDriveInputs, constrainedSigNames, preludeReturnPosDictNames,
+  driveInputsFor, constrainedSigNames, preludeReturnPosDictNames,
   preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
   checkedFfiExternTypeNamesModules, checkOneSchemeFullK
 }
@@ -606,6 +606,7 @@ finishClean : Bool ->
 finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
   let (analysis, report) =
     analyzeProgramReport
+      (driveInputsFor !selectedProfile False [])
       True
       (Some "runAsyncMain")
       runtimeDecls
@@ -813,12 +814,13 @@ queryResult isHover rsrc csrc tsrc line col = match parseResult tsrc
     -- S-full-env-scheme-entry (#1116): Module arm, own schemes FIRST — kept in
     -- lockstep with `docEnv` in tools/lsp.mdk, whose comment carries the
     -- shadowing rationale (`lookupSchemeL`/`hoverResult` are first-match scans).
-    let (preludeSchemes, ownSchemes) = checkOneSchemeFullK
-      defaultDriveInputs
-      preludeKey
-      runtimeDecls
-      coreDecls
-      ("__user__", desugar userRaw)
+    let (preludeSchemes, ownSchemes) = checkOneSchemeFullK (driveInputsFor
+      !selectedProfile
+      False
+      []) preludeKey runtimeDecls coreDecls (
+      "__user__",
+      desugar userRaw,
+    )
     let env = ownSchemes ++ preludeSchemes
     if isHover then
       hoverResult tsrc line col env

@@ -1,5 +1,5 @@
 # META
-source_lines=54745
+source_lines=54725
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -708,7 +708,7 @@ import types.disposition.{
   validateDispositionTable,
 }
 import types.target_profile.{
-  TargetProfile, hostLabels, ioJoinGrants, profileName, selectedProfile
+  TargetProfile, hostLabels, ioJoinGrants, profileName
 }
 import types.ffi_bindings.{
   FfiDiag(..),
@@ -7993,7 +7993,6 @@ emptyTcConfig = TcConfig {
   tcIoJoinProfile = "",
   tcStdlibOwned = omEmpty,
   tcFlatEntryIsStdlib = False,
-  tcCoherenceUserDecls = [],
 }
 
 -- The process's first graph record, before any drive minted one.  `env` is the
@@ -8007,6 +8006,7 @@ initialGraphCtx env = GraphCtx {
   graphRun = freshGraphRun (),
   effectDomains = Ref [],
   config = Ref emptyTcConfig,
+  trace = None,
   graphAdmittedMethodsRef = Ref omEmpty,
   declEnvsRef = Ref emptyDeclEnvs,
   abstractRecordTypesRef = Ref omEmpty,
@@ -9524,32 +9524,56 @@ hadMatchWarnings _ = match perRun.value.matchWarnings.value
   [] => False
   _ => True
 
--- The drive inputs of a process that publishes nothing: no stdlib ownership, the flat
--- entry not stdlib, no coherence decls, every trace off.  A pure value (it holds no
--- `Ref`), so a caller that drives without publishing passes it.
+-- The drive inputs of a driver that loads no stdlib ownership and selects no
+-- profile: no module stdlib-owned, the flat entry not stdlib, every trace off, and
+-- the `IO` join of no profile.  A pure value (it holds no `Ref`).
+--
+-- No ownership means every `extern` is stamped (#2072, `ffiStampModeOwned`), and that
+-- direction is the safe one on purpose: a driver that passes no ownership suppresses
+-- nothing, so the worst it can do is render an `FFI` atom on the stdlib catalog when
+-- someone points it at stdlib source.  The inverse default would leave #2072's hole
+-- (a user `extern f : Int -> <> Int` typing pure) open on every such path, which is
+-- a soundness hole rather than a cosmetic one.
 export
 defaultDriveInputs : DriveInputs
 defaultDriveInputs = DriveInputs {
   diStdlibOwned = omEmpty,
   diFlatEntryIsStdlib = False,
-  diCoherenceUserDecls = [],
   diTrace = None,
+  diIoJoinGrants = ioJoinGrants None,
+  diProfileName = "",
 }
 
--- What the drivers hand the typechecker before a drive (the stdlib ownership, the
--- coherence user decls, the trace sink), read by `tcConfigOf` and by the `note*`
--- trace functions.  Written only through the publishers below.
-driveInputs : Ref DriveInputs
-driveInputs = Ref defaultDriveInputs
+-- The drive inputs a driver builds from the profile it selected and the loader's
+-- owning-root fact (`stdlibOwnership`, `driver/loader.mdk`): whether the flat entry
+-- is a stdlib module, and the stdlib-owned module ids.  That fact is read by
+-- `ffiStampMode`, which decides whether an `extern` DECLARATION in the program
+-- under check is the stdlib's extern catalog (never stamped) or a user's FFI
+-- declaration (always stamped).
+--
+-- Two ownership fields because graph checks carry different amounts of identity.
+-- `Module mid _ _` has a module id, so the Module arm asks "is THIS module
+-- stdlib-owned" of the set.  `Flat _` has no id at all (the flat driver has already
+-- flattened the program into one anonymous decl list), so the entry's ownership
+-- arrives as its own Bool.
+--
+-- NOT `projectTrustedMods` (`driver/loader.mdk`): that predicate answers a different
+-- question (may module M *reference* an internal-only extern?) and is opt-in-able
+-- from any `medaka.toml` via `allow-internal` (#1713).  Routing this through it would
+-- let a user exempt their own externs from the stamp by writing one manifest line.
+export
+driveInputsFor : Option TargetProfile -> Bool -> List String -> DriveInputs
+driveInputsFor profile flatEntry mods = DriveInputs {
+  diStdlibOwned = namesToSet mods omEmpty,
+  diFlatEntryIsStdlib = flatEntry,
+  diTrace = None,
+  diIoJoinGrants = ioJoinGrants profile,
+  diProfileName = match profile
+    None => ""
+    Some p => profileName p,
+}
 
--- The trace sink of the current configuration.  Trace off (`None`) answers a fresh
--- sink whose gates are all `False`: its buffers are only written behind a gate, so
--- no constant holds a `Ref`.
-traceSink : Unit -> TraceSink
-traceSink _ = match driveInputs.value.diTrace
-  Some sink => sink
-  None => offTraceSink ()
-
+-- A sink with every gate off and fresh buffers; each `begin*` turns one gate on.
 offTraceSink : Unit -> TraceSink
 offTraceSink _ = TraceSink {
   tsAssumptionEnabled = False,
@@ -9562,60 +9586,37 @@ offTraceSink _ = TraceSink {
   tsEvidenceObservationEntries = Ref [],
 }
 
-setTraceSink : TraceSink -> Unit
-setTraceSink sink = driveInputs := { driveInputs.value | diTrace = Some sink }
+-- The trace builders and readers: a test builds a sink with `begin*`, passes it as
+-- the `diTrace` of the drives it observes, and reads its buffer with `finish*`.
+export
+beginAssumptionTrace : Unit -> TraceSink
+beginAssumptionTrace _ = { offTraceSink () | tsAssumptionEnabled = True }
 
 export
-beginAssumptionTrace : Unit -> Unit
-beginAssumptionTrace _ =
-  let sink = traceSink ()
-  sink.tsAssumptionEntries := []
-  setTraceSink { sink | tsAssumptionEnabled = True }
+finishAssumptionTrace : TraceSink -> List AssumptionTraceEntry
+finishAssumptionTrace sink = reverseL sink.tsAssumptionEntries.value
 
 export
-finishAssumptionTrace : Unit -> List AssumptionTraceEntry
-finishAssumptionTrace _ =
-  let sink = traceSink ()
-  let entries = reverseL sink.tsAssumptionEntries.value
-  sink.tsAssumptionEntries := []
-  setTraceSink { sink | tsAssumptionEnabled = False }
-  entries
-
-export
-beginNumericPredicateTrace : Unit -> Unit
+beginNumericPredicateTrace : Unit -> TraceSink
 beginNumericPredicateTrace _ =
-  let sink = traceSink ()
-  sink.tsNumericPredicateEntries := []
-  setTraceSink { sink | tsNumericPredicateEnabled = True }
+  { offTraceSink () | tsNumericPredicateEnabled = True }
 
 export
-finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry
-finishNumericPredicateTrace _ =
-  let sink = traceSink ()
-  let entries = reverseL sink.tsNumericPredicateEntries.value
-  sink.tsNumericPredicateEntries := []
-  setTraceSink { sink | tsNumericPredicateEnabled = False }
-  entries
+finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry
+finishNumericPredicateTrace sink = reverseL sink.tsNumericPredicateEntries.value
 
 export
-beginMethodReturnTrace : Unit -> Unit
-beginMethodReturnTrace _ =
-  let sink = traceSink ()
-  sink.tsMethodReturnEntries := []
-  setTraceSink { sink | tsMethodReturnEnabled = True }
+beginMethodReturnTrace : Unit -> TraceSink
+beginMethodReturnTrace _ = { offTraceSink () | tsMethodReturnEnabled = True }
 
+-- Each entry with the evidence its goal published in [evidence], the table of the
+-- drive that recorded it.
 export
-finishMethodReturnTrace : Unit -> List MethodReturnTraceEntry
-finishMethodReturnTrace _ =
-  let evidence = drivenEvidence ()
-  let sink = traceSink ()
-  let entries =
-    map
-      (publishMethodReturnTrace evidence)
-      (reverseL sink.tsMethodReturnEntries.value)
-  sink.tsMethodReturnEntries := []
-  setTraceSink { sink | tsMethodReturnEnabled = False }
-  entries
+finishMethodReturnTrace : TraceSink -> EvTable -> List MethodReturnTraceEntry
+finishMethodReturnTrace sink evidence =
+  map
+    (publishMethodReturnTrace evidence)
+    (reverseL sink.tsMethodReturnEntries.value)
 
 publishMethodReturnTrace : EvTable ->
   MethodReturnTraceEntry ->
@@ -9658,32 +9659,34 @@ noteMethodReturnTrace : MethodReturnTraceStage ->
   List Route ->
   Unit
 noteMethodReturnTrace stage request route prerequisites =
-  let sink = traceSink ()
-  if sink.tsMethodReturnEnabled then
-    let (qualifiedBody, wanted) = match methodReturnInstantiation request
-      Some (Instantiation { body = body, arguments = [InstantiationArgument { wanted = carried, ... }], ... }) =>
-        (Some body, Some carried)
-      _ => (None, None)
-    sink.tsMethodReturnEntries :=
-      MethodReturnTraceEntry {
-          mrtStage = stage,
-          mrtInterface = request.mrrIface,
-          mrtMethod = request.mrrName,
-          mrtArguments = methodReturnArgs request,
-          mrtScope = request.mrrScope,
-          mrtOrigin = request.mrrLoc,
-          mrtGoal = request.mrrGoalEv,
-          mrtPublished = None,
-          mrtQualifiedBody = qualifiedBody,
-          mrtWanted = wanted,
-          mrtOutcome =
-            map
-              (resolution => resolution.mrrOutcome)
-              request.mrrResolution.value,
-          mrtRoute = route,
-          mrtPrerequisites = prerequisites,
-        }
-        :: sink.tsMethodReturnEntries.value
+  match graphCtx.value.trace
+    Some sink =>
+      if sink.tsMethodReturnEnabled then
+        let (qualifiedBody, wanted) = match methodReturnInstantiation request
+          Some (Instantiation { body = body, arguments = [InstantiationArgument { wanted = carried, ... }], ... }) =>
+            (Some body, Some carried)
+          _ => (None, None)
+        sink.tsMethodReturnEntries :=
+          MethodReturnTraceEntry {
+              mrtStage = stage,
+              mrtInterface = request.mrrIface,
+              mrtMethod = request.mrrName,
+              mrtArguments = methodReturnArgs request,
+              mrtScope = request.mrrScope,
+              mrtOrigin = request.mrrLoc,
+              mrtGoal = request.mrrGoalEv,
+              mrtPublished = None,
+              mrtQualifiedBody = qualifiedBody,
+              mrtWanted = wanted,
+              mrtOutcome =
+                map
+                  (resolution => resolution.mrrOutcome)
+                  request.mrrResolution.value,
+              mrtRoute = route,
+              mrtPrerequisites = prerequisites,
+            }
+            :: sink.tsMethodReturnEntries.value
+    None => ()
 
 -- #2095: trace-gated, zero cost when off — same discipline as
 -- `methodReturnTrace`. Generalizes that pattern from
@@ -9692,20 +9695,14 @@ noteMethodReturnTrace stage request route prerequisites =
 -- family produced the goal, read back from the SAME cells the stampers wrote
 -- (never re-derived), so this can never disagree with the published `EvTable`.
 export
-beginEvidenceObservation : Unit -> Unit
+beginEvidenceObservation : Unit -> TraceSink
 beginEvidenceObservation _ =
-  let sink = traceSink ()
-  sink.tsEvidenceObservationEntries := []
-  setTraceSink { sink | tsEvidenceObservationEnabled = True }
+  { offTraceSink () | tsEvidenceObservationEnabled = True }
 
 export
-finishEvidenceObservation : Unit -> List EvidenceObservationEntry
-finishEvidenceObservation _ =
-  let sink = traceSink ()
-  let entries = reverseL sink.tsEvidenceObservationEntries.value
-  sink.tsEvidenceObservationEntries := []
-  setTraceSink { sink | tsEvidenceObservationEnabled = False }
-  entries
+finishEvidenceObservation : TraceSink -> List EvidenceObservationEntry
+finishEvidenceObservation sink =
+  reverseL sink.tsEvidenceObservationEntries.value
 
 goalKindName : GoalKind -> String
 goalKindName GKReturnSite = "GKReturnSite"
@@ -9844,15 +9841,16 @@ renderRouteIdentity (RProj r path) =
   "RProj (\{renderRouteIdentity r}) \{joinWith "." (map intToString path)}"
 
 noteEvidenceObservation : Obligation -> Unit
-noteEvidenceObservation o =
-  let sink = traceSink ()
-  if sink.tsEvidenceObservationEnabled then
-    let routes = obligationRoutes o
-    let predicates = obligationPredicateMonos o
-    let arity = listLen routes
-    sink.tsEvidenceObservationEntries :=
-      evidenceObservationEntriesGo o routes predicates arity 0
-        ++ sink.tsEvidenceObservationEntries.value
+noteEvidenceObservation o = match graphCtx.value.trace
+  Some sink =>
+    if sink.tsEvidenceObservationEnabled then
+      let routes = obligationRoutes o
+      let predicates = obligationPredicateMonos o
+      let arity = listLen routes
+      sink.tsEvidenceObservationEntries :=
+        evidenceObservationEntriesGo o routes predicates arity 0
+          ++ sink.tsEvidenceObservationEntries.value
+  None => ()
 
 evidenceObservationEntriesGo : Obligation ->
   List Route ->
@@ -9888,19 +9886,27 @@ noteNumericPredicateTrace : NumericPredicateTraceStage ->
   List Route ->
   Unit
 noteNumericPredicateTrace stage predicate scope origin selected route prereqs =
-  let sink = traceSink ()
-  if sink.tsNumericPredicateEnabled then
-    sink.tsNumericPredicateEntries :=
-      NumericPredicateTraceEntry {
-          nptStage = stage,
-          nptPredicate = predicate,
-          nptScope = scope,
-          nptOrigin = origin,
-          nptSelectedInterface = selected,
-          nptRoute = route,
-          nptPrerequisites = prereqs,
-        }
-        :: sink.tsNumericPredicateEntries.value
+  match graphCtx.value.trace
+    Some sink =>
+      if sink.tsNumericPredicateEnabled then
+        sink.tsNumericPredicateEntries :=
+          NumericPredicateTraceEntry {
+              nptStage = stage,
+              nptPredicate = predicate,
+              nptScope = scope,
+              nptOrigin = origin,
+              nptSelectedInterface = selected,
+              nptRoute = route,
+              nptPrerequisites = prereqs,
+            }
+            :: sink.tsNumericPredicateEntries.value
+    None => ()
+
+-- Whether this drive traces numeric predicates; reads the sink in place.
+numericPredicateTraceOn : Unit -> Bool
+numericPredicateTraceOn _ = match graphCtx.value.trace
+  Some sink => sink.tsNumericPredicateEnabled
+  None => False
 
 assumAnswerBinder : AssumAnswer -> EvidenceBinderId
 assumAnswerBinder (SemanticGiven evidence) = givenEvidenceBinder evidence
@@ -10014,16 +10020,17 @@ projectedGivenOf parent path =
     (givensForScope (Scopes.binderScope parent))
 
 noteAssumption : ScopeId -> AssumAnswer -> Unit
-noteAssumption scope answer =
-  let sink = traceSink ()
-  if sink.tsAssumptionEnabled then
-    sink.tsAssumptionEntries :=
-      AssumptionTraceEntry {
-          atGoalScope = scope,
-          atBinder = assumAnswerBinder answer,
-          atKind = assumAnswerKind answer,
-        }
-        :: sink.tsAssumptionEntries.value
+noteAssumption scope answer = match graphCtx.value.trace
+  Some sink =>
+    if sink.tsAssumptionEnabled then
+      sink.tsAssumptionEntries :=
+        AssumptionTraceEntry {
+            atGoalScope = scope,
+            atBinder = assumAnswerBinder answer,
+            atKind = assumAnswerKind answer,
+          }
+          :: sink.tsAssumptionEntries.value
+  None => ()
 
 captureScope : Unit -> ScopeId
 captureScope _ = Scopes.captureScopeCursor perRun.value.currentScope.value
@@ -30754,50 +30761,6 @@ globalCoherenceConflict env =
   match cohScan CohSweepGlobal (reverseL (map cohImplOfRow (cohRowsOf env))) []
     CohScan hard soft => (map fst hard, map fst soft)
 
--- the USER decls a driver wants coherence-checked.  Set by single-file drivers
--- (check.mdk / typecheck_main.mdk / check_batch.mdk) to the desugared USER program
--- (NO prelude), so a user impl that overrides a prelude impl is not flagged.  []
--- (the golden/profile drivers and the no-runtime path) use their own
--- prelude-free arg; checkToLinesWithRuntime runs no coherence (byte-identical).
-
--- exported so the single-file front-end drivers set the user boundary before check
-export
-setCoherenceUserDecls : List Decl -> Unit
-setCoherenceUserDecls ds =
-  driveInputs := { driveInputs.value | diCoherenceUserDecls = ds }
-
--- #2072 (extern FFI stamp): the LOADER's owning-root fact, published for the one
--- reader that needs it — `ffiStampMode`, which decides whether an `extern`
--- DECLARATION in the program under check is the stdlib's extern catalog (never
--- stamped) or a user's FFI declaration (always stamped).
---
--- Two fields remain because graph checks carry different amounts
--- of identity.  `Module mid _ _` has a module id, so the Module arm can ask
--- "is THIS module stdlib-owned" of the list.  `Flat _` has NO id at all — the flat
--- driver has already flattened the program into one anonymous decl list — so the
--- entry's ownership has to arrive as its own Bool.
---
--- 🚨 DEFAULTS ARE `(False, [])` = STAMP EVERYTHING, and that direction is the safe
--- one on purpose.  A driver that never calls this suppresses nothing, so the worst
--- an unwired entry point can do is render an `FFI` atom on the stdlib catalog when
--- someone points it AT stdlib source.  The inverse default would leave #2072's hole
--- (a user `extern f : Int -> <> Int` typing pure) open on every unwired path, which
--- is a soundness hole rather than a cosmetic one.  Do not "helpfully" flip it.
---
--- ⚠️ NOT `projectTrustedMods` (`driver/loader.mdk`) — that predicate answers a
--- DIFFERENT question (may module M *reference* an internal-only extern?) and is
--- opt-in-able from any `medaka.toml` via `allow-internal` (#1713, slice 2).  Routing
--- this through it would let a user exempt their OWN externs from the stamp by writing
--- one manifest line: an effect-system escape hatch reachable from a manifest.
--- Stdlib-root ownership alone, no project-level opt-out.
-export
-setStdlibOwnership : Bool -> List String -> Unit
-setStdlibOwnership flatEntry mods =
-  driveInputs := { driveInputs.value |
-    diFlatEntryIsStdlib = flatEntry,
-    diStdlibOwned = namesToSet mods omEmpty,
-  }
-
 -- ── instance-`requires` impl-dict routing (Phase 83/84 single-level) ────────
 -- `implMethodNameTc` and its callers route through the graph-global `IE`
 -- (`ieSelectRowByIface`); a headless impl's own `requires` is discharged the
@@ -36330,7 +36293,7 @@ methodReturnPrerequisitesMatch _ _ = False
 
 noteNumericObligationChecked : UObligation -> List Mono -> Unit
 noteNumericObligationChecked o occs =
-  if not (traceSink ()).tsNumericPredicateEnabled then
+  if not (numericPredicateTraceOn ()) then
     ()
   else match (o.prov, o.oblProj)
     (_, OpNumLit _) =>
@@ -40994,7 +40957,7 @@ ffiStampMode : String -> Bool
 ffiStampMode mid =
   omSize graphCtx.value.builtinExternNamesRef.value > 0 && ffiStampModeOwned mid
 
--- The ownership half, unchanged.  See `setStdlibOwnership` for why the two arms
+-- The ownership half, unchanged.  See `driveInputsFor` for why the two arms
 -- read two different fields and why the default is "apply them".
 ffiStampModeOwned : String -> Bool
 -- 🚨 `"__user__"` IS THE FLAT ENTRY, NOT A LOADED MODULE, and this arm is what
@@ -47518,21 +47481,29 @@ nameableIfaceMethodSet prog =
 -- flattening above is the previous expression term for term.
 export
 nameableIfaceRows : List Decl -> List (String, List String)
-nameableIfaceRows prog =
-  optionOr [] (omLookup "core" (ifaceExportsIndex ()))
-    ++ ifaceMethodRows prog
-    ++ importedIfaceRows prog
+nameableIfaceRows prog = nameableIfaceRowsIn (ifaceExportsIndex ()) prog
 
-importedIfaceRows : List Decl -> List (String, List String)
-importedIfaceRows [] = []
-importedIfaceRows ((DAttrib _ d) :: rest) =
-  importedIfaceRows [d] ++ importedIfaceRows rest
-importedIfaceRows ((DUse _ path _) :: rest) =
-  (match omLookup (usePathModuleId path) (ifaceExportsIndex ())
+-- `nameableIfaceRows` over the interface-row index [idx].
+nameableIfaceRowsIn : OrdMap (List (String, List String)) ->
+  List Decl ->
+  List (String, List String)
+nameableIfaceRowsIn idx prog =
+  optionOr [] (omLookup "core" idx)
+    ++ ifaceMethodRows prog
+    ++ importedIfaceRows idx prog
+
+importedIfaceRows : OrdMap (List (String, List String)) ->
+  List Decl ->
+  List (String, List String)
+importedIfaceRows _ [] = []
+importedIfaceRows idx ((DAttrib _ d) :: rest) =
+  importedIfaceRows idx [d] ++ importedIfaceRows idx rest
+importedIfaceRows idx ((DUse _ path _) :: rest) =
+  (match omLookup (usePathModuleId path) idx
       None => []
       Some src => selectIfaceRows path src)
-    ++ importedIfaceRows rest
-importedIfaceRows (_ :: rest) = importedIfaceRows rest
+    ++ importedIfaceRows idx rest
+importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 
 -- ── #2738: a selectively imported standalone displaced by a nameable method ──
 -- The peer of `frontend/marker.mdk`'s `preludeStandaloneShadows` for the IMPORTER
@@ -47564,10 +47535,21 @@ export
 importedStandaloneShadows : List (String, List Decl) ->
   List Decl ->
   List (String, String, Option Ty, Ty, Loc)
-importedStandaloneShadows graph prog
-  | omSize (ifaceExportsIndex ()) == 0 = []
+importedStandaloneShadows graph prog =
+  importedStandaloneShadowsIn (ifaceExportsIndex ()) graph prog
+
+-- `importedStandaloneShadows` over the interface-row index [idx], for a caller whose
+-- index is not the last drive's: a single file analysed before its drive passes
+-- `omEmpty`, which answers nothing.
+export
+importedStandaloneShadowsIn : OrdMap (List (String, List String)) ->
+  List (String, List Decl) ->
+  List Decl ->
+  List (String, String, Option Ty, Ty, Loc)
+importedStandaloneShadowsIn idx graph prog
+  | omSize idx == 0 = []
   | otherwise =
-    let rows = nameableIfaceRows prog
+    let rows = nameableIfaceRowsIn idx prog
     let nameable = namesToSet (flatMap snd rows) omEmpty
     let universe = flatMap snd graph ++ prog
     flatMap (importShadowsOfDecl graph rows nameable universe) prog
@@ -50783,17 +50765,14 @@ preludePreambleStore k coreDecls coreRow =
     Some ((k, graphCtx.value.config.value.tcIoJoinProfile), p)
   p
 
--- The drive's configuration: the IO join taken from the selected profile (after the
--- effect domains it reads), the profile's name, and the driver inputs.
-tcConfigOf : Option TargetProfile -> DriveInputs -> TcConfig
-tcConfigOf profile inputs = TcConfig {
-  tcIoJoin = ioJoinAtoms (ioJoinGrants profile),
-  tcIoJoinProfile = match profile
-    None => ""
-    Some p => profileName p,
+-- The drive's configuration: the IO join of the selected profile's grants (after the
+-- effect domains it reads), the profile's name, and the stdlib ownership.
+tcConfigOf : DriveInputs -> TcConfig
+tcConfigOf inputs = TcConfig {
+  tcIoJoin = ioJoinAtoms inputs.diIoJoinGrants,
+  tcIoJoinProfile = inputs.diProfileName,
   tcStdlibOwned = inputs.diStdlibOwned,
   tcFlatEntryIsStdlib = inputs.diFlatEntryIsStdlib,
-  tcCoherenceUserDecls = inputs.diCoherenceUserDecls,
 }
 
 -- Mint the drive's graph record, once, at the head of `graphPreamble`.  The
@@ -50804,15 +50783,16 @@ tcConfigOf profile inputs = TcConfig {
 -- drive K's residue while the `*Qual` mirrors grew without bound.  So `crossRun` is
 -- fresh (`freshCrossRun` re-mints every field, so what resets is what `CrossRun`
 -- holds) and `graphRun` starts a new lineage (`graphLineageRun`, keeping a
--- `markModules` lineage).  Every `Ref` field is carried by identity: the preamble
--- writes the graph-derived ones in place below, and the sticky pair and the rest
--- keep the previous drive's values.
-mintGraphCtx : Unit -> Unit
-mintGraphCtx _ =
+-- `markModules` lineage), and the trace sink is the drive's own.  Every `Ref` field
+-- is carried by identity: the preamble writes the graph-derived ones in place below,
+-- and the sticky pair and the rest keep the previous drive's values.
+mintGraphCtx : DriveInputs -> Unit
+mintGraphCtx inputs =
   let prior = graphCtx.value
   graphCtx := GraphCtx { prior |
     crossRun = freshCrossRun initialEnv,
     graphRun = graphLineageRun prior.graphRun.markedAhead prior.graphRun,
+    trace = inputs.diTrace,
   }
 
 graphPreamble : DriveInputs ->
@@ -50822,7 +50802,7 @@ graphPreamble : DriveInputs ->
   List Decl ->
   List (String, List Decl) ->
   (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), OrdMap (List VecObl), List Decl, MarkSets)
-graphPreamble _inputs sel preludeKey runtimeDecls coreDecls modules =
+graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
   -- S-emit-interleave-leak (#2049), TREES only: THE EMIT DRIVER OWNS ITS OWN
   -- (empty) ctor oracle.  A module checked without a `CheckRunSeed` carries the
   -- previous module record's `matchOracle`, and the tree arm's core pass is one
@@ -50862,7 +50842,7 @@ graphPreamble _inputs sel preludeKey runtimeDecls coreDecls modules =
       perRun.value.matchOracle := buildOracle []
       ()
     GOutDiags => ()
-  let _ = mintGraphCtx ()
+  let _ = mintGraphCtx inputs
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
   -- loop, so a module using an effect declared in ANOTHER module sees its domain.
@@ -50879,10 +50859,10 @@ graphPreamble _inputs sel preludeKey runtimeDecls coreDecls modules =
   -- in the same order; `populateEffectDomainsGraph` walks them without building
   -- that concatenation a second time.
   let _ = populateEffectDomainsGraph coreDecls modules
-  -- What `IO` joins, from the profile the verb selected, after the domains the
-  -- atoms take their tops from.  `run` checks against `runProfile` of that
-  -- profile, whose host-label grants are the selected profile's own.
-  graphCtx.value.config := tcConfigOf !selectedProfile !driveInputs
+  -- What `IO` joins, from the grants of the profile the verb selected, after the
+  -- domains the atoms take their tops from.  `run` checks against `runProfile` of
+  -- that profile, whose host-label grants are the selected profile's own.
+  graphCtx.value.config := tcConfigOf inputs
   -- the prelude's own contribution to every derivation below, from the memo when
   -- the caller supplied a prelude key -- see `PreludePreamble`.  The row is built
   -- HERE, not inside the memo, because it carries THIS analyze's decls.
@@ -54785,7 +54765,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "chain_key") ((mem "chainGraphKey" false) (mem "constrainedSigName" false) (mem "isConstrainedTy" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "EvIndex" false) (mem "evIndexOf" false) (mem "evDictRoutesIn" false) (mem "evSiteRouteIn" false) (mem "evSiteLitIn" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "validateDispositionTable" false))))
-(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "hostLabels" false) (mem "ioJoinGrants" false) (mem "profileName" false) (mem "selectedProfile" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "hostLabels" false) (mem "ioJoinGrants" false) (mem "profileName" false))))
 (DUse false (UseGroup ("types" "ffi_bindings") ((mem "FfiDiag" true) (mem "ffiCatalogNarrowMsg" false) (mem "ffiCatalogTailMsg" false) (mem "ffiDeclarationDiags" false) (mem "ffiNonCrossableMsg" false) (mem "ffiShadowMsg" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "EvidenceRow" true) (mem "Inner" true) (mem "innerNone" false) (mem "innerOfRoute" false) (mem "innerOr" false) (mem "rowHoleWith" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "addBinderRow" false) (mem "emptyBinderTypes" false) (mem "RuntimeType" true) (mem "runtimeTypeOf" false))))
@@ -56077,9 +56057,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "ifaceExportsIndex" (TyFun (TyCon "Unit") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "ifaceExportsIndex" (PWild) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "declEnvsRef") "value") "deMethods") "meIfaceExports"))
 (DTypeSig false "emptyTcConfig" (TyCon "TcConfig"))
-(DFunDef false "emptyTcConfig" () (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EListLit)) (fa "tcIoJoinProfile" (ELit (LString ""))) (fa "tcStdlibOwned" (EVar "omEmpty")) (fa "tcFlatEntryIsStdlib" (EVar "False")) (fa "tcCoherenceUserDecls" (EListLit)))))
+(DFunDef false "emptyTcConfig" () (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EListLit)) (fa "tcIoJoinProfile" (ELit (LString ""))) (fa "tcStdlibOwned" (EVar "omEmpty")) (fa "tcFlatEntryIsStdlib" (EVar "False")))))
 (DTypeSig false "initialGraphCtx" (TyFun (TyCon "TcEnv") (TyCon "GraphCtx")))
-(DFunDef false "initialGraphCtx" ((PVar "env")) (ERecordCreate "GraphCtx" ((fa "crossRun" (EApp (EVar "freshCrossRun") (EVar "env"))) (fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit))) (fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "config" (EApp (EVar "Ref") (EVar "emptyTcConfig"))) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "markSetsRef" (EApp (EVar "Ref") (EVar "None"))) (fa "typeErrorsSticky" (EApp (EVar "Ref") (EVar "False"))) (fa "typeErrorsStickyDiags" (EApp (EVar "Ref") (EListLit))))))
+(DFunDef false "initialGraphCtx" ((PVar "env")) (ERecordCreate "GraphCtx" ((fa "crossRun" (EApp (EVar "freshCrossRun") (EVar "env"))) (fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit))) (fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "config" (EApp (EVar "Ref") (EVar "emptyTcConfig"))) (fa "trace" (EVar "None")) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "markSetsRef" (EApp (EVar "Ref") (EVar "None"))) (fa "typeErrorsSticky" (EApp (EVar "Ref") (EVar "False"))) (fa "typeErrorsStickyDiags" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig false "graphCtx" (TyApp (TyCon "Ref") (TyCon "GraphCtx")))
 (DFunDef false "graphCtx" () (EApp (EVar "Ref") (EApp (EVar "initialGraphCtx") (EVar "initialEnv"))))
 (DTypeSig false "installCross" (TyFun (TyCon "CrossRun") (TyCon "Unit")))
@@ -56284,27 +56264,23 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig true "hadMatchWarnings" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "hadMatchWarnings" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchWarnings") "value") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig true "defaultDriveInputs" (TyCon "DriveInputs"))
-(DFunDef false "defaultDriveInputs" () (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EVar "omEmpty")) (fa "diFlatEntryIsStdlib" (EVar "False")) (fa "diCoherenceUserDecls" (EListLit)) (fa "diTrace" (EVar "None")))))
-(DTypeSig false "driveInputs" (TyApp (TyCon "Ref") (TyCon "DriveInputs")))
-(DFunDef false "driveInputs" () (EApp (EVar "Ref") (EVar "defaultDriveInputs")))
-(DTypeSig false "traceSink" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "traceSink" (PWild) (EMatch (EFieldAccess (EFieldAccess (EVar "driveInputs") "value") "diTrace") (arm (PCon "Some" (PVar "sink")) () (EVar "sink")) (arm (PCon "None") () (EApp (EVar "offTraceSink") (ELit LUnit)))))
+(DFunDef false "defaultDriveInputs" () (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EVar "omEmpty")) (fa "diFlatEntryIsStdlib" (EVar "False")) (fa "diTrace" (EVar "None")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "None"))) (fa "diProfileName" (ELit (LString ""))))))
+(DTypeSig true "driveInputsFor" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "DriveInputs")))))
+(DFunDef false "driveInputsFor" ((PVar "profile") (PVar "flatEntry") (PVar "mods")) (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EApp (EApp (EVar "namesToSet") (EVar "mods")) (EVar "omEmpty"))) (fa "diFlatEntryIsStdlib" (EVar "flatEntry")) (fa "diTrace" (EVar "None")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "profile"))) (fa "diProfileName" (EMatch (EVar "profile") (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "profileName") (EVar "p"))))))))
 (DTypeSig false "offTraceSink" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
 (DFunDef false "offTraceSink" (PWild) (ERecordCreate "TraceSink" ((fa "tsAssumptionEnabled" (EVar "False")) (fa "tsAssumptionEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsNumericPredicateEnabled" (EVar "False")) (fa "tsNumericPredicateEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsMethodReturnEnabled" (EVar "False")) (fa "tsMethodReturnEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsEvidenceObservationEnabled" (EVar "False")) (fa "tsEvidenceObservationEntries" (EApp (EVar "Ref") (EListLit))))))
-(DTypeSig false "setTraceSink" (TyFun (TyCon "TraceSink") (TyCon "Unit")))
-(DFunDef false "setTraceSink" ((PVar "sink")) (EApp (EApp (EVar "setRef") (EVar "driveInputs")) (ERecordUpdate (EFieldAccess (EVar "driveInputs") "value") ((fa "diTrace" (EApp (EVar "Some") (EVar "sink")))))))
-(DTypeSig true "beginAssumptionTrace" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "beginAssumptionTrace" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsAssumptionEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsAssumptionEnabled" (EVar "True"))))))))
-(DTypeSig true "finishAssumptionTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry"))))
-(DFunDef false "finishAssumptionTrace" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoLet false false (PVar "entries") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsAssumptionEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsAssumptionEnabled" (EVar "False")))))) (DoExpr (EVar "entries"))))
-(DTypeSig true "beginNumericPredicateTrace" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "beginNumericPredicateTrace" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsNumericPredicateEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsNumericPredicateEnabled" (EVar "True"))))))))
-(DTypeSig true "finishNumericPredicateTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry"))))
-(DFunDef false "finishNumericPredicateTrace" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoLet false false (PVar "entries") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsNumericPredicateEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsNumericPredicateEnabled" (EVar "False")))))) (DoExpr (EVar "entries"))))
-(DTypeSig true "beginMethodReturnTrace" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "beginMethodReturnTrace" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsMethodReturnEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsMethodReturnEnabled" (EVar "True"))))))))
-(DTypeSig true "finishMethodReturnTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry"))))
-(DFunDef false "finishMethodReturnTrace" (PWild) (EBlock (DoLet false false (PVar "evidence") (EApp (EVar "drivenEvidence") (ELit LUnit))) (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoLet false false (PVar "entries") (EApp (EApp (EVar "map") (EApp (EVar "publishMethodReturnTrace") (EVar "evidence"))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsMethodReturnEntries") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsMethodReturnEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsMethodReturnEnabled" (EVar "False")))))) (DoExpr (EVar "entries"))))
+(DTypeSig true "beginAssumptionTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginAssumptionTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsAssumptionEnabled" (EVar "True")))))
+(DTypeSig true "finishAssumptionTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry"))))
+(DFunDef false "finishAssumptionTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value")))
+(DTypeSig true "beginNumericPredicateTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginNumericPredicateTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsNumericPredicateEnabled" (EVar "True")))))
+(DTypeSig true "finishNumericPredicateTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry"))))
+(DFunDef false "finishNumericPredicateTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value")))
+(DTypeSig true "beginMethodReturnTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginMethodReturnTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsMethodReturnEnabled" (EVar "True")))))
+(DTypeSig true "finishMethodReturnTrace" (TyFun (TyCon "TraceSink") (TyFun (TyCon "EvTable") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry")))))
+(DFunDef false "finishMethodReturnTrace" ((PVar "sink") (PVar "evidence")) (EApp (EApp (EVar "map") (EApp (EVar "publishMethodReturnTrace") (EVar "evidence"))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsMethodReturnEntries") "value"))))
 (DTypeSig false "publishMethodReturnTrace" (TyFun (TyCon "EvTable") (TyFun (TyCon "MethodReturnTraceEntry") (TyCon "MethodReturnTraceEntry"))))
 (DFunDef false "publishMethodReturnTrace" ((PVar "evidence") (PVar "entry")) (EBlock (DoLet false false (PVar "published") (EMatch (EFieldAccess (EVar "entry") "mrtGoal") (arm (PCon "Some" (PVar "goal")) () (EApp (EApp (EVar "lookupTraceEvidence") (EVar "goal")) (EVar "evidence"))) (arm (PCon "None") () (EVar "None")))) (DoExpr (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EFieldAccess (EVar "entry") "mrtStage")) (fa "mrtInterface" (EFieldAccess (EVar "entry") "mrtInterface")) (fa "mrtMethod" (EFieldAccess (EVar "entry") "mrtMethod")) (fa "mrtArguments" (EFieldAccess (EVar "entry") "mrtArguments")) (fa "mrtScope" (EFieldAccess (EVar "entry") "mrtScope")) (fa "mrtOrigin" (EFieldAccess (EVar "entry") "mrtOrigin")) (fa "mrtGoal" (EFieldAccess (EVar "entry") "mrtGoal")) (fa "mrtPublished" (EVar "published")) (fa "mrtQualifiedBody" (EFieldAccess (EVar "entry") "mrtQualifiedBody")) (fa "mrtWanted" (EFieldAccess (EVar "entry") "mrtWanted")) (fa "mrtOutcome" (EFieldAccess (EVar "entry") "mrtOutcome")) (fa "mrtRoute" (EFieldAccess (EVar "entry") "mrtRoute")) (fa "mrtPrerequisites" (EFieldAccess (EVar "entry") "mrtPrerequisites")))))))
 (DTypeSig false "lookupTraceEvidence" (TyFun (TyCon "EvId") (TyFun (TyCon "EvTable") (TyApp (TyCon "Option") (TyCon "EvVal")))))
@@ -56313,11 +56289,11 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "sameTraceEvId" (TyFun (TyCon "EvId") (TyFun (TyCon "EvId") (TyCon "Bool"))))
 (DFunDef false "sameTraceEvId" ((PCon "EvId" (PVar "moduleA") (PVar "ordinalA")) (PCon "EvId" (PVar "moduleB") (PVar "ordinalB"))) (EBinOp "&&" (EBinOp "==" (EVar "moduleA") (EVar "moduleB")) (EBinOp "==" (EVar "ordinalA") (EVar "ordinalB"))))
 (DTypeSig false "noteMethodReturnTrace" (TyFun (TyCon "MethodReturnTraceStage") (TyFun (TyCon "MethodReturnRequest") (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit"))))))
-(DFunDef false "noteMethodReturnTrace" ((PVar "stage") (PVar "request") (PVar "route") (PVar "prerequisites")) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EIf (EFieldAccess (EVar "sink") "tsMethodReturnEnabled") (EBlock (DoLet false false (PTuple (PVar "qualifiedBody") (PVar "wanted")) (EMatch (EApp (EVar "methodReturnInstantiation") (EVar "request")) (arm (PCon "Some" (PRec "Instantiation" ((rf "body" (PVar "body")) (rf "arguments" (PList (PRec "InstantiationArgument" ((rf "wanted" (PVar "carried"))) true)))) true)) () (ETuple (EApp (EVar "Some") (EVar "body")) (EApp (EVar "Some") (EVar "carried")))) (arm PWild () (ETuple (EVar "None") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsMethodReturnEntries")) (EBinOp "::" (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EVar "stage")) (fa "mrtInterface" (EFieldAccess (EVar "request") "mrrIface")) (fa "mrtMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrtArguments" (EApp (EVar "methodReturnArgs") (EVar "request"))) (fa "mrtScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "mrtOrigin" (EFieldAccess (EVar "request") "mrrLoc")) (fa "mrtGoal" (EFieldAccess (EVar "request") "mrrGoalEv")) (fa "mrtPublished" (EVar "None")) (fa "mrtQualifiedBody" (EVar "qualifiedBody")) (fa "mrtWanted" (EVar "wanted")) (fa "mrtOutcome" (EApp (EApp (EVar "map") (ELam ((PVar "resolution")) (EFieldAccess (EVar "resolution") "mrrOutcome"))) (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value"))) (fa "mrtRoute" (EVar "route")) (fa "mrtPrerequisites" (EVar "prerequisites")))) (EFieldAccess (EFieldAccess (EVar "sink") "tsMethodReturnEntries") "value"))))) (ELit LUnit)))))
-(DTypeSig true "beginEvidenceObservation" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "beginEvidenceObservation" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsEvidenceObservationEnabled" (EVar "True"))))))))
-(DTypeSig true "finishEvidenceObservation" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
-(DFunDef false "finishEvidenceObservation" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoLet false false (PVar "entries") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsEvidenceObservationEnabled" (EVar "False")))))) (DoExpr (EVar "entries"))))
+(DFunDef false "noteMethodReturnTrace" ((PVar "stage") (PVar "request") (PVar "route") (PVar "prerequisites")) (EMatch (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "trace") (arm (PCon "Some" (PVar "sink")) () (EIf (EFieldAccess (EVar "sink") "tsMethodReturnEnabled") (EBlock (DoLet false false (PTuple (PVar "qualifiedBody") (PVar "wanted")) (EMatch (EApp (EVar "methodReturnInstantiation") (EVar "request")) (arm (PCon "Some" (PRec "Instantiation" ((rf "body" (PVar "body")) (rf "arguments" (PList (PRec "InstantiationArgument" ((rf "wanted" (PVar "carried"))) true)))) true)) () (ETuple (EApp (EVar "Some") (EVar "body")) (EApp (EVar "Some") (EVar "carried")))) (arm PWild () (ETuple (EVar "None") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsMethodReturnEntries")) (EBinOp "::" (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EVar "stage")) (fa "mrtInterface" (EFieldAccess (EVar "request") "mrrIface")) (fa "mrtMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrtArguments" (EApp (EVar "methodReturnArgs") (EVar "request"))) (fa "mrtScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "mrtOrigin" (EFieldAccess (EVar "request") "mrrLoc")) (fa "mrtGoal" (EFieldAccess (EVar "request") "mrrGoalEv")) (fa "mrtPublished" (EVar "None")) (fa "mrtQualifiedBody" (EVar "qualifiedBody")) (fa "mrtWanted" (EVar "wanted")) (fa "mrtOutcome" (EApp (EApp (EVar "map") (ELam ((PVar "resolution")) (EFieldAccess (EVar "resolution") "mrrOutcome"))) (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value"))) (fa "mrtRoute" (EVar "route")) (fa "mrtPrerequisites" (EVar "prerequisites")))) (EFieldAccess (EFieldAccess (EVar "sink") "tsMethodReturnEntries") "value"))))) (ELit LUnit))) (arm (PCon "None") () (ELit LUnit))))
+(DTypeSig true "beginEvidenceObservation" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginEvidenceObservation" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsEvidenceObservationEnabled" (EVar "True")))))
+(DTypeSig true "finishEvidenceObservation" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
+(DFunDef false "finishEvidenceObservation" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value")))
 (DTypeSig false "goalKindName" (TyFun (TyCon "GoalKind") (TyCon "String")))
 (DFunDef false "goalKindName" ((PCon "GKReturnSite")) (ELit (LString "GKReturnSite")))
 (DFunDef false "goalKindName" ((PCon "GKArgStamp")) (ELit (LString "GKArgStamp")))
@@ -56379,12 +56355,14 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "renderRouteIdentity" ((PCon "RScalar" (PVar "n"))) (EBinOp "++" (ELit (LString "RScalar ")) (EVar "n")))
 (DFunDef false "renderRouteIdentity" ((PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RProj (")) (EApp (EVar "display") (EApp (EVar "renderRouteIdentity") (EVar "r")))) (ELit (LString ") "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EApp (EApp (EVar "map") (EVar "intToString")) (EVar "path"))))) (ELit (LString ""))))
 (DTypeSig false "noteEvidenceObservation" (TyFun (TyCon "Obligation") (TyCon "Unit")))
-(DFunDef false "noteEvidenceObservation" ((PVar "o")) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EIf (EFieldAccess (EVar "sink") "tsEvidenceObservationEnabled") (EBlock (DoLet false false (PVar "routes") (EApp (EVar "obligationRoutes") (EVar "o"))) (DoLet false false (PVar "predicates") (EApp (EVar "obligationPredicateMonos") (EVar "o"))) (DoLet false false (PVar "arity") (EApp (EVar "listLen") (EVar "routes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "evidenceObservationEntriesGo") (EVar "o")) (EVar "routes")) (EVar "predicates")) (EVar "arity")) (ELit (LInt 0))) (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value"))))) (ELit LUnit)))))
+(DFunDef false "noteEvidenceObservation" ((PVar "o")) (EMatch (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "trace") (arm (PCon "Some" (PVar "sink")) () (EIf (EFieldAccess (EVar "sink") "tsEvidenceObservationEnabled") (EBlock (DoLet false false (PVar "routes") (EApp (EVar "obligationRoutes") (EVar "o"))) (DoLet false false (PVar "predicates") (EApp (EVar "obligationPredicateMonos") (EVar "o"))) (DoLet false false (PVar "arity") (EApp (EVar "listLen") (EVar "routes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "evidenceObservationEntriesGo") (EVar "o")) (EVar "routes")) (EVar "predicates")) (EVar "arity")) (ELit (LInt 0))) (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value"))))) (ELit LUnit))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig false "evidenceObservationEntriesGo" (TyFun (TyCon "Obligation") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))))))
 (DFunDef false "evidenceObservationEntriesGo" (PWild (PList) PWild PWild PWild) (EListLit))
 (DFunDef false "evidenceObservationEntriesGo" ((PVar "o") (PCons (PVar "r") (PVar "rs")) (PVar "preds") (PVar "arity") (PVar "slot")) (EBlock (DoLet false false (PTuple (PVar "predHere") (PVar "predsRest")) (EMatch (EVar "preds") (arm (PCons (PVar "p") (PVar "ptail")) () (ETuple (EVar "p") (EVar "ptail"))) (arm (PList) () (ETuple (EVar "None") (EListLit))))) (DoExpr (EBinOp "::" (ERecordCreate "EvidenceObservationEntry" ((fa "eoeEv" (EFieldAccess (EVar "o") "oEv")) (fa "eoeGoalKind" (EApp (EVar "goalKindName") (EFieldAccess (EVar "o") "oKind"))) (fa "eoeSlot" (EVar "slot")) (fa "eoeArity" (EVar "arity")) (fa "eoePredicate" (EApp (EApp (EVar "map") (EVar "ppMono")) (EVar "predHere"))) (fa "eoeOutcome" (EApp (EVar "routeOutcomeKind") (EVar "r"))) (fa "eoeGivenBinder" (EApp (EVar "routeGivenBinder") (EVar "r"))) (fa "eoeInstanceKey" (EApp (EVar "routeInstanceKey") (EVar "r"))) (fa "eoePrerequisites" (EApp (EApp (EVar "map") (EVar "renderRouteIdentity")) (EApp (EVar "routePrerequisiteRoutes") (EVar "r")))) (fa "eoeScope" (EFieldAccess (EVar "o") "oScope")))) (EApp (EApp (EApp (EApp (EApp (EVar "evidenceObservationEntriesGo") (EVar "o")) (EVar "rs")) (EVar "predsRest")) (EVar "arity")) (EBinOp "+" (EVar "slot") (ELit (LInt 1))))))))
 (DTypeSig false "noteNumericPredicateTrace" (TyFun (TyCon "NumericPredicateTraceStage") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit")))))))))
-(DFunDef false "noteNumericPredicateTrace" ((PVar "stage") (PVar "predicate") (PVar "scope") (PVar "origin") (PVar "selected") (PVar "route") (PVar "prereqs")) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EIf (EFieldAccess (EVar "sink") "tsNumericPredicateEnabled") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsNumericPredicateEntries")) (EBinOp "::" (ERecordCreate "NumericPredicateTraceEntry" ((fa "nptStage" (EVar "stage")) (fa "nptPredicate" (EVar "predicate")) (fa "nptScope" (EVar "scope")) (fa "nptOrigin" (EVar "origin")) (fa "nptSelectedInterface" (EVar "selected")) (fa "nptRoute" (EVar "route")) (fa "nptPrerequisites" (EVar "prereqs")))) (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value"))) (ELit LUnit)))))
+(DFunDef false "noteNumericPredicateTrace" ((PVar "stage") (PVar "predicate") (PVar "scope") (PVar "origin") (PVar "selected") (PVar "route") (PVar "prereqs")) (EMatch (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "trace") (arm (PCon "Some" (PVar "sink")) () (EIf (EFieldAccess (EVar "sink") "tsNumericPredicateEnabled") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsNumericPredicateEntries")) (EBinOp "::" (ERecordCreate "NumericPredicateTraceEntry" ((fa "nptStage" (EVar "stage")) (fa "nptPredicate" (EVar "predicate")) (fa "nptScope" (EVar "scope")) (fa "nptOrigin" (EVar "origin")) (fa "nptSelectedInterface" (EVar "selected")) (fa "nptRoute" (EVar "route")) (fa "nptPrerequisites" (EVar "prereqs")))) (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value"))) (ELit LUnit))) (arm (PCon "None") () (ELit LUnit))))
+(DTypeSig false "numericPredicateTraceOn" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DFunDef false "numericPredicateTraceOn" (PWild) (EMatch (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "trace") (arm (PCon "Some" (PVar "sink")) () (EFieldAccess (EVar "sink") "tsNumericPredicateEnabled")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "assumAnswerBinder" (TyFun (TyCon "AssumAnswer") (TyCon "EvidenceBinderId")))
 (DFunDef false "assumAnswerBinder" ((PCon "SemanticGiven" (PVar "evidence"))) (EApp (EVar "givenEvidenceBinder") (EVar "evidence")))
 (DFunDef false "assumAnswerBinder" ((PCon "LegacyScalar" (PVar "binder"))) (EVar "binder"))
@@ -56422,7 +56400,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "projectedGivenOf" (TyFun (TyCon "EvidenceBinderId") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "GivenEntry")))))
 (DFunDef false "projectedGivenOf" ((PVar "parent") (PVar "path")) (EApp (EApp (EVar "find") (ELam ((PVar "g")) (EBinOp "==" (EFieldAccess (EVar "g") "geProvenance") (EApp (EApp (EVar "ProjectedGiven") (EVar "parent")) (EVar "path"))))) (EApp (EVar "givensForScope") (EApp (EVar "Scopes.binderScope") (EVar "parent")))))
 (DTypeSig false "noteAssumption" (TyFun (TyCon "ScopeId") (TyFun (TyCon "AssumAnswer") (TyCon "Unit"))))
-(DFunDef false "noteAssumption" ((PVar "scope") (PVar "answer")) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EIf (EFieldAccess (EVar "sink") "tsAssumptionEnabled") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsAssumptionEntries")) (EBinOp "::" (ERecordCreate "AssumptionTraceEntry" ((fa "atGoalScope" (EVar "scope")) (fa "atBinder" (EApp (EVar "assumAnswerBinder") (EVar "answer"))) (fa "atKind" (EApp (EVar "assumAnswerKind") (EVar "answer"))))) (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value"))) (ELit LUnit)))))
+(DFunDef false "noteAssumption" ((PVar "scope") (PVar "answer")) (EMatch (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "trace") (arm (PCon "Some" (PVar "sink")) () (EIf (EFieldAccess (EVar "sink") "tsAssumptionEnabled") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsAssumptionEntries")) (EBinOp "::" (ERecordCreate "AssumptionTraceEntry" ((fa "atGoalScope" (EVar "scope")) (fa "atBinder" (EApp (EVar "assumAnswerBinder") (EVar "answer"))) (fa "atKind" (EApp (EVar "assumAnswerKind") (EVar "answer"))))) (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value"))) (ELit LUnit))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig false "captureScope" (TyFun (TyCon "Unit") (TyCon "ScopeId")))
 (DFunDef false "captureScope" (PWild) (EApp (EVar "Scopes.captureScopeCursor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentScope") "value")))
 (DTypeSig false "openScope" (TyFun (TyCon "ScopeId") (TyCon "Unit")))
@@ -60417,10 +60395,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "superHeadStep" ((PVar "pat") (PVar "t")) (EApp (EApp (EVar "tyStep") (EVar "pat")) (EApp (EVar "stripTyWrap") (EVar "t"))))
 (DTypeSig false "globalCoherenceConflict" (TyFun (TyCon "ImplEnv") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "globalCoherenceConflict" ((PVar "env")) (EMatch (EApp (EApp (EApp (EVar "cohScan") (EVar "CohSweepGlobal")) (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "cohImplOfRow")) (EApp (EVar "cohRowsOf") (EVar "env"))))) (EListLit)) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (ETuple (EApp (EApp (EVar "map") (EVar "fst")) (EVar "hard")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "soft"))))))
-(DTypeSig true "setCoherenceUserDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
-(DFunDef false "setCoherenceUserDecls" ((PVar "ds")) (EApp (EApp (EVar "setRef") (EVar "driveInputs")) (ERecordUpdate (EFieldAccess (EVar "driveInputs") "value") ((fa "diCoherenceUserDecls" (EVar "ds"))))))
-(DTypeSig true "setStdlibOwnership" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))
-(DFunDef false "setStdlibOwnership" ((PVar "flatEntry") (PVar "mods")) (EApp (EApp (EVar "setRef") (EVar "driveInputs")) (ERecordUpdate (EFieldAccess (EVar "driveInputs") "value") ((fa "diFlatEntryIsStdlib" (EVar "flatEntry")) (fa "diStdlibOwned" (EApp (EApp (EVar "namesToSet") (EVar "mods")) (EVar "omEmpty")))))))
 (DTypeSig false "implMethodNameTc" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodNameTc" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "keyEntryIdx" (TyFun (TyCon "KeyEntry") (TyCon "Int")))
@@ -61250,7 +61224,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "methodReturnPrerequisitesMatch" ((PCons (PVar "left") (PVar "ls")) (PCons (PVar "right") (PVar "rs"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "left") "prerequisiteInterface")) (EFieldAccess (EVar "right") "prerequisiteInterface")) (EApp (EApp (EVar "monoVecSameGiven") (EFieldAccess (EVar "left") "prerequisiteArguments")) (EFieldAccess (EVar "right") "prerequisiteArguments"))) (EApp (EApp (EVar "methodReturnPrerequisitesMatch") (EVar "ls")) (EVar "rs"))))
 (DFunDef false "methodReturnPrerequisitesMatch" (PWild PWild) (EVar "False"))
 (DTypeSig false "noteNumericObligationChecked" (TyFun (TyCon "UObligation") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit"))))
-(DFunDef false "noteNumericObligationChecked" ((PVar "o") (PVar "occs")) (EIf (EApp (EVar "not") (EFieldAccess (EApp (EVar "traceSink") (ELit LUnit)) "tsNumericPredicateEnabled")) (ELit LUnit) (EMatch (ETuple (EFieldAccess (EVar "o") "prov") (EFieldAccess (EVar "o") "oblProj")) (arm (PTuple PWild (PCon "OpNumLit" PWild)) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTChecked")) (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (fa "predicateArguments" (EFieldAccess (EFieldAccess (EVar "o") "pred") "args"))))) (EFieldAccess (EVar "o") "uoScope")) (EFieldAccess (EVar "o") "loc")) (EVar "None")) (EVar "None")) (EListLit))) (arm (PTuple (PCon "POperator") PWild) () (EBlock (DoLet false false (PVar "predicate") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (fa "predicateArguments" (EVar "occs"))))) (DoExpr (EIf (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "predicate") "predicateInterface")) (EApp (EVar "builtinIfaceRef") (EVar "BNum"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTChecked")) (EVar "predicate")) (EFieldAccess (EVar "o") "uoScope")) (EFieldAccess (EVar "o") "loc")) (EVar "None")) (EVar "None")) (EListLit)) (ELit LUnit))))) (arm PWild () (ELit LUnit)))))
+(DFunDef false "noteNumericObligationChecked" ((PVar "o") (PVar "occs")) (EIf (EApp (EVar "not") (EApp (EVar "numericPredicateTraceOn") (ELit LUnit))) (ELit LUnit) (EMatch (ETuple (EFieldAccess (EVar "o") "prov") (EFieldAccess (EVar "o") "oblProj")) (arm (PTuple PWild (PCon "OpNumLit" PWild)) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTChecked")) (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (fa "predicateArguments" (EFieldAccess (EFieldAccess (EVar "o") "pred") "args"))))) (EFieldAccess (EVar "o") "uoScope")) (EFieldAccess (EVar "o") "loc")) (EVar "None")) (EVar "None")) (EListLit))) (arm (PTuple (PCon "POperator") PWild) () (EBlock (DoLet false false (PVar "predicate") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (fa "predicateArguments" (EVar "occs"))))) (DoExpr (EIf (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "predicate") "predicateInterface")) (EApp (EVar "builtinIfaceRef") (EVar "BNum"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTChecked")) (EVar "predicate")) (EFieldAccess (EVar "o") "uoScope")) (EFieldAccess (EVar "o") "loc")) (EVar "None")) (EVar "None")) (EListLit)) (ELit LUnit))))) (arm PWild () (ELit LUnit)))))
 (DTypeSig false "checkOneCallObligation" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit"))))))))
 (DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc") (PVar "scope")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "iface")) (EVar "args")) (EVar "loc")) (EVar "scope"))) (EMatch (EApp (EApp (EApp (EVar "oblCallVerdict") (EVar "univ")) (EVar "iface")) (EVar "args")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PCon "True")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "noSite")) (EVar "univ")) (EApp (EVar "reqWalkStart") (ELit LUnit))) (EVar "iface")) (EVar "args")) (EVar "loc")) (EVar "scope"))) (arm (PCon "Some" (PCon "False")) () (EApp (EApp (EApp (EApp (EVar "checkOneCallObligationNoImpl") (EVar "iface")) (EVar "args")) (EVar "loc")) (EVar "scope")))))))))))
 (DTypeSig false "checkOneCallObligationNoImpl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit"))))))
@@ -63022,14 +62996,18 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "nameableIfaceMethodSet" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "nameableIfaceMethodSet" ((PVar "prog")) (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EApp (EVar "nameableIfaceRows") (EVar "prog")))) (EVar "omEmpty")))
 (DTypeSig true "nameableIfaceRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "nameableIfaceRows" ((PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (ELit (LString "core"))) (EApp (EVar "ifaceExportsIndex") (ELit LUnit)))) (EApp (EVar "ifaceMethodRows") (EVar "prog"))) (EApp (EVar "importedIfaceRows") (EVar "prog"))))
-(DTypeSig false "importedIfaceRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "importedIfaceRows" ((PList)) (EListLit))
-(DFunDef false "importedIfaceRows" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "importedIfaceRows") (EListLit (EVar "d"))) (EApp (EVar "importedIfaceRows") (EVar "rest"))))
-(DFunDef false "importedIfaceRows" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBinOp "++" (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EApp (EVar "ifaceExportsIndex") (ELit LUnit))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))) (EApp (EVar "importedIfaceRows") (EVar "rest"))))
-(DFunDef false "importedIfaceRows" ((PCons PWild (PVar "rest"))) (EApp (EVar "importedIfaceRows") (EVar "rest")))
+(DFunDef false "nameableIfaceRows" ((PVar "prog")) (EApp (EApp (EVar "nameableIfaceRowsIn") (EApp (EVar "ifaceExportsIndex") (ELit LUnit))) (EVar "prog")))
+(DTypeSig false "nameableIfaceRowsIn" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "nameableIfaceRowsIn" ((PVar "idx") (PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (ELit (LString "core"))) (EVar "idx"))) (EApp (EVar "ifaceMethodRows") (EVar "prog"))) (EApp (EApp (EVar "importedIfaceRows") (EVar "idx")) (EVar "prog"))))
+(DTypeSig false "importedIfaceRows" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "importedIfaceRows" (PWild (PList)) (EListLit))
+(DFunDef false "importedIfaceRows" ((PVar "idx") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "importedIfaceRows") (EVar "idx")) (EListLit (EVar "d"))) (EApp (EApp (EVar "importedIfaceRows") (EVar "idx")) (EVar "rest"))))
+(DFunDef false "importedIfaceRows" ((PVar "idx") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBinOp "++" (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "idx")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))) (EApp (EApp (EVar "importedIfaceRows") (EVar "idx")) (EVar "rest"))))
+(DFunDef false "importedIfaceRows" ((PVar "idx") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "importedIfaceRows") (EVar "idx")) (EVar "rest")))
 (DTypeSig true "importedStandaloneShadows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc"))))))
-(DFunDef false "importedStandaloneShadows" ((PVar "graph") (PVar "prog")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EVar "ifaceExportsIndex") (ELit LUnit))) (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "rows") (EApp (EVar "nameableIfaceRows") (EVar "prog"))) (DoLet false false (PVar "nameable") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "rows"))) (EVar "omEmpty"))) (DoLet false false (PVar "universe") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "graph")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "importShadowsOfDecl") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe"))) (EVar "prog")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "importedStandaloneShadows" ((PVar "graph") (PVar "prog")) (EApp (EApp (EApp (EVar "importedStandaloneShadowsIn") (EApp (EVar "ifaceExportsIndex") (ELit LUnit))) (EVar "graph")) (EVar "prog")))
+(DTypeSig true "importedStandaloneShadowsIn" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc")))))))
+(DFunDef false "importedStandaloneShadowsIn" ((PVar "idx") (PVar "graph") (PVar "prog")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EVar "idx")) (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "nameableIfaceRowsIn") (EVar "idx")) (EVar "prog"))) (DoLet false false (PVar "nameable") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "rows"))) (EVar "omEmpty"))) (DoLet false false (PVar "universe") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "graph")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "importShadowsOfDecl") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe"))) (EVar "prog")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "importShadowsOfDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc")))))))))
 (DFunDef false "importShadowsOfDecl" ((PVar "graph") (PVar "rows") (PVar "nameable") (PVar "universe") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "importShadowsOfDecl") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe")) (EVar "d")))
 (DFunDef false "importShadowsOfDecl" ((PVar "graph") (PVar "rows") (PVar "nameable") (PVar "universe") (PCon "DUse" PWild (PVar "path") PWild)) (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "ms")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "graph")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "depDecls")) () (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "importMemberShadow") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe")) (EVar "depDecls"))) (EVar "ms"))))) (arm PWild () (EListLit))))
@@ -63580,12 +63558,12 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "preludePreambleFor" ((PCon "Some" (PVar "k")) (PVar "coreDecls") (PVar "coreRow")) (EMatch (EUnOp "!" (EVar "preludePreambleMemoRef")) (arm (PCon "Some" (PVar "entry")) () (EIf (EBinOp "==" (EApp (EVar "fst") (EVar "entry")) (ETuple (EVar "k") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "config") "value") "tcIoJoinProfile"))) (EApp (EVar "snd") (EVar "entry")) (EApp (EApp (EApp (EVar "preludePreambleStore") (EVar "k")) (EVar "coreDecls")) (EVar "coreRow")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "preludePreambleStore") (EVar "k")) (EVar "coreDecls")) (EVar "coreRow")))))
 (DTypeSig false "preludePreambleStore" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "DeclEnvModule") (TyCon "PreludePreamble")))))
 (DFunDef false "preludePreambleStore" ((PVar "k") (PVar "coreDecls") (PVar "coreRow")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EVar "preludePreambleOf") (EVar "coreDecls")) (EVar "coreRow"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludePreambleMemoRef")) (EApp (EVar "Some") (ETuple (ETuple (EVar "k") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "config") "value") "tcIoJoinProfile")) (EVar "p"))))) (DoExpr (EVar "p"))))
-(DTypeSig false "tcConfigOf" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyFun (TyCon "DriveInputs") (TyCon "TcConfig"))))
-(DFunDef false "tcConfigOf" ((PVar "profile") (PVar "inputs")) (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EApp (EVar "ioJoinAtoms") (EApp (EVar "ioJoinGrants") (EVar "profile")))) (fa "tcIoJoinProfile" (EMatch (EVar "profile") (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "profileName") (EVar "p"))))) (fa "tcStdlibOwned" (EFieldAccess (EVar "inputs") "diStdlibOwned")) (fa "tcFlatEntryIsStdlib" (EFieldAccess (EVar "inputs") "diFlatEntryIsStdlib")) (fa "tcCoherenceUserDecls" (EFieldAccess (EVar "inputs") "diCoherenceUserDecls")))))
-(DTypeSig false "mintGraphCtx" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "mintGraphCtx" (PWild) (EBlock (DoLet false false (PVar "prior") (EFieldAccess (EVar "graphCtx") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphCtx")) (EVariantUpdate "GraphCtx" (EVar "prior") ((fa "crossRun" (EApp (EVar "freshCrossRun") (EVar "initialEnv"))) (fa "graphRun" (EApp (EApp (EVar "graphLineageRun") (EFieldAccess (EFieldAccess (EVar "prior") "graphRun") "markedAhead")) (EFieldAccess (EVar "prior") "graphRun")))))))))
+(DTypeSig false "tcConfigOf" (TyFun (TyCon "DriveInputs") (TyCon "TcConfig")))
+(DFunDef false "tcConfigOf" ((PVar "inputs")) (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EApp (EVar "ioJoinAtoms") (EFieldAccess (EVar "inputs") "diIoJoinGrants"))) (fa "tcIoJoinProfile" (EFieldAccess (EVar "inputs") "diProfileName")) (fa "tcStdlibOwned" (EFieldAccess (EVar "inputs") "diStdlibOwned")) (fa "tcFlatEntryIsStdlib" (EFieldAccess (EVar "inputs") "diFlatEntryIsStdlib")))))
+(DTypeSig false "mintGraphCtx" (TyFun (TyCon "DriveInputs") (TyCon "Unit")))
+(DFunDef false "mintGraphCtx" ((PVar "inputs")) (EBlock (DoLet false false (PVar "prior") (EFieldAccess (EVar "graphCtx") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphCtx")) (EVariantUpdate "GraphCtx" (EVar "prior") ((fa "crossRun" (EApp (EVar "freshCrossRun") (EVar "initialEnv"))) (fa "graphRun" (EApp (EApp (EVar "graphLineageRun") (EFieldAccess (EFieldAccess (EVar "prior") "graphRun") "markedAhead")) (EFieldAccess (EVar "prior") "graphRun"))) (fa "trace" (EFieldAccess (EVar "inputs") "diTrace"))))))))
 (DTypeSig false "graphPreamble" (TyFun (TyCon "DriveInputs") (TyFun (TyCon "GraphOut") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "ModuleBindings") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkSets")))))))))
-(DFunDef false "graphPreamble" ((PVar "_inputs") (PVar "sel") (PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "mainSchemeRef")) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchOracle")) (EApp (EVar "buildOracle") (EListLit)))) (DoExpr (ELit LUnit)))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "mintGraphCtx") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "populateEffectDomainsGraph") (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "config")) (EApp (EApp (EVar "tcConfigOf") (EUnOp "!" (EVar "selectedProfile"))) (EUnOp "!" (EVar "driveInputs"))))) (DoLet false false (PVar "coreRow") (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "core"))) (EVar "coreDecls"))) (DoLet false false (PVar "modRows") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 1))) (EVar "modules"))) (DoLet false false (PVar "prelude") (EApp (EApp (EApp (EVar "preludePreambleFor") (EVar "preludeKey")) (EVar "coreDecls")) (EVar "coreRow"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "mangledFunDefsPresentRef")) (EBinOp "||" (EFieldAccess (EVar "prelude") "ppMangledFunDefs") (EApp (EVar "graphCarriesMangledFunDefs") (EVar "modules"))))) (DoLet false false (PVar "declEnvs") (EApp (EApp (EApp (EVar "buildDeclEnvs") (EFieldAccess (EVar "prelude") "ppEnvAcc")) (EVar "coreRow")) (EVar "modRows"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "declEnvsRef")) (EVar "declEnvs"))) (DoLet false false (PVar "runtimeSeed") (EApp (EApp (EVar "withDeclParamKinds") (EVar "coreDecls")) (ELam ((PVar "u")) (EApp (EApp (EVar "externSchemes") (EApp (EVar "runtimeExternTyOriginScope") (EVar "coreDecls"))) (EVar "runtimeDecls"))))) (DoLet false false PWild (EApp (EApp (EVar "seedAbstractRecordTypes") (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "ms") (EApp (EApp (EApp (EApp (EVar "markSetsOf") (EFieldAccess (EVar "prelude") "ppMarkFacts")) (EVar "coreDecls")) (EVar "modules")) (EFieldAccess (EVar "declEnvs") "deAllDecls"))) (DoLet false false PWild (EApp (EVar "setDictEligible") (EApp (EVar "moduleUserFnNames") (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "promotionHarvestRef")) (EListLit))) (DoLet false false (PTuple (PVar "coreSchemes") (PVar "corePub") (PVar "coreContexts") (PVar "coreTree")) (EMatch (EVar "sel") (arm (PCon "GOutDiags") () (EBlock (DoLet false false (PTuple (PVar "bindings") (PVar "published") (PVar "ctx")) (EApp (EApp (EApp (EVar "checkCoreMemoized") (EVar "preludeKey")) (EVar "coreDecls")) (EVar "runtimeSeed"))) (DoExpr (EApp (EVar "installGraphCtx") (EVar "ctx"))) (DoExpr (ETuple (EVar "bindings") (EApp (EVar "Some") (EVar "published")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "crossRun") "coreSchemeObligationsRef") "value") (EListLit))))) (arm (PCon "GOutTrees") () (EBlock (DoLet false false (PTuple (PVar "bindings") (PVar "tree")) (EApp (EApp (EApp (EApp (EApp (EVar "elabModuleStamp") (ELit (LString ""))) (EVar "runtimeSeed")) (EListLit)) (EVar "coreDecls")) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "bindings") (EVar "None") (EApp (EVar "coreOwnContexts") (ELit LUnit)) (EVar "tree"))))))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes") (EVar "corePub") (EVar "coreContexts") (EVar "coreTree") (EVar "ms")))))
+(DFunDef false "graphPreamble" ((PVar "inputs") (PVar "sel") (PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "mainSchemeRef")) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchOracle")) (EApp (EVar "buildOracle") (EListLit)))) (DoExpr (ELit LUnit)))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "mintGraphCtx") (EVar "inputs"))) (DoLet false false PWild (EApp (EApp (EVar "populateEffectDomainsGraph") (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "config")) (EApp (EVar "tcConfigOf") (EVar "inputs")))) (DoLet false false (PVar "coreRow") (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "core"))) (EVar "coreDecls"))) (DoLet false false (PVar "modRows") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 1))) (EVar "modules"))) (DoLet false false (PVar "prelude") (EApp (EApp (EApp (EVar "preludePreambleFor") (EVar "preludeKey")) (EVar "coreDecls")) (EVar "coreRow"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "mangledFunDefsPresentRef")) (EBinOp "||" (EFieldAccess (EVar "prelude") "ppMangledFunDefs") (EApp (EVar "graphCarriesMangledFunDefs") (EVar "modules"))))) (DoLet false false (PVar "declEnvs") (EApp (EApp (EApp (EVar "buildDeclEnvs") (EFieldAccess (EVar "prelude") "ppEnvAcc")) (EVar "coreRow")) (EVar "modRows"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "declEnvsRef")) (EVar "declEnvs"))) (DoLet false false (PVar "runtimeSeed") (EApp (EApp (EVar "withDeclParamKinds") (EVar "coreDecls")) (ELam ((PVar "u")) (EApp (EApp (EVar "externSchemes") (EApp (EVar "runtimeExternTyOriginScope") (EVar "coreDecls"))) (EVar "runtimeDecls"))))) (DoLet false false PWild (EApp (EApp (EVar "seedAbstractRecordTypes") (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "ms") (EApp (EApp (EApp (EApp (EVar "markSetsOf") (EFieldAccess (EVar "prelude") "ppMarkFacts")) (EVar "coreDecls")) (EVar "modules")) (EFieldAccess (EVar "declEnvs") "deAllDecls"))) (DoLet false false PWild (EApp (EVar "setDictEligible") (EApp (EVar "moduleUserFnNames") (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "promotionHarvestRef")) (EListLit))) (DoLet false false (PTuple (PVar "coreSchemes") (PVar "corePub") (PVar "coreContexts") (PVar "coreTree")) (EMatch (EVar "sel") (arm (PCon "GOutDiags") () (EBlock (DoLet false false (PTuple (PVar "bindings") (PVar "published") (PVar "ctx")) (EApp (EApp (EApp (EVar "checkCoreMemoized") (EVar "preludeKey")) (EVar "coreDecls")) (EVar "runtimeSeed"))) (DoExpr (EApp (EVar "installGraphCtx") (EVar "ctx"))) (DoExpr (ETuple (EVar "bindings") (EApp (EVar "Some") (EVar "published")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "crossRun") "coreSchemeObligationsRef") "value") (EListLit))))) (arm (PCon "GOutTrees") () (EBlock (DoLet false false (PTuple (PVar "bindings") (PVar "tree")) (EApp (EApp (EApp (EApp (EApp (EVar "elabModuleStamp") (ELit (LString ""))) (EVar "runtimeSeed")) (EListLit)) (EVar "coreDecls")) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "bindings") (EVar "None") (EApp (EVar "coreOwnContexts") (ELit LUnit)) (EVar "tree"))))))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes") (EVar "corePub") (EVar "coreContexts") (EVar "coreTree") (EVar "ms")))))
 (DTypeSig false "checkModulesPreambleK" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "ModuleBindings"))))))))
 (DFunDef false "checkModulesPreambleK" ((PVar "inputs") (PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes") PWild PWild PWild PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "graphPreamble") (EVar "inputs")) (EVar "GOutDiags")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes")))))
 (DTypeSig false "cmCheckWorker" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))))))
@@ -64094,7 +64072,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "chain_key") ((mem "chainGraphKey" false) (mem "constrainedSigName" false) (mem "isConstrainedTy" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "EvIndex" false) (mem "evIndexOf" false) (mem "evDictRoutesIn" false) (mem "evSiteRouteIn" false) (mem "evSiteLitIn" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "validateDispositionTable" false))))
-(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "hostLabels" false) (mem "ioJoinGrants" false) (mem "profileName" false) (mem "selectedProfile" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "hostLabels" false) (mem "ioJoinGrants" false) (mem "profileName" false))))
 (DUse false (UseGroup ("types" "ffi_bindings") ((mem "FfiDiag" true) (mem "ffiCatalogNarrowMsg" false) (mem "ffiCatalogTailMsg" false) (mem "ffiDeclarationDiags" false) (mem "ffiNonCrossableMsg" false) (mem "ffiShadowMsg" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "EvidenceRow" true) (mem "Inner" true) (mem "innerNone" false) (mem "innerOfRoute" false) (mem "innerOr" false) (mem "rowHoleWith" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "addBinderRow" false) (mem "emptyBinderTypes" false) (mem "RuntimeType" true) (mem "runtimeTypeOf" false))))
@@ -65386,9 +65364,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "ifaceExportsIndex" (TyFun (TyCon "Unit") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "ifaceExportsIndex" (PWild) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "declEnvsRef") "value") "deMethods") "meIfaceExports"))
 (DTypeSig false "emptyTcConfig" (TyCon "TcConfig"))
-(DFunDef false "emptyTcConfig" () (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EListLit)) (fa "tcIoJoinProfile" (ELit (LString ""))) (fa "tcStdlibOwned" (EVar "omEmpty")) (fa "tcFlatEntryIsStdlib" (EVar "False")) (fa "tcCoherenceUserDecls" (EListLit)))))
+(DFunDef false "emptyTcConfig" () (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EListLit)) (fa "tcIoJoinProfile" (ELit (LString ""))) (fa "tcStdlibOwned" (EVar "omEmpty")) (fa "tcFlatEntryIsStdlib" (EVar "False")))))
 (DTypeSig false "initialGraphCtx" (TyFun (TyCon "TcEnv") (TyCon "GraphCtx")))
-(DFunDef false "initialGraphCtx" ((PVar "env")) (ERecordCreate "GraphCtx" ((fa "crossRun" (EApp (EVar "freshCrossRun") (EVar "env"))) (fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit))) (fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "config" (EApp (EVar "Ref") (EVar "emptyTcConfig"))) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "markSetsRef" (EApp (EVar "Ref") (EVar "None"))) (fa "typeErrorsSticky" (EApp (EVar "Ref") (EVar "False"))) (fa "typeErrorsStickyDiags" (EApp (EVar "Ref") (EListLit))))))
+(DFunDef false "initialGraphCtx" ((PVar "env")) (ERecordCreate "GraphCtx" ((fa "crossRun" (EApp (EVar "freshCrossRun") (EVar "env"))) (fa "graphRun" (EApp (EVar "freshGraphRun") (ELit LUnit))) (fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "config" (EApp (EVar "Ref") (EVar "emptyTcConfig"))) (fa "trace" (EVar "None")) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "markSetsRef" (EApp (EVar "Ref") (EVar "None"))) (fa "typeErrorsSticky" (EApp (EVar "Ref") (EVar "False"))) (fa "typeErrorsStickyDiags" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig false "graphCtx" (TyApp (TyCon "Ref") (TyCon "GraphCtx")))
 (DFunDef false "graphCtx" () (EApp (EVar "Ref") (EApp (EVar "initialGraphCtx") (EVar "initialEnv"))))
 (DTypeSig false "installCross" (TyFun (TyCon "CrossRun") (TyCon "Unit")))
@@ -65593,27 +65571,23 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig true "hadMatchWarnings" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "hadMatchWarnings" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchWarnings") "value") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig true "defaultDriveInputs" (TyCon "DriveInputs"))
-(DFunDef false "defaultDriveInputs" () (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EVar "omEmpty")) (fa "diFlatEntryIsStdlib" (EVar "False")) (fa "diCoherenceUserDecls" (EListLit)) (fa "diTrace" (EVar "None")))))
-(DTypeSig false "driveInputs" (TyApp (TyCon "Ref") (TyCon "DriveInputs")))
-(DFunDef false "driveInputs" () (EApp (EVar "Ref") (EVar "defaultDriveInputs")))
-(DTypeSig false "traceSink" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "traceSink" (PWild) (EMatch (EFieldAccess (EFieldAccess (EVar "driveInputs") "value") "diTrace") (arm (PCon "Some" (PVar "sink")) () (EVar "sink")) (arm (PCon "None") () (EApp (EVar "offTraceSink") (ELit LUnit)))))
+(DFunDef false "defaultDriveInputs" () (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EVar "omEmpty")) (fa "diFlatEntryIsStdlib" (EVar "False")) (fa "diTrace" (EVar "None")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "None"))) (fa "diProfileName" (ELit (LString ""))))))
+(DTypeSig true "driveInputsFor" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "DriveInputs")))))
+(DFunDef false "driveInputsFor" ((PVar "profile") (PVar "flatEntry") (PVar "mods")) (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EApp (EApp (EVar "namesToSet") (EVar "mods")) (EVar "omEmpty"))) (fa "diFlatEntryIsStdlib" (EVar "flatEntry")) (fa "diTrace" (EVar "None")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "profile"))) (fa "diProfileName" (EMatch (EVar "profile") (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "profileName") (EVar "p"))))))))
 (DTypeSig false "offTraceSink" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
 (DFunDef false "offTraceSink" (PWild) (ERecordCreate "TraceSink" ((fa "tsAssumptionEnabled" (EVar "False")) (fa "tsAssumptionEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsNumericPredicateEnabled" (EVar "False")) (fa "tsNumericPredicateEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsMethodReturnEnabled" (EVar "False")) (fa "tsMethodReturnEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsEvidenceObservationEnabled" (EVar "False")) (fa "tsEvidenceObservationEntries" (EApp (EVar "Ref") (EListLit))))))
-(DTypeSig false "setTraceSink" (TyFun (TyCon "TraceSink") (TyCon "Unit")))
-(DFunDef false "setTraceSink" ((PVar "sink")) (EApp (EApp (EVar "setRef") (EVar "driveInputs")) (ERecordUpdate (EFieldAccess (EVar "driveInputs") "value") ((fa "diTrace" (EApp (EVar "Some") (EVar "sink")))))))
-(DTypeSig true "beginAssumptionTrace" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "beginAssumptionTrace" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsAssumptionEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsAssumptionEnabled" (EVar "True"))))))))
-(DTypeSig true "finishAssumptionTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry"))))
-(DFunDef false "finishAssumptionTrace" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoLet false false (PVar "entries") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsAssumptionEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsAssumptionEnabled" (EVar "False")))))) (DoExpr (EVar "entries"))))
-(DTypeSig true "beginNumericPredicateTrace" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "beginNumericPredicateTrace" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsNumericPredicateEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsNumericPredicateEnabled" (EVar "True"))))))))
-(DTypeSig true "finishNumericPredicateTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry"))))
-(DFunDef false "finishNumericPredicateTrace" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoLet false false (PVar "entries") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsNumericPredicateEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsNumericPredicateEnabled" (EVar "False")))))) (DoExpr (EVar "entries"))))
-(DTypeSig true "beginMethodReturnTrace" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "beginMethodReturnTrace" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsMethodReturnEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsMethodReturnEnabled" (EVar "True"))))))))
-(DTypeSig true "finishMethodReturnTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry"))))
-(DFunDef false "finishMethodReturnTrace" (PWild) (EBlock (DoLet false false (PVar "evidence") (EApp (EVar "drivenEvidence") (ELit LUnit))) (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoLet false false (PVar "entries") (EApp (EApp (EMethodRef "map") (EApp (EVar "publishMethodReturnTrace") (EVar "evidence"))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsMethodReturnEntries") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsMethodReturnEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsMethodReturnEnabled" (EVar "False")))))) (DoExpr (EVar "entries"))))
+(DTypeSig true "beginAssumptionTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginAssumptionTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsAssumptionEnabled" (EVar "True")))))
+(DTypeSig true "finishAssumptionTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry"))))
+(DFunDef false "finishAssumptionTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value")))
+(DTypeSig true "beginNumericPredicateTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginNumericPredicateTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsNumericPredicateEnabled" (EVar "True")))))
+(DTypeSig true "finishNumericPredicateTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry"))))
+(DFunDef false "finishNumericPredicateTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value")))
+(DTypeSig true "beginMethodReturnTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginMethodReturnTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsMethodReturnEnabled" (EVar "True")))))
+(DTypeSig true "finishMethodReturnTrace" (TyFun (TyCon "TraceSink") (TyFun (TyCon "EvTable") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry")))))
+(DFunDef false "finishMethodReturnTrace" ((PVar "sink") (PVar "evidence")) (EApp (EApp (EMethodRef "map") (EApp (EVar "publishMethodReturnTrace") (EVar "evidence"))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsMethodReturnEntries") "value"))))
 (DTypeSig false "publishMethodReturnTrace" (TyFun (TyCon "EvTable") (TyFun (TyCon "MethodReturnTraceEntry") (TyCon "MethodReturnTraceEntry"))))
 (DFunDef false "publishMethodReturnTrace" ((PVar "evidence") (PVar "entry")) (EBlock (DoLet false false (PVar "published") (EMatch (EFieldAccess (EVar "entry") "mrtGoal") (arm (PCon "Some" (PVar "goal")) () (EApp (EApp (EVar "lookupTraceEvidence") (EVar "goal")) (EVar "evidence"))) (arm (PCon "None") () (EVar "None")))) (DoExpr (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EFieldAccess (EVar "entry") "mrtStage")) (fa "mrtInterface" (EFieldAccess (EVar "entry") "mrtInterface")) (fa "mrtMethod" (EFieldAccess (EVar "entry") "mrtMethod")) (fa "mrtArguments" (EFieldAccess (EVar "entry") "mrtArguments")) (fa "mrtScope" (EFieldAccess (EVar "entry") "mrtScope")) (fa "mrtOrigin" (EFieldAccess (EVar "entry") "mrtOrigin")) (fa "mrtGoal" (EFieldAccess (EVar "entry") "mrtGoal")) (fa "mrtPublished" (EVar "published")) (fa "mrtQualifiedBody" (EFieldAccess (EVar "entry") "mrtQualifiedBody")) (fa "mrtWanted" (EFieldAccess (EVar "entry") "mrtWanted")) (fa "mrtOutcome" (EFieldAccess (EVar "entry") "mrtOutcome")) (fa "mrtRoute" (EFieldAccess (EVar "entry") "mrtRoute")) (fa "mrtPrerequisites" (EFieldAccess (EVar "entry") "mrtPrerequisites")))))))
 (DTypeSig false "lookupTraceEvidence" (TyFun (TyCon "EvId") (TyFun (TyCon "EvTable") (TyApp (TyCon "Option") (TyCon "EvVal")))))
@@ -65622,11 +65596,11 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "sameTraceEvId" (TyFun (TyCon "EvId") (TyFun (TyCon "EvId") (TyCon "Bool"))))
 (DFunDef false "sameTraceEvId" ((PCon "EvId" (PVar "moduleA") (PVar "ordinalA")) (PCon "EvId" (PVar "moduleB") (PVar "ordinalB"))) (EBinOp "&&" (EBinOp "==" (EVar "moduleA") (EVar "moduleB")) (EBinOp "==" (EVar "ordinalA") (EVar "ordinalB"))))
 (DTypeSig false "noteMethodReturnTrace" (TyFun (TyCon "MethodReturnTraceStage") (TyFun (TyCon "MethodReturnRequest") (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit"))))))
-(DFunDef false "noteMethodReturnTrace" ((PVar "stage") (PVar "request") (PVar "route") (PVar "prerequisites")) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EIf (EFieldAccess (EVar "sink") "tsMethodReturnEnabled") (EBlock (DoLet false false (PTuple (PVar "qualifiedBody") (PVar "wanted")) (EMatch (EApp (EVar "methodReturnInstantiation") (EVar "request")) (arm (PCon "Some" (PRec "Instantiation" ((rf "body" (PVar "body")) (rf "arguments" (PList (PRec "InstantiationArgument" ((rf "wanted" (PVar "carried"))) true)))) true)) () (ETuple (EApp (EVar "Some") (EVar "body")) (EApp (EVar "Some") (EVar "carried")))) (arm PWild () (ETuple (EVar "None") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsMethodReturnEntries")) (EBinOp "::" (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EVar "stage")) (fa "mrtInterface" (EFieldAccess (EVar "request") "mrrIface")) (fa "mrtMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrtArguments" (EApp (EVar "methodReturnArgs") (EVar "request"))) (fa "mrtScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "mrtOrigin" (EFieldAccess (EVar "request") "mrrLoc")) (fa "mrtGoal" (EFieldAccess (EVar "request") "mrrGoalEv")) (fa "mrtPublished" (EVar "None")) (fa "mrtQualifiedBody" (EVar "qualifiedBody")) (fa "mrtWanted" (EVar "wanted")) (fa "mrtOutcome" (EApp (EApp (EMethodRef "map") (ELam ((PVar "resolution")) (EFieldAccess (EVar "resolution") "mrrOutcome"))) (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value"))) (fa "mrtRoute" (EVar "route")) (fa "mrtPrerequisites" (EVar "prerequisites")))) (EFieldAccess (EFieldAccess (EVar "sink") "tsMethodReturnEntries") "value"))))) (ELit LUnit)))))
-(DTypeSig true "beginEvidenceObservation" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "beginEvidenceObservation" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsEvidenceObservationEnabled" (EVar "True"))))))))
-(DTypeSig true "finishEvidenceObservation" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
-(DFunDef false "finishEvidenceObservation" (PWild) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoLet false false (PVar "entries") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries")) (EListLit))) (DoExpr (EApp (EVar "setTraceSink") (ERecordUpdate (EVar "sink") ((fa "tsEvidenceObservationEnabled" (EVar "False")))))) (DoExpr (EVar "entries"))))
+(DFunDef false "noteMethodReturnTrace" ((PVar "stage") (PVar "request") (PVar "route") (PVar "prerequisites")) (EMatch (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "trace") (arm (PCon "Some" (PVar "sink")) () (EIf (EFieldAccess (EVar "sink") "tsMethodReturnEnabled") (EBlock (DoLet false false (PTuple (PVar "qualifiedBody") (PVar "wanted")) (EMatch (EApp (EVar "methodReturnInstantiation") (EVar "request")) (arm (PCon "Some" (PRec "Instantiation" ((rf "body" (PVar "body")) (rf "arguments" (PList (PRec "InstantiationArgument" ((rf "wanted" (PVar "carried"))) true)))) true)) () (ETuple (EApp (EVar "Some") (EVar "body")) (EApp (EVar "Some") (EVar "carried")))) (arm PWild () (ETuple (EVar "None") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsMethodReturnEntries")) (EBinOp "::" (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EVar "stage")) (fa "mrtInterface" (EFieldAccess (EVar "request") "mrrIface")) (fa "mrtMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrtArguments" (EApp (EVar "methodReturnArgs") (EVar "request"))) (fa "mrtScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "mrtOrigin" (EFieldAccess (EVar "request") "mrrLoc")) (fa "mrtGoal" (EFieldAccess (EVar "request") "mrrGoalEv")) (fa "mrtPublished" (EVar "None")) (fa "mrtQualifiedBody" (EVar "qualifiedBody")) (fa "mrtWanted" (EVar "wanted")) (fa "mrtOutcome" (EApp (EApp (EMethodRef "map") (ELam ((PVar "resolution")) (EFieldAccess (EVar "resolution") "mrrOutcome"))) (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value"))) (fa "mrtRoute" (EVar "route")) (fa "mrtPrerequisites" (EVar "prerequisites")))) (EFieldAccess (EFieldAccess (EVar "sink") "tsMethodReturnEntries") "value"))))) (ELit LUnit))) (arm (PCon "None") () (ELit LUnit))))
+(DTypeSig true "beginEvidenceObservation" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginEvidenceObservation" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsEvidenceObservationEnabled" (EVar "True")))))
+(DTypeSig true "finishEvidenceObservation" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
+(DFunDef false "finishEvidenceObservation" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value")))
 (DTypeSig false "goalKindName" (TyFun (TyCon "GoalKind") (TyCon "String")))
 (DFunDef false "goalKindName" ((PCon "GKReturnSite")) (ELit (LString "GKReturnSite")))
 (DFunDef false "goalKindName" ((PCon "GKArgStamp")) (ELit (LString "GKArgStamp")))
@@ -65688,12 +65662,14 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "renderRouteIdentity" ((PCon "RScalar" (PVar "n"))) (EBinOp "++" (ELit (LString "RScalar ")) (EVar "n")))
 (DFunDef false "renderRouteIdentity" ((PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RProj (")) (EApp (EMethodRef "display") (EApp (EVar "renderRouteIdentity") (EVar "r")))) (ELit (LString ") "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EVar "path"))))) (ELit (LString ""))))
 (DTypeSig false "noteEvidenceObservation" (TyFun (TyCon "Obligation") (TyCon "Unit")))
-(DFunDef false "noteEvidenceObservation" ((PVar "o")) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EIf (EFieldAccess (EVar "sink") "tsEvidenceObservationEnabled") (EBlock (DoLet false false (PVar "routes") (EApp (EVar "obligationRoutes") (EVar "o"))) (DoLet false false (PVar "predicates") (EApp (EVar "obligationPredicateMonos") (EVar "o"))) (DoLet false false (PVar "arity") (EApp (EVar "listLen") (EVar "routes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "evidenceObservationEntriesGo") (EVar "o")) (EVar "routes")) (EVar "predicates")) (EVar "arity")) (ELit (LInt 0))) (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value"))))) (ELit LUnit)))))
+(DFunDef false "noteEvidenceObservation" ((PVar "o")) (EMatch (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "trace") (arm (PCon "Some" (PVar "sink")) () (EIf (EFieldAccess (EVar "sink") "tsEvidenceObservationEnabled") (EBlock (DoLet false false (PVar "routes") (EApp (EVar "obligationRoutes") (EVar "o"))) (DoLet false false (PVar "predicates") (EApp (EVar "obligationPredicateMonos") (EVar "o"))) (DoLet false false (PVar "arity") (EApp (EVar "listLen") (EVar "routes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "evidenceObservationEntriesGo") (EVar "o")) (EVar "routes")) (EVar "predicates")) (EVar "arity")) (ELit (LInt 0))) (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value"))))) (ELit LUnit))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig false "evidenceObservationEntriesGo" (TyFun (TyCon "Obligation") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))))))
 (DFunDef false "evidenceObservationEntriesGo" (PWild (PList) PWild PWild PWild) (EListLit))
 (DFunDef false "evidenceObservationEntriesGo" ((PVar "o") (PCons (PVar "r") (PVar "rs")) (PVar "preds") (PVar "arity") (PVar "slot")) (EBlock (DoLet false false (PTuple (PVar "predHere") (PVar "predsRest")) (EMatch (EVar "preds") (arm (PCons (PVar "p") (PVar "ptail")) () (ETuple (EVar "p") (EVar "ptail"))) (arm (PList) () (ETuple (EVar "None") (EListLit))))) (DoExpr (EBinOp "::" (ERecordCreate "EvidenceObservationEntry" ((fa "eoeEv" (EFieldAccess (EVar "o") "oEv")) (fa "eoeGoalKind" (EApp (EVar "goalKindName") (EFieldAccess (EVar "o") "oKind"))) (fa "eoeSlot" (EVar "slot")) (fa "eoeArity" (EVar "arity")) (fa "eoePredicate" (EApp (EApp (EMethodRef "map") (EVar "ppMono")) (EVar "predHere"))) (fa "eoeOutcome" (EApp (EVar "routeOutcomeKind") (EVar "r"))) (fa "eoeGivenBinder" (EApp (EVar "routeGivenBinder") (EVar "r"))) (fa "eoeInstanceKey" (EApp (EVar "routeInstanceKey") (EVar "r"))) (fa "eoePrerequisites" (EApp (EApp (EMethodRef "map") (EVar "renderRouteIdentity")) (EApp (EVar "routePrerequisiteRoutes") (EVar "r")))) (fa "eoeScope" (EFieldAccess (EVar "o") "oScope")))) (EApp (EApp (EApp (EApp (EApp (EVar "evidenceObservationEntriesGo") (EVar "o")) (EVar "rs")) (EVar "predsRest")) (EVar "arity")) (EBinOp "+" (EVar "slot") (ELit (LInt 1))))))))
 (DTypeSig false "noteNumericPredicateTrace" (TyFun (TyCon "NumericPredicateTraceStage") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit")))))))))
-(DFunDef false "noteNumericPredicateTrace" ((PVar "stage") (PVar "predicate") (PVar "scope") (PVar "origin") (PVar "selected") (PVar "route") (PVar "prereqs")) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EIf (EFieldAccess (EVar "sink") "tsNumericPredicateEnabled") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsNumericPredicateEntries")) (EBinOp "::" (ERecordCreate "NumericPredicateTraceEntry" ((fa "nptStage" (EVar "stage")) (fa "nptPredicate" (EVar "predicate")) (fa "nptScope" (EVar "scope")) (fa "nptOrigin" (EVar "origin")) (fa "nptSelectedInterface" (EVar "selected")) (fa "nptRoute" (EVar "route")) (fa "nptPrerequisites" (EVar "prereqs")))) (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value"))) (ELit LUnit)))))
+(DFunDef false "noteNumericPredicateTrace" ((PVar "stage") (PVar "predicate") (PVar "scope") (PVar "origin") (PVar "selected") (PVar "route") (PVar "prereqs")) (EMatch (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "trace") (arm (PCon "Some" (PVar "sink")) () (EIf (EFieldAccess (EVar "sink") "tsNumericPredicateEnabled") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsNumericPredicateEntries")) (EBinOp "::" (ERecordCreate "NumericPredicateTraceEntry" ((fa "nptStage" (EVar "stage")) (fa "nptPredicate" (EVar "predicate")) (fa "nptScope" (EVar "scope")) (fa "nptOrigin" (EVar "origin")) (fa "nptSelectedInterface" (EVar "selected")) (fa "nptRoute" (EVar "route")) (fa "nptPrerequisites" (EVar "prereqs")))) (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value"))) (ELit LUnit))) (arm (PCon "None") () (ELit LUnit))))
+(DTypeSig false "numericPredicateTraceOn" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DFunDef false "numericPredicateTraceOn" (PWild) (EMatch (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "trace") (arm (PCon "Some" (PVar "sink")) () (EFieldAccess (EVar "sink") "tsNumericPredicateEnabled")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "assumAnswerBinder" (TyFun (TyCon "AssumAnswer") (TyCon "EvidenceBinderId")))
 (DFunDef false "assumAnswerBinder" ((PCon "SemanticGiven" (PVar "evidence"))) (EApp (EVar "givenEvidenceBinder") (EVar "evidence")))
 (DFunDef false "assumAnswerBinder" ((PCon "LegacyScalar" (PVar "binder"))) (EVar "binder"))
@@ -65731,7 +65707,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "projectedGivenOf" (TyFun (TyCon "EvidenceBinderId") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "GivenEntry")))))
 (DFunDef false "projectedGivenOf" ((PVar "parent") (PVar "path")) (EApp (EApp (EDictApp "find") (ELam ((PVar "g")) (EBinOp "==" (EFieldAccess (EVar "g") "geProvenance") (EApp (EApp (EVar "ProjectedGiven") (EVar "parent")) (EVar "path"))))) (EApp (EVar "givensForScope") (EApp (EVar "Scopes.binderScope") (EVar "parent")))))
 (DTypeSig false "noteAssumption" (TyFun (TyCon "ScopeId") (TyFun (TyCon "AssumAnswer") (TyCon "Unit"))))
-(DFunDef false "noteAssumption" ((PVar "scope") (PVar "answer")) (EBlock (DoLet false false (PVar "sink") (EApp (EVar "traceSink") (ELit LUnit))) (DoExpr (EIf (EFieldAccess (EVar "sink") "tsAssumptionEnabled") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsAssumptionEntries")) (EBinOp "::" (ERecordCreate "AssumptionTraceEntry" ((fa "atGoalScope" (EVar "scope")) (fa "atBinder" (EApp (EVar "assumAnswerBinder") (EVar "answer"))) (fa "atKind" (EApp (EVar "assumAnswerKind") (EVar "answer"))))) (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value"))) (ELit LUnit)))))
+(DFunDef false "noteAssumption" ((PVar "scope") (PVar "answer")) (EMatch (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "trace") (arm (PCon "Some" (PVar "sink")) () (EIf (EFieldAccess (EVar "sink") "tsAssumptionEnabled") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "sink") "tsAssumptionEntries")) (EBinOp "::" (ERecordCreate "AssumptionTraceEntry" ((fa "atGoalScope" (EVar "scope")) (fa "atBinder" (EApp (EVar "assumAnswerBinder") (EVar "answer"))) (fa "atKind" (EApp (EVar "assumAnswerKind") (EVar "answer"))))) (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value"))) (ELit LUnit))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig false "captureScope" (TyFun (TyCon "Unit") (TyCon "ScopeId")))
 (DFunDef false "captureScope" (PWild) (EApp (EVar "Scopes.captureScopeCursor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentScope") "value")))
 (DTypeSig false "openScope" (TyFun (TyCon "ScopeId") (TyCon "Unit")))
@@ -69726,10 +69702,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "superHeadStep" ((PVar "pat") (PVar "t")) (EApp (EApp (EVar "tyStep") (EVar "pat")) (EApp (EVar "stripTyWrap") (EVar "t"))))
 (DTypeSig false "globalCoherenceConflict" (TyFun (TyCon "ImplEnv") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "globalCoherenceConflict" ((PVar "env")) (EMatch (EApp (EApp (EApp (EVar "cohScan") (EVar "CohSweepGlobal")) (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "cohImplOfRow")) (EApp (EVar "cohRowsOf") (EVar "env"))))) (EListLit)) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (ETuple (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "hard")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "soft"))))))
-(DTypeSig true "setCoherenceUserDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
-(DFunDef false "setCoherenceUserDecls" ((PVar "ds")) (EApp (EApp (EVar "setRef") (EVar "driveInputs")) (ERecordUpdate (EFieldAccess (EVar "driveInputs") "value") ((fa "diCoherenceUserDecls" (EVar "ds"))))))
-(DTypeSig true "setStdlibOwnership" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))
-(DFunDef false "setStdlibOwnership" ((PVar "flatEntry") (PVar "mods")) (EApp (EApp (EVar "setRef") (EVar "driveInputs")) (ERecordUpdate (EFieldAccess (EVar "driveInputs") "value") ((fa "diFlatEntryIsStdlib" (EVar "flatEntry")) (fa "diStdlibOwned" (EApp (EApp (EVar "namesToSet") (EVar "mods")) (EVar "omEmpty")))))))
 (DTypeSig false "implMethodNameTc" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodNameTc" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "keyEntryIdx" (TyFun (TyCon "KeyEntry") (TyCon "Int")))
@@ -70559,7 +70531,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "methodReturnPrerequisitesMatch" ((PCons (PVar "left") (PVar "ls")) (PCons (PVar "right") (PVar "rs"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "left") "prerequisiteInterface")) (EFieldAccess (EVar "right") "prerequisiteInterface")) (EApp (EApp (EVar "monoVecSameGiven") (EFieldAccess (EVar "left") "prerequisiteArguments")) (EFieldAccess (EVar "right") "prerequisiteArguments"))) (EApp (EApp (EVar "methodReturnPrerequisitesMatch") (EVar "ls")) (EVar "rs"))))
 (DFunDef false "methodReturnPrerequisitesMatch" (PWild PWild) (EVar "False"))
 (DTypeSig false "noteNumericObligationChecked" (TyFun (TyCon "UObligation") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit"))))
-(DFunDef false "noteNumericObligationChecked" ((PVar "o") (PVar "occs")) (EIf (EApp (EVar "not") (EFieldAccess (EApp (EVar "traceSink") (ELit LUnit)) "tsNumericPredicateEnabled")) (ELit LUnit) (EMatch (ETuple (EFieldAccess (EVar "o") "prov") (EFieldAccess (EVar "o") "oblProj")) (arm (PTuple PWild (PCon "OpNumLit" PWild)) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTChecked")) (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (fa "predicateArguments" (EFieldAccess (EFieldAccess (EVar "o") "pred") "args"))))) (EFieldAccess (EVar "o") "uoScope")) (EFieldAccess (EVar "o") "loc")) (EVar "None")) (EVar "None")) (EListLit))) (arm (PTuple (PCon "POperator") PWild) () (EBlock (DoLet false false (PVar "predicate") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (fa "predicateArguments" (EVar "occs"))))) (DoExpr (EIf (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "predicate") "predicateInterface")) (EApp (EVar "builtinIfaceRef") (EVar "BNum"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTChecked")) (EVar "predicate")) (EFieldAccess (EVar "o") "uoScope")) (EFieldAccess (EVar "o") "loc")) (EVar "None")) (EVar "None")) (EListLit)) (ELit LUnit))))) (arm PWild () (ELit LUnit)))))
+(DFunDef false "noteNumericObligationChecked" ((PVar "o") (PVar "occs")) (EIf (EApp (EVar "not") (EApp (EVar "numericPredicateTraceOn") (ELit LUnit))) (ELit LUnit) (EMatch (ETuple (EFieldAccess (EVar "o") "prov") (EFieldAccess (EVar "o") "oblProj")) (arm (PTuple PWild (PCon "OpNumLit" PWild)) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTChecked")) (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (fa "predicateArguments" (EFieldAccess (EFieldAccess (EVar "o") "pred") "args"))))) (EFieldAccess (EVar "o") "uoScope")) (EFieldAccess (EVar "o") "loc")) (EVar "None")) (EVar "None")) (EListLit))) (arm (PTuple (PCon "POperator") PWild) () (EBlock (DoLet false false (PVar "predicate") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (fa "predicateArguments" (EVar "occs"))))) (DoExpr (EIf (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "predicate") "predicateInterface")) (EApp (EVar "builtinIfaceRef") (EVar "BNum"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTChecked")) (EVar "predicate")) (EFieldAccess (EVar "o") "uoScope")) (EFieldAccess (EVar "o") "loc")) (EVar "None")) (EVar "None")) (EListLit)) (ELit LUnit))))) (arm PWild () (ELit LUnit)))))
 (DTypeSig false "checkOneCallObligation" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit"))))))))
 (DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc") (PVar "scope")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "iface")) (EVar "args")) (EVar "loc")) (EVar "scope"))) (EMatch (EApp (EApp (EApp (EVar "oblCallVerdict") (EVar "univ")) (EVar "iface")) (EVar "args")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PCon "True")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "noSite")) (EVar "univ")) (EApp (EVar "reqWalkStart") (ELit LUnit))) (EVar "iface")) (EVar "args")) (EVar "loc")) (EVar "scope"))) (arm (PCon "Some" (PCon "False")) () (EApp (EApp (EApp (EApp (EVar "checkOneCallObligationNoImpl") (EVar "iface")) (EVar "args")) (EVar "loc")) (EVar "scope")))))))))))
 (DTypeSig false "checkOneCallObligationNoImpl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit"))))))
@@ -72331,14 +72303,18 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "nameableIfaceMethodSet" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "nameableIfaceMethodSet" ((PVar "prog")) (EApp (EApp (EVar "namesToSet") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EApp (EVar "nameableIfaceRows") (EVar "prog")))) (EVar "omEmpty")))
 (DTypeSig true "nameableIfaceRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "nameableIfaceRows" ((PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (ELit (LString "core"))) (EApp (EVar "ifaceExportsIndex") (ELit LUnit)))) (EApp (EVar "ifaceMethodRows") (EVar "prog"))) (EApp (EVar "importedIfaceRows") (EVar "prog"))))
-(DTypeSig false "importedIfaceRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "importedIfaceRows" ((PList)) (EListLit))
-(DFunDef false "importedIfaceRows" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "importedIfaceRows") (EListLit (EVar "d"))) (EApp (EVar "importedIfaceRows") (EVar "rest"))))
-(DFunDef false "importedIfaceRows" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBinOp "++" (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EApp (EVar "ifaceExportsIndex") (ELit LUnit))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))) (EApp (EVar "importedIfaceRows") (EVar "rest"))))
-(DFunDef false "importedIfaceRows" ((PCons PWild (PVar "rest"))) (EApp (EVar "importedIfaceRows") (EVar "rest")))
+(DFunDef false "nameableIfaceRows" ((PVar "prog")) (EApp (EApp (EVar "nameableIfaceRowsIn") (EApp (EVar "ifaceExportsIndex") (ELit LUnit))) (EVar "prog")))
+(DTypeSig false "nameableIfaceRowsIn" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "nameableIfaceRowsIn" ((PVar "idx") (PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (ELit (LString "core"))) (EVar "idx"))) (EApp (EVar "ifaceMethodRows") (EVar "prog"))) (EApp (EApp (EVar "importedIfaceRows") (EVar "idx")) (EVar "prog"))))
+(DTypeSig false "importedIfaceRows" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "importedIfaceRows" (PWild (PList)) (EListLit))
+(DFunDef false "importedIfaceRows" ((PVar "idx") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "importedIfaceRows") (EVar "idx")) (EListLit (EVar "d"))) (EApp (EApp (EVar "importedIfaceRows") (EVar "idx")) (EVar "rest"))))
+(DFunDef false "importedIfaceRows" ((PVar "idx") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBinOp "++" (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "idx")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))) (EApp (EApp (EVar "importedIfaceRows") (EVar "idx")) (EVar "rest"))))
+(DFunDef false "importedIfaceRows" ((PVar "idx") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "importedIfaceRows") (EVar "idx")) (EVar "rest")))
 (DTypeSig true "importedStandaloneShadows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc"))))))
-(DFunDef false "importedStandaloneShadows" ((PVar "graph") (PVar "prog")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EApp (EVar "ifaceExportsIndex") (ELit LUnit))) (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "rows") (EApp (EVar "nameableIfaceRows") (EVar "prog"))) (DoLet false false (PVar "nameable") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "rows"))) (EVar "omEmpty"))) (DoLet false false (PVar "universe") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "graph")) (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "importShadowsOfDecl") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe"))) (EVar "prog")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "importedStandaloneShadows" ((PVar "graph") (PVar "prog")) (EApp (EApp (EApp (EVar "importedStandaloneShadowsIn") (EApp (EVar "ifaceExportsIndex") (ELit LUnit))) (EVar "graph")) (EVar "prog")))
+(DTypeSig true "importedStandaloneShadowsIn" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc")))))))
+(DFunDef false "importedStandaloneShadowsIn" ((PVar "idx") (PVar "graph") (PVar "prog")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EVar "idx")) (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "nameableIfaceRowsIn") (EVar "idx")) (EVar "prog"))) (DoLet false false (PVar "nameable") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "rows"))) (EVar "omEmpty"))) (DoLet false false (PVar "universe") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "graph")) (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "importShadowsOfDecl") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe"))) (EVar "prog")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "importShadowsOfDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc")))))))))
 (DFunDef false "importShadowsOfDecl" ((PVar "graph") (PVar "rows") (PVar "nameable") (PVar "universe") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "importShadowsOfDecl") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe")) (EVar "d")))
 (DFunDef false "importShadowsOfDecl" ((PVar "graph") (PVar "rows") (PVar "nameable") (PVar "universe") (PCon "DUse" PWild (PVar "path") PWild)) (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "ms")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "graph")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "depDecls")) () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "importMemberShadow") (EVar "graph")) (EVar "rows")) (EVar "nameable")) (EVar "universe")) (EVar "depDecls"))) (EVar "ms"))))) (arm PWild () (EListLit))))
@@ -72889,12 +72865,12 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "preludePreambleFor" ((PCon "Some" (PVar "k")) (PVar "coreDecls") (PVar "coreRow")) (EMatch (EUnOp "!" (EVar "preludePreambleMemoRef")) (arm (PCon "Some" (PVar "entry")) () (EIf (EBinOp "==" (EApp (EVar "fst") (EVar "entry")) (ETuple (EVar "k") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "config") "value") "tcIoJoinProfile"))) (EApp (EVar "snd") (EVar "entry")) (EApp (EApp (EApp (EVar "preludePreambleStore") (EVar "k")) (EVar "coreDecls")) (EVar "coreRow")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "preludePreambleStore") (EVar "k")) (EVar "coreDecls")) (EVar "coreRow")))))
 (DTypeSig false "preludePreambleStore" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "DeclEnvModule") (TyCon "PreludePreamble")))))
 (DFunDef false "preludePreambleStore" ((PVar "k") (PVar "coreDecls") (PVar "coreRow")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EVar "preludePreambleOf") (EVar "coreDecls")) (EVar "coreRow"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludePreambleMemoRef")) (EApp (EVar "Some") (ETuple (ETuple (EVar "k") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "config") "value") "tcIoJoinProfile")) (EVar "p"))))) (DoExpr (EVar "p"))))
-(DTypeSig false "tcConfigOf" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyFun (TyCon "DriveInputs") (TyCon "TcConfig"))))
-(DFunDef false "tcConfigOf" ((PVar "profile") (PVar "inputs")) (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EApp (EVar "ioJoinAtoms") (EApp (EVar "ioJoinGrants") (EVar "profile")))) (fa "tcIoJoinProfile" (EMatch (EVar "profile") (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "profileName") (EVar "p"))))) (fa "tcStdlibOwned" (EFieldAccess (EVar "inputs") "diStdlibOwned")) (fa "tcFlatEntryIsStdlib" (EFieldAccess (EVar "inputs") "diFlatEntryIsStdlib")) (fa "tcCoherenceUserDecls" (EFieldAccess (EVar "inputs") "diCoherenceUserDecls")))))
-(DTypeSig false "mintGraphCtx" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "mintGraphCtx" (PWild) (EBlock (DoLet false false (PVar "prior") (EFieldAccess (EVar "graphCtx") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphCtx")) (EVariantUpdate "GraphCtx" (EVar "prior") ((fa "crossRun" (EApp (EVar "freshCrossRun") (EVar "initialEnv"))) (fa "graphRun" (EApp (EApp (EVar "graphLineageRun") (EFieldAccess (EFieldAccess (EVar "prior") "graphRun") "markedAhead")) (EFieldAccess (EVar "prior") "graphRun")))))))))
+(DTypeSig false "tcConfigOf" (TyFun (TyCon "DriveInputs") (TyCon "TcConfig")))
+(DFunDef false "tcConfigOf" ((PVar "inputs")) (ERecordCreate "TcConfig" ((fa "tcIoJoin" (EApp (EVar "ioJoinAtoms") (EFieldAccess (EVar "inputs") "diIoJoinGrants"))) (fa "tcIoJoinProfile" (EFieldAccess (EVar "inputs") "diProfileName")) (fa "tcStdlibOwned" (EFieldAccess (EVar "inputs") "diStdlibOwned")) (fa "tcFlatEntryIsStdlib" (EFieldAccess (EVar "inputs") "diFlatEntryIsStdlib")))))
+(DTypeSig false "mintGraphCtx" (TyFun (TyCon "DriveInputs") (TyCon "Unit")))
+(DFunDef false "mintGraphCtx" ((PVar "inputs")) (EBlock (DoLet false false (PVar "prior") (EFieldAccess (EVar "graphCtx") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphCtx")) (EVariantUpdate "GraphCtx" (EVar "prior") ((fa "crossRun" (EApp (EVar "freshCrossRun") (EVar "initialEnv"))) (fa "graphRun" (EApp (EApp (EVar "graphLineageRun") (EFieldAccess (EFieldAccess (EVar "prior") "graphRun") "markedAhead")) (EFieldAccess (EVar "prior") "graphRun"))) (fa "trace" (EFieldAccess (EVar "inputs") "diTrace"))))))))
 (DTypeSig false "graphPreamble" (TyFun (TyCon "DriveInputs") (TyFun (TyCon "GraphOut") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "ModuleBindings") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkSets")))))))))
-(DFunDef false "graphPreamble" ((PVar "_inputs") (PVar "sel") (PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "mainSchemeRef")) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchOracle")) (EApp (EVar "buildOracle") (EListLit)))) (DoExpr (ELit LUnit)))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "mintGraphCtx") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "populateEffectDomainsGraph") (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "config")) (EApp (EApp (EVar "tcConfigOf") (EUnOp "!" (EVar "selectedProfile"))) (EUnOp "!" (EVar "driveInputs"))))) (DoLet false false (PVar "coreRow") (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "core"))) (EVar "coreDecls"))) (DoLet false false (PVar "modRows") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 1))) (EVar "modules"))) (DoLet false false (PVar "prelude") (EApp (EApp (EApp (EVar "preludePreambleFor") (EVar "preludeKey")) (EVar "coreDecls")) (EVar "coreRow"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "mangledFunDefsPresentRef")) (EBinOp "||" (EFieldAccess (EVar "prelude") "ppMangledFunDefs") (EApp (EVar "graphCarriesMangledFunDefs") (EVar "modules"))))) (DoLet false false (PVar "declEnvs") (EApp (EApp (EApp (EVar "buildDeclEnvs") (EFieldAccess (EVar "prelude") "ppEnvAcc")) (EVar "coreRow")) (EVar "modRows"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "declEnvsRef")) (EVar "declEnvs"))) (DoLet false false (PVar "runtimeSeed") (EApp (EApp (EVar "withDeclParamKinds") (EVar "coreDecls")) (ELam ((PVar "u")) (EApp (EApp (EVar "externSchemes") (EApp (EVar "runtimeExternTyOriginScope") (EVar "coreDecls"))) (EVar "runtimeDecls"))))) (DoLet false false PWild (EApp (EApp (EVar "seedAbstractRecordTypes") (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "ms") (EApp (EApp (EApp (EApp (EVar "markSetsOf") (EFieldAccess (EVar "prelude") "ppMarkFacts")) (EVar "coreDecls")) (EVar "modules")) (EFieldAccess (EVar "declEnvs") "deAllDecls"))) (DoLet false false PWild (EApp (EVar "setDictEligible") (EApp (EVar "moduleUserFnNames") (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "promotionHarvestRef")) (EListLit))) (DoLet false false (PTuple (PVar "coreSchemes") (PVar "corePub") (PVar "coreContexts") (PVar "coreTree")) (EMatch (EVar "sel") (arm (PCon "GOutDiags") () (EBlock (DoLet false false (PTuple (PVar "bindings") (PVar "published") (PVar "ctx")) (EApp (EApp (EApp (EVar "checkCoreMemoized") (EVar "preludeKey")) (EVar "coreDecls")) (EVar "runtimeSeed"))) (DoExpr (EApp (EVar "installGraphCtx") (EVar "ctx"))) (DoExpr (ETuple (EVar "bindings") (EApp (EVar "Some") (EVar "published")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "crossRun") "coreSchemeObligationsRef") "value") (EListLit))))) (arm (PCon "GOutTrees") () (EBlock (DoLet false false (PTuple (PVar "bindings") (PVar "tree")) (EApp (EApp (EApp (EApp (EApp (EVar "elabModuleStamp") (ELit (LString ""))) (EVar "runtimeSeed")) (EListLit)) (EVar "coreDecls")) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "bindings") (EVar "None") (EApp (EVar "coreOwnContexts") (ELit LUnit)) (EVar "tree"))))))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes") (EVar "corePub") (EVar "coreContexts") (EVar "coreTree") (EVar "ms")))))
+(DFunDef false "graphPreamble" ((PVar "inputs") (PVar "sel") (PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "mainSchemeRef")) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchOracle")) (EApp (EVar "buildOracle") (EListLit)))) (DoExpr (ELit LUnit)))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "mintGraphCtx") (EVar "inputs"))) (DoLet false false PWild (EApp (EApp (EVar "populateEffectDomainsGraph") (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "config")) (EApp (EVar "tcConfigOf") (EVar "inputs")))) (DoLet false false (PVar "coreRow") (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "core"))) (EVar "coreDecls"))) (DoLet false false (PVar "modRows") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 1))) (EVar "modules"))) (DoLet false false (PVar "prelude") (EApp (EApp (EApp (EVar "preludePreambleFor") (EVar "preludeKey")) (EVar "coreDecls")) (EVar "coreRow"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "mangledFunDefsPresentRef")) (EBinOp "||" (EFieldAccess (EVar "prelude") "ppMangledFunDefs") (EApp (EVar "graphCarriesMangledFunDefs") (EVar "modules"))))) (DoLet false false (PVar "declEnvs") (EApp (EApp (EApp (EVar "buildDeclEnvs") (EFieldAccess (EVar "prelude") "ppEnvAcc")) (EVar "coreRow")) (EVar "modRows"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "declEnvsRef")) (EVar "declEnvs"))) (DoLet false false (PVar "runtimeSeed") (EApp (EApp (EVar "withDeclParamKinds") (EVar "coreDecls")) (ELam ((PVar "u")) (EApp (EApp (EVar "externSchemes") (EApp (EVar "runtimeExternTyOriginScope") (EVar "coreDecls"))) (EVar "runtimeDecls"))))) (DoLet false false PWild (EApp (EApp (EVar "seedAbstractRecordTypes") (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "ms") (EApp (EApp (EApp (EApp (EVar "markSetsOf") (EFieldAccess (EVar "prelude") "ppMarkFacts")) (EVar "coreDecls")) (EVar "modules")) (EFieldAccess (EVar "declEnvs") "deAllDecls"))) (DoLet false false PWild (EApp (EVar "setDictEligible") (EApp (EVar "moduleUserFnNames") (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "promotionHarvestRef")) (EListLit))) (DoLet false false (PTuple (PVar "coreSchemes") (PVar "corePub") (PVar "coreContexts") (PVar "coreTree")) (EMatch (EVar "sel") (arm (PCon "GOutDiags") () (EBlock (DoLet false false (PTuple (PVar "bindings") (PVar "published") (PVar "ctx")) (EApp (EApp (EApp (EVar "checkCoreMemoized") (EVar "preludeKey")) (EVar "coreDecls")) (EVar "runtimeSeed"))) (DoExpr (EApp (EVar "installGraphCtx") (EVar "ctx"))) (DoExpr (ETuple (EVar "bindings") (EApp (EVar "Some") (EVar "published")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "crossRun") "coreSchemeObligationsRef") "value") (EListLit))))) (arm (PCon "GOutTrees") () (EBlock (DoLet false false (PTuple (PVar "bindings") (PVar "tree")) (EApp (EApp (EApp (EApp (EApp (EVar "elabModuleStamp") (ELit (LString ""))) (EVar "runtimeSeed")) (EListLit)) (EVar "coreDecls")) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "bindings") (EVar "None") (EApp (EVar "coreOwnContexts") (ELit LUnit)) (EVar "tree"))))))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes") (EVar "corePub") (EVar "coreContexts") (EVar "coreTree") (EVar "ms")))))
 (DTypeSig false "checkModulesPreambleK" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "ModuleBindings"))))))))
 (DFunDef false "checkModulesPreambleK" ((PVar "inputs") (PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes") PWild PWild PWild PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "graphPreamble") (EVar "inputs")) (EVar "GOutDiags")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes")))))
 (DTypeSig false "cmCheckWorker" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))))))

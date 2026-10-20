@@ -50,7 +50,7 @@ import driver.loader.{
   loadProgramFilesLocatedE,
   stdlibOwnership,
 }
-import types.typecheck.{elaborateModules, setStdlibOwnership}
+import types.typecheck.{elaborateModules, driveInputsFor}
 import frontend.desugar.{desugarIn}
 import test_process.{underRoot}
 import support.util.{listLen}
@@ -366,10 +366,9 @@ loweredEntry runtimeDecls coreDecls entry roots =
       let pairs = map dropPathTriple mods
       let (flatStdlib, ownedStdlib) =
         stdlibOwnership entry roots (underRoot "stdlib") pairs
-      let _ = setStdlibOwnership flatStdlib ownedStdlib
       let elab =
         elaborateModules
-          defaultDriveInputs
+          (driveInputsFor None flatStdlib ownedStdlib)
           runtimeDecls
           coreDecls
           (map (p => (fst p, desugarIn (fst p) (snd p))) pairs)

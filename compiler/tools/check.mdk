@@ -39,7 +39,6 @@ import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import types.typecheck.{
   defaultDriveInputs,
   checkOneToLinesWithRuntimeK,
-  setCoherenceUserDecls,
   checkOneErrorsWithRuntime,
   entryReportFromDiags,
   ModDiags,
@@ -113,7 +112,6 @@ cleanReport : String ->
 -- lint-disable-next-line rule-duplicate-body
 cleanReport rsrc csrc runtimeP coreP raw desugared =
   let exWarns = exhaustToLinesWith (raw ++ runtimeP ++ coreP) raw
-  let _ = setCoherenceUserDecls desugared
   -- The typecheck runs over the desugar cache's trees, keyed by the prelude
   -- sources, so the core check is memoized: `analyzeFrom` already checked this
   -- prelude in this process, and a keyless check would redo it from scratch.
@@ -126,8 +124,6 @@ cleanReport rsrc csrc runtimeP coreP raw desugared =
       (desugaredPrelude csrc)
       desugared
   joinNonEmpty exWarns schemes
--- TYPECHECK-AUDIT S3: stage the USER decls (NO prelude) for the coherence check
--- so a user impl overriding a prelude impl is not flagged as overlapping.
 
 joinNonEmpty : String -> String -> String
 -- Intentional cross-file duplicate of entries/check_batch.mdk's copy — same
@@ -161,7 +157,6 @@ checkHasErrors rsrc csrc tsrc =
       let resDiags = resolveToLines runtimeP coreP desugared
       match resDiags
         "" =>
-          let _ = setCoherenceUserDecls desugared
           checkOneErrorsWithRuntime
             defaultDriveInputs
             (desugar runtimeP)

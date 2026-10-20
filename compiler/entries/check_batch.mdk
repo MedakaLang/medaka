@@ -27,9 +27,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveToLines}
 import frontend.exhaust.{exhaustToLinesWith}
-import types.typecheck.{
-  defaultDriveInputs, checkOneToLinesWithRuntime, setCoherenceUserDecls
-}
+import types.typecheck.{defaultDriveInputs, checkOneToLinesWithRuntime}
 import entries.entry_support.{driveParseSources}
 
 export
@@ -68,7 +66,6 @@ cleanReport : List Decl -> List Decl -> List Decl -> List Decl -> String
 -- lint-disable-next-line rule-duplicate-body
 cleanReport runtimeP coreP raw desugared =
   let exWarns = exhaustToLinesWith (raw ++ runtimeP ++ coreP) raw
-  let _ = setCoherenceUserDecls desugared
   let schemes =
     checkOneToLinesWithRuntime
       defaultDriveInputs

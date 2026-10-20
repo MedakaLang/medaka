@@ -704,7 +704,7 @@ import types.disposition.{
   validateDispositionTable,
 }
 import types.target_profile.{
-  TargetProfile, hostLabels, ioJoinGrants, profileName, selectedProfile
+  TargetProfile, hostLabels, ioJoinGrants, profileName
 }
 import types.ffi_bindings.{
   FfiDiag(..),
@@ -7989,7 +7989,6 @@ emptyTcConfig = TcConfig {
   tcIoJoinProfile = "",
   tcStdlibOwned = omEmpty,
   tcFlatEntryIsStdlib = False,
-  tcCoherenceUserDecls = [],
 }
 
 -- The process's first graph record, before any drive minted one.  `env` is the
@@ -8003,6 +8002,7 @@ initialGraphCtx env = GraphCtx {
   graphRun = freshGraphRun (),
   effectDomains = Ref [],
   config = Ref emptyTcConfig,
+  trace = None,
   graphAdmittedMethodsRef = Ref omEmpty,
   declEnvsRef = Ref emptyDeclEnvs,
   abstractRecordTypesRef = Ref omEmpty,
@@ -9520,32 +9520,56 @@ hadMatchWarnings _ = match perRun.value.matchWarnings.value
   [] => False
   _ => True
 
--- The drive inputs of a process that publishes nothing: no stdlib ownership, the flat
--- entry not stdlib, no coherence decls, every trace off.  A pure value (it holds no
--- `Ref`), so a caller that drives without publishing passes it.
+-- The drive inputs of a driver that loads no stdlib ownership and selects no
+-- profile: no module stdlib-owned, the flat entry not stdlib, every trace off, and
+-- the `IO` join of no profile.  A pure value (it holds no `Ref`).
+--
+-- No ownership means every `extern` is stamped (#2072, `ffiStampModeOwned`), and that
+-- direction is the safe one on purpose: a driver that passes no ownership suppresses
+-- nothing, so the worst it can do is render an `FFI` atom on the stdlib catalog when
+-- someone points it at stdlib source.  The inverse default would leave #2072's hole
+-- (a user `extern f : Int -> <> Int` typing pure) open on every such path, which is
+-- a soundness hole rather than a cosmetic one.
 export
 defaultDriveInputs : DriveInputs
 defaultDriveInputs = DriveInputs {
   diStdlibOwned = omEmpty,
   diFlatEntryIsStdlib = False,
-  diCoherenceUserDecls = [],
   diTrace = None,
+  diIoJoinGrants = ioJoinGrants None,
+  diProfileName = "",
 }
 
--- What the drivers hand the typechecker before a drive (the stdlib ownership, the
--- coherence user decls, the trace sink), read by `tcConfigOf` and by the `note*`
--- trace functions.  Written only through the publishers below.
-driveInputs : Ref DriveInputs
-driveInputs = Ref defaultDriveInputs
+-- The drive inputs a driver builds from the profile it selected and the loader's
+-- owning-root fact (`stdlibOwnership`, `driver/loader.mdk`): whether the flat entry
+-- is a stdlib module, and the stdlib-owned module ids.  That fact is read by
+-- `ffiStampMode`, which decides whether an `extern` DECLARATION in the program
+-- under check is the stdlib's extern catalog (never stamped) or a user's FFI
+-- declaration (always stamped).
+--
+-- Two ownership fields because graph checks carry different amounts of identity.
+-- `Module mid _ _` has a module id, so the Module arm asks "is THIS module
+-- stdlib-owned" of the set.  `Flat _` has no id at all (the flat driver has already
+-- flattened the program into one anonymous decl list), so the entry's ownership
+-- arrives as its own Bool.
+--
+-- NOT `projectTrustedMods` (`driver/loader.mdk`): that predicate answers a different
+-- question (may module M *reference* an internal-only extern?) and is opt-in-able
+-- from any `medaka.toml` via `allow-internal` (#1713).  Routing this through it would
+-- let a user exempt their own externs from the stamp by writing one manifest line.
+export
+driveInputsFor : Option TargetProfile -> Bool -> List String -> DriveInputs
+driveInputsFor profile flatEntry mods = DriveInputs {
+  diStdlibOwned = namesToSet mods omEmpty,
+  diFlatEntryIsStdlib = flatEntry,
+  diTrace = None,
+  diIoJoinGrants = ioJoinGrants profile,
+  diProfileName = match profile
+    None => ""
+    Some p => profileName p,
+}
 
--- The trace sink of the current configuration.  Trace off (`None`) answers a fresh
--- sink whose gates are all `False`: its buffers are only written behind a gate, so
--- no constant holds a `Ref`.
-traceSink : Unit -> TraceSink
-traceSink _ = match driveInputs.value.diTrace
-  Some sink => sink
-  None => offTraceSink ()
-
+-- A sink with every gate off and fresh buffers; each `begin*` turns one gate on.
 offTraceSink : Unit -> TraceSink
 offTraceSink _ = TraceSink {
   tsAssumptionEnabled = False,
@@ -9558,60 +9582,37 @@ offTraceSink _ = TraceSink {
   tsEvidenceObservationEntries = Ref [],
 }
 
-setTraceSink : TraceSink -> Unit
-setTraceSink sink = driveInputs := { driveInputs.value | diTrace = Some sink }
+-- The trace builders and readers: a test builds a sink with `begin*`, passes it as
+-- the `diTrace` of the drives it observes, and reads its buffer with `finish*`.
+export
+beginAssumptionTrace : Unit -> TraceSink
+beginAssumptionTrace _ = { offTraceSink () | tsAssumptionEnabled = True }
 
 export
-beginAssumptionTrace : Unit -> Unit
-beginAssumptionTrace _ =
-  let sink = traceSink ()
-  sink.tsAssumptionEntries := []
-  setTraceSink { sink | tsAssumptionEnabled = True }
+finishAssumptionTrace : TraceSink -> List AssumptionTraceEntry
+finishAssumptionTrace sink = reverseL sink.tsAssumptionEntries.value
 
 export
-finishAssumptionTrace : Unit -> List AssumptionTraceEntry
-finishAssumptionTrace _ =
-  let sink = traceSink ()
-  let entries = reverseL sink.tsAssumptionEntries.value
-  sink.tsAssumptionEntries := []
-  setTraceSink { sink | tsAssumptionEnabled = False }
-  entries
-
-export
-beginNumericPredicateTrace : Unit -> Unit
+beginNumericPredicateTrace : Unit -> TraceSink
 beginNumericPredicateTrace _ =
-  let sink = traceSink ()
-  sink.tsNumericPredicateEntries := []
-  setTraceSink { sink | tsNumericPredicateEnabled = True }
+  { offTraceSink () | tsNumericPredicateEnabled = True }
 
 export
-finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry
-finishNumericPredicateTrace _ =
-  let sink = traceSink ()
-  let entries = reverseL sink.tsNumericPredicateEntries.value
-  sink.tsNumericPredicateEntries := []
-  setTraceSink { sink | tsNumericPredicateEnabled = False }
-  entries
+finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry
+finishNumericPredicateTrace sink = reverseL sink.tsNumericPredicateEntries.value
 
 export
-beginMethodReturnTrace : Unit -> Unit
-beginMethodReturnTrace _ =
-  let sink = traceSink ()
-  sink.tsMethodReturnEntries := []
-  setTraceSink { sink | tsMethodReturnEnabled = True }
+beginMethodReturnTrace : Unit -> TraceSink
+beginMethodReturnTrace _ = { offTraceSink () | tsMethodReturnEnabled = True }
 
+-- Each entry with the evidence its goal published in [evidence], the table of the
+-- drive that recorded it.
 export
-finishMethodReturnTrace : Unit -> List MethodReturnTraceEntry
-finishMethodReturnTrace _ =
-  let evidence = drivenEvidence ()
-  let sink = traceSink ()
-  let entries =
-    map
-      (publishMethodReturnTrace evidence)
-      (reverseL sink.tsMethodReturnEntries.value)
-  sink.tsMethodReturnEntries := []
-  setTraceSink { sink | tsMethodReturnEnabled = False }
-  entries
+finishMethodReturnTrace : TraceSink -> EvTable -> List MethodReturnTraceEntry
+finishMethodReturnTrace sink evidence =
+  map
+    (publishMethodReturnTrace evidence)
+    (reverseL sink.tsMethodReturnEntries.value)
 
 publishMethodReturnTrace : EvTable ->
   MethodReturnTraceEntry ->
@@ -9654,32 +9655,34 @@ noteMethodReturnTrace : MethodReturnTraceStage ->
   List Route ->
   Unit
 noteMethodReturnTrace stage request route prerequisites =
-  let sink = traceSink ()
-  if sink.tsMethodReturnEnabled then
-    let (qualifiedBody, wanted) = match methodReturnInstantiation request
-      Some (Instantiation { body = body, arguments = [InstantiationArgument { wanted = carried, ... }], ... }) =>
-        (Some body, Some carried)
-      _ => (None, None)
-    sink.tsMethodReturnEntries :=
-      MethodReturnTraceEntry {
-          mrtStage = stage,
-          mrtInterface = request.mrrIface,
-          mrtMethod = request.mrrName,
-          mrtArguments = methodReturnArgs request,
-          mrtScope = request.mrrScope,
-          mrtOrigin = request.mrrLoc,
-          mrtGoal = request.mrrGoalEv,
-          mrtPublished = None,
-          mrtQualifiedBody = qualifiedBody,
-          mrtWanted = wanted,
-          mrtOutcome =
-            map
-              (resolution => resolution.mrrOutcome)
-              request.mrrResolution.value,
-          mrtRoute = route,
-          mrtPrerequisites = prerequisites,
-        }
-        :: sink.tsMethodReturnEntries.value
+  match graphCtx.value.trace
+    Some sink =>
+      if sink.tsMethodReturnEnabled then
+        let (qualifiedBody, wanted) = match methodReturnInstantiation request
+          Some (Instantiation { body = body, arguments = [InstantiationArgument { wanted = carried, ... }], ... }) =>
+            (Some body, Some carried)
+          _ => (None, None)
+        sink.tsMethodReturnEntries :=
+          MethodReturnTraceEntry {
+              mrtStage = stage,
+              mrtInterface = request.mrrIface,
+              mrtMethod = request.mrrName,
+              mrtArguments = methodReturnArgs request,
+              mrtScope = request.mrrScope,
+              mrtOrigin = request.mrrLoc,
+              mrtGoal = request.mrrGoalEv,
+              mrtPublished = None,
+              mrtQualifiedBody = qualifiedBody,
+              mrtWanted = wanted,
+              mrtOutcome =
+                map
+                  (resolution => resolution.mrrOutcome)
+                  request.mrrResolution.value,
+              mrtRoute = route,
+              mrtPrerequisites = prerequisites,
+            }
+            :: sink.tsMethodReturnEntries.value
+    None => ()
 
 -- #2095: trace-gated, zero cost when off — same discipline as
 -- `methodReturnTrace`. Generalizes that pattern from
@@ -9688,20 +9691,14 @@ noteMethodReturnTrace stage request route prerequisites =
 -- family produced the goal, read back from the SAME cells the stampers wrote
 -- (never re-derived), so this can never disagree with the published `EvTable`.
 export
-beginEvidenceObservation : Unit -> Unit
+beginEvidenceObservation : Unit -> TraceSink
 beginEvidenceObservation _ =
-  let sink = traceSink ()
-  sink.tsEvidenceObservationEntries := []
-  setTraceSink { sink | tsEvidenceObservationEnabled = True }
+  { offTraceSink () | tsEvidenceObservationEnabled = True }
 
 export
-finishEvidenceObservation : Unit -> List EvidenceObservationEntry
-finishEvidenceObservation _ =
-  let sink = traceSink ()
-  let entries = reverseL sink.tsEvidenceObservationEntries.value
-  sink.tsEvidenceObservationEntries := []
-  setTraceSink { sink | tsEvidenceObservationEnabled = False }
-  entries
+finishEvidenceObservation : TraceSink -> List EvidenceObservationEntry
+finishEvidenceObservation sink =
+  reverseL sink.tsEvidenceObservationEntries.value
 
 goalKindName : GoalKind -> String
 goalKindName GKReturnSite = "GKReturnSite"
@@ -9840,15 +9837,16 @@ renderRouteIdentity (RProj r path) =
   "RProj (\{renderRouteIdentity r}) \{joinWith "." (map intToString path)}"
 
 noteEvidenceObservation : Obligation -> Unit
-noteEvidenceObservation o =
-  let sink = traceSink ()
-  if sink.tsEvidenceObservationEnabled then
-    let routes = obligationRoutes o
-    let predicates = obligationPredicateMonos o
-    let arity = listLen routes
-    sink.tsEvidenceObservationEntries :=
-      evidenceObservationEntriesGo o routes predicates arity 0
-        ++ sink.tsEvidenceObservationEntries.value
+noteEvidenceObservation o = match graphCtx.value.trace
+  Some sink =>
+    if sink.tsEvidenceObservationEnabled then
+      let routes = obligationRoutes o
+      let predicates = obligationPredicateMonos o
+      let arity = listLen routes
+      sink.tsEvidenceObservationEntries :=
+        evidenceObservationEntriesGo o routes predicates arity 0
+          ++ sink.tsEvidenceObservationEntries.value
+  None => ()
 
 evidenceObservationEntriesGo : Obligation ->
   List Route ->
@@ -9884,19 +9882,27 @@ noteNumericPredicateTrace : NumericPredicateTraceStage ->
   List Route ->
   Unit
 noteNumericPredicateTrace stage predicate scope origin selected route prereqs =
-  let sink = traceSink ()
-  if sink.tsNumericPredicateEnabled then
-    sink.tsNumericPredicateEntries :=
-      NumericPredicateTraceEntry {
-          nptStage = stage,
-          nptPredicate = predicate,
-          nptScope = scope,
-          nptOrigin = origin,
-          nptSelectedInterface = selected,
-          nptRoute = route,
-          nptPrerequisites = prereqs,
-        }
-        :: sink.tsNumericPredicateEntries.value
+  match graphCtx.value.trace
+    Some sink =>
+      if sink.tsNumericPredicateEnabled then
+        sink.tsNumericPredicateEntries :=
+          NumericPredicateTraceEntry {
+              nptStage = stage,
+              nptPredicate = predicate,
+              nptScope = scope,
+              nptOrigin = origin,
+              nptSelectedInterface = selected,
+              nptRoute = route,
+              nptPrerequisites = prereqs,
+            }
+            :: sink.tsNumericPredicateEntries.value
+    None => ()
+
+-- Whether this drive traces numeric predicates; reads the sink in place.
+numericPredicateTraceOn : Unit -> Bool
+numericPredicateTraceOn _ = match graphCtx.value.trace
+  Some sink => sink.tsNumericPredicateEnabled
+  None => False
 
 assumAnswerBinder : AssumAnswer -> EvidenceBinderId
 assumAnswerBinder (SemanticGiven evidence) = givenEvidenceBinder evidence
@@ -10010,16 +10016,17 @@ projectedGivenOf parent path =
     (givensForScope (Scopes.binderScope parent))
 
 noteAssumption : ScopeId -> AssumAnswer -> Unit
-noteAssumption scope answer =
-  let sink = traceSink ()
-  if sink.tsAssumptionEnabled then
-    sink.tsAssumptionEntries :=
-      AssumptionTraceEntry {
-          atGoalScope = scope,
-          atBinder = assumAnswerBinder answer,
-          atKind = assumAnswerKind answer,
-        }
-        :: sink.tsAssumptionEntries.value
+noteAssumption scope answer = match graphCtx.value.trace
+  Some sink =>
+    if sink.tsAssumptionEnabled then
+      sink.tsAssumptionEntries :=
+        AssumptionTraceEntry {
+            atGoalScope = scope,
+            atBinder = assumAnswerBinder answer,
+            atKind = assumAnswerKind answer,
+          }
+          :: sink.tsAssumptionEntries.value
+  None => ()
 
 captureScope : Unit -> ScopeId
 captureScope _ = Scopes.captureScopeCursor perRun.value.currentScope.value
@@ -30750,50 +30757,6 @@ globalCoherenceConflict env =
   match cohScan CohSweepGlobal (reverseL (map cohImplOfRow (cohRowsOf env))) []
     CohScan hard soft => (map fst hard, map fst soft)
 
--- the USER decls a driver wants coherence-checked.  Set by single-file drivers
--- (check.mdk / typecheck_main.mdk / check_batch.mdk) to the desugared USER program
--- (NO prelude), so a user impl that overrides a prelude impl is not flagged.  []
--- (the golden/profile drivers and the no-runtime path) use their own
--- prelude-free arg; checkToLinesWithRuntime runs no coherence (byte-identical).
-
--- exported so the single-file front-end drivers set the user boundary before check
-export
-setCoherenceUserDecls : List Decl -> Unit
-setCoherenceUserDecls ds =
-  driveInputs := { driveInputs.value | diCoherenceUserDecls = ds }
-
--- #2072 (extern FFI stamp): the LOADER's owning-root fact, published for the one
--- reader that needs it — `ffiStampMode`, which decides whether an `extern`
--- DECLARATION in the program under check is the stdlib's extern catalog (never
--- stamped) or a user's FFI declaration (always stamped).
---
--- Two fields remain because graph checks carry different amounts
--- of identity.  `Module mid _ _` has a module id, so the Module arm can ask
--- "is THIS module stdlib-owned" of the list.  `Flat _` has NO id at all — the flat
--- driver has already flattened the program into one anonymous decl list — so the
--- entry's ownership has to arrive as its own Bool.
---
--- 🚨 DEFAULTS ARE `(False, [])` = STAMP EVERYTHING, and that direction is the safe
--- one on purpose.  A driver that never calls this suppresses nothing, so the worst
--- an unwired entry point can do is render an `FFI` atom on the stdlib catalog when
--- someone points it AT stdlib source.  The inverse default would leave #2072's hole
--- (a user `extern f : Int -> <> Int` typing pure) open on every unwired path, which
--- is a soundness hole rather than a cosmetic one.  Do not "helpfully" flip it.
---
--- ⚠️ NOT `projectTrustedMods` (`driver/loader.mdk`) — that predicate answers a
--- DIFFERENT question (may module M *reference* an internal-only extern?) and is
--- opt-in-able from any `medaka.toml` via `allow-internal` (#1713, slice 2).  Routing
--- this through it would let a user exempt their OWN externs from the stamp by writing
--- one manifest line: an effect-system escape hatch reachable from a manifest.
--- Stdlib-root ownership alone, no project-level opt-out.
-export
-setStdlibOwnership : Bool -> List String -> Unit
-setStdlibOwnership flatEntry mods =
-  driveInputs := { driveInputs.value |
-    diFlatEntryIsStdlib = flatEntry,
-    diStdlibOwned = namesToSet mods omEmpty,
-  }
-
 -- ── instance-`requires` impl-dict routing (Phase 83/84 single-level) ────────
 -- `implMethodNameTc` and its callers route through the graph-global `IE`
 -- (`ieSelectRowByIface`); a headless impl's own `requires` is discharged the
@@ -36326,7 +36289,7 @@ methodReturnPrerequisitesMatch _ _ = False
 
 noteNumericObligationChecked : UObligation -> List Mono -> Unit
 noteNumericObligationChecked o occs =
-  if not (traceSink ()).tsNumericPredicateEnabled then
+  if not (numericPredicateTraceOn ()) then
     ()
   else match (o.prov, o.oblProj)
     (_, OpNumLit _) =>
@@ -40990,7 +40953,7 @@ ffiStampMode : String -> Bool
 ffiStampMode mid =
   omSize graphCtx.value.builtinExternNamesRef.value > 0 && ffiStampModeOwned mid
 
--- The ownership half, unchanged.  See `setStdlibOwnership` for why the two arms
+-- The ownership half, unchanged.  See `driveInputsFor` for why the two arms
 -- read two different fields and why the default is "apply them".
 ffiStampModeOwned : String -> Bool
 -- 🚨 `"__user__"` IS THE FLAT ENTRY, NOT A LOADED MODULE, and this arm is what
@@ -47514,21 +47477,29 @@ nameableIfaceMethodSet prog =
 -- flattening above is the previous expression term for term.
 export
 nameableIfaceRows : List Decl -> List (String, List String)
-nameableIfaceRows prog =
-  optionOr [] (omLookup "core" (ifaceExportsIndex ()))
-    ++ ifaceMethodRows prog
-    ++ importedIfaceRows prog
+nameableIfaceRows prog = nameableIfaceRowsIn (ifaceExportsIndex ()) prog
 
-importedIfaceRows : List Decl -> List (String, List String)
-importedIfaceRows [] = []
-importedIfaceRows ((DAttrib _ d) :: rest) =
-  importedIfaceRows [d] ++ importedIfaceRows rest
-importedIfaceRows ((DUse _ path _) :: rest) =
-  (match omLookup (usePathModuleId path) (ifaceExportsIndex ())
+-- `nameableIfaceRows` over the interface-row index [idx].
+nameableIfaceRowsIn : OrdMap (List (String, List String)) ->
+  List Decl ->
+  List (String, List String)
+nameableIfaceRowsIn idx prog =
+  optionOr [] (omLookup "core" idx)
+    ++ ifaceMethodRows prog
+    ++ importedIfaceRows idx prog
+
+importedIfaceRows : OrdMap (List (String, List String)) ->
+  List Decl ->
+  List (String, List String)
+importedIfaceRows _ [] = []
+importedIfaceRows idx ((DAttrib _ d) :: rest) =
+  importedIfaceRows idx [d] ++ importedIfaceRows idx rest
+importedIfaceRows idx ((DUse _ path _) :: rest) =
+  (match omLookup (usePathModuleId path) idx
       None => []
       Some src => selectIfaceRows path src)
-    ++ importedIfaceRows rest
-importedIfaceRows (_ :: rest) = importedIfaceRows rest
+    ++ importedIfaceRows idx rest
+importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 
 -- ── #2738: a selectively imported standalone displaced by a nameable method ──
 -- The peer of `frontend/marker.mdk`'s `preludeStandaloneShadows` for the IMPORTER
@@ -47560,10 +47531,21 @@ export
 importedStandaloneShadows : List (String, List Decl) ->
   List Decl ->
   List (String, String, Option Ty, Ty, Loc)
-importedStandaloneShadows graph prog
-  | omSize (ifaceExportsIndex ()) == 0 = []
+importedStandaloneShadows graph prog =
+  importedStandaloneShadowsIn (ifaceExportsIndex ()) graph prog
+
+-- `importedStandaloneShadows` over the interface-row index [idx], for a caller whose
+-- index is not the last drive's: a single file analysed before its drive passes
+-- `omEmpty`, which answers nothing.
+export
+importedStandaloneShadowsIn : OrdMap (List (String, List String)) ->
+  List (String, List Decl) ->
+  List Decl ->
+  List (String, String, Option Ty, Ty, Loc)
+importedStandaloneShadowsIn idx graph prog
+  | omSize idx == 0 = []
   | otherwise =
-    let rows = nameableIfaceRows prog
+    let rows = nameableIfaceRowsIn idx prog
     let nameable = namesToSet (flatMap snd rows) omEmpty
     let universe = flatMap snd graph ++ prog
     flatMap (importShadowsOfDecl graph rows nameable universe) prog
@@ -50779,17 +50761,14 @@ preludePreambleStore k coreDecls coreRow =
     Some ((k, graphCtx.value.config.value.tcIoJoinProfile), p)
   p
 
--- The drive's configuration: the IO join taken from the selected profile (after the
--- effect domains it reads), the profile's name, and the driver inputs.
-tcConfigOf : Option TargetProfile -> DriveInputs -> TcConfig
-tcConfigOf profile inputs = TcConfig {
-  tcIoJoin = ioJoinAtoms (ioJoinGrants profile),
-  tcIoJoinProfile = match profile
-    None => ""
-    Some p => profileName p,
+-- The drive's configuration: the IO join of the selected profile's grants (after the
+-- effect domains it reads), the profile's name, and the stdlib ownership.
+tcConfigOf : DriveInputs -> TcConfig
+tcConfigOf inputs = TcConfig {
+  tcIoJoin = ioJoinAtoms inputs.diIoJoinGrants,
+  tcIoJoinProfile = inputs.diProfileName,
   tcStdlibOwned = inputs.diStdlibOwned,
   tcFlatEntryIsStdlib = inputs.diFlatEntryIsStdlib,
-  tcCoherenceUserDecls = inputs.diCoherenceUserDecls,
 }
 
 -- Mint the drive's graph record, once, at the head of `graphPreamble`.  The
@@ -50800,15 +50779,16 @@ tcConfigOf profile inputs = TcConfig {
 -- drive K's residue while the `*Qual` mirrors grew without bound.  So `crossRun` is
 -- fresh (`freshCrossRun` re-mints every field, so what resets is what `CrossRun`
 -- holds) and `graphRun` starts a new lineage (`graphLineageRun`, keeping a
--- `markModules` lineage).  Every `Ref` field is carried by identity: the preamble
--- writes the graph-derived ones in place below, and the sticky pair and the rest
--- keep the previous drive's values.
-mintGraphCtx : Unit -> Unit
-mintGraphCtx _ =
+-- `markModules` lineage), and the trace sink is the drive's own.  Every `Ref` field
+-- is carried by identity: the preamble writes the graph-derived ones in place below,
+-- and the sticky pair and the rest keep the previous drive's values.
+mintGraphCtx : DriveInputs -> Unit
+mintGraphCtx inputs =
   let prior = graphCtx.value
   graphCtx := GraphCtx { prior |
     crossRun = freshCrossRun initialEnv,
     graphRun = graphLineageRun prior.graphRun.markedAhead prior.graphRun,
+    trace = inputs.diTrace,
   }
 
 graphPreamble : DriveInputs ->
@@ -50818,7 +50798,7 @@ graphPreamble : DriveInputs ->
   List Decl ->
   List (String, List Decl) ->
   (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), OrdMap (List VecObl), List Decl, MarkSets)
-graphPreamble _inputs sel preludeKey runtimeDecls coreDecls modules =
+graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
   -- S-emit-interleave-leak (#2049), TREES only: THE EMIT DRIVER OWNS ITS OWN
   -- (empty) ctor oracle.  A module checked without a `CheckRunSeed` carries the
   -- previous module record's `matchOracle`, and the tree arm's core pass is one
@@ -50858,7 +50838,7 @@ graphPreamble _inputs sel preludeKey runtimeDecls coreDecls modules =
       perRun.value.matchOracle := buildOracle []
       ()
     GOutDiags => ()
-  let _ = mintGraphCtx ()
+  let _ = mintGraphCtx inputs
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
   -- loop, so a module using an effect declared in ANOTHER module sees its domain.
@@ -50875,10 +50855,10 @@ graphPreamble _inputs sel preludeKey runtimeDecls coreDecls modules =
   -- in the same order; `populateEffectDomainsGraph` walks them without building
   -- that concatenation a second time.
   let _ = populateEffectDomainsGraph coreDecls modules
-  -- What `IO` joins, from the profile the verb selected, after the domains the
-  -- atoms take their tops from.  `run` checks against `runProfile` of that
-  -- profile, whose host-label grants are the selected profile's own.
-  graphCtx.value.config := tcConfigOf !selectedProfile !driveInputs
+  -- What `IO` joins, from the grants of the profile the verb selected, after the
+  -- domains the atoms take their tops from.  `run` checks against `runProfile` of
+  -- that profile, whose host-label grants are the selected profile's own.
+  graphCtx.value.config := tcConfigOf inputs
   -- the prelude's own contribution to every derivation below, from the memo when
   -- the caller supplied a prelude key -- see `PreludePreamble`.  The row is built
   -- HERE, not inside the memo, because it carries THIS analyze's decls.

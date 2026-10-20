@@ -81,8 +81,9 @@ import types.publish.{
   ppPubScheme,
 }
 import types.typecheck.{
-  defaultDriveInputs, checkOneReportK, entrySplit, entryOwnSchemes
+  driveInputsFor, checkOneReportK, entrySplit, entryOwnSchemes
 }
+import types.target_profile.{selectedProfile}
 import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
 import list.{sortBy, zipWith}
@@ -728,16 +729,13 @@ docEnv runtimeSrc coreSrc src =
       let userDecls = desugar userRaw
       let preludeKey =
         Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
-      let report = checkOneReportK
-        defaultDriveInputs
+      let report = checkOneReportK (driveInputsFor
+        !selectedProfile
         False
-        preludeKey
-        runtimeDecls
-        coreDecls
-        (
-          "__user__",
-          userDecls,
-        )
+        []) False preludeKey runtimeDecls coreDecls (
+        "__user__",
+        userDecls,
+      )
       Some (reportEnv report)
 
 -- The single-document env of a drive's report: own schemes first, then the

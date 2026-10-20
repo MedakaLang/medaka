@@ -30,12 +30,12 @@ import driver.front_gate.{
 }
 export import support.util.{rootsOrDefault}
 import support.util.{splitLast, startsWith, joinNl}
-import types.tc_types.{ElabResult}
+import types.tc_types.{ElabResult, DriveInputs(..)}
 import types.typecheck.{
   defaultDriveInputs,
+  driveInputsFor,
   elaborateOneFacts,
   elaborateModulesWithReport,
-  setStdlibOwnership,
 }
 import support.path.{dirOf, joinPath}
 import support.stage_count.{stageExit}
@@ -188,17 +188,25 @@ usageModules = "usage: <runtime.mdk> <core.mdk> <entry.mdk> [root ...]"
 -- LLVM/WasmGC multi-module emit drivers (llvm_bootstrap_lex_main,
 -- llvm_emit_modules_main, wasm_emit_gaps_main, wasm_emit_modules_main).
 export
-driveModules : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+driveModules : (DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   <IO> Unit
-driveModules runEmit = driveModulesLocated (_ _ => runEmit)
+driveModules runEmit =
+  driveModulesLocated (ask _ => runEmit (emitDriveInputs !selectedProfile ask))
 
 -- What an emit is handed beside its graph: the prelude sources the graph's
--- prelude decls were desugared from, and on the `--json` route the envelope
--- file and what the gate kept for it (`None` on every other route).
+-- prelude decls were desugared from, on the `--json` route the envelope file and
+-- what the gate kept for it (`None` on every other route), and the graph's stdlib
+-- ownership (`stdlibOwnership`: the flat entry's, then the owned module ids).
 public export data EmitAsk = EmitAsk {
   askPreludeSrcs : (String, String),
   askJson : Option (String, JsonFront),
+  askOwnership : (Bool, List String),
 }
+
+-- The inputs of an emit's drive under [profile], with the graph's stdlib ownership.
+emitDriveInputs : Option TargetProfile -> EmitAsk -> DriveInputs
+emitDriveInputs profile ask = match ask.askOwnership
+  (flatEntry, owned) => driveInputsFor profile flatEntry owned
 
 -- `driveModules` for a terminal that needs the loader's `(modId, path, decls)`
 -- triples and the route's ask (`runEmitAsked`) as well — the emit drivers do,
@@ -250,10 +258,9 @@ driveModulesGo runEmit runtimeP coreP entry roots =
           Err cj => refuseJson path cj
           Ok (g, front) =>
             emitLoaded
-              (runEmit EmitAsk {
-                askPreludeSrcs = (rsrc, csrc),
-                askJson = Some (path, front),
-              })
+              runEmit
+              (rsrc, csrc)
+              (Some (path, front))
               coreP
               entry
               g.fgRoots
@@ -272,10 +279,9 @@ driveModulesGo runEmit runtimeP coreP entry roots =
             stageExit emitDiagExitCode
           Ok g =>
             emitLoaded
-              (runEmit EmitAsk {
-                askPreludeSrcs = (rsrc, csrc),
-                askJson = None,
-              })
+              runEmit
+              (rsrc, csrc)
+              None
               coreP
               entry
               g.fgRoots
@@ -287,7 +293,9 @@ driveModulesGo runEmit runtimeP coreP entry roots =
         Err e => failWith (moduleLoadHint (loadErrorMessage e))
         Ok mods =>
           emitLoaded
-            (runEmit EmitAsk { askPreludeSrcs = (rsrc, csrc), askJson = None })
+            runEmit
+            (rsrc, csrc)
+            None
             coreP
             entry
             roots
@@ -303,15 +311,17 @@ refuseJson path cj =
   let _ = writeDiagJson path cj
   stageExit emitDiagExitCode
 
--- #2072: publish the FFI-stamp discriminator before anything elaborates.
--- `ffiStampModeOwned` DEFAULTS to "apply the `extern` declaration rules", so a
--- driver that never publishes this rejects a stdlib-root-owned module whose
--- externs the stdlib itself wrote — which `medaka check` accepts.  This process
--- owns the type verdict for a build, so it derives the fact `check` derives,
--- from the roots the graph was loaded with.  The stdlib root is `dirOf coreP`:
--- this driver's CLI shape hands it the stdlib's own `core.mdk`, which is the
--- file the parent spells `<root>/stdlib/core.mdk`.
-emitLoaded : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+-- #2072: the FFI-stamp discriminator, derived before anything elaborates and
+-- handed to the emit in its ask.  `ffiStampModeOwned` defaults to "apply the
+-- `extern` declaration rules", so a drive given no ownership rejects a
+-- stdlib-root-owned module whose externs the stdlib itself wrote, which `medaka
+-- check` accepts.  This process owns the type verdict for a build, so it derives
+-- the fact `check` derives, from the roots the graph was loaded with.  The stdlib
+-- root is `dirOf coreP`: this driver's CLI shape hands it the stdlib's own
+-- `core.mdk`, which is the file the parent spells `<root>/stdlib/core.mdk`.
+emitLoaded : (EmitAsk -> List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  (String, String) ->
+  Option (String, JsonFront) ->
   String ->
   String ->
   List String ->
@@ -320,11 +330,15 @@ emitLoaded : (List (String, String, List Decl) -> List Decl -> List Decl -> List
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-emitLoaded runEmit coreP entry roots mods runtimeD coreD modsD =
-  let (flatStdlib, ownedStdlib) =
+emitLoaded runEmit srcs json coreP entry roots mods runtimeD coreD modsD =
+  let ownership =
     stdlibOwnership entry roots (dirOf coreP) (map dropPathTriple mods)
-  let _ = setStdlibOwnership flatStdlib ownedStdlib
-  runEmit mods runtimeD coreD modsD
+  let ask = EmitAsk {
+    askPreludeSrcs = srcs,
+    askJson = json,
+    askOwnership = ownership,
+  }
+  runEmit ask mods runtimeD coreD modsD
 
 -- #1796: `usageModules`' `[root ...]` bracket notation reads as "root args are
 -- optional" — they aren't, the moment the entry graph spans more than one root
@@ -431,7 +445,8 @@ selectTargetProfileOfEnv _ = match selectProfile (getEnv targetProfileEnv) None
 -- and the drive whose trees are emitted, so it returns that print's evidence
 -- and judges an `Async` main's application to `asyncDriver`.  `paths` spells
 -- each module's file as the refusal is reported.
-elaborateForTarget : String ->
+elaborateForTarget : DriveInputs ->
+  String ->
   Option TargetProfile ->
   List (String, String, List Decl) ->
   List (String, String) ->
@@ -439,19 +454,20 @@ elaborateForTarget : String ->
   List Decl ->
   List (String, List Decl) ->
   (ElabResult, TcReport, List Diag)
-elaborateForTarget asyncDriver None _ _ runtimeDecls coreDecls modules =
+elaborateForTarget inputs asyncDriver None _ _ runtimeDecls coreDecls modules =
   let (elaborated, report) =
     elaborateModulesWithReport
-      defaultDriveInputs
+      inputs
       (valueMainCandidate coreDecls modules)
       (Some asyncDriver)
       runtimeDecls
       coreDecls
       modules
   (elaborated, report, [])
-elaborateForTarget asyncDriver (Some p) modsWithPath paths runtimeDecls coreDecls modules =
+elaborateForTarget inputs asyncDriver (Some p) modsWithPath paths runtimeDecls coreDecls modules =
   let (analysis, report) =
     analyzeProgramReport
+      inputs
       (valueMainCandidate coreDecls modules)
       (Some asyncDriver)
       runtimeDecls
@@ -567,12 +583,13 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
       map ((mid, path) => (mid, jsonFrontKey front modsWithPath path)) paths
   -- The profile is selected inside the drive, after any resolve the front end
   -- runs and before the elaboration: the typechecker bounds `IO` by the
-  -- selected profile's join.
+  -- selected profile's join, so the drive's inputs are built from it.
   let drive =
     _ =>
       let profile = selectTargetProfileOfEnv ()
       let (_, report, refusal) =
         elaborateForTarget
+          (emitDriveInputs profile ask)
           asyncDriver
           profile
           modsWithPath
@@ -587,6 +604,7 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
   let (rsrc, csrc) = ask.askPreludeSrcs
   let out = match ask.askJson
     None => frontEnd noStdlibExports drive FrontInput {
+      fiInputs = emitDriveInputs !selectedProfile ask,
       fiAllowInternal = True,
       fiTrusted = [],
       fiRuntimeSrc = rsrc,
@@ -602,6 +620,7 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
         (cliStdlibExports front.jfStdlibDir)
         drive
         FrontInput {
+          fiInputs = emitDriveInputs !selectedProfile ask,
           fiAllowInternal = front.jfAllowInternal,
           fiTrusted = front.jfTrusted,
           fiRuntimeSrc = rsrc,

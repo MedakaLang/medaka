@@ -1,5 +1,5 @@
 # META
-source_lines=211
+source_lines=206
 stages=DESUGAR,MARK
 # SOURCE
 -- Composed self-hosted front-end LOGIC — wires the stage ports into one
@@ -43,7 +43,6 @@ import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import types.typecheck.{
   defaultDriveInputs,
   checkOneToLinesWithRuntimeK,
-  setCoherenceUserDecls,
   checkOneErrorsWithRuntime,
   entryReportFromDiags,
   ModDiags,
@@ -117,7 +116,6 @@ cleanReport : String ->
 -- lint-disable-next-line rule-duplicate-body
 cleanReport rsrc csrc runtimeP coreP raw desugared =
   let exWarns = exhaustToLinesWith (raw ++ runtimeP ++ coreP) raw
-  let _ = setCoherenceUserDecls desugared
   -- The typecheck runs over the desugar cache's trees, keyed by the prelude
   -- sources, so the core check is memoized: `analyzeFrom` already checked this
   -- prelude in this process, and a keyless check would redo it from scratch.
@@ -130,8 +128,6 @@ cleanReport rsrc csrc runtimeP coreP raw desugared =
       (desugaredPrelude csrc)
       desugared
   joinNonEmpty exWarns schemes
--- TYPECHECK-AUDIT S3: stage the USER decls (NO prelude) for the coherence check
--- so a user impl overriding a prelude impl is not flagged as overlapping.
 
 joinNonEmpty : String -> String -> String
 -- Intentional cross-file duplicate of entries/check_batch.mdk's copy — same
@@ -165,7 +161,6 @@ checkHasErrors rsrc csrc tsrc =
       let resDiags = resolveToLines runtimeP coreP desugared
       match resDiags
         "" =>
-          let _ = setCoherenceUserDecls desugared
           checkOneErrorsWithRuntime
             defaultDriveInputs
             (desugar runtimeP)
@@ -222,7 +217,7 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveToLines" false) (mem "singleFileImportErrors" false) (mem "ppResError" false) (mem "importedCtorDecls" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "exhaustToLinesWith" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkOneToLinesWithRuntimeK" false) (mem "setCoherenceUserDecls" false) (mem "checkOneErrorsWithRuntime" false) (mem "entryReportFromDiags" false) (mem "ModDiags" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkOneToLinesWithRuntimeK" false) (mem "checkOneErrorsWithRuntime" false) (mem "entryReportFromDiags" false) (mem "ModDiags" false))))
 (DTypeSig true "runCheck" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "runCheck" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EApp (EApp (EApp (EVar "runCheckFromDecls") (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "parse") (EVar "tsrc"))))
 (DTypeSig true "runCheckFromDecls" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
@@ -234,13 +229,13 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DFunDef false "reportFor" ((PLit (LString "")) (PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cleanReport") (EVar "rsrc")) (EVar "csrc")) (EVar "runtimeP")) (EVar "coreP")) (EVar "raw")) (EVar "desugared")))
 (DFunDef false "reportFor" ((PVar "resDiags") PWild PWild PWild PWild PWild PWild) (EVar "resDiags"))
 (DTypeSig false "cleanReport" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))))))
-(DFunDef false "cleanReport" ((PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EVar "exhaustToLinesWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntimeK") (EVar "defaultDriveInputs")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "desugared"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EVar "schemes")))))
+(DFunDef false "cleanReport" ((PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EVar "exhaustToLinesWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntimeK") (EVar "defaultDriveInputs")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "desugared"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EVar "schemes")))))
 (DTypeSig false "joinNonEmpty" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "joinNonEmpty" ((PLit (LString "")) (PVar "b")) (EVar "b"))
 (DFunDef false "joinNonEmpty" ((PVar "a") (PLit (LString ""))) (EVar "a"))
 (DFunDef false "joinNonEmpty" ((PVar "a") (PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ""))))
 (DTypeSig true "checkHasErrors" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "checkHasErrors" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "parse") (EVar "tsrc"))) (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "parsePrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "parsePrelude") (EVar "csrc"))) (DoLet false false (PVar "importErrs") (EApp (EVar "singleFileImportErrors") (EVar "desugared"))) (DoExpr (EMatch (EVar "importErrs") (arm (PCons PWild PWild) () (EVar "True")) (arm (PList) () (EBlock (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EVar "resolveToLines") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkOneErrorsWithRuntime") (EVar "defaultDriveInputs")) (EApp (EVar "desugar") (EVar "runtimeP"))) (EApp (EVar "desugar") (EVar "coreP"))) (EVar "desugared"))))) (arm PWild () (EVar "True"))))))))))
+(DFunDef false "checkHasErrors" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "parse") (EVar "tsrc"))) (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "parsePrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "parsePrelude") (EVar "csrc"))) (DoLet false false (PVar "importErrs") (EApp (EVar "singleFileImportErrors") (EVar "desugared"))) (DoExpr (EMatch (EVar "importErrs") (arm (PCons PWild PWild) () (EVar "True")) (arm (PList) () (EBlock (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EVar "resolveToLines") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EApp (EApp (EApp (EApp (EVar "checkOneErrorsWithRuntime") (EVar "defaultDriveInputs")) (EApp (EVar "desugar") (EVar "runtimeP"))) (EApp (EVar "desugar") (EVar "coreP"))) (EVar "desugared"))) (arm PWild () (EVar "True"))))))))))
 (DTypeSig true "checkModulesReport" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyCon "String"))))
 (DFunDef false "checkModulesReport" ((PVar "exWarns") (PVar "perMod")) (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EApp (EVar "entryReportFromDiags") (EVar "perMod"))))
 (DTypeSig true "entryExhaust" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
@@ -259,7 +254,7 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveToLines" false) (mem "singleFileImportErrors" false) (mem "ppResError" false) (mem "importedCtorDecls" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "exhaustToLinesWith" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkOneToLinesWithRuntimeK" false) (mem "setCoherenceUserDecls" false) (mem "checkOneErrorsWithRuntime" false) (mem "entryReportFromDiags" false) (mem "ModDiags" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkOneToLinesWithRuntimeK" false) (mem "checkOneErrorsWithRuntime" false) (mem "entryReportFromDiags" false) (mem "ModDiags" false))))
 (DTypeSig true "runCheck" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "runCheck" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EApp (EApp (EApp (EVar "runCheckFromDecls") (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "parse") (EVar "tsrc"))))
 (DTypeSig true "runCheckFromDecls" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
@@ -271,13 +266,13 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DFunDef false "reportFor" ((PLit (LString "")) (PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cleanReport") (EVar "rsrc")) (EVar "csrc")) (EVar "runtimeP")) (EVar "coreP")) (EVar "raw")) (EVar "desugared")))
 (DFunDef false "reportFor" ((PVar "resDiags") PWild PWild PWild PWild PWild PWild) (EVar "resDiags"))
 (DTypeSig false "cleanReport" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))))))
-(DFunDef false "cleanReport" ((PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EVar "exhaustToLinesWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntimeK") (EVar "defaultDriveInputs")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "desugared"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EVar "schemes")))))
+(DFunDef false "cleanReport" ((PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EVar "exhaustToLinesWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntimeK") (EVar "defaultDriveInputs")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "desugared"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EVar "schemes")))))
 (DTypeSig false "joinNonEmpty" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "joinNonEmpty" ((PLit (LString "")) (PVar "b")) (EVar "b"))
 (DFunDef false "joinNonEmpty" ((PVar "a") (PLit (LString ""))) (EVar "a"))
 (DFunDef false "joinNonEmpty" ((PVar "a") (PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString ""))))
 (DTypeSig true "checkHasErrors" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "checkHasErrors" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "parse") (EVar "tsrc"))) (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "parsePrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "parsePrelude") (EVar "csrc"))) (DoLet false false (PVar "importErrs") (EApp (EVar "singleFileImportErrors") (EVar "desugared"))) (DoExpr (EMatch (EVar "importErrs") (arm (PCons PWild PWild) () (EVar "True")) (arm (PList) () (EBlock (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EVar "resolveToLines") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkOneErrorsWithRuntime") (EVar "defaultDriveInputs")) (EApp (EVar "desugar") (EVar "runtimeP"))) (EApp (EVar "desugar") (EVar "coreP"))) (EVar "desugared"))))) (arm PWild () (EVar "True"))))))))))
+(DFunDef false "checkHasErrors" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "parse") (EVar "tsrc"))) (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "parsePrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "parsePrelude") (EVar "csrc"))) (DoLet false false (PVar "importErrs") (EApp (EVar "singleFileImportErrors") (EVar "desugared"))) (DoExpr (EMatch (EVar "importErrs") (arm (PCons PWild PWild) () (EVar "True")) (arm (PList) () (EBlock (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EVar "resolveToLines") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EApp (EApp (EApp (EApp (EVar "checkOneErrorsWithRuntime") (EVar "defaultDriveInputs")) (EApp (EVar "desugar") (EVar "runtimeP"))) (EApp (EVar "desugar") (EVar "coreP"))) (EVar "desugared"))) (arm PWild () (EVar "True"))))))))))
 (DTypeSig true "checkModulesReport" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyCon "String"))))
 (DFunDef false "checkModulesReport" ((PVar "exWarns") (PVar "perMod")) (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EApp (EVar "entryReportFromDiags") (EVar "perMod"))))
 (DTypeSig true "entryExhaust" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))

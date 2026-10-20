@@ -547,7 +547,7 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:7264 | Ref (List | `dictEligibleRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7266 | Ref (List | `mangledShadowMapRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7268 | Ref (List | `userIfaceNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7269 | Ref (List | `diCoherenceUserDecls` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7269 | Ref (List | diCoherenceUserDecls (field deleted: it had no reader) | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7270 | Ref (List | `tcStdlibOwned` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7273 | Ref (List | `superDeclsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7274 | Ref (List | `standaloneValuesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |

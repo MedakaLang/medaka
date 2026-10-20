@@ -71,16 +71,18 @@ import types.publish.{
 }
 import types.effect_invocation.{InvocationOps}
 import types.typecheck.{
-  defaultDriveInputs,
+  driveInputsFor,
   checkModulesEntryFullReportK, entrySplit, schemeLines,
   checkModulesChainReportFor, chainFullKey, checkModulesPartialK,
   lastInvocationOps,
-  entryOwnSchemes, dropModSchemes, ModDiags, setCoherenceUserDecls,
-  setStdlibOwnership, TcDiag(..), tcMsg,
+  entryOwnSchemes, dropModSchemes, ModDiags,
+  TcDiag(..), tcMsg,
   -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
   -- typechecker because S1's `nameable in M` operand does; see its own comment.
-  importedStandaloneShadows,
+  importedStandaloneShadows, importedStandaloneShadowsIn,
 }
+import types.tc_types.{DriveInputs(..)}
+import types.target_profile.{selectedProfile}
 -- #2738: the two colliding signatures are SURFACE types, and this is the one
 -- surface-type renderer in the tree (`tools/doc.mdk`'s `ppTyP` is private to the
 -- doc generator).  Imported here, at the driver, rather than into
@@ -896,7 +898,8 @@ analyzeFrom exportsFor modName runtimeSrc coreSrc raw =
 -- One file through `frontEnd` and the check drive, with nothing kept beside the
 -- drive's report: the faces that render only diagnostics (the LSP's
 -- single-document path, the playground, `check --json`'s inline source).
--- `allowInternal` lifts the internal-extern guard.
+-- `allowInternal` lifts the internal-extern guard.  No loader saw the file, so
+-- no module is stdlib-owned; the profile is the one the process selected.
 export
 fileFront : (List String -> <e> List (String, List String)) ->
   String ->
@@ -910,6 +913,7 @@ fileFront exportsFor modName allowInternal runtimeSrc coreSrc raw =
     exportsFor
     (d => ((), checkReportOf "" d))
     FrontInput {
+      fiInputs = driveInputsFor !selectedProfile False [],
       fiAllowInternal = allowInternal,
       fiTrusted = [],
       fiRuntimeSrc = runtimeSrc,
@@ -964,7 +968,7 @@ export
 checkReportOf : String -> FrontDriveIn -> TcReport
 checkReportOf chainKey d = match (d.fdMods, d.fdPairs)
   ([], [up]) => checkModulesEntryFullReportK
-    defaultDriveInputs
+    d.fdInputs
     (valueMainCandidate d.fdCore [up])
     d.fdPreludeKey
     d.fdRuntime
@@ -972,6 +976,7 @@ checkReportOf chainKey d = match (d.fdMods, d.fdPairs)
     [up]
   (mods, pairs) =>
     checkChainReport
+      d.fdInputs
       (valueMainCandidate d.fdCore pairs)
       d.fdPreludeKey
       chainKey
@@ -1046,8 +1051,10 @@ analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard =
   -- name no dependency's decls: every `DUse` misses the (empty) graph and the walk
   -- yields `[]`.  Wired anyway, beside its sibling, so the two directions stay one
   -- SET here as they are at their detection sites — and so the multi-module half
-  -- below is not the only place a reader can find this warning's wiring.
-  let importShadowWarns = importedStandaloneShadows [] desugared
+  -- below is not the only place a reader can find this warning's wiring.  The
+  -- interface-row index is passed empty: the one the typechecker holds here is a
+  -- previous drive's, and this file's drive has not run.
+  let importShadowWarns = importedStandaloneShadowsIn omEmpty [] desugared
   -- Derives live only on the RAW tree (`desugar` clears the field), so this reads
   -- `raw`, not `desugared`.
   let deriveDiags = map deriveErrToDiag (checkDerives raw)
@@ -1056,7 +1063,6 @@ analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard =
       exportsFor
       (resolveProgramG2 internalGuard runtimeP coreP desugared)
   let resDiags = map diagOfResError resErrs
-  let _ = setCoherenceUserDecls desugared
   let guardDiags = map guardWarnToDiag guardWarns
   let shadowDiags = map (preludeShadowWarnToDiag modName) shadowWarns
   let importShadowDiags = map (importShadowWarnToDiag modName) importShadowWarns
@@ -1144,9 +1150,12 @@ public export data FrontPolicy =
   | DriveUnblocked String
   | ResolvedByGate
 
--- `fiAllowInternal`/`fiTrusted` lift the internal-extern guard: off for every
--- module under `--allow-internal`, else off for the modules named.
+-- `fiInputs` is what every drive of the run is given: the verb's profile and the
+-- stdlib ownership its loader computed.  `fiAllowInternal`/`fiTrusted` lift the
+-- internal-extern guard: off for every module under `--allow-internal`, else off
+-- for the modules named.
 public export data FrontInput = FrontInput {
+  fiInputs : DriveInputs,
   fiAllowInternal : Bool,
   fiTrusted : List String,
   fiRuntimeSrc : String,
@@ -1155,10 +1164,11 @@ public export data FrontInput = FrontInput {
   fiProgram : FrontProgram,
 }
 
--- What the verb's drive is handed: the preludes resolve read, their memo key,
--- and the desugared program.  `fdMods` is `[]` for a single file, whose one
--- pair is named `__user__` and has no file.
+-- What the verb's drive is handed: the run's drive inputs, the preludes resolve
+-- read, their memo key, and the desugared program.  `fdMods` is `[]` for a single
+-- file, whose one pair is named `__user__` and has no file.
 public export data FrontDriveIn = FrontDriveIn {
+  fdInputs : DriveInputs,
   fdPreludeKey : Option (Int, Int),
   fdRuntime : List Decl,
   fdCore : List Decl,
@@ -1201,6 +1211,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
       False => undrivenOutput [(path, s.surfaceDiags)]
       True =>
         let (kept, r) = drive FrontDriveIn {
+          fdInputs = fi.fiInputs,
           fdPreludeKey = s.surfacePreludeKey,
           fdRuntime = s.surfaceRuntimeP,
           fdCore = s.surfaceCoreP,
@@ -1217,6 +1228,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
       desugaredPreludeKey fi.fiCoreSrc,
     )
     let driveIn = FrontDriveIn {
+      fdInputs = fi.fiInputs,
       fdPreludeKey = preludeKey,
       fdRuntime = rt,
       fdCore = core,
@@ -1254,7 +1266,15 @@ frontEnd exportsFor drive fi = match fi.fiProgram
         match bucketsResolveRejected buckets
           True =>
             let (r, results) =
-              typecheckPassReport rt core preludeKey chainKey mods pairs buckets
+              typecheckPassReport
+                fi.fiInputs
+                rt
+                core
+                preludeKey
+                chainKey
+                mods
+                pairs
+                buckets
             FrontOutput { foDiags = results, foReport = r, foDriven = None }
           False => drivenGraph drive driveIn buckets
       ResolvedByGate =>
@@ -1308,8 +1328,6 @@ undrivenReport = TcReport {
 -- resolve over runtime + core (prelude) + target
 
 -- resolve has no per-error loc in the compiler pipeline → None.
-
--- Stage the user decls for coherence (mirrors check.mdk's setCoherenceUserDecls).
 
 -- Only run typecheck when resolve found no errors (same gate as diagnostics.ml).
 
@@ -1777,6 +1795,7 @@ analyzeProjectKeyed exportsFor allowInternal trustedMods cacheRef parseCacheRef 
           exportsFor
           (d => ((), checkReportOf chainKey d))
           FrontInput {
+            fiInputs = driveInputsFor !selectedProfile False [],
             fiAllowInternal = allowInternal,
             fiTrusted = trustedMods,
             fiRuntimeSrc = runtimeSrc,
@@ -1834,6 +1853,7 @@ projectDiagsLoadedFull : (List String -> <e> List (String, List String)) ->
   <e> (List ModDiags, List (String, List Diag))
 projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods modPairs =
   typecheckPassFull
+    (driveInputsFor !selectedProfile False [])
     runtimeP
     coreP
     preludeKey
@@ -1932,7 +1952,7 @@ projectEntryAnalysisOr kept cacheRef parseCacheRef read entry roots runtimeSrc c
       None =>
         Some
           (checkModulesPartialK
-            defaultDriveInputs
+            (driveInputsFor !selectedProfile False [])
             preludeKey
             runtimeP
             coreP
@@ -2109,7 +2129,8 @@ resolvePass exportsFor allowInternal trustedMods preludeKey rt core known keys (
 -- `typecheckDiagsFold` keeps consuming exactly `(errs, warns)`: the schemes are
 -- a projection beside the fold, never an input to it.  `modPairs` is the
 -- caller's, so the graph is desugared once per analyze.
-typecheckPassFull : List Decl ->
+typecheckPassFull : DriveInputs ->
+  List Decl ->
   List Decl ->
   Option (Int, Int) ->
   String ->
@@ -2117,15 +2138,24 @@ typecheckPassFull : List Decl ->
   List (String, List Decl) ->
   List (String, List Diag) ->
   (List ModDiags, List (String, List Diag))
-typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets =
+typecheckPassFull inputs runtimeP coreP preludeKey chainKey mods modPairs buckets =
   let (r, results) =
-    typecheckPassReport runtimeP coreP preludeKey chainKey mods modPairs buckets
+    typecheckPassReport
+      inputs
+      runtimeP
+      coreP
+      preludeKey
+      chainKey
+      mods
+      modPairs
+      buckets
   (r.trDiagnostics, results)
 
 -- `typecheckPassFull` returning the drive's whole report, whose
 -- `trDiagnostics` is the per-module list.  `frontEnd` runs it over a graph
 -- resolve rejected under `DriveUnblocked`.
-typecheckPassReport : List Decl ->
+typecheckPassReport : DriveInputs ->
+  List Decl ->
   List Decl ->
   Option (Int, Int) ->
   String ->
@@ -2133,7 +2163,7 @@ typecheckPassReport : List Decl ->
   List (String, List Decl) ->
   List (String, List Diag) ->
   (TcReport, List (String, List Diag))
-typecheckPassReport runtimeP coreP preludeKey chainKey mods modPairs buckets =
+typecheckPassReport inputs runtimeP coreP preludeKey chainKey mods modPairs buckets =
   -- The graph analogue of a single file's `resolveClean` gate, per module: a
   -- module resolve rejected, or one importing such a module, is not typechecked
   -- (a bare method name resolve left unbound would panic in `inferMethodAt`).
@@ -2150,6 +2180,7 @@ typecheckPassReport runtimeP coreP preludeKey chainKey mods modPairs buckets =
   let valueMain = not rejected && valueMainCandidate coreP modPairs
   let driven =
     checkChainReport
+      inputs
       valueMain
       preludeKey
       chainKey
@@ -2174,7 +2205,8 @@ typecheckPassReport runtimeP coreP preludeKey chainKey mods modPairs buckets =
 -- `check`'s drive of a graph: the module-chain memo (types/typecheck.mdk)
 -- resumes an unchanged import prefix from its snapshot, so only the modules
 -- after it are re-checked.  `mods` are the loaded triples `pairs` desugars.
-checkChainReport : Bool ->
+checkChainReport : DriveInputs ->
+  Bool ->
   Option (Int, Int) ->
   String ->
   List Decl ->
@@ -2182,9 +2214,9 @@ checkChainReport : Bool ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   TcReport
-checkChainReport valueMain preludeKey chainKey runtimeP coreP mods pairs =
+checkChainReport inputs valueMain preludeKey chainKey runtimeP coreP mods pairs =
   checkModulesChainReportFor
-    defaultDriveInputs
+    inputs
     valueMain
     preludeKey
     chainKey
@@ -3290,13 +3322,13 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
       -- why it is not `trusted` above.
       let (flatStdlib, ownedStdlib) =
         stdlibOwnership target roots stdlibDir mods
-      let _ = setStdlibOwnership flatStdlib ownedStdlib
       let program = match modsWithPath
         [m] => FrontFile m
         _ => FrontGraph modsWithPath (desugaredModPairs modsWithPath)
       let chainKey = chainKeyOf target roots
       let front = frontEnd (stdlibExportsReader stdlibDir) (checkDriveReport
         chainKey) FrontInput {
+        fiInputs = driveInputsFor !selectedProfile flatStdlib ownedStdlib,
         fiAllowInternal = allowInternal,
         fiTrusted = trusted,
         fiRuntimeSrc = rsrc,
