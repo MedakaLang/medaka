@@ -18,6 +18,7 @@
 // plain, stderr/problems render inline in that same pane (see main.js).
 import { chromium } from 'playwright';
 import fs from 'node:fs';
+import { ANIMATION_EXAMPLES } from '../../animation_examples.mjs';
 
 const [, , BASE_URL, SCREENSHOT_DIR] = process.argv;
 if (!BASE_URL || !SCREENSHOT_DIR) {
@@ -265,6 +266,20 @@ async function main() {
     const helloConsole = (await page.$eval('#console', (el) => el.textContent)).trim();
     check('"hello" example runs and prints greeting', helloConsole.includes('hello from Medaka!'), helloConsole);
     await page.screenshot({ path: `${SCREENSHOT_DIR}/07_examples.png` });
+
+    // ── Named examples can be linked with a short hash ───────────────────────
+    console.log('Test: named example hash');
+    await page.selectOption('#example-select', 'cube');
+    check('selecting an example puts its name in the URL hash',
+      await page.evaluate(() => window.location.hash) === '#example=cube',
+      await page.evaluate(() => window.location.hash));
+    const cubeUrl = BASE_URL.replace(/#.*$/, '') + '#example=cube';
+    await page.goto(cubeUrl, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.cm-editor .cm-content', { timeout: 15000 });
+    check('example hash loads the matching source and picker selection',
+      await page.evaluate(() => window.__mdkView.state.doc.toString()) === ANIMATION_EXAMPLES.cube
+        && await page.$eval('#example-select', el => el.value) === 'cube');
 
     // ── Test 8: Share round-trip (set hash -> reload -> editor has program) ──
     console.log('Test: share permalink round-trip');

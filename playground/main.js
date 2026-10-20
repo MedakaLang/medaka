@@ -129,7 +129,13 @@ function programFromHash() {
   try { return decodeProgram(m[1]); } catch { return null; }
 }
 
-const initialProgram = programFromHash() || DEFAULT_PROGRAM;
+function exampleFromHash() {
+  const m = window.location.hash.match(/^#example=([a-z0-9_-]+)$/i);
+  return m && Object.hasOwn(EXAMPLES, m[1]) ? m[1] : null;
+}
+
+const initialExample = exampleFromHash();
+const initialProgram = programFromHash() || (initialExample ? EXAMPLES[initialExample] : DEFAULT_PROGRAM);
 
 // ── Language-service (hover + completion) — runs on the MAIN THREAD ───────────
 // Unlike analyze (in the language worker), hover/completion run here: a full
@@ -585,12 +591,18 @@ for (const id of Object.keys(ANIMATION_EXAMPLES)) {
   option.textContent = id;
   exampleSelect.append(option);
 }
+if (initialExample) {
+  exampleSelect.value = initialExample;
+  const label = document.getElementById('example-label');
+  if (label) label.textContent = initialExample;
+}
 exampleSelect.addEventListener('change', () => {
   const src = EXAMPLES[exampleSelect.value];
   if (!src) return;
   const label = document.getElementById('example-label');
   if (label) label.textContent = exampleSelect.value;
   setValue(view, src);
+  window.history.replaceState(null, '', '#example=' + encodeURIComponent(exampleSelect.value));
   clearConsole();
   setStatus('');
   scheduleAnalyze();
