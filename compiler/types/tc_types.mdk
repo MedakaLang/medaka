@@ -912,11 +912,10 @@ public export data MethodScope =
 -- One graph drive's state: the cross-module accumulators (`crossRun`), the graph
 -- lineage (`graphRun`), the drive's configuration and trace sink, the graph-derived
 -- tables, and the sticky type-error pair.  `graphPreamble` mints it (`mintGraphCtx`)
--- with fresh `crossRun` and `graphRun` and the trace of the drive's inputs; every
--- `Ref` field is carried from the previous record by identity and then written in
--- place at its own site, so a field the preamble does not write keeps the previous
--- drive's value.  The sticky pair is process-lived:
--- no driver clears it (`resetTypeErrorsSticky` does, for its callers).
+-- from the drive's inputs, the admitted map its driver computed, and the process's
+-- `Interners`: every field is the drive's own, except the lineage objects of
+-- `graphRun` and the extern catalog `builtinExternNamesRef`, which are the
+-- interners' (the record installed last).
 --
 -- NO TRAILING `--` comment on any field below (#829/[T-PERRUN-COMMENTS] corrupts
 -- this header shape) — field prose lives on the reader, e.g. `dispatchIdxScoped`.
@@ -949,8 +948,7 @@ public export data GraphCtx = GraphCtx {
   -- driver that skipped its preamble, and fails loud.
   markSetsRef : Ref (Option MarkSets),
   -- The innermost ELoc span the inference walk has entered (the walk's current
-  -- location), `None` until the first one.  Carried by identity from one drive's
-  -- record to the next, like every other `Ref` field here.
+  -- location), `None` until the drive's first one.
   currentLocRef : Ref (Option Loc),
   -- Armed by every recorded type error (`recordTypeError`), read by
   -- `typeErrorsArmed` and `driveOutputsNow`; the diagnostics behind it, newest first, each with its module.
@@ -990,15 +988,18 @@ public export data TraceSink = TraceSink {
 }
 
 -- What a driver hands a drive as its first argument: the stdlib ownership of the
--- loader's module list, the trace sink (`None`: every trace off), and the selected
+-- loader's module list, the trace sink (`None`: every trace off), the selected
 -- target profile's `IO` grants and name (`""` for none), carried as data so this
--- module need not import `types.target_profile`.
+-- module need not import `types.target_profile`, and the run `markModules`
+-- returned when the drive checks the trees it marked (`None` otherwise): the mint
+-- keeps that run's base and cell arrays.
 public export data DriveInputs = DriveInputs {
   diStdlibOwned : OrdMap Unit,
   diFlatEntryIsStdlib : Bool,
   diTrace : Option TraceSink,
   diIoJoinGrants : List (String, EffParamTy),
   diProfileName : String,
+  diMarked : Option GraphRun,
 }
 
 -- What a drive hands back to its caller, as plain data frozen at the drive's end
@@ -1795,8 +1796,9 @@ public export data GraphRun = GraphRun {
   -- from an earlier graph.  It travels with `evCells` through `copyGraphRun`, so a
   -- memo snapshot keeps answering for the ids it was taken with.
   evBase : Int,
-  -- Set by `markModules`, whose marking mints this lineage's cells before the
-  -- driver it feeds resets the graph; that reset keeps them (`graphLineageRun`).
+  -- Set by `markModules` on the run it returns, whose marking minted this lineage's
+  -- cells before the driver it feeds mints the graph.  The mint keeps those cells
+  -- when the driver's inputs carry the run (`DriveInputs.diMarked`), not on this flag.
   markedAhead : Bool,
   -- The ordinal below which every method cell has been judged complete
   -- (`judgeEvidence`).  Each drain judges the cells minted since the last one and
@@ -1844,6 +1846,25 @@ public export data GraphRun = GraphRun {
   -- The goals boundaries held on those variables without judging them, for the
   -- drain's verdict (`judgeLiveGoals`).  Every drain empties it.
   liveGoals : Ref (List LiveGoal),
+}
+
+-- What one graph run hands the next: the evidence-ordinal counter, the binder-name
+-- state and the grant state, as the objects of the run installed last (not copies),
+-- so the next lineage continues from the counter's value at the next mint.
+public export data Lineage = Lineage {
+  lnEvCounter : Ref Int,
+  lnLocalAbs : LocalAbsState,
+  lnGrants : GrantState,
+}
+
+-- The process's interners: what outlives a drive on purpose.  The evidence lineage
+-- keeps ids and local binder names unique across the drives of a long-lived
+-- process; the builtin extern catalog is the union of every catalog a drive built,
+-- because a later drive with a shorter runtime list must not exempt the FFI guards.
+-- Both are the objects of the graph record installed last.
+public export data Interners = Interners {
+  lineage : Lineage,
+  externCatalog : Ref (OrdMap (Ty, List (String, Int))),
 }
 
 -- One binder awaiting the drain: its id, source name, type cell, for a
