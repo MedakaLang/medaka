@@ -6,14 +6,14 @@ Total 580 items: 239 dev (41%), 341 test.
 
 | | positive | control | judgment | total |
 |---|---|---|---|---|
-| val | 74 | 18 | 7 | 99 |
+| val | 75 | 18 | 7 | 100 |
 | fixed | 87 | 73 | 11 | 171 |
 | declined | 0 | 4 | 2 | 6 |
 | reviewed | 56 | 11 | 2 | 69 |
-| candidate | 154 | 61 | 20 | 235 |
-| **all** | 371 | 167 | 42 | 580 |
+| candidate | 157 | 61 | 16 | 234 |
+| **all** | 375 | 167 | 38 | 580 |
 
-Source kinds: `derived` 8, `file-mining` 97, `scan` 177, `style-report` 210, `val-ruling` 88.
+Source kinds: `derived` 8, `file-mining` 97, `scan` 176, `style-report` 210, `val-ruling` 89.
 
 ## By class
 
@@ -61,7 +61,7 @@ Positives, controls and judgments as dev/test; `val`, `fixed`, `rev`, `cand` cou
 | `comment.stale` | 8/18 | 0 | 16 | 4 | 6 | 7/7 | 2 |
 | `comment.layout` | 4/6 | 0 | 5 | 4 | 1 | 3/0 | 0 |
 | `dup.in-diff` | 8/23 | 0 | 12 | 9 | 10 | 5/7 | 0 |
-| `dup.cross-file` | 9/14 | 1 | 11 | 0 | 11 | 4/12 | 4 |
+| `dup.cross-file` | 11/16 | 2 | 11 | 0 | 14 | 4/12 | 0 |
 | `dead.code` | 2/10 | 0 | 4 | 3 | 5 | 2/1 | 1 |
 | `naming.misleading` | 2/3 | 0 | 4 | 1 | 0 | 1/1 | 0 |
 | `defensive.silent-default` | 4/1 | 0 | 2 | 1 | 2 | 2/2 | 0 |
