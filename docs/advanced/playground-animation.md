@@ -1,8 +1,11 @@
 # Canvas Animation in the Playground
 
-Choose **cube**, **lissajous**, or **balls** in the playground's examples picker,
-then press **Run**. Each example is a complete editable Medaka program. **Share**
-saves that source in the URL, including your edits.
+Open the playground with the [cube](https://medaka-lang.dev/#example=cube),
+[Lissajous](https://medaka-lang.dev/#example=lissajous), or [balls](https://medaka-lang.dev/#example=balls)
+example loaded, or choose one in the examples picker, then press **Run**. Each
+example is a complete editable Medaka program. The selected example is saved in
+the URL hash, so you can copy that link. **Share** saves the complete source in
+the URL, including your edits.
 
 The cube demonstrates rotation and perspective with eight vertices and twelve
 edges. Move the pointer over its canvas to change the rotation offset. The
