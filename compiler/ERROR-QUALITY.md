@@ -398,7 +398,7 @@ of a row is *"not yet audited"*, not *"unenforced"*.
 
 | Clause | Site | Keying assumption | Conformance fixture |
 |--------|------|-------------------|---------------------|
-| **R** — pinpoints the single root cause; no cascade | **S1** `inferMethodBody`, default kind (`compiler/types/typecheck.mdk`) — skips the effect-variable rigidity check (`checkMethodEffVarRigidity`) when the default body detected an error. ⚠️ **NOT diagnostics-only** — see "S1's gated block mutates inference state" below | "an error was DETECTED in this region", read off `perRun.errorsDetected` through `erredDuring`. **Not** "the diagnostic list grew" — see below | `test/typecheck_error_fixtures/iface_default_dedup_cascade.mdk` — pins the shared keying, **not** S1's gate specifically (see the coverage note below) |
+| **R** — pinpoints the single root cause; no cascade | **S1** `inferMethodBody`, default kind (`compiler/types/typecheck.mdk`) — skips the effect-variable rigidity check (`checkMethodEffVarRigidity`) when the default body detected an error. ⚠️ **NOT diagnostics-only** — see "S1's gated block mutates inference state" below | "an error was DETECTED in this region", read off `ModuleCtx.errorsDetected` through `erredDuring`. **Not** "the diagnostic list grew" — see below | `test/typecheck_error_fixtures/iface_default_dedup_cascade.mdk` — pins the shared keying, **not** S1's gate specifically (see the coverage note below) |
 | **R** + **X** — exactly one diagnostic per root cause | **S2** `checkMethodBodyAgainst`, default kind (`gatesBodyCascade`) — skips the launder query + the method-boundary `unify expectedTy actualTy` when `inferClauses` detected an error | same counter, same combinator | `iface_default_dedup_cascade.mdk` (the **skipping** arm); `default_body_type_error.mdk` pins the **non-skipping** arm — see the coverage note below |
 | **X** — one root cause must not emit a storm of follow-ons | **S3** `checkMethodBodyAgainst`, default kind — on a detected method-boundary mismatch, `wRestore`s `implObls` to the pre-body snapshot, dropping the body's induced obligations (`(5 : Bool)` ⇒ `Num Bool`) | same counter; plus `dcMethodMismatch = Some mname` across that one unify, which selects the specialized `Method '<m>': …` line (dims **C**/**J**) | `default_body_type_error.mdk` |
 
@@ -416,7 +416,7 @@ it does not on its own discriminate S1's gate. Demonstrating that needs a compil
 S1 removed; **nobody has built one**, so no such claim is made here.
 
 **The keying assumption is the load-bearing column, and it is why issue 1146 exists.**
-Until PR 1 these three gates keyed on `listLen perRun.typeErrors` — the *length of the
+Until PR 1 these three gates keyed on `listLen perRun.typeErrors` (`perRun` since replaced by `ModuleCtx` as a parameter) — the *length of the
 diagnostic list*. That makes a **presentation** decision (how many diagnostics are
 worth printing) decide a **control** question (did this region typecheck), so a dedup
 rule, a rendering change or a loc-selection change can silently flip an inference

@@ -292,7 +292,7 @@ this is the #158/#176 design, and it landed.
 | *(loose)* | **7** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, and the toggles cell, since deleted; the bundles have since been reorganised, see `types/CELL-LIFETIMES.md`) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc` | varies |
 
 **The seven cells with no single owning function** (≥6 distinct writers) are the residual
-state-discipline debt: `perRun` (56 writers), `driverState` (14, since `graphCtx`), `currentLoc` (8),
+state-discipline debt (`perRun` since replaced by `ModuleCtx` as a parameter): `perRun` (56 writers), `driverState` (14, since `graphCtx`), `currentLoc` (8),
 `typeErrorsSticky` (8), `crossRun` (7), the toggles cell (6, since deleted), `funConstraintsRef` (6).
 
 ⚠️ Two granularities are mixed in that list: `funConstraintsRef` is a `PerRun` *field* (now `ModuleCtx`), so
@@ -586,7 +586,7 @@ One function, 347 lines, reached from `checkModuleFullImpl`. It dominates **835
 functions / 10,917 lines — 58% of the file — and 110 of 118 state cells (93%)**.
 It directly touches 46 cells.
 
-It opens with the `ModuleCtx` mint (`perRun := freshModuleCtx …`); `mid`, `implDecls`, and `prog0` carry the current
+It opens with the `ModuleCtx` mint (`checkBodyImpl` mints `freshModuleCtx …` and passes it down as `mctx`; the former `perRun` cell is deleted); `mid`, `implDecls`, and `prog0` carry the current
 module and its graph-visible declaration universe. The phases are:
 
 ```
