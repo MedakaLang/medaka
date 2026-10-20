@@ -1,6 +1,6 @@
 # Typechecker cell lifetimes
 
-One row per piece of mutable typechecker state: the six module-level cells of `compiler/types/typecheck.mdk`, the fields of its bundle records (`ModuleCtx`, `GraphCtx`, `GraphRun`, `CrossRun`, declared in `compiler/types/tc_types.mdk`), the fields of the records that carry the drive's configuration (`TcConfig`, `DriveInputs`, `TraceSink`) and of the context records that replace the old cells (`GroupCtx`, `DynCtx`, `SiteCtx`), and the cells outside the file that a drive reads or writes. It is the inventory the state-by-lifetime split works from.
+One row per piece of mutable typechecker state: the five module-level cells of `compiler/types/typecheck.mdk`, the fields of its bundle records (`ModuleCtx`, `GraphCtx`, `GraphRun`, `CrossRun`, declared in `compiler/types/tc_types.mdk`), the fields of the records that carry the drive's configuration (`TcConfig`, `DriveInputs`, `TraceSink`) and of the context records that replace the old cells (`GroupCtx`, `DynCtx`, `SiteCtx`), and the cells outside the file that a drive reads or writes. It is the inventory the state-by-lifetime split works from.
 
 Counts: 5 module-level cells in `types.typecheck`; field rows `ModuleCtx` 91, `GraphRun` 30, `CrossRun` 14, `GraphCtx` 20, `TcConfig` 5, `DriveInputs` 5, `TraceSink` 8; 5 rows outside the file. The first table is pinned to the cell census by `test/arch_boundaries_test.mdk`.
 
