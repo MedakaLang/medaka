@@ -5,10 +5,16 @@
 
 import graphics.{Picture, Point, Shape(..)}
 
-{- | Begin the invocation's picture, requesting further frames when true. -}
-export
-extern begin : Bool -> <FFI "js/canvas"> Unit
+{- | Whether a canvas invocation paints once or requests subsequent frames. -}
+public export data FrameMode = Once | Continuous deriving (Eq, Debug)
+
+extern beginHost : Bool -> <FFI "js/canvas"> Unit
   bind js "medaka_canvas_v1_begin"
+
+{- | Begin the invocation's picture with the selected frame mode. -}
+export
+begin : FrameMode -> <FFI "js/canvas"> Unit
+begin mode = beginHost (mode == Continuous)
 
 {- | Active animation time in seconds. -}
 export

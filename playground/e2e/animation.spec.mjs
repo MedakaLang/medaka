@@ -7,15 +7,22 @@ import { ANIMATION_EXAMPLES } from '../animation_examples.mjs';
 const [, , baseUrl, screenshotDir] = process.argv;
 if (!baseUrl || !screenshotDir) throw new Error('usage: node animation.spec.mjs <base-url> <screenshots-dir>');
 const scene = `import animation.{animateWith, Frame}
-import graphics.{Picture, picture, rgba, circle, point}
+import graphics.{Picture, picture, rgba, circle, point, polygon}
 
 scene : Frame -> Picture
 scene frame =
   let red = if frame.pointer.down then 1.0 else 0.0
   picture (rgba red 0.0 0.0 1.0)
-    [circle (rgba 0.0 1.0 0.0 1.0) (point (frame.elapsed * 80.0) 0.0) 20.0]
+    [circle (rgba 0.0 1.0 0.0 1.0) (point (frame.elapsed * 80.0) 0.0) 20.0,
+      polygon (rgba 0.0 0.5 1.0 1.0) [point -35.0 -25.0, point -5.0 -25.0, point -20.0 5.0]]
 
 main = animateWith scene
+`;
+const staticPicture = `import animation.{drawing}
+import graphics.{picture, rgba, point, polygon}
+main = drawing (picture (rgba 0.0 0.0 0.0 1.0) [
+  polygon (rgba 0.0 0.5 1.0 1.0) [point -35.0 -25.0, point -5.0 -25.0, point -20.0 5.0],
+])
 `;
 const runaway = `loop : Int -> Int
 loop n = loop (n + 1)
@@ -215,6 +222,9 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {
   const page = await open(browser);
   await geometryProof(page);
+  await run(page, staticPicture); await waitCanvas(page);
+  assert.match(await page.locator('#status').textContent(), /no problems/);
+  console.log('PASS one-shot drawing sends polygon commands through the Medaka canvas bridge');
   await run(page, ANIMATION_EXAMPLES.cube); await waitCanvas(page);
   await mkdir(screenshotDir, { recursive: true });
   for (const [width, height] of [[1440, 900], [1280, 720]]) {

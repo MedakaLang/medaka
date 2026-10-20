@@ -52,22 +52,23 @@ readFrame _ =
 export
 drawing : Picture -> <FFI "js/canvas"> Unit
 drawing scene =
-  Canvas.begin False
+  Canvas.begin Canvas.Once
   Canvas.render scene
+
+renderContinuous : (Unit -> <FFI "js/canvas"> Picture) -> <FFI "js/canvas"> Unit
+renderContinuous scene =
+  Canvas.begin Canvas.Continuous
+  Canvas.render (scene ())
 
 {- | Draw a pure scene function of elapsed seconds on each frame. -}
 export
 animate : (Float -> Picture) -> <FFI "js/canvas"> Unit
-animate scene =
-  Canvas.begin True
-  Canvas.render (scene (Canvas.elapsed ()))
+animate scene = renderContinuous (unit => scene (Canvas.elapsed ()))
 
 {- | Draw a pure scene function with viewport and pointer input. -}
 export
 animateWith : (Frame -> Picture) -> <FFI "js/canvas"> Unit
-animateWith scene =
-  Canvas.begin True
-  Canvas.render (scene (readFrame ()))
+animateWith scene = renderContinuous (unit => scene (readFrame ()))
 
 {- | Capture an initial model and pure update and view functions.
 
@@ -86,7 +87,7 @@ simulation initial update view = Simulation (Ref initial) (Ref True) update view
 export
 runSimulation : Simulation model -> <FFI "js/canvas"> Unit
 runSimulation (Simulation cell first update view) =
-  Canvas.begin True
+  Canvas.begin Canvas.Continuous
   let frame = readFrame ()
   if !first then first := False else cell := update frame !cell
   Canvas.render (view frame !cell)
