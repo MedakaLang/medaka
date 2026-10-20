@@ -92,7 +92,7 @@ import driver.loader.{
   findImportLoc,
 }
 import driver.diagnostics.{
-  analyzeProject,
+  analyzeProjectKeyed,
   fileFront,
   FrontOutput(..),
   exportsAmong,
@@ -135,6 +135,7 @@ import entries.entry_support.{
 }
 import support.util.{startsWith, splitOnChar, filterList}
 import types.publish.{PubScheme(..), ppPubScheme}
+import types.tc_types.{DriveOutputs, emptyDriveOutputs}
 import types.typecheck.{
   driveInputsFor, constrainedSigNames, preludeReturnPosDictNames,
   preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
@@ -362,13 +363,11 @@ analyzeSingle : Bool ->
 analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP loaded exportsFor =
   let mods = map dropPath loaded
   let paths = map ((mid, path, _) => (mid, path)) loaded
-  let diags =
-    flatMap
-      snd
-      (fileFront exportsFor "" True rsrc csrc (parseLocated tsrc)).foDiags
+  let front = fileFront exportsFor "" True rsrc csrc (parseLocated tsrc)
+  let diags = flatMap snd front.foDiags
   match any isDiagError diags
     True => emitDiagnostics (cjAllToJson [(entry, tsrc, diags)])
-    False => guardedEmit emit rsrc csrc tsrc entry paths mods [
+    False => guardedEmit front.foOutputs emit rsrc csrc tsrc entry paths mods [
       (entry, tsrc, filterWarnings diags),
     ]
 
@@ -391,8 +390,8 @@ analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots loaded exportsFor =
   let mods = map dropPath loaded
   let paths = map ((mid, path, _) => (mid, path)) loaded
   let cacheRef = Ref []
-  let results =
-    analyzeProject
+  let (keyed, results) =
+    analyzeProjectKeyed
       exportsFor
       True
       []
@@ -403,11 +402,23 @@ analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots loaded exportsFor =
       roots
       rsrc
       csrc
+  let outputs = match keyed
+    Some ((_, o), _) => o
+    None => emptyDriveOutputs ()
   let triples = map readDiagSrc results
   match any cjHasErr results
     True => emitDiagnostics (cjAllToJson triples)
     False =>
-      guardedEmit emit rsrc csrc tsrc entry paths mods (map warnTriple triples)
+      guardedEmit
+        outputs
+        emit
+        rsrc
+        csrc
+        tsrc
+        entry
+        paths
+        mods
+        (map warnTriple triples)
 
 -- Keep only non-error (i.e. warning) diagnostics for a single file's list.
 filterWarnings : List Diag -> List Diag
@@ -437,7 +448,8 @@ warnTriple (p, s, ds) = (p, s, filterWarnings ds)
 -- on an ERROR — it never consults warnTriples.
 -- Runs in BOTH modes: W-MAIN-SHAPE / W-MAIN-MISSING are diagnostics the editor
 -- shows today, so `analyze` must report them exactly as `compile` does.
-guardedEmit : Bool ->
+guardedEmit : DriveOutputs ->
+  Bool ->
   String ->
   String ->
   String ->
@@ -446,12 +458,12 @@ guardedEmit : Bool ->
   List (String, List Decl) ->
   List (String, String, List Diag) ->
   <IO> Unit
-guardedEmit emit rsrc csrc tsrc entry paths mods warnTriples =
+guardedEmit outputs emit rsrc csrc tsrc entry paths mods warnTriples =
   match parseLocatedResult tsrc
     Err pe => emitParseError entry pe
     Ok decls => match mainShapeError decls
       Some d => emitDiagnostics (cjAllToJson [(entry, tsrc, [d])])
-      None => doEmit emit rsrc csrc tsrc entry paths mods warnTriples
+      None => doEmit outputs emit rsrc csrc tsrc entry paths mods warnTriples
 
 -- Find a top-level `main` DFunDef among a module's raw decls (skipping @attr
 -- wrappers).  Returns its param list + body so callers can inspect arity and
@@ -514,8 +526,10 @@ mainShapeError decls = match findMainFunDef decls
 --     (#2155's SET-OR-CLEAR write);
 --   * multi module  — `analyzeProject` → `typecheckPassFull` → `graphCollect` →
 --     `setMainSchemeIfEntry` (#2246's).
--- Both run BEFORE this point on every path that reaches it, and nothing between
--- them and here writes the ref (`desugaredPrelude` and `desugarPair` are pure).
+-- Both run BEFORE this point on every path that reaches it and hand their drive's
+-- outputs down (`analyzeSingle`, `analyzeMulti`), which is what `doEmit`'s
+-- `asyncMainShapeError` reads; no drive runs between them and here
+-- (`desugaredPrelude` and `desugarPair` are pure).
 -- MEASURED, not inferred (S2/#2442): an instrumented build printing all
 -- three predicates plus `shouldAutoPrintMain` immediately before and after this
 -- elaborate agreed on all four bits in 34/34 runs — 17 fixtures spanning Unit,
@@ -533,7 +547,8 @@ mainShapeError decls = match findMainFunDef decls
 -- the wrap's `Display` obligation and reported it.  A Unit main is unchanged.
 -- An `Async` main is driven by `runAsyncMain`; one whose payload is not `Unit`
 -- is reported here, in `analyze` mode too.
-doEmit : Bool ->
+doEmit : DriveOutputs ->
+  Bool ->
   String ->
   String ->
   String ->
@@ -542,11 +557,11 @@ doEmit : Bool ->
   List (String, List Decl) ->
   List (String, String, List Diag) ->
   <IO> Unit
-doEmit emit rsrc csrc tsrc entry paths mods warnTriples =
+doEmit outputs emit rsrc csrc tsrc entry paths mods warnTriples =
   let rt = desugaredPrelude rsrc
   let core = desugaredPrelude csrc
   let modules = map desugarPair mods
-  match asyncMainShapeError modules
+  match asyncMainShapeError outputs modules
     Some msg =>
       emitDiagnostics
         (cjAllToJson [
@@ -604,7 +619,7 @@ finishClean : Bool ->
   List (String, List Decl) ->
   <IO> Unit
 finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
-  let (analysis, report) =
+  let (analysis, report, outputs) =
     analyzeProgramReport
       (driveInputsFor !selectedProfile False [])
       True
@@ -619,12 +634,14 @@ finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
         let (coreE, modulesE, _, _, _, _, _) = elab
         let executed =
           executedTrees
+            outputs
             report.trAutoPrint
             "runAsyncMain"
             (coreDecls, modules)
             (coreE, modulesE)
         match executed
-          Ok executed => runEmit paths warnTriples runtimeDecls elab executed
+          Ok executed =>
+            runEmit outputs paths warnTriples runtimeDecls elab executed
           Err msg => failWith msg
       else
         emitAnalyzeMarker warnTriples
@@ -674,13 +691,14 @@ nonEmptyDiags : List Diag -> Bool
 nonEmptyDiags [] = False
 nonEmptyDiags _ = True
 
-runEmit : List (String, String) ->
+runEmit : DriveOutputs ->
+  List (String, String) ->
   List (String, String, List Diag) ->
   List Decl ->
   ElabResult ->
   (List Decl, List (String, List Decl)) ->
   <IO> Unit
-runEmit paths warnTriples runtimeDecls elab executed =
+runEmit outputs paths warnTriples runtimeDecls elab executed =
   let (_, _, _, _, evTable, _, _) = elab
   -- #2809: the program is elaborated as written (`finishClean`), then its
   -- elaborated trees are mangled.
@@ -695,15 +713,16 @@ runEmit paths warnTriples runtimeDecls elab executed =
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
   let ffiRows =
-    validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2)
+    validateFfiExternTypeNames
+      (checkedFfiExternTypeNamesModules outputs modules2)
   let input =
     withRuntimeExternsW
       (runtimeExternNames runtimeDecls)
       (makeWasmEmitInputFull
         (methodIfaceTable allDecls)
         (ctorFieldTypeNames allDecls)
-        (mainTypeIsFloat () && not wrapped)
-        (mainTypeIsUnit () || wrapped)
+        (mainTypeIsFloat outputs && not wrapped)
+        (mainTypeIsUnit outputs || wrapped)
         (declaredRecordFieldOrders allDecls)
         ffiRows)
   -- Mirrors wasm_emit_modules_main.emitTail: bind the lowered

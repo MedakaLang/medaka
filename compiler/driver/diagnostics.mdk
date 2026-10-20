@@ -69,19 +69,17 @@ import types.publish.{
   PubScheme(..), pubSchemes, TcReport(..), PartialAnalysis(..), partialAnalysis,
   noEntryTables
 }
-import types.effect_invocation.{InvocationOps}
 import types.typecheck.{
   driveInputsFor,
   checkModulesEntryFullReportK, entrySplit, schemeLines,
   checkModulesChainReportFor, chainFullKey, checkModulesPartialK,
-  lastInvocationOps,
   entryOwnSchemes, dropModSchemes, ModDiags,
   TcDiag(..), tcMsg,
   -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
   -- typechecker because S1's `nameable in M` operand does; see its own comment.
   importedStandaloneShadows, importedStandaloneShadowsIn,
 }
-import types.tc_types.{DriveInputs(..)}
+import types.tc_types.{DriveInputs(..), DriveOutputs(..), emptyDriveOutputs}
 import types.target_profile.{selectedProfile}
 -- #2738: the two colliding signatures are SURFACE types, and this is the one
 -- surface-type renderer in the tree (`tools/doc.mdk`'s `ppTyP` is private to the
@@ -911,7 +909,7 @@ fileFront : (List String -> <e> List (String, List String)) ->
 fileFront exportsFor modName allowInternal runtimeSrc coreSrc raw =
   frontEnd
     exportsFor
-    (d => ((), checkReportOf "" d))
+    (d => unkept (checkReportOf "" d))
     FrontInput {
       fiInputs = driveInputsFor !selectedProfile False [],
       fiAllowInternal = allowInternal,
@@ -924,14 +922,14 @@ fileFront exportsFor modName allowInternal runtimeSrc coreSrc raw =
 
 -- What a check drive leaves for the target verdict, taken straight off it so no
 -- second elaboration is needed: the entry's own schemes and the prelude's
--- (separate, so the caller picks the lookup order), the invocation ops
--- `lastInvocationOps` describes for THAT drive, the desugared graph it read
+-- (separate, so the caller picks the lookup order), the outputs of THAT drive
+-- (its invocation view, its `main` shape), the desugared graph it read
 -- (the entry last), and each module's file as the loader named it (`[]` for a
 -- single-file drive, whose one module is the entry file).
 public export data CheckDrive = CheckDrive {
   cdEntrySchemes : List (String, Scheme),
   cdCoreSchemes : List (String, Scheme),
-  cdOps : InvocationOps,
+  cdOutputs : DriveOutputs,
   cdMods : List (String, List Decl),
   cdPaths : List (String, String),
 }
@@ -947,14 +945,15 @@ public export data CheckDump = CheckDump {
 -- module-to-file map.
 export
 graphCheckDrive : TcReport ->
+  DriveOutputs ->
   List (String, List Decl) ->
   List (String, String) ->
   CheckDrive
-graphCheckDrive r modPairs paths = CheckDrive {
+graphCheckDrive r outputs modPairs paths = CheckDrive {
   cdEntrySchemes =
     pubSchemes (entryOwnSchemes (map modOwnSchemes r.trDiagnostics)),
   cdCoreSchemes = pubSchemes r.trPartial.paCore,
-  cdOps = lastInvocationOps (),
+  cdOutputs = outputs,
   cdMods = modPairs,
   cdPaths = paths,
 }
@@ -962,10 +961,10 @@ graphCheckDrive r modPairs paths = CheckDrive {
 modOwnSchemes : ModDiags -> (String, List (String, PubScheme))
 modOwnSchemes (mid, (schemes, _, _)) = (mid, schemes)
 
--- The check drive's report: a single file's entry drive, or a graph's drive
--- through the module-chain memo under `chainKey`.
+-- The check drive's report beside its outputs: a single file's entry drive, or a
+-- graph's drive through the module-chain memo under `chainKey`.
 export
-checkReportOf : String -> FrontDriveIn -> TcReport
+checkReportOf : String -> FrontDriveIn -> (TcReport, DriveOutputs)
 checkReportOf chainKey d = match (d.fdMods, d.fdPairs)
   ([], [up]) => checkModulesEntryFullReportK
     d.fdInputs
@@ -988,21 +987,23 @@ checkReportOf chainKey d = match (d.fdMods, d.fdPairs)
 -- The check drive with its `CheckDrive`, taken off the report before anything
 -- else can drive.
 export
-checkDriveReport : String -> FrontDriveIn -> (CheckDrive, TcReport)
+checkDriveReport : String ->
+  FrontDriveIn ->
+  (CheckDrive, TcReport, DriveOutputs)
 checkDriveReport chainKey d =
-  let r = checkReportOf chainKey d
+  let (r, outputs) = checkReportOf chainKey d
   let drive = match (d.fdMods, d.fdPairs)
     ([], [_]) =>
       let (coreSchemes, schemes, _, _) = entrySplit r
       CheckDrive {
         cdEntrySchemes = pubSchemes schemes,
         cdCoreSchemes = pubSchemes coreSchemes,
-        cdOps = lastInvocationOps (),
+        cdOutputs = outputs,
         cdMods = d.fdPairs,
         cdPaths = [],
       }
-    (mods, pairs) => graphCheckDrive r pairs (map modIdToPath mods)
-  (drive, r)
+    (mods, pairs) => graphCheckDrive r outputs pairs (map modIdToPath mods)
+  (drive, r, outputs)
 
 -- `check`'s drive, the arm `frontEnd` runs for it.  A single file's renders the
 -- entry's `name : scheme` lines inside the drive, before any later elaboration:
@@ -1010,15 +1011,18 @@ checkDriveReport chainKey d =
 -- (#4053).  A graph's report is rendered later from its `trDiagnostics`, so its
 -- `cdLines` are empty.  `target` and `roots` key the module-chain memo.
 export
-checkFrontDrive : String -> List String -> FrontDriveIn -> (CheckDump, TcReport)
+checkFrontDrive : String ->
+  List String ->
+  FrontDriveIn ->
+  (CheckDump, TcReport, DriveOutputs)
 checkFrontDrive target roots d =
-  let (drive, r) = checkDriveReport (chainKeyOf target roots) d
+  let (drive, r, outputs) = checkDriveReport (chainKeyOf target roots) d
   let lines = match (d.fdMods, d.fdPairs)
     ([], [_]) =>
       let (_, schemes, _, tcWarns) = entrySplit r
       schemeLines schemes ++ map tcMsg tcWarns
     _ => []
-  (CheckDump { cdLines = lines, cdDrive = drive }, r)
+  (CheckDump { cdLines = lines, cdDrive = drive }, r, outputs)
 
 -- `frontEnd`'s raw-tree passes over a single file: everything but the drive.
 analyzeSurface : (List String -> <e> List (String, List String)) ->
@@ -1185,16 +1189,22 @@ public export data FrontDriveIn = FrontDriveIn {
 -- the unblocked modules' check drive's report, or a report of nothing.
 -- `foReport.trChecked` is `None` whenever any diagnostic in `foDiags` is an
 -- error, including the ones the raw-tree passes add outside the drive
--- (`R-CANNOT-DERIVE`).
+-- (`R-CANNOT-DERIVE`).  `foOutputs` are the outputs of the drive that produced
+-- `foReport` (`emptyDriveOutputs` where none ran).
 public export data FrontOutput a = FrontOutput {
   foDiags : List (String, List Diag),
   foReport : TcReport,
+  foOutputs : DriveOutputs,
   foDriven : Option a,
 }
 
+-- A drive that keeps nothing beside its report and outputs.
+unkept : (TcReport, DriveOutputs) -> (Unit, TcReport, DriveOutputs)
+unkept (r, o) = ((), r, o)
+
 export
 frontEnd : (List String -> <e> List (String, List String)) ->
-  (FrontDriveIn -> <e> (a, TcReport)) ->
+  (FrontDriveIn -> <e> (a, TcReport, DriveOutputs)) ->
   FrontInput ->
   <e> FrontOutput a
 frontEnd exportsFor drive fi = match fi.fiProgram
@@ -1210,7 +1220,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
     match s.resolveClean
       False => undrivenOutput [(path, s.surfaceDiags)]
       True =>
-        let (kept, r) = drive FrontDriveIn {
+        let (kept, r, outputs) = drive FrontDriveIn {
           fdInputs = fi.fiInputs,
           fdPreludeKey = s.surfacePreludeKey,
           fdRuntime = s.surfaceRuntimeP,
@@ -1219,7 +1229,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
           fdMods = [],
         }
         let tcHalf = tcHalfOfPerModule (map dropModSchemes r.trDiagnostics)
-        drivenOutput [(path, s.surfaceDiags ++ tcHalf)] r kept
+        drivenOutput [(path, s.surfaceDiags ++ tcHalf)] r outputs kept
   FrontGraph mods pairs =>
     let rt = desugaredPrelude fi.fiRuntimeSrc
     let core = desugaredPrelude fi.fiCoreSrc
@@ -1265,7 +1275,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
             pairs
         match bucketsResolveRejected buckets
           True =>
-            let (r, results) =
+            let (r, outputs, results) =
               typecheckPassReport
                 fi.fiInputs
                 rt
@@ -1275,28 +1285,34 @@ frontEnd exportsFor drive fi = match fi.fiProgram
                 mods
                 pairs
                 buckets
-            FrontOutput { foDiags = results, foReport = r, foDriven = None }
+            FrontOutput {
+              foDiags = results,
+              foReport = r,
+              foOutputs = outputs,
+              foDriven = None,
+            }
           False => drivenGraph drive driveIn buckets
       ResolvedByGate =>
         drivenGraph drive driveIn (seedAll (map midPath mods) [])
 
 -- The verb's drive of a graph resolve admitted, its per-module diagnostics
 -- folded into `buckets`, which hold every loaded file.
-drivenGraph : (FrontDriveIn -> <e> (a, TcReport)) ->
+drivenGraph : (FrontDriveIn -> <e> (a, TcReport, DriveOutputs)) ->
   FrontDriveIn ->
   List (String, List Diag) ->
   <e> FrontOutput a
 drivenGraph drive d buckets =
-  let (kept, r) = drive d
+  let (kept, r, outputs) = drive d
   let folded =
     typecheckDiagsFold
+      outputs
       d.fdRuntime
       d.fdCore
       d.fdMods
       d.fdPairs
       (map dropModSchemes r.trDiagnostics)
       buckets
-  drivenOutput folded r kept
+  drivenOutput folded r outputs kept
 
 resolveBucket : (String, List ResError) -> (String, List Diag)
 resolveBucket (file, errs) = (file, map diagOfResError errs)
@@ -1305,13 +1321,19 @@ undrivenOutput : List (String, List Diag) -> FrontOutput a
 undrivenOutput buckets = FrontOutput {
   foDiags = buckets,
   foReport = undrivenReport,
+  foOutputs = emptyDriveOutputs (),
   foDriven = None,
 }
 
-drivenOutput : List (String, List Diag) -> TcReport -> a -> FrontOutput a
-drivenOutput buckets r kept = FrontOutput {
+drivenOutput : List (String, List Diag) ->
+  TcReport ->
+  DriveOutputs ->
+  a ->
+  FrontOutput a
+drivenOutput buckets r outputs kept = FrontOutput {
   foDiags = buckets,
   foReport = if anyList cjHasErrD buckets then { r | trChecked = None } else r,
+  foOutputs = outputs,
   foDriven = Some kept,
 }
 -- The report of a program no drive checked.
@@ -1719,7 +1741,7 @@ analyzeProjectReport exportsFor allowInternal trustedMods cacheRef parseCacheRef
       roots
       runtimeSrc
       coreSrc
-  (map fst keyed, results)
+  (map (k => fst (fst k)) keyed, results)
 
 -- A loaded graph's identity: the entry's module id, and `moduleStepKey` of every
 -- module in load order.  Two loads with equal ids read the same modules from
@@ -1747,8 +1769,8 @@ graphIdSame : GraphId -> GraphId -> Bool
 graphIdSame a b =
   a.giEntry == b.giEntry && allList isSome a.giSteps && a.giSteps == b.giSteps
 
--- `analyzeProjectReport` handing back, beside the report, the identity of the
--- graph its load read.
+-- `analyzeProjectReport` handing back, beside the report, the outputs of its
+-- drive and the identity of the graph its load read.
 export
 analyzeProjectKeyed : (List String -> <e> List (String, List String)) ->
   Bool ->
@@ -1760,7 +1782,7 @@ analyzeProjectKeyed : (List String -> <e> List (String, List String)) ->
   List String ->
   String ->
   String ->
-  <IO | e> (Option (TcReport, GraphId), List (String, List Diag))
+  <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag))
 analyzeProjectKeyed exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
@@ -1793,7 +1815,7 @@ analyzeProjectKeyed exportsFor allowInternal trustedMods cacheRef parseCacheRef 
       let front =
         frontEnd
           exportsFor
-          (d => ((), checkReportOf chainKey d))
+          (d => unkept (checkReportOf chainKey d))
           FrontInput {
             fiInputs = driveInputsFor !selectedProfile False [],
             fiAllowInternal = allowInternal,
@@ -1804,7 +1826,7 @@ analyzeProjectKeyed exportsFor allowInternal trustedMods cacheRef parseCacheRef 
             fiProgram = FrontGraph mods (desugaredModPairs mods),
           }
       (
-        Some (front.foReport, graphIdOf mods),
+        Some ((front.foReport, front.foOutputs), graphIdOf mods),
         appendStale staleRef front.foDiags,
       )
 
@@ -2139,7 +2161,7 @@ typecheckPassFull : DriveInputs ->
   List (String, List Diag) ->
   (List ModDiags, List (String, List Diag))
 typecheckPassFull inputs runtimeP coreP preludeKey chainKey mods modPairs buckets =
-  let (r, results) =
+  let (r, _, results) =
     typecheckPassReport
       inputs
       runtimeP
@@ -2151,7 +2173,7 @@ typecheckPassFull inputs runtimeP coreP preludeKey chainKey mods modPairs bucket
       buckets
   (r.trDiagnostics, results)
 
--- `typecheckPassFull` returning the drive's whole report, whose
+-- `typecheckPassFull` returning the drive's whole report and outputs, whose
 -- `trDiagnostics` is the per-module list.  `frontEnd` runs it over a graph
 -- resolve rejected under `DriveUnblocked`.
 typecheckPassReport : DriveInputs ->
@@ -2162,7 +2184,7 @@ typecheckPassReport : DriveInputs ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   List (String, List Diag) ->
-  (TcReport, List (String, List Diag))
+  (TcReport, DriveOutputs, List (String, List Diag))
 typecheckPassReport inputs runtimeP coreP preludeKey chainKey mods modPairs buckets =
   -- The graph analogue of a single file's `resolveClean` gate, per module: a
   -- module resolve rejected, or one importing such a module, is not typechecked
@@ -2178,7 +2200,7 @@ typecheckPassReport inputs runtimeP coreP preludeKey chainKey mods modPairs buck
   -- module.
   let rejected = bucketsResolveRejected buckets
   let valueMain = not rejected && valueMainCandidate coreP modPairs
-  let driven =
+  let (driven, outputs) =
     checkChainReport
       inputs
       valueMain
@@ -2193,7 +2215,9 @@ typecheckPassReport inputs runtimeP coreP preludeKey chainKey mods modPairs buck
   let report = if rejected then { driven | trChecked = None } else driven
   (
     report,
+    outputs,
     typecheckDiagsFold
+      outputs
       runtimeP
       coreP
       mods
@@ -2213,7 +2237,7 @@ checkChainReport : DriveInputs ->
   List Decl ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
-  TcReport
+  (TcReport, DriveOutputs)
 checkChainReport inputs valueMain preludeKey chainKey runtimeP coreP mods pairs =
   checkModulesChainReportFor
     inputs
@@ -2235,14 +2259,15 @@ checkChainReport inputs valueMain preludeKey chainKey runtimeP coreP mods pairs 
 -- must bucket, filter and order identically, which is why there is one fold.
 -- `modPairs` is passed in rather than re-derived: the chain memo's keys need it,
 -- and desugaring the graph twice was the cost this split would otherwise add.
-typecheckDiagsFold : List Decl ->
+typecheckDiagsFold : DriveOutputs ->
+  List Decl ->
   List Decl ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   List (String, (List TcDiag, List TcDiag)) ->
   List (String, List Diag) ->
   List (String, List Diag)
-typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
+typecheckDiagsFold outputs runtimeP coreP mods modPairs tcByMid buckets =
   -- Each module's clause-exhaustiveness oracle is its own decls, the decls
   -- declaring a constructor its imports bind, and the prelude: never every
   -- loaded module, where an unrelated module's same-spelled constructor
@@ -2263,6 +2288,7 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
   -- operand the flat path cannot have.
   let shadowGraph = ("core", runtimeP ++ coreP) :: modPairs
   foldModuleTc
+    outputs
     shadowPool
     shadowGraph
     (ctorScope, preludeDecls)
@@ -2361,11 +2387,13 @@ projectDiagsFromTc : (List String -> <e> List (String, List String)) ->
   List Decl ->
   List Decl ->
   List (String, String, List Decl) ->
+  DriveOutputs ->
   List (String, (List TcDiag, List TcDiag)) ->
   <e> List (String, List Diag)
-projectDiagsFromTc exportsFor allowInternal trustedMods runtimeP coreP mods tcByMid =
+projectDiagsFromTc exportsFor allowInternal trustedMods runtimeP coreP mods outputs tcByMid =
   let modPairs = desugaredModPairs mods
   typecheckDiagsFold
+    outputs
     runtimeP
     coreP
     mods
@@ -2493,7 +2521,8 @@ lookupDesugaredMod mid ((m, d) :: rest)
   | m == mid = d
   | otherwise = lookupDesugaredMod mid rest
 
-foldModuleTc : OrdMap Unit ->
+foldModuleTc : DriveOutputs ->
+  OrdMap Unit ->
   List (String, List Decl) ->
   (OrdMap (List Decl), List Decl) ->
   List (String, List Decl) ->
@@ -2501,8 +2530,8 @@ foldModuleTc : OrdMap Unit ->
   List (String, (List TcDiag, List TcDiag)) ->
   List (String, List Diag) ->
   List (String, List Diag)
-foldModuleTc _ _ _ _ [] _ buckets = buckets
-foldModuleTc shadowPool shadowGraph oracle modPairs ((mid, path, prog) :: rest) tcByMid buckets =
+foldModuleTc _ _ _ _ _ [] _ buckets = buckets
+foldModuleTc outputs shadowPool shadowGraph oracle modPairs ((mid, path, prog) :: rest) tcByMid buckets =
   let (tcErrs, tcWarns) = lookupTcDiags mid tcByMid
   let tcReported = match lookupBucket path buckets
     Some existing => not (resolveRejected existing)
@@ -2534,7 +2563,10 @@ foldModuleTc shadowPool shadowGraph oracle modPairs ((mid, path, prog) :: rest) 
   let importShadowDiags =
     map
       (importShadowWarnToDiag mid)
-      (importedStandaloneShadows shadowGraph (lookupDesugaredMod mid modPairs))
+      (importedStandaloneShadows
+        outputs
+        shadowGraph
+        (lookupDesugaredMod mid modPairs))
   let buckets2 =
     pushDiags
       path
@@ -2545,7 +2577,15 @@ foldModuleTc shadowPool shadowGraph oracle modPairs ((mid, path, prog) :: rest) 
         ++ errDiags
         ++ warnDiags)
       buckets
-  foldModuleTc shadowPool shadowGraph oracle modPairs rest tcByMid buckets2
+  foldModuleTc
+    outputs
+    shadowPool
+    shadowGraph
+    oracle
+    modPairs
+    rest
+    tcByMid
+    buckets2
 
 lookupTcDiags : String ->
   List (String, (List TcDiag, List TcDiag)) ->

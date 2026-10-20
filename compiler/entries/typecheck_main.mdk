@@ -38,11 +38,12 @@ withRuntimeTarget rsrc targetPath = match readFile targetPath
   Ok src =>
     let desugared = desugar (parse src)
     putStr
-      (checkOneToLinesWithRuntime
-        defaultDriveInputs
-        (desugar (parse rsrc))
-        []
-        desugared)
+      (fst
+        (checkOneToLinesWithRuntime
+          defaultDriveInputs
+          (desugar (parse rsrc))
+          []
+          desugared))
   Err msg => ePutStrLn msg
 
 main = oracleMain ()

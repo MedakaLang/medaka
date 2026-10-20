@@ -3,7 +3,8 @@
 -- shadowing binding's context (#2054); published schemes holding no Link; and
 -- the partial analysis a drive returns (locals, seed, module).
 import test.{
-  expectEqual, expectEach, expectTrue, expectGreaterThan, Expectation, fail
+  expectEqual, expectEach, expectTrue, expectFalse, expectGreaterThan,
+  Expectation, fail
 }
 import frontend.ast.{
   TyConOrigin(..), EvId(..), EvVal(..), EvEntry(..), Route(..), Loc(..), Decl
@@ -31,13 +32,16 @@ import types.disposition.{
 import types.evidence_coverage.{EvShape(..), evShapeOf}
 import types.runtime_types.{binderOrdinal, emptyBinderTypes}
 import map.{values}
-import types.tc_types.{MethodReturnMemoView(..)}
+import types.tc_types.{
+  MethodReturnMemoView(..), DriveOutputs(..), InvocationView(..)
+}
 import types.typecheck.{
   defaultDriveInputs, checkOneSchemeFullK, checkModulesDiagsChain,
   checkModulesAllLines, elaborateModulesReport, checkModules,
   methodReturnMemoCurrentViews, methodReturnMemoRetentionStats,
   chainMemoReplayedSteps, tcCode, tcMsg, checkModulesChainReportFor,
-  checkOneReportK, checkModulesPartialK
+  checkOneReportK, checkModulesPartialK, elaborateModulesWithReport,
+  resetTypeErrorsSticky
 }
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
@@ -350,7 +354,7 @@ accDrive : String ->
   String ->
   (TcReport, List MethodReturnMemoView)
 accDrive chainKey prefixSource entrySource stepKey =
-  let report =
+  let (report, _) =
     checkModulesChainReportFor
       defaultDriveInputs
       False
@@ -620,7 +624,7 @@ markEntry = "import a.{useA}\nimport b.{bval}\nentry = bval\n"
 markDrive : String -> Bool -> List String
 markDrive key constrained =
   let bSrc = markB constrained
-  let report =
+  let (report, _) =
     checkModulesChainReportFor
       defaultDriveInputs
       False
@@ -855,6 +859,68 @@ dedupSorted : List Int -> List Int
 dedupSorted (a :: b :: rest) =
   if a == b then dedupSorted (b :: rest) else a :: dedupSorted (b :: rest)
 dedupSorted xs = xs
+
+-- ── a drive's outputs ────────────────────────────────────────────────────────
+-- `DriveOutputs` is booleans, immutable tables and an `InvocationView`; the view's
+-- schemes are the only fields whose type reaches a cell, so they are walked as a
+-- `CheckedProgram`'s are.
+
+outputsSrc : String
+outputsSrc = joinNl [
+  "data Box a = Box a | Hollow",
+  "unbox : Box Int -> Int",
+  "unbox (Box n) = n",
+  "unbox Hollow = 0",
+  "main = 1",
+]
+
+outputsOf : String -> String -> DriveOutputs
+outputsOf mid src =
+  match (elaborateModulesWithReport defaultDriveInputs False None [] [] [
+    (mid, desugar (parseLocated src)),
+  ])
+    (_, _, outputs) => outputs
+
+viewSchemes : InvocationView -> List Scheme
+viewSchemes (InvocationView ctors _ _) = ctors
+
+test "a drive's outputs hold no live cell and survive a later drive" =
+  let outputs = outputsOf "o" outputsSrc
+  let ctors = viewSchemes outputs.doInvocationView
+  let rendered = map ppScheme ctors
+  let found = flatMap (s => liveCells "ctor" (pub s)) ctors
+  let _ = outputsOf "p" "data Other = A | B Int\nz = B 1\n"
+  expectEach [
+    (
+      "the view lists the program's constructors",
+      expectGreaterThan 0 (length ctors),
+    ),
+    ("no link and no free cell is reachable", expectEqual [] found),
+    (
+      "a later drive leaves the schemes as rendered",
+      expectEqual rendered (map ppScheme ctors),
+    ),
+  ]
+
+test "a drive's outputs answer for its own main and its own effect domains" =
+  let _ = resetTypeErrorsSticky ()
+  let outputs = outputsOf "o" outputsSrc
+  let rejected = outputsOf "q" "bad : Int\nbad = \"x\"\n"
+  let _ = resetTypeErrorsSticky ()
+  expectEach [
+    ("an Int main is not Unit", expectFalse outputs.doMainIsUnit),
+    ("an Int main is not Float", expectFalse outputs.doMainIsFloat),
+    ("an Int main is not Async", expectFalse outputs.doMainIsAsync),
+    ("a clean program armed nothing", expectFalse outputs.doHadTypeErrors),
+    (
+      "a rejected program armed the sticky flag",
+      expectTrue rejected.doHadTypeErrors,
+    ),
+    (
+      "the builtin domains are registered",
+      expectGreaterThan 0 (length outputs.doEffectDomains),
+    ),
+  ]
 
 test "#4267: the tree arm publishes the prelude's context" =
   let core = (talkReport ()).trPartial.paCore

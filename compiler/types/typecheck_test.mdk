@@ -76,6 +76,7 @@ import types.tc_types.{
   NumericPredicateTraceEntry(..),
   NumericPredicateTraceStage(..),
   DriveInputs(..),
+  DriveOutputs(..),
   TraceSink(..),
 }
 import types.publish.{TcReport(..), CheckedProgram(..)}
@@ -93,6 +94,7 @@ import types.typecheck.{
   checkModules,
   checkModulesChainReportFor,
   checkModulesDiagsChain,
+  checkModulesEntryFullReportK,
   checkModulesEntryReport,
   checkOneDiags,
   checkOneSchemeFullK,
@@ -2179,7 +2181,7 @@ importedReturnObserved reverseOrder =
   let sources =
     if reverseOrder then [foreign, owner, entry] else [owner, foreign, entry]
   let sink = beginMethodReturnTrace ()
-  let report =
+  let (report, _) =
     checkModulesChainReportFor
       (traced sink)
       False
@@ -2256,7 +2258,7 @@ cachedMethodReturnObserved entrySource =
     "cached = cachedChoose ()",
   ]
   let sink = beginMethodReturnTrace ()
-  let report =
+  let (report, _) =
     checkModulesChainReportFor
       (traced sink)
       False
@@ -4010,20 +4012,19 @@ drainPreludeSource = joinNl [
   "println x = let _ = display x in ()",
 ]
 
-drainCheck : DriveInputs -> List String -> Unit
+drainCheck : DriveInputs -> List String -> DriveOutputs
 drainCheck inputs body =
   let core = desugar (parse "\{arithmeticPreludeSource}\n\{drainPreludeSource}")
-  let _ = checkOneDiags inputs [] core (
-    "drain_quiescence",
-    desugar (parseLocated (joinNl body)),
-  )
-  ()
+  snd
+    (checkModulesEntryFullReportK inputs False None [] core [
+      ("drain_quiescence", desugar (parseLocated (joinNl body))),
+    ])
 
 drainStickyObserved : List String -> List String
 drainStickyObserved body =
   let _ = resetTypeErrorsSticky ()
-  let _ = drainCheck defaultDriveInputs body
-  let raised = map (entry => tcMsg (snd entry)) (stickyTypeErrorDiags ())
+  let outputs = drainCheck defaultDriveInputs body
+  let raised = map (entry => tcMsg (snd entry)) (stickyTypeErrorDiags outputs)
   let _ = resetTypeErrorsSticky ()
   raised
 

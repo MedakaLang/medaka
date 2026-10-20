@@ -24,7 +24,7 @@
 
 import frontend.ast.{Decl}
 import types.typecheck.{
-  elaborateModules,
+  elaborateModulesWithReport,
   constrainedSigNames,
   preludeReturnPosDictNames,
   preludeArgPosDictNames,
@@ -61,7 +61,8 @@ runEmit : DriveInputs ->
   <IO> Unit
 runEmit inputs runtimeDecls coreDecls modules =
   -- #2809: elaborate the program as written, then mangle its elaborated trees.
-  let elab = elaborateModules inputs runtimeDecls coreDecls modules
+  let (elab, _, outputs) =
+    elaborateModulesWithReport inputs False None runtimeDecls coreDecls modules
   let (coreE, modulesE, _, _, evTable, _, _) = elab
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let allDecls = coreD ++ flatMap snd modules2
@@ -76,14 +77,15 @@ runEmit inputs runtimeDecls coreDecls modules =
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       (externArities runtimeDecls)
-      (mainTypeIsUnit ())
-      (mainTypeIsFloat ())
+      (mainTypeIsUnit outputs)
+      (mainTypeIsFloat outputs)
       0
       []
       []
       ""
       (declaredRecordFieldOrders allDecls)
-      (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
+      (validateFfiExternTypeNames
+        (checkedFfiExternTypeNamesModules outputs modules2))
   let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
   let (text, _) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
   putStr text

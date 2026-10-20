@@ -197,7 +197,7 @@ atSignature : Ty -> (Unit -> a) -> a
 atomAuthorityName : EffAtomTy -> List (String, Option Loc)
 atomBindersIn : (EffAtomTy -> List a) -> Ty -> List a
 atomNaming : String -> EffAtomTy -> List String
-atomOfLabel : String -> Atom
+atomOfLabel : List (String, Param) -> String -> Atom
 atomOfWrittenIn : SigVars -> EffAtomTy -> Atom
 atomicLabelParamText : String -> String
 atomsAbsorbedInto : Int -> List AbsorptionEvent -> List Atom
@@ -281,7 +281,7 @@ binderTypeMsg : String -> String -> String
 bindingDeclared : TcEnv -> String -> Option CDeclared
 bindingDeclaredAt : TcEnv -> String -> MethodTrackedInstantiation -> Option CDeclared
 bindingForceFromAst : SigVars -> List (String, Mono) -> Ty -> EffRow
-bindingGrantArity : String -> Scheme -> Int
+bindingGrantArity : DriveOutputs -> String -> Scheme -> Int
 bindingWithStandalone : EnvBinding -> (StandaloneOrigin, ValueScheme) -> EnvBinding
 bindsName : Option (Map String Unit) -> String -> Bool
 bindsRename : List LetBind -> Map String String -> (List LetBind, Map String String)
@@ -489,17 +489,18 @@ checkModuleFullDiags : String -> ModuleSeed -> List Decl -> List Decl -> List De
 checkModuleFullImpl : Option CheckRunSeed -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 checkModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
 checkModulesAllLines : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> String
-checkModulesChainReportFor : DriveInputs -> Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
+checkModulesChainReportFor : DriveInputs -> Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> (TcReport, DriveOutputs)
 checkModulesDiagsChain : DriveInputs -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 checkModulesDiagsChainFor : DriveInputs -> Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 checkModulesEntryFromDiags : List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> (List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryFull : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryFullK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List TcDiag, List TcDiag)
-checkModulesEntryFullReportK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
+checkModulesEntryFullReportK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (TcReport, DriveOutputs)
 checkModulesEntryFullSplitK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryHasErrors : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> Bool
 checkModulesEntryLines : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesEntryReport : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> String
+checkModulesEntryReportOut : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (String, DriveOutputs)
 checkModulesK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
 checkModulesPartialK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> PartialAnalysis
 checkModulesPreambleK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings)
@@ -517,7 +518,7 @@ checkOneScheme : DriveInputs -> List Decl -> List Decl -> (String, List Decl) ->
 checkOneSchemeFull : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme))
 checkOneSchemeFullK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme))
 checkOneToLines : DriveInputs -> List Decl -> String
-checkOneToLinesWithRuntime : DriveInputs -> List Decl -> List Decl -> List Decl -> String
+checkOneToLinesWithRuntime : DriveInputs -> List Decl -> List Decl -> List Decl -> (String, DriveOutputs)
 checkOneToLinesWithRuntimeK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List Decl -> String
 checkPhantomAuthorityExport : DataVis -> String -> List String -> List Variant -> Unit
 checkPhantomMethods : ClassEnv -> Int -> Unit
@@ -550,8 +551,8 @@ checkWideLiterals : List (Mono, String, Int, Int, Bool, Option Loc) -> Unit
 checkWrittenElementCap : List EffAtomTy -> Unit
 checkedAxis : List (String, Param) -> (String, EffParamTy) -> (String, Param)
 checkedFfiExternTypeNames : List Decl -> List (String, (List (String, String), (List String, String)))
-checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (List (String, String), (List String, String)))
-checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (List (String, String), (List String, String)))
+checkedFfiExternTypeNamesModule : DriveOutputs -> (String, List Decl) -> List (String, (List (String, String), (List String, String)))
+checkedFfiExternTypeNamesModules : DriveOutputs -> List (String, List Decl) -> List (String, (List (String, String), (List String, String)))
 checkedInto : TcEnv -> Expr -> Mono -> Mono -> Mono
 clampPrefix : List CSlot -> Option CDeclaredPrefix -> CDeclaredPrefix
 classEnvDeclFact : Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
@@ -842,7 +843,7 @@ declaredSchemeOblsFor : List (String, Ty, List (String, Mono)) -> String -> List
 declaresCtorNamed : List Decl -> String -> Bool
 declaresStandalone : String -> List Decl -> Bool
 decodeSetParam : String -> List String
-decodeWrittenParam : EffLabel -> EffParamTy -> Result String Param
+decodeWrittenParam : List (String, Param) -> EffLabel -> EffParamTy -> Result String Param
 dedupBinders : List (String, Param) -> List (String, Param) -> List (String, Param)
 dedupI : List Int -> List Int
 dedupIGo : List Int -> Map Int Unit -> List Int -> List Int
@@ -952,12 +953,14 @@ drainStampQueue : Unit -> List DrainFinding
 driveErrs : List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List TcDiag
 driveGraphK : DriveInputs -> GraphOut -> Bool -> Option String -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
 driveInputsFor : Option TargetProfile -> Bool -> List String -> DriveInputs
+driveOutputsNow : Unit -> DriveOutputs
 drivenEvidence : Unit -> List EvEntry
 dropFirst : Int -> List a -> List a
 dropGoalsSince : Int -> List GoalKind -> Unit
 dropModSchemes : (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> (String, (List TcDiag, List TcDiag))
 dropRenameSuffixes : List String -> String
 dtopFor : EffLabel -> Param
+dtopIn : List (String, Param) -> EffLabel -> Param
 eagerIndexOnlyVars : List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> List EffRow -> Mono -> Mono -> List String
 eagerRefs : Expr -> List String
 eagerRefsArm : Arm -> List String
@@ -997,7 +1000,7 @@ effvarLevel : Ref Effvar -> Int
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 elaborateModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow)
 elaborateModulesReport : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
-elaborateModulesWithReport : DriveInputs -> Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), TcReport)
+elaborateModulesWithReport : DriveInputs -> Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), TcReport, DriveOutputs)
 elaborateModulesWithSchemes : DriveInputs -> Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), List (String, PubScheme), List (String, PubScheme))
 elaborateOne : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOneFacts : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List Decl, ProgramFacts)
@@ -1288,6 +1291,7 @@ fromAstType : List (String, Mono) -> Ty -> Mono
 fromAstTypeApp : SigVars -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
 fromAstTypeE : SigVars -> List (String, Mono) -> Ty -> Mono
 fromAstTypeVarApp : SigVars -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
+frozenInvocationView : InvocationView -> InvocationView
 funArity : Mono -> Int
 funClauseDictSites : EvIndex -> FunClause -> List (List Route)
 funClauseEVars : FunClause -> List String
@@ -1400,8 +1404,8 @@ guardDictSites : EvIndex -> Guard -> List (List Route)
 guardEVars : Guard -> List String
 guardSites : Guard -> List (Ref Route)
 guardsDefaulting : UObligation -> Bool
-hadMatchWarnings : Unit -> Bool
-hadTypeErrors : Unit -> Bool
+hadMatchWarnings : DriveOutputs -> Bool
+hadTypeErrors : DriveOutputs -> Bool
 handOffAbsentNumVars : Int -> Mono -> List UObligation -> Unit
 hasDupI : List Int -> Bool
 hasFileBoundValue : Mono -> Bool
@@ -1598,7 +1602,7 @@ importedMemberBindingNames : List Decl -> List String
 importedMethodBindingNames : List Decl -> List (String, String) -> List String
 importedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 importedSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
-importedStandaloneShadows : List (String, List Decl) -> List Decl -> List (String, String, Option Ty, Ty, Loc)
+importedStandaloneShadows : DriveOutputs -> List (String, List Decl) -> List Decl -> List (String, String, Option Ty, Ty, Loc)
 importedStandaloneShadowsIn : Map String (List (String, List String)) -> List (String, List Decl) -> List Decl -> List (String, String, Option Ty, Ty, Loc)
 importerAdmittedVerdict : ImplEnv -> String -> List Mono -> AdmittedVerdict
 importerDispatchIdxOuter : String -> Option Int
@@ -1804,7 +1808,7 @@ intercalateComma : List String -> String
 interpEVars : InterpPart -> List String
 intersectDeclAtoms : List (List Atom) -> List Atom
 invocationHeadKey : Mono -> String
-ioJoinAtoms : List (String, EffParamTy) -> List Atom
+ioJoinAtoms : List (String, Param) -> List (String, EffParamTy) -> List Atom
 ioJoinClause : List Atom -> String
 ioLabel : EffLabel
 isAliasDecl : Decl -> Bool
@@ -1906,7 +1910,7 @@ labelKeyName : String -> String
 labelsMissing : List Atom -> List Atom -> List Atom
 lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
 lastComponent : List String -> String
-lastInvocationOps : Unit -> InvocationOps
+lastInvocationOps : DriveOutputs -> InvocationOps
 launderEscapeFromLog : List EffRow -> List EffRow -> List AbsorptionEvent -> List Atom
 launderOpenActualArrow : EffRow -> List AbsorptionEvent -> List Atom
 leadInferredPred : (IfaceRef, List Int, List Mono) -> List (IfaceRef, Int, List Mono)
@@ -1985,11 +1989,15 @@ lowerPending : Int -> List PendingJoin -> List PendingJoin
 lowerRowLevels : Int -> EffRow -> Unit
 lowerToCurrent : Mono -> Unit
 lowerTyvarLevel : Int -> Mono -> Unit
-mainAsyncPayloadIsUnit : Unit -> Bool
+mainAsyncPayloadIsUnit : DriveOutputs -> Bool
+mainAsyncPayloadIsUnitNow : Unit -> Bool
 mainBodySpan : List Decl -> Option Loc
-mainTypeIsAsync : Unit -> Bool
-mainTypeIsFloat : Unit -> Bool
-mainTypeIsUnit : Unit -> Bool
+mainIsAsyncNow : Unit -> Bool
+mainIsFloatNow : Unit -> Bool
+mainIsUnitNow : Unit -> Bool
+mainTypeIsAsync : DriveOutputs -> Bool
+mainTypeIsFloat : DriveOutputs -> Bool
+mainTypeIsUnit : DriveOutputs -> Bool
 mainUseDiags : Option Loc -> List Decl -> List TcDiag
 mangledCtorShaped : Array Char -> Int -> Int -> Bool
 mapDeclBodies : (Expr -> Expr) -> Decl -> Decl
@@ -2016,6 +2024,7 @@ matchOneSided : (a -> b -> MStep c a b) -> (c -> c -> Bool) -> (b -> b -> Bool) 
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))
 matchTyMonos : List Ty -> List Mono -> Option (List (String, Mono))
+matchWarningsNow : Unit -> Bool
 materializeBinder : (String -> TyConOrigin -> Bool) -> PendingBinder -> BinderRow
 materializeBinderTypes : Unit -> Unit
 maybeInferConstraint : List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> ScopeId -> Scheme -> Unit
@@ -2373,6 +2382,7 @@ optionOrFresh : Option Mono -> Mono
 oracleImportDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
 oracleImportDeclsOf : Int -> List DeclEnvModule -> Decl -> List Decl
 ordCompareOp : DynCtx -> Mono -> Mono -> Mono
+ordOfIndex : String -> Map String Int -> Int
 ordinalIsSentinel : Int -> Bool
 ordinalSentinelGuard : Int -> Unit
 ordinalSentinelMsg : String
@@ -3130,9 +3140,8 @@ standaloneValueBindingEmit : TcEnv -> String -> Ref Route -> Option ValueScheme
 standaloneValueFor : TcEnv -> String -> String -> Option ValueScheme
 standaloneValuePinned : TcEnv -> String -> Bool
 starSpelling : String -> Option String -> String
-stickyTypeErrorDiags : Unit -> List (String, TcDiag)
+stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
 stickyTypeErrorDiagsSince : List (String, TcDiag) -> List (String, TcDiag)
-stickyTypeErrorMessages : Unit -> List String
 stmtCalleeName : Expr -> Option String
 stripArrows : Mono -> Mono
 stripEff : Ty -> Ty
@@ -3247,6 +3256,7 @@ tyVarTypeOcc : String -> Ty -> Bool
 tyVarTypeOccSlots : String -> List Kind -> List Ty -> Bool
 typeAsAuthorityMsg : String -> String -> String
 typeErrorLines : List String -> List String
+typeErrorsArmed : Unit -> Bool
 typeInRowSlotMsg : Ty -> String
 typeMismatch : DynCtx -> Mono -> Mono -> Unit
 typeMismatchInDo : Mono -> Mono -> DoCtx -> Unit

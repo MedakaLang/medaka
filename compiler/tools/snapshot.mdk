@@ -182,13 +182,14 @@ import types.typecheck.{
   driveInputsFor,
   checkOneToLinesWithRuntime,
   elaborateOneFacts,
-  elaborateModules,
+  elaborateModulesWithReport,
   mainTypeIsUnit,
   mainTypeIsFloat,
   hadTypeErrors,
   hadMatchWarnings,
   resetTypeErrorsSticky,
 }
+import types.tc_types.{DriveOutputs}
 import types.target_profile.{selectedProfile}
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{emptyFacts, factsOfElabWith}
@@ -498,13 +499,13 @@ typesOf runtimeDecls d =
   -- coreDecls is always [] here (prelude-free), so there is no prelude-scheme
   -- to lose crossing to the Module arm's checkOneToLinesWithRuntime -- the
   -- rendered set is `d`'s own schemes either way (S-migrate-tool-consumers-remainder).
-  let text =
+  let (text, outputs) =
     checkOneToLinesWithRuntime
       (driveInputsFor !selectedProfile False [])
       runtimeDecls
       []
       d
-  (text, hadTypeErrors () || hadMatchWarnings ())
+  (text, hadTypeErrors outputs || hadMatchWarnings outputs)
 
 -- `# TYPES_USER` — the PRELUDE-AWARE user-only variant.  `# TYPES` above is
 -- prelude-FREE (`checkOneToLinesWithRuntime runtimeDecls [] d`): correct for the minimal
@@ -542,17 +543,17 @@ typesUserOf runtimeDecls coreDecls d =
   -- MORE than Module returns); here Module already gives what's wanted, so the
   -- filter is kept as a harmless belt-and-suspenders no-op rather than removed
   -- (S-migrate-tool-consumers-remainder).
-  let full =
+  let (full, outputs) =
     checkOneToLinesWithRuntime
       (driveInputsFor !selectedProfile False [])
       runtimeDecls
       coreDecls
       d
-  let diag = hadTypeErrors () || hadMatchWarnings ()
+  let diag = hadTypeErrors outputs || hadMatchWarnings outputs
   let userNames = funNamesOf d ++ externNamesOf d
   -- Filter the SUCCESS path (scheme dump) only; a diagnostic run has no schemes to trim.
   let text =
-    if hadTypeErrors () then
+    if hadTypeErrors outputs then
       full
     else
       blockOf (filterList (userSchemeLine userNames) (contentLines full))
@@ -633,10 +634,10 @@ emitBoth root sel runtimeDecls userDecls =
   -- `entry_support.runEmitWith` runs (mirrors `llvm_emit_typed_main.mdk`'s
   -- `runEmit`), so a name-keyed table below sees the same stamped names a real
   -- build's tables do.
-  let elab = elaborateModules (driveInputsFor
+  let (elab, _, outputs) = elaborateModulesWithReport (driveInputsFor
     !selectedProfile
     False
-    []) runtimeDecls [] [
+    []) False None runtimeDecls [] [
     ("__user__", userDecls),
   ]
   let (coreE, modulesE, _, _, evTable, _, _) = elab
@@ -645,12 +646,12 @@ emitBoth root sel runtimeDecls userDecls =
   let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
   let _ =
     if wants sel "LLVM" then
-      emitSection root "LLVM" (llvmOf runtimeDecls allDecls cp)
+      emitSection root "LLVM" (llvmOf outputs runtimeDecls allDecls cp)
   if wants sel "WASM" then
-    emitSection root "WASM" (wasmOf runtimeDecls allDecls cp)
+    emitSection root "WASM" (wasmOf outputs runtimeDecls allDecls cp)
 
-llvmOf : List Decl -> List Decl -> CProgram -> String
-llvmOf runtimeDecls allDecls cp =
+llvmOf : DriveOutputs -> List Decl -> List Decl -> CProgram -> String
+llvmOf outputs runtimeDecls allDecls cp =
   let input =
     makeEmitInput
       (returnsSelfTable allDecls)
@@ -658,8 +659,8 @@ llvmOf runtimeDecls allDecls cp =
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       (externArities runtimeDecls)
-      (mainTypeIsUnit ())
-      (mainTypeIsFloat ())
+      (mainTypeIsUnit outputs)
+      (mainTypeIsFloat outputs)
       0
       []
       []
@@ -669,14 +670,14 @@ llvmOf runtimeDecls allDecls cp =
   let (text, gaps) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
   withGaps ";" text gaps
 
-wasmOf : List Decl -> List Decl -> CProgram -> String
-wasmOf runtimeDecls allDecls cp =
+wasmOf : DriveOutputs -> List Decl -> List Decl -> CProgram -> String
+wasmOf outputs runtimeDecls allDecls cp =
   let input =
     makeWasmEmitInputFull
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       False
-      (mainTypeIsUnit ())
+      (mainTypeIsUnit outputs)
       (declaredRecordFieldOrders allDecls)
       []
   let (text, gaps) = wasmRecord input (buildEmitPlan WasmBackend cp) cp

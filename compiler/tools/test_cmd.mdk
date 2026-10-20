@@ -80,10 +80,11 @@ import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
   driveInputsFor,
   elaborateModules,
-  elaborateModulesWithSchemes,
+  elaborateModulesWithReport,
   TcDiag(..),
   tcDiagGoalKey,
 }
+import types.tc_types.{DriveOutputs}
 import types.target_profile.{selectedProfile}
 import driver.main_autoprint.{valueMainCandidate}
 import types.private_mangle.{mangleCtorCollisionsPair}
@@ -608,10 +609,11 @@ gateOfPerModule : Bool ->
   List Decl ->
   List Decl ->
   List (String, String, List Decl) ->
+  DriveOutputs ->
   List (String, (List TcDiag, List TcDiag)) ->
   <IO> Option String
-gateOfPerModule True _ _ _ _ = None
-gateOfPerModule False runtimeDecls coreDecls mods perModule =
+gateOfPerModule True _ _ _ _ _ = None
+gateOfPerModule False runtimeDecls coreDecls mods outputs perModule =
   renderGate
     (projectDiagsFromTc
       noStdlibExports
@@ -620,6 +622,7 @@ gateOfPerModule False runtimeDecls coreDecls mods perModule =
       runtimeDecls
       coreDecls
       mods
+      outputs
       perModule)
 
 -- A load failure reaches the gate as the diagnostic `analyzeProject` attributes
@@ -827,16 +830,17 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
   let runtimeDecls = desugaredPrelude rsrc
   let coreDecls = desugaredPrelude csrc
   let rawModules = desugaredModPairs mods
-  let (elaborated, _, _) =
-    elaborateModulesWithSchemes
+  let (elaborated, _, outputs) =
+    elaborateModulesWithReport
       (driveInputsFor !selectedProfile False [])
       (valueMainCandidate coreDecls rawModules)
+      None
       runtimeDecls
       coreDecls
       rawModules
   match elaborated
     (coreE, modulesE, perModule, _, _, _, _) => (
-      gateOfPerModule exempt runtimeDecls coreDecls mods perModule,
+      gateOfPerModule exempt runtimeDecls coreDecls mods outputs perModule,
       PreparedPair
         (uncurryPair
           runtimeDecls

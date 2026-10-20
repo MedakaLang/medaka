@@ -203,10 +203,10 @@ import types.publish.{TcReport(..)}
 import types.program_facts.{ProgramFacts, factsOfChecked}
 import types.typecheck.{
   TcDiag,
-  mainTypeIsUnit,
+  lastInvocationOps,
   driveInputsFor,
 }
-import types.tc_types.{DriveInputs(..)}
+import types.tc_types.{DriveInputs(..), DriveOutputs}
 import driver.main_autoprint.{
   asyncMainShapeError,
   shouldAutoPrintMain,
@@ -1151,20 +1151,20 @@ checkTargetRefusal rsrc csrc target paths drive = match !selectedProfile
   Some profile =>
     targetRefusal profile target paths (checkTargetInputs rsrc csrc drive)
 
--- The target verdict's inputs, off a check drive.  Called right after the drive:
--- `shouldAutoPrintMain` reads the drive's `main` type.  The preludes are the
--- memoized trees the drive read.
+-- The target verdict's inputs, off a check drive: `shouldAutoPrintMain` reads
+-- the drive's outputs for its `main` type.  The preludes are the memoized trees
+-- the drive read.
 checkTargetInputs : String -> String -> CheckDrive -> TargetInputs
 checkTargetInputs rsrc csrc drive =
   let core = desugaredPrelude csrc
   let printed =
-    if shouldAutoPrintMain core drive.cdMods then
+    if shouldAutoPrintMain drive.cdOutputs core drive.cdMods then
       lookupAssoc "println" drive.cdCoreSchemes
     else
       None
   TargetInputs {
     tiSchemes = drive.cdEntrySchemes ++ drive.cdCoreSchemes,
-    tiOps = drive.cdOps,
+    tiOps = lastInvocationOps drive.cdOutputs,
     tiEntryDecls = match lastModPair drive.cdMods
       Some (_, decls) => decls
       None => [],
@@ -1172,6 +1172,7 @@ checkTargetInputs rsrc csrc drive =
     tiCore = core,
     tiModules = drive.cdMods,
     tiRuntime = desugaredPrelude rsrc,
+    tiOutputs = drive.cdOutputs,
   }
 
 -- `check --json`'s copy of the same refusal, folded into the entry's file.  A
@@ -2853,8 +2854,11 @@ runRunCmd argv =
                   -- so widening here widens both in lockstep.  The
                   -- multi-module arm below keeps `projWarns` on the
                   -- coherence allowlist.
-                  let executed =
-                    executedFromReport report "runAsyncMain" (coreD, modsD)
+                  let executed = executedFromReport
+                    front.foOutputs
+                    report
+                    "runAsyncMain"
+                    (coreD, modsD)
                   match executed
                     Err msg => runAbort msg
                     Ok trees =>
@@ -2934,8 +2938,11 @@ runRunCmd argv =
                   let perfTCheck = now ()
                   let _ =
                     emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                  let executed =
-                    executedFromReport report "runAsyncMain" (coreD, modsD)
+                  let executed = executedFromReport
+                    front.foOutputs
+                    report
+                    "runAsyncMain"
+                    (coreD, modsD)
                   match executed
                     Err msg => runAbort msg
                     Ok trees =>
@@ -2966,9 +2973,9 @@ elaborateRun : DriveInputs ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  <IO> (EntryAnalysis, TcReport)
+  <IO> (EntryAnalysis, TcReport, DriveOutputs)
 elaborateRun inputs rtD coreD modsD =
-  let (analysis, report) =
+  let (analysis, report, outputs) =
     analyzeProgramReport
       inputs
       (valueMainCandidate coreD modsD)
@@ -2976,10 +2983,10 @@ elaborateRun inputs rtD coreD modsD =
       rtD
       coreD
       modsD
-  let _ = match asyncMainShapeError modsD
+  let _ = match asyncMainShapeError outputs modsD
     Some msg => runAbort msg
     None => ()
-  (analysis, report)
+  (analysis, report, outputs)
 
 -- B2 (RUN-EFFECTS): evalModulesOutputRunFacts is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main

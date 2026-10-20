@@ -67,11 +67,12 @@ cleanReport : List Decl -> List Decl -> List Decl -> List Decl -> String
 cleanReport runtimeP coreP raw desugared =
   let exWarns = exhaustToLinesWith (raw ++ runtimeP ++ coreP) raw
   let schemes =
-    checkOneToLinesWithRuntime
-      defaultDriveInputs
-      (desugar runtimeP)
-      (desugar coreP)
-      desugared
+    fst
+      (checkOneToLinesWithRuntime
+        defaultDriveInputs
+        (desugar runtimeP)
+        (desugar coreP)
+        desugared)
   joinNonEmpty exWarns schemes
 
 joinNonEmpty : String -> String -> String

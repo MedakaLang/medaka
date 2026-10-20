@@ -36,7 +36,7 @@ runElab : DriveInputs ->
   List (String, List Decl) ->
   <IO> Unit
 runElab inputs runtimeDecls coreDecls modules =
-  let (elab, report) =
+  let (elab, report, outputs) =
     elaborateModulesWithReport
       inputs
       (valueMainCandidate coreDecls modules)
@@ -47,6 +47,7 @@ runElab inputs runtimeDecls coreDecls modules =
   let (coreE, modulesE, _, _, _, _, _) = elab
   let executed =
     executedTrees
+      outputs
       report.trAutoPrint
       "runAsyncMain"
       (coreDecls, modules)

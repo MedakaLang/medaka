@@ -13,11 +13,15 @@ import types.target_profile.{hostLabels}
 import list.{take, sort}
 import support.ordmap.{omEmpty, omFromPairs}
 
+-- The effect domains before any drive registered one: what no-drive callers read.
+noDomains : List (String, Param)
+noDomains = []
+
 ioAtom : Atom
-ioAtom = atomOfLabel "IO"
+ioAtom = atomOfLabel noDomains "IO"
 
 ffiAtom : Atom
-ffiAtom = atomOfLabel "FFI"
+ffiAtom = atomOfLabel noDomains "FFI"
 
 wholeGrant : String -> (String, EffParamTy)
 wholeGrant l = (l, EPTop)
@@ -39,16 +43,21 @@ eightLabels = map wholeGrant (take 8 hostLabels)
 
 test "IO is the join: refused by eight labels, permitted by all eleven" = expectAll
   [
-    expectTrue (refused (policyRefusals [ioAtom] eightLabels)),
-    expectEqual ["IO"] (refusedLabels (policyRefusals [ioAtom] eightLabels)),
-    expectFalse (refused (policyRefusals [ioAtom] (map wholeGrant hostLabels))),
+    expectTrue (refused (policyRefusals noDomains [ioAtom] eightLabels)),
+    expectEqual
+      ["IO"]
+      (refusedLabels (policyRefusals noDomains [ioAtom] eightLabels)),
+    expectFalse
+      (refused (policyRefusals noDomains [ioAtom] (map wholeGrant hostLabels))),
   ]
 
 test "FFI is not in the IO join" = expectAll [
-  expectTrue (refused (policyRefusals [ffiAtom] (map wholeGrant hostLabels))),
+  expectTrue
+    (refused (policyRefusals noDomains [ffiAtom] (map wholeGrant hostLabels))),
   expectFalse
     (refused
       (policyRefusals
+        noDomains
         [ffiAtom]
         (wholeGrant "FFI" :: map wholeGrant hostLabels))),
 ]
@@ -60,17 +69,19 @@ unresolvedNet =
     (AVar (Ref (AUnbound 1 0 (PPrefix None) False (Some "k"))))
 
 atomOfLabelLabel : String -> EffLabel
-atomOfLabelLabel l = match atomOfLabel l
+atomOfLabelLabel l = match atomOfLabel noDomains l
   Atom lbl _ => lbl
 
 test "an unresolved authority needs a whole grant" =
   let partial = [("Net", EPLit "a.com/*")]
   expectAll [
-    expectTrue (refused (policyRefusals [unresolvedNet] partial)),
+    expectTrue (refused (policyRefusals noDomains [unresolvedNet] partial)),
     expectEqual
       1
-      (length (refusalLines (policyRefusals [unresolvedNet] partial))),
-    expectFalse (refused (policyRefusals [unresolvedNet] [wholeGrant "Net"])),
+      (length
+        (refusalLines (policyRefusals noDomains [unresolvedNet] partial))),
+    expectFalse
+      (refused (policyRefusals noDomains [unresolvedNet] [wholeGrant "Net"])),
   ]
 
 callGraph : CallGraph
@@ -105,7 +116,8 @@ test "the typechecker's IO join over the full profile is hostLabels" = expectAll
   [
     expectEqual
       (sort hostLabels)
-      (sort (map atomLabel (ioJoinAtoms (map wholeGrant hostLabels)))),
+      (sort
+        (map atomLabel (ioJoinAtoms noDomains (map wholeGrant hostLabels)))),
     expectEqual
       (sort [
         "Clock",

@@ -30,6 +30,7 @@ import types.effect_rows.{
   effrowLabels,
 }
 import types.repr.{Scheme(..), Mono(..), normalize}
+import types.effect_domain.{Param}
 import types.typecheck.{decodeWrittenParam, atomOfLabel}
 import types.target_profile.{hostLabels}
 import support.util.{
@@ -47,29 +48,40 @@ public export data PolicyVerdict =
   | PolicyAdmitted
   | PolicyRefused (List String) (List String)
 
--- The one call: the atoms an entry may perform against a policy.  The
--- explanation lines are built only on a refusal.
+-- The one call: the atoms an entry may perform against a policy, with each
+-- label's domain read off [domains] (`doEffectDomains` of the drive that
+-- registered them).  The explanation lines are built only on a refusal.
 export
-policyRefusals : List Atom -> List (String, EffParamTy) -> PolicyVerdict
-policyRefusals atoms policy = match filterForbidden atoms policy
+policyRefusals : List (String, Param) ->
+  List Atom ->
+  List (String, EffParamTy) ->
+  PolicyVerdict
+policyRefusals domains atoms policy = match filterForbidden domains atoms policy
   [] => PolicyAdmitted
   labels =>
     PolicyRefused
       labels
-      (policyProblems atoms policy ++ notProvenLines atoms policy)
+      (policyProblems domains atoms policy
+        ++ notProvenLines domains atoms policy)
 
-filterForbidden : List Atom -> List (String, EffParamTy) -> List String
-filterForbidden [] _ = []
-filterForbidden (a :: rest) policy = match permitOf a policy
-  Permitted => filterForbidden rest policy
-  _ => atomLabel a :: filterForbidden rest policy
+filterForbidden : List (String, Param) ->
+  List Atom ->
+  List (String, EffParamTy) ->
+  List String
+filterForbidden _ [] _ = []
+filterForbidden domains (a :: rest) policy = match permitOf domains a policy
+  Permitted => filterForbidden domains rest policy
+  _ => atomLabel a :: filterForbidden domains rest policy
 
 -- Why each refused atom's policy entry could not be read, one report line per
 -- malformed entry the verdict met.
-policyProblems : List Atom -> List (String, EffParamTy) -> List String
-policyProblems effs policy =
+policyProblems : List (String, Param) ->
+  List Atom ->
+  List (String, EffParamTy) ->
+  List String
+policyProblems domains effs policy =
   flatMap
-    (a => match permitOf a policy
+    (a => match permitOf domains a policy
       Malformed m => ["   policy entry for \{atomLabel a}: \{m}\n"]
       _ => [])
     effs
@@ -82,19 +94,23 @@ export data Permit = Permitted | Forbidden | Malformed String
 -- manifest boundary is not proven and is not permitted, and an entry the
 -- domain does not admit permits nothing.
 export
-permitOf : Atom -> List (String, EffParamTy) -> Permit
-permitOf a policy = match (atomLabel a == "IO", policyEntriesFor a policy)
-  (True, []) => permitIoAsJoin policy
+permitOf : List (String, Param) -> Atom -> List (String, EffParamTy) -> Permit
+permitOf domains a policy = match (
+  atomLabel a == "IO",
+  policyEntriesFor a policy,
+)
+  (True, []) => permitIoAsJoin domains policy
   (_, []) => Forbidden
-  (_, written) => match allOk (map (decodeWrittenParam (atomLabelOf a)) written)
-    -- The entries are read exactly, however many there are: a set is never
-    -- folded, so a manifest of any size is accepted back as a policy.
-    Ok pps =>
-      if authSub (atomAuth a) (authJoinAll (map AConst pps)) then
-        Permitted
-      else
-        Forbidden
-    Err m => Malformed m
+  (_, written) =>
+    match allOk (map (decodeWrittenParam domains (atomLabelOf a)) written)
+      -- The entries are read exactly, however many there are: a set is never
+      -- folded, so a manifest of any size is accepted back as a policy.
+      Ok pps =>
+        if authSub (atomAuth a) (authJoinAll (map AConst pps)) then
+          Permitted
+        else
+          Forbidden
+      Err m => Malformed m
 
 -- Here `IO` is the join of the eleven host labels, so an `IO` atom under a
 -- policy with no `IO` entry is permitted exactly when the policy admits every
@@ -103,9 +119,10 @@ permitOf a policy = match (atomLabel a == "IO", policyEntriesFor a policy)
 -- caller that passes a profile's grants, `tools.target_check`, never passes an
 -- `IO` atom, because the typechecker has already bounded `IO` by that
 -- profile's join.
-permitIoAsJoin : List (String, EffParamTy) -> Permit
-permitIoAsJoin policy =
-  firstNotPermitted (map (l => permitOf (atomOfLabel l) policy) hostLabels)
+permitIoAsJoin : List (String, Param) -> List (String, EffParamTy) -> Permit
+permitIoAsJoin domains policy =
+  firstNotPermitted
+    (map (l => permitOf domains (atomOfLabel domains l) policy) hostLabels)
 
 firstNotPermitted : List Permit -> Permit
 firstNotPermitted [] = Permitted
@@ -115,10 +132,13 @@ firstNotPermitted (p :: _) = p
 -- An atom whose authority is still a variable at the host boundary, refused
 -- by a policy entry narrower than the whole label: the entry may well cover
 -- what the caller will choose, but nothing proves it.
-notProvenLines : List Atom -> List (String, EffParamTy) -> List String
-notProvenLines effs policy =
+notProvenLines : List (String, Param) ->
+  List Atom ->
+  List (String, EffParamTy) ->
+  List String
+notProvenLines domains effs policy =
   flatMap
-    (a => match (authHasVars (atomAuth a), permitOf a policy)
+    (a => match (authHasVars (atomAuth a), permitOf domains a policy)
       (True, Forbidden) => match policyEntriesFor a policy
         _ :: _ =>
           let unresolved =

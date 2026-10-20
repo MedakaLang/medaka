@@ -30,7 +30,7 @@ import driver.front_gate.{
 }
 export import support.util.{rootsOrDefault}
 import support.util.{splitLast, startsWith, joinNl}
-import types.tc_types.{ElabResult, DriveInputs(..)}
+import types.tc_types.{ElabResult, DriveInputs(..), DriveOutputs}
 import types.typecheck.{
   defaultDriveInputs,
   driveInputsFor,
@@ -453,9 +453,9 @@ elaborateForTarget : DriveInputs ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (ElabResult, TcReport, List Diag)
+  (ElabResult, TcReport, DriveOutputs, List Diag)
 elaborateForTarget inputs asyncDriver None _ _ runtimeDecls coreDecls modules =
-  let (elaborated, report) =
+  let (elaborated, report, outputs) =
     elaborateModulesWithReport
       inputs
       (valueMainCandidate coreDecls modules)
@@ -463,9 +463,9 @@ elaborateForTarget inputs asyncDriver None _ _ runtimeDecls coreDecls modules =
       runtimeDecls
       coreDecls
       modules
-  (elaborated, report, [])
+  (elaborated, report, outputs, [])
 elaborateForTarget inputs asyncDriver (Some p) modsWithPath paths runtimeDecls coreDecls modules =
-  let (analysis, report) =
+  let (analysis, report, outputs) =
     analyzeProgramReport
       inputs
       (valueMainCandidate coreDecls modules)
@@ -476,6 +476,7 @@ elaborateForTarget inputs asyncDriver (Some p) modsWithPath paths runtimeDecls c
   (
     analysis.eaElab,
     report,
+    outputs,
     targetRefusal p (entryPathOf modsWithPath) paths analysis.eaTarget,
   )
 
@@ -528,7 +529,7 @@ emitJsonGate path front modsWithPath runtimeDecls buckets report profile refusal
 
 export
 runEmitWith : String ->
-  (ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  (DriveOutputs -> ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   EmitAsk ->
   List (String, String, List Decl) ->
   List Decl ->
@@ -561,7 +562,7 @@ data EmitKept = EmitKept {
 -- emitted.
 runEmitAsked : EmitAsk ->
   String ->
-  (ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  (DriveOutputs -> ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   List (String, String, List Decl) ->
   List Decl ->
   List Decl ->
@@ -587,7 +588,7 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
   let drive =
     _ =>
       let profile = selectTargetProfileOfEnv ()
-      let (_, report, refusal) =
+      let (_, report, outputs, refusal) =
         elaborateForTarget
           (emitDriveInputs profile ask)
           asyncDriver
@@ -600,6 +601,7 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
       (
         EmitKept { ekRefusal = refusal, ekProfile = profile },
         report,
+        outputs,
       )
   let (rsrc, csrc) = ask.askPreludeSrcs
   let out = match ask.askJson
@@ -637,6 +639,7 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
       let _ =
         emitTargetGate modsWithPath runtimeDecls kept.ekProfile kept.ekRefusal
       emitElaborated
+        out.foOutputs
         asyncDriver
         emitTail
         runtimeDecls
@@ -656,6 +659,7 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
           kept.ekRefusal
       let _ =
         emitElaborated
+          out.foOutputs
           asyncDriver
           emitTail
           runtimeDecls
@@ -675,18 +679,20 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
 -- (`report`, whose checked trees are run): the driver's wrap is applied to
 -- them (`executedFromReport`), and the result is mangled once.  The backend
 -- lowers against the facts of the checked program with the mangled table.
-emitElaborated : String ->
-  (ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+emitElaborated : DriveOutputs ->
+  String ->
+  (DriveOutputs -> ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   TcReport ->
   <IO> Unit
-emitElaborated asyncDriver emitTail runtimeDecls coreDecls modules report =
-  match asyncMainShapeError modules
+emitElaborated outputs asyncDriver emitTail runtimeDecls coreDecls modules report =
+  match asyncMainShapeError outputs modules
     Some msg => failWith msg
     None =>
-      let executed = executedFromReport report asyncDriver (coreDecls, modules)
+      let executed =
+        executedFromReport outputs report asyncDriver (coreDecls, modules)
       match executed
         Err msg => failWith msg
         Ok (coreW, modulesW) => match report.trChecked
@@ -694,6 +700,7 @@ emitElaborated asyncDriver emitTail runtimeDecls coreDecls modules report =
             let (coreD, modules2, table) =
               mangleUnitsEv checked.cpEvidence coreW modulesW
             emitTail
+              outputs
               (factsOfChecked { checked | cpEvidence = table })
               runtimeDecls
               coreD
@@ -706,7 +713,7 @@ emitElaborated asyncDriver emitTail runtimeDecls coreDecls modules report =
 -- the loader's (module, path, decls): its `Async` main is run by
 -- `runAsyncMain`.
 export
-driveEmitLocated : (List (String, String, List Decl) -> ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+driveEmitLocated : (List (String, String, List Decl) -> DriveOutputs -> ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   <IO> Unit
 driveEmitLocated emitTail = driveModulesLocated (ask mods =>
   runEmitAsked ask "runAsyncMain" (emitTail mods) mods)

@@ -1,5 +1,5 @@
 # META
-source_lines=4828
+source_lines=4832
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -84,10 +84,11 @@ import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
   driveInputsFor,
   elaborateModules,
-  elaborateModulesWithSchemes,
+  elaborateModulesWithReport,
   TcDiag(..),
   tcDiagGoalKey,
 }
+import types.tc_types.{DriveOutputs}
 import types.target_profile.{selectedProfile}
 import driver.main_autoprint.{valueMainCandidate}
 import types.private_mangle.{mangleCtorCollisionsPair}
@@ -612,10 +613,11 @@ gateOfPerModule : Bool ->
   List Decl ->
   List Decl ->
   List (String, String, List Decl) ->
+  DriveOutputs ->
   List (String, (List TcDiag, List TcDiag)) ->
   <IO> Option String
-gateOfPerModule True _ _ _ _ = None
-gateOfPerModule False runtimeDecls coreDecls mods perModule =
+gateOfPerModule True _ _ _ _ _ = None
+gateOfPerModule False runtimeDecls coreDecls mods outputs perModule =
   renderGate
     (projectDiagsFromTc
       noStdlibExports
@@ -624,6 +626,7 @@ gateOfPerModule False runtimeDecls coreDecls mods perModule =
       runtimeDecls
       coreDecls
       mods
+      outputs
       perModule)
 
 -- A load failure reaches the gate as the diagnostic `analyzeProject` attributes
@@ -831,16 +834,17 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
   let runtimeDecls = desugaredPrelude rsrc
   let coreDecls = desugaredPrelude csrc
   let rawModules = desugaredModPairs mods
-  let (elaborated, _, _) =
-    elaborateModulesWithSchemes
+  let (elaborated, _, outputs) =
+    elaborateModulesWithReport
       (driveInputsFor !selectedProfile False [])
       (valueMainCandidate coreDecls rawModules)
+      None
       runtimeDecls
       coreDecls
       rawModules
   match elaborated
     (coreE, modulesE, perModule, _, _, _, _) => (
-      gateOfPerModule exempt runtimeDecls coreDecls mods perModule,
+      gateOfPerModule exempt runtimeDecls coreDecls mods outputs perModule,
       PreparedPair
         (uncurryPair
           runtimeDecls
@@ -4837,7 +4841,8 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesWithSchemes" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesWithReport" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
@@ -4893,9 +4898,9 @@ testFilesReport _ _ acc = acc
 (DFunDef false "exemptNotice" ((PCon "True") (PVar "target") (PVar "userDecls")) (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckSkipNotice") (EVar "target")) (EVar "userDecls"))))
 (DTypeSig false "singleFileTypeErrors" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "singleFileTypeErrors" ((PVar "target") (PVar "tsrc") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EVar "filter") (EVar "diagIsError")) (EApp (EApp (EApp (EApp (EVar "analyzeLocated") (EVar "noStdlibExports")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs")))))))))
-(DTypeSig false "gateOfPerModule" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))
-(DFunDef false "gateOfPerModule" ((PCon "True") PWild PWild PWild PWild) (EVar "None"))
-(DFunDef false "gateOfPerModule" ((PCon "False") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "mods") (PVar "perModule")) (EApp (EVar "renderGate") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsFromTc") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "perModule"))))
+(DTypeSig false "gateOfPerModule" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
+(DFunDef false "gateOfPerModule" ((PCon "True") PWild PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "gateOfPerModule" ((PCon "False") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "mods") (PVar "outputs") (PVar "perModule")) (EApp (EVar "renderGate") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsFromTc") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "outputs")) (EVar "perModule"))))
 (DTypeSig false "loadGate" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "loadGate" ((PCon "True") PWild PWild) (EVar "None"))
 (DFunDef false "loadGate" ((PCon "False") (PVar "target") (PVar "le")) (EApp (EVar "renderGate") (EApp (EApp (EVar "loadErrorDiags") (EVar "target")) (EVar "le"))))
@@ -4923,7 +4928,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "prepareMulti" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Prepared"))))))))))))
 (DFunDef false "prepareMulti" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "exempt") (PVar "unread") (PVar "hasDoctests") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "loaded") (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-load"))) (EVar "target")) (ELam (PWild) (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots"))))) (DoExpr (EMatch (EVar "loaded") (arm (PCon "Err" (PVar "le")) () (ETuple (EApp (EApp (EApp (EVar "loadGate") (EVar "exempt")) (EVar "target")) (EVar "le")) (EApp (EVar "PreparedPair") (EApp (EVar "TestPairErr") (EApp (EVar "loadErrorMessage") (EVar "le")))))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "mods")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EVar "exempt") (EVar "unread")) (EApp (EVar "not") (EVar "hasDoctests"))) (ETuple (EVar "None") (EApp (EVar "PreparedPair") (EVar "unreadTrees"))) (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-gate"))) (EIf (EVar "hasDoctests") (ELit (LString "check")) (ELit (LString "elaborate")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateFor") (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "roots")) (EVar "mods")) (EVar "exempt")) (EVar "hasDoctests")) (EVar "synthDecls"))))))))))))
 (DTypeSig false "elaborateFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Prepared"))))))))))))
-(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "_target") (PVar "_roots") (PVar "mods") (PVar "exempt") (PCon "False") PWild) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoLet false false (PTuple (PVar "elaborated") PWild PWild) (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithSchemes") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawModules"))) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules"))) (DoExpr (EMatch (EVar "elaborated") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "perModule")) (EApp (EVar "PreparedPair") (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elaborated"))))))))))
+(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "_target") (PVar "_roots") (PVar "mods") (PVar "exempt") (PCon "False") PWild) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoLet false false (PTuple (PVar "elaborated") PWild (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawModules"))) (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules"))) (DoExpr (EMatch (EVar "elaborated") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "outputs")) (EVar "perModule")) (EApp (EVar "PreparedPair") (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elaborated"))))))))))
 (DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods") (PVar "exempt") (PCon "True") (PVar "synthDecls")) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfCheck") (EVar "exempt")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "roots")) (EVar "mods")) (EApp (EApp (EVar "PreparedInject") (EVar "mods")) (EVar "synthDecls"))))
 (DTypeSig false "forcePrepared" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Prepared") (TyEffect ("IO") None (TyCon "TestPair"))))))
 (DFunDef false "forcePrepared" (PWild PWild (PCon "PreparedPair" (PVar "pair"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EVar "omEmpty"))) (DoExpr (EVar "pair"))))
@@ -5493,7 +5498,8 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesWithSchemes" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesWithReport" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
@@ -5549,9 +5555,9 @@ testFilesReport _ _ acc = acc
 (DFunDef false "exemptNotice" ((PCon "True") (PVar "target") (PVar "userDecls")) (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckSkipNotice") (EVar "target")) (EVar "userDecls"))))
 (DTypeSig false "singleFileTypeErrors" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "singleFileTypeErrors" ((PVar "target") (PVar "tsrc") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EMethodRef "filter") (EVar "diagIsError")) (EApp (EApp (EApp (EApp (EVar "analyzeLocated") (EVar "noStdlibExports")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target"))) (EVar "errs")))))))))
-(DTypeSig false "gateOfPerModule" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))
-(DFunDef false "gateOfPerModule" ((PCon "True") PWild PWild PWild PWild) (EVar "None"))
-(DFunDef false "gateOfPerModule" ((PCon "False") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "mods") (PVar "perModule")) (EApp (EVar "renderGate") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsFromTc") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "perModule"))))
+(DTypeSig false "gateOfPerModule" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
+(DFunDef false "gateOfPerModule" ((PCon "True") PWild PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "gateOfPerModule" ((PCon "False") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "mods") (PVar "outputs") (PVar "perModule")) (EApp (EVar "renderGate") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsFromTc") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "outputs")) (EVar "perModule"))))
 (DTypeSig false "loadGate" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "loadGate" ((PCon "True") PWild PWild) (EVar "None"))
 (DFunDef false "loadGate" ((PCon "False") (PVar "target") (PVar "le")) (EApp (EVar "renderGate") (EApp (EApp (EVar "loadErrorDiags") (EVar "target")) (EVar "le"))))
@@ -5579,7 +5585,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "prepareMulti" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Prepared"))))))))))))
 (DFunDef false "prepareMulti" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "exempt") (PVar "unread") (PVar "hasDoctests") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "loaded") (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-load"))) (EVar "target")) (ELam (PWild) (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots"))))) (DoExpr (EMatch (EVar "loaded") (arm (PCon "Err" (PVar "le")) () (ETuple (EApp (EApp (EApp (EVar "loadGate") (EVar "exempt")) (EVar "target")) (EVar "le")) (EApp (EVar "PreparedPair") (EApp (EVar "TestPairErr") (EApp (EVar "loadErrorMessage") (EVar "le")))))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "mods")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EVar "exempt") (EVar "unread")) (EApp (EVar "not") (EVar "hasDoctests"))) (ETuple (EVar "None") (EApp (EVar "PreparedPair") (EVar "unreadTrees"))) (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-gate"))) (EIf (EVar "hasDoctests") (ELit (LString "check")) (ELit (LString "elaborate")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateFor") (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "roots")) (EVar "mods")) (EVar "exempt")) (EVar "hasDoctests")) (EVar "synthDecls"))))))))))))
 (DTypeSig false "elaborateFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Prepared"))))))))))))
-(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "_target") (PVar "_roots") (PVar "mods") (PVar "exempt") (PCon "False") PWild) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoLet false false (PTuple (PVar "elaborated") PWild PWild) (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithSchemes") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawModules"))) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules"))) (DoExpr (EMatch (EVar "elaborated") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "perModule")) (EApp (EVar "PreparedPair") (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elaborated"))))))))))
+(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "_target") (PVar "_roots") (PVar "mods") (PVar "exempt") (PCon "False") PWild) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoLet false false (PTuple (PVar "elaborated") PWild (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawModules"))) (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules"))) (DoExpr (EMatch (EVar "elaborated") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "outputs")) (EVar "perModule")) (EApp (EVar "PreparedPair") (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elaborated"))))))))))
 (DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods") (PVar "exempt") (PCon "True") (PVar "synthDecls")) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfCheck") (EVar "exempt")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "roots")) (EVar "mods")) (EApp (EApp (EVar "PreparedInject") (EVar "mods")) (EVar "synthDecls"))))
 (DTypeSig false "forcePrepared" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Prepared") (TyEffect ("IO") None (TyCon "TestPair"))))))
 (DFunDef false "forcePrepared" (PWild PWild (PCon "PreparedPair" (PVar "pair"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EVar "omEmpty"))) (DoExpr (EVar "pair"))))
