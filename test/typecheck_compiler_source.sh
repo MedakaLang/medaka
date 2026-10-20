@@ -930,13 +930,10 @@ predicate_slot_required='registerReqSlots : ModuleCtx ->
     psBoundIds = ids,
 setFunConstraintEntry : ModuleCtx -> String -> List PredicateSlot -> Unit
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
-recordCallObligations : ModuleCtx ->
-dedupPredicateSlotEntry : (String, List PredicateSlot) ->
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
 && sameIfaceDecl request.prIface slot.psIface
 monoVecSameGiven requestArgs slotArgs
 givensForScope : ScopeId -> List GivenEntry
-pushGiven : GivenMatch ->
 pushGiven gm provenance slot binder =
 givenInScope : GivenScope -> GivenEntry -> Bool
 registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
@@ -945,16 +942,12 @@ activeFunDictPredOf request useScope =
 goalRequestOfKind : ModuleCtx -> String -> EntailKind -> Option PredicateRequest
 goalPredOf : ModuleCtx -> String -> Mono -> Option PredicateRequest
 goalPredOfOp : ModuleCtx -> String -> Option PredicateRequest
-activeDictVarOfEncl : ModuleCtx ->
 activeDictVarOfEncl mctx None m encl useScope =
 map LegacyScalar (activeDictVarForEncl m useScope)
 activeDictVarOfEncl mctx (Some request) m encl useScope =
-enclSlotIndex : ModuleCtx ->
 enclSlotIndex mctx None target encl = indexOfId target (enclSlotIds mctx encl)
 enclSlotIndex mctx (Some request) target encl =
-implReqDictVarOf : Option PredicateRequest ->
 implReqDictVarOf (Some request) m useScope
-firstPredForEnclAt : GivenScope ->
 entailAssumVar mctx _ m encl _ useScope (EKNestedTop iface _ _ rest) =
 goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
 anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
@@ -964,17 +957,12 @@ graphCtx.value.crossRun.crossModuleFunPredicateSlotsRef
 graphCtx.value.crossRun.crossModuleFunPredicateSlotsQualRef
 graphCtx.value.crossRun.crossModuleMethodPredicateSlotsRef :=
 graphCtx.value.crossRun.crossModuleMethodPredicateSlotsQualRef
-installMethodPredicateSlots : ModuleCtx ->
-setMethodPredicateSlotEntry : ModuleCtx ->
 methodDictArityOf : ModuleCtx -> String -> Int
 resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
 pending.pmdRoutesRef :=
 methodPredicateRoute : SiteCtx -> String -> ScopeId -> PredicateSlot -> Route
 realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
-recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route
-scopePredicateSlots : List ((String, String), List PredicateSlot) ->
-scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
-attributeMethodModulePredicateSlots : String ->'
+recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route'
 
 printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
@@ -982,6 +970,34 @@ printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
     exit 1
   fi
 done || exit 1
+
+# A signature the formatter wraps one parameter per line is compared whole, against the
+# source with line breaks and runs of blanks collapsed; a first-line prefix would stop
+# constraining the signature after its first parameter. Each pin starts with a blank
+# so it matches at a line start only.
+predicate_slot_src_flat="$(tr '\n' ' ' < "$predicate_slot_src" | tr -s ' ')"
+require_signature_flat() {
+  if ! printf '%s\n' "$predicate_slot_src_flat" | grep -Fq " $1"; then
+    echo "FAIL: typechecker signature is missing or changed: $1"
+    exit 1
+  fi
+}
+require_signature_flat 'registerReqSlots : ModuleCtx -> ScopeId -> List (String, Mono) -> Int -> List Require -> Unit'
+require_signature_flat 'recordCallObligations : ModuleCtx -> List CSlot -> List Mono -> List (List Mono) -> Unit'
+require_signature_flat 'dedupPredicateSlotEntry : (String, List PredicateSlot) -> (String, List PredicateSlot)'
+require_signature_flat 'pushGiven : GivenMatch -> GivenProvenance -> PredicateSlot -> EvidenceBinderId -> Unit'
+require_signature_flat 'activeDictVarOfEncl : ModuleCtx -> Option PredicateRequest -> Mono -> String -> ScopeId -> Option AssumAnswer'
+require_signature_flat 'enclSlotIndex : ModuleCtx -> Option PredicateRequest -> Int -> String -> Option Int'
+require_signature_flat 'implReqDictVarOf : Option PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer'
+require_signature_flat 'firstPredForEnclAt : GivenScope -> Int -> PredicateRequest -> ScopeId -> List GivenEntry -> Option AssumAnswer'
+require_signature_flat 'installMethodPredicateSlots : ModuleCtx -> String -> List MethodPredicateSlot -> Unit'
+require_signature_flat 'setMethodPredicateSlotEntry : ModuleCtx -> String -> List MethodPredicateSlot -> Unit'
+require_signature_flat 'scopePredicateSlots : List ((String, String), List PredicateSlot) -> OrdMap Unit -> List Decl -> List (String, List PredicateSlot)'
+require_signature_flat 'scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) -> OrdMap Unit -> List (String, List MethodPredicateSlot)'
+require_signature_flat 'attributeMethodModulePredicateSlots : String -> List Decl -> List (String, List MethodPredicateSlot) -> List ((String, String), List MethodPredicateSlot)'
+require_signature_flat 'methodSchemeRows : ModuleCtx -> List (String, List Kind) -> IfaceRef -> List String -> List IfaceMethod -> List MethodSchemeRow'
+require_signature_flat 'pickSchemesByDecl : ModuleCtx -> List String -> List (String, Scheme) -> Registry MethodSchemeRow -> OrdMap Scheme -> List (String, EnvBinding)'
+require_signature_flat 'admittedSchemeFor : ModuleCtx -> String -> Registry MethodSchemeRow -> Option Scheme'
 
 predicate_slot_types_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
 data PredicateRequest = PredicateRequest {
@@ -1034,12 +1050,8 @@ done
 # are built in one row walk.  The Module-only driver reads its visible rows from
 # `implDecls`; positional key/scheme zips and graph-lived row state are retired.
 method_row_required='ifaceMethodSchemeRows : ModuleCtx -> List Decl -> List MethodSchemeRow
-methodSchemeRows : ModuleCtx ->
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
-installMethodPredicateSlots : ModuleCtx ->
 seedNumLitFromIntAnchor : ModuleCtx -> List MethodSchemeRow -> Unit
-pickSchemesByDecl : ModuleCtx ->
-admittedSchemeFor : ModuleCtx ->
   List MethodSchemeRow ->
   let currentMethodRows = ifaceMethodSchemeRows mctx prog
   let visibleMethodRows = ifaceMethodSchemeRows mctx implDecls'

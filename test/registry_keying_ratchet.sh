@@ -1162,8 +1162,19 @@ echo "  ok: the child builds its drive inputs as the CLI does (driveInputsFor fr
 #      `captureTypeErrors`), so a ModuleCtx field named like another record's
 #      field would count that record's writes as ModuleCtx writes.
 # Each row of the allowlist is `<field> <W|-> -- <reason>`: `W` means some code
-# assigns the field after the mint, `-` means none does (a `-` field is changed
-# only by the mint and by `Windowed` helpers, so an assignment to it is new).
+# assigns the field after the mint, `-` means none does.  A `-` field holding a
+# `Windowed` value (`typeErrors`, `obls`, ...) is still mutated after the mint, but
+# through the Windowed record's own fields (`w.items :=`, `w.n :=` in the helpers
+# and in `captureTypeErrors`), which name no ModuleCtx field and so are not seen.
+#
+# What this check guards: the SET of ModuleCtx fields assigned anywhere outside the
+# mint, as `.<field> :=` or `setRef <path>.<field>` (the path may open with one
+# parenthesised group, `setRef (envFor mctx).teDyn.dcModule.<field> v`).  A new
+# first write to a `-` field, or the loss of the last write to a `W` field, turns it
+# red.  What it does NOT guard: a new write site to a field that is already `W`
+# (the pin is per field, not per site), a write through an alias
+# (`let o = mctx.<field>` then `o := v`), a write through a receiver spelled any other
+# way than the two forms above, and the mutation of a Windowed value's own fields.
 echo "checking #4332 ModuleCtx field allowlist, writer set and field-name collisions ..."
 
 modulectx_allowed=$(cat <<'ALLOWLIST_EOF'
@@ -1281,7 +1292,7 @@ assigned_fields() {
   for f in "$@"; do
     join_setref "$f" \
       | strip_comments \
-      | grep -oE "setRef[ ]+[A-Za-z0-9_.']*\.[A-Za-z_][A-Za-z0-9_]*([^.A-Za-z0-9_]|$)" \
+      | grep -oE "setRef[ ]+(\([^()]*\))?[A-Za-z0-9_.']*\.[A-Za-z_][A-Za-z0-9_]*([^.A-Za-z0-9_]|$)" \
       | sed -E 's/^setRef[ ]+//; s/[^.A-Za-z0-9_]$//; s/.*\.//'
     strip_comments < "$f" \
       | grep -oE "\.[A-Za-z_][A-Za-z0-9_]*[ ]+:=" \
