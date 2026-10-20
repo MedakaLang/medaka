@@ -661,7 +661,7 @@ session"):
 5. **Existentials.** A constructor's leading `(p : Authority L)` groups are
    `dataCtorBinders`/`newtypeCtorBinders` (positional with the constructors,
    as `dataParamKinds` is with the parameters); their cells are quantified in
-   the scheme and their ids recorded in `ModuleCtx.ctorExistentialsRef`, keyed by
+   the scheme and their ids recorded in `GraphRun.ctorExistentialsRef`, keyed by
    id so a same-named constructor elsewhere cannot answer. A pattern
    instantiates them RIGID (`instantiateCtorPattern`,
    `instantiateRecordOpening`) and parks them at the pattern site

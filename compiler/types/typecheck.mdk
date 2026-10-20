@@ -44201,8 +44201,8 @@ declKindEntry (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasP
 declKindEntry _ = None
 
 -- Runs `k` with the declared kinds of `ds` in the table of [mctx], the current
--- record, then puts the table back as it was. A reader that elaborates signatures against declarations
--- whose own pass comes later (the extern catalog against the prelude) sees
+-- record, then puts the table back as it was. A reader that elaborates signatures
+-- against declarations whose own pass comes later (the extern catalog against the prelude) sees
 -- their kinds, and that later pass still records each head once, so no
 -- lookup scans a duplicate row. Only a head with a parameter whose kind is
 -- not `Type` is recorded: every other head reads as it does with no entry,
@@ -56105,10 +56105,7 @@ enqueueStampCtx mctx mid implDecls =
 
 -- [stamp] is the record the drain entered for [ctx].
 runStampSteps : ModuleCtx -> StampCtx -> List StampStep -> Unit
-runStampSteps _ _ [] = ()
-runStampSteps stamp ctx (s :: rest) =
-  let _ = runStampStep stamp ctx s
-  runStampSteps stamp ctx rest
+runStampSteps stamp ctx steps = each (runStampStep stamp ctx) steps
 
 runStampStep : ModuleCtx -> StampCtx -> StampStep -> Unit
 runStampStep _ ctx SSNumlitFloats = setNumlitFloatsGo ctx.scNumlits
@@ -56421,10 +56418,10 @@ runStampCtx saved ctx =
     (d => verdictFinding ctx.scModule (isLiveSpan liveSpans (tcLoc d)) d)
     (captureTypeErrors stamp (_ => checkAdmittedOccObls stamp ()))
 
--- Installs [ctx]'s record, with the two module tables the drain reads taken from
+-- Builds [ctx]'s record, with the two module tables the drain reads taken from
 -- [saved], the record current when the drain began: the stamp context holds no
--- module's tables of its own (`StampCtx`).  Returns the installed record, which the
--- walk that follows runs in.
+-- module's tables of its own (`StampCtx`).  Returns that record, which the walk that
+-- follows runs in.
 enterStampCtx : ModuleCtx -> StampCtx -> ModuleCtx
 enterStampCtx saved ctx =
   -- Deferred goals select their `gGiven` bucket from their captured scope frames;

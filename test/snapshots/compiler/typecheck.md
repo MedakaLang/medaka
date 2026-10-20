@@ -1,5 +1,5 @@
 # META
-source_lines=56766
+source_lines=56763
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -44205,8 +44205,8 @@ declKindEntry (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasP
 declKindEntry _ = None
 
 -- Runs `k` with the declared kinds of `ds` in the table of [mctx], the current
--- record, then puts the table back as it was. A reader that elaborates signatures against declarations
--- whose own pass comes later (the extern catalog against the prelude) sees
+-- record, then puts the table back as it was. A reader that elaborates signatures
+-- against declarations whose own pass comes later (the extern catalog against the prelude) sees
 -- their kinds, and that later pass still records each head once, so no
 -- lookup scans a duplicate row. Only a head with a parameter whose kind is
 -- not `Type` is recorded: every other head reads as it does with no entry,
@@ -56109,10 +56109,7 @@ enqueueStampCtx mctx mid implDecls =
 
 -- [stamp] is the record the drain entered for [ctx].
 runStampSteps : ModuleCtx -> StampCtx -> List StampStep -> Unit
-runStampSteps _ _ [] = ()
-runStampSteps stamp ctx (s :: rest) =
-  let _ = runStampStep stamp ctx s
-  runStampSteps stamp ctx rest
+runStampSteps stamp ctx steps = each (runStampStep stamp ctx) steps
 
 runStampStep : ModuleCtx -> StampCtx -> StampStep -> Unit
 runStampStep _ ctx SSNumlitFloats = setNumlitFloatsGo ctx.scNumlits
@@ -56425,10 +56422,10 @@ runStampCtx saved ctx =
     (d => verdictFinding ctx.scModule (isLiveSpan liveSpans (tcLoc d)) d)
     (captureTypeErrors stamp (_ => checkAdmittedOccObls stamp ()))
 
--- Installs [ctx]'s record, with the two module tables the drain reads taken from
+-- Builds [ctx]'s record, with the two module tables the drain reads taken from
 -- [saved], the record current when the drain began: the stamp context holds no
--- module's tables of its own (`StampCtx`).  Returns the installed record, which the
--- walk that follows runs in.
+-- module's tables of its own (`StampCtx`).  Returns that record, which the walk that
+-- follows runs in.
 enterStampCtx : ModuleCtx -> StampCtx -> ModuleCtx
 enterStampCtx saved ctx =
   -- Deferred goals select their `gGiven` bucket from their captured scope frames;
@@ -65986,8 +65983,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "enqueueStampCtx" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))))
 (DFunDef false "enqueueStampCtx" ((PVar "mctx") (PVar "mid") (PVar "implDecls")) (EBlock (DoLet false false (PVar "mk") (EApp (EVar "currentModuleMarks") (ELit LUnit))) (DoLet false false (PVar "ctx") (EApp (EApp (EApp (EApp (EApp (EVar "stampCtxOf") (EVar "mctx")) (EVar "mid")) (EVar "implDecls")) (EApp (EVar "goalsSince") (EFieldAccess (EVar "mk") "mGoals"))) (EApp (EVar "numlitSince") (EFieldAccess (EVar "mk") "mNumlit")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "graphRun") "stampCtxs")) (EBinOp "::" (EVar "ctx") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "graphRun") "stampCtxs") "value"))))))
 (DTypeSig false "runStampSteps" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "StampCtx") (TyFun (TyApp (TyCon "List") (TyCon "StampStep")) (TyCon "Unit")))))
-(DFunDef false "runStampSteps" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "runStampSteps" ((PVar "stamp") (PVar "ctx") (PCons (PVar "s") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "runStampStep") (EVar "stamp")) (EVar "ctx")) (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "runStampSteps") (EVar "stamp")) (EVar "ctx")) (EVar "rest")))))
+(DFunDef false "runStampSteps" ((PVar "stamp") (PVar "ctx") (PVar "steps")) (EApp (EApp (EVar "each") (EApp (EApp (EVar "runStampStep") (EVar "stamp")) (EVar "ctx"))) (EVar "steps")))
 (DTypeSig false "runStampStep" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "StampCtx") (TyFun (TyCon "StampStep") (TyCon "Unit")))))
 (DFunDef false "runStampStep" (PWild (PVar "ctx") (PCon "SSNumlitFloats")) (EApp (EVar "setNumlitFloatsGo") (EFieldAccess (EVar "ctx") "scNumlits")))
 (DFunDef false "runStampStep" ((PVar "stamp") (PVar "ctx") (PCon "SSReturnSites")) (EBlock (DoLet false false (PVar "rpNames") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ctx") "scRpNames")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "stampEach") (EVar "stamp")) (ELam ((PVar "sx") (PVar "o")) (EApp (EApp (EApp (EVar "resolveSites") (EVar "sx")) (EVar "rpNames")) (EApp (EVar "siteEntry") (EVar "o"))))) (EVar "GKReturnSite")) (EVar "ctx")))))
@@ -75326,8 +75322,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "enqueueStampCtx" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))))
 (DFunDef false "enqueueStampCtx" ((PVar "mctx") (PVar "mid") (PVar "implDecls")) (EBlock (DoLet false false (PVar "mk") (EApp (EVar "currentModuleMarks") (ELit LUnit))) (DoLet false false (PVar "ctx") (EApp (EApp (EApp (EApp (EApp (EVar "stampCtxOf") (EVar "mctx")) (EVar "mid")) (EVar "implDecls")) (EApp (EVar "goalsSince") (EFieldAccess (EVar "mk") "mGoals"))) (EApp (EVar "numlitSince") (EFieldAccess (EVar "mk") "mNumlit")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "graphRun") "stampCtxs")) (EBinOp "::" (EVar "ctx") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphCtx") "value") "graphRun") "stampCtxs") "value"))))))
 (DTypeSig false "runStampSteps" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "StampCtx") (TyFun (TyApp (TyCon "List") (TyCon "StampStep")) (TyCon "Unit")))))
-(DFunDef false "runStampSteps" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "runStampSteps" ((PVar "stamp") (PVar "ctx") (PCons (PVar "s") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "runStampStep") (EVar "stamp")) (EVar "ctx")) (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "runStampSteps") (EVar "stamp")) (EVar "ctx")) (EVar "rest")))))
+(DFunDef false "runStampSteps" ((PVar "stamp") (PVar "ctx") (PVar "steps")) (EApp (EApp (EVar "each") (EApp (EApp (EVar "runStampStep") (EVar "stamp")) (EVar "ctx"))) (EVar "steps")))
 (DTypeSig false "runStampStep" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "StampCtx") (TyFun (TyCon "StampStep") (TyCon "Unit")))))
 (DFunDef false "runStampStep" (PWild (PVar "ctx") (PCon "SSNumlitFloats")) (EApp (EVar "setNumlitFloatsGo") (EFieldAccess (EVar "ctx") "scNumlits")))
 (DFunDef false "runStampStep" ((PVar "stamp") (PVar "ctx") (PCon "SSReturnSites")) (EBlock (DoLet false false (PVar "rpNames") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "ctx") "scRpNames")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "stampEach") (EVar "stamp")) (ELam ((PVar "sx") (PVar "o")) (EApp (EApp (EApp (EVar "resolveSites") (EVar "sx")) (EVar "rpNames")) (EApp (EVar "siteEntry") (EVar "o"))))) (EVar "GKReturnSite")) (EVar "ctx")))))

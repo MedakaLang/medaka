@@ -12,7 +12,7 @@
    to rewrite them from the tree instead of comparing. -}
 import fs.{walkDir}
 import list.{
-  drop, dropWhile, dropWhileEnd, filterMap, lookup, nub, reverse, sort,
+  drop, dropWhile, dropWhileEnd, filterMap, last, lookup, nub, reverse, sort,
   takeWhile
 }
 import map as M
@@ -842,7 +842,9 @@ partitionRows ls =
 -- Some (field, class) for a `field = … class.field,` line.
 partitionRow : String -> Option (String, String)
 partitionRow l = match split " = " (trim l)
-  [field, rhs] => classOf field (lastWord (words rhs))
+  [field, rhs] => match last (words rhs)
+    Some w => classOf field w
+    None => None
   _ => None
 
 -- Some (field, class) when [w] is `class.field` (its trailing comma dropped).
@@ -850,11 +852,6 @@ classOf : String -> String -> Option (String, String)
 classOf field w = match split "." (optionOr w (stripSuffix "," w))
   [cls, f] if f == field => Some (field, cls)
   _ => None
-
-lastWord : List String -> String
-lastWord ws = match reverse ws
-  [] => ""
-  w :: _ => w
 
 -- A new `ModuleCtx` field is unclassified until the partition names its class: the
 -- partition and the record have the same fields, each once, each in a class.
