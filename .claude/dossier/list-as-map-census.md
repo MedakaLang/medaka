@@ -73,7 +73,7 @@ on push but not a linear rescan.
 
 - `moduleWindow : Ref (List a) -> Int -> List a` (`compiler/types/typecheck.mdk:9304`)
   — `let now = cell.value in takeFirst (listLen now - mark) now`. Called on
-  `graphCtx.value.graphRun.goals` (line 2984) and `graphCtx.value.graphRun.numlitRefs` (lines 19834, 30440,
+  `graphCtx.value.graphRun.goals` (line 2984) and `gctx.graphRun.numlitRefs` (lines 19834, 30440,
   42378) — the run-wide goals/numlit channels.
 - the transitive-importer walk (`compiler/types/typecheck.mdk` ~41791 at the census base),
   called from `dictPassModulesScoped` (~41441) once per module in the program, each call a
@@ -412,7 +412,7 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:16852 | lookupAssoc | `mctx.definerShadowSigsRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:20181 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:20493 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:20998 | lookupAssoc | `graphCtx.value.graphRun.activeDictVars.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:20998 | lookupAssoc | `gctx.graphRun.activeDictVars.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:21639 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:24284 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:30538 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
@@ -427,10 +427,10 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:34779 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:35342 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:36419 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:37049 | lookupAssoc | `graphCtx.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:37309 | lookupAssoc | `graphCtx.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:37354 | lookupAssoc | `graphCtx.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:37563 | lookupAssoc | `graphCtx.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:37049 | lookupAssoc | `gctx.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:37309 | lookupAssoc | `gctx.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:37354 | lookupAssoc | `gctx.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:37563 | lookupAssoc | `gctx.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:37670 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:37705 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:37844 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
@@ -1013,7 +1013,7 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:12432 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:12458 | contains/elem/dedup | `graphCtx.value.userIfaceNamesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:12668 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:12998 | contains/elem/dedup | `graphCtx.value.abstractRecordTypesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:12998 | contains/elem/dedup | `mctx.mcGraph.abstractRecordTypesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:13813 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:14860 | contains/elem/dedup | `mctx.definerShadowNamesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:14861 | contains/elem/dedup | `mctx.standaloneValuesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
@@ -1087,7 +1087,7 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:32292 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:32394 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:32598 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:32821 | contains/elem/dedup | `graphCtx.value.config.value.tcStdlibOwned` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:32821 | contains/elem/dedup | `gctx.config.value.tcStdlibOwned` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:34130 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:34443 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:34483 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |

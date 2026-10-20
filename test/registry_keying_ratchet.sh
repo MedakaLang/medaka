@@ -151,6 +151,14 @@ strip_comments() {
   grep -vE '^[[:space:]]*--' | sed -E 's/[[:space:]]--[[:space:]].*$//'
 }
 
+# holder_to_shim: a swept function reaches the GraphCtx through its parameter
+# (`gctx`) or through a carrier path (`mctx.mcGraph`, `dyn.dcModule.mcGraph`,
+# `sx.sxModule.mcGraph`, `env.teDyn.dcModule.mcGraph`); the writer set is
+# pinned per field, so each spelling reads as `graphCtx.value`.
+holder_to_shim() {
+  sed -E 's/(^|[^A-Za-z0-9_.])(env\.teDyn\.dcModule\.mcGraph|dyn\.dcModule\.mcGraph|sx\.sxModule\.mcGraph|mctx\.mcGraph|gctx)\./\1graphCtx.value./g'
+}
+
 # write_targets PATH: every `<PATH>.<field>` WRITE target in $TC, under EITHER
 # spelling, one per line, deduped.  PATH is an ERE with its dots escaped
 # (`graphCtx\.value\.crossRun`); the field must follow it directly, so a write
@@ -176,9 +184,11 @@ write_targets() {
   {
     join_setref "$TC" \
       | strip_comments \
+      | holder_to_shim \
       | grep -oE "setRef[ ]+$1\.[A-Za-z_][A-Za-z0-9_]*([^.A-Za-z0-9_]|$)" \
       | sed -E 's/^setRef[ ]+//; s/[^.A-Za-z0-9_]$//'
     strip_comments < "$TC" \
+      | holder_to_shim \
       | grep -oE "$1\.[A-Za-z_][A-Za-z0-9_]*[ ]+:=" \
       | sed -E 's/[ ]+:=$//'
   } | LC_ALL=C sort -u
@@ -961,7 +971,8 @@ if [ -z "$preamble_lo" ] || [ -z "$preamble_hi" ] || [ "$preamble_hi" -le "$prea
 fi
 
 # check_parity_row LABEL PATTERN NAME: fail-closed, naming the ROW. Two halves:
-#   (a) `graphPreamble` CARRIES the call, spelled exactly as PATTERN;
+#   (a) `graphPreamble` CARRIES the call, spelled exactly as PATTERN (matched on the
+#       body with line breaks and runs of blanks folded to one space);
 #   (b) SOLE SITE -- every non-comment line of this file that mentions NAME (the
 #       callee/ref alone, so the check does not depend on any one caller's parameter
 #       names) is inside graphPreamble's body, apart from NAME's own column-0
@@ -971,7 +982,7 @@ check_parity_row() {
   label="$1"
   pattern="$2"
   name="$3"
-  cc=$(printf '%s\n' "$preamble_body" | grep -Fc "$pattern")
+  cc=$(printf '%s\n' "$preamble_body" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g' | grep -Fc "$pattern")
   if [ "$cc" -lt 1 ]; then
     echo "FAIL: graphPreamble is missing the '$label' writer/seed call"
     echo "  (looked for: $pattern)."
@@ -1009,16 +1020,16 @@ check_parity_row() {
 }
 
 check_parity_row "mintGraphCtx" "mintGraphCtx inputs admitted" "mintGraphCtx"
-check_parity_row "populateEffectDomainsGraph" "populateEffectDomainsGraph coreDecls modules" "populateEffectDomainsGraph"
+check_parity_row "populateEffectDomainsGraph" "populateEffectDomainsGraph graphCtx.value coreDecls modules" "populateEffectDomainsGraph"
 check_parity_row "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :="
 check_parity_row "declEnvsRef :=" "declEnvsRef :=" "declEnvsRef :="
-check_parity_row "seedAbstractRecordTypes" "seedAbstractRecordTypes coreDecls modules" "seedAbstractRecordTypes"
+check_parity_row "seedAbstractRecordTypes" "seedAbstractRecordTypes graphCtx.value coreDecls modules" "seedAbstractRecordTypes"
 # The harvest CLEAR is the entry-only fact; `graphModuleWorker`'s per-module
 # accumulation writes the same ref and is not a second copy of it, so this row's
 # sole-site half keys on the cleared spelling rather than on the bare ref name.
 check_parity_row "promotionHarvestRef :=" "promotionHarvestRef := []" "promotionHarvestRef := []"
 
-check_parity_row "mark sets" "markSetsOf prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls" "markSetsOf"
+check_parity_row "mark sets" "markSetsOf graphCtx.value prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls" "markSetsOf"
 echo "  ok: graphPreamble carries the whole-graph writer/seed set, and no other body"
 echo "      in the file carries a copy of any row"
 
@@ -1061,7 +1072,7 @@ echo "  ok: graphPreamble has exactly 4 call sites (two drivers + two projection
 check_order() {
   label="$1"
   body="$2"
-  before_line=$(printf '%s\n' "$body" | grep -n 'populateEffectDomainsGraph coreDecls modules' | head -1 | cut -d: -f1)
+  before_line=$(printf '%s\n' "$body" | grep -n 'populateEffectDomainsGraph graphCtx.value coreDecls modules' | head -1 | cut -d: -f1)
   after_line=$(printf '%s\n' "$body" | grep -n 'declEnvsRef :=' | head -1 | cut -d: -f1)
   if [ -z "$before_line" ] || [ -z "$after_line" ]; then
     echo "FAIL: $label -- could not locate both populateEffectDomainsGraph and"
