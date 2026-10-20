@@ -325,7 +325,7 @@ QUIETER is a severity INCREASE" rule applied to the plan's own ordering.
 **Mechanism (verified).** `dataParamKindsRef : Ref (List (String, List Kind))`
 (`compiler/types/typecheck.mdk:3113`) and its carrier
 `universeDataParamKinds : Ref (List (String, List Kind))` (`:2536`) are keyed by the bare
-type name; readers are `lookupAssoc n perRun.value.dataParamKindsRef.value` first-match
+type name; readers are `lookupAssoc n perRun.value.dataParamKindsRef.value` (`perRun` since replaced by `ModuleCtx` as a parameter) first-match
 (`:1240`, `:4135`, `:4289`, `:7977`). The source states the hazard itself at `:17048`:
 
 > `⚠️ dataParamKindsRef is keyed by BARE NAME across the whole import graph, so two
