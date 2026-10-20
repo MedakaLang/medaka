@@ -51315,9 +51315,9 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- checkModuleFull → checkModuleFullImpl runs `freshModuleCtx` first (clears
 -- typeErrors + currentLevel), so the snapshot below is this module's own errors.
 
--- coherence over this module's own decls (mirrors the one-module projection's
--- checkCoherence over the driver inputs' user decls, which moduleTypeDiags set to the
--- module decls).  Pushes any conflict into typeErrors AFTER the `freshModuleCtx` above.
+-- coherence over this module's own impls runs in `runFinalChecks` above: its
+-- `checkCoherence` sweeps this module's rows of the whole-graph `IE` (`cohRowsOwnedBy`),
+-- and a hard conflict is pushed into typeErrors AFTER the `freshModuleCtx` above.
 
 -- multi-module diagnostics driver: threads the runtime+core seed and per-module
 -- PUBLIC accumulators exactly as foldModules threads, but at each module harvests its
