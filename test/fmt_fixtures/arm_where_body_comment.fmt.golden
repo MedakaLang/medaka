@@ -1,0 +1,12 @@
+g : Int -> Int
+g x = match x
+  3 => 1
+  n => a n + b where  -- body
+    a i = i
+    b = 2
+
+h : Int -> Int
+h x = match x
+  3 => 1
+  n => let rec a i = i in a n + 1  -- single binding
+  _ => 2
