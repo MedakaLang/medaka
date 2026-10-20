@@ -685,7 +685,7 @@ session"):
    index it is `T @p`.
 8. **Carrying.** The export check decides whether a constructor's field
    carries the parameter by the field's type (`tyCarries`, over
-   `crossRun.universeDataCtors`: every registered head's parameters and
+   `CrossRun.universeDataCtors`: every registered head's parameters and
    constructors, the prelude's included): a qualifier, the parameter itself, a
    tuple with a carrying component, or an index of a head whose every
    constructor carries that parameter (through a type parameter the head
@@ -705,7 +705,7 @@ session"):
    outside a pattern instantiates an existential binder as the domain's top
    (`sharedAuthority`); an update repacks a binder only when every field that
    mentions it is replaced (`instantiateRecordUpdate`); the existential id
-   table lives with the id counter (`graphRun.ctorExistentialsRef`), so a
+   table lives with the id counter (`GraphRun.ctorExistentialsRef`), so a
    record the universe seeds into an importer still knows its binders; a
    record's binder cells are collected from its fields (`recordAuthCells`).
    An index slot is invariant and a flexible index variable substitutes

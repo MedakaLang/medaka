@@ -30,9 +30,9 @@
 #      into one) a table this pins.
 #
 # SIX CHECKS:
-#   1. CrossRun + DriverState FIELD allowlist (compiler/types/typecheck.mdk)
-#   2. the cross-module WRITER ratchet: every `crossRun.value.*` /
-#      `driverState.value.*` WRITE site -- `setRef r v` or `r := v`, both live --
+#   1. CrossRun + GraphCtx FIELD allowlist (compiler/types/tc_types.mdk)
+#   2. the cross-module WRITER ratchet: every `graphCtx.value.crossRun.*` /
+#      `graphCtx.value.*` WRITE site -- `setRef r v` or `r := v`, both live --
 #      pinned by TARGET FIELD (load-bearing)
 #   3. the THREE parallel engine module-state builders' frame-seeding parity,
 #      plus exact delegation by the two root-environment wrappers
@@ -60,11 +60,11 @@
 # FAIL and A, F pass.
 #   A  (unmodified tree)                                            -> pass
 #   B  add `rogueRef : Ref (OrdMap Int),` as a new CrossRun field    -> FAIL (check 1)
-#   C  add `let _ = setRef crossRun.value.rogueRef (f prog)` on its
+#   C  add `let _ = setRef graphCtx.value.crossRun.rogueRef (f prog)` on its
 #      OWN line inside appendUniverseAccums                          -> FAIL (check 2)
 #   D  add, ON ONE LINE, an allowlisted write AND a rogue one:
-#      `let _ = setRef crossRun.value.universeFunNamesRef (f prog) in
-#       setRef crossRun.value.rogueRef (f prog)`                     -> FAIL (check 2)
+#      `let _ = setRef graphCtx.value.crossRun.universeFunNamesRef (f prog) in
+#       setRef graphCtx.value.crossRun.rogueRef (f prog)`            -> FAIL (check 2)
 #         <- THE A-1 HOLE. If D passes while C fails, the filter is
 #            per-LINE (treats "line contains an allowed substring" as
 #            "line is accounted for") instead of per-OCCURRENCE, and
@@ -74,7 +74,7 @@
 #      buildRootModuleStateWith, or core_ir_eval.mdk's cevalModules)  -> FAIL (check 3)
 #      Change either root wrapper's `buildRootModuleStateWith` call to use
 #      different arguments                                             -> FAIL (check 3)
-#   F  add a COMMENT line mentioning `setRef crossRun.value.foo`      -> pass
+#   F  add a COMMENT line mentioning `setRef graphCtx.value.crossRun.foo` -> pass
 #      (a side comment is not a write: must not false-positive)
 #
 # All six were actually executed against this tree while writing this script
@@ -84,7 +84,7 @@
 # Implementation note on how D is made to fail correctly: every extraction
 # below uses `grep -oE` (extract ALL non-overlapping occurrences on a line),
 # never a line-level "does this line contain an allowed substring" test. A
-# line carrying two `crossRun.value.*` write targets yields TWO extracted
+# line carrying two `graphCtx.value.crossRun.*` write targets yields TWO extracted
 # tokens, each independently checked against the allowlist -- so an allowed
 # token sharing a line with a rogue one cannot hide the rogue one. This is the
 # occurrence-level discipline the #1110 Mono.TCon ratchet's own header
@@ -117,13 +117,13 @@ CIE="$ROOT/compiler/ir/core_ir_eval.mdk"
 #     (<value>)
 # (bare `setRef` at the end of one line, the target alone on the next) as well
 # as the single-line `setRef <target> (<value>)` form. A grep for the literal
-# substring `setRef crossRun.value.` on its own MISSES the split form outright
+# substring `setRef graphCtx.value.crossRun.` on its own MISSES the split form outright
 # -- verified against this file: the naive single-line grep the #1111 brief
 # itself suggests undercounts CrossRun's writer set by one field
 # (that field was `universeIfaceRequiredRef` until #1557 A-3.5a RETIRED it; the
-# helper is still required for DriverState below, and re-deriving the current
+# helper is still required for GraphCtx below, and re-deriving the current
 # split-form set is one command -- `grep -n -B1 '^ *setRef$' compiler/types/typecheck.mdk`)
-# and DriverState's by two
+# and GraphCtx's by two
 # (effectDomains,
 # abstractRecordTypesRef). This helper joins a bare trailing `setRef` line
 # with the line that follows it -- as an EXTRA synthesized line emitted ahead
@@ -148,8 +148,11 @@ strip_comments() {
   grep -vE '^[[:space:]]*--' | sed -E 's/[[:space:]]--[[:space:]].*$//'
 }
 
-# write_targets BUNDLE: every `<BUNDLE>.value.<field>` WRITE target in $TC, under
-# EITHER spelling, one per line, deduped.
+# write_targets PATH: every `<PATH>.<field>` WRITE target in $TC, under EITHER
+# spelling, one per line, deduped.  PATH is an ERE with its dots escaped
+# (`graphCtx\.value\.crossRun`); the field must follow it directly, so a write
+# through a longer path (`graphCtx.value.crossRun.x` under `graphCtx\.value`) is
+# not one of the shorter path's targets.
 #
 # There are two, and both are live. `setRef r v` was the only spelling until the
 # `setRef` -> `:=` codemod; that migration left 12 multi-line calls on `setRef`
@@ -170,10 +173,10 @@ write_targets() {
   {
     join_setref "$TC" \
       | strip_comments \
-      | grep -oE "setRef[ ]+$1\.value\.[A-Za-z_][A-Za-z0-9_]*" \
-      | sed -E 's/^setRef[ ]+//'
+      | grep -oE "setRef[ ]+$1\.[A-Za-z_][A-Za-z0-9_]*([^.A-Za-z0-9_]|$)" \
+      | sed -E 's/^setRef[ ]+//; s/[^.A-Za-z0-9_]$//'
     strip_comments < "$TC" \
-      | grep -oE "$1\.value\.[A-Za-z_][A-Za-z0-9_]*[ ]+:=" \
+      | grep -oE "$1\.[A-Za-z_][A-Za-z0-9_]*[ ]+:=" \
       | sed -E 's/[ ]+:=$//'
   } | LC_ALL=C sort -u
 }
@@ -192,7 +195,7 @@ body_of() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# CHECK 1 — CrossRun / DriverState FIELD allowlist
+# CHECK 1 — CrossRun / GraphCtx FIELD allowlist
 # ═══════════════════════════════════════════════════════════════════════════
 # Seeded with TODAY's full field set (derived below, not assumed) -- this
 # check asserts nothing about the existing 44 fields' correctness, only that
@@ -205,12 +208,12 @@ body_of() {
 # ⚠️ DERIVED, NOT TRUSTED. This block used to carry field COUNTS for both
 # records, alongside a note that the records' own prose comments were stale by
 # three or four fields apiece. Those numbers went stale in turn the next time a
-# field landed (A-2.11 added two to CrossRun and one to DriverState), which is
+# field landed (A-2.11 added two to CrossRun and one to the graph record), which is
 # the same failure one level up. The counts are gone rather than bumped: the
 # script PRINTS the actual field counts on every run, and the allowlists below
 # are the reviewable artefact. Trust the extraction; treat any count written in
 # prose -- here, in typecheck.mdk, or in a PR body -- as unverified.
-echo "checking #1111 CrossRun / DriverState field allowlist ..."
+echo "checking #1111 CrossRun / GraphCtx field allowlist ..."
 
 # NOTE: each allowlist below is built from a QUOTED heredoc (`<<'EOF'`), not a
 # single-quoted `var='...'` literal. A row body is long free-form prose and
@@ -259,6 +262,19 @@ promotionHarvestRef -- accumulated directly-promoted fn names across modules (#1
 mainSchemeRef -- the entry module inferred `main` scheme; last writer (dependency-order last) wins
 markSetsRef -- ARCH E (marking on the schedule): the graph's mark sets (`markSetsOf` -- return-position / method-constrained / shadow / arg-dispatch name sets, the bare dict-name set, the unit list, and `msCoreShadowMap`, the definer-shadow map filtered to what core can name -- one fixed module, never a cross-module lookup), written once per Module-arm driver entry beside the three graph*Ref peers and under the SAME two-part conjunction (unconditional whole-value overwrite at both entries; no reset point on DriverState), read by `checkBodyImpl` to mark each module's binding groups as the schedule reaches them. NOT a bare-name-keyed cross-module table: it is name SETS derived from the whole graph's declaration heads, consumed as membership tests by the marker, never keyed by module and never looked up by a bare name across modules.
 builtinExternNamesRef -- #2074 (FFI crossable-set guard, S-crossable-guard): the set of stdlib/runtime.mdk extern NAMES, recorded once by externSchemes (the catalog builder, whose eight call sites all pass runtimeDecls) and read by ffiIsBuiltinExternName. Not a bare-name-keyed CROSS-MODULE table in the sense this ratchet pins: it is a flat name SET over one fixed file's catalog, never a per-module map, and its only question is "does the extern catalog already own this exact name?" -- which is itself keyed on the bare name by construction (the extern catalog has one row per exact name, with no notion of which module declared it), so keying the mirror any other way would answer a DIFFERENT question than the one the emitter asks. Union-not-replace on write, so a driver that seeds the catalog more than once per process (medaka test runs several engines) cannot shrink the set a guard is reading. NOTE: this entry was owed by S-crossable-guard and is added here by S-ffi-lowering, which found the ratchet red on the sprint branch.
+typeErrorsSticky -- the sticky type-error flag: armed by every recorded type error (`recordTypeError`, the one funnel), read by `hadTypeErrors` to abort `build`/`run`, and by `requiresRouteWalkCut`. A Bool, not keyed by name at all. Process-lived: `mintGraphCtx` carries it by identity and no driver clears it (only `resetTypeErrorsSticky`, for its callers), so `driveGraphK`'s residual stays a length difference against the list read before the preamble. `checkGraphFinish` and `captureTypeErrors` roll it back around a drain
+typeErrorsStickyDiags -- the diagnostics behind `typeErrorsSticky`, newest first, each tagged with the module it was recorded in (the module is payload, not a key; readers dedup per goal by module, code, location and text, `tcDiagGoalKey`). Same single writer, same lifetime and the same rollback pairing as the flag one row up; `driveGraphK` returns the entries pushed since its pre-preamble baseline as the tree arm`s residual
+ALLOWLIST_EOF
+)
+
+# `GraphCtx`'s two sub-record containers.  Each holds a whole record value and is
+# replaced only by the installs (`mintGraphCtx`, the memo hits, the probes), never
+# written through a `:=` on the field, so check 2's writer set leaves them out.
+# `CrossRun`'s own fields are pinned by `cross_allowed` above; `GraphRun` is
+# graph-lifetime solver state (counters, goal channels, cell arrays), not a table.
+graphctx_container_allowed=$(cat <<'ALLOWLIST_EOF'
+crossRun -- the `CrossRun` sub-record: the cross-module accumulators, fresh at every mint (`freshCrossRun`), pinned field by field by cross_allowed above
+graphRun -- the `GraphRun` sub-record: the graph lineage and solver channels, started at every mint by `graphLineageRun` (which keeps a `markModules` lineage); keyed by nothing
 ALLOWLIST_EOF
 )
 
@@ -302,6 +318,7 @@ ALLOWLIST_EOF
 
 cross_expected=$(printf '%s\n' "$cross_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
 driver_expected=$(printf '%s\n' "$driver_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
+graphctx_expected=$(printf '%s\n%s\n' "$driver_allowed" "$graphctx_container_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
 declenvs_expected=$(printf '%s\n' "$declenvs_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
 declenvmodule_expected=$(printf '%s\n' "$declenvmodule_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
 
@@ -310,7 +327,7 @@ cross_actual=$(sed -n '/^public export data CrossRun = CrossRun {$/,/^}$/p' "$TC
   | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:.*/\1/' \
   | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' \
   | LC_ALL=C sort)
-driver_actual=$(sed -n '/^public export data DriverState = DriverState {$/,/^}$/p' "$TCT" \
+driver_actual=$(sed -n '/^public export data GraphCtx = GraphCtx {$/,/^}$/p' "$TCT" \
   | strip_comments \
   | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:.*/\1/' \
   | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' \
@@ -332,9 +349,9 @@ driver_n=$(printf '%s\n' "$driver_actual" | grep -c .)
 declenvs_n=$(printf '%s\n' "$declenvs_actual" | grep -c .)
 declenvmodule_n=$(printf '%s\n' "$declenvmodule_actual" | grep -c .)
 if [ "$cross_n" -eq 0 ] || [ "$driver_n" -eq 0 ]; then
-  echo "FAIL: check 1 extracted ZERO fields from CrossRun ($cross_n) or DriverState"
+  echo "FAIL: check 1 extracted ZERO fields from CrossRun ($cross_n) or GraphCtx"
   echo "  ($driver_n). Either record was renamed/reshaped and the sed range markers"
-  echo "  ('data CrossRun = CrossRun {' / '  | DriverState {') no longer match, or"
+  echo "  ('data CrossRun = CrossRun {' / 'data GraphCtx = GraphCtx {') no longer match, or"
   echo "  this check just validated nothing. Update the range markers -- do NOT"
   echo "  treat a zero extraction as a pass."
   exit 1
@@ -369,13 +386,14 @@ if [ "$cross_actual" != "$cross_expected" ]; then
   echo "  re-keys) or already module-qualified -- never widen this check."
   exit 1
 fi
-if [ "$driver_actual" != "$driver_expected" ]; then
-  echo "FAIL: DriverState's field set changed."
+if [ "$driver_actual" != "$graphctx_expected" ]; then
+  echo "FAIL: GraphCtx's field set changed."
   echo "  allowed:"
-  printf '%s\n' "$driver_expected" | sed 's/^/    /'
+  printf '%s\n' "$graphctx_expected" | sed 's/^/    /'
   echo "  actual:"
   printf '%s\n' "$driver_actual" | sed 's/^/    /'
-  echo "  REMEDY: add the field to driver_allowed above with a one-line reason --"
+  echo "  REMEDY: add the field to driver_allowed (or, for a sub-record container,"
+  echo "  graphctx_container_allowed) above with a one-line reason --"
   echo "  never widen this check."
   exit 1
 fi
@@ -403,25 +421,25 @@ if [ "$declenvmodule_actual" != "$declenvmodule_expected" ]; then
   echo "  reason -- never widen this check."
   exit 1
 fi
-echo "  ok: $cross_n CrossRun field(s), $driver_n DriverState field(s), $declenvs_n DeclEnvs field(s), $declenvmodule_n DeclEnvModule field(s), no new bundle field"
+echo "  ok: $cross_n CrossRun field(s), $driver_n GraphCtx field(s), $declenvs_n DeclEnvs field(s), $declenvmodule_n DeclEnvModule field(s), no new bundle field"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CHECK 2 — the cross-module WRITER ratchet (load-bearing)
 # ═══════════════════════════════════════════════════════════════════════════
-# Pins the exact SET of `crossRun.value.<field>` / `driverState.value.<field>`
+# Pins the exact SET of `graphCtx.value.crossRun.<field>` / `graphCtx.value.<field>`
 # write TARGETS anywhere in typecheck.mdk, under BOTH spellings -- `setRef r v`
 # and `r := v` (see write_targets above; both are live post-codemod). A new
 # cross-module accumulator (or a new write path to an existing one) cannot be
 # added without a reviewer editing this allowlist -- which is the review
 # point #1111 exists to create. Every field from check 1 is expected to
-# appear here too (every CrossRun/DriverState field IS written somewhere,
+# appear here too (every CrossRun field and every GraphCtx graph field IS written somewhere,
 # verified below) -- check 2 is a SEPARATE textual ratchet on the write SITES
 # themselves, not a restatement of check 1: it catches a NEW write occurrence
 # to a field regardless of whether that field is already declared.
-echo "checking #1111 crossRun / driverState writer ratchet (setRef + :=) ..."
+echo "checking #1111 graphCtx.value.crossRun / graphCtx.value writer ratchet (setRef + :=) ..."
 
-cross_write_allowed=$(printf '%s\n' "$cross_expected" | sed 's/^/crossRun.value./')
-driver_write_allowed=$(printf '%s\n' "$driver_expected" | sed 's/^/driverState.value./')
+cross_write_allowed=$(printf '%s\n' "$cross_expected" | sed 's/^/graphCtx.value.crossRun./')
+driver_write_allowed=$(printf '%s\n' "$driver_expected" | sed 's/^/graphCtx.value./')
 
 # join_setref makes the split `setRef\n  target\n  (value)` layout visible to
 # the same single-line extraction as the one-line form; strip_comments closes
@@ -430,21 +448,21 @@ driver_write_allowed=$(printf '%s\n' "$driver_expected" | sed 's/^/driverState.v
 # TWO such occurrences (control D) yields two tokens, not one, so an allowed
 # token cannot hide a rogue one on the same line (the A-1 hole this ratchet
 # must not repeat).
-cross_write_actual=$(write_targets crossRun)
-driver_write_actual=$(write_targets driverState)
+cross_write_actual=$(write_targets 'graphCtx\.value\.crossRun')
+driver_write_actual=$(write_targets 'graphCtx\.value')
 
 cross_write_n=$(printf '%s\n' "$cross_write_actual" | grep -c .)
 driver_write_n=$(printf '%s\n' "$driver_write_actual" | grep -c .)
 if [ "$cross_write_n" -eq 0 ] || [ "$driver_write_n" -eq 0 ]; then
-  echo "FAIL: check 2 found ZERO write targets for crossRun ($cross_write_n)"
-  echo "  or driverState ($driver_write_n). Either the accessor pattern changed"
-  echo "  (crossRun.value.* / driverState.value.*) or this check validated"
+  echo "FAIL: check 2 found ZERO write targets for graphCtx.value.crossRun ($cross_write_n)"
+  echo "  or graphCtx.value ($driver_write_n). Either the accessor pattern changed"
+  echo "  (graphCtx.value.crossRun.* / graphCtx.value.*) or this check validated"
   echo "  nothing. Do not treat a zero extraction as a pass."
   exit 1
 fi
 
 if [ "$cross_write_actual" != "$(printf '%s\n' "$cross_write_allowed" | LC_ALL=C sort)" ]; then
-  echo "FAIL: the set of \`crossRun.value.*\` write targets changed."
+  echo "FAIL: the set of \`graphCtx.value.crossRun.*\` write targets changed."
   echo "  allowed:"
   printf '%s\n' "$cross_write_allowed" | LC_ALL=C sort | sed 's/^/    /'
   echo "  actual:"
@@ -452,21 +470,21 @@ if [ "$cross_write_actual" != "$(printf '%s\n' "$cross_write_allowed" | LC_ALL=C
   echo "  REMEDY WHEN THIS FIRES: add the offending write target to"
   echo "  cross_write_allowed above (it should already be a field in"
   echo "  cross_allowed -- if not, check 1 owes a row too) and justify it in"
-  echo "  the PR. Never widen the crossRun.value. pattern above."
+  echo "  the PR. Never widen the graphCtx.value.crossRun. pattern above."
   exit 1
 fi
 if [ "$driver_write_actual" != "$(printf '%s\n' "$driver_write_allowed" | LC_ALL=C sort)" ]; then
-  echo "FAIL: the set of \`driverState.value.*\` write targets changed."
+  echo "FAIL: the set of \`graphCtx.value.*\` write targets changed."
   echo "  allowed:"
   printf '%s\n' "$driver_write_allowed" | LC_ALL=C sort | sed 's/^/    /'
   echo "  actual:"
   printf '%s\n' "$driver_write_actual" | sed 's/^/    /'
   echo "  REMEDY WHEN THIS FIRES: add the offending write target to"
   echo "  driver_write_allowed above and justify it in the PR. Never widen the"
-  echo "  driverState.value. pattern above."
+  echo "  graphCtx.value. pattern above."
   exit 1
 fi
-echo "  ok: $cross_write_n crossRun.value.* write target(s), $driver_write_n driverState.value.* write target(s), no rogue writer"
+echo "  ok: $cross_write_n graphCtx.value.crossRun.* write target(s), $driver_write_n graphCtx.value.* write target(s), no rogue writer"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CHECK 3 — the engine frame ratchet (THREE parallel module-state builders)
@@ -875,8 +893,8 @@ echo "  ok: CE block is $ce_n line(s), no elaboration-machinery call, no exclude
 #
 # THE SET, derived from the body (not from prose), one row per call, with
 # a one-line reason -- the same discipline `driver_allowed` above uses:
-#   resetCrossModuleState        -- opens both entries; DriverState has no reset
-#                                    point, so this is the only place the run's
+#   mintGraphCtx                 -- opens both entries; GraphCtx's Ref fields have no
+#                                    reset point, so this is the only place the run's
 #                                    prior CrossRun state is cleared
 #   populateEffectDomainsGraph   -- effect-label -> domain-param registry, over
 #                                    the WHOLE import graph, before anything reads it
@@ -903,7 +921,7 @@ echo "  ok: CE block is $ce_n line(s), no elaboration-machinery call, no exclude
 #   2d add a duplicate `seedAbstractRecordTypes coreDecls modules` inside
 #      `driveGraphK`, where those two names ARE locals
 #   3  add a third `graphPreamble` call site
-#   M4 add a new top-level body that inlines `resetCrossModuleState ()`,
+#   M4 add a new top-level body that inlines `mintGraphCtx ()`,
 #      `populateEffectDomainsGraph`, the three `graph*ExportsRef :=` writes and
 #      `declEnvsRef :=`, and never calls `graphPreamble`
 # 2, 2c, 2d and M4 all passed the earlier one-consumer form of the sole-site row.
@@ -984,7 +1002,7 @@ check_parity_row() {
   fi
 }
 
-check_parity_row "resetCrossModuleState" "resetCrossModuleState ()" "resetCrossModuleState"
+check_parity_row "mintGraphCtx" "mintGraphCtx ()" "mintGraphCtx"
 check_parity_row "populateEffectDomainsGraph" "populateEffectDomainsGraph coreDecls modules" "populateEffectDomainsGraph"
 check_parity_row "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :="
 check_parity_row "declEnvsRef :=" "declEnvsRef :=" "declEnvsRef :="
@@ -1111,4 +1129,4 @@ if [ -n "$missing" ]; then
 fi
 echo "  ok: every driver-state publisher the CLI calls is also called in the child"
 
-echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-builder frame parity plus root-wrapper delegation, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction, #2796 single Module-mode entry, parent/child driver-state parity)."
+echo "PASS: #1111 registry keying ratchet (CrossRun/GraphCtx/DeclEnvs fields, writer sites, three-builder frame parity plus root-wrapper delegation, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction, #2796 single Module-mode entry, parent/child driver-state parity)."

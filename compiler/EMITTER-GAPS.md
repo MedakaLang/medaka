@@ -927,7 +927,7 @@ bindings actually lazy.
 
 ⚠️ **No gate we have can prove the edge set complete.** A parity gate is blind here (both
 backends are equally wrong), the fixpoint is native and was green throughout (in the compiler's
-own graph native escapes only by **luck** — `resetCrossModuleState ()` overwrites the poisoned
+own graph native escapes only by **luck** — `mintGraphCtx ()` overwrites the poisoned
 bundle before any reader dereferences it), the in-language suite runs under **eval**, the one
 correct engine, and `diff_compiler_perf_scaling.sh` grades **allocation**, so a pure scan is
 invisible to it **by construction**. Only removing the approximation (#561) can close this class.

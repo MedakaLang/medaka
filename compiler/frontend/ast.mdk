@@ -1352,7 +1352,7 @@ intMinLiteralHelp =
 --
 -- The `String` is the module the site was recorded in, the `Int` its ordinal within
 -- the graph run.  UNIQUENESS RESTS ON THE ORDINAL ALONE, not on the pair: `freshEvId`
--- draws it from a graph-global monotone counter that `resetGraphState` deliberately
+-- draws it from a graph-global monotone counter that `graphLineageRun` deliberately
 -- carries across resets, and the published table (`types/route_key.mdk`) indexes its
 -- array by that ordinal less the table's lowest one, never consulting the module
 -- half.  The module half is a TRIPWIRE: it is what lets that lookup panic instead of

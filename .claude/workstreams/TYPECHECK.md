@@ -299,7 +299,7 @@ grep on `universe*`. Those are not the same set, and multiple "the set is comple
 prefix.
 
 Re-derived 2026-08-09: **~20 shape-members sat outside both prefix greps**, in `types/`
-(`DriverState`), `backend/`, `ir/` and `eval/` — including `argDispatchIdxRef` and the former
+(`GraphCtx`), `backend/`, `ir/` and `eval/` — including `argDispatchIdxRef` and the former
 shared method-interface table/index Refs in `backend/emit_support.mdk`. X-N.H and X-W.H1 later
 moved those method facts into backend input values, but the derivation lesson remains: a
 `types/`-anchored enumeration structurally cannot reach backend members.

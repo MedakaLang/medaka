@@ -19,7 +19,7 @@
 -- eleven `readPreludeFile` call-site PAIRS across two driver files plus the whole
 -- `analyzeFrom` surface, so a threaded cache would mean re-signing every one of
 -- them.  A process-global memo is the same lifetime the prelude source itself
--- has, and `driverState` (types/typecheck.mdk) and `locSrcRef`
+-- has, and `graphCtx` (types/typecheck.mdk) and `locSrcRef`
 -- (frontend/parser.mdk) are the established precedent for compiler-global
 -- session state.
 --

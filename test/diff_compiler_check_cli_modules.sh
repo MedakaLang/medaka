@@ -2429,7 +2429,7 @@ else
 fi
 
 # 9. #1512 (ARCH A-3.2b residual, slice 1/3): THE CROSS-MODULE TYPE-ALIAS TABLE IS
-#    STAGE K.  `crossRun.universeAliasTable` — the per-module-grown accumulator
+#    STAGE K.  `CrossRun.universeAliasTable` — the per-module-grown accumulator
 #    `loadDataUniverse`/`storeDataUniverse` marshalled — is retired; the per-run
 #    `aliasTableRef` is now seeded by `aliasUniverseAt cur declEnvsRef.deData.deAliases`,
 #    i.e. the public aliases of every module at a STRICTLY LOWER ordinal.
