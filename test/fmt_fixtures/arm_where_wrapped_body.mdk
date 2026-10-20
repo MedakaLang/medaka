@@ -1,0 +1,8 @@
+g : Int -> Int
+g x = match x
+  3 => 1
+  _ => aVeryLongFunctionNameNumberOne 1 + aVeryLongFunctionNameNumberTwo 2 + a 1
+    where
+      a i = i
+      aVeryLongFunctionNameNumberOne i = i
+      aVeryLongFunctionNameNumberTwo i = i

@@ -1853,16 +1853,21 @@ matchArmDoc (Arm pat guards body) =
   Cat (printPatArm pat) (Cat guardsD (armBodyDoc body))
 
 -- An arm's own `where` with several bindings prints as `where` at the end of the
--- arm line, bindings indented under it.  The nested `let rec … in` spelling
--- (`letRecInDoc`) scopes each binding over only the ones after it, so a
--- binding that refers to a later one would stop resolving.  A single binding
--- nests safely and keeps that spelling.
+-- arm line, bindings indented under it.  That spelling needs the body on the
+-- arm line as flat text: a broken body would put `where` after a line it
+-- cannot follow, and a trailing comment would swallow it.  So a body with no
+-- line break or comment takes this spelling at any width, and a commented one
+-- keeps the nested `let rec … in` spelling (`letRecInDoc`).  That spelling
+-- scopes each binding over only the ones after it, and it is the only path
+-- still open for multi-binding arms with comments.  A single binding nests
+-- safely and keeps that spelling.
 armBodyDoc : Expr -> Doc
 armBodyDoc body = match stripLocE body
   ELetGroup binds inner =>
-    if isMultiBindGroup binds then
+    let flat = printExprBody inner
+    if isMultiBindGroup binds && not (docHasHardline flat) then
       Cat
-        (sepBody " =>" inner)
+        (text (" => " ++ renderFlat flat))
         (Cat (text " where") (Nest 2 (letGroupClauses binds)))
     else
       sepBody " =>" body
@@ -1892,6 +1897,8 @@ condExprDoc c = match stripLocE c
   ELet _ _ _ _ _ => parenCondDoc c
   ELetGroup _ _ => parenCondDoc c
   EAnnot _ _ => parenCondDoc c
+  EDo _ _ => parenCondDoc c
+  ELam _ _ => parenCondDoc c
   _ => printExpr precTop c
 
 parenCondDoc : Expr -> Doc
