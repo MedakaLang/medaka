@@ -1,7 +1,7 @@
 -- A drive starts from its inputs and the process's interners alone: what an earlier
 -- drive in the same process left behind (type-error flag and list, admitted methods,
 -- match oracle and warnings, last-entered location) is not visible to the next one.
-import test.{expectEqual, expectFalse, expectTrue}
+import test.{expectEqual, expectTrue}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import frontend.ast.{Decl}
@@ -128,16 +128,16 @@ ifaceMod = joinNl [
 ]
 
 aliasEntry : String
-aliasEntry = "import m1 as A\nentry = A.mth (1 : Int)\n"
+aliasEntry = joinNl ["import m1 as A", "entry = A.mth (1 : Int)", ""]
 
 valMod1 : String
-valMod1 = "export mth : Int -> Int\nmth n = n\n"
+valMod1 = joinNl ["export mth : Int -> Int", "mth n = n", ""]
 
 valMod2 : String
-valMod2 = "export mth : Int -> Int\nmth n = n + 1\n"
+valMod2 = joinNl ["export mth : Int -> Int", "mth n = n + 1", ""]
 
 ambEntry : String
-ambEntry = "import m1.{mth}\nimport m2.{mth}\nentry = mth 1\n"
+ambEntry = joinNl ["import m1.{mth}", "import m2.{mth}", "entry = mth 1", ""]
 
 test "#4336: a projection after a renaming drive admits nothing the renaming drive admitted" =
   let renaming = diags None [("m1", ifaceMod), ("e", aliasEntry)]

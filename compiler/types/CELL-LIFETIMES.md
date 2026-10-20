@@ -4,7 +4,7 @@ One row per piece of mutable typechecker state: the six module-level cells of `c
 
 Counts: 6 module-level cells in `types.typecheck`; field rows `ModuleCtx` 91, `GraphRun` 30, `CrossRun` 14, `GraphCtx` 20, `Interners` 2, `Lineage` 3, `TcConfig` 5, `DriveInputs` 6, `TraceSink` 8; 5 rows outside the file. The first table is pinned to the cell census by `test/arch_boundaries_test.mdk`.
 
-Stage-6 denominators (`fnmap.py` on `compiler/types/typecheck.mdk` at the sprint base; `frontier` is not a command of that tool, so `refs` and `closure` stand for it): functions that mention the shim / functions that reach one. `perRun` 345 / 1210, `graphCtx` 195 / 1439, `currentLoc` 83 / 744 (the cell is deleted since arch-p2-6b slice 1), `driveInputs` 6 / 235 (the cell is deleted since arch-p2-6a), of 3417 top-level functions.
+Stage-6 denominators (`fnmap.py` on `compiler/types/typecheck.mdk` at the sprint base; `frontier` is not a command of that tool, so `refs` and `closure` stand for it): functions that mention the shim / functions that reach one. `perRun` 345 / 1210, `graphCtx` 195 / 1439, `currentLoc` 83 / 744 (the cell is deleted), `driveInputs` 6 / 235 (the cell is deleted since arch-p2-6a), of 3417 top-level functions.
 
 Columns: `name | holds | lifetime | owner-today | writers | reset | target | interface-fills | source | issue`.
 
@@ -99,7 +99,7 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | GraphRun.moduleRanges | per-module channel marks, so the drain cuts a module window | graph | GraphRun | recordModuleStart | graphLineageRun | GraphCtx | no | - | - |
 | GraphRun.stampCtxs | one StampCtx per module that finished elaborating, replayed at graph end | graph | GraphRun | drainStampQueue, enqueueStampCtx | graphLineageRun | GraphCtx | no | - | - |
 | GraphRun.goalsN | length of goals for O(1) marks | graph | GraphRun | copyGraphRunForMemo, dropGoalsSince, pushGoal | graphLineageRun | GraphCtx | no | - | - |
-| GraphRun.evCounter | ordinal source for evidence ids; carried across graph resets through the interners (`Lineage.lnEvCounter`), rewound to a snapshot's value by a core-memo hit | process | GraphRun | autoPrintEvidence, freshEvId, judgeEvidence, graphLineageRun | never (graphLineageRun continues from the interners') | GraphCtx | yes | derived(cpEvidence) | - |
+| GraphRun.evCounter | ordinal source for evidence ids; carried across graph resets through the interners (`Lineage.lnEvCounter`), rewound to a snapshot's value by a core-memo or chain-memo hit | process | GraphRun | autoPrintEvidence, freshEvId, judgeEvidence, graphLineageRun | never (graphLineageRun continues from the interners') | GraphCtx | yes | derived(cpEvidence) | - |
 | GraphRun.evBase | evCounter value when this graph lineage began | graph | GraphRun | graphLineageRun (plain field, re-minted) | graphLineageRun | GraphCtx | no | - | - |
 | GraphRun.markedAhead | set by markModules on the run it returns; no reader (the mint keeps a marked run's cells when DriveInputs.diMarked carries it) | graph | GraphRun | markModules (plain field, re-minted) | graphLineageRun | delete | no | - | - |
 | GraphRun.evJudged | ordinal below which method cells were judged complete | graph | GraphRun | judgeEvidence, graphLineageRun | graphLineageRun | GraphCtx | no | - | - |

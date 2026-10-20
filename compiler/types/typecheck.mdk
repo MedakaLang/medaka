@@ -10410,8 +10410,8 @@ currentScopeStore _ = graphCtx.value.graphRun.scopeStore
 -- #2549 M2: the next evidence id for the module currently being inferred.  The
 -- module component comes from `perRun`, which `checkBodyImpl` sets once per
 -- module before any body of it is inferred; the ordinal is this run's counter.
--- `evCounter` is graph-global and monotone, and `graphLineageRun` carries it across
--- every new lineage, so the ordinal alone is what makes an id unique — the module half does
+-- `evCounter` is graph-global, and `graphLineageRun` carries it across every new
+-- lineage (a memo hit rewinds it to its snapshot's), so the ordinal alone is what makes an id unique — the module half does
 -- not scope it, and `evDictRoutesIn` indexes on the ordinal without consulting it.
 -- The module half is a tripwire for that lookup (see `EvId` in `frontend/ast.mdk`):
 -- do not make ordinals per-module in the belief that the pair still separates them.
@@ -10431,8 +10431,8 @@ freshEvId _ =
 -- installed last).  The evidence ORDINAL continues from that run's counter, so an
 -- id minted from here does not repeat one the previous drive's tree holds, and a
 -- stray read of such an id fails loudly instead of answering for another node.  It
--- is not monotone across a core-memo hit: the hit installs a copy of its snapshot's
--- run, whose counter is the snapshot's, so the next ordinals rewind to it (the
+-- is not monotone across a memo hit (core or chain): the hit installs a copy of its
+-- snapshot's run, whose counter is the snapshot's, so the next ordinals rewind to it (the
 -- rewind `freshEvId` states).  What is indexed by ordinal is not carried: `evBase`
 -- moves up to the counter and `evCells` starts empty, so a long-lived process's
 -- arrays span one graph rather than its whole life.
@@ -50765,9 +50765,11 @@ copyCrossRun c = CrossRun {
 }
 
 -- One chain step's graph snapshot: detached copies of the two sub-records and the
--- extern-name map, the rest of the record carried (a hit reads only those three).
+-- extern-name map (a hit reads only those three).  The other fields are the initial
+-- record's, not [c]'s: a step that carried them would keep its drive's whole
+-- declaration environment alive for as long as the memo holds the step.
 snapshotGraphCtx : GraphCtx -> GraphCtx
-snapshotGraphCtx c = GraphCtx { c |
+snapshotGraphCtx c = GraphCtx { initialGraphCtx initialEnv (freshGraphRun ()) |
   crossRun = copyCrossRun c.crossRun,
   graphRun = copyGraphRunForMemo c.graphRun,
   builtinExternNamesRef = Ref c.builtinExternNamesRef.value,

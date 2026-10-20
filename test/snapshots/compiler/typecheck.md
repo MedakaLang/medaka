@@ -1,5 +1,5 @@
 # META
-source_lines=54922
+source_lines=54924
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -10414,8 +10414,8 @@ currentScopeStore _ = graphCtx.value.graphRun.scopeStore
 -- #2549 M2: the next evidence id for the module currently being inferred.  The
 -- module component comes from `perRun`, which `checkBodyImpl` sets once per
 -- module before any body of it is inferred; the ordinal is this run's counter.
--- `evCounter` is graph-global and monotone, and `graphLineageRun` carries it across
--- every new lineage, so the ordinal alone is what makes an id unique — the module half does
+-- `evCounter` is graph-global, and `graphLineageRun` carries it across every new
+-- lineage (a memo hit rewinds it to its snapshot's), so the ordinal alone is what makes an id unique — the module half does
 -- not scope it, and `evDictRoutesIn` indexes on the ordinal without consulting it.
 -- The module half is a tripwire for that lookup (see `EvId` in `frontend/ast.mdk`):
 -- do not make ordinals per-module in the belief that the pair still separates them.
@@ -10435,8 +10435,8 @@ freshEvId _ =
 -- installed last).  The evidence ORDINAL continues from that run's counter, so an
 -- id minted from here does not repeat one the previous drive's tree holds, and a
 -- stray read of such an id fails loudly instead of answering for another node.  It
--- is not monotone across a core-memo hit: the hit installs a copy of its snapshot's
--- run, whose counter is the snapshot's, so the next ordinals rewind to it (the
+-- is not monotone across a memo hit (core or chain): the hit installs a copy of its
+-- snapshot's run, whose counter is the snapshot's, so the next ordinals rewind to it (the
 -- rewind `freshEvId` states).  What is indexed by ordinal is not carried: `evBase`
 -- moves up to the counter and `evCells` starts empty, so a long-lived process's
 -- arrays span one graph rather than its whole life.
@@ -50769,9 +50769,11 @@ copyCrossRun c = CrossRun {
 }
 
 -- One chain step's graph snapshot: detached copies of the two sub-records and the
--- extern-name map, the rest of the record carried (a hit reads only those three).
+-- extern-name map (a hit reads only those three).  The other fields are the initial
+-- record's, not [c]'s: a step that carried them would keep its drive's whole
+-- declaration environment alive for as long as the memo holds the step.
 snapshotGraphCtx : GraphCtx -> GraphCtx
-snapshotGraphCtx c = GraphCtx { c |
+snapshotGraphCtx c = GraphCtx { initialGraphCtx initialEnv (freshGraphRun ()) |
   crossRun = copyCrossRun c.crossRun,
   graphRun = copyGraphRunForMemo c.graphRun,
   builtinExternNamesRef = Ref c.builtinExternNamesRef.value,
@@ -63757,7 +63759,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "copyCrossRun" (TyFun (TyCon "CrossRun") (TyCon "CrossRun")))
 (DFunDef false "copyCrossRun" ((PVar "c")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeFunNamesRef") "value"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeMethodDispatchIdxByIdRef") "value"))) (fa "universeDataCtors" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeDataCtors") "value"))) (fa "universeCtorPop" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeCtorPop") "value"))) (fa "universeRecordPop" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeRecordPop") "value"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "builtinClassesRef") "value"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsRef") "value"))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsQualRef") "value"))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredRef") "value"))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredQualRef") "value"))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsRef") "value"))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsQualRef") "value"))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "coreSchemeObligationsRef") "value"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleSchemeOblsQualRef") "value"))))))
 (DTypeSig false "snapshotGraphCtx" (TyFun (TyCon "GraphCtx") (TyCon "GraphCtx")))
-(DFunDef false "snapshotGraphCtx" ((PVar "c")) (EVariantUpdate "GraphCtx" (EVar "c") ((fa "crossRun" (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "c") "crossRun"))) (fa "graphRun" (EApp (EVar "copyGraphRunForMemo") (EFieldAccess (EVar "c") "graphRun"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "builtinExternNamesRef") "value"))))))
+(DFunDef false "snapshotGraphCtx" ((PVar "c")) (EVariantUpdate "GraphCtx" (EApp (EApp (EVar "initialGraphCtx") (EVar "initialEnv")) (EApp (EVar "freshGraphRun") (ELit LUnit))) ((fa "crossRun" (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "c") "crossRun"))) (fa "graphRun" (EApp (EVar "copyGraphRunForMemo") (EFieldAccess (EVar "c") "graphRun"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "builtinExternNamesRef") "value"))))))
 (DTypeSig false "restoreGraphCtx" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "CrossRun") (TyFun (TyCon "GraphRun") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (TyCon "GraphCtx"))))))
 (DFunDef false "restoreGraphCtx" ((PVar "cur") (PVar "cross") (PVar "run") (PVar "externs")) (EVariantUpdate "GraphCtx" (EVar "cur") ((fa "crossRun" (EApp (EVar "copyCrossRun") (EVar "cross"))) (fa "graphRun" (EApp (EVar "copyGraphRun") (EVar "run"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "externs"))))))
 (DTypeSig false "checkCoreMemoized" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyCon "GraphCtx"))))))
@@ -73086,7 +73088,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "copyCrossRun" (TyFun (TyCon "CrossRun") (TyCon "CrossRun")))
 (DFunDef false "copyCrossRun" ((PVar "c")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeFunNamesRef") "value"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeMethodDispatchIdxByIdRef") "value"))) (fa "universeDataCtors" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeDataCtors") "value"))) (fa "universeCtorPop" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeCtorPop") "value"))) (fa "universeRecordPop" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeRecordPop") "value"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "builtinClassesRef") "value"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsRef") "value"))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsQualRef") "value"))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredRef") "value"))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredQualRef") "value"))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsRef") "value"))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsQualRef") "value"))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "coreSchemeObligationsRef") "value"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleSchemeOblsQualRef") "value"))))))
 (DTypeSig false "snapshotGraphCtx" (TyFun (TyCon "GraphCtx") (TyCon "GraphCtx")))
-(DFunDef false "snapshotGraphCtx" ((PVar "c")) (EVariantUpdate "GraphCtx" (EVar "c") ((fa "crossRun" (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "c") "crossRun"))) (fa "graphRun" (EApp (EVar "copyGraphRunForMemo") (EFieldAccess (EVar "c") "graphRun"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "builtinExternNamesRef") "value"))))))
+(DFunDef false "snapshotGraphCtx" ((PVar "c")) (EVariantUpdate "GraphCtx" (EApp (EApp (EVar "initialGraphCtx") (EVar "initialEnv")) (EApp (EVar "freshGraphRun") (ELit LUnit))) ((fa "crossRun" (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "c") "crossRun"))) (fa "graphRun" (EApp (EVar "copyGraphRunForMemo") (EFieldAccess (EVar "c") "graphRun"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "builtinExternNamesRef") "value"))))))
 (DTypeSig false "restoreGraphCtx" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "CrossRun") (TyFun (TyCon "GraphRun") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (TyCon "GraphCtx"))))))
 (DFunDef false "restoreGraphCtx" ((PVar "cur") (PVar "cross") (PVar "run") (PVar "externs")) (EVariantUpdate "GraphCtx" (EVar "cur") ((fa "crossRun" (EApp (EVar "copyCrossRun") (EVar "cross"))) (fa "graphRun" (EApp (EVar "copyGraphRun") (EVar "run"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "externs"))))))
 (DTypeSig false "checkCoreMemoized" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyCon "GraphCtx"))))))
