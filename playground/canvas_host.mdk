@@ -3,7 +3,7 @@
    A browser host must supply the versioned canvas bindings. Calls belong
    inside one entry invocation; begin precedes frame reads and rendering. -}
 
-import graphics.{Picture, Point, Shape(..)}
+import graphics.{Color, Picture, Point, Shape(..)}
 
 {- | Whether a canvas invocation paints once or requests subsequent frames. -}
 public export data FrameMode = Once | Continuous deriving (Eq, Debug)
@@ -93,11 +93,15 @@ extern polygonEnd : Unit -> <FFI "js/canvas"> Unit
 extern end : Unit -> <FFI "js/canvas"> Unit
   bind js "medaka_canvas_v1_end"
 
-renderPoint : Point -> <FFI "js/canvas"> Unit
-renderPoint p = polygonPoint p.x p.y
+{- | Typed commands passed to the one adapter that unpacks values for JS FFI.
 
-renderShape : Shape -> <FFI "js/canvas"> Unit
-renderShape (Line color width from to) =
+   Keep colors, points, and shapes grouped until this boundary; the imported
+   JavaScript functions still receive only scalar floats. -}
+data RenderCommand = Clear Color | Paint Shape | Vertex Point | Seal
+
+send : RenderCommand -> <FFI "js/canvas"> Unit
+send (Clear color) = background color.red color.green color.blue color.alpha
+send (Paint (Line color width from to)) =
   strokeLine
     color.red
     color.green
@@ -108,7 +112,7 @@ renderShape (Line color width from to) =
     from.y
     to.x
     to.y
-renderShape (Circle color center radius) =
+send (Paint (Circle color center radius)) =
   fillCircle
     color.red
     color.green
@@ -117,10 +121,12 @@ renderShape (Circle color center radius) =
     center.x
     center.y
     radius
-renderShape (Polygon color points) =
+send (Paint (Polygon color points)) =
   polygonBegin color.red color.green color.blue color.alpha
-  each renderPoint points
+  each (point => send (Vertex point)) points
   polygonEnd ()
+send (Vertex point) = polygonPoint point.x point.y
+send Seal = end ()
 
 {- | Render a complete picture after begin and seal its command batch.
 
@@ -129,7 +135,6 @@ renderShape (Polygon color points) =
 export
 render : Picture -> <FFI "js/canvas"> Unit
 render scene =
-  let color = scene.background
-  background color.red color.green color.blue color.alpha
-  each renderShape scene.shapes
-  end ()
+  send (Clear scene.background)
+  each (shape => send (Paint shape)) scene.shapes
+  send Seal
