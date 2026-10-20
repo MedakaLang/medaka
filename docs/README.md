@@ -75,6 +75,7 @@ The guide's sequel: each topic (effects first) is a run of chapters that starts 
 | [`effects-5-data.md`](advanced/effects-5-data.md) | Effects V: Authority in Data | — |
 | [`effects-6-indexed.md`](advanced/effects-6-indexed.md) | Effects VI: Effect-Indexed Types | — |
 | [`effects-7-reference.md`](advanced/effects-7-reference.md) | Effects VII: Reference and Open Edges | — |
+| [`playground-animation.md`](advanced/playground-animation.md) | Canvas Animation in the Playground | — |
 
 ### design — open/partial work
 
@@ -103,8 +104,6 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`MESSAGE-AUDIT.md`](design/MESSAGE-AUDIT.md) | MESSAGE-AUDIT.md | PARTIAL |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
 | [`PERF-CI-COVERAGE.md`](design/PERF-CI-COVERAGE.md) | PERF-CI-COVERAGE.md — a comprehensive design for catching quadratics in CI | DESIGN |
-| [`PLAYGROUND-ANIMATION-DESIGN.md`](design/PLAYGROUND-ANIMATION-DESIGN.md) | Playground canvas and animation | PROPOSED |
-| [`PLAYGROUND-ANIMATION-PLAN.md`](design/PLAYGROUND-ANIMATION-PLAN.md) | Playground animation implementation plan | READY FOR SPIKE |
 | [`REFERENCES-RENAME-DESIGN.md`](design/REFERENCES-RENAME-DESIGN.md) | Cross-file `references` + `rename` (#254) — Design / Scoping | DESIGN |
 | [`REGEX-DESIGN.md`](design/REGEX-DESIGN.md) | Regular expressions in the stdlib | — |
 | [`REVIEW-WORKFLOW-DESIGN.md`](design/REVIEW-WORKFLOW-DESIGN.md) | Review workflow: a cheap reviewer and the benchmark that measures it | — |
@@ -265,6 +264,8 @@ IMPLEMENTED or SUPERSEDED work, kept for provenance. Links inside these docs are
 | [`PERF-NOTES.md`](../archive/design/PERF-NOTES.md) | Self-host performance notes & log | SUPERSEDED BY `compiler/PERF-RESULTS.md` / `archive/design/PERF-SCOPE.md` |
 | [`PERF-RUNTIME.md`](../archive/design/PERF-RUNTIME.md) | PERF-RUNTIME.md — general compiled-program performance | IMPLEMENTED |
 | [`PERF-SCOPE.md`](../archive/design/PERF-SCOPE.md) | PERF-SCOPE.md — Stage-3 bar-item-4 performance scoping | IMPLEMENTED |
+| [`PLAYGROUND-ANIMATION-DESIGN.md`](../archive/design/PLAYGROUND-ANIMATION-DESIGN.md) | Playground canvas and animation | IMPLEMENTED |
+| [`PLAYGROUND-ANIMATION-PLAN.md`](../archive/design/PLAYGROUND-ANIMATION-PLAN.md) | Playground animation implementation plan | COMPLETE |
 | [`PLAYGROUND-DESIGN.md`](../archive/design/PLAYGROUND-DESIGN.md) | PLAYGROUND-DESIGN.md — in-browser Medaka playground | IMPLEMENTED |
 | [`PLAYGROUND-EDITOR-DESIGN.md`](../archive/design/PLAYGROUND-EDITOR-DESIGN.md) | PLAYGROUND-EDITOR-DESIGN.md — Tier 3 in-browser editor | IMPLEMENTED |
 | [`PRE-FLIP-GAPS.md`](../archive/design/PRE-FLIP-GAPS.md) | PRE-FLIP-GAPS.md — outstanding native-compiler items to close before the canonicalization milestone flip | IMPLEMENTED |

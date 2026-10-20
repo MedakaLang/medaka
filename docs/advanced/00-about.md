@@ -17,6 +17,10 @@ pasted from the compiler, not paraphrased.
 
 ## Topics
 
+**Playground graphics.** [Canvas Animation](playground-animation.md) introduces
+pure pictures, time and pointer input, retained simulation models, and the
+playground's Run, Pause, Resume, and Stop controls.
+
 **Effects.** How the effect row in a signature is inferred and checked, how effects
 flow through higher-order functions, how to declare labels of your own, how a label
 can carry a parameter that says *which* file, host, or variable a function may

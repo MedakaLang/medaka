@@ -1,0 +1,40 @@
+{- | Pure pictures in logical canvas coordinates.
+
+   The origin is at the viewport center, with x right and y up. The data
+   constructors preserve their arguments; the canvas host validates a whole
+   frame before presenting it. -}
+
+{- | A position measured in logical CSS pixels.
+
+   > Point { x = 3.0, y = 4.0 }
+   Point { x = 3.0, y = 4.0 }
+   -}
+public export data Point = Point { x : Float, y : Float } deriving (Eq, Debug)
+
+{- | Straight RGBA components in the range zero through one. -}
+public export data Color = Color {
+  red : Float,
+  green : Float,
+  blue : Float,
+  alpha : Float,
+}
+  deriving (Eq, Debug)
+
+{- | A stroked line, filled circle, or filled polygon.
+
+   Zero-radius circles and polygons with fewer than three points paint
+   nothing. Line widths must be positive; radii must be nonnegative. -}
+public export data Shape =
+  | Line Color Float Point Point
+  | Circle Color Point Float
+  | Polygon Color (List Point)
+  deriving (Eq, Debug)
+
+{- | A complete frame, painted in list order over its background.
+
+   Transparent backgrounds clear the preceding frame before painting. -}
+public export data Picture = Picture {
+  background : Color,
+  shapes : List Shape,
+}
+  deriving (Eq, Debug)

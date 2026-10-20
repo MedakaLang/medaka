@@ -1,0 +1,11 @@
+import graphics.{Color(..)}
+import test.{expectAll, expectWithin}
+
+test "public color constructor preserves channels for host validation" =
+  let color = Color { red = -1.0, green = 2.0, blue = 0.0, alpha = 1.5 }
+  expectAll [
+    expectWithin -1.0 color.red 0.0,
+    expectWithin 2.0 color.green 0.0,
+    expectWithin 0.0 color.blue 0.0,
+    expectWithin 1.5 color.alpha 0.0,
+  ]

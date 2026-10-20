@@ -20,6 +20,7 @@
 //   makeImports(profile, opts) -> imports   createHost(profile, opts).imports
 //   jspiAvailable() -> boolean              the engine has JSPI
 //   promiseImport(capability, key, fn, promising) -> import   a promise-answering key
+//   createProgramSession(wasm, host, opts) -> Promise<{ invokeMain, dispose }>
 //   runProgram(wasm, host, opts) -> { kind: 'done' } | { kind: 'exit', code }
 //                                 | { kind: 'error', error, inProgram }
 //   runToResult(module, profile, opts) -> Promise<{ stdout, stderr, exitCode }>
@@ -1234,17 +1235,16 @@ export function checkImportKeys(module, host) {
 
 export function makeImports(profile, opts) { return createHost(profile, opts).imports; }
 
-// Compile (unless given a Module), refuse an old entry shape, instantiate, call
-// `mdk_main`, and flush on every way out.  `inProgram` says whether `mdk_main` had
-// started: a failure after that is the program's, not the instantiation's.
+// Initialization failures reject creation; invocation failures use runProgram's
+// outcomes. A refused overlapping entry has not entered the guest.
 // With JSPI present the entry is `WebAssembly.promising(mdk_main)`, awaited, so the
 // imports from `host.importsFor(true)` may suspend it.  A suspended run settles the
 // same ways a synchronous one ends: an `exit` after a resumption rejects with its
 // ExitSignal and a trap with its RuntimeError, both caught below after a flush.  The
 // start function runs during instantiation and is never promising: a Suspending import
 // it reached would trap with a SuspendError.
-export async function runProgram(wasm, host, opts = {}) {
-  let inProgram = false;
+export async function createProgramSession(wasm, host, opts = {}) {
+  let entry;
   try {
     const module = wasm instanceof WebAssembly.Module ? wasm : await WebAssembly.compile(wasm);
     const names = WebAssembly.Module.exports(module).map((e) => e.name);
@@ -1254,21 +1254,63 @@ export async function runProgram(wasm, host, opts = {}) {
     checkImportKeys(module, host);
     const promising = jspiAvailable();
     const instance = await WebAssembly.instantiate(module, host.importsFor(promising));
-    inProgram = true;
     const main = instance.exports.mdk_main;
-    if (typeof main === 'function') {
-      if (promising) await WebAssembly.promising(main)();
-      else main();
-    }
-    host.flush();
-    return { kind: 'done' };
+    entry = typeof main === 'function' ? (promising ? WebAssembly.promising(main) : main) : () => {};
   } catch (e) {
     host.flush();
-    if (e instanceof ExitSignal) return { kind: 'exit', code: e.code };
-    if (!inProgram && e && (e.name === 'SuspendError' || /suspend without WebAssembly\.promising/.test(e.message)))
+    if (e && (e.name === 'SuspendError' || /suspend without WebAssembly\.promising/.test(e.message)))
       e.message += ': a top-level value called fetchText or sleepMs during initialization; '
         + 'JSPI cannot suspend there: move the call into main';
-    return { kind: 'error', error: e, inProgram };
+    throw e;
+  }
+  let active = false;
+  let disposed = false;
+  let poisoned = false;
+  let liveHost = host;
+  return {
+    async invokeMain() {
+      const refusal = disposed ? 'disposed' : poisoned ? 'poisoned' : active ? 'already running' : null;
+      if (refusal) {
+        const error = new Error(`program session is ${refusal}`);
+        error.name = 'ProgramSessionError';
+        return { kind: 'error', error, inProgram: false };
+      }
+      active = true;
+      // Disposal prevents future calls; it cannot preempt a suspended guest.
+      const invocationHost = liveHost;
+      try {
+        await entry();
+        invocationHost.flush();
+        return { kind: 'done' };
+      } catch (e) {
+        poisoned = true;
+        invocationHost.flush();
+        if (e instanceof ExitSignal) return { kind: 'exit', code: e.code };
+        return { kind: 'error', error: e, inProgram: true };
+      } finally {
+        active = false;
+      }
+    },
+    dispose() {
+      disposed = true;
+      entry = null;
+      liveHost = null;
+    },
+  };
+}
+
+// One call uses the same initialization, JSPI entry and flush discipline as a
+// persistent session. `inProgram` distinguishes entry errors from initialization.
+export async function runProgram(wasm, host, opts = {}) {
+  let session;
+  try {
+    session = await createProgramSession(wasm, host, opts);
+    return await session.invokeMain();
+  } catch (e) {
+    if (e instanceof ExitSignal) return { kind: 'exit', code: e.code };
+    return { kind: 'error', error: e, inProgram: false };
+  } finally {
+    session?.dispose();
   }
 }
 

@@ -205,12 +205,12 @@ function preflight() {
   return { wasm, medaka, runjs };
 }
 
-// The browser feeds runtime.mdk + core.mdk directly and every other stdlib module
-// (dist/stdlib_modules.json) through the loader's key for its id (playground/main.js,
-// compile.mjs `buildVfs`). Mirror that
+// The browser feeds runtime.mdk + core.mdk directly and every other browser-vfs
+// module through the loader's key for its id (playground/main.js, compile.mjs
+// `buildVfs`). Mirror that
 // exactly: read them from dist/, which build_playground_wasm.sh staged, so the
 // module set here is the module set the page ships and cannot drift from it.
-function loadStdlib() {
+function loadBrowserModules() {
   const dist = join(HERE, 'dist');
   const runtime = readFileSync(join(dist, 'runtime.mdk'), 'utf8');
   const core = readFileSync(join(dist, 'core.mdk'), 'utf8');
@@ -329,7 +329,7 @@ const blocks = readBlocks(GUIDE_DIR);
 // per-block run, so it has to exist before the misclassification check — hence
 // the hoist. Reading dist/*.mdk is cheap; the expensive `loadCompiler` stays
 // below, after `--list` has had its chance to exit.
-const stdlib = loadStdlib();
+const stdlib = loadBrowserModules();
 // core/runtime are fed directly, not through the loader, so they are shipped too.
 const shippedModules = new Set([...Object.keys(stdlib.extra), 'core', 'runtime']);
 

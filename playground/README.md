@@ -13,7 +13,7 @@ The page is a single centered "quiet column" (`min(1040px, 100%)`): a slim
 header (wordmark + tagline + `Quickstart`/`Stdlib`/`GitHub` links), a
 dismissible funnel strip ("The full Medaka compiler, running in your
 browser…", dismissal persists via `localStorage`), a toolbar (an **Examples**
-picker with 3 embedded samples — `hello`/`shapes`/`pipeline` — a **Share**
+picker with 6 embedded samples — `hello`/`shapes`/`pipeline`/`cube`/`lissajous`/`balls` — a **Share**
 button that encodes the current program into a `#code=` URL hash permalink and
 copies it to the clipboard, a status line, and the gold **Run** button with a
 `⌘↵`/`Ctrl+Enter` hint), the CM6 editor, and one **unified console** pane
@@ -24,8 +24,11 @@ the editor exactly as before (`editor.js`/`language-worker.js` unchanged).
 
 ## Architecture
 
-Planned canvas support: [animation design](../docs/design/PLAYGROUND-ANIMATION-DESIGN.md)
-and [implementation plan](../docs/design/PLAYGROUND-ANIMATION-PLAN.md).
+The playground includes editable canvas animation examples and controls. See the
+[Canvas Animation guide](../docs/advanced/playground-animation.md) for the
+`graphics` and `animation` APIs, examples, and lifecycle behavior.
+Those three modules live in `playground/` and are supplied only by the browser
+playground; they are not part of Medaka's standard library.
 
 ```
 Browser
@@ -159,8 +162,10 @@ preview on purpose.
 
 ⚠️ **`sleep` needs cross-origin isolation.** `_headers` sends
 `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy:
-require-corp` on the playground route, its three workers, and every module the module
-workers import (`compile.mjs`, `medaka_host.mjs`, `vendor/wat2wasm/wat2wasm.js`), and on nothing else
+require-corp` on the playground route, its three workers, and every module the page
+and module workers import (including the animation modules, `compile.mjs`,
+`medaka_host.mjs`, `vendor/codemirror/codemirror.js`, and
+`vendor/wat2wasm/wat2wasm.js`), and on nothing else
 (the blog and guide embed third-party content). WebKit, and so every iOS browser,
 refuses a module worker's import that lacks COEP; Chrome checks only the worker
 script, so a Chrome-only check passes while Safari's Run fails with
@@ -169,7 +174,7 @@ the import set from the workers' source. After a deploy, check both sides:
 
 ```sh
 curl -sI https://medaka-lang.dev/ | grep -i '^cross-origin'            # both headers
-for p in worker.js compiler-worker.js language-worker.js compile.mjs medaka_host.mjs vendor/wat2wasm/wat2wasm.js; do
+for p in worker.js compiler-worker.js language-worker.js main.js editor.js compile.mjs medaka_host.mjs animation_protocol.mjs animation_host.mjs animation_controller.mjs canvas_renderer.mjs compile_dispatcher.mjs animation_examples.mjs vendor/codemirror/codemirror.js vendor/wat2wasm/wat2wasm.js; do
   curl -sI "https://medaka-lang.dev/$p" | grep -ci '^cross-origin-embedder'   # 1 each
 done
 curl -sI https://medaka-lang.dev/blog/index.html | grep -ci '^cross-origin'  # 0

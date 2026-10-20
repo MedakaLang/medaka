@@ -15,9 +15,9 @@
 # `sleep` can block a worker on Atomics.wait (SharedArrayBuffer needs isolation).
 # Rules stack by URL pattern, so each path is listed exactly: no splat, so /blog/*
 # and /guide/* (which embed third-party content) never receive COEP. Every worker
-# the page spawns needs COEP itself under require-corp, and so does every module a
-# module worker imports: WebKit (every iOS browser) refuses an import without it,
-# which kills the worker before it runs. Chrome checks only the worker script.
+# the page spawns needs COEP itself under require-corp. WebKit (every iOS browser)
+# also refuses a module-worker import without it, so the page's and workers'
+# static import graphs receive the header. Chrome checks only the worker script.
 /
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
@@ -30,9 +30,33 @@
   Cross-Origin-Embedder-Policy: require-corp
 /language-worker.js
   Cross-Origin-Embedder-Policy: require-corp
+/main.js
+  Cross-Origin-Embedder-Policy: require-corp
+/editor.js
+  Cross-Origin-Embedder-Policy: require-corp
+/medaka_lang.js
+  Cross-Origin-Embedder-Policy: require-corp
+/medaka_tokenizer.js
+  Cross-Origin-Embedder-Policy: require-corp
+/diagnostics_map.js
+  Cross-Origin-Embedder-Policy: require-corp
 /compile.mjs
   Cross-Origin-Embedder-Policy: require-corp
 /medaka_host.mjs
+  Cross-Origin-Embedder-Policy: require-corp
+/animation_host.mjs
+  Cross-Origin-Embedder-Policy: require-corp
+/animation_protocol.mjs
+  Cross-Origin-Embedder-Policy: require-corp
+/animation_controller.mjs
+  Cross-Origin-Embedder-Policy: require-corp
+/canvas_renderer.mjs
+  Cross-Origin-Embedder-Policy: require-corp
+/compile_dispatcher.mjs
+  Cross-Origin-Embedder-Policy: require-corp
+/animation_examples.mjs
+  Cross-Origin-Embedder-Policy: require-corp
+/vendor/codemirror/codemirror.js
   Cross-Origin-Embedder-Policy: require-corp
 /vendor/wat2wasm/wat2wasm.js
   Cross-Origin-Embedder-Policy: require-corp

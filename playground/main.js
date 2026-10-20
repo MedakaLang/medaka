@@ -22,6 +22,10 @@
 
 import { createEditor, getValue, setValue, setDiagnostics as setSquiggles } from './editor.js';
 import { hover as compileHover, complete as compileComplete } from './compile.mjs';
+import { createAnimationController } from './animation_controller.mjs';
+import { createCanvasRenderer } from './canvas_renderer.mjs';
+import { createCompileDispatcher } from './compile_dispatcher.mjs';
+import { ANIMATION_EXAMPLES } from './animation_examples.mjs';
 
 const RUN_TIMEOUT_MS = 10000; // 10 s wall-clock budget per run
 const ANALYZE_DEBOUNCE_MS = 300;
@@ -29,6 +33,7 @@ const FUNNEL_DISMISS_KEY = 'medaka-playground-funnel-dismissed';
 
 // ── Embedded examples ─────────────────────────────────────────────────────────
 const EXAMPLES = {
+  ...ANIMATION_EXAMPLES,
   hello: `-- Medaka playground — edit me and hit Run!
 
 main =
@@ -183,9 +188,8 @@ if (!gcOk) {
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let activeRunner   = null;  // current worker.js runner worker
-let compileWorker  = null;  // persistent compiler-worker.js (reused across runs)
-let killTimer      = null;
+let runGeneration = 0;
+let activeCompile = null;
 let cachedAssets   = null;  // { wasm, runtime, core, wat2wasmBytes }
 let assetsLoading  = null;  // pending Promise<assets>
 
@@ -270,14 +274,6 @@ function setStatus(msg, cls) {
   statusLine.className = 'b-status ' + (cls || '');
 }
 
-function killRunner(reason) {
-  if (activeRunner) { activeRunner.terminate(); activeRunner = null; }
-  if (killTimer)    { clearTimeout(killTimer); killTimer = null; }
-  if (reason) appendConsole('con-stderr', '\n' + reason + '\n');
-  runBtn.disabled = false;
-  setStatus('killed', 'error');
-}
-
 // ── Diagnostics renderer (console problem lines) ──────────────────────────────
 function renderProblems() {
   const files = lastDiagnosticFiles || [];
@@ -303,18 +299,21 @@ function applyDiagnostics(files) {
 }
 
 // ── Asset loader ──────────────────────────────────────────────────────────────
-// Every stdlib module is bundled into the vfs so `import <mod>` resolves in the
-// browser as it does natively; one the profile cannot run is refused by the
-// compiler's target check.  The ids come from dist/stdlib_modules.json, which
-// build_playground_wasm.sh generates; each is fetched from dist/<id>.mdk.
+// Standard-library modules and the playground's own animation modules share the
+// browser vfs so their source-level imports resolve as they do natively. The
+// manifests keep the standard library catalog separate from playground-only APIs.
 async function fetchOk(name) {
   const r = await fetch(name);
   if (!r.ok) throw new Error('failed to fetch ' + name + ' (' + r.status + ')');
   return r;
 }
 
-async function loadStdlibModules() {
-  const ids = await (await fetchOk('dist/stdlib_modules.json')).json();
+async function loadBrowserModules() {
+  const lists = await Promise.all([
+    fetchOk('dist/stdlib_modules.json').then((r) => r.json()),
+    fetchOk('dist/playground_modules.json').then((r) => r.json()),
+  ]);
+  const ids = lists.flat();
   const texts = await Promise.all(ids.map(async (m) => (await fetchOk('dist/' + m + '.mdk')).text()));
   const extra = {};
   ids.forEach((m, i) => { extra[m] = texts[i]; });
@@ -333,7 +332,7 @@ async function loadAssets() {
       fetchOk('dist/runtime.mdk'),
       fetchOk('dist/core.mdk'),
       fetchOk('vendor/wat2wasm/wat2wasm_bg.wasm'),
-      loadStdlibModules(),
+      loadBrowserModules(),
     ]);
     const [wasm, runtime, core, wat2wasmBytes] = await Promise.all([
       wasmResp.arrayBuffer(),
@@ -414,120 +413,157 @@ function onAnalyzeDone() {
   }
 }
 
-// ── Compiler worker (Run) ─────────────────────────────────────────────────────
-function getCompilerWorker() {
-  if (!compileWorker) {
-    compileWorker = new Worker('compiler-worker.js', { type: 'module' });
-    compileWorker.onerror = (e) => {
-      if (compileWorker._reject) {
-        compileWorker._reject(new Error('compiler-worker error: ' + e.message));
-      }
-      compileWorker = null;
-    };
-  }
-  return compileWorker;
+// ── Run and canvas ───────────────────────────────────────────────────────────
+const canvasPanel = document.getElementById('canvas-pane');
+const canvas = document.getElementById('animation-canvas');
+const pauseBtn = document.getElementById('pause-btn');
+const stopBtn = document.getElementById('stop-btn');
+const compileDispatcher = createCompileDispatcher({
+  createWorker: () => new Worker('compiler-worker.js', { type: 'module' }),
+});
+let manualPaused = false;
+let runningStartedAt = 0;
+function measureViewport() {
+  const rect = (canvasPanel.hidden ? consolePane.parentElement : canvas).getBoundingClientRect();
+  const width = Math.max(0, rect.width);
+  return { width, height: width * 9 / 16, dpr: window.devicePixelRatio || 1 };
 }
-
-function requestCompile(source, assets) {
-  return new Promise((resolve, reject) => {
-    const worker = getCompilerWorker();
-    worker._resolve = resolve;
-    worker._reject  = reject;
-    worker.onmessage = (e) => { worker._resolve = null; worker._reject = null; resolve(e.data); };
-    worker.postMessage({ source, assets });
+function displayState({ state, continuous, message, shown, presented }) {
+  if (presented) canvasPanel.hidden = false;
+  if (presented || ['done', 'failed', 'stopped'].includes(state)) runBtn.disabled = !gcOk;
+  pauseBtn.hidden = continuous !== true && state !== 'loading' && state !== 'paused';
+  pauseBtn.disabled = state === 'failed' || state === 'done' || state === 'stopped';
+  pauseBtn.textContent = manualPaused ? 'Resume' : 'Pause';
+  if (continuous && state === 'paused' && !document.hidden) {
+    manualPaused = true;
+    pauseBtn.textContent = 'Resume';
+  }
+  stopBtn.disabled = ['done', 'failed', 'stopped'].includes(state);
+  if (state === 'failed') {
+    if (!shown || consoleCapNoticed) appendConsole('con-stderr', '\n' + message + '\n');
+    setStatus('runtime error', 'error');
+  } else if (state === 'done') {
+    const ms = Math.round(performance.now() - runningStartedAt);
+    setStatus('✓ no problems · ran in ' + ms + ' ms', 'ok');
+    appendConsole('con-meta', '✓ compiled & ran in ' + ms + ' ms · WasmGC, fully in your browser');
+  } else if (state === 'stopped') setStatus('stopped');
+  else setStatus(state === 'paused' ? 'paused' : 'running…');
+}
+const animationController = createAnimationController({
+  createWorker: () => new Worker('worker.js', { type: 'module' }),
+  renderer: createCanvasRenderer(canvas),
+  requestAnimationFrame: (fn) => requestAnimationFrame(fn),
+  cancelAnimationFrame: (id) => cancelAnimationFrame(id),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (id) => clearTimeout(id),
+  reducedMotion: () => matchMedia('(prefers-reduced-motion: reduce)').matches,
+  measureViewport,
+  startupTimeout: RUN_TIMEOUT_MS,
+  status: displayState,
+  output: ({ type, text }) => appendProgramOutput(type === 'stdout' ? 'con-stdout' : 'con-stderr', text),
+});
+function stopProgram() {
+  runGeneration++;
+  if (activeCompile !== null) compileDispatcher.cancel(activeCompile);
+  activeCompile = null;
+  animationController.stop();
+  manualPaused = false;
+  releasePointer();
+}
+stopBtn.addEventListener('click', stopProgram);
+pauseBtn.addEventListener('click', () => {
+  manualPaused = !manualPaused;
+  if (manualPaused) animationController.pause();
+  else animationController.resume();
+});
+const observer = new ResizeObserver(() => animationController.resize(measureViewport()));
+observer.observe(consolePane.parentElement);
+window.addEventListener('resize', () => animationController.resize(measureViewport()));
+document.addEventListener('visibilitychange', () => {
+  animationController.visibility(document.hidden);
+});
+let capturedPointer = null;
+function releasePointer(outside = true) {
+  if (capturedPointer !== null && canvas.hasPointerCapture(capturedPointer))
+    canvas.releasePointerCapture(capturedPointer);
+  capturedPointer = null;
+  animationController.pointer(outside ? { down: false, inside: false } : { down: false });
+}
+for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'pointerleave', 'lostpointercapture']) {
+  canvas.addEventListener(type, (event) => {
+    if (!event.isPrimary) return;
+    if (type === 'pointercancel' || type === 'lostpointercapture') {
+      releasePointer(type === 'pointercancel'); return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const inside = event.clientX >= rect.left && event.clientX <= rect.right
+      && event.clientY >= rect.top && event.clientY <= rect.bottom && type !== 'pointerleave';
+    animationController.pointer({ x: event.clientX - rect.left - rect.width / 2,
+      y: rect.height / 2 - (event.clientY - rect.top), inside,
+      down: type === 'pointerdown' || (type !== 'pointerup' && (event.buttons & 1) !== 0) });
+    if (type === 'pointerdown') {
+      capturedPointer = event.pointerId;
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    } else if (type === 'pointerup') releasePointer(false);
   });
 }
-
-// ── Run ───────────────────────────────────────────────────────────────────────
+window.addEventListener('blur', releasePointer);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releasePointer(); });
+window.addEventListener('pagehide', () => {
+  stopProgram(); compileDispatcher.dispose(); animationController.dispose(); observer.disconnect();
+});
 async function runProgram() {
-  if (runBtn.disabled) return;
-  if (activeRunner) killRunner('superseded');
-
+  if (!gcOk) return;
+  stopProgram();
+  const generation = ++runGeneration;
+  manualPaused = false;
+  canvasPanel.hidden = true;
   clearConsole();
   runBtn.disabled = true;
+  stopBtn.disabled = false;
+  pauseBtn.hidden = true;
   setStatus('loading compiler…');
-
-  const startedAt = performance.now();
-
-  let assets;
-  try {
-    assets = await loadAssets();
-  } catch (e) {
-    setStatus('asset load failed: ' + e.message, 'error');
-    runBtn.disabled = false;
-    return;
-  }
-
-  setStatus('compiling…');
-
+  runningStartedAt = performance.now();
   const source = getValue(view);
-
-  let result;
-  try {
-    result = await requestCompile(source, assets);
-  } catch (e) {
-    setStatus('compiler error: ' + e.message, 'error');
+  let assets;
+  try { assets = await loadAssets(); }
+  catch (error) {
+    if (generation !== runGeneration) return;
+    stopBtn.disabled = true;
     runBtn.disabled = false;
+    setStatus('asset load failed: ' + error.message, 'error');
     return;
   }
-
+  if (generation !== runGeneration) return;
+  setStatus('compiling…');
+  activeCompile = generation;
+  let reply;
+  try { reply = await compileDispatcher.request({ runId: generation, source, assets }); }
+  catch (error) {
+    if (generation !== runGeneration) return;
+    activeCompile = null;
+    stopBtn.disabled = true;
+    runBtn.disabled = false;
+    setStatus('compiler error: ' + error.message, 'error');
+    return;
+  }
+  if (generation !== runGeneration || reply.kind === 'cancelled') return;
+  activeCompile = null;
+  const result = reply.result;
   if (!result.ok) {
-    if (result.diagnostics && result.diagnostics.files) {
-      applyDiagnostics(result.diagnostics.files);
-      const n = renderProblems();
-      if (n === 0) appendConsole('con-problem', 'compile failed (no diagnostics)');
-    } else {
-      appendConsole('con-problem', 'compile failed (no diagnostics)');
-    }
-    setStatus('compile error', 'error');
+    applyDiagnostics(result.diagnostics?.files || []);
+    if (renderProblems() === 0) appendConsole('con-problem', 'compile failed (no diagnostics)');
+    stopBtn.disabled = true;
     runBtn.disabled = false;
+    setStatus('compile error', 'error');
     return;
   }
-
-  // Clean compile — but there may still be WARNINGS (e.g. W-NONEXHAUSTIVE): they
-  // don't block emit (matching native `medaka check`), so show them as squiggles
-  // + console problem lines, then still run the program.
-  const warnFiles = (result.diagnostics && result.diagnostics.files) || [];
-  applyDiagnostics(warnFiles);
+  applyDiagnostics(result.diagnostics?.files || []);
   renderProblems();
-  setStatus('running…');
-
-  const runner = new Worker('worker.js', { type: 'module' });
-  activeRunner = runner;
-
-  killTimer = setTimeout(() => killRunner(`stopped after ${RUN_TIMEOUT_MS / 1000} s (the playground's time limit)`), RUN_TIMEOUT_MS);
-
-  runner.onmessage = (e) => {
-    const { type, text, message, shown } = e.data;
-    if (type === 'stdout') appendProgramOutput('con-stdout', text);
-    else if (type === 'stderr') appendProgramOutput('con-stderr', text);
-    else if (type === 'error') {
-      // `shown` means the message already streamed as stderr; past the cap that
-      // stream was dropped, so print it here.
-      if (!shown || consoleCapNoticed) appendConsole('con-stderr', '\n' + message + '\n');
-      clearTimeout(killTimer); killTimer = null;
-      activeRunner = null;
-      runBtn.disabled = false;
-      setStatus('runtime error', 'error');
-    } else if (type === 'done') {
-      clearTimeout(killTimer); killTimer = null;
-      activeRunner = null;
-      runBtn.disabled = false;
-      const ms = Math.round(performance.now() - startedAt);
-      setStatus('✓ no problems · ran in ' + ms + ' ms', 'ok');
-      appendConsole('con-meta', '✓ compiled & ran in ' + ms + ' ms · WasmGC, fully in your browser');
-    }
-  };
-
-  runner.onerror = (e) => {
-    appendConsole('con-stderr', '\n[runner error: ' + e.message + ']\n');
-    clearTimeout(killTimer); killTimer = null;
-    activeRunner = null;
-    runBtn.disabled = false;
-    setStatus('runner error', 'error');
-  };
-
-  runner.postMessage({ wasm: result.wasm, isolated: crossOriginIsolated }, [result.wasm]);
+  animationController.start({ runId: generation, wasm: result.wasm, isolated: crossOriginIsolated,
+    viewport: { ...measureViewport(), revision: 0 } });
+  if (document.hidden) animationController.visibility(true);
 }
 
 runBtn.addEventListener('click', runProgram);
@@ -543,6 +579,12 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ── Examples picker ───────────────────────────────────────────────────────────
+for (const id of Object.keys(ANIMATION_EXAMPLES)) {
+  const option = document.createElement('option');
+  option.value = id;
+  option.textContent = id;
+  exampleSelect.append(option);
+}
 exampleSelect.addEventListener('change', () => {
   const src = EXAMPLES[exampleSelect.value];
   if (!src) return;

@@ -1,0 +1,93 @@
+{- | Pictures driven by browser frames and retained simulation models.
+
+   Bind a simulation once at module scope to retain its model across frames.
+   Constructing one inside main creates a fresh model on every invocation. -}
+
+import canvas_host as Canvas
+import graphics.{Picture}
+
+{- | The primary pointer in logical canvas coordinates. -}
+public export data Pointer = Pointer {
+  x : Float,
+  y : Float,
+  inside : Bool,
+  down : Bool,
+}
+  deriving (Eq, Debug)
+
+{- | An immutable snapshot for one delivered frame.
+
+   Times are seconds of active animation; width and height are CSS pixels.
+   Delta is zero on the first frame and after resuming, otherwise at most 0.05. -}
+public export data Frame = Frame {
+  elapsed : Float,
+  delta : Float,
+  width : Float,
+  height : Float,
+  pointer : Pointer,
+}
+  deriving (Eq, Debug)
+
+{- | A retained model with pure update and view functions. -}
+export data Simulation model =
+  | Simulation (Ref model) (Ref Bool) (Frame -> model -> model) (Frame -> model -> Picture)
+
+readFrame : Unit -> <FFI "js/canvas"> Frame
+readFrame _ =
+  let pointer = Pointer {
+    x = Canvas.pointerX (),
+    y = Canvas.pointerY (),
+    inside = Canvas.pointerInside (),
+    down = Canvas.pointerDown (),
+  }
+  Frame {
+    elapsed = Canvas.elapsed (),
+    delta = Canvas.delta (),
+    width = Canvas.width (),
+    height = Canvas.height (),
+    pointer = pointer,
+  }
+
+{- | Draw one picture and finish without requesting another frame. -}
+export
+drawing : Picture -> <FFI "js/canvas"> Unit
+drawing scene =
+  Canvas.begin Canvas.Once
+  Canvas.render scene
+
+renderContinuous : (Unit -> <FFI "js/canvas"> Picture) -> <FFI "js/canvas"> Unit
+renderContinuous scene =
+  Canvas.begin Canvas.Continuous
+  Canvas.render (scene ())
+
+{- | Draw a pure scene function of elapsed seconds on each frame. -}
+export
+animate : (Float -> Picture) -> <FFI "js/canvas"> Unit
+animate scene = renderContinuous (unit => scene (Canvas.elapsed ()))
+
+{- | Draw a pure scene function with viewport and pointer input. -}
+export
+animateWith : (Frame -> Picture) -> <FFI "js/canvas"> Unit
+animateWith scene = renderContinuous (unit => scene (readFrame ()))
+
+{- | Capture an initial model and pure update and view functions.
+
+   Construction makes no host call and does not invoke either callback. -}
+export
+simulation : model ->
+  (Frame -> model -> model) ->
+  (Frame -> model -> Picture) ->
+  Simulation model
+simulation initial update view = Simulation (Ref initial) (Ref True) update view
+
+{- | Render the initial model, then update once before each later view.
+
+   Call from main with a simulation retained at module scope. Other effects
+   in main repeat on each delivered frame too. -}
+export
+runSimulation : Simulation model -> <FFI "js/canvas"> Unit
+runSimulation (Simulation cell first update view) =
+  Canvas.begin Canvas.Continuous
+  let frame = readFrame ()
+  if !first then first := False else cell := update frame !cell
+  Canvas.render (view frame !cell)

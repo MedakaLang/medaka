@@ -14,7 +14,13 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHost, runProgram, confine, jspiAvailable, CapabilityError, JsBindingError, HostKeyError, MemoryVfs, SLICES, KEY_EXTERN } from './medaka_host.mjs';
+import { createHost, createProgramSession, runProgram, confine, jspiAvailable, CapabilityError, JsBindingError, HostKeyError, MemoryVfs, SLICES, KEY_EXTERN } from './medaka_host.mjs';
+import { createAnimationBindings } from './animation_host.mjs';
+import { runAnimationProtocolTests, sampleInput } from './animation_protocol_test.mjs';
+import { runAnimationHostTests } from './animation_host_test.mjs';
+import { runAnimationControllerTests } from './animation_controller_test.mjs';
+import { runCanvasRendererTests } from './canvas_renderer_test.mjs';
+import { runCompileDispatcherTests } from './compile_dispatcher_test.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = dirname(here);
@@ -45,6 +51,33 @@ loop i =
 const bigText = (line) => Array.from({ length: BIG_LINES }, (_, i) => line(i + 1) + '\n').join('');
 
 const PROGRAMS = {
+  sessionstate: String.raw`counter = Ref 0
+
+main =
+  let value = !counter
+  counter := value + 1
+  println value
+`,
+  sessionsleep: String.raw`main =
+  putStr "before"
+  sleepMs 20
+  putStrLn " after"
+`,
+  canvastrap: String.raw`extern canvasBegin : Bool -> <FFI "js/canvas"> Unit
+  bind js "medaka_canvas_v1_begin"
+extern canvasBackground : Float -> Float -> Float -> Float -> <FFI "js/canvas"> Unit
+  bind js "medaka_canvas_v1_background"
+extern canvasEnd : Unit -> <FFI "js/canvas"> Unit
+  bind js "medaka_canvas_v1_end"
+
+main =
+  canvasBegin True
+  canvasBackground 0.0 0.0 0.0 1.0
+  canvasEnd ()
+  ePutStr "canvas-stderr"
+  let zero = length [1] - 1
+  println (10 / zero)
+`,
   exit: 'main =\n  let _ = putStrLn "out-before-exit"\n  let _ = ePutStrLn "err-before-exit"\n  exit 3\n',
   write: 'main =\n  let w = writeFileBytes "probe.bin" (arrayFromList [104, 105, 10])\n'
     + '  let _ = match w\n    Ok _ => putStrLn "write ok"\n    Err e => putStrLn "write err: \\{e}"\n'
@@ -233,9 +266,96 @@ const streamText = (msgs, type) => msgs.filter((m) => m.type === type).map((m) =
 const last = (msgs) => msgs[msgs.length - 1] || {};
 
 let failed = 0;
+let executed = 0;
 function check(name, ok, detail) {
+  executed++;
   console.log((ok ? 'PASS ' : 'FAIL ') + name);
   if (!ok) { failed++; console.log('     ' + detail); }
+}
+
+runAnimationProtocolTests(check);
+runAnimationHostTests(check);
+runAnimationControllerTests(check);
+runCanvasRendererTests(check);
+await runCompileDispatcherTests(check);
+
+{
+  const wasm = readFileSync(build('sessionstate', 'wasmgc/browser-worker'));
+  const host = createHost('wasmgc/browser-worker');
+  const session = await createProgramSession(wasm, host);
+  const first = session.invokeMain();
+  const overlap = await session.invokeMain();
+  const initial = await first;
+  const second = await session.invokeMain();
+  const third = await session.invokeMain();
+  check('session: retained state, flushed entries, and overlap refusal',
+    [initial, second, third].every((r) => r.kind === 'done')
+      && overlap.kind === 'error' && !overlap.inProgram && overlap.error.message.includes('already running')
+      && host.sink.text('stdout') === '0\n1\n2\n',
+    JSON.stringify({ initial, second, third, overlap: overlap.error?.message, stdout: host.sink.text('stdout') }));
+  session.dispose();
+  session.dispose();
+  const disposed = await session.invokeMain();
+  check('session: disposed entry refused and fresh instance resets model',
+    disposed.kind === 'error' && !disposed.inProgram && disposed.error.message.includes('disposed')
+      && (await runProgram(wasm, host)).kind === 'done' && host.sink.text('stdout') === '0\n1\n2\n0\n',
+    JSON.stringify({ disposed: disposed.error?.message, stdout: host.sink.text('stdout') }));
+}
+
+{
+  const animation = createAnimationBindings();
+  const host = createHost('wasmgc/browser-worker', { bindings: animation.bindings });
+  const session = await createProgramSession(readFileSync(build('canvastrap', 'wasmgc/browser-worker')), host);
+  animation.beginInvocation(sampleInput());
+  const trapped = await session.invokeMain();
+  if (trapped.kind !== 'done') animation.discard();
+  let frame;
+  let discarded;
+  try { frame = animation.finishInvocation(); } catch (e) { discarded = e; }
+  const before = host.sink.text('stderr');
+  const poisoned = await session.invokeMain();
+  check('session: trap after end discards frame, flushes stderr, and poisons reuse',
+    trapped.kind === 'error' && trapped.inProgram && frame === undefined
+      && discarded?.message.includes('no entry invocation') && before.includes('canvas-stderr')
+      && poisoned.kind === 'error' && !poisoned.inProgram && poisoned.error.message.includes('poisoned')
+      && host.sink.text('stderr') === before,
+    JSON.stringify({ trapped: trapped.error?.message, discarded: discarded?.message,
+      stderr: before, poisoned: poisoned.error?.message }));
+  session.dispose();
+}
+
+{
+  const child = String.raw`
+const { createHost, createProgramSession, jspiAvailable } = await import(process.env.MHT_HOST);
+const { readFileSync } = await import('node:fs');
+const host = createHost('wasmgc/node');
+const session = await createProgramSession(readFileSync(process.env.MHT_WASM), host);
+const first = session.invokeMain();
+const overlap = await session.invokeMain();
+const initial = await first;
+const second = await session.invokeMain();
+session.dispose();
+const disposed = await session.invokeMain();
+console.log(JSON.stringify({ jspi: jspiAvailable(), initial: initial.kind, second: second.kind,
+  overlap: overlap.error?.message, disposed: disposed.error?.message,
+  stdout: host.sink.text('stdout'), stderr: host.sink.text('stderr') }));
+`;
+  const wasm = build('sessionsleep', 'wasmgc/node');
+  for (const [mode, flags, expected] of [
+    ['enabled', ['--experimental-wasm-jspi'], true], ['unavailable', NO_JSPI, false],
+  ]) {
+    const r = spawnSync(process.execPath, [...flags, '--input-type=module', '-e', child], {
+      env: { ...process.env, MHT_HOST: pathToFileURL(join(here, 'medaka_host.mjs')).href, MHT_WASM: wasm }, encoding: 'utf8',
+    });
+    let result = {};
+    try { result = JSON.parse(r.stdout); } catch {}
+    check(`session: JSPI ${mode} preserves sleep, output, overlap and disposal`,
+      r.status === 0 && r.stderr === '' && result.jspi === expected
+        && result.initial === 'done' && result.second === 'done' && result.stderr === ''
+        && result.stdout === 'before after\nbefore after\n'
+        && result.overlap?.includes('already running') && result.disposed?.includes('disposed'),
+      JSON.stringify({ status: r.status, stdout: r.stdout, stderr: r.stderr }));
+  }
 }
 
 // (a) WH4 on `exit`: run.js delivers stderr as well as stdout before it exits (#376).
@@ -899,5 +1019,6 @@ process.exit(r.exitCode);
 }
 
 rmSync(work, { recursive: true, force: true });
+console.log(`${executed} probes executed`);
 console.log(failed ? `${failed} probe(s) failed` : 'all probes pass');
 process.exit(failed ? 1 : 0);

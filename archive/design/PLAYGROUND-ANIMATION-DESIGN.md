@@ -1,12 +1,12 @@
 # Playground canvas and animation
 
-**Status:** PROPOSED — direction accepted; execution protocol requires the first implementation spike.
+**Status:** IMPLEMENTED — the playground examples and API are available; see the [user guide](../../docs/advanced/playground-animation.md).
 
 Planning base: `31f730fa4b186424d919e1d469e6cc64e95a40b5` (2026-10-19).
 Tracking: [#4328](https://github.com/MedakaLang/medaka/issues/4328).
 Execution order, ownership, and acceptance are in
 [the implementation plan](PLAYGROUND-ANIMATION-PLAN.md).
-This document specifies new behavior; it does not claim the feature exists.
+This document records the implemented behavior and its boundaries.
 
 ## 1. Outcome and scope
 
@@ -72,9 +72,9 @@ files. Boundary signatures are contracts, not promised parser-valid declarations
 
 | Directory | Module/file | Responsibility and exports | Import boundary |
 |---|---|---|---|
-| `stdlib/` | `graphics.mdk` | Pure `Point`, `Color`, `Shape`, `Picture`; constructors described in §4. | Existing pure stdlib only; no host, animation, compiler, or DOM dependency. |
-| `stdlib/` | `canvas_host.mdk` | Typed scalar externs, frame getters, `render : Picture -> <FFI "js/canvas"> Unit`. | `graphics` and needed stdlib; never `animation` or compiler modules. |
-| `stdlib/` | `animation.mdk` | `Frame`, `Pointer`, abstract `Simulation model`, `drawing`, `animate`, `animateWith`, `simulation`, `runSimulation`. | `graphics`, `canvas_host`, existing stdlib only. |
+| `playground/` | `graphics.mdk` | Pure `Point`, `Color`, `Shape`, `Picture`; constructors described in §4. | Existing pure stdlib only; no host, animation, compiler, or DOM dependency. |
+| `playground/` | `canvas_host.mdk` | Typed scalar externs, frame getters, `render : Picture -> <FFI "js/canvas"> Unit`. | `graphics` and needed stdlib; never `animation` or compiler modules. |
+| `playground/` | `animation.mdk` | `Frame`, `Pointer`, abstract `Simulation model`, `drawing`, `animate`, `animateWith`, `simulation`, `runSimulation`. | `graphics`, `canvas_host`, existing stdlib only. |
 | `playground/` | `animation_protocol.mjs` | Protocol version, limits, validators for frame inputs and batches. Exports `PROTOCOL_VERSION`, `LIMITS`, `validateFrameInput`, `validateFrameBatch`. | No DOM, worker globals, compiler, or host runtime. |
 | `playground/` | `animation_host.mjs` | Per-session FFI binding factory: `createAnimationBindings() -> {bindings, beginInvocation(input), finishInvocation(), discard()}`. | Protocol only; no scheduling or DOM. |
 | `playground/` | `animation_controller.mjs` | Page state machine: `createAnimationController(deps) -> {start, pause, resume, stop, resize, pointer, dispose}`. Inject worker factory, clock/rAF, renderer, and status sink. | Protocol; no editor/compiler imports and no WASM evaluation on the page. |
@@ -171,9 +171,11 @@ comes from the host's binding map, not from granting arbitrary JS execution.
 ## 5. Scalar ABI and frame protocol
 
 Use signature-bearing `jsffi` imports and `<FFI "js/canvas">`, following
-[the existing WASM FFI contract](../spec/WASM-SEMANTICS.md#31-the-jsffi-import-module-user-js-bindings).
-The `medaka.canvas.v1.` JS-name prefix versions this application protocol. It
-does not change the compiler ABI. The binding names and argument order are:
+[the existing WASM FFI contract](../../docs/spec/WASM-SEMANTICS.md#31-the-jsffi-import-module-user-js-bindings).
+The `medaka_canvas_v1_` JS-name prefix versions this application protocol. JS
+binding names must be valid JavaScript identifiers, as required by the existing
+scalar FFI. This prefix does not change the compiler ABI. The binding names are
+the prefix followed by each suffix below, with the listed argument order:
 
 | Suffix | Parameters -> result | Meaning |
 |---|---|---|
@@ -378,10 +380,11 @@ justifies a public 3D library. Imported graphics modules must reach both compile
 and editor analyze/hover/completion through the existing extra-module VFS.
 
 Update the explicit site asset list and COEP headers for every new transitive
-worker import. The stdlib source manifest, generated reference, development
-server, and built site must contain the same library/example surface. Test the
-built site as well as the development tree. Production deployment is a later
-release action using the existing playground procedure, not part of this plan.
+worker import. The stdlib manifest remains a pure standard-library catalog; the
+explicit playground-module roster carries the canvas APIs. The development
+server and built site must contain their combined browser surface. Test the built
+site as well as the development tree. Production deployment is a later release
+action using the existing playground procedure, not part of this plan.
 
 ## 8. Verification and language-extension decision
 

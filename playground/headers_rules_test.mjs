@@ -26,10 +26,10 @@ const walk = (rel) => {
   for (const m of src.matchAll(/^\s*import\s[^'"]*['"](\.{1,2}\/[^'"]+)['"]/gm))
     walk(posix.normalize(posix.join(posix.dirname(rel), m[1])));
 };
-for (const w of ['worker.js', 'compiler-worker.js', 'language-worker.js']) walk(w);
+for (const w of ['main.js', 'worker.js', 'compiler-worker.js', 'language-worker.js']) walk(w);
 check('the module workers import something', seen.size > 2);
 for (const rel of seen)
-  check(`/${rel} gets COEP (module-worker import)`, get('/' + rel, 'Cross-Origin-Embedder-Policy').join() === 'require-corp');
+  check(`/${rel} gets COEP (module graph import)`, get('/' + rel, 'Cross-Origin-Embedder-Policy').join() === 'require-corp');
 for (const p of ['/blog/pds', '/blog/index.html', '/guide/00-introduction.html', '/advanced/index.html', '/stdlib/index.html', '/dist/x.mdk'])
   check(`${p} gets neither`, get(p, 'Cross-Origin-Opener-Policy').length === 0
     && get(p, 'Cross-Origin-Embedder-Policy').length === 0);

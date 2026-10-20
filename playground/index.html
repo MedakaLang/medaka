@@ -225,6 +225,7 @@
       cursor: pointer;
     }
     .btn-ghost:hover { color: var(--ink); border-color: #3d4a68; }
+    .btn-ghost:disabled { color: var(--faint); cursor: not-allowed; opacity: 0.6; }
 
     .b-status {
       margin-left: auto;
@@ -261,9 +262,16 @@
     }
 
     /* ---------- editor ---------- */
-    #editor {
+    #workbench {
+      display: flex;
       flex: 2.2;
-      width: 100%;
+      min-height: 0;
+      min-width: 0;
+      gap: 10px;
+    }
+    #editor {
+      flex: 1 1 0;
+      min-width: 0;
       min-height: 0;
       background: var(--code-bg);
       border: 1px solid var(--line);
@@ -306,6 +314,35 @@
     #console .con-stderr { color: #f8a5a5; }
     #console .con-problem { color: #ffb347; display: block; }
     #console .con-meta { color: var(--faint); display: block; margin-top: 6px; }
+    #canvas-pane {
+      display: flex;
+      flex: 1 1 0;
+      min-width: 0;
+      min-height: 0;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    #canvas-pane[hidden] { display: none; }
+    #animation-canvas { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; touch-action: none; }
+    .b-wrap:has(#canvas-pane:not([hidden])) { width: min(1640px, 100%); }
+    #workbench:has(#canvas-pane:not([hidden])) { flex: 1; gap: 14px; }
+    #workbench:has(#canvas-pane:not([hidden])) #editor { flex: 3 1 0; }
+    #workbench:has(#canvas-pane:not([hidden])) #canvas-pane { flex: 2 1 0; }
+    .b-wrap:has(#canvas-pane:not([hidden])) #console-pane { flex: 0 0 clamp(80px, 12vh, 120px); }
+    @media (max-width: 1100px) {
+      body:has(#canvas-pane:not([hidden])) { height: auto; min-height: 100dvh; overflow: auto; }
+      .b-wrap:has(#canvas-pane:not([hidden])) { flex: none; overflow: visible; }
+      #workbench:has(#canvas-pane:not([hidden])) { flex: none; flex-direction: column; }
+      #workbench:has(#canvas-pane:not([hidden])) #editor { flex: none; height: max(320px, 52dvh); }
+      #workbench:has(#canvas-pane:not([hidden])) #canvas-pane { flex: none; aspect-ratio: 16 / 9; }
+    }
+    @media (max-width: 700px) {
+      .b-toolbar { flex-wrap: wrap; }
+    }
   </style>
 </head>
 <body>
@@ -362,11 +399,17 @@
       </label>
       <button id="share-btn" class="btn-ghost">Share</button>
       <span id="status" class="b-status"></span>
+      <button id="pause-btn" class="btn-ghost" hidden>Pause</button>
+      <button id="stop-btn" class="btn-ghost" disabled>Stop</button>
       <button id="run-btn">&#9654; Run <span class="kbd">&#8984;&#9166;</span></button>
     </div>
 
-    <div id="editor"></div>
-
+    <div id="workbench">
+      <div id="editor"></div>
+      <div id="canvas-pane" hidden>
+        <canvas id="animation-canvas" role="img" aria-label="Medaka program drawing"></canvas>
+      </div>
+    </div>
     <div id="console-pane">
       <div class="con-label" id="console-label">Console</div>
       <div id="console" role="log" aria-live="polite" aria-labelledby="console-label" tabindex="0"></div>

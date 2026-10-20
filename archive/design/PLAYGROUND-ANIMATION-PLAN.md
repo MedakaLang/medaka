@@ -1,6 +1,6 @@
 # Playground animation implementation plan
 
-**Status:** READY FOR SPIKE — subsequent slices depend on its measured result.
+**Status:** COMPLETE — S1–S6 delivered the design and package; see the [user guide](../../docs/advanced/playground-animation.md).
 
 Design: [Playground canvas and animation](PLAYGROUND-ANIMATION-DESIGN.md).
 Planning base: `31f730fa4b186424d919e1d469e6cc64e95a40b5` (2026-10-19).
@@ -10,7 +10,8 @@ copies the relevant release boundary into its writable scratch `CONTRACT.md`,
 records the then-current base, and creates one-page packets just in time using
 [sprint-packet](../../.claude/skills/sprint-packet/SKILL.md) and
 [the Codex adapter](../../.codex/SPRINT.md). Do not dispatch from this planning
-SHA after another slice lands. Implementation has not started.
+SHA after another slice lands. Implementation is complete; this plan remains as
+the execution record.
 
 ## 1. The question
 
@@ -71,7 +72,7 @@ and any licensed generated outputs found at dispatch time.
 | Field | S3 — graphics-and-animation-library |
 |---|---|
 | Mission | Implement the pure picture API and effectful frame adapters, including retained Simulation state. Prove them using actual WASM compilation. |
-| Surface | New `graphics.mdk`, `canvas_host.mdk`, `animation.mdk` and pure `*_test.mdk` siblings in `stdlib/`; a proposed `animation_integration_test.mjs` under `playground/`; fixtures owned by this feature, outside shared engine corpora. Enrollment described in §6. |
+| Surface | New `graphics.mdk`, `canvas_host.mdk`, `animation.mdk` and pure `*_test.mdk` siblings in `playground/`; a proposed `animation_integration_test.mjs` under `playground/`; fixtures owned by this feature, outside shared engine corpora. Enrollment described in §6. |
 | Acceptance shape | Four groups: (1) pure geometry/model tests and explicit typechecks; (2) static, time-based, viewport/pointer, and Simulation sources compile through browser compiler + assembler and produce specified commands; (3) independent instances and repeated runs have independent models, globals initialize once, and pure callbacks remain pure; (4) native/render-without-bindings routes refuse clearly while pure graphics remains usable. |
 | Model | Sol/high: finalize the supported type/effect spelling from S1 without losing the agreed lifecycle or introducing an FFI closure. |
 | Depends-on / parallel-ok | S2. Serial. |
@@ -159,9 +160,9 @@ A spike success does not close implementation. A discovered compiler defect gets
 its own minimal reproducer and issue; no existing pin is removed because an
 example avoids the failing shape.
 
-At completion, move implemented design records to `archive/design/` according to
-the architecture policy, leave current user instructions beside the playground
-and in the published guide, and regenerate the index.
+The implementation records now live in `archive/design/`; current user
+instructions remain beside the playground and in the published guide, and the
+generated index records their archived status.
 
 ## 6. Test execution and expected reds
 
