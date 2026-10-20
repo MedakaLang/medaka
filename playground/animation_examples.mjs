@@ -5,28 +5,31 @@ import graphics.{Picture, Point, picture, rgba, line, point}
 
 data Vec3 = Vec3 Float Float Float
 
-project : Float -> Float -> Vec3 -> Point
-project angle size (Vec3 x y z) =
+project : Float -> Float -> Float -> Vec3 -> Point
+project angle tilt size (Vec3 x y z) =
   let rx = x * cos angle + z * sin angle
   let rz = z * cos angle - x * sin angle
-  let ry = y * cos 0.5 - rz * sin 0.5
-  let depth = y * sin 0.5 + rz * cos 0.5
-  let scale = size * 5.0 / (5.0 + depth)
-  point (rx * scale) (ry * scale)
+  let ry = y * cos tilt - rz * sin tilt
+  let depth = y * sin tilt + rz * cos tilt
+  let sx = rx * cos 0.12 - ry * sin 0.12
+  let sy = rx * sin 0.12 + ry * cos 0.12
+  let scale = size * 8.0 / (8.0 + depth)
+  point (sx * scale) (sy * scale)
 
 scene : Frame -> Picture
 scene frame =
   let offset = if frame.pointer.inside then frame.pointer.x * 0.01 else 0.0
   let angle = 0.7 + frame.elapsed * 0.7 + offset
+  let tilt = 0.55 + frame.elapsed * 0.25
   let size = min frame.width frame.height * 0.2
-  let a = project angle size (Vec3 -1.0 -1.0 -1.0)
-  let b = project angle size (Vec3 1.0 -1.0 -1.0)
-  let c = project angle size (Vec3 1.0 1.0 -1.0)
-  let d = project angle size (Vec3 -1.0 1.0 -1.0)
-  let e = project angle size (Vec3 -1.0 -1.0 1.0)
-  let f = project angle size (Vec3 1.0 -1.0 1.0)
-  let g = project angle size (Vec3 1.0 1.0 1.0)
-  let h = project angle size (Vec3 -1.0 1.0 1.0)
+  let a = project angle tilt size (Vec3 -1.0 -1.0 -1.0)
+  let b = project angle tilt size (Vec3 1.0 -1.0 -1.0)
+  let c = project angle tilt size (Vec3 1.0 1.0 -1.0)
+  let d = project angle tilt size (Vec3 -1.0 1.0 -1.0)
+  let e = project angle tilt size (Vec3 -1.0 -1.0 1.0)
+  let f = project angle tilt size (Vec3 1.0 -1.0 1.0)
+  let g = project angle tilt size (Vec3 1.0 1.0 1.0)
+  let h = project angle tilt size (Vec3 -1.0 1.0 1.0)
   let ink = rgba 0.3 0.85 1.0 1.0
   picture (rgba 0.025 0.035 0.07 1.0) [
     line ink 2.0 a b,

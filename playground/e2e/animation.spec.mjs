@@ -148,16 +148,19 @@ async function geometryProof(page) {
       const vertices = [[-1,-1,-1], [1,-1,-1], [1,1,-1], [-1,1,-1],
         [-1,-1,1], [1,-1,1], [1,1,1], [-1,1,1]];
       const edges = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
-      const expectedAngles = [0.7, 1.4, 2.4];
-      for (const [fi, theta] of expectedAngles.entries()) {
-        // Apply independent rotation matrices in homogeneous camera coordinates.
-        const matrix = [[Math.cos(theta), 0, Math.sin(theta)],
-          [Math.sin(0.5) * Math.sin(theta), Math.cos(0.5), -Math.sin(0.5) * Math.cos(theta)],
-          [-Math.cos(0.5) * Math.sin(theta), Math.sin(0.5), Math.cos(0.5) * Math.cos(theta)]];
+      const expectedAngles = [[0.7, 0.55], [1.4, 0.8], [2.4, 0.8]];
+      for (const [fi, [theta, tilt]] of expectedAngles.entries()) {
+        // Apply independent yaw, pitch, and roll matrices before perspective projection.
+        const matrices = [
+          [[Math.cos(theta), 0, Math.sin(theta)], [0, 1, 0], [-Math.sin(theta), 0, Math.cos(theta)]],
+          [[1, 0, 0], [0, Math.cos(tilt), -Math.sin(tilt)], [0, Math.sin(tilt), Math.cos(tilt)]],
+          [[Math.cos(0.12), -Math.sin(0.12), 0], [Math.sin(0.12), Math.cos(0.12), 0], [0, 0, 1]],
+        ];
         const projected = vertices.map(v => {
-          const [x, y, z] = matrix.map(row => row.reduce((sum, a, i) => sum + a * v[i], 0));
-          assert.ok(5 + z > 3, 'all cube vertices stay beyond the near plane');
-          return [360 * x / (5 + z), 360 * y / (5 + z)];
+          const [x, y, z] = matrices.reduce((v, matrix) =>
+            matrix.map(row => row.reduce((sum, a, i) => sum + a * v[i], 0)), v);
+          assert.ok(8 + z > 6, 'all cube vertices stay beyond the near plane');
+          return [576 * x / (8 + z), 576 * y / (8 + z)];
         });
         assert.equal(frames[fi].commands.length, 12);
         edges.forEach(([a,b], i) => {
