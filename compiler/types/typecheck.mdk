@@ -7995,7 +7995,8 @@ emptyTcConfig = TcConfig {
 -- The process's first graph record, before any drive minted one.  `env` is the
 -- initial TcEnv (always `initialEnv`), a parameter for the reason `freshCrossRun`
 -- states: the `graphCtx` initializer must name `initialEnv` in its own body.  Every
--- `Ref` built here is the one every later record carries (`mintGraphCtx`).
+-- `Ref` built here is the one every later record carries (`mintGraphCtx`), except
+-- `builtinExternNamesRef`, which a memo hit replaces (`restoreGraphCtx`).
 initialGraphCtx : TcEnv -> GraphCtx
 initialGraphCtx env = GraphCtx {
   crossRun = freshCrossRun env,
@@ -8703,11 +8704,10 @@ uOblIsDecidableNow o =
 -- top-level binding, a global initialized eagerly at startup, and the backends order
 -- those globals by the value globals each initializer names (`eagerVars`,
 -- backend/emit_support.mdk).  A read hidden inside this function was invisible to that
--- order, so the shim was initialized before `initialEnv` and read a zero: a null
--- dereference at wasm instantiate that killed the playground (#543), and a silent
--- zero on native that only the first drive's mint happened to overwrite.  Taking the
--- env as an argument puts `initialEnv` in the shim initializer's own body
--- (`initialGraphCtx initialEnv`).  The emitter-side fix that follows calls is #553.
+-- order, so the shim would be initialized before `initialEnv` and read a zero: a null
+-- dereference at wasm instantiate, and a silent zero on native until the first
+-- drive's mint overwrites it.  Taking the env as an argument puts `initialEnv` in the
+-- shim initializer's own body (`initialGraphCtx initialEnv`).
 freshCrossRun : TcEnv -> CrossRun
 freshCrossRun env = CrossRun {
   universeFunNamesRef = Ref omEmpty,
@@ -9065,7 +9065,7 @@ resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
 -- module, wiping `typeErrors`, so after the whole graph only the last module's errors
 -- survive there.  build/run must abort on a type error in any module, so
 -- `pushTypeError` also records into this accumulator, which only
--- `resetTypeErrorsSticky` clears (the driver, once, before a run).  Read via
+-- `resetTypeErrorsSticky` clears (snapshot.mdk and tests; no production driver calls it).  Read via
 -- `hadTypeErrors` to gate the CLI exit code before emit/eval.
 --
 -- #2089 / #2544 (M4): `GraphCtx.typeErrorsStickyDiags` holds the diagnostics behind
@@ -9077,7 +9077,7 @@ resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
 -- wherever the flag is (`checkGraphFinish`) — the same pairing obligation the
 -- detection counter states.  The mint carries both, so they outlive a drive.
 
--- Clear the sticky accumulator.  Call once at the start of a build/run pipeline.
+-- Clear the sticky accumulator.  Called by snapshot.mdk and tests; the production drivers carry it across drives.
 export
 resetTypeErrorsSticky : Unit -> Unit
 resetTypeErrorsSticky _ =
@@ -10536,7 +10536,7 @@ defaultBodyBinderNamesProbe : Unit -> List String
 defaultBodyBinderNamesProbe _ =
   let savedGraph = graphCtx.value.graphRun
   let savedPerRun = perRun.value
-  let _ = installRun (freshGraphRun ())
+  installRun (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let iface =
     IfaceRef { irName = "Supply", irOrigin = OriginModule "owner-module" }
@@ -10555,7 +10555,7 @@ defaultBodyBinderNamesProbe _ =
     renderEvidenceBinder (Scopes.binderAt body 1),
     renderEvidenceBinder (Scopes.binderAt body defaultReceiverOrdinal),
   ]
-  let _ = installRun savedGraph
+  installRun savedGraph
   perRun := savedPerRun
   rendered
 
@@ -15392,7 +15392,7 @@ argDispatchOf name =
 -- argument on any program the corpus does not yet contain.
 --
 -- ── The two fields this reader consumes (re-homed here by L3, RUN-METHID-054) ──
--- `argDispatchIdxByIdRef` / `methodDispatchIdxByIdRef` (`GraphCtx`) — #1351 L1
+-- `argDispatchIdxByIdRef` (`GraphCtx`) / `methodDispatchIdxByIdRef` (`ModuleCtx`) — #1351 L1
 -- (EXPAND), keyed `(IfaceRef, method name)`.  The `IfaceRef` half carries `irOrigin`,
 -- the module-identity component, so a bare method name shared by two interfaces in
 -- different modules gets distinct rows instead of colliding.  L1 wrote them and nothing
@@ -45297,7 +45297,7 @@ scopeGivenProbe : Unit -> List Bool
 scopeGivenProbe _ =
   let savedGraph = graphCtx.value.graphRun
   let savedPerRun = perRun.value
-  let _ = installRun (freshGraphRun ())
+  installRun (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let store = currentScopeStore ()
   let root = Scopes.freshScope store None 0 "given-probe" ModuleOwner
@@ -45365,7 +45365,7 @@ scopeGivenProbe _ =
       (firstPredForEnclResidual "PairGiven" args owner givens),
     isLegacyPredicateAnswer (firstPredForEncl compatibleRequest owner givens),
   ]
-  let _ = installRun savedGraph
+  installRun savedGraph
   perRun := savedPerRun
   result
 
@@ -45520,7 +45520,7 @@ methodRowNumObservation caseName builtinDecls decls =
   let savedCross = graphCtx.value.crossRun
   let savedGraph = graphCtx.value.graphRun
   let savedPerRun = perRun.value
-  let _ = installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
+  installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   graphCtx.value.crossRun.builtinClassesRef := builtinClassesOf builtinDecls
   let rows = ifaceMethodSchemeRows decls
@@ -45540,7 +45540,7 @@ methodRowNumObservation caseName builtinDecls decls =
       natoSchemeBody = ppMono (schemeBodyOf anchor.msrScheme),
       natoDeclaredType = ppTy anchor.msrType,
     }
-  let _ = installSubRecords savedCross savedGraph
+  installSubRecords savedCross savedGraph
   perRun := savedPerRun
   observation
 
@@ -45550,7 +45550,7 @@ observeMethodSchemeRowsForTest _ =
   let savedGraph = graphCtx.value.graphRun
   let savedPerRun = perRun.value
 
-  let _ = installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
+  installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let constrainedRow =
     firstMethodRow (ifaceMethodSchemeRows [methodRowTestFoldMapDecl])
@@ -45562,7 +45562,7 @@ observeMethodSchemeRowsForTest _ =
     methodSlotIdsAtPositions constrainedIds constrainedSlots
   let constrainedArgumentIds = methodSlotArgumentIds constrainedSlots
 
-  let _ = installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
+  installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let counterBefore = graphCtx.value.graphRun.tyvarCounter.value
   let firstRow =
@@ -45578,18 +45578,18 @@ observeMethodSchemeRowsForTest _ =
   let registryAfterSecondSlotIds =
     methodRowRegistrySlotIds (methodSlotKey firstRow.msrIface "foldMap")
 
-  let _ = installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
+  installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let sameNameForward =
     methodRowSameNameView
       (ifaceMethodSchemeRows [methodRowTestSameA, methodRowTestSameB])
-  let _ = installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
+  installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let sameNameReverse =
     methodRowSameNameView
       (ifaceMethodSchemeRows [methodRowTestSameB, methodRowTestSameA])
 
-  let _ = installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
+  installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let constantRows = ifaceMethodSchemeRows [methodRowTestConstantDecl]
   let constantRow = firstMethodRow constantRows
@@ -45598,7 +45598,7 @@ observeMethodSchemeRowsForTest _ =
       TFun _ _ _ => True
       _ => False
 
-  let _ = installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
+  installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let attributed = DAttrib [] methodRowTestFoldMapDecl
   let attributedRows = ifaceMethodSchemeRows [attributed]
@@ -45668,7 +45668,7 @@ observeMethodSchemeRowsForTest _ =
     mrtoAttributedParamTyparams = attributedParamTyparams,
     mrtoNumAnchors = numAnchors,
   }
-  let _ = installSubRecords savedCross savedGraph
+  installSubRecords savedCross savedGraph
   perRun := savedPerRun
   observation
 
@@ -45803,7 +45803,7 @@ methodReturnVectorCompletenessProbe _ =
   let savedCross = graphCtx.value.crossRun
   let savedGraph = graphCtx.value.graphRun
   let savedPerRun = perRun.value
-  let _ = installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
+  installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let _ = methodReturnProbeScope "return-vector"
   let zeroRow =
@@ -45842,7 +45842,7 @@ methodReturnVectorCompletenessProbe _ =
     allMethodParamsMentioned zeroRow.msrTyparams zeroRow.msrType,
     allMethodParamsMentioned partialRow.msrTyparams partialRow.msrType,
   )
-  let _ = installSubRecords savedCross savedGraph
+  installSubRecords savedCross savedGraph
   perRun := savedPerRun
   observed
 
@@ -45856,7 +45856,7 @@ methodReturnTemplatePresenceProbe _ =
   let savedCross = graphCtx.value.crossRun
   let savedGraph = graphCtx.value.graphRun
   let savedPerRun = perRun.value
-  let _ = installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
+  installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let present =
     firstMethodRow
@@ -45894,13 +45894,13 @@ methodReturnTemplatePresenceProbe _ =
     map isSome present.msrPredicateTemplate.mptArguments,
     map isSome absent.msrPredicateTemplate.mptArguments,
   )
-  let _ = installSubRecords savedCross savedGraph
+  installSubRecords savedCross savedGraph
   perRun := savedPerRun
   observed
 
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
 methodReturnProbeCodes ownedRow impls =
-  let _ = installRun (freshGraphRun ())
+  installRun (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let _ = methodReturnProbeScope "return-owner-checker"
   let foreignRow =
@@ -45928,7 +45928,7 @@ methodReturnProbeStamp : MethodSchemeRow ->
   List Decl ->
   (String, String, String)
 methodReturnProbeStamp ownedRow foreignRow impls =
-  let _ = installRun (freshGraphRun ())
+  installRun (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let scope = methodReturnProbeScope "return-owner-stamper"
   let request = methodReturnProbeRequest ownedRow
@@ -45969,7 +45969,7 @@ methodReturnOwnershipProbe _ =
   let savedPerRun = perRun.value
   let savedSticky = graphCtx.value.typeErrorsSticky.value
   let savedStickyDiags = graphCtx.value.typeErrorsStickyDiags.value
-  let _ = installCross (freshCrossRun initialEnv)
+  installCross (freshCrossRun initialEnv)
   let ownedDecl =
     methodReturnProbeIface
       "return-owner"
@@ -45980,10 +45980,10 @@ methodReturnOwnershipProbe _ =
       "return-foreign"
       "Foreign"
       (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-  let _ = installRun (freshGraphRun ())
+  installRun (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let ownedRow = firstMethodRow (ifaceMethodSchemeRows [ownedDecl])
-  let _ = installRun (freshGraphRun ())
+  installRun (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let foreignRow = firstMethodRow (ifaceMethodSchemeRows [foreignDecl])
   let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
@@ -45998,7 +45998,7 @@ methodReturnOwnershipProbe _ =
     actualKey == ownedKey,
     actualKey /= foreignKey,
   )
-  let _ = installSubRecords savedCross savedGraph
+  installSubRecords savedCross savedGraph
   perRun := savedPerRun
   graphCtx.value.typeErrorsSticky := savedSticky
   graphCtx.value.typeErrorsStickyDiags := savedStickyDiags
@@ -46013,7 +46013,7 @@ methodReturnResolutionMutationProbe _ =
   let savedCross = graphCtx.value.crossRun
   let savedGraph = graphCtx.value.graphRun
   let savedPerRun = perRun.value
-  let _ = installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
+  installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let _ = methodReturnProbeScope "return-outcome-validation"
   let ownedDecl =
@@ -46077,7 +46077,7 @@ methodReturnResolutionMutationProbe _ =
     not (methodReturnResolutionValid request wrongPrerequisites),
     not (methodReturnResolutionValid request disagreement),
   )
-  let _ = installSubRecords savedCross savedGraph
+  installSubRecords savedCross savedGraph
   perRun := savedPerRun
   observed
 
@@ -46110,7 +46110,7 @@ methodReturnProbeSlotCase : MethodSchemeRow ->
   Bool ->
   (List String, List String)
 methodReturnProbeSlotCase ownedRow foreignRow retainOwner =
-  let _ = installRun (freshGraphRun ())
+  installRun (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let _ = methodReturnProbeScope "return-owner-slots"
   perRun.value.methodPredicateSlotsRef :=
@@ -46152,7 +46152,7 @@ methodReturnSlotOwnershipProbe _ =
   let savedCross = graphCtx.value.crossRun
   let savedGraph = graphCtx.value.graphRun
   let savedPerRun = perRun.value
-  let _ = installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
+  installSubRecords (freshCrossRun initialEnv) (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let ownedRow =
     firstMethodRow
@@ -46164,7 +46164,7 @@ methodReturnSlotOwnershipProbe _ =
             [methodRowTestConstraint "return-seed" "Seed" [TyVar "b"]]
             (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
       ])
-  let _ = installRun (freshGraphRun ())
+  installRun (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let emptyRow =
     firstMethodRow
@@ -46174,7 +46174,7 @@ methodReturnSlotOwnershipProbe _ =
           "EmptySlots"
           (TyFun (tyConBuiltin "Unit" None) (TyVar "a")),
       ])
-  let _ = installRun (freshGraphRun ())
+  installRun (freshGraphRun ())
   perRun := carryModuleCtx perRun.value
   let foreignRow =
     firstMethodRow
@@ -46191,7 +46191,7 @@ methodReturnSlotOwnershipProbe _ =
     methodReturnProbeSlotCase emptyRow foreignRow True,
     methodReturnProbeSlotCase ownedRow foreignRow False,
   )
-  let _ = installSubRecords savedCross savedGraph
+  installSubRecords savedCross savedGraph
   perRun := savedPerRun
   observed
 
@@ -50678,7 +50678,7 @@ checkCoreMemoized : Option (Int, Int) ->
   (ModuleBindings, List (String, PubScheme), GraphCtx)
 checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
   Some m =>
-    let _ = installSnapshotModuleCtx m.ccmModule
+    installSnapshotModuleCtx m.ccmModule
     (
       m.ccmCoreSchemes,
       m.ccmCorePub,
@@ -50921,7 +50921,7 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
     GOutDiags =>
       let (bindings, published, ctx) =
         checkCoreMemoized preludeKey coreDecls runtimeSeed
-      let _ = installGraphCtx ctx
+      installGraphCtx ctx
       (
         bindings,
         Some published,
@@ -51646,7 +51646,7 @@ checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDe
   let (depEnv, accData, accAll, results, resumeCtx) = match restored
     None => ([], publicDataDecls coreDecls, coreDecls, [], graphCtx.value)
     Some st =>
-      let _ = installSnapshotModuleCtx st.csModule
+      installSnapshotModuleCtx st.csModule
       (
         st.csDepEnv,
         st.csAccData,
@@ -51658,7 +51658,7 @@ checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDe
           st.csCtx.graphRun
           st.csCtx.builtinExternNamesRef.value,
       )
-  let _ = installGraphCtx resumeCtx
+  installGraphCtx resumeCtx
   let n = listLen kept
   -- A restored step's rows were frozen when it was recorded, so nothing is open.
   let (finalResults, open, newSteps) =
@@ -53820,11 +53820,11 @@ markModules : List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 markModules coreDecls modules =
-  let _ = installRun (graphLineageRun False graphCtx.value.graphRun)
+  installRun (graphLineageRun False graphCtx.value.graphRun)
   let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
   let core2 = prePassDict rpNames [] coreDecls
   let modules2 = map (prePassModulePair rpNames) modules
-  let _ = installRun GraphRun { graphCtx.value.graphRun | markedAhead = True }
+  installRun GraphRun { graphCtx.value.graphRun | markedAhead = True }
   (core2, modules2)
 
 -- typecheck one module (seeded like checkModuleFull) AND immediately stamp the
