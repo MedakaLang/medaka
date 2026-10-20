@@ -324,7 +324,7 @@ deletion.
   NOTES.md, 9 never resync and 76 resync lines describe a clean, file-disjoint
   merge. Adoption 2 cuts the COUNT (~2.5/sprint → ~1); adoption 3 cuts the
   per-resync battery.
-- `argtag-decidability`'s `copyDriverState` non-compiling clean auto-merge is
+- `argtag-decidability`'s `copyDriverState` (since deleted) non-compiling clean auto-merge is
   cited in places as an argument FOR mid-sprint resync. It is not: it happened
   at LAND time, after four mid-sprint resyncs had already run and prevented
   nothing, and [T-LEGA-REBASE]'s rebuild is what caught it.

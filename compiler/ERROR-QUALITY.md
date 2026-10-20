@@ -443,7 +443,7 @@ sticky flag, the sticky residual and the match warnings before re-sweeping. All 
 gates above run *inside* a discarded sweep, so a detection there is un-stored,
 un-armed and un-counted — the final sweep re-detects it — and **the program is not
 rejected on account of it.** What survives the window is the discovery result — `promoted`
-plus the two `crossRun` constraint snapshots — not a diagnostic. So inside the speculative
+plus the two `CrossRun` constraint snapshots — not a diagnostic. So inside the speculative
 pass a gate that fires changes what discovery concludes, and the "rejected either way"
 premise is unavailable.
 

@@ -225,7 +225,7 @@ the others — and the miss is path-specific (LSP-only, emit-only), the hardest 
 Before pushing, grep every member of the family you touched (table above) and patch all of them.
 
 ### 5. Coherence must NEVER see seeded impls
-`checkCoherence` runs over **user decls only** (`coherenceUserDecls`) — a user impl deliberately
+`checkCoherence` runs over **user decls only** (`diCoherenceUserDecls`) — a user impl deliberately
 overrides a seeded prelude impl. Feed the unified final-checks helper (#152) the seeded set and it
 false-positives on the stdlib itself, breaking dozens of gates at once. Pass the decls explicitly;
 no defaulting to the whole program.
@@ -299,7 +299,7 @@ grep on `universe*`. Those are not the same set, and multiple "the set is comple
 prefix.
 
 Re-derived 2026-08-09: **~20 shape-members sat outside both prefix greps**, in `types/`
-(`DriverState`), `backend/`, `ir/` and `eval/` — including `argDispatchIdxRef` and the former
+(`GraphCtx`), `backend/`, `ir/` and `eval/` — including `argDispatchIdxRef` and the former
 shared method-interface table/index Refs in `backend/emit_support.mdk`. X-N.H and X-W.H1 later
 moved those method facts into backend input values, but the derivation lesson remains: a
 `types/`-anchored enumeration structurally cannot reach backend members.

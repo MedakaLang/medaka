@@ -24,7 +24,7 @@ Scope: `compiler/**/*.mdk`, excluding `*_test.mdk`, comment lines excluded via
   a scheme's type variables).
 - **per-module** — grows with a module: its decls, its impls, its resolve environment.
 - **graph** — grows with the whole program or the run: the module list, a run-wide
-  channel (`ModuleCtx`/`DriverState`/`GraphRun` fields in `compiler/types/typecheck.mdk`),
+  channel (`ModuleCtx`/`GraphCtx`/`GraphRun` fields in `compiler/types/typecheck.mdk`),
   a "universe" accumulator.
 
 ## Drain order — graph-class collections first
@@ -33,7 +33,7 @@ Every row below is a `List`-typed run-wide channel scanned with `lookupAssoc`,
 `lookupTab`, or `contains`/`elem`/`dedup`. Call-site counts are call sites found across
 the `lookupAssoc` / `lookupTab` / `contains`-family / `Ref (List ` sweeps (below), not
 independently re-verified beyond the naming convention (`perRun.value.*Ref.value`,
-`driverState.value.*Ref.value`, `ModuleCtx`/`DriverState`/`GraphRun` record fields). All
+`graphCtx.value.*Ref.value`, `ModuleCtx`/`GraphCtx`/`GraphRun` record fields). All
 scans found are **first-wins** (linear cons-list scan; no last-wins run-wide table was
 found) — an assoc-list to `OrdMap`/`HashMap` conversion on any of these preserves
 semantics with no first/last-wins hazard, unlike the `typecheck.mdk`-internal
@@ -46,8 +46,8 @@ semantics with no first/last-wins hazard, unlike the `typecheck.mdk`-internal
 | `definerShadowNamesRef` | PerRun | 8 (contains) + 1 field decl | `HashSet` |
 | `definerShadowSigsRef` | PerRun | 4 (lookupAssoc) + 1 field decl | `OrdMap` |
 | `aliasTableRef` | PerRun | 5 (lookupTab) + 1 field decl | `OrdMap` |
-| `standaloneValuesRef` | DriverState | 4 (contains) + 1 field decl | `HashSet` |
-| `mangledShadowMapRef` | DriverState | 4 (lookupAssoc) + 1 field decl | `OrdMap` |
+| `standaloneValuesRef` | GraphCtx | 4 (contains) + 1 field decl | `HashSet` |
+| `mangledShadowMapRef` | GraphCtx | 4 (lookupAssoc) + 1 field decl | `OrdMap` |
 | `currentImportDefinersRef` | PerRun | 2 (lookupAssoc) + 1 field decl | `OrdMap` |
 | `dataParamPolarityRef` | PerRun | 2 (lookupTab) + 1 field decl | `OrdMap` |
 | `dataParamRowAtomsRef` | PerRun | 1 (lookupTab) + 1 field decl | `OrdMap` |
@@ -55,15 +55,15 @@ semantics with no first/last-wins hazard, unlike the `typecheck.mdk`-internal
 | `promotedRef` | PerRun | 1 (dedup) + 1 field decl | n/a — dedup, not lookup; `HashSet`-backed dedup if hot |
 | `funConstraintDeclaredRef` | PerRun | 1 (lookupAssoc) + 1 field decl | `OrdMap` |
 | `currentImportOriginsRef` | PerRun | 1 (lookupAssoc) + 1 field decl | `OrdMap` |
-| `userIfaceNamesRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
-| `stdlibOwnedModsRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
-| `promotionHarvestRef` | DriverState | 1 (dedup) + 1 field decl | n/a — dedup |
-| `abstractRecordTypesRef` | DriverState | 1 (contains) + 1 field decl | `HashSet` |
+| `userIfaceNamesRef` | GraphCtx | 1 (contains) + 1 field decl | `HashSet` |
+| `tcStdlibOwned` | GraphCtx | 1 (contains) + 1 field decl | `HashSet` |
+| `promotionHarvestRef` | GraphCtx | 1 (dedup) + 1 field decl | n/a — dedup |
+| `abstractRecordTypesRef` | GraphCtx | 1 (contains) + 1 field decl | `HashSet` |
 | module list (`modules`/`allModules`/`modPaths`) | (loader/typecheck/resolve param) | 4 (lookupAssoc-family) | `OrdMap` keyed by module id |
 | **= #2724**: `goals` via `moduleWindow`'s `listLen` | GraphRun | see below, not part of the lookupAssoc/contains/Ref(List sweeps — `listLen` shape | tracked by #2724 (counter instead of `listLen`) |
 | **= #2724**: `allModules` in `dictPassModulesScoped` → the transitive-importer walk | (typecheck.mdk param) | see below | precomputed importer index, one per run (`importerReachIndex`, PR #2743) |
 
-Remaining `DriverState`/`GraphRun`/`ModuleCtx` fields that are `Ref (List …)`-typed but not
+Remaining `GraphCtx`/`GraphRun`/`ModuleCtx` fields that are `Ref (List …)`-typed but not
 found scanned by `lookupAssoc`/`lookupTab`/`contains` in this sweep (47 total field
 declarations in the three records — see the `Ref (List` table below, rows tagged
 `graph`) are lower priority: a field with no scan call site found here costs allocation
@@ -73,7 +73,7 @@ on push but not a linear rescan.
 
 - `moduleWindow : Ref (List a) -> Int -> List a` (`compiler/types/typecheck.mdk:9304`)
   — `let now = cell.value in takeFirst (listLen now - mark) now`. Called on
-  `graphRun.value.goals` (line 2984) and `graphRun.value.numlitRefs` (lines 19834, 30440,
+  `graphCtx.value.graphRun.goals` (line 2984) and `graphCtx.value.graphRun.numlitRefs` (lines 19834, 30440,
   42378) — the run-wide goals/numlit channels.
 - the transitive-importer walk (`compiler/types/typecheck.mdk` ~41791 at the census base),
   called from `dictPassModulesScoped` (~41441) once per module in the program, each call a
@@ -136,7 +136,7 @@ on push but not a linear rescan.
 | **Total** | **47** | **156** |
 
 `47 + 156 = 203` — matches the acceptance-check grep count (below). All 47 `graph` rows
-are `DriverState`/`GraphRun`/`ModuleCtx` field *declarations* (type occurrences), not call
+are `GraphCtx`/`GraphRun`/`ModuleCtx` field *declarations* (type occurrences), not call
 sites — see the Drain order table above for which of those fields also has a live
 `lookupAssoc`/`lookupTab`/`contains` scan against it.
 
@@ -213,8 +213,8 @@ site, not this note, before changing either.
 
 - Every row's `class`/`collection`/`container` was assigned by a small shell classifier
   (kept out of the tree per the packet — not checked in) matching on: `perRun.value.*
-  Ref.value` / `driverState.value.*Ref.value` / `graphRun.value.*` (→ graph), line
-  ranges inside the `DriverState`/`GraphRun`/`ModuleCtx` record bodies in
+  Ref.value` / `graphCtx.value.*Ref.value` / `graphCtx.value.graphRun.*` (→ graph), line
+  ranges inside the `GraphCtx`/`GraphRun`/`ModuleCtx` record bodies in
   `compiler/types/typecheck.mdk` (→ graph, for the `Ref (List` sweep), `env.*Ambiguous`
   / `exp.exp*Ctors` (→ per-module), the three `haskell*Aliases` tables (→ bounded), and
   otherwise **per-decl by default**. The `graph` and `per-module` rows above were
@@ -252,7 +252,7 @@ grep -rn 'Ref (List ' compiler --include='*.mdk' | grep -v '^\S*:\s*--' | grep -
 grep -rn -E '\b(contains|elem|containsI|dedup|dedupBy)\b' compiler --include='*.mdk' \
   | grep -v '^\S*:\s*--' | grep -v _test.mdk | wc -l                                                    # 476
 grep -rn 'lookupTab ' compiler --include='*.mdk' | grep -v '^\S*:\s*--' | grep -v _test.mdk             # 18 call sites (excl. the definition itself)
-grep -rn 'perRun\.value\.[A-Za-z]*Ref\.value\|driverState\.value\.[A-Za-z]*Ref\.value' compiler \
+grep -rn 'perRun\.value\.[A-Za-z]*Ref\.value\|graphCtx\.value\.[A-Za-z]*Ref\.value' compiler \
   --include='*.mdk' | grep -v _test.mdk | grep -E 'lookupAssoc|contains|elem|containsI|dedup|Ref \(List'
 grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^\S*:\s*--' | wc -l      # 377, not enumerated (see Methodology)
 ```
@@ -411,7 +411,7 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:16852 | lookupAssoc | `perRun.value.definerShadowSigsRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:20181 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:20493 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:20998 | lookupAssoc | `graphRun.value.activeDictVars.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:20998 | lookupAssoc | `graphCtx.value.graphRun.activeDictVars.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:21639 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:24284 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:30538 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
@@ -426,10 +426,10 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:34779 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:35342 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:36419 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:37049 | lookupAssoc | `driverState.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:37309 | lookupAssoc | `driverState.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:37354 | lookupAssoc | `driverState.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:37563 | lookupAssoc | `driverState.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:37049 | lookupAssoc | `graphCtx.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:37309 | lookupAssoc | `graphCtx.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:37354 | lookupAssoc | `graphCtx.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:37563 | lookupAssoc | `graphCtx.value.mangledShadowMapRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:37670 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:37705 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:37844 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
@@ -547,8 +547,8 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:7264 | Ref (List | `dictEligibleRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7266 | Ref (List | `mangledShadowMapRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7268 | Ref (List | `userIfaceNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7269 | Ref (List | `coherenceUserDecls` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:7270 | Ref (List | `stdlibOwnedModsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7269 | Ref (List | `diCoherenceUserDecls` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:7270 | Ref (List | `tcStdlibOwned` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7273 | Ref (List | `superDeclsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7274 | Ref (List | `standaloneValuesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:7275 | Ref (List | `methodDispatchIdxByIdRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
@@ -1010,9 +1010,9 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:11446 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:11582 | contains/elem/dedup | `perRun.value.standaloneValuesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:12432 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:12458 | contains/elem/dedup | `driverState.value.userIfaceNamesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:12458 | contains/elem/dedup | `graphCtx.value.userIfaceNamesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:12668 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:12998 | contains/elem/dedup | `driverState.value.abstractRecordTypesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:12998 | contains/elem/dedup | `graphCtx.value.abstractRecordTypesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:13813 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:14860 | contains/elem/dedup | `perRun.value.definerShadowNamesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:14861 | contains/elem/dedup | `perRun.value.standaloneValuesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
@@ -1086,7 +1086,7 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:32292 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:32394 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:32598 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:32821 | contains/elem/dedup | `driverState.value.stdlibOwnedModsRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:32821 | contains/elem/dedup | `graphCtx.value.config.value.tcStdlibOwned` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:34130 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:34443 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:34483 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
@@ -1133,7 +1133,7 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:42103 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:42268 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:42487 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:42567 | contains/elem/dedup | `driverState.value.promotionHarvestRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:42567 | contains/elem/dedup | `graphCtx.value.promotionHarvestRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 
 ### `lookupTab` sites (18)
 

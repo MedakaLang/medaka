@@ -1,5 +1,5 @@
 # META
-source_lines=3356
+source_lines=3393
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -404,7 +404,7 @@ public export data DeclEnvs = DeclEnvs {
 --     `Ref` field: the value is then a function of WHEN it was first derived, and
 --     a resumed prefix pins that first reading for the life of the process.  This
 --     is why the ATOM-GUARANTEE seed is not here -- `declEnvRowAtomEntries`
---     bottoms out in `dtopFor`, which reads `driverState.effectDomains`, a table
+--     bottoms out in `dtopFor`, which reads `GraphCtx.effectDomains`, a table
 --     the graph's own `effect` decls fill.  `buildDeclEnvs` derives it over
 --     every row on every call, the way `deReach` is derived.
 public export data DeclEnvAcc = DeclEnvAcc {
@@ -506,7 +506,7 @@ public export data DataTypeDecl = DataTypeDecl {
 -- takes, carried on the row rather than re-derived at the read.  They are here —
 -- and not on `DataTypeDecl` — because THIS is the row that has a production
 -- reader: `aliasUniverseAt` is the whole-graph replacement for the retired
--- `crossRun.universeAliasTable`, and it must answer "which aliases can a reader
+-- `CrossRun.universeAliasTable`, and it must answer "which aliases can a reader
 -- at ordinal k see" without walking every module's decls again (the per-module ×
 -- per-decl shape `importedCtorTypeDecls` already pays once).
 --
@@ -539,7 +539,7 @@ public export data AliasDecl = AliasDecl {
 }
 
 -- `deFieldOwnerIdents` is the NEW identity-keyed table: `universeFieldOwners`
--- (`crossRun`) is bare-String-keyed only and has no identity companion today
+-- (`GraphCtx.crossRun`) is bare-String-keyed only and has no identity companion today
 -- (unlike the ctor/record tables, which A-2.11/A-2.12 (#1319 units 1/2)
 -- already gave one).  Mirrors `deCtorIdents`/`deRecordIdents`'s shape: field
 -- name -> every (owning ctor Ident, owning ctor name) that declares it, in
@@ -631,7 +631,7 @@ public export data InstRef = InstRef String Int Int
 --
 -- `ImplEnv` below KEEPS its named fields, and that is not an inconsistency: its
 -- construction site `emptyImplEnv` is reachable from `emptyDeclEnvs` ←
--- `freshDriverState`, which every driver builds — which is exactly why the panic
+-- `initialGraphCtx`, which the `graphCtx` initializer builds — which is why the panic
 -- named `ieOrd` and not `ieRows`.  A later editor who makes `emptyImplEnv`
 -- unreachable re-arms the same trap on `ImplEnv`.
 --
@@ -816,8 +816,8 @@ public export data ImplAcc = ImplAcc {
 -- positional constructor is destructured by pattern match and consults no
 -- label table, so it cannot hit this.  `ClassEnv` below KEEPS named fields,
 -- for the identical reason `ImplEnv` does: its construction site
--- (`emptyClassEnv`) is reachable from `emptyDeclEnvs` ← `freshDriverState`,
--- which every driver builds.
+-- (`emptyClassEnv`) is reachable from `emptyDeclEnvs` ← `initialGraphCtx`,
+-- which the `graphCtx` initializer builds.
 --
 -- Fields, in order: this interface's identity key (`ifaceTabKey` lifted
 -- through `regKeyOfTab`, the same mint `oblIfaceKeys`/`ifaceSlotKey` use);
@@ -911,28 +911,23 @@ public export data MethodScope =
   | MsOne MethodRow
   | MsMany (List IfaceRef)
 
--- #158 PR5 / #176 closure: the RESIDUAL survivor Refs — governed until now by
--- per-ref prose and clustered in NEITHER `ModuleCtx` NOR
--- `resetCrossModuleState` (CrossRun).  They have HETEROGENEOUS lifecycles
--- (driver-set-once preamble state like `effectDomains`/`mainSchemeRef`, graph
--- indexes, driver-published inputs; the per-module fields live on `ModuleCtx`),
--- so there is NO single `freshDriverState` reset point: `freshDriverState` is the
--- INITIAL construction only, and every field is (re)written at its OWN current site,
--- exactly as before.  Re-homing them here does NOT change any write/reset timing — it
--- makes the #143/#144-style silent clobber STRUCTURALLY VISIBLE: a residual survivor is
--- now a named field on ONE cell (a type fact, not prose), the last piece of #158/#176.
--- A record OF Refs (fields stay `Ref …`): every writer mutates a field-Ref in place, so
--- no whole-record copy is allocated per set.
+-- One graph drive's state: the cross-module accumulators (`crossRun`), the graph
+-- lineage (`graphRun`), the drive's configuration, the graph-derived tables, and the
+-- sticky type-error pair.  `graphPreamble` mints it (`mintGraphCtx`) with fresh
+-- `crossRun` and `graphRun`; every `Ref` field is carried from the previous record by
+-- identity and then written in place at its own site, so a field the preamble does
+-- not write keeps the previous drive's value.  The sticky pair is process-lived:
+-- no driver clears it (`resetTypeErrorsSticky` does, for its callers).
 --
 -- NO TRAILING `--` comment on any field below (#829/[T-PERRUN-COMMENTS] corrupts
 -- this header shape) — field prose lives on the reader, e.g. `dispatchIdxScoped`.
-public export data DriverState = DriverState {
+public export data GraphCtx = GraphCtx {
+  crossRun : CrossRun,
+  graphRun : GraphRun,
   effectDomains : Ref (List (String, Param)),
-  -- What `IO` joins in this drive (`ioJoinAtoms`), and the name of the profile
-  -- it was taken from (`""` for none).  Written once per drive by
-  -- `graphPreamble`, after the effect domains it reads.
-  ioJoin : Ref (List Atom),
-  ioJoinProfile : Ref String,
+  -- The drive's configuration, built once per drive by `graphPreamble` (`tcConfigOf`)
+  -- after the effect domains its IO join reads.
+  config : Ref TcConfig,
   -- Per module: the (dependency id, method name) pairs `deAliasMethodImports`
   -- admitted for dispatch without the program binding that bare name, so the
   -- import seed can tell an admission from a written binding.
@@ -944,9 +939,6 @@ public export data DriverState = DriverState {
   dictEligibleSetRef : Ref (OrdMap Unit),
   mangledShadowMapRef : Ref (List (String, String)),
   mangledFunDefsPresentRef : Ref Bool,
-  coherenceUserDecls : Ref (List Decl),
-  stdlibOwnedModsRef : Ref (OrdMap Unit),
-  flatEntryIsStdlibRef : Ref Bool,
   builtinExternNamesRef : Ref (OrdMap (Ty, List (String, Int))),
   promotionHarvestRef : Ref (List String),
   mainSchemeRef : Ref (Option Scheme),
@@ -955,6 +947,47 @@ public export data DriverState = DriverState {
   -- schedule.  `None` until a preamble has run; a Module arm reading `None` is a
   -- driver that skipped its preamble, and fails loud.
   markSetsRef : Ref (Option MarkSets),
+  -- Armed by every recorded type error (`recordTypeError`), read by
+  -- `hadTypeErrors`; the diagnostics behind it, newest first, each with its module.
+  typeErrorsSticky : Ref Bool,
+  typeErrorsStickyDiags : Ref (List (String, TcDiag)),
+}
+
+-- The typechecker's configuration for one drive: immutable, built once by
+-- `graphPreamble` from the selected profile and the driver inputs.  `tcIoJoin` is
+-- what `IO` joins (`ioJoinAtoms`) and `tcIoJoinProfile` the name of the profile it
+-- was taken from (`""` for none), which also keys the memos.  The other three are
+-- the driver inputs of `DriveInputs`, copied at the same point.
+public export data TcConfig = TcConfig {
+  tcIoJoin : List Atom,
+  tcIoJoinProfile : String,
+  tcStdlibOwned : OrdMap Unit,
+  tcFlatEntryIsStdlib : Bool,
+  tcCoherenceUserDecls : List Decl,
+}
+
+-- The trace gates and buffers the tests turn on before a drive and read after it.
+-- A gate is a plain `Bool` replaced through the publishers; each buffer is a `Ref`
+-- so a `note*` call appends in place.
+public export data TraceSink = TraceSink {
+  tsAssumptionEnabled : Bool,
+  tsAssumptionEntries : Ref (List AssumptionTraceEntry),
+  tsNumericPredicateEnabled : Bool,
+  tsNumericPredicateEntries : Ref (List NumericPredicateTraceEntry),
+  tsMethodReturnEnabled : Bool,
+  tsMethodReturnEntries : Ref (List MethodReturnTraceEntry),
+  tsEvidenceObservationEnabled : Bool,
+  tsEvidenceObservationEntries : Ref (List EvidenceObservationEntry),
+}
+
+-- What the drivers hand the typechecker before a drive: the stdlib ownership of the
+-- loader's module list, the user declarations coherence is checked over, and the
+-- trace sink.  Held in the config-lifetime cell `driveInputs`.
+public export data DriveInputs = DriveInputs {
+  diStdlibOwned : OrdMap Unit,
+  diFlatEntryIsStdlib : Bool,
+  diCoherenceUserDecls : List Decl,
+  diTrace : TraceSink,
 }
 
 -- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by
@@ -1305,7 +1338,7 @@ public export data PendingMethodDict = PendingMethodDict {
 -- crossModule* dict-arity mirrors of #143/#144, plus the #154 universe*/obUniv* universe
 -- accumulators) are bundled into ONE typed record so their survive/clear lifecycle is a
 -- TYPE FACT, not prose.  `freshCrossRun` constructs exactly the field-Refs that
--- `resetCrossModuleState` installs, so "what survives a module" == "what CrossRun holds"
+-- `mintGraphCtx` installs, so "what survives a module" == "what CrossRun holds"
 -- == "what a per-run reset clears" — enforced by the constructor: a new accumulator cannot
 -- be added to the survive-set without appearing in freshCrossRun (and thus the reset).
 -- This is a record OF Refs (fields stay `Ref …`), NOT a record of values: the grow helpers
@@ -1415,7 +1448,7 @@ public export data JoinContext =
 -- whole-graph resolve pass (#2548) can read them at quiescence, and the two counters
 -- that keep every tyvar/effvar id unique across the graph so an entry recorded in one
 -- module can never alias one recorded in another.  Minted once per graph by
--- `resetGraphState` — from `resetCrossModuleState` (every Module driver's preamble)
+-- `graphLineageRun` — from `mintGraphCtx` (every Module driver's preamble)
 -- and from every graph preamble, including the one-module projection.
 --
 -- The channels are still drained per module today, by the stamper sequence in
@@ -1428,7 +1461,7 @@ public export data JoinContext =
 --
 -- Deliberately still per-module: `funPredicateSlotsRef` (keyed by bare binding NAME —
 -- graph-global it would collide across modules; it is seeded from and written back to
--- crossRun's tables per module already).  It is NOT a given table: its readers are the
+-- CrossRun's tables per module already).  It is NOT a given table: its readers are the
 -- DECLARED-slot consumers (`declaredConstraintFor`, `declaredConstraintIds`,
 -- `inferDictAtFound`, `goalIdsClaimed`) plus `enclDictVarOf`, which derives a dict-param
 -- name POSITIONALLY (`dictParamName encl <slot index>`) rather than reading a stored one.
@@ -1701,13 +1734,13 @@ public export data GraphRun = GraphRun {
   -- monotone, so `EvId <module> <ordinal>` is unique across the whole run without a
   -- per-module reset — see `freshEvId`.
   evCounter : Ref Int,
-  -- The counter's value when this graph lineage began (`resetGraphState`).  Every
+  -- The counter's value when this graph lineage began (`graphLineageRun`).  Every
   -- array indexed by ordinal holds only ordinals from here up, so an id below it is
   -- from an earlier graph.  It travels with `evCells` through `copyGraphRun`, so a
   -- memo snapshot keeps answering for the ids it was taken with.
   evBase : Int,
   -- Set by `markModules`, whose marking mints this lineage's cells before the
-  -- driver it feeds resets the graph; that reset keeps them (`resetGraphState`).
+  -- driver it feeds resets the graph; that reset keeps them (`graphLineageRun`).
   markedAhead : Bool,
   -- The ordinal below which every method cell has been judged complete
   -- (`judgeEvidence`).  Each drain judges the cells minted since the last one and
@@ -1724,7 +1757,7 @@ public export data GraphRun = GraphRun {
   memoMethodReturns : Ref (List MethodReturnMemoView),
   -- #2705: the method-occurrence cells, indexed by the node's evidence ORDINAL less
   -- `evBase`, so a stamper's lookup is O(1) and the array spans one lineage, not the
-  -- process.  Sized by doubling as ids are minted.  `resetGraphState` starts it empty.
+  -- process.  Sized by doubling as ids are minted.  `graphLineageRun` starts it empty.
   evCells : Ref (Array (Option EvCell)),
   -- The operator, literal and record-head site cells with the id each was minted
   -- under, indexed exactly as `evCells` is (ordinal less `evBase`, doubled as ids
@@ -1732,7 +1765,7 @@ public export data GraphRun = GraphRun {
   siteCells : Ref (Array (Option (EvId, SiteCell))),
   scopeStore : ScopeStore,
   -- Dictionary-abstracted local bindings (`registerLocalAbs`).  Graph-owned so a
-  -- renamed binder's spelling depends only on this elaboration; `resetGraphState`
+  -- renamed binder's spelling depends only on this elaboration; `graphLineageRun`
   -- carries it, clearing only its quantified ids.
   localAbs : LocalAbsState,
   -- The authorities each occurrence of an authority-quantified binding was
@@ -2970,11 +3003,12 @@ public export data ModuleSeed = ModuleSeed {
 -- (`autoPrintPinCore`) must not be able to hit by accident.  A hit RESTORES
 -- what the pass produced instead of recomputing it:
 --   * `coreSchemes` (the return value);
---   * `crossRun` — the core pass fills the universe accumulators and, right after
---     it, `coreSchemeObligationsRef`; a hit installs a DETACHED copy of the
---     snapshot (fresh Refs, `copyCrossRun`) so the user modules that follow
---     mutate the copy and the memo stays what the miss left;
---   * the `driverState` field the core pass writes (`restoreCoreDriverFields`);
+--   * `GraphCtx.crossRun` — the core pass fills the universe accumulators and, right
+--     after it, `coreSchemeObligationsRef`; a hit returns a record carrying a
+--     DETACHED copy of the snapshot (fresh Refs, `copyCrossRun`) so the user
+--     modules that follow mutate the copy and the memo stays what the miss left;
+--   * the one graph field the core pass writes, `builtinExternNamesRef`
+--     (`ccmBuiltinExternNames`);
 --   * core's module record: the `ModuleCtx` a hit installs carries the module
 --     fields core left (`carryModuleCtx`), above all the match oracle and warnings
 --     that a module checked without a `CheckRunSeed` copies from it.  Its run
@@ -2994,7 +3028,7 @@ public export data CoreCheckMemo = CoreCheckMemo {
   ccmCorePub : List (String, PubScheme),
   ccmCrossRun : CrossRun,
   ccmGraphRun : GraphRun,
-  ccmDriver : DriverState,
+  ccmBuiltinExternNames : OrdMap (Ty, List (String, Int)),
   ccmModule : ModuleCtx,
 }
 
@@ -3063,8 +3097,10 @@ public export data GraphOut = GOutDiags | GOutTrees
 -- module is snapshotted under that module's key, and the next call resumes from
 -- the longest matching prefix, checking only what follows.  Each step holds what a
 -- miss would have left behind at that point: the fold's `depEnv`/`accData`/
--- `accAll`, the results collected so far, a DETACHED `crossRun` copy, the
--- driver field and the module record the core-check memo also restores.
+-- `accAll`, the results collected so far, one `GraphCtx` snapshot (`snapshotGraphCtx`:
+-- DETACHED copies of the `crossRun` and `graphRun` sub-records and the extern-name
+-- map; a hit reads only those three) and the module record the core-check memo also
+-- restores.
 -- Keys come from the caller: a chain key (which prelude generations, which entry
 -- and roots) and one `Option String` per module (mid + path + the EXACT source
 -- the loader parsed — `loadedSourceOf`); a `None` step is never recorded and ends
@@ -3078,9 +3114,7 @@ public export data ChainStep = ChainStep {
   csAccData : List Decl,
   csAccAll : List Decl,
   csResults : List ModDiags,
-  csCrossRun : CrossRun,
-  csGraphRun : GraphRun,
-  csDriver : DriverState,
+  csCtx : GraphCtx,
   csModule : ModuleCtx,
 }
 
@@ -3114,6 +3148,9 @@ public export data GraphDrive = GraphDrive {
   gdBinders : BinderTypeTable,
   -- The drive's frozen outputs as one value (`types/publish.mdk`'s `TcReport`).
   gdReport : TcReport,
+  -- The drive's graph record as the drive left it.  Its `Ref` fields are the
+  -- process's, so a later drive writes them.
+  gdGraph : GraphCtx,
 }
 
 -- ── TYPED multi-module elaboration (bootstrap eval front-end) ──────────────
@@ -3405,7 +3442,10 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "MethodRow" () ((variant "MethodRow" (ConNamed (field "mrIdent" (TyCon "Ident")) (field "mrOrd" (TyCon "Int")) (field "mrIface" (TyCon "RegKey")) (field "mrEntry" (TyCon "MethodEntry"))))) ())
 (DData Public "MethodEnv" () ((variant "MethodEnv" (ConNamed (field "meByName" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodRow")))) (field "meExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))) (field "meIfaceExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))) ())
 (DData Public "MethodScope" () ((variant "MsAbsent" (ConPos)) (variant "MsOne" (ConPos (TyCon "MethodRow"))) (variant "MsMany" (ConPos (TyApp (TyCon "List") (TyCon "IfaceRef"))))) ())
-(DData Public "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "ioJoin" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Atom")))) (field "ioJoinProfile" (TyApp (TyCon "Ref") (TyCon "String"))) (field "graphAdmittedMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "argDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "mangledFunDefsPresentRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "stdlibOwnedModsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatEntryIsStdlibRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "builtinExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "markSetsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "MarkSets"))))))) ())
+(DData Public "GraphCtx" () ((variant "GraphCtx" (ConNamed (field "crossRun" (TyCon "CrossRun")) (field "graphRun" (TyCon "GraphRun")) (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "config" (TyApp (TyCon "Ref") (TyCon "TcConfig"))) (field "graphAdmittedMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "argDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "mangledFunDefsPresentRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "builtinExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "markSetsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "MarkSets")))) (field "typeErrorsSticky" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "typeErrorsStickyDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))))) ())
+(DData Public "TcConfig" () ((variant "TcConfig" (ConNamed (field "tcIoJoin" (TyApp (TyCon "List") (TyCon "Atom"))) (field "tcIoJoinProfile" (TyCon "String")) (field "tcStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "tcFlatEntryIsStdlib" (TyCon "Bool")) (field "tcCoherenceUserDecls" (TyApp (TyCon "List") (TyCon "Decl")))))) ())
+(DData Public "TraceSink" () ((variant "TraceSink" (ConNamed (field "tsAssumptionEnabled" (TyCon "Bool")) (field "tsAssumptionEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry")))) (field "tsNumericPredicateEnabled" (TyCon "Bool")) (field "tsNumericPredicateEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry")))) (field "tsMethodReturnEnabled" (TyCon "Bool")) (field "tsMethodReturnEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry")))) (field "tsEvidenceObservationEnabled" (TyCon "Bool")) (field "tsEvidenceObservationEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))))) ())
+(DData Public "DriveInputs" () ((variant "DriveInputs" (ConNamed (field "diStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "diFlatEntryIsStdlib" (TyCon "Bool")) (field "diCoherenceUserDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "diTrace" (TyCon "TraceSink"))))) ())
 (DData Public "Windowed" ("a") ((variant "Windowed" (ConNamed (field "items" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyVar "a")))) (field "n" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DData Public "CSlot" () ((variant "CSlot" (ConNamed (field "csIface" (TyCon "IfaceRef")) (field "csId" (TyCon "Int"))))) ())
 (DData Public "PredicateSlotArgs" () ((variant "PSArgsUnknown" (ConPos)) (variant "PSArgsKnown" (ConPos (TyApp (TyCon "List") (TyCon "Mono"))))) ())
@@ -3538,12 +3578,12 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "ModuleBindings" () ((variant "ModuleBindings" (ConNamed (field "mbSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "mbStandaloneSchemes" (TyApp (TyCon "OrdMap") (TyCon "Scheme")))))) ())
 (DData Public "ExportBinding" () ((variant "ExportBinding" (ConNamed (field "xbScheme" (TyCon "Scheme")) (field "xbStandalone" (TyApp (TyCon "Option") (TyCon "Scheme"))) (field "xbExtern" (TyCon "Bool"))))) ())
 (DData Public "ModuleSeed" () ((variant "ModuleSeed" (ConNamed (field "msSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "msImportedValues" (TyApp (TyCon "OrdMap") (TyCon "Scheme"))) (field "msImportedNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "msImportedExterns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
-(DData Public "CoreCheckMemo" () ((variant "CoreCheckMemo" (ConNamed (field "ccmKey" (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (field "ccmCoreSchemes" (TyCon "ModuleBindings")) (field "ccmCorePub" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "ccmCrossRun" (TyCon "CrossRun")) (field "ccmGraphRun" (TyCon "GraphRun")) (field "ccmDriver" (TyCon "DriverState")) (field "ccmModule" (TyCon "ModuleCtx"))))) ())
+(DData Public "CoreCheckMemo" () ((variant "CoreCheckMemo" (ConNamed (field "ccmKey" (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (field "ccmCoreSchemes" (TyCon "ModuleBindings")) (field "ccmCorePub" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "ccmCrossRun" (TyCon "CrossRun")) (field "ccmGraphRun" (TyCon "GraphRun")) (field "ccmBuiltinExternNames" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "ccmModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "PreludePreamble" () ((variant "PreludePreamble" (ConNamed (field "ppEnvAcc" (TyCon "DeclEnvAcc")) (field "ppMangledFunDefs" (TyCon "Bool")) (field "ppMarkFacts" (TyCon "PreludeMarkFacts"))))) ())
 (DData Public "GraphOut" () ((variant "GOutDiags" (ConPos)) (variant "GOutTrees" (ConPos))) ())
-(DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCrossRun" (TyCon "CrossRun")) (field "csGraphRun" (TyCon "GraphRun")) (field "csDriver" (TyCon "DriverState")) (field "csModule" (TyCon "ModuleCtx"))))) ())
+(DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCtx" (TyCon "GraphCtx")) (field "csModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "ChainMemo" () ((variant "ChainMemo" (ConNamed (field "chKey" (TyCon "String")) (field "chSteps" (TyApp (TyCon "List") (TyCon "ChainStep"))) (field "chReplayed" (TyCon "Int"))))) ())
-(DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport"))))) ())
+(DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport")) (field "gdGraph" (TyCon "GraphCtx"))))) ())
 (DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "BinderTypeTable")))
 (DData Public "MarkCtx" () ((variant "MarkCtx" (ConNamed (field "mcRp" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcAn" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcSm" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DData Public "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "List") (TyCon "String"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
@@ -3601,7 +3641,10 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "MethodRow" () ((variant "MethodRow" (ConNamed (field "mrIdent" (TyCon "Ident")) (field "mrOrd" (TyCon "Int")) (field "mrIface" (TyCon "RegKey")) (field "mrEntry" (TyCon "MethodEntry"))))) ())
 (DData Public "MethodEnv" () ((variant "MethodEnv" (ConNamed (field "meByName" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodRow")))) (field "meExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))))) (field "meIfaceExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))) ())
 (DData Public "MethodScope" () ((variant "MsAbsent" (ConPos)) (variant "MsOne" (ConPos (TyCon "MethodRow"))) (variant "MsMany" (ConPos (TyApp (TyCon "List") (TyCon "IfaceRef"))))) ())
-(DData Public "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "ioJoin" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Atom")))) (field "ioJoinProfile" (TyApp (TyCon "Ref") (TyCon "String"))) (field "graphAdmittedMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "argDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "mangledFunDefsPresentRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "stdlibOwnedModsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatEntryIsStdlibRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "builtinExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "markSetsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "MarkSets"))))))) ())
+(DData Public "GraphCtx" () ((variant "GraphCtx" (ConNamed (field "crossRun" (TyCon "CrossRun")) (field "graphRun" (TyCon "GraphRun")) (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "config" (TyApp (TyCon "Ref") (TyCon "TcConfig"))) (field "graphAdmittedMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "argDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "mangledFunDefsPresentRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "builtinExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "markSetsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "MarkSets")))) (field "typeErrorsSticky" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "typeErrorsStickyDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))))) ())
+(DData Public "TcConfig" () ((variant "TcConfig" (ConNamed (field "tcIoJoin" (TyApp (TyCon "List") (TyCon "Atom"))) (field "tcIoJoinProfile" (TyCon "String")) (field "tcStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "tcFlatEntryIsStdlib" (TyCon "Bool")) (field "tcCoherenceUserDecls" (TyApp (TyCon "List") (TyCon "Decl")))))) ())
+(DData Public "TraceSink" () ((variant "TraceSink" (ConNamed (field "tsAssumptionEnabled" (TyCon "Bool")) (field "tsAssumptionEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry")))) (field "tsNumericPredicateEnabled" (TyCon "Bool")) (field "tsNumericPredicateEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry")))) (field "tsMethodReturnEnabled" (TyCon "Bool")) (field "tsMethodReturnEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry")))) (field "tsEvidenceObservationEnabled" (TyCon "Bool")) (field "tsEvidenceObservationEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))))) ())
+(DData Public "DriveInputs" () ((variant "DriveInputs" (ConNamed (field "diStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "diFlatEntryIsStdlib" (TyCon "Bool")) (field "diCoherenceUserDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "diTrace" (TyCon "TraceSink"))))) ())
 (DData Public "Windowed" ("a") ((variant "Windowed" (ConNamed (field "items" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyVar "a")))) (field "n" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DData Public "CSlot" () ((variant "CSlot" (ConNamed (field "csIface" (TyCon "IfaceRef")) (field "csId" (TyCon "Int"))))) ())
 (DData Public "PredicateSlotArgs" () ((variant "PSArgsUnknown" (ConPos)) (variant "PSArgsKnown" (ConPos (TyApp (TyCon "List") (TyCon "Mono"))))) ())
@@ -3734,12 +3777,12 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "ModuleBindings" () ((variant "ModuleBindings" (ConNamed (field "mbSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "mbStandaloneSchemes" (TyApp (TyCon "OrdMap") (TyCon "Scheme")))))) ())
 (DData Public "ExportBinding" () ((variant "ExportBinding" (ConNamed (field "xbScheme" (TyCon "Scheme")) (field "xbStandalone" (TyApp (TyCon "Option") (TyCon "Scheme"))) (field "xbExtern" (TyCon "Bool"))))) ())
 (DData Public "ModuleSeed" () ((variant "ModuleSeed" (ConNamed (field "msSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "msImportedValues" (TyApp (TyCon "OrdMap") (TyCon "Scheme"))) (field "msImportedNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "msImportedExterns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
-(DData Public "CoreCheckMemo" () ((variant "CoreCheckMemo" (ConNamed (field "ccmKey" (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (field "ccmCoreSchemes" (TyCon "ModuleBindings")) (field "ccmCorePub" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "ccmCrossRun" (TyCon "CrossRun")) (field "ccmGraphRun" (TyCon "GraphRun")) (field "ccmDriver" (TyCon "DriverState")) (field "ccmModule" (TyCon "ModuleCtx"))))) ())
+(DData Public "CoreCheckMemo" () ((variant "CoreCheckMemo" (ConNamed (field "ccmKey" (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (field "ccmCoreSchemes" (TyCon "ModuleBindings")) (field "ccmCorePub" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "ccmCrossRun" (TyCon "CrossRun")) (field "ccmGraphRun" (TyCon "GraphRun")) (field "ccmBuiltinExternNames" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "ccmModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "PreludePreamble" () ((variant "PreludePreamble" (ConNamed (field "ppEnvAcc" (TyCon "DeclEnvAcc")) (field "ppMangledFunDefs" (TyCon "Bool")) (field "ppMarkFacts" (TyCon "PreludeMarkFacts"))))) ())
 (DData Public "GraphOut" () ((variant "GOutDiags" (ConPos)) (variant "GOutTrees" (ConPos))) ())
-(DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCrossRun" (TyCon "CrossRun")) (field "csGraphRun" (TyCon "GraphRun")) (field "csDriver" (TyCon "DriverState")) (field "csModule" (TyCon "ModuleCtx"))))) ())
+(DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCtx" (TyCon "GraphCtx")) (field "csModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "ChainMemo" () ((variant "ChainMemo" (ConNamed (field "chKey" (TyCon "String")) (field "chSteps" (TyApp (TyCon "List") (TyCon "ChainStep"))) (field "chReplayed" (TyCon "Int"))))) ())
-(DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport"))))) ())
+(DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport")) (field "gdGraph" (TyCon "GraphCtx"))))) ())
 (DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "BinderTypeTable")))
 (DData Public "MarkCtx" () ((variant "MarkCtx" (ConNamed (field "mcRp" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcAn" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcSm" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DData Public "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "List") (TyCon "String"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
