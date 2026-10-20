@@ -16,7 +16,7 @@
 
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{checkOneDiags, tcCode}
+import types.typecheck.{defaultDriveInputs, checkOneDiags, tcCode}
 
 export
 oracleMain : Unit -> <IO> Unit
@@ -36,7 +36,7 @@ run runtimeP coreP targetP = match readFile runtimeP
       Ok src =>
         let desugared = desugar (parse src)
         let coreDesugared = desugar (parse csrc)
-        let (errs, _warns) = checkOneDiags (desugar
+        let (errs, _warns) = checkOneDiags defaultDriveInputs (desugar
           (parse rsrc)) coreDesugared (
           "probe",
           desugared,

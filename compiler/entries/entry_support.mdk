@@ -32,6 +32,7 @@ export import support.util.{rootsOrDefault}
 import support.util.{splitLast, startsWith, joinNl}
 import types.tc_types.{ElabResult}
 import types.typecheck.{
+  defaultDriveInputs,
   elaborateOneFacts,
   elaborateModulesWithReport,
   setStdlibOwnership,
@@ -441,6 +442,7 @@ elaborateForTarget : String ->
 elaborateForTarget asyncDriver None _ _ runtimeDecls coreDecls modules =
   let (elaborated, report) =
     elaborateModulesWithReport
+      defaultDriveInputs
       (valueMainCandidate coreDecls modules)
       (Some asyncDriver)
       runtimeDecls
@@ -700,8 +702,11 @@ export
 evalTypedString : List Decl -> List Decl -> List Decl -> String
 evalTypedString runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
-  let (elaborated, facts) =
-    elaborateOneFacts runtimeDecls livePrelude ("__user__", userDecls)
+  let (elaborated, facts) = elaborateOneFacts
+    defaultDriveInputs
+    runtimeDecls
+    livePrelude
+    ("__user__", userDecls)
   evalOneOutputFacts facts [] ("__main__", elaborated)
 
 -- DICT-PASSING path: routes through the 1-module case of the multi-module path
@@ -713,8 +718,11 @@ evalDictString : List Decl -> List Decl -> List Decl -> String
 evalDictString runtimeDecls preludeDecls userDecls =
   let userNames = funNamesOf userDecls
   let livePrelude = dropShadowedExp userNames preludeDecls
-  let (elaborated, facts) =
-    elaborateOneFacts runtimeDecls livePrelude ("__user__", userDecls)
+  let (elaborated, facts) = elaborateOneFacts
+    defaultDriveInputs
+    runtimeDecls
+    livePrelude
+    ("__user__", userDecls)
   evalOneOutputFacts facts [] ("__main__", elaborated)
 
 -- ── batch drivers ────────────────────────────────────────────────────────────

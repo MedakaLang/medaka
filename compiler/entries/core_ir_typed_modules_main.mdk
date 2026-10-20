@@ -33,7 +33,7 @@ import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}
-import types.typecheck.{elaborateModules}
+import types.typecheck.{defaultDriveInputs, elaborateModules}
 import ir.core_ir_eval.{cevalModulesOutputFacts}
 import types.program_facts.{factsOfElab}
 import entries.entry_support.{
@@ -64,7 +64,7 @@ run runtimeP coreP entry roots =
 
 runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runElab runtimeDecls coreDecls modules =
-  let elab = elaborateModules runtimeDecls coreDecls modules
+  let elab = elaborateModules defaultDriveInputs runtimeDecls coreDecls modules
   let (coreE, modulesE, _, _, _, _, _) = elab
   putStr (cevalModulesOutputFacts (factsOfElab elab) coreE modulesE)
 

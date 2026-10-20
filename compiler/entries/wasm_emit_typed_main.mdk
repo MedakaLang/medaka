@@ -37,7 +37,7 @@ import frontend.ast.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{elaborateModules}
+import types.typecheck.{defaultDriveInputs, elaborateModules}
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{ProgramFacts, emptyFacts, factsOfElabWith}
 import eval.eval.{funNamesOf, dropShadowedExp}
@@ -143,7 +143,9 @@ typedElaboratedFacts : List Decl ->
   (List Decl, ProgramFacts)
 typedElaboratedFacts runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
-  let elab = elaborateModules runtimeDecls livePrelude [("__user__", userDecls)]
+  let elab = elaborateModules defaultDriveInputs runtimeDecls livePrelude [
+    ("__user__", userDecls),
+  ]
   let (coreE, modulesE, _, _, evTable, _, _) = elab
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   (coreD ++ flatMap snd modules2, factsOfElabWith evTableM elab)

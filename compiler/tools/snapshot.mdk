@@ -179,6 +179,7 @@ import ir.core_ir_lower.{
 import ir.core_ir_sexp.{cprogramToSexp}
 import types.annotate.{annotateProgram}
 import types.typecheck.{
+  defaultDriveInputs,
   checkOneToLinesWithRuntime,
   setCoherenceUserDecls,
   elaborateOneFacts,
@@ -498,7 +499,7 @@ typesOf runtimeDecls d =
   -- coreDecls is always [] here (prelude-free), so there is no prelude-scheme
   -- to lose crossing to the Module arm's checkOneToLinesWithRuntime -- the
   -- rendered set is `d`'s own schemes either way (S-migrate-tool-consumers-remainder).
-  let text = checkOneToLinesWithRuntime runtimeDecls [] d
+  let text = checkOneToLinesWithRuntime defaultDriveInputs runtimeDecls [] d
   (text, hadTypeErrors () || hadMatchWarnings ())
 
 -- `# TYPES_USER` — the PRELUDE-AWARE user-only variant.  `# TYPES` above is
@@ -538,7 +539,8 @@ typesUserOf runtimeDecls coreDecls d =
   -- MORE than Module returns); here Module already gives what's wanted, so the
   -- filter is kept as a harmless belt-and-suspenders no-op rather than removed
   -- (S-migrate-tool-consumers-remainder).
-  let full = checkOneToLinesWithRuntime runtimeDecls coreDecls d
+  let full =
+    checkOneToLinesWithRuntime defaultDriveInputs runtimeDecls coreDecls d
   let diag = hadTypeErrors () || hadMatchWarnings ()
   let userNames = funNamesOf d ++ externNamesOf d
   -- Filter the SUCCESS path (scheme dump) only; a diagnostic run has no schemes to trim.
@@ -586,8 +588,11 @@ coreIrOf d =
 evalOf : List Decl -> List Decl -> List Decl -> String
 evalOf runtimeDecls coreDecls d =
   let livePrelude = dropShadowedExp (funNamesOf d) coreDecls
-  let (elaborated, facts) =
-    elaborateOneFacts runtimeDecls livePrelude ("__user__", d)
+  let (elaborated, facts) = elaborateOneFacts
+    defaultDriveInputs
+    runtimeDecls
+    livePrelude
+    ("__user__", d)
   evalOneOutputFacts facts [] ("__main__", elaborated)
 
 -- ── the emit path (BOTH backends, ONE lowered CProgram) ──────────────────────
@@ -619,7 +624,9 @@ emitBoth root sel runtimeDecls userDecls =
   -- `entry_support.runEmitWith` runs (mirrors `llvm_emit_typed_main.mdk`'s
   -- `runEmit`), so a name-keyed table below sees the same stamped names a real
   -- build's tables do.
-  let elab = elaborateModules runtimeDecls [] [("__user__", userDecls)]
+  let elab = elaborateModules defaultDriveInputs runtimeDecls [] [
+    ("__user__", userDecls),
+  ]
   let (coreE, modulesE, _, _, evTable, _, _) = elab
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let allDecls = coreD ++ flatMap snd modules2

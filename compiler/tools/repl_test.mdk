@@ -25,7 +25,8 @@ test "prelude binder names equal the names a whole-graph check lists" = match (
     let cd = desugar (parse c)
     expectAll [
       expectEqual
-        (sortedUnique (map fst (checkOneScheme rd [] ("__user__", cd))))
+        (sortedUnique
+          (map fst (checkOneScheme defaultDriveInputs rd [] ("__user__", cd))))
         (sortedUnique (preludeBinderNames cd)),
     ]
   _ => expectEqual "readable" "unreadable"

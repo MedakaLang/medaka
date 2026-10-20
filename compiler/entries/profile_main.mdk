@@ -41,6 +41,7 @@ import frontend.desugar.{desugar}
 import frontend.resolve.{resolveToLines}
 import frontend.marker.{markWithPrelude}
 import types.typecheck.{
+  defaultDriveInputs,
   checkOneToLinesWithRuntime,
   elaborateModules,
   mainTypeIsUnit,
@@ -221,7 +222,7 @@ runStaged on targetPath rsrc csrc tsrc =
   -- return value discarded (profiler only times the call) -- the Module-arm
   -- swap is safe regardless of scheme-list-shape differences
   -- (S-migrate-tool-consumers-remainder).
-  let _ = checkOneToLinesWithRuntime rDecls cDecls desugared
+  let _ = checkOneToLinesWithRuntime defaultDriveInputs rDecls cDecls desugared
   let tT1 = now ()
   let _ =
     emitPhaseAO
@@ -280,7 +281,12 @@ runStaged on targetPath rsrc csrc tsrc =
   -- The per-module schemes and residual diagnostics `elaborateModules` also returns
   -- have no consumer here: this driver measures stages and throws its emitted IR
   -- away, so it has no diagnostic surface to route them to.
-  let elab = elaborateModules rDecls livePrelude (("__user__", desugared) :: [])
+  let elab =
+    elaborateModules
+      defaultDriveInputs
+      rDecls
+      livePrelude
+      (("__user__", desugared) :: [])
   let (coreE, modulesE, _, _, evTable, _, _) = elab
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let elaborated = coreD ++ flatMap snd modules2

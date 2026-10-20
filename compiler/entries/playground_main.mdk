@@ -136,9 +136,9 @@ import entries.entry_support.{
 import support.util.{startsWith, splitOnChar, filterList}
 import types.publish.{PubScheme(..), ppPubScheme}
 import types.typecheck.{
-  constrainedSigNames, preludeReturnPosDictNames, preludeArgPosDictNames,
-  mainTypeIsFloat, mainTypeIsUnit, checkedFfiExternTypeNamesModules,
-  checkOneSchemeFullK
+  defaultDriveInputs, constrainedSigNames, preludeReturnPosDictNames,
+  preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
+  checkedFfiExternTypeNamesModules, checkOneSchemeFullK
 }
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
@@ -814,6 +814,7 @@ queryResult isHover rsrc csrc tsrc line col = match parseResult tsrc
     -- lockstep with `docEnv` in tools/lsp.mdk, whose comment carries the
     -- shadowing rationale (`lookupSchemeL`/`hoverResult` are first-match scans).
     let (preludeSchemes, ownSchemes) = checkOneSchemeFullK
+      defaultDriveInputs
       preludeKey
       runtimeDecls
       coreDecls

@@ -927,7 +927,7 @@ echo "  ok: CE block is $ce_n line(s), no elaboration-machinery call, no exclude
 # 2, 2c, 2d and M4 all passed the earlier one-consumer form of the sole-site row.
 echo "checking #2796 Module-mode driver entry: one preamble carries the whole-graph set ..."
 
-preamble_body=$(body_of "$TC" '^graphPreamble sel preludeKey runtimeDecls coreDecls modules =')
+preamble_body=$(body_of "$TC" '^graphPreamble _inputs sel preludeKey runtimeDecls coreDecls modules =')
 
 preamble_n=$(printf '%s\n' "$preamble_body" | grep -c . || true)
 if [ "$preamble_n" -eq 0 ]; then
@@ -942,7 +942,7 @@ fi
 # the next column-0 binding. The sole-site half below asks whether each mention of a
 # writer falls inside it, so the range must be derived, not assumed.
 preamble_range=$(awk '
-  /^graphPreamble sel preludeKey runtimeDecls coreDecls modules =/ { found=1; lo=NR; next }
+  /^graphPreamble _inputs sel preludeKey runtimeDecls coreDecls modules =/ { found=1; lo=NR; next }
   found && /^[A-Za-z_]/ { print lo, NR-1; found=0; exit }
   END { if (found) print lo, NR }
 ' "$TC")

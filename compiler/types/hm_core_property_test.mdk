@@ -26,7 +26,7 @@ import types.law_harness_test.{
   withTwoUses,
 }
 import types.repr.{ppScheme}
-import types.typecheck.{checkModulesDiagsChain, tcCode}
+import types.typecheck.{defaultDriveInputs, checkModulesDiagsChain, tcCode}
 
 -- The model's types: a variable, a constructor applied to arguments, an
 -- arrow, a tuple.
@@ -494,9 +494,14 @@ prop "a lambda-bound variable is monomorphic and its let-bound twin is polymorph
 schemeOf : String -> String -> (List String, String)
 schemeOf name source =
   let prelude = desugar (parseLocated lawPrelude)
-  let results = checkModulesDiagsChain None "" [] [] prelude [
-    ("law", desugar (parseLocated source)),
-  ]
+  let results = checkModulesDiagsChain
+    defaultDriveInputs
+    None
+    ""
+    []
+    []
+    prelude
+    [("law", desugar (parseLocated source))]
   let codes = flatMap ((_, (_, errors, _)) => map tcCode errors) results
   let schemes = match reverse results
     (_, (own, _, _)) :: _ => map ((n, p) => (n, ppScheme p.psScheme)) own

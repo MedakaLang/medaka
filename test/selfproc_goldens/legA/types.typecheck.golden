@@ -487,38 +487,38 @@ checkMissingFields : String -> List String -> Map String Unit -> Unit
 checkModuleFull : List (String, Scheme) -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 checkModuleFullDiags : String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl, List TcDiag, List TcDiag)
 checkModuleFullImpl : Option CheckRunSeed -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl)
-checkModules : List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
-checkModulesAllLines : List Decl -> List Decl -> List (String, List Decl) -> String
-checkModulesChainReportFor : Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
-checkModulesDiagsChain : Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
-checkModulesDiagsChainFor : Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
+checkModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
+checkModulesAllLines : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> String
+checkModulesChainReportFor : DriveInputs -> Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
+checkModulesDiagsChain : DriveInputs -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
+checkModulesDiagsChainFor : DriveInputs -> Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 checkModulesEntryFromDiags : List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> (List (String, PubScheme), List TcDiag, List TcDiag)
-checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List TcDiag, List TcDiag)
-checkModulesEntryFullK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List TcDiag, List TcDiag)
-checkModulesEntryFullReportK : Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
-checkModulesEntryFullSplitK : Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
-checkModulesEntryHasErrors : List Decl -> List Decl -> List (String, List Decl) -> Bool
-checkModulesEntryLines : List Decl -> List Decl -> List (String, List Decl) -> String
-checkModulesEntryReport : List Decl -> List Decl -> List (String, List Decl) -> String
-checkModulesK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
-checkModulesPartialK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> PartialAnalysis
-checkModulesPreambleK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings)
+checkModulesEntryFull : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List TcDiag, List TcDiag)
+checkModulesEntryFullK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List TcDiag, List TcDiag)
+checkModulesEntryFullReportK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
+checkModulesEntryFullSplitK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
+checkModulesEntryHasErrors : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> Bool
+checkModulesEntryLines : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> String
+checkModulesEntryReport : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> String
+checkModulesK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
+checkModulesPartialK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> PartialAnalysis
+checkModulesPreambleK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings)
 checkNestedReqs : SiteCtx -> ImplUniverse -> ReqWalk -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
-checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
-checkOneDiagsK : Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
+checkOneDiags : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
+checkOneDiagsK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneEffectParam : String -> Param -> EffParamTy -> Unit
-checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
+checkOneErrorsWithRuntime : DriveInputs -> List Decl -> List Decl -> List Decl -> Bool
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
-checkOneMatchToLines : List Decl -> List Decl -> String
-checkOneReportK : Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> TcReport
-checkOneScheme : List Decl -> List Decl -> (String, List Decl) -> List (String, Scheme)
-checkOneSchemeFull : List Decl -> List Decl -> (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme))
-checkOneSchemeFullK : Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme))
-checkOneToLines : List Decl -> String
-checkOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
-checkOneToLinesWithRuntimeK : Option (Int, Int) -> List Decl -> List Decl -> List Decl -> String
+checkOneMatchToLines : DriveInputs -> List Decl -> List Decl -> String
+checkOneReportK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> TcReport
+checkOneScheme : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> List (String, Scheme)
+checkOneSchemeFull : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme))
+checkOneSchemeFullK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme))
+checkOneToLines : DriveInputs -> List Decl -> String
+checkOneToLinesWithRuntime : DriveInputs -> List Decl -> List Decl -> List Decl -> String
+checkOneToLinesWithRuntimeK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List Decl -> String
 checkPhantomAuthorityExport : DataVis -> String -> List String -> List Variant -> Unit
 checkPhantomMethods : ClassEnv -> Int -> Unit
 checkRecBindNonFunction : String -> Expr -> Unit
@@ -859,6 +859,7 @@ defaultAmbiguousNumWith : DynCtx -> Option Int -> ArmedGuard -> Map String Unit 
 defaultBodyBinderNamesProbe : Unit -> List String
 defaultBodyLocalNumWith : DynCtx -> Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> Unit
 defaultDeferredPatLitsIn : DynCtx -> Int -> Mono -> Unit
+defaultDriveInputs : DriveInputs
 defaultEachMemberWith : DynCtx -> Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> List Mono -> Unit
 defaultEffectLaunderMsg : String -> List Atom -> String
 defaultGroupNumWith : DynCtx -> Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> List Mono -> Unit
@@ -949,7 +950,7 @@ domainParam : Option String -> Param
 domainParamWith : Option String -> List (String, String) -> Param
 drainStampQueue : Unit -> List DrainFinding
 driveErrs : List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List TcDiag
-driveGraphK : GraphOut -> Bool -> Option String -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
+driveGraphK : DriveInputs -> GraphOut -> Bool -> Option String -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
 driveInputs : Ref DriveInputs
 drivenEvidence : Unit -> List EvEntry
 dropFirst : Int -> List a -> List a
@@ -994,12 +995,12 @@ effectUndeterminedMsg : String -> String -> List String -> String
 effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl)
-elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow)
-elaborateModulesReport : List Decl -> List Decl -> List (String, List Decl) -> TcReport
-elaborateModulesWithReport : Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), TcReport)
-elaborateModulesWithSchemes : Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), List (String, PubScheme), List (String, PubScheme))
-elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
-elaborateOneFacts : List Decl -> List Decl -> (String, List Decl) -> (List Decl, ProgramFacts)
+elaborateModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow)
+elaborateModulesReport : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
+elaborateModulesWithReport : DriveInputs -> Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), TcReport)
+elaborateModulesWithSchemes : DriveInputs -> Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), List (String, PubScheme), List (String, PubScheme))
+elaborateOne : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> List Decl
+elaborateOneFacts : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List Decl, ProgramFacts)
 elselessIfHelp : String
 emitCyclicAliasErrors : List String -> Unit
 emitValueShadowGate : String -> Bool
@@ -1378,7 +1379,7 @@ graphCtx : Ref GraphCtx
 graphLineageRun : Bool -> GraphRun -> GraphRun
 graphMarksNow : Unit -> GraphMarks
 graphModuleWorker : GraphOut -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag))
-graphPreamble : GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), Map String (List VecObl), List Decl, MarkSets)
+graphPreamble : DriveInputs -> GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), Map String (List VecObl), List Decl, MarkSets)
 graphPubDefiners : String -> List (String, (String, String))
 groundAdmittedGo : TcEnv -> String -> List IfaceRef -> List Mono -> Option Loc -> Unit
 groundAdmittedReceivers : TcEnv -> String -> List Mono -> Option Loc -> Unit
@@ -2353,6 +2354,7 @@ occurrencePredOf : String -> Mono -> List (String, Mono) -> Option PredicateRequ
 occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
+offTraceSink : Unit -> TraceSink
 omittedParamVars : List String -> Ty -> List (String, Mono)
 onlyCell : List EvCell -> Option EvCell
 opDictVarOf : Option PredicateRequest -> Bool -> String -> Mono -> Bool -> String -> ScopeId -> Option AssumAnswer

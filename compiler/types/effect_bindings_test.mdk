@@ -5,8 +5,8 @@ import frontend.ast.{Loc(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import types.typecheck.{
-  checkOneDiags, checkOneSchemeFullK, checkModulesDiagsChain, ModDiags,
-  TcDiag(..), tcCode, tcMsg
+  defaultDriveInputs, checkOneDiags, checkOneSchemeFullK,
+  checkModulesDiagsChain, ModDiags, TcDiag(..), tcCode, tcMsg
 }
 import types.repr.{Scheme(..), ppScheme}
 import types.effect_rows.{effrowLabels, rowFlat}
@@ -404,7 +404,7 @@ test "repeated top-prefix writes inside a continuation stay within a bare contra
 
 errorsFor : String -> List String
 errorsFor source =
-  let (errors, _) = checkOneDiags [] [] (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] [] (
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
@@ -419,7 +419,8 @@ numPrelude =
 -- `errorsFor` under `numPrelude`.
 numErrorsFor : String -> List String
 numErrorsFor source =
-  let (errors, _) = checkOneDiags [] (desugar (parse numPrelude)) (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+    (parse numPrelude)) (
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
@@ -427,7 +428,7 @@ numErrorsFor source =
 
 forcingFor : String -> String -> String
 forcingFor source name =
-  let (_, schemes) = checkOneSchemeFullK None [] [] (
+  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs None [] [] (
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
@@ -437,7 +438,7 @@ forcingFor source name =
 
 renderedFor : String -> String -> String
 renderedFor source name =
-  let (_, schemes) = checkOneSchemeFullK None [] [] (
+  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs None [] [] (
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
@@ -447,7 +448,7 @@ renderedFor source name =
 
 forcingTailCount : String -> String -> Int
 forcingTailCount source name =
-  let (_, schemes) = checkOneSchemeFullK None [] [] (
+  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs None [] [] (
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
@@ -457,7 +458,7 @@ forcingTailCount source name =
 
 messagesFor : String -> List String
 messagesFor source =
-  let (errors, _) = checkOneDiags [] [] (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] [] (
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
@@ -473,6 +474,7 @@ moduleErrorsChain : List (String, String) -> List String
 moduleErrorsChain sources =
   let results =
     checkModulesDiagsChain
+      defaultDriveInputs
       None
       ""
       []
@@ -485,6 +487,7 @@ keyedModuleErrors : String -> List (String, String) -> List String
 keyedModuleErrors key sources =
   let results =
     checkModulesDiagsChain
+      defaultDriveInputs
       (Some (1812, 1813))
       "effect-bindings-supplier-tag:\{key}"
       [Some "provider-v1", Some "relay-v1", None]
@@ -498,7 +501,7 @@ moduleDiagCodes (_, (_, errors, _)) = map tcCode errors
 
 moduleErrorDiags : String -> String -> List TcDiag
 moduleErrorDiags provider entry =
-  let results = checkModulesDiagsChain None "" [] [] (desugar
+  let results = checkModulesDiagsChain defaultDriveInputs None "" [] [] (desugar
     (parseLocated effectPrelude)) [
     ("provider", desugar (parseLocated provider)),
     ("entry", desugar (parseLocated entry)),

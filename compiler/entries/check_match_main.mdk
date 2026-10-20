@@ -15,7 +15,7 @@
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{checkOneMatchToLines}
+import types.typecheck.{defaultDriveInputs, checkOneMatchToLines}
 
 export
 oracleMain : Unit -> <IO> Unit
@@ -37,6 +37,9 @@ withTarget rsrc targetPath = match readFile targetPath
 
 runCheckMatch : String -> String -> String
 runCheckMatch rsrc tsrc =
-  checkOneMatchToLines (desugar (parse rsrc)) (desugar (parse tsrc))
+  checkOneMatchToLines
+    defaultDriveInputs
+    (desugar (parse rsrc))
+    (desugar (parse tsrc))
 
 main = oracleMain ()

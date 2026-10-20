@@ -9520,31 +9520,46 @@ hadMatchWarnings _ = match perRun.value.matchWarnings.value
   [] => False
   _ => True
 
+-- The drive inputs of a process that publishes nothing: no stdlib ownership, the flat
+-- entry not stdlib, no coherence decls, every trace off.  A pure value (it holds no
+-- `Ref`), so a caller that drives without publishing passes it.
+export
+defaultDriveInputs : DriveInputs
+defaultDriveInputs = DriveInputs {
+  diStdlibOwned = omEmpty,
+  diFlatEntryIsStdlib = False,
+  diCoherenceUserDecls = [],
+  diTrace = None,
+}
+
 -- What the drivers hand the typechecker before a drive (the stdlib ownership, the
 -- coherence user decls, the trace sink), read by `tcConfigOf` and by the `note*`
 -- trace functions.  Written only through the publishers below.
 driveInputs : Ref DriveInputs
-driveInputs = Ref DriveInputs {
-  diStdlibOwned = omEmpty,
-  diFlatEntryIsStdlib = False,
-  diCoherenceUserDecls = [],
-  diTrace = TraceSink {
-    tsAssumptionEnabled = False,
-    tsAssumptionEntries = Ref [],
-    tsNumericPredicateEnabled = False,
-    tsNumericPredicateEntries = Ref [],
-    tsMethodReturnEnabled = False,
-    tsMethodReturnEntries = Ref [],
-    tsEvidenceObservationEnabled = False,
-    tsEvidenceObservationEntries = Ref [],
-  },
+driveInputs = Ref defaultDriveInputs
+
+-- The trace sink of the current configuration.  Trace off (`None`) answers a fresh
+-- sink whose gates are all `False`: its buffers are only written behind a gate, so
+-- no constant holds a `Ref`.
+traceSink : Unit -> TraceSink
+traceSink _ = match driveInputs.value.diTrace
+  Some sink => sink
+  None => offTraceSink ()
+
+offTraceSink : Unit -> TraceSink
+offTraceSink _ = TraceSink {
+  tsAssumptionEnabled = False,
+  tsAssumptionEntries = Ref [],
+  tsNumericPredicateEnabled = False,
+  tsNumericPredicateEntries = Ref [],
+  tsMethodReturnEnabled = False,
+  tsMethodReturnEntries = Ref [],
+  tsEvidenceObservationEnabled = False,
+  tsEvidenceObservationEntries = Ref [],
 }
 
-traceSink : Unit -> TraceSink
-traceSink _ = driveInputs.value.diTrace
-
 setTraceSink : TraceSink -> Unit
-setTraceSink sink = driveInputs := { driveInputs.value | diTrace = sink }
+setTraceSink sink = driveInputs := { driveInputs.value | diTrace = Some sink }
 
 export
 beginAssumptionTrace : Unit -> Unit
@@ -26147,19 +26162,24 @@ clauseIsValue _ (FunClause _ _) = True
 -- true on both sides of the #1564 fix — every arm that ACCEPTS must compute the
 -- same value.  Read its header before changing either arm.
 export
-elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
-elaborateOne runtimeDecls coreDecls prog =
-  fst (elaborateOneFacts runtimeDecls coreDecls prog)
+elaborateOne : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  (String, List Decl) ->
+  List Decl
+elaborateOne inputs runtimeDecls coreDecls prog =
+  fst (elaborateOneFacts inputs runtimeDecls coreDecls prog)
 
 -- `elaborateOne` with the `ProgramFacts` value its elaboration built, for a caller that lowers
 -- the flat decls.
 export
-elaborateOneFacts : List Decl ->
+elaborateOneFacts : DriveInputs ->
+  List Decl ->
   List Decl ->
   (String, List Decl) ->
   (List Decl, ProgramFacts)
-elaborateOneFacts runtimeDecls coreDecls (rootId, prog) =
-  let elab = elaborateModules runtimeDecls coreDecls [(rootId, prog)]
+elaborateOneFacts inputs runtimeDecls coreDecls (rootId, prog) =
+  let elab = elaborateModules inputs runtimeDecls coreDecls [(rootId, prog)]
   let (coreD, modules, _, _, _, _, _) = elab
   (coreD ++ flatMap snd modules, factsOfElab elab)
 
@@ -50791,13 +50811,14 @@ mintGraphCtx _ =
     graphRun = graphLineageRun prior.graphRun.markedAhead prior.graphRun,
   }
 
-graphPreamble : GraphOut ->
+graphPreamble : DriveInputs ->
+  GraphOut ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), OrdMap (List VecObl), List Decl, MarkSets)
-graphPreamble sel preludeKey runtimeDecls coreDecls modules =
+graphPreamble _inputs sel preludeKey runtimeDecls coreDecls modules =
   -- S-emit-interleave-leak (#2049), TREES only: THE EMIT DRIVER OWNS ITS OWN
   -- (empty) ctor oracle.  A module checked without a `CheckRunSeed` carries the
   -- previous module record's `matchOracle`, and the tree arm's core pass is one
@@ -50936,14 +50957,15 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
 
 -- `graphPreamble`'s `(runtimeSeed, coreSchemes)` projection, for the schemes-only
 -- driver (`checkModulesK`), which neither marks trees nor reads the mark sets back.
-checkModulesPreambleK : Option (Int, Int) ->
+checkModulesPreambleK : DriveInputs ->
+  Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (List (String, Scheme), ModuleBindings)
-checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
+checkModulesPreambleK inputs preludeKey runtimeDecls coreDecls modules =
   let (runtimeSeed, coreSchemes, _, _, _, _) =
-    graphPreamble GOutDiags preludeKey runtimeDecls coreDecls modules
+    graphPreamble inputs GOutDiags preludeKey runtimeDecls coreDecls modules
   (runtimeSeed, coreSchemes)
 
 -- worker: plain per-module typecheck (no diagnostics harvest, no accAll).  Surfaces
@@ -51034,12 +51056,13 @@ implHeadNormalDecl _ d = d
 -- check every module in dependency order against a shared prelude + runtime.
 -- modules = (moduleId, desugared program) in dependency-first order.
 export
-checkModules : List Decl ->
+checkModules : DriveInputs ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
   List (String, List (String, PubScheme))
-checkModules runtimeDecls coreDecls0 modules0 =
-  checkModulesK None runtimeDecls coreDecls0 modules0
+checkModules inputs runtimeDecls coreDecls0 modules0 =
+  checkModulesK inputs None runtimeDecls coreDecls0 modules0
 
 -- Keyed form of `checkModules`.  `preludeKey` is the desugar-cache generation pair
 -- identifying `runtimeDecls`/`coreDecls0`; passing it lets `checkCoreMemoized` hit
@@ -51053,33 +51076,35 @@ checkModules runtimeDecls coreDecls0 modules0 =
 -- (`checkModuleFull` over core, then `checkGraphFinish`), and this driver's own
 -- worker (`cmCheckWorker`) queues no stamping context, so no drain interacts.
 export
-checkModulesK : Option (Int, Int) ->
+checkModulesK : DriveInputs ->
+  Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   List (String, List (String, PubScheme))
-checkModulesK preludeKey runtimeDecls coreDecls0 modules0 =
+checkModulesK inputs preludeKey runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreambleK` for why it is here and not there.
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modules0
   let (runtimeSeed, coreSchemes) =
-    checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
+    checkModulesPreambleK inputs preludeKey runtimeDecls coreDecls modules
   cmFold runtimeSeed coreSchemes modules
 
 -- `checkModulesK` also handing back what its drive left for the last module it
 -- checked (its locals and import seed), taken at the drive's end.  It returns no
 -- `TcReport`: the drive harvests no diagnostics, so it judges nothing.
 export
-checkModulesPartialK : Option (Int, Int) ->
+checkModulesPartialK : DriveInputs ->
+  Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   PartialAnalysis
-checkModulesPartialK preludeKey runtimeDecls coreDecls0 modules0 =
+checkModulesPartialK inputs preludeKey runtimeDecls coreDecls0 modules0 =
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modules0
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _) =
-    graphPreamble GOutDiags preludeKey runtimeDecls coreDecls modules
+    graphPreamble inputs GOutDiags preludeKey runtimeDecls coreDecls modules
   let rows = cmFold runtimeSeed coreSchemes modules
   partialAnalysis
     rows
@@ -51567,15 +51592,17 @@ export
 chainFullKey : Int -> Int -> String -> String
 chainFullKey rk ck chainKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
 export
-checkModulesDiagsChain : Option (Int, Int) ->
+checkModulesDiagsChain : DriveInputs ->
+  Option (Int, Int) ->
   String ->
   List (Option String) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   List ModDiags
-checkModulesDiagsChain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+checkModulesDiagsChain inputs preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   checkModulesDiagsChainFor
+    inputs
     False
     preludeKey
     chainKey
@@ -51587,7 +51614,8 @@ checkModulesDiagsChain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modu
 -- `checkModulesDiagsChain` for a caller that passes its value-main candidate
 -- (`autoPrintWanted`).
 export
-checkModulesDiagsChainFor : Bool ->
+checkModulesDiagsChainFor : DriveInputs ->
+  Bool ->
   Option (Int, Int) ->
   String ->
   List (Option String) ->
@@ -51595,8 +51623,9 @@ checkModulesDiagsChainFor : Bool ->
   List Decl ->
   List (String, List Decl) ->
   List ModDiags
-checkModulesDiagsChainFor valueMain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+checkModulesDiagsChainFor inputs valueMain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   (checkModulesChainReportFor
+    inputs
     valueMain
     preludeKey
     chainKey
@@ -51608,7 +51637,8 @@ checkModulesDiagsChainFor valueMain preludeKey chainKey stepKeys runtimeDecls co
 -- `checkModulesDiagsChainFor` returning the drive's whole report.  The keyed arm
 -- builds it with the same `graphReport` call as `driveGraphK`'s diags arm.
 export
-checkModulesChainReportFor : Bool ->
+checkModulesChainReportFor : DriveInputs ->
+  Bool ->
   Option (Int, Int) ->
   String ->
   List (Option String) ->
@@ -51616,8 +51646,9 @@ checkModulesChainReportFor : Bool ->
   List Decl ->
   List (String, List Decl) ->
   TcReport
-checkModulesChainReportFor valueMain None _ _ runtimeDecls coreDecls0 modules0 =
+checkModulesChainReportFor inputs valueMain None _ _ runtimeDecls coreDecls0 modules0 =
   (driveGraphK
+    inputs
     GOutDiags
     valueMain
     None
@@ -51625,7 +51656,7 @@ checkModulesChainReportFor valueMain None _ _ runtimeDecls coreDecls0 modules0 =
     runtimeDecls
     coreDecls0
     modules0).gdReport
-checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   -- The keyed arm mirrors `driveGraphK`'s prologue by hand, so it owes the same
   -- method-alias rewrite: without it this arm typechecks a graph in which
   -- `import m as A` binds none of `m`'s methods under their origin name, and a bare
@@ -51635,7 +51666,13 @@ checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDe
   let (coreDecls, modules) =
     stampGraphDecls coreDecls0 (renameAliasedMethods coreDecls0 modules0)
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _) =
-    graphPreamble GOutDiags (Some (rk, ck)) runtimeDecls coreDecls modules
+    graphPreamble
+      inputs
+      GOutDiags
+      (Some (rk, ck))
+      runtimeDecls
+      coreDecls
+      modules
   let fullKey =
     "\{graphCtx.value.config.value.tcIoJoinProfile}\n\{chainFullKey rk ck chainKey}\n\{chainGraphKey modules}"
   let steps = match !moduleChainMemoRef
@@ -51925,7 +51962,8 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
 -- decls back and a memo may hold no `Decl`.  `valueMain` is the caller's
 -- value-main candidate and `executes` names the `async` driver of a caller that
 -- runs the trees, `None` for one that does not (`autoPrintWanted`).
-driveGraphK : GraphOut ->
+driveGraphK : DriveInputs ->
+  GraphOut ->
   Bool ->
   Option String ->
   Option (Int, Int) ->
@@ -51933,7 +51971,7 @@ driveGraphK : GraphOut ->
   List Decl ->
   List (String, List Decl) ->
   GraphDrive
-driveGraphK sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn =
+driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn =
   let stickyBefore = graphCtx.value.typeErrorsStickyDiags.value
   -- IMPORT ALIASING of an interface/impl METHOD — a method is global-by-name, so an
   -- alias of one is a second SPELLING, not a second binding.  A member alias and a
@@ -51956,7 +51994,7 @@ driveGraphK sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn 
   -- minting in its final shape and no later pass has to re-mint.
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, coreTree, ms) =
-    graphPreamble sel preludeKey runtimeDecls coreDecls modules
+    graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: the worker reads BOTH accData (buildOracle `prog ++ accData`) and
   -- accAll (checkModuleFullImpl implDecls), and
   -- both are order-observable (oracle first-wins, implDecls scan order), so both
@@ -52314,21 +52352,29 @@ entryOwnSchemes (_ :: rest) = entryOwnSchemes rest
 -- merely defensible on one: `foldModules`' singleton clause is a genuinely
 -- user-reachable path (it is where #2024's `accAll` = initial-value defect lives),
 -- and so is the whole-graph coherence prepend at the bottom.
-checkModulesEntryFull : List Decl ->
+checkModulesEntryFull : DriveInputs ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (List (String, PubScheme), List TcDiag, List TcDiag)
-checkModulesEntryFull runtimeDecls coreDecls modules =
-  checkModulesEntryFullK None runtimeDecls coreDecls modules
+checkModulesEntryFull inputs runtimeDecls coreDecls modules =
+  checkModulesEntryFullK inputs None runtimeDecls coreDecls modules
 
-checkModulesEntryFullK : Option (Int, Int) ->
+checkModulesEntryFullK : DriveInputs ->
+  Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (List (String, PubScheme), List TcDiag, List TcDiag)
-checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
+checkModulesEntryFullK inputs preludeKey runtimeDecls coreDecls modules =
   let (_, schemes, errs, warns) =
-    checkModulesEntryFullSplitK False preludeKey runtimeDecls coreDecls modules
+    checkModulesEntryFullSplitK
+      inputs
+      False
+      preludeKey
+      runtimeDecls
+      coreDecls
+      modules
   (schemes, errs, warns)
 
 -- S-full-env-scheme-entry (#1116): the SAME driver, but ALSO returning the
@@ -52352,15 +52398,17 @@ checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
 -- `preludeKey`: the prelude key for the core-check memo (see `checkCoreMemoized`);
 -- `None` = unkeyed, no memo.
 export
-checkModulesEntryFullSplitK : Bool ->
+checkModulesEntryFullSplitK : DriveInputs ->
+  Bool ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
-checkModulesEntryFullSplitK valueMain preludeKey runtimeDecls coreDecls0 modules0 =
+checkModulesEntryFullSplitK inputs valueMain preludeKey runtimeDecls coreDecls0 modules0 =
   entrySplit
     (checkModulesEntryFullReportK
+      inputs
       valueMain
       preludeKey
       runtimeDecls
@@ -52377,13 +52425,14 @@ entrySplit r =
 
 -- `checkModulesEntryFullSplitK` returning its drive's whole report.
 export
-checkModulesEntryFullReportK : Bool ->
+checkModulesEntryFullReportK : DriveInputs ->
+  Bool ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   TcReport
-checkModulesEntryFullReportK valueMain preludeKey runtimeDecls coreDecls0 modules0 =
+checkModulesEntryFullReportK inputs valueMain preludeKey runtimeDecls coreDecls0 modules0 =
   -- The single-file front door loads stdlib/core.mdk twice: once as its prelude and
   -- once as the singleton `__user__` module.  Resolve already owns the syntactic
   -- self-test that prevents double-seeding core.  Apply that same authority before
@@ -52400,6 +52449,7 @@ checkModulesEntryFullReportK valueMain preludeKey runtimeDecls coreDecls0 module
           (preludeKey, coreDecls0, modules0)
       _ => (preludeKey, coreDecls0, modules0)
   (driveGraphK
+    inputs
     GOutDiags
     valueMain
     None
@@ -52424,13 +52474,14 @@ prependDiagOpt code sev help (Some msg) ds =
 -- The harness sorts, so scheme/warn relative order is not load-bearing.  Mirrors
 -- runCheck's single-file shape, but over the entry module of a resolved graph.
 export
-checkModulesEntryReport : List Decl ->
+checkModulesEntryReport : DriveInputs ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
   String
-checkModulesEntryReport runtimeDecls coreDecls modules =
+checkModulesEntryReport inputs runtimeDecls coreDecls modules =
   let (schemes, errs, warns) =
-    checkModulesEntryFull runtimeDecls coreDecls modules
+    checkModulesEntryFull inputs runtimeDecls coreDecls modules
   match errs
     [] => joinNl (schemeLines schemes ++ map tcMsg warns)
     _ => joinNl (typeErrorLines (map tcMsg errs))
@@ -52438,12 +52489,13 @@ checkModulesEntryReport runtimeDecls coreDecls modules =
 -- exit-code predicate analog of checkHasErrors: any type error in ANY module of
 -- the resolved graph (entry or imported — see checkModulesEntryFromDiags).
 export
-checkModulesEntryHasErrors : List Decl ->
+checkModulesEntryHasErrors : DriveInputs ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
   Bool
-checkModulesEntryHasErrors runtimeDecls coreDecls modules =
-  let (_, errs, _) = checkModulesEntryFull runtimeDecls coreDecls modules
+checkModulesEntryHasErrors inputs runtimeDecls coreDecls modules =
+  let (_, errs, _) = checkModulesEntryFull inputs runtimeDecls coreDecls modules
   match errs
     [] => False
     _ => True
@@ -52468,13 +52520,14 @@ checkModulesEntryHasErrors runtimeDecls coreDecls modules =
 -- `checkModulesEntryHasErrors`, both import-bearing-only per its own header comment) —
 -- this is its first 1-module caller.
 export
-checkOneScheme : List Decl ->
+checkOneScheme : DriveInputs ->
+  List Decl ->
   List Decl ->
   (String, List Decl) ->
   List (String, Scheme)
-checkOneScheme runtimeDecls coreDecls (rootId, prog) =
+checkOneScheme inputs runtimeDecls coreDecls (rootId, prog) =
   let (schemes, _, _) =
-    checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
+    checkModulesEntryFull inputs runtimeDecls coreDecls [(rootId, prog)]
   pubSchemes schemes
 
 -- FULL-ENVIRONMENT sibling of `checkOneScheme` (S-full-env-scheme-entry, #1116):
@@ -52492,64 +52545,71 @@ checkOneScheme runtimeDecls coreDecls (rootId, prog) =
 -- is NOT a widening of the `medaka check` front door, whose narrowed
 -- own-schemes-only report is deliberate and unchanged.
 export
-checkOneSchemeFull : List Decl ->
+checkOneSchemeFull : DriveInputs ->
+  List Decl ->
   List Decl ->
   (String, List Decl) ->
   (List (String, PubScheme), List (String, PubScheme))
-checkOneSchemeFull runtimeDecls coreDecls prog =
-  checkOneSchemeFullK None runtimeDecls coreDecls prog
+checkOneSchemeFull inputs runtimeDecls coreDecls prog =
+  checkOneSchemeFullK inputs None runtimeDecls coreDecls prog
 
 -- `checkOneSchemeFull` with the prelude key for the core-check memo (see
 -- `checkCoreMemoized`): pass `Some (desugaredPreludeKey runtimeSrc,
 -- desugaredPreludeKey coreSrc)` when `runtimeDecls`/`coreDecls` are exactly what
 -- `desugaredPrelude` returned for those sources; `None` otherwise.
 export
-checkOneSchemeFullK : Option (Int, Int) ->
+checkOneSchemeFullK : DriveInputs ->
+  Option (Int, Int) ->
   List Decl ->
   List Decl ->
   (String, List Decl) ->
   (List (String, PubScheme), List (String, PubScheme))
-checkOneSchemeFullK preludeKey runtimeDecls coreDecls prog =
+checkOneSchemeFullK inputs preludeKey runtimeDecls coreDecls prog =
   let (coreSchemes, schemes, _, _) =
-    entrySplit (checkOneReportK False preludeKey runtimeDecls coreDecls prog)
+    entrySplit
+      (checkOneReportK inputs False preludeKey runtimeDecls coreDecls prog)
   (coreSchemes, schemes)
 
 -- diagnostics-returning sibling of `checkOneScheme`, matching the former wrapper's
 -- return shape (`(errs, warns)`) exactly, so a call site can swap targets with no
 -- shape change (this slice's own acceptance bar — see the packet).
 export
-checkOneDiags : List Decl ->
+checkOneDiags : DriveInputs ->
+  List Decl ->
   List Decl ->
   (String, List Decl) ->
   (List TcDiag, List TcDiag)
-checkOneDiags runtimeDecls coreDecls prog =
-  checkOneDiagsK False None runtimeDecls coreDecls prog
+checkOneDiags inputs runtimeDecls coreDecls prog =
+  checkOneDiagsK inputs False None runtimeDecls coreDecls prog
 
 -- `checkOneDiags` with the prelude key for the core-check memo — same contract as
 -- `checkOneSchemeFullK` — and the caller's value-main candidate (`autoPrintWanted`).
 export
-checkOneDiagsK : Bool ->
+checkOneDiagsK : DriveInputs ->
+  Bool ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   (String, List Decl) ->
   (List TcDiag, List TcDiag)
-checkOneDiagsK valueMain preludeKey runtimeDecls coreDecls prog =
+checkOneDiagsK inputs valueMain preludeKey runtimeDecls coreDecls prog =
   let (_, _, errs, warns) =
     entrySplit
-      (checkOneReportK valueMain preludeKey runtimeDecls coreDecls prog)
+      (checkOneReportK inputs valueMain preludeKey runtimeDecls coreDecls prog)
   (errs, warns)
 
 -- The report-returning sibling of both `checkOneSchemeFullK` and `checkOneDiagsK`:
 -- the one-module drive's whole report, which each of them projects.
 export
-checkOneReportK : Bool ->
+checkOneReportK : DriveInputs ->
+  Bool ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   (String, List Decl) ->
   TcReport
-checkOneReportK valueMain preludeKey runtimeDecls coreDecls (rootId, prog) = checkModulesEntryFullReportK
+checkOneReportK inputs valueMain preludeKey runtimeDecls coreDecls (rootId, prog) = checkModulesEntryFullReportK
+  inputs
   valueMain
   preludeKey
   runtimeDecls
@@ -52566,21 +52626,27 @@ checkOneReportK valueMain preludeKey runtimeDecls coreDecls (rootId, prog) = che
 -- duplicating that rendering logic here.  `"__user__"` mirrors `elaborateOne`'s own
 -- rootId convention for a bare/no-import file (`entry_support.mdk`).
 export
-checkOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
-checkOneToLinesWithRuntime runtimeDecls coreProg userProg =
-  checkModulesEntryReport runtimeDecls coreProg [("__user__", userProg)]
+checkOneToLinesWithRuntime : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  String
+checkOneToLinesWithRuntime inputs runtimeDecls coreProg userProg =
+  checkModulesEntryReport inputs runtimeDecls coreProg [("__user__", userProg)]
 
 -- `checkOneToLinesWithRuntime` with the prelude key for the core-check memo (see
 -- `checkCoreMemoized`): same contract as `checkOneSchemeFullK`.  Same render as
 -- `checkModulesEntryReport`, over the keyed driver.
 export
-checkOneToLinesWithRuntimeK : Option (Int, Int) ->
+checkOneToLinesWithRuntimeK : DriveInputs ->
+  Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List Decl ->
   String
-checkOneToLinesWithRuntimeK preludeKey runtimeDecls coreProg userProg =
+checkOneToLinesWithRuntimeK inputs preludeKey runtimeDecls coreProg userProg =
   let (schemes, errs, warns) = checkModulesEntryFullK
+    inputs
     preludeKey
     runtimeDecls
     coreProg
@@ -52590,14 +52656,21 @@ checkOneToLinesWithRuntimeK preludeKey runtimeDecls coreProg userProg =
     _ => joinNl (typeErrorLines (map tcMsg errs))
 
 export
-checkOneToLines : List Decl -> String
-checkOneToLines userProg =
-  checkModulesEntryReport [] [] [("__user__", userProg)]
+checkOneToLines : DriveInputs -> List Decl -> String
+checkOneToLines inputs userProg =
+  checkModulesEntryReport inputs [] [] [("__user__", userProg)]
 
 export
-checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
-checkOneErrorsWithRuntime runtimeDecls coreProg userProg =
-  checkModulesEntryHasErrors runtimeDecls coreProg [("__user__", userProg)]
+checkOneErrorsWithRuntime : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  Bool
+checkOneErrorsWithRuntime inputs runtimeDecls coreProg userProg = checkModulesEntryHasErrors
+  inputs
+  runtimeDecls
+  coreProg
+  [("__user__", userProg)]
 
 -- One-module match-report wrapper: the type-aware
 -- non-exhaustive-match report for ONE module, runtime externs seeded and NO
@@ -52616,22 +52689,23 @@ checkOneErrorsWithRuntime runtimeDecls coreProg userProg =
 -- collapses to the same expression at `coreDecls = []`.  `"__user__"` mirrors
 -- `checkOneToLinesWithRuntime`'s rootId convention just above.
 export
-checkOneMatchToLines : List Decl -> List Decl -> String
-checkOneMatchToLines runtimeDecls prog =
-  let (_, warns) = checkOneDiags runtimeDecls [] ("__user__", prog)
+checkOneMatchToLines : DriveInputs -> List Decl -> List Decl -> String
+checkOneMatchToLines inputs runtimeDecls prog =
+  let (_, warns) = checkOneDiags inputs runtimeDecls [] ("__user__", prog)
   joinNl (map tcMsg warns)
 
 -- run the multi-module front-end and render the ENTRY module's own bindings as
 -- `name : scheme` per line (the harness sorts) — diffs vs dev/tc_module_probe.
 export
-checkModulesEntryLines : List Decl ->
+checkModulesEntryLines : DriveInputs ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
   String
-checkModulesEntryLines runtimeDecls coreDecls modules =
+checkModulesEntryLines inputs runtimeDecls coreDecls modules =
   joinNl
     (schemeLines
-      (entryOwnSchemes (checkModules runtimeDecls coreDecls modules)))
+      (entryOwnSchemes (checkModules inputs runtimeDecls coreDecls modules)))
 
 -- Emit EVERY module's bindings in one pass, each section preceded by a
 -- `## MODULE <mid>` marker line.  A single full-closure run can then cover many
@@ -52640,12 +52714,13 @@ checkModulesEntryLines runtimeDecls coreDecls modules =
 -- dependency-closure (which precedes it in topo order), so a module's section
 -- is identical whether checked alone or inside a larger union closure.
 export
-checkModulesAllLines : List Decl ->
+checkModulesAllLines : DriveInputs ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
   String
-checkModulesAllLines runtimeDecls coreDecls modules =
-  joinNl (allModuleLines (checkModules runtimeDecls coreDecls modules))
+checkModulesAllLines inputs runtimeDecls coreDecls modules =
+  joinNl (allModuleLines (checkModules inputs runtimeDecls coreDecls modules))
 
 allModuleLines : List (String, List (String, PubScheme)) -> List String
 allModuleLines [] = []
@@ -52664,7 +52739,8 @@ allModuleLines ((mid, ss) :: rest) =
 -- source uses no `=>`-constrained user polymorphism, so no EDictAt / dict params
 -- and no pendingDictApps / pendingRecDictApps to resolve.  Return shape: `ElabResult`.
 export
-elaborateModules : List Decl ->
+elaborateModules : DriveInputs ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
   ElabResult
@@ -52686,8 +52762,13 @@ elaborateModules : List Decl ->
 -- groups PROMOTE and their call sites are marked as dict applications), publishes
 -- the evidence table and dict-passes the marked trees, and that it returns the
 -- diagnostics the drive raised as its residual.
-elaborateModules runtimeDecls coreDecls0 modulesIn =
-  match elaborateModulesWithSchemes False runtimeDecls coreDecls0 modulesIn
+elaborateModules inputs runtimeDecls coreDecls0 modulesIn =
+  match (elaborateModulesWithSchemes
+    inputs
+    False
+    runtimeDecls
+    coreDecls0
+    modulesIn)
     (result, _, _) => result
 
 -- `elaborateModules` together with the prelude's schemes and the entry module's own
@@ -52695,14 +52776,21 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
 -- elaborated program (`check-policy`) typechecks once.  `valueMain` is the caller's
 -- value-main candidate (`autoPrintWanted`).
 export
-elaborateModulesWithSchemes : Bool ->
+elaborateModulesWithSchemes : DriveInputs ->
+  Bool ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (ElabResult, List (String, PubScheme), List (String, PubScheme))
-elaborateModulesWithSchemes valueMain runtimeDecls coreDecls0 modulesIn =
+elaborateModulesWithSchemes inputs valueMain runtimeDecls coreDecls0 modulesIn =
   let (result, r) =
-    elaborateModulesWithReport valueMain None runtimeDecls coreDecls0 modulesIn
+    elaborateModulesWithReport
+      inputs
+      valueMain
+      None
+      runtimeDecls
+      coreDecls0
+      modulesIn
   let (core, entrySchemes, _, _) = entrySplit r
   (result, core, entrySchemes)
 
@@ -52710,15 +52798,17 @@ elaborateModulesWithSchemes valueMain runtimeDecls coreDecls0 modulesIn =
 -- elaboration.  `executes` names the `async` driver of a caller that runs or
 -- emits the trees: its report then carries the auto-print evidence (`trAutoPrint`).
 export
-elaborateModulesWithReport : Bool ->
+elaborateModulesWithReport : DriveInputs ->
+  Bool ->
   Option String ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (ElabResult, TcReport)
-elaborateModulesWithReport valueMain executes runtimeDecls coreDecls0 modulesIn =
+elaborateModulesWithReport inputs valueMain executes runtimeDecls coreDecls0 modulesIn =
   let g =
     driveGraphK
+      inputs
       GOutTrees
       valueMain
       executes
@@ -52741,12 +52831,20 @@ elaborateModulesWithReport valueMain executes runtimeDecls coreDecls0 modulesIn 
 
 -- The report of `elaborateModules`' drive, for a test that reads it.
 export
-elaborateModulesReport : List Decl ->
+elaborateModulesReport : DriveInputs ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
   TcReport
-elaborateModulesReport runtimeDecls coreDecls0 modulesIn =
-  snd (elaborateModulesWithReport False None runtimeDecls coreDecls0 modulesIn)
+elaborateModulesReport inputs runtimeDecls coreDecls0 modulesIn =
+  snd
+    (elaborateModulesWithReport
+      inputs
+      False
+      None
+      runtimeDecls
+      coreDecls0
+      modulesIn)
 -- arg-position interface-method names whose route resolveArgStamps may stamp
 -- (populated on every path; an empty set would degenerate prePassDictArg to prePassDict)
 

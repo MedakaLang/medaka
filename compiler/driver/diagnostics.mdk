@@ -71,6 +71,7 @@ import types.publish.{
 }
 import types.effect_invocation.{InvocationOps}
 import types.typecheck.{
+  defaultDriveInputs,
   checkModulesEntryFullReportK, entrySplit, schemeLines,
   checkModulesChainReportFor, chainFullKey, checkModulesPartialK,
   lastInvocationOps,
@@ -962,11 +963,13 @@ modOwnSchemes (mid, (schemes, _, _)) = (mid, schemes)
 export
 checkReportOf : String -> FrontDriveIn -> TcReport
 checkReportOf chainKey d = match (d.fdMods, d.fdPairs)
-  ([], [up]) => checkModulesEntryFullReportK (valueMainCandidate d.fdCore [
-    up,
-  ]) d.fdPreludeKey d.fdRuntime d.fdCore [
-    up,
-  ]
+  ([], [up]) => checkModulesEntryFullReportK
+    defaultDriveInputs
+    (valueMainCandidate d.fdCore [up])
+    d.fdPreludeKey
+    d.fdRuntime
+    d.fdCore
+    [up]
   (mods, pairs) =>
     checkChainReport
       (valueMainCandidate d.fdCore pairs)
@@ -1929,6 +1932,7 @@ projectEntryAnalysisOr kept cacheRef parseCacheRef read entry roots runtimeSrc c
       None =>
         Some
           (checkModulesPartialK
+            defaultDriveInputs
             preludeKey
             runtimeP
             coreP
@@ -2180,6 +2184,7 @@ checkChainReport : Bool ->
   TcReport
 checkChainReport valueMain preludeKey chainKey runtimeP coreP mods pairs =
   checkModulesChainReportFor
+    defaultDriveInputs
     valueMain
     preludeKey
     chainKey
