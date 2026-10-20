@@ -472,7 +472,7 @@ regFromEntriesGo [] acc = acc
 regFromEntriesGo ((k, v) :: rest) acc =
   regFromEntriesGo rest (regInsertK k v acc)
 
--- Whole-table copy, the `perRun` ↔ `crossRun` shape (`types/typecheck.mdk`
+-- Whole-table copy, the `perRun` ↔ `GraphCtx.crossRun` shape (`types/typecheck.mdk`
 -- copies whole tables between the two in both directions). RIGHT-BIASED: an
 -- entry in `newer` wins over the same key in `older`, which is what a
 -- last-write-wins table's copy has always meant.

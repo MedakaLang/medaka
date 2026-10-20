@@ -960,10 +960,10 @@ goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
 anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
 perRun.value.funPredicateSlotsRef :=
 perRun.value.methodPredicateSlotsRef :=
-crossRun.value.crossModuleFunPredicateSlotsRef
-crossRun.value.crossModuleFunPredicateSlotsQualRef
-crossRun.value.crossModuleMethodPredicateSlotsRef :=
-crossRun.value.crossModuleMethodPredicateSlotsQualRef
+graphCtx.value.crossRun.crossModuleFunPredicateSlotsRef
+graphCtx.value.crossRun.crossModuleFunPredicateSlotsQualRef
+graphCtx.value.crossRun.crossModuleMethodPredicateSlotsRef :=
+graphCtx.value.crossRun.crossModuleMethodPredicateSlotsQualRef
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 methodDictArityOf : String -> Int
@@ -1628,7 +1628,7 @@ echo "  ok: #1318 predicate-slot exclusive authority present; retired split auth
 # ── #1111 Stage A-2 unit A-2.8: registry keying ratchet ─────────────────────
 # Mechanical enforcement for the registry-keying arc (re-keying ~15
 # program-global cross-module tables from bare names to qualified identity):
-# pins CrossRun's and DriverState's field sets, their setRef write targets,
+# pins CrossRun's and GraphCtx's field sets, their setRef write targets,
 # and the three engine module drivers' frame-seeding parity. Deliberately
 # NOT a standalone test/*.sh gate -- see test/registry_keying_ratchet.sh's own
 # header for why it rides inside this already-CI-wired script instead.

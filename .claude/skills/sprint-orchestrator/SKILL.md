@@ -86,7 +86,7 @@ instead.
    - **A slice needs something that just landed** — new code, a renamed gate
      or shard a packet must cite by name.
    - **`main` touched a shared record or table this sprint is also
-     extending** (`DriverState`, `DeclEnvs`, a `CrossRun` bundle). Divergence
+     extending** (`GraphCtx`, `DeclEnvs`, a `CrossRun` bundle). Divergence
      here grows the [T-LEGA-REBASE] hazard of a clean-but-non-compiling
      auto-merge; a small early merge keeps the break attributable.
    - **Land time, or `mergeable` says `CONFLICTING`.**

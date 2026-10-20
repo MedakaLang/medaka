@@ -11,7 +11,7 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 ## Parts
 | Module | Owns | Entry points |
 |---|---|---|
-| `tc_types.mdk` | The typechecker's data declarations and state records (`ModuleCtx`, `GroupCtx`, `GraphRun`, `DriverState`, `CrossRun`, `DynCtx`, `SiteCtx`) | none |
+| `tc_types.mdk` | The typechecker's data declarations and state records (`ModuleCtx`, `GroupCtx`, `GraphCtx`, `GraphRun`, `CrossRun`, `DynCtx`, `SiteCtx`) | none |
 | `typecheck.mdk` | Hindley-Milner inference, constraint solving, dict-passing elaboration, coherence, the effect-row checker's wiring; described in `TYPECHECK-ARCHITECTURE.md` | `elaborateOne`, `grantWholeDomain` |
 | `publish.mdk` | The published shapes (`TcReport`, `CheckedProgram`, `PubScheme`, `TcDiag`, `ModDiags`), the deep zonk and freeze-by-copy over them, and the live-cell validator; imports no typechecker state | `freezePub`, `liveCells` |
 | `evidence_coverage.mdk` | The evidence coverage validator: every minted site in a program's trees answered once, in the shape its reader accepts, and no ordinal published twice; a pure walk over `Decl`s and an `EvTable` | `evidenceFaults`, `EvidenceFault` |
@@ -42,7 +42,7 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 
 ## Cell lifetimes
 `CELL-LIFETIMES.md` lists every typechecker cell (18 module-level cells and the 165 fields of
-`ModuleCtx`, `GroupCtx`, `GraphRun`, `DriverState`, `CrossRun`, `DynCtx`, `SiteCtx`) with its measured lifetime, target home and whether
+`ModuleCtx`, `GroupCtx`, `GraphCtx`, `GraphRun`, `CrossRun`, `DynCtx`, `SiteCtx`) with its measured lifetime, target home and whether
 an interface load would have to fill it. Lifetimes (183 rows): process 9, graph 61, module 80, group 3, run 30.
 The per-module cell counts are in `test/arch_goldens/cells.golden`.
 
