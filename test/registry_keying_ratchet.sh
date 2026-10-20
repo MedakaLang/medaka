@@ -1229,6 +1229,7 @@ markingRef W -- one Option of the module`s marking; not a table
 matchChecksDeferred W -- list; not keyed
 matchOracle - -- one exhaustiveness oracle value; not a table of this record
 matchWarnings W -- list of warnings; not keyed
+mcGraph - -- one GraphCtx value, the drive's graph record the module is checked in; not a table. A ModuleCtx field, not a GraphCtx one: the module record names its graph, set by the mint and by moduleCtxFrom's run class, never assigned
 methodAliasEntriesRef W -- OrdMap keyed by the alias method spelling (`A.mth`) of this module`s own imports
 methodDispatchIdxByIdRef W -- assoc list keyed ((IfaceRef, String), Int): interface identity carries the origin, so same-spelled interfaces do not collide
 methodPredicateSlotsRef W -- assoc list keyed by the method slot key (interface identity and method name)
