@@ -28,10 +28,12 @@ import graphics.{Color(..), Picture(..), Point(..), Shape(..)}
 
 scene : Float -> Picture
 scene seconds =
+  let background = Color { red = 0.02, green = 0.04, blue = 0.08, alpha = 1.0 }
+  let ink = Color { red = 0.3, green = 0.85, blue = 1.0, alpha = 1.0 }
+  let center = Point { x = 80.0 * sin seconds, y = 0.0 }
   Picture {
-    background = Color { red = 0.02, green = 0.04, blue = 0.08, alpha = 1.0 },
-    shapes = [Circle (Color { red = 0.3, green = 0.85, blue = 1.0, alpha = 1.0 })
-      (Point { x = 80.0 * sin seconds, y = 0.0 }) 20.0],
+    background = background,
+    shapes = [Circle ink center 20.0],
   }
 
 main = animate scene
