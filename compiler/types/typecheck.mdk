@@ -50875,7 +50875,7 @@ graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
       perRun.value.matchOracle := buildOracle []
       ()
     GOutDiags => ()
-  let _ = mintGraphCtx inputs
+  mintGraphCtx inputs
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
   -- loop, so a module using an effect declared in ANOTHER module sees its domain.
@@ -51961,9 +51961,9 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
     restRows
 
 -- The drive's answers to the post-drive questions, read once at its end (after the
--- drain, the tree arm's dictionary pass and the sticky rollback), exactly when a
--- caller used to read the cells.  The invocation view's schemes are re-minted
--- copies, so no cell inference writes is reachable from the result.
+-- drain, the tree arm's dictionary pass and the sticky rollback).  The invocation
+-- view's schemes are re-minted copies, so no cell inference writes is reachable from
+-- the result.
 driveOutputsNow : Unit -> DriveOutputs
 driveOutputsNow _ = DriveOutputs {
   doMainIsUnit = mainIsUnitNow (),

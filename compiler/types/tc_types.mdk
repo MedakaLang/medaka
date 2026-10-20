@@ -913,9 +913,9 @@ public export data MethodScope =
 -- lineage (`graphRun`), the drive's configuration and trace sink, the graph-derived
 -- tables, and the sticky type-error pair.  `graphPreamble` mints it (`mintGraphCtx`)
 -- with fresh `crossRun` and `graphRun` and the trace of the drive's inputs; every
--- `Ref` field is carried from the previous record by
--- identity and then written in place at its own site, so a field the preamble does
--- not write keeps the previous drive's value.  The sticky pair is process-lived:
+-- `Ref` field is carried from the previous record by identity and then written in
+-- place at its own site, so a field the preamble does not write keeps the previous
+-- drive's value.  The sticky pair is process-lived:
 -- no driver clears it (`resetTypeErrorsSticky` does, for its callers).
 --
 -- NO TRAILING `--` comment on any field below (#829/[T-PERRUN-COMMENTS] corrupts
@@ -999,9 +999,8 @@ public export data DriveInputs = DriveInputs {
 
 -- What a drive hands back to its caller, as plain data frozen at the drive's end
 -- (after the drain and the sticky rollback): the answers a driver asks of the
--- drive it ran.  No `Decl`, no closure and no
--- live cell: `doInvocationView`'s schemes are re-minted copies, and the rest is
--- booleans and immutable tables.  It is not a `TcReport` field because
+-- drive it ran.  No `Decl`, no closure and no live cell: `doInvocationView`'s
+-- schemes are re-minted copies, and the rest is booleans and immutable tables.  It is not a `TcReport` field because
 -- `types.publish` cannot import this module.
 --
 -- `doStickyDiags` is the sticky list as the drive left it, newest first, not yet
