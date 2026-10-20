@@ -126,6 +126,7 @@ SUBJECTS: dict[str, tuple[str, tuple[str, ...], bool]] = {
     "idiom.let-underscore-unit": ("`let _ = e` where `e` has type Unit", (), False),
     "defensive.discarded-result": ("a Result or Option value discarded without being handled", (M,), False),
     "dup.existing": ("a hand-rolled function that the stdlib or an existing helper already provides", (), True),
+    "dup.ctor-wrapper": ("a function whose body only applies an exported data constructor to its own parameters, adding nothing the constructor does not", (), False),
     "magic-literal": ("a raw numeric character code, or a constant's value repeated as a literal", (), False),
     "suppress.invalid-reason": ("a `lint-disable` whose reason is not a concrete semantic difference, an independence requirement, a measured cost, or a verified language limitation", (), False),
     "module.scattered-concern": ("new code adding a concern to a file that is not about it, or scattering one concern across distant regions", (), False),

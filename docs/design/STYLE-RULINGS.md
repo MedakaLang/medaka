@@ -335,3 +335,13 @@ different slug, that is noted.
 - **Ruling:** "a". A comment that explains why a copy is not shared excuses it from `dup.cross-file` only if its reason is one of R19's four valid kinds: a concrete semantic difference, an independence requirement, a measured cost, or a verified language limitation. Any other reason does not excuse it. "Blast radius" with identical behaviour names a worry, not a difference, so `canonKey` stays a positive. Bare "deliberate", "kept on purpose" and "out of scope" fail as they do for a suppression.
 - **Class:** `dup.cross-file`. `dup.existing`'s exceptions are already of R19's kinds (a measured hot path, an oracle's independence).
 - **Amends:** R19, extending its test from lint suppressions to comments that justify a copy.
+
+### R51: a function that only applies an exported data constructor duplicates it
+
+- **Instance:** the playground `graphics` module in #4333 (`c2bb846f5`): `point`, `rgba`, `line`, `circle`, `polygon` and `picture` each apply an exported constructor (`Point`, `Color`, `Line`, `Circle`, `Polygon`, `Picture`) to their own parameters in the same order, or build the record literal field by field from same-named parameters. The module's doc says "Constructors preserve their arguments".
+- **Ruling:** The project owner named the pattern ("function constructors that just duplicate data constructors (e.g. rgba for Color)") and chose reading (a): a pure pass-through is the positive; a wrapper that does real work (validates, supplies a default, reorders its arguments, or is the smart constructor of an abstractly exported type) is not. Use the constructor.
+- **Class:** `dup.ctor-wrapper` (new).
+- **Record literals:** asked whether `mkRowType w d = RowType { width = w, decode = d }` counts when the parameters are named differently from the fields; the project owner: "yes it counts". The first draft's "same-named parameter" was an operationalization of the drafter, not part of the ruling.
+- **Open:** whether a wrapper whose only addition is a default argument should count (reading (b)), whether a wrapper exists to give a doctest a home.
+- **Unit-naming wrappers:** `stdlib/time.mdk` `millis n = Duration n`, beside `seconds` and `minutes` which convert. Offered exempt, flag, or unscored; the project owner chose "a": exempt. The exemption is narrowed to a name that states a unit or representation the constructor's argument type does not, so a name that merely paraphrases the constructor stays a positive.
+- **Amends:** none.
