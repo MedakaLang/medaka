@@ -8164,9 +8164,9 @@ graphCtx : Ref GraphCtx
 graphCtx = Ref (initialGraphCtx builtinCtors (freshGraphRun ()))
 
 -- The process's interners (see `Interners`): the lineage objects and the extern
--- catalog of the graph record installed last.  Every install below writes it, so
--- the next mint continues from whatever record was installed before it: a mint, a
--- memo hit's restored record, `markModules`' run, or a probe's restore.
+-- catalog of the graph record a drive continues from.  The drive's mint, a memo hit's
+-- restored record and `markModules`' record each write it, so the next mint continues
+-- from the last of them.
 interners : Ref Interners
 interners = Ref (internersOf graphCtx.value)
 
@@ -8180,25 +8180,17 @@ internersOf c = Interners {
   externCatalog = c.builtinExternNamesRef,
 }
 
--- Install [c] as the cross-module accumulators, keeping the rest of the record.
-installCross : CrossRun -> Unit
-installCross c = installGraphCtx GraphCtx { graphCtx.value | crossRun = c }
+-- A test probe's graph record: every field fresh, as a process's first record.
+probeGraphCtx : Unit -> GraphCtx
+probeGraphCtx _ = initialGraphCtx builtinCtors (freshGraphRun ())
 
--- Install [r] as the graph lineage, keeping the rest of the record.
-installRun : GraphRun -> Unit
-installRun r = installGraphCtx GraphCtx { graphCtx.value | graphRun = r }
-
--- Install [c] as the current drive's record, and its lineage and catalog as the
--- interners: the one write every install goes through.
-installGraphCtx : GraphCtx -> Unit
-installGraphCtx c =
-  graphCtx := c
-  interners := internersOf c
-
--- Install both sub-records, keeping the rest of the record.
-installSubRecords : CrossRun -> GraphRun -> Unit
-installSubRecords c r =
-  installGraphCtx GraphCtx { graphCtx.value | crossRun = c, graphRun = r }
+-- [g] with fresh cross-module accumulators and a fresh graph run: the record a test
+-- probe's next phase runs in, keeping [g]'s other fields.
+freshSubRecordsOf : GraphCtx -> GraphCtx
+freshSubRecordsOf g = GraphCtx { g |
+  crossRun = freshCrossRun builtinCtors,
+  graphRun = freshGraphRun (),
+}
 
 -- one entry per occurrence of a registered interface method: (iface, typarams,
 -- declared method Ty, the occurrence's instantiated mono).  Resolved post-inference.
@@ -10792,10 +10784,10 @@ methodReturnMemoSupers supers =
 -- never a parameter -- lowering and eval rebind it per instance (`defaultReceiverDict`).
 defaultBodyBinderNamesProbe : Unit -> List String
 defaultBodyBinderNamesProbe _ =
-  let savedGraph = graphCtx.value.graphRun
-  let saved = initialModuleCtx ()
-  installRun (freshGraphRun ())
-  let mctx = carryModuleCtx saved
+  let savedGraph = graphCtx.value
+  let gctx = probeGraphCtx ()
+  graphCtx := gctx
+  let mctx = initialModuleCtx gctx
   let iface =
     IfaceRef { irName = "Supply", irOrigin = OriginModule "owner-module" }
   let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = "copy" }
@@ -10813,7 +10805,7 @@ defaultBodyBinderNamesProbe _ =
     renderEvidenceBinder (Scopes.binderAt body 1),
     renderEvidenceBinder (Scopes.binderAt body defaultReceiverOrdinal),
   ]
-  installRun savedGraph
+  graphCtx := savedGraph
   rendered
 
 -- > defaultBodyBinderNamesProbe ()
@@ -10920,10 +10912,10 @@ pushNumlit e =
 -- instead.  The FIELD anchor is TWO leading spaces; the four-space form this recipe
 -- once used matches nothing and silently returns 0.
 -- A derivation is only honest if someone ran it — so run it, don't read a number here.
--- The module fields start empty except the three the mint is given: the module id and
--- the seed's oracle and warnings.
-freshModuleCtx : CheckRunSeed -> String -> ModuleCtx
-freshModuleCtx seed mid = ModuleCtx {
+-- The module fields start empty except the four the mint is given: the graph record,
+-- the module id and the seed's oracle and warnings.
+freshModuleCtx : GraphCtx -> CheckRunSeed -> String -> ModuleCtx
+freshModuleCtx gctx seed mid = ModuleCtx {
   currentScope = Ref ScopeClosed,
   admittedOccObls = Ref [],
   curEffect = Ref [],
@@ -11015,16 +11007,21 @@ freshModuleCtx seed mid = ModuleCtx {
   sigTyMapRef = Ref omEmpty,
   currentModuleRef = Ref mid,
   invocationViewRef = Ref (InvocationView [] [] []),
+  mcGraph = gctx,
 }
 
--- The record a process starts from: no module, an empty oracle, no warnings.
-initialModuleCtx : Unit -> ModuleCtx
-initialModuleCtx _ = blankModuleCtx ""
+-- The record a drive starts from in the graph record [gctx]: no module, an empty
+-- oracle, no warnings.
+initialModuleCtx : GraphCtx -> ModuleCtx
+initialModuleCtx gctx = blankModuleCtx gctx ""
 
--- A fresh record for the module [mid], with an empty oracle and no warnings.
-blankModuleCtx : String -> ModuleCtx
-blankModuleCtx mid =
-  freshModuleCtx CheckRunSeed { crsOracle = emptyOracle, crsWarnings = [] } mid
+-- A fresh record for the module [mid] in [gctx], with an empty oracle and no warnings.
+blankModuleCtx : GraphCtx -> String -> ModuleCtx
+blankModuleCtx gctx mid =
+  freshModuleCtx
+    gctx
+    CheckRunSeed { crsOracle = emptyOracle, crsWarnings = [] }
+    mid
 
 -- Built once: a stamp context keeps no oracle, and building one per stamp is
 -- counted by `exhaust.oracle` in the per-verb stage counts.
@@ -11043,9 +11040,10 @@ checkRunResidue m = CheckRunSeed {
 -- taken from the argument its class names.  A mint makes every field fresh
 -- (`freshModuleCtx`), taking the module id and the oracle and warnings from its seed;
 -- every other whole-record operation is a call of this function.
---   [run] — what the module's inference, its channels and its stampers accumulate.  A
---     carry and a memo hit take a fresh record's; a stamp context takes the module's own
---     (shared); the drain's enter takes the stamp context's.
+--   [run] — what the module's inference, its channels and its stampers accumulate, and
+--     the graph record they accumulate in (`mcGraph`).  A carry and a memo hit take a
+--     fresh record's, minted in the graph they are given; a stamp context takes the
+--     module's own (shared); the drain's enter takes the stamp context's.
 --   [tables] — the module's declared tables and its match oracle and warnings.  A carry
 --     copies the module's; a stamp context drops them (its `superDeclsRef` holds the
 --     interface decls of the module's universe instead); a memo hit takes the snapshot's.
@@ -11145,6 +11143,7 @@ moduleCtxFrom detach run tables drain ident = ModuleCtx {
   occursCheckFailed = run.occursCheckFailed,
   currentLevel = run.currentLevel,
   markingRef = run.markingRef,
+  mcGraph = run.mcGraph,
   superDeclsRef = refFrom detach tables.superDeclsRef,
   sigNameSetRef = refFrom detach tables.sigNameSetRef,
   sigTyMapRef = refFrom detach tables.sigTyMapRef,
@@ -11159,16 +11158,18 @@ moduleCtxFrom detach run tables drain ident = ModuleCtx {
 refFrom : Bool -> Ref a -> Ref a
 refFrom detach r = if detach then Ref r.value else r
 
--- A record with fresh run fields and [m]'s other fields, copied by value: what a memo
--- snapshot stores, and what a test probe runs in.
-carryModuleCtx : ModuleCtx -> ModuleCtx
-carryModuleCtx m = moduleCtxFrom True (initialModuleCtx ()) m m m
+-- A record with fresh run fields in the graph record [gctx] and [m]'s other fields,
+-- copied by value: what a memo snapshot stores (in the memo's own detached graph), and
+-- what a test probe runs in.
+carryModuleCtx : GraphCtx -> ModuleCtx -> ModuleCtx
+carryModuleCtx gctx m = moduleCtxFrom True (initialModuleCtx gctx) m m m
 
--- The record a memo hit continues from: the snapshot [snap] carried, with the module id
--- and the invocation view of [cur], the record current when the hit is taken.
-resumeModuleCtx : ModuleCtx -> ModuleCtx -> ModuleCtx
-resumeModuleCtx cur snap =
-  moduleCtxFrom True (initialModuleCtx ()) snap snap cur
+-- The record a memo hit continues from in [gctx], the graph record the hit restored:
+-- the snapshot [snap] carried, with the module id and the invocation view of [cur], the
+-- record current when the hit is taken.
+resumeModuleCtx : GraphCtx -> ModuleCtx -> ModuleCtx -> ModuleCtx
+resumeModuleCtx gctx cur snap =
+  moduleCtxFrom True (initialModuleCtx gctx) snap snap cur
 
 containsI : Int -> List Int -> Bool
 containsI _ [] = False
@@ -11517,7 +11518,7 @@ walkGoalSameProbe : Unit -> List Bool
 walkGoalSameProbe _ =
   let iface = ifaceRefBare "C"
   let int = tconBuiltin "Int"
-  let mctx = initialModuleCtx ()
+  let mctx = initialModuleCtx graphCtx.value
   let row1 = EffRow [] (Some (freshEffvar mctx ()))
   let row2 = EffRow [] (Some (freshEffvar mctx ()))
   let goal1 = [TFun int row1 int]
@@ -35626,10 +35627,12 @@ tupleUnifyClash a b = match (tupleSpine a, tupleSpine b)
 -- the same function through the one-module graph projections.
 --
 -- The module's `ModuleCtx` is minted here, before anything else runs, and returned
--- beside the bindings: the driver continues from it.  [runSeed] is its match oracle
--- and warnings (`seedCheckRun`); a driver that does not seed (`cmCheckWorker`, the
--- core passes) passes the previous record's (`checkRunResidue`).
-checkBodyImpl : CheckRunSeed ->
+-- beside the bindings: the driver continues from it.  [gctx] is the drive's graph
+-- record, which the driver passes (the previous record's `mcGraph`).  [runSeed] is its
+-- match oracle and warnings (`seedCheckRun`); a driver that does not seed
+-- (`cmCheckWorker`, the core passes) passes the previous record's (`checkRunResidue`).
+checkBodyImpl : GraphCtx ->
+  CheckRunSeed ->
   ModuleSeed ->
   String ->
   List Decl ->
@@ -35637,9 +35640,9 @@ checkBodyImpl : CheckRunSeed ->
   (ModuleBindings, List Decl, ModuleCtx)
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
-checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
+checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   let seed = moduleSeed.msSchemes
-  let mctx = freshModuleCtx runSeed mid
+  let mctx = freshModuleCtx gctx runSeed mid
   let moduleScope =
     Scopes.freshScope
       (currentScopeStore ())
@@ -46959,10 +46962,10 @@ isLegacyPredicateAnswer _ = False
 -- removed from `anyGivenMatches`.
 scopeGivenProbe : Unit -> List Bool
 scopeGivenProbe _ =
-  let savedGraph = graphCtx.value.graphRun
-  let saved = initialModuleCtx ()
-  installRun (freshGraphRun ())
-  let mctx = carryModuleCtx saved
+  let savedGraph = graphCtx.value
+  let gctx = probeGraphCtx ()
+  graphCtx := gctx
+  let mctx = initialModuleCtx gctx
   let store = currentScopeStore ()
   let root = Scopes.freshScope store None 0 "given-probe" ModuleOwner
   let owner =
@@ -47029,7 +47032,7 @@ scopeGivenProbe _ =
       (firstPredForEnclResidual "PairGiven" args owner givens),
     isLegacyPredicateAnswer (firstPredForEncl compatibleRequest owner givens),
   ]
-  installRun savedGraph
+  graphCtx := savedGraph
   result
 
 -- > scopeGivenProbe ()
@@ -47173,19 +47176,19 @@ methodRowRegistrySlotIds mctx key =
     None => []
     Some slots => methodSlotBoundIds slots
 
--- [saved] is the caller's current record: the observation runs in a carry of it, and
--- it is current again on return.
+-- [saved] is the caller's current record: the observation runs in a carry of it, in
+-- its graph record with fresh sub-records, and its graph record is current again on
+-- return.
 methodRowNumObservation : ModuleCtx ->
   String ->
   List Decl ->
   List Decl ->
   NumAnchorTestObservation
 methodRowNumObservation saved caseName builtinDecls decls =
-  let savedCross = graphCtx.value.crossRun
-  let savedGraph = graphCtx.value.graphRun
-  installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
-  let mctx = carryModuleCtx saved
-  graphCtx.value.crossRun.builtinClassesRef := builtinClassesOf builtinDecls
+  let gctx = freshSubRecordsOf saved.mcGraph
+  graphCtx := gctx
+  let mctx = carryModuleCtx gctx saved
+  gctx.crossRun.builtinClassesRef := builtinClassesOf builtinDecls
   let rows = ifaceMethodSchemeRows mctx decls
   let _ = seedNumLitFromIntAnchor mctx rows
   let observation = match mctx.numLitFromIntAnchorRef.value
@@ -47203,17 +47206,16 @@ methodRowNumObservation saved caseName builtinDecls decls =
       natoSchemeBody = ppMono (schemeBodyOf anchor.msrScheme),
       natoDeclaredType = ppTy anchor.msrType,
     }
-  installSubRecords savedCross savedGraph
+  graphCtx := saved.mcGraph
   observation
 
 observeMethodSchemeRowsForTest : Unit -> MethodRowTestObservation
 observeMethodSchemeRowsForTest _ =
-  let savedCross = graphCtx.value.crossRun
-  let savedGraph = graphCtx.value.graphRun
-  let saved = initialModuleCtx ()
+  let savedGraph = graphCtx.value
+  let graph1 = probeGraphCtx ()
 
-  installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
-  let rows1 = carryModuleCtx saved
+  graphCtx := graph1
+  let rows1 = initialModuleCtx graph1
   let constrainedRow =
     firstMethodRow (ifaceMethodSchemeRows rows1 [methodRowTestFoldMapDecl])
   let constrainedIds = schemeIds constrainedRow.msrScheme
@@ -47224,15 +47226,16 @@ observeMethodSchemeRowsForTest _ =
     methodSlotIdsAtPositions constrainedIds constrainedSlots
   let constrainedArgumentIds = methodSlotArgumentIds constrainedSlots
 
-  installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
-  let rows2 = carryModuleCtx rows1
-  let counterBefore = graphCtx.value.graphRun.tyvarCounter.value
+  let graph2 = freshSubRecordsOf graph1
+  graphCtx := graph2
+  let rows2 = carryModuleCtx graph2 rows1
+  let counterBefore = graph2.graphRun.tyvarCounter.value
   let firstRow =
     firstMethodRow (ifaceMethodSchemeRows rows2 [methodRowTestFoldMapDecl])
-  let counterAfterFirst = graphCtx.value.graphRun.tyvarCounter.value
+  let counterAfterFirst = graph2.graphRun.tyvarCounter.value
   let secondRow =
     firstMethodRow (ifaceMethodSchemeRows rows2 [methodRowTestFoldMapDecl])
-  let counterAfterSecond = graphCtx.value.graphRun.tyvarCounter.value
+  let counterAfterSecond = graph2.graphRun.tyvarCounter.value
   let firstSchemeIds = schemeIds firstRow.msrScheme
   let secondSchemeIds = schemeIds secondRow.msrScheme
   let firstRowSlotIds = methodSlotBoundIds firstRow.msrMethodSlots
@@ -47240,19 +47243,22 @@ observeMethodSchemeRowsForTest _ =
   let registryAfterSecondSlotIds =
     methodRowRegistrySlotIds rows2 (methodSlotKey firstRow.msrIface "foldMap")
 
-  installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
-  let rows3 = carryModuleCtx rows2
+  let graph3 = freshSubRecordsOf graph1
+  graphCtx := graph3
+  let rows3 = carryModuleCtx graph3 rows2
   let sameNameForward =
     methodRowSameNameView
       (ifaceMethodSchemeRows rows3 [methodRowTestSameA, methodRowTestSameB])
-  installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
-  let rows4 = carryModuleCtx rows3
+  let graph4 = freshSubRecordsOf graph1
+  graphCtx := graph4
+  let rows4 = carryModuleCtx graph4 rows3
   let sameNameReverse =
     methodRowSameNameView
       (ifaceMethodSchemeRows rows4 [methodRowTestSameB, methodRowTestSameA])
 
-  installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
-  let rows5 = carryModuleCtx rows4
+  let graph5 = freshSubRecordsOf graph1
+  graphCtx := graph5
+  let rows5 = carryModuleCtx graph5 rows4
   let constantRows = ifaceMethodSchemeRows rows5 [methodRowTestConstantDecl]
   let constantRow = firstMethodRow constantRows
   let constantBodyIsFunction =
@@ -47260,8 +47266,9 @@ observeMethodSchemeRowsForTest _ =
       TFun _ _ _ => True
       _ => False
 
-  installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
-  let rows6 = carryModuleCtx rows5
+  let graph6 = freshSubRecordsOf graph1
+  graphCtx := graph6
+  let rows6 = carryModuleCtx graph6 rows5
   let attributed = DAttrib [] methodRowTestFoldMapDecl
   let attributedRows = ifaceMethodSchemeRows rows6 [attributed]
   let attributedMethods =
@@ -47334,7 +47341,7 @@ observeMethodSchemeRowsForTest _ =
     mrtoAttributedParamTyparams = attributedParamTyparams,
     mrtoNumAnchors = numAnchors,
   }
-  installSubRecords savedCross savedGraph
+  graphCtx := savedGraph
   observation
 
 methodRowSlotAllocationProbe : Unit ->
@@ -47468,11 +47475,10 @@ methodReturnProbeRequest mctx row =
 methodReturnVectorCompletenessProbe : Unit ->
   (Option (List String), Option (List String), Bool, Bool)
 methodReturnVectorCompletenessProbe _ =
-  let savedCross = graphCtx.value.crossRun
-  let savedGraph = graphCtx.value.graphRun
-  let saved = initialModuleCtx ()
-  installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
-  let mctx = carryModuleCtx saved
+  let savedGraph = graphCtx.value
+  let gctx = probeGraphCtx ()
+  graphCtx := gctx
+  let mctx = initialModuleCtx gctx
   let _ = methodReturnProbeScope mctx "return-vector"
   let zeroRow =
     firstMethodRow
@@ -47512,7 +47518,7 @@ methodReturnVectorCompletenessProbe _ =
     allMethodParamsMentioned zeroRow.msrTyparams zeroRow.msrType,
     allMethodParamsMentioned partialRow.msrTyparams partialRow.msrType,
   )
-  installSubRecords savedCross savedGraph
+  graphCtx := savedGraph
   observed
 
 -- The absent `b` of `Partial` reads the occurrence's own unbound variable.
@@ -47522,11 +47528,10 @@ methodReturnVectorCompletenessProbe _ =
 export
 methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
 methodReturnTemplatePresenceProbe _ =
-  let savedCross = graphCtx.value.crossRun
-  let savedGraph = graphCtx.value.graphRun
-  let saved = initialModuleCtx ()
-  installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
-  let mctx = carryModuleCtx saved
+  let savedGraph = graphCtx.value
+  let gctx = probeGraphCtx ()
+  graphCtx := gctx
+  let mctx = initialModuleCtx gctx
   let present =
     firstMethodRow
       (ifaceMethodSchemeRows mctx [
@@ -47563,18 +47568,19 @@ methodReturnTemplatePresenceProbe _ =
     map isSome present.msrPredicateTemplate.mptArguments,
     map isSome absent.msrPredicateTemplate.mptArguments,
   )
-  installSubRecords savedCross savedGraph
+  graphCtx := savedGraph
   observed
 
--- Runs in a carry of [prev], the caller's record, and returns it beside the codes:
--- it is the record left current.
+-- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
+-- graph run, and returns it beside the codes: it is the record left current.
 methodReturnProbeCodes : ModuleCtx ->
   MethodSchemeRow ->
   List Decl ->
   (List String, ModuleCtx)
 methodReturnProbeCodes prev ownedRow impls =
-  installRun (freshGraphRun ())
-  let mctx = carryModuleCtx prev
+  let gctx = GraphCtx { prev.mcGraph | graphRun = freshGraphRun () }
+  graphCtx := gctx
+  let mctx = carryModuleCtx gctx prev
   let _ = methodReturnProbeScope mctx "return-owner-checker"
   let foreignRow =
     firstMethodRow
@@ -47596,15 +47602,17 @@ methodReturnProbeRouteKey : Route -> String
 methodReturnProbeRouteKey (RKey key _ _) = key
 methodReturnProbeRouteKey _ = ""
 
--- Runs in a carry of [prev], the caller's record.
+-- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
+-- graph run.
 methodReturnProbeStamp : ModuleCtx ->
   MethodSchemeRow ->
   MethodSchemeRow ->
   List Decl ->
   (String, String, String)
 methodReturnProbeStamp prev ownedRow foreignRow impls =
-  installRun (freshGraphRun ())
-  let mctx = carryModuleCtx prev
+  let gctx = GraphCtx { prev.mcGraph | graphRun = freshGraphRun () }
+  graphCtx := gctx
+  let mctx = carryModuleCtx gctx prev
   let scope = methodReturnProbeScope mctx "return-owner-stamper"
   let request = methodReturnProbeRequest mctx ownedRow
   let _ = methodReturnProbeSpelling mctx foreignRow
@@ -47641,12 +47649,8 @@ methodReturnProbeStamp prev ownedRow foreignRow impls =
 -- accept Owner's impl, and the stamper must select Owner's distinct route.
 methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
 methodReturnOwnershipProbe _ =
-  let savedCross = graphCtx.value.crossRun
-  let savedGraph = graphCtx.value.graphRun
-  let saved = initialModuleCtx ()
-  let savedSticky = graphCtx.value.typeErrorsSticky.value
-  let savedStickyDiags = graphCtx.value.typeErrorsStickyDiags.value
-  installCross (freshCrossRun builtinCtors)
+  let savedGraph = graphCtx.value
+  let ownedGraph = probeGraphCtx ()
   let ownedDecl =
     methodReturnProbeIface
       "return-owner"
@@ -47657,11 +47661,12 @@ methodReturnOwnershipProbe _ =
       "return-foreign"
       "Foreign"
       (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-  installRun (freshGraphRun ())
-  let ownedCtx = carryModuleCtx saved
+  graphCtx := ownedGraph
+  let ownedCtx = initialModuleCtx ownedGraph
   let ownedRow = firstMethodRow (ifaceMethodSchemeRows ownedCtx [ownedDecl])
-  installRun (freshGraphRun ())
-  let foreignCtx = carryModuleCtx ownedCtx
+  let foreignGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
+  graphCtx := foreignGraph
+  let foreignCtx = carryModuleCtx foreignGraph ownedCtx
   let foreignRow =
     firstMethodRow (ifaceMethodSchemeRows foreignCtx [foreignDecl])
   let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
@@ -47681,9 +47686,7 @@ methodReturnOwnershipProbe _ =
     actualKey == ownedKey,
     actualKey /= foreignKey,
   )
-  installSubRecords savedCross savedGraph
-  graphCtx.value.typeErrorsSticky := savedSticky
-  graphCtx.value.typeErrorsStickyDiags := savedStickyDiags
+  graphCtx := savedGraph
   observed
 
 -- > methodReturnOwnershipProbe ()
@@ -47692,11 +47695,10 @@ methodReturnOwnershipProbe _ =
 export
 methodReturnResolutionMutationProbe : Unit -> (Bool, Bool, Bool, Bool)
 methodReturnResolutionMutationProbe _ =
-  let savedCross = graphCtx.value.crossRun
-  let savedGraph = graphCtx.value.graphRun
-  let saved = initialModuleCtx ()
-  installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
-  let mctx = carryModuleCtx saved
+  let savedGraph = graphCtx.value
+  let gctx = probeGraphCtx ()
+  graphCtx := gctx
+  let mctx = initialModuleCtx gctx
   let _ = methodReturnProbeScope mctx "return-outcome-validation"
   let ownedDecl =
     methodReturnProbeIface
@@ -47759,7 +47761,7 @@ methodReturnResolutionMutationProbe _ =
     not (methodReturnResolutionValid mctx request wrongPrerequisites),
     not (methodReturnResolutionValid mctx request disagreement),
   )
-  installSubRecords savedCross savedGraph
+  graphCtx := savedGraph
   observed
 
 methodReturnSelectedIdentity : MethodReturnResolution -> Int
@@ -47786,16 +47788,17 @@ methodReturnProbeOblIfaces (obl :: rest) =
     _ => []
   here ++ methodReturnProbeOblIfaces rest
 
--- Runs in a carry of [prev], the caller's record, and returns it beside the
--- observation: it is the record left current.
+-- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
+-- graph run, and returns it beside the observation: it is the record left current.
 methodReturnProbeSlotCase : ModuleCtx ->
   MethodSchemeRow ->
   MethodSchemeRow ->
   Bool ->
   ((List String, List String), ModuleCtx)
 methodReturnProbeSlotCase prev ownedRow foreignRow retainOwner =
-  installRun (freshGraphRun ())
-  let mctx = carryModuleCtx prev
+  let gctx = GraphCtx { prev.mcGraph | graphRun = freshGraphRun () }
+  graphCtx := gctx
+  let mctx = carryModuleCtx gctx prev
   let _ = methodReturnProbeScope mctx "return-owner-slots"
   mctx.methodPredicateSlotsRef :=
     [(methodSlotKey foreignRow.msrIface "make", foreignRow.msrMethodSlots)]
@@ -47826,7 +47829,7 @@ methodReturnProbeSlotCase prev ownedRow foreignRow retainOwner =
   (
     (
       methodReturnProbeOblIfaces (wAll mctx.obls),
-      methodReturnProbeGoalIfaces graphCtx.value.graphRun.goals.value,
+      methodReturnProbeGoalIfaces gctx.graphRun.goals.value,
     ),
     mctx,
   )
@@ -47837,11 +47840,10 @@ methodReturnProbeSlotCase prev ownedRow foreignRow retainOwner =
 methodReturnSlotOwnershipProbe : Unit ->
   ((List String, List String), (List String, List String), (List String, List String))
 methodReturnSlotOwnershipProbe _ =
-  let savedCross = graphCtx.value.crossRun
-  let savedGraph = graphCtx.value.graphRun
-  let saved = initialModuleCtx ()
-  installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
-  let ownedCtx = carryModuleCtx saved
+  let savedGraph = graphCtx.value
+  let ownedGraph = probeGraphCtx ()
+  graphCtx := ownedGraph
+  let ownedCtx = initialModuleCtx ownedGraph
   let ownedRow =
     firstMethodRow
       (ifaceMethodSchemeRows ownedCtx [
@@ -47852,8 +47854,9 @@ methodReturnSlotOwnershipProbe _ =
             [methodRowTestConstraint "return-seed" "Seed" [TyVar "b"]]
             (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
       ])
-  installRun (freshGraphRun ())
-  let emptyCtx = carryModuleCtx ownedCtx
+  let emptyGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
+  graphCtx := emptyGraph
+  let emptyCtx = carryModuleCtx emptyGraph ownedCtx
   let emptyRow =
     firstMethodRow
       (ifaceMethodSchemeRows emptyCtx [
@@ -47862,8 +47865,9 @@ methodReturnSlotOwnershipProbe _ =
           "EmptySlots"
           (TyFun (tyConBuiltin "Unit" None) (TyVar "a")),
       ])
-  installRun (freshGraphRun ())
-  let foreignCtx = carryModuleCtx emptyCtx
+  let foreignGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
+  graphCtx := foreignGraph
+  let foreignCtx = carryModuleCtx foreignGraph emptyCtx
   let foreignRow =
     firstMethodRow
       (ifaceMethodSchemeRows foreignCtx [
@@ -47881,7 +47885,7 @@ methodReturnSlotOwnershipProbe _ =
   let (missing, _) =
     methodReturnProbeSlotCase emptiedCtx ownedRow foreignRow False
   let observed = (retained, emptied, missing)
-  installSubRecords savedCross savedGraph
+  graphCtx := savedGraph
   observed
 
 -- > methodReturnSlotOwnershipProbe ()
@@ -48506,7 +48510,7 @@ prependPredicateSlots (slot :: rest) acc =
 -- Private producer probe: same-lead predicates stay distinct, an exact duplicate
 -- collapses, a multi-argument predicate owns one slot, a vector whose lead is another
 -- predicate's non-lead survives, and a trace-only id retains PSArgsUnknown.
--- > inferredPredicateSlotsProbe (initialModuleCtx ()) ()
+-- > inferredPredicateSlotsProbe (initialModuleCtx graphCtx.value) ()
 -- [("Tweak", ["a", "Int"], ["a"]), ("Tweak", ["a", "Bool"], ["a"]), ("Ix", ["a", "b"], ["a", "b"]), ("Num", ["b"], ["b"]), ("", ["?"], ["c"])]
 inferredPredicateSlotsProbe : ModuleCtx ->
   Unit ->
@@ -48749,6 +48753,7 @@ checkModuleFull : ModuleCtx ->
   (ModuleBindings, List Decl, ModuleCtx)
 checkModuleFull prev seedVars accData prog =
   checkModuleFullImpl
+    prev.mcGraph
     (checkRunResidue prev)
     ""
     (plainModuleSeed seedVars)
@@ -48767,18 +48772,20 @@ checkModuleFull prev seedVars accData prog =
 -- resolveArgStamps then stamps RDict (via the requires dict registered by
 -- registerImplRequires).  The stage-K ClassEnv gives body inference the interface
 -- declarations, while [implDecls] lets a body dispatch against an earlier module's impl.
--- [runSeed] is the module's check-run seed, passed to its mint (see `checkBodyImpl`),
--- and the module's record is returned beside its bindings.
-checkModuleFullImpl : CheckRunSeed ->
+-- [gctx] and [runSeed] are the drive's graph record and the module's check-run seed,
+-- passed to its mint (see `checkBodyImpl`), and the module's record is returned beside
+-- its bindings.
+checkModuleFullImpl : GraphCtx ->
+  CheckRunSeed ->
   String ->
   ModuleSeed ->
   List Decl ->
   List Decl ->
   List Decl ->
   (ModuleBindings, List Decl, ModuleCtx)
-checkModuleFullImpl runSeed mid seedVars _accData implDecls prog =
+checkModuleFullImpl gctx runSeed mid seedVars _accData implDecls prog =
   let (schemes, marked, mctx) =
-    checkBodyImpl runSeed seedVars mid implDecls prog
+    checkBodyImpl gctx runSeed seedVars mid implDecls prog
   -- #2705 (M2 phase 2): solving is not optional.  Every module a Module-arm driver
   -- checks — `check`, `run`, `build`, the LSP alike — cuts its stamping context
   -- here, at the point its stampers used to run, for the one graph-end drain
@@ -52485,32 +52492,28 @@ restoreGraphCtx cur cross run externs = GraphCtx { cur |
 
 -- The core pass proper, memoized.  Runs `checkModuleFull` over core and snapshots
 -- `coreSchemeObligationsRef` on a miss; on a hit it restores core's module record
--- and returns the record to continue from (`restoreGraphCtx`: copies of the two
--- sub-records and the one graph field the core pass (checkBodyImpl and what it
+-- in the graph record to continue from (`restoreGraphCtx` of [prev]'s: copies of the
+-- two sub-records and the one graph field the core pass (checkBodyImpl and what it
 -- calls) writes, the extern-name map), so a hit leaves the record exactly where a
--- miss would; on a miss the record is the current one, written in place.  The
--- caller installs it.  Beside the bindings inference reads, it returns the
--- prelude's published rows, frozen once after the drain closed core; a hit returns
--- the stored frozen copy, and the module record to continue from: core's, or on a hit
--- the snapshot's resumed from [prev], the record current before the pass.
+-- miss would; on a miss the record is [prev]'s, written in place.  Beside the
+-- bindings inference reads, it returns the prelude's published rows, frozen once after
+-- the drain closed core; a hit returns the stored frozen copy, and the module record to
+-- continue from, whose `mcGraph` is the graph record: core's, or on a hit the
+-- snapshot's resumed from [prev], the record current before the pass.
 checkCoreMemoized : ModuleCtx ->
   Option (Int, Int) ->
   List Decl ->
   List (String, Scheme) ->
-  (ModuleBindings, List (String, PubScheme), GraphCtx, ModuleCtx)
+  (ModuleBindings, List (String, PubScheme), ModuleCtx)
 checkCoreMemoized prev key coreDecls runtimeSeed = match coreCheckMemoHit key
   Some m =>
-    let resumed = resumeModuleCtx prev m.ccmModule
-    (
-      m.ccmCoreSchemes,
-      m.ccmCorePub,
+    let restored =
       restoreGraphCtx
-        graphCtx.value
+        prev.mcGraph
         m.ccmCrossRun
         m.ccmGraphRun
-        m.ccmBuiltinExternNames,
-      resumed,
-    )
+        m.ccmBuiltinExternNames
+    (m.ccmCoreSchemes, m.ccmCorePub, resumeModuleCtx restored prev m.ccmModule)
   None =>
     -- #2705: core is marked inside the pass, on the miss, with the unsplit set
     -- (`moduleMarkCtx`'s core arm) — so its cells are minted into the graph the
@@ -52537,16 +52540,19 @@ checkCoreMemoized prev key coreDecls runtimeSeed = match coreCheckMemoHit key
     let _ = match key
       None => ()
       Some k =>
+        -- The stored module record's graph is the memo's own snapshot, never this
+        -- drive's record, which the memo would otherwise keep alive.
+        let snap = snapshotGraphCtx coreCtx.mcGraph
         coreCheckMemoRef := Some CoreCheckMemo {
           ccmKey = (k, graphCtx.value.config.value.tcIoJoinProfile),
           ccmCoreSchemes = coreSchemes,
           ccmCorePub = corePub,
-          ccmCrossRun = copyCrossRun graphCtx.value.crossRun,
-          ccmGraphRun = copyGraphRunForMemo graphCtx.value.graphRun,
-          ccmBuiltinExternNames = graphCtx.value.builtinExternNamesRef.value,
-          ccmModule = carryModuleCtx coreCtx,
+          ccmCrossRun = snap.crossRun,
+          ccmGraphRun = snap.graphRun,
+          ccmBuiltinExternNames = snap.builtinExternNamesRef.value,
+          ccmModule = carryModuleCtx snap coreCtx,
         }
-    (coreSchemes, corePub, graphCtx.value, coreCtx)
+    (coreSchemes, corePub, coreCtx)
 
 preludePreambleMemoRef : Ref (Option (((Int, Int), String), PreludePreamble))
 preludePreambleMemoRef = Ref None
@@ -52605,23 +52611,23 @@ tcConfigOf domains inputs = TcConfig {
 -- which are this drive's, the extern catalog, which is the interners' (a union over
 -- the process; see `noteBuiltinExternNames`), and `graphRun`, a new lineage from
 -- the interners' (`graphLineageRun`, keeping the base and cells of the run
--- `markModules` returned when [inputs] carry it).  The module record restarts from
--- the initial one, so a module checked without a seed (the core pass) starts from
--- an empty oracle and no warnings; it is returned, and the drive continues from it.
-mintGraphCtx : DriveInputs -> OrdMap (List (String, String)) -> ModuleCtx
+-- `markModules` returned when [inputs] carry it).  The record is returned, and the
+-- drive continues from it; the interners take its lineage and catalog.
+mintGraphCtx : DriveInputs -> OrdMap (List (String, String)) -> GraphCtx
 mintGraphCtx inputs admitted =
   let carried = interners.value
   let base =
     initialGraphCtx
       builtinCtors
       (graphLineageRun inputs.diMarked carried.lineage)
-  let initial = initialModuleCtx ()
-  installGraphCtx GraphCtx { base |
+  let gctx = GraphCtx { base |
     trace = inputs.diTrace,
     graphAdmittedMethodsRef = Ref admitted,
     builtinExternNamesRef = carried.externCatalog,
   }
-  initial
+  graphCtx := gctx
+  interners := internersOf gctx
+  gctx
 
 -- [admitted]: the per-module method admissions `renameAliasedMethods` computed for
 -- the drive's graph, or `omEmpty` on a drive that does not rename.  The last
@@ -52660,12 +52666,13 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- `runEmitWith`'s own path (`compiler/entries/entry_support.mdk`), which never
   -- reads `hadTypeErrors` after the call.  Clean exit 0, SIGSEGV at runtime.
   --
-  -- The mint below starts the module record from `initialModuleCtx`, whose oracle is
-  -- empty, so no reader can see a previous run's residue, no matter which arm (or
-  -- none) ran before.  It is what the core pass below runs against; each user
-  -- module then overwrites it from its own decls (`checkModuleFullDiags` →
+  -- The module record starts from `initialModuleCtx` of the minted graph record,
+  -- whose oracle is empty, so no reader can see a previous run's residue, no matter
+  -- which arm (or none) ran before.  It is what the core pass below runs against; each
+  -- user module then overwrites it from its own decls (`checkModuleFullDiags` →
   -- `seedCheckRun`).
-  let initial = mintGraphCtx inputs admitted
+  let gctx = mintGraphCtx inputs admitted
+  let initial = initialModuleCtx gctx
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
   -- loop, so a module using an effect declared in ANOTHER module sees its domain.
@@ -52747,13 +52754,16 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- written to `CrossRun.coreSchemeObligationsRef`, which inference reads.
   let (coreSchemes, corePub, coreContexts, coreTree, coreCtx) = match sel
     GOutDiags =>
-      let (bindings, published, ctx, coreCtx) =
+      let (bindings, published, coreCtx) =
         checkCoreMemoized initial preludeKey coreDecls runtimeSeed
-      installGraphCtx ctx
+      -- The graph record the drive continues from: a hit's restored one, or the
+      -- minted one.  Nothing holds `initial` past this point.
+      graphCtx := coreCtx.mcGraph
+      interners := internersOf coreCtx.mcGraph
       (
         bindings,
         Some published,
-        graphCtx.value.crossRun.coreSchemeObligationsRef.value,
+        coreCtx.mcGraph.crossRun.coreSchemeObligationsRef.value,
         [],
         coreCtx,
       )
@@ -52832,7 +52842,8 @@ cmCheckWorker prev mid seed _accData _accAll prog =
   -- to red `diff_compiler_perf_scaling`'s `modules` row at 4.48 against a 4.2
   -- ceiling) and would re-solve the whole graph per hover.  The memoized solve that
   -- makes this path one driver with the others is #2719.
-  let (schemes, _, mctx) = checkBodyImpl (checkRunResidue prev) seed mid [] prog
+  let (schemes, _, mctx) =
+    checkBodyImpl prev.mcGraph (checkRunResidue prev) seed mid [] prog
   (schemes, publishOwn mctx schemes.mbSchemes, mctx)
 
 -- The graph every Module-mode driver typechecks: type-constructor identity
@@ -53017,13 +53028,14 @@ cmFold runtimeSeed coreSchemes coreCtx modules =
 -- skipping this write leaves the previous run's envelope in place, and a stale method
 -- namespace can pick a wrong interface where an empty one finds nothing.  A standalone
 -- caller must do both.
-checkModuleFullDiags : String ->
+checkModuleFullDiags : GraphCtx ->
+  String ->
   ModuleSeed ->
   List Decl ->
   List Decl ->
   List Decl ->
   (ModuleBindings, List Decl, List TcDiag, List TcDiag, ModuleCtx)
-checkModuleFullDiags mid seedVars accData accAll prog =
+checkModuleFullDiags gctx mid seedVars accData accAll prog =
   -- #415 item 1: same seeding preamble as the flat entry points (one body), but the
   -- oracle decls are THIS module's own first.
   -- P0-9: THIS module's own decls (`prog`) come FIRST so its constructors win
@@ -53098,7 +53110,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- source-exact keying makes it MISS for a genuinely-unconstrained same-name import
   -- (#739's `q.f`, attributed nowhere), so no over-rejection is reintroduced.
   let (schemes, marked, mctx) =
-    checkModuleFullImpl runSeed mid seedVars accData accAll prog
+    checkModuleFullImpl gctx runSeed mid seedVars accData accAll prog
   -- #1557 A-3.5c: the whole-graph `CE`, read at THIS module's ordinal — the same
   -- `declEnvsOrdOf mid` key `seedCheckRun`'s overlay pool above and `moduleImplUniv`
   -- (`checkBodyImpl`) already read at.  ONE env for both members; they differ only in
@@ -53206,10 +53218,10 @@ graphModuleWorker : GraphOut ->
   List Decl ->
   List Decl ->
   (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag), ModuleCtx)
-graphModuleWorker sel _prev mid seed accData accAll prog =
+graphModuleWorker sel prev mid seed accData accAll prog =
   let implDecls = accAll ++ prog
   let (schemes, marked, errs, warns, mctx) =
-    checkModuleFullDiags mid seed accData implDecls prog
+    checkModuleFullDiags prev.mcGraph mid seed accData implDecls prog
   let published = publishOwn mctx schemes.mbSchemes
   let _ = match sel
     GOutTrees =>
@@ -53531,25 +53543,26 @@ checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys ru
     None => []
   let (kept, restored) =
     matchingStepPrefix (st => st.csKey) steps stepKeys (listLen modules)
-  let (depEnv, accData, accAll, results, resumeCtx, resumeModule) =
-    match restored
-      None =>
-        ([], publicDataDecls coreDecls, coreDecls, [], graphCtx.value, coreCtx)
-      Some st =>
-        let resumed = resumeModuleCtx coreCtx st.csModule
-        (
-          st.csDepEnv,
-          st.csAccData,
-          st.csAccAll,
-          st.csResults,
-          restoreGraphCtx
-            graphCtx.value
-            st.csCtx.crossRun
-            st.csCtx.graphRun
-            st.csCtx.builtinExternNamesRef.value,
-          resumed,
-        )
-  installGraphCtx resumeCtx
+  let (depEnv, accData, accAll, results, resumeModule) = match restored
+    None => ([], publicDataDecls coreDecls, coreDecls, [], coreCtx)
+    Some st =>
+      let resumeCtx =
+        restoreGraphCtx
+          coreCtx.mcGraph
+          st.csCtx.crossRun
+          st.csCtx.graphRun
+          st.csCtx.builtinExternNamesRef.value
+      (
+        st.csDepEnv,
+        st.csAccData,
+        st.csAccAll,
+        st.csResults,
+        resumeModuleCtx resumeCtx coreCtx st.csModule,
+      )
+  -- The graph record the suffix continues from: the restored prefix's, or the one the
+  -- core pass left.  Nothing holds `coreCtx` past this point.
+  graphCtx := resumeModule.mcGraph
+  interners := internersOf resumeModule.mcGraph
   let n = listLen kept
   -- A restored step's rows were frozen when it was recorded, so nothing is open.
   let (finalResults, open, newSteps, lastCtx) =
@@ -53697,14 +53710,17 @@ chainGo baseSeed coreV depEnv accData accAll results open keys steps prev ((mid,
         freezeNewest
           open2
           (attachDrainFindings (checkGraphFinish next) results2)
+      -- The step's module record is carried into the step's own snapshot, so the memo
+      -- keeps no drive's graph record alive.
+      let snap = snapshotGraphCtx next.mcGraph
       let step = ChainStep {
         csKey = k,
         csDepEnv = depEnv2,
         csAccData = accData2,
         csAccAll = accAll2,
         csResults = results3,
-        csCtx = snapshotGraphCtx graphCtx.value,
-        csModule = carryModuleCtx next,
+        csCtx = snap,
+        csModule = carryModuleCtx snap next,
       }
       chainGo
         baseSeed
@@ -53992,7 +54008,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
           graphCtx.value.graphRun.binderRows.value
           None
           entryTables,
-      gdGraph = graphCtx.value,
+      gdGraph = lastCtx.mcGraph,
       gdOutputs = driveOutputsNow lastCtx,
     }
     GOutTrees =>
@@ -54030,7 +54046,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
         gdReport = { graphReport perMod corePub residual (_ => evidence) dispositions graphCtx.value.graphRun.binderRows.value (Some (coreD, modulesOut)) entryTables |
           trAutoPrint = autoPrint,
         },
-        gdGraph = graphCtx.value,
+        gdGraph = lastCtx.mcGraph,
         gdOutputs = driveOutputsNow lastCtx,
       }
 
@@ -55893,21 +55909,28 @@ shadowBareName sm n = match lookupAssoc n sm
 -- can bracket the mark phase vs the typecheck phase separately.  It opens the graph
 -- lineage the cells it mints belong to and returns that run beside the marked
 -- trees; the driver it feeds (`checkModules`) takes the run as `diMarked` and keeps
--- those cells when its preamble mints the graph.  The marking runs in the record a
--- drive starts from (`initialModuleCtx`), so the cells it mints belong to no module, as
--- in a process that marks before any drive.
+-- those cells when its preamble mints the graph.  The marking runs in a graph record
+-- built as a mint builds one (the interners' lineage and catalog, every other field
+-- fresh) and in the module record a drive starts from (`initialModuleCtx`), so the
+-- cells it mints belong to no module, as in a process that marks before any drive.
+-- The interners take the record's lineage, which the next mint continues.
 export
 markModules : List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl), GraphRun)
 markModules coreDecls modules =
-  let mctx = initialModuleCtx ()
-  installRun (graphLineageRun None interners.value.lineage)
+  let carried = interners.value
+  let base = initialGraphCtx builtinCtors (graphLineageRun None carried.lineage)
+  let gctx = GraphCtx { base | builtinExternNamesRef = carried.externCatalog }
+  graphCtx := gctx
+  interners := internersOf gctx
+  let mctx = initialModuleCtx gctx
   let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
   let core2 = prePassDict mctx rpNames [] coreDecls
   let modules2 = map (prePassModulePair mctx rpNames) modules
-  installRun GraphRun { graphCtx.value.graphRun | markedAhead = True }
-  (core2, modules2, graphCtx.value.graphRun)
+  let marked = GraphRun { gctx.graphRun | markedAhead = True }
+  graphCtx := GraphCtx { gctx | graphRun = marked }
+  (core2, modules2, marked)
 
 -- typecheck one module (seeded like checkModuleFull) AND immediately stamp the
 -- EMethodAt route refs it just recorded.  `recordModuleStart` marks the goal channel
@@ -55935,6 +55958,7 @@ elabModuleStamp prev mid seedVars accData implDecls prog =
   -- Stampers execute after graph inference via `drainStampQueue`, not here.
   -- See `StampCtx` and `moduleStampOrder` for the replay mechanism.
   checkModuleFullImpl
+    prev.mcGraph
     (checkRunResidue prev)
     mid
     (plainModuleSeed seedVars)
@@ -56021,7 +56045,7 @@ stampCtxOf : ModuleCtx ->
   List (Mono, Ref (Option Float), Int, Ref Route) ->
   StampCtx
 stampCtxOf mctx mid implDecls goals numlits =
-  let dropped = blankModuleCtx mid
+  let dropped = blankModuleCtx mctx.mcGraph mid
   dropped.superDeclsRef := filterList isInterfaceDecl implDecls
   StampCtx {
     scModule = mid,
