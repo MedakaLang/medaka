@@ -50644,7 +50644,7 @@ coreCheckMemoHit None = None
 coreCheckMemoHit (Some key) = match !coreCheckMemoRef
   None => None
   Some m =>
-    if m.ccmKey == (key, graphCtx.value.config.value.tcKey) then
+    if m.ccmKey == (key, graphCtx.value.config.value.tcIoJoinProfile) then
       Some m
     else
       None
@@ -50750,7 +50750,7 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
       None => ()
       Some k =>
         coreCheckMemoRef := Some CoreCheckMemo {
-          ccmKey = (k, graphCtx.value.config.value.tcKey),
+          ccmKey = (k, graphCtx.value.config.value.tcIoJoinProfile),
           ccmCoreSchemes = coreSchemes,
           ccmCorePub = corePub,
           ccmCrossRun = copyCrossRun graphCtx.value.crossRun,
@@ -50777,7 +50777,7 @@ preludePreambleFor : Option (Int, Int) ->
 preludePreambleFor None coreDecls coreRow = preludePreambleOf coreDecls coreRow
 preludePreambleFor (Some k) coreDecls coreRow = match !preludePreambleMemoRef
   Some entry =>
-    if fst entry == (k, graphCtx.value.config.value.tcKey) then
+    if fst entry == (k, graphCtx.value.config.value.tcIoJoinProfile) then
       snd entry
     else
       preludePreambleStore k coreDecls coreRow
@@ -50791,16 +50791,16 @@ preludePreambleStore : (Int, Int) ->
   PreludePreamble
 preludePreambleStore k coreDecls coreRow =
   let p = preludePreambleOf coreDecls coreRow
-  preludePreambleMemoRef := Some ((k, graphCtx.value.config.value.tcKey), p)
+  preludePreambleMemoRef :=
+    Some ((k, graphCtx.value.config.value.tcIoJoinProfile), p)
   p
 
 -- The drive's configuration: the IO join of the selected profile's grants (after the
 -- effect domains it reads), the profile's name, and the stdlib ownership.
 export
-tcConfigOf : DriveInputs -> TcConfig
-tcConfigOf inputs = TcConfig {
-  tcIoJoin =
-    ioJoinAtoms graphCtx.value.effectDomains.value inputs.diIoJoinGrants,
+tcConfigOf : List (String, Param) -> DriveInputs -> TcConfig
+tcConfigOf domains inputs = TcConfig {
+  tcIoJoin = ioJoinAtoms domains inputs.diIoJoinGrants,
   tcIoJoinProfile = inputs.diProfileName,
   tcStdlibOwned = inputs.diStdlibOwned,
   tcFlatEntryIsStdlib = inputs.diFlatEntryIsStdlib,
@@ -50895,7 +50895,7 @@ graphPreamble inputs sel preludeKey runtimeDecls coreDecls modules =
   -- What `IO` joins, from the grants of the profile the verb selected, after the
   -- domains the atoms take their tops from.  `run` checks against `runProfile` of
   -- that profile, whose host-label grants are the selected profile's own.
-  graphCtx.value.config := tcConfigOf inputs
+  graphCtx.value.config := tcConfigOf graphCtx.value.effectDomains.value inputs
   -- the prelude's own contribution to every derivation below, from the memo when
   -- the caller supplied a prelude key -- see `PreludePreamble`.  The row is built
   -- HERE, not inside the memo, because it carries THIS analyze's decls.

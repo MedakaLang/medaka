@@ -953,7 +953,7 @@ public export data GraphCtx = GraphCtx {
   -- driver that skipped its preamble, and fails loud.
   markSetsRef : Ref (Option MarkSets),
   -- Armed by every recorded type error (`recordTypeError`), read by
-  -- `hadTypeErrors`; the diagnostics behind it, newest first, each with its module.
+  -- `typeErrorsArmed` and `driveOutputsNow`; the diagnostics behind it, newest first, each with its module.
   typeErrorsSticky : Ref Bool,
   typeErrorsStickyDiags : Ref (List (String, TcDiag)),
 }
@@ -964,8 +964,8 @@ public export data GraphCtx = GraphCtx {
 -- was taken from (`""` for none).  The next two are the stdlib ownership of
 -- `DriveInputs`, copied at the same point.  `tcKey` digests the profile name and
 -- both ownership fields once, at construction (profile, flat flag, then the
--- sorted owned module ids joined by `,`, separated by newlines); the three
--- cross-drive memos key on it, so a hit is only served to the configuration it was
+-- sorted owned module ids joined by `,`, separated by newlines); the chain
+-- memo keys on it, so a hit is only served to the configuration it was
 -- computed under.
 public export data TcConfig = TcConfig {
   tcIoJoin : List Atom,
@@ -1895,8 +1895,8 @@ public export data CheckRunSeed = CheckRunSeed {
 -- One module's state.  `checkBodyImpl` mints it once per module (`freshModuleCtx`), so
 -- the constructor is the reset: a new per-module field cannot be added without
 -- appearing in `freshModuleCtx`.  The `perRun` cell holds the last-minted record, and
--- every read after a module (the graph-level diagnostics, `lastInvocationOps`,
--- `hadMatchWarnings`) reads that one.  This is a record OF Refs (fields stay `Ref …`),
+-- every read after a module (the graph-level diagnostics, and `driveOutputsNow`,
+-- which freezes `lastInvocationOps`' view and `hadMatchWarnings`' answer) reads that one.  This is a record OF Refs (fields stay `Ref …`),
 -- NOT a record of values: the hot accumulators (typeErrors, poisonedVars,
 -- localBindRefs, …) are pushed with `setRef x (v :: x.value)`, so the field must be a
 -- Ref for that to stay one Ref-write — a record of values would rebuild the whole
@@ -2038,8 +2038,8 @@ public export data ModuleCtx = ModuleCtx {
   -- module, since a `Loc` carries no file on the elaborate path and the graph's
   -- residual would otherwise be unattributable.
   currentModuleRef : Ref String,
-  -- The module's constructors and variance table, read by `lastInvocationOps` —
-  -- see `InvocationView`.
+  -- The module's constructors and variance table, read by `driveOutputsNow` into
+  -- `DriveOutputs` — see `InvocationView`.
   invocationViewRef : Ref InvocationView,
 }
 
@@ -2118,7 +2118,7 @@ public export data ReqStep =
 -- identity-keyed universe (so two same-spelled constructors both count), and
 -- its variance and kind tables, its own declarations over everything it
 -- imports.  Written once per module, right after its data environment is
--- built; a drive's caller reads it through `lastInvocationOps`.
+-- built; a drive's caller reads it through `DriveOutputs` (`lastInvocationOps`).
 public export data InvocationView =
   | InvocationView (List Scheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
 

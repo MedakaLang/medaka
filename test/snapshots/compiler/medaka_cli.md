@@ -1,5 +1,5 @@
 # META
-source_lines=4364
+source_lines=4363
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -2971,8 +2971,7 @@ desugarPair (mid, p) = (mid, desugarIn mid p)
 
 -- (modId, path, decls) → (modId, path): the per-module file map threaded into the
 -- `run`'s one elaboration: the analysis its gate reads, and the auto-print
--- evidence `executedTrees` wraps the elaborated trees with.  It leaves
--- mainSchemeRef populated for the main-shape warnings `finishRunEval` reads.
+-- evidence `executedTrees` wraps the elaborated trees with.
 elaborateRun : DriveInputs ->
   List Decl ->
   List Decl ->

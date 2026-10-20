@@ -1184,12 +1184,14 @@ test "the chain memo does not serve a hit across a stdlib ownership change" =
   ]
 
 test "equal configurations digest to equal memo keys" =
-  let key = owned => (tcConfigOf (driveInputsFor None False owned)).tcKey
+  let key = owned => (tcConfigOf [] (driveInputsFor None False owned)).tcKey
   expectEach [
     ("same ownership", expectEqual (key ["b", "a"]) (key ["a", "b"])),
     ("different ownership", expectNotEqual (key ["a"]) (key [])),
     (
       "flat flag",
-      expectNotEqual (tcConfigOf (driveInputsFor None True [])).tcKey (key []),
+      expectNotEqual
+        (tcConfigOf [] (driveInputsFor None True [])).tcKey
+        (key []),
     ),
   ]

@@ -3207,7 +3207,7 @@ takeOpenedExistentials : Unit -> List (Ref Authvar)
 takePatLits : Unit -> List (Mono, Int, Option Loc)
 takeUntilInclusiveS : String -> List String -> List String
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
-tcConfigOf : DriveInputs -> TcConfig
+tcConfigOf : List (String, Param) -> DriveInputs -> TcConfig
 tcDiagGoalKey : (String, TcDiag) -> String
 tconBuiltin : String -> Mono
 tconFrom : TyConOrigin -> String -> Mono
