@@ -803,7 +803,7 @@ echo "  ok: IE block is $ie_n line(s), no non-IE namespace mint, no default-arm 
 #   (a) CE is built SYNTACTICALLY -- no call into the elaboration machinery
 #       (fromAstTypeE / registerRecordInfoKeyed / freshVars / freshEffvar) may
 #       appear inside the block. Those mint fresh tyvar ids from the global
-#       counter and mutate perRun refs from the driver PREAMBLE, before the
+#       counter and mutate ModuleCtx refs from the driver PREAMBLE, before the
 #       per-module walk that owns that counter -- see the Step 0 derivation
 #       in the block's own header.
 #   (b) CE never reaches `universeMethodDispatchIdxByIdRef` -- lifted bare
@@ -844,7 +844,7 @@ if [ -n "$ce_elab_hits" ]; then
   printf '%s\n' "$ce_elab_hits" | sed 's/^/    /'
   echo "  CE is built SYNTACTICALLY (raw Ty/Super/Kind, no Scheme/Mono/RecordInfo)"
   echo "  -- the Step 0 ruling this unit's header derives and re-confirms. These"
-  echo "  calls mint fresh tyvar ids and mutate perRun refs from the driver"
+  echo "  calls mint fresh tyvar ids and mutate ModuleCtx refs from the driver"
   echo "  PREAMBLE, before the per-module walk that owns that state."
   echo "  REMEDY: elaborate on demand at the READ site, not at construction --"
   echo "  or this is an owner-level re-adjudication of the Step 0 ruling, not a"
