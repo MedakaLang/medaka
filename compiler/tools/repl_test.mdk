@@ -2,7 +2,7 @@ import test.{expectAll, expectEqual}
 import list.{sort}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{checkOneScheme}
+import types.typecheck.{checkOneScheme, defaultDriveInputs}
 import tools.repl.{preludeBinderNames}
 
 sortedUnique : List String -> List String
