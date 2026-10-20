@@ -47,9 +47,8 @@ import frontend.desugar.{desugar}
 import types.repr.{Scheme(..), Mono(..), normalize}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import types.publish.{TcReport}
-import types.tc_types.{ElabResult}
+import types.tc_types.{ElabResult, DriveInputs(..)}
 import types.typecheck.{
-  defaultDriveInputs,
   elaborateModulesWithReport,
   entrySplit,
   pubSchemes,
@@ -350,37 +349,34 @@ public export data EntryAnalysis = EntryAnalysis {
   eaTarget : TargetInputs,
 }
 
--- [valueMain] is the drive's value-main candidate: a caller that reports the
--- analysis' diagnostics passes `valueMainCandidate`, so they carry a value
--- `main`'s auto-print obligation.  [executes] names the `async` driver of a
--- caller that runs or emits the elaborated program (`elaborateModulesWithReport`).
+-- [inputs] is the drive's configuration, which the caller decided.  [valueMain]
+-- is the drive's value-main candidate: a caller that reports the analysis'
+-- diagnostics passes `valueMainCandidate`, so they carry a value `main`'s
+-- auto-print obligation.  [executes] names the `async` driver of a caller that
+-- runs or emits the elaborated program (`elaborateModulesWithReport`).
 export
-analyzeProgram : Bool ->
+analyzeProgram : DriveInputs ->
+  Bool ->
   Option String ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   EntryAnalysis
-analyzeProgram valueMain executes rtD coreD modsD =
-  fst (analyzeProgramReport valueMain executes rtD coreD modsD)
+analyzeProgram inputs valueMain executes rtD coreD modsD =
+  fst (analyzeProgramReport inputs valueMain executes rtD coreD modsD)
 
 -- `analyzeProgram` handing back its drive's whole report beside the analysis.
 export
-analyzeProgramReport : Bool ->
+analyzeProgramReport : DriveInputs ->
+  Bool ->
   Option String ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (EntryAnalysis, TcReport)
-analyzeProgramReport valueMain executes rtD coreD modsD =
+analyzeProgramReport inputs valueMain executes rtD coreD modsD =
   let (elaborated, report) =
-    elaborateModulesWithReport
-      defaultDriveInputs
-      valueMain
-      executes
-      rtD
-      coreD
-      modsD
+    elaborateModulesWithReport inputs valueMain executes rtD coreD modsD
   let (preludePub, ownPub, _, _) = entrySplit report
   let preludeSchemes = pubSchemes preludePub
   let ops = lastInvocationOps ()

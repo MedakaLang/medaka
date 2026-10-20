@@ -1107,8 +1107,8 @@ done || exit 1
 # through checking and return stamping.  Each former OblProjection reader states
 # explicitly whether the unary numeric population participates.
 numeric_predicate_required='  ClassPredicate(..),
-beginNumericPredicateTrace : Unit -> Unit
-finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry'
+beginNumericPredicateTrace : Unit -> TraceSink
+finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry'
 
 printf '%s\n' "$numeric_predicate_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then

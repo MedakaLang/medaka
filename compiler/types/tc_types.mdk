@@ -24,6 +24,7 @@ import frontend.ast.{
   DataVis(..),
   Decl(..),
   TabKey(..),
+  EffParamTy(..),
 }
 import types.repr.{
   AuthResidual(..),
@@ -908,9 +909,10 @@ public export data MethodScope =
   | MsMany (List IfaceRef)
 
 -- One graph drive's state: the cross-module accumulators (`crossRun`), the graph
--- lineage (`graphRun`), the drive's configuration, the graph-derived tables, and the
--- sticky type-error pair.  `graphPreamble` mints it (`mintGraphCtx`) with fresh
--- `crossRun` and `graphRun`; every `Ref` field is carried from the previous record by
+-- lineage (`graphRun`), the drive's configuration and trace sink, the graph-derived
+-- tables, and the sticky type-error pair.  `graphPreamble` mints it (`mintGraphCtx`)
+-- with fresh `crossRun` and `graphRun` and the trace of the drive's inputs; every
+-- `Ref` field is carried from the previous record by
 -- identity and then written in place at its own site, so a field the preamble does
 -- not write keeps the previous drive's value.  The sticky pair is process-lived:
 -- no driver clears it (`resetTypeErrorsSticky` does, for its callers).
@@ -924,6 +926,8 @@ public export data GraphCtx = GraphCtx {
   -- The drive's configuration, built once per drive by `graphPreamble` (`tcConfigOf`)
   -- after the effect domains its IO join reads.
   config : Ref TcConfig,
+  -- The drive's trace sink, `diTrace` of its inputs (`None`: every trace off).
+  trace : Option TraceSink,
   -- Per module: the (dependency id, method name) pairs `deAliasMethodImports`
   -- admitted for dispatch without the program binding that bare name, so the
   -- import seed can tell an admission from a written binding.
@@ -952,19 +956,18 @@ public export data GraphCtx = GraphCtx {
 -- The typechecker's configuration for one drive: immutable, built once by
 -- `graphPreamble` from the selected profile and the driver inputs.  `tcIoJoin` is
 -- what `IO` joins (`ioJoinAtoms`) and `tcIoJoinProfile` the name of the profile it
--- was taken from (`""` for none), which also keys the memos.  The other three are
--- the driver inputs of `DriveInputs`, copied at the same point.
+-- was taken from (`""` for none), which also keys the memos.  The other two are
+-- the stdlib ownership of `DriveInputs`, copied at the same point.
 public export data TcConfig = TcConfig {
   tcIoJoin : List Atom,
   tcIoJoinProfile : String,
   tcStdlibOwned : OrdMap Unit,
   tcFlatEntryIsStdlib : Bool,
-  tcCoherenceUserDecls : List Decl,
 }
 
--- The trace gates and buffers the tests turn on before a drive and read after it.
--- A gate is a plain `Bool` replaced through the publishers; each buffer is a `Ref`
--- so a `note*` call appends in place.
+-- The trace gates and buffers a test builds before a drive and reads after it.
+-- A gate is a plain `Bool` fixed when the sink is built; each buffer is a `Ref` so a
+-- `note*` call appends in place.
 public export data TraceSink = TraceSink {
   tsAssumptionEnabled : Bool,
   tsAssumptionEntries : Ref (List AssumptionTraceEntry),
@@ -976,14 +979,16 @@ public export data TraceSink = TraceSink {
   tsEvidenceObservationEntries : Ref (List EvidenceObservationEntry),
 }
 
--- What the drivers hand the typechecker before a drive: the stdlib ownership of the
--- loader's module list, the user declarations coherence is checked over, and the
--- trace sink (`None`: every trace off).  Held in the config-lifetime cell `driveInputs`.
+-- What a driver hands a drive as its first argument: the stdlib ownership of the
+-- loader's module list, the trace sink (`None`: every trace off), and the selected
+-- target profile's `IO` grants and name (`""` for none), carried as data so this
+-- module need not import `types.target_profile`.
 public export data DriveInputs = DriveInputs {
   diStdlibOwned : OrdMap Unit,
   diFlatEntryIsStdlib : Bool,
-  diCoherenceUserDecls : List Decl,
   diTrace : Option TraceSink,
+  diIoJoinGrants : List (String, EffParamTy),
+  diProfileName : String,
 }
 
 -- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by

@@ -78,12 +78,13 @@ import driver.loader.{
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
 import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
-  defaultDriveInputs,
+  driveInputsFor,
   elaborateModules,
   elaborateModulesWithSchemes,
   TcDiag(..),
   tcDiagGoalKey,
 }
+import types.target_profile.{selectedProfile}
 import driver.main_autoprint.{valueMainCandidate}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import types.program_facts.{ProgramFacts, factsOfElab, withFacts}
@@ -828,7 +829,7 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
   let rawModules = desugaredModPairs mods
   let (elaborated, _, _) =
     elaborateModulesWithSchemes
-      defaultDriveInputs
+      (driveInputsFor !selectedProfile False [])
       (valueMainCandidate coreDecls rawModules)
       runtimeDecls
       coreDecls
@@ -896,7 +897,7 @@ forceInjected rsrc csrc mods synthDecls =
   let injected = injectIntoLast synthDecls (desugaredModPairs mods)
   let elab =
     elaborateModules
-      defaultDriveInputs
+      (driveInputsFor !selectedProfile False [])
       (desugaredPrelude rsrc)
       (desugaredPrelude csrc)
       injected
@@ -1677,7 +1678,10 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
       dropShadowedExp (funNamesOf allUser) coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
-  let elab = elaborateModules defaultDriveInputs runtimeDecls livePrelude [
+  let elab = elaborateModules (driveInputsFor
+    !selectedProfile
+    False
+    []) runtimeDecls livePrelude [
     (rootId, allUser),
   ]
   let (coreE, modulesE, perModule, _, _, _, _) = elab
@@ -1886,7 +1890,12 @@ elaborateModulesMangled : List Decl ->
   List (String, List Decl) ->
   ((List Decl, List (String, List Decl)), ProgramFacts, List (String, TcDiag))
 elaborateModulesMangled runtimeDecls coreDecls modules =
-  let elab = elaborateModules defaultDriveInputs runtimeDecls coreDecls modules
+  let elab =
+    elaborateModules
+      (driveInputsFor !selectedProfile False [])
+      runtimeDecls
+      coreDecls
+      modules
   match elab
     (coreE, modulesE, perModule, residual, _, _, _) => (
       mangleCtorCollisionsPair (coreE, modulesE),
@@ -3389,7 +3398,11 @@ helperElabDiags : List Decl ->
   List (String, List Decl) ->
   List (String, TcDiag)
 helperElabDiags runtimeM rawCoreM rawM =
-  match elaborateModules defaultDriveInputs runtimeM rawCoreM rawM
+  match (elaborateModules
+    (driveInputsFor !selectedProfile False [])
+    runtimeM
+    rawCoreM
+    rawM)
     (_, _, perModule, residual, _, _, _) =>
       residual ++ perModuleErrors perModule []
 

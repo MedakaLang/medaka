@@ -179,9 +179,8 @@ import ir.core_ir_lower.{
 import ir.core_ir_sexp.{cprogramToSexp}
 import types.annotate.{annotateProgram}
 import types.typecheck.{
-  defaultDriveInputs,
+  driveInputsFor,
   checkOneToLinesWithRuntime,
-  setCoherenceUserDecls,
   elaborateOneFacts,
   elaborateModules,
   mainTypeIsUnit,
@@ -190,6 +189,7 @@ import types.typecheck.{
   hadMatchWarnings,
   resetTypeErrorsSticky,
 }
+import types.target_profile.{selectedProfile}
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{emptyFacts, factsOfElabWith}
 import eval.eval.{evalOneOutputFacts, funNamesOf, dropShadowedExp, noMainMsg}
@@ -494,12 +494,16 @@ markOf coreDecls d = programToSexp (markWithPrelude coreDecls d)
 -- "TYPE ERROR:" is one reworded message away from silently becoming blessable.
 typesOf : List Decl -> List Decl -> (String, Bool)
 typesOf runtimeDecls d =
-  let _ = setCoherenceUserDecls d
   let _ = resetTypeErrorsSticky ()
   -- coreDecls is always [] here (prelude-free), so there is no prelude-scheme
   -- to lose crossing to the Module arm's checkOneToLinesWithRuntime -- the
   -- rendered set is `d`'s own schemes either way (S-migrate-tool-consumers-remainder).
-  let text = checkOneToLinesWithRuntime defaultDriveInputs runtimeDecls [] d
+  let text =
+    checkOneToLinesWithRuntime
+      (driveInputsFor !selectedProfile False [])
+      runtimeDecls
+      []
+      d
   (text, hadTypeErrors () || hadMatchWarnings ())
 
 -- `# TYPES_USER` — the PRELUDE-AWARE user-only variant.  `# TYPES` above is
@@ -530,7 +534,6 @@ typesOf runtimeDecls d =
 -- section still reports the diagnostic (and stays unblessable).
 typesUserOf : List Decl -> List Decl -> List Decl -> (String, Bool)
 typesUserOf runtimeDecls coreDecls d =
-  let _ = setCoherenceUserDecls d
   let _ = resetTypeErrorsSticky ()
   -- checkOneToLinesWithRuntime (Module arm) already renders ONLY the target
   -- module's own scheme lines (never coreDecls'), matching what the userNames
@@ -540,7 +543,11 @@ typesUserOf runtimeDecls coreDecls d =
   -- filter is kept as a harmless belt-and-suspenders no-op rather than removed
   -- (S-migrate-tool-consumers-remainder).
   let full =
-    checkOneToLinesWithRuntime defaultDriveInputs runtimeDecls coreDecls d
+    checkOneToLinesWithRuntime
+      (driveInputsFor !selectedProfile False [])
+      runtimeDecls
+      coreDecls
+      d
   let diag = hadTypeErrors () || hadMatchWarnings ()
   let userNames = funNamesOf d ++ externNamesOf d
   -- Filter the SUCCESS path (scheme dump) only; a diagnostic run has no schemes to trim.
@@ -588,11 +595,13 @@ coreIrOf d =
 evalOf : List Decl -> List Decl -> List Decl -> String
 evalOf runtimeDecls coreDecls d =
   let livePrelude = dropShadowedExp (funNamesOf d) coreDecls
-  let (elaborated, facts) = elaborateOneFacts
-    defaultDriveInputs
-    runtimeDecls
-    livePrelude
-    ("__user__", d)
+  let (elaborated, facts) = elaborateOneFacts (driveInputsFor
+    !selectedProfile
+    False
+    []) runtimeDecls livePrelude (
+    "__user__",
+    d,
+  )
   evalOneOutputFacts facts [] ("__main__", elaborated)
 
 -- ── the emit path (BOTH backends, ONE lowered CProgram) ──────────────────────
@@ -624,7 +633,10 @@ emitBoth root sel runtimeDecls userDecls =
   -- `entry_support.runEmitWith` runs (mirrors `llvm_emit_typed_main.mdk`'s
   -- `runEmit`), so a name-keyed table below sees the same stamped names a real
   -- build's tables do.
-  let elab = elaborateModules defaultDriveInputs runtimeDecls [] [
+  let elab = elaborateModules (driveInputsFor
+    !selectedProfile
+    False
+    []) runtimeDecls [] [
     ("__user__", userDecls),
   ]
   let (coreE, modulesE, _, _, evTable, _, _) = elab

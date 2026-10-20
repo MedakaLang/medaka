@@ -1,5 +1,5 @@
 # META
-source_lines=1488
+source_lines=1500
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/snapshot.mdk — `medaka snapshot`, the in-process snapshot runner
@@ -183,9 +183,8 @@ import ir.core_ir_lower.{
 import ir.core_ir_sexp.{cprogramToSexp}
 import types.annotate.{annotateProgram}
 import types.typecheck.{
-  defaultDriveInputs,
+  driveInputsFor,
   checkOneToLinesWithRuntime,
-  setCoherenceUserDecls,
   elaborateOneFacts,
   elaborateModules,
   mainTypeIsUnit,
@@ -194,6 +193,7 @@ import types.typecheck.{
   hadMatchWarnings,
   resetTypeErrorsSticky,
 }
+import types.target_profile.{selectedProfile}
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{emptyFacts, factsOfElabWith}
 import eval.eval.{evalOneOutputFacts, funNamesOf, dropShadowedExp, noMainMsg}
@@ -498,12 +498,16 @@ markOf coreDecls d = programToSexp (markWithPrelude coreDecls d)
 -- "TYPE ERROR:" is one reworded message away from silently becoming blessable.
 typesOf : List Decl -> List Decl -> (String, Bool)
 typesOf runtimeDecls d =
-  let _ = setCoherenceUserDecls d
   let _ = resetTypeErrorsSticky ()
   -- coreDecls is always [] here (prelude-free), so there is no prelude-scheme
   -- to lose crossing to the Module arm's checkOneToLinesWithRuntime -- the
   -- rendered set is `d`'s own schemes either way (S-migrate-tool-consumers-remainder).
-  let text = checkOneToLinesWithRuntime defaultDriveInputs runtimeDecls [] d
+  let text =
+    checkOneToLinesWithRuntime
+      (driveInputsFor !selectedProfile False [])
+      runtimeDecls
+      []
+      d
   (text, hadTypeErrors () || hadMatchWarnings ())
 
 -- `# TYPES_USER` — the PRELUDE-AWARE user-only variant.  `# TYPES` above is
@@ -534,7 +538,6 @@ typesOf runtimeDecls d =
 -- section still reports the diagnostic (and stays unblessable).
 typesUserOf : List Decl -> List Decl -> List Decl -> (String, Bool)
 typesUserOf runtimeDecls coreDecls d =
-  let _ = setCoherenceUserDecls d
   let _ = resetTypeErrorsSticky ()
   -- checkOneToLinesWithRuntime (Module arm) already renders ONLY the target
   -- module's own scheme lines (never coreDecls'), matching what the userNames
@@ -544,7 +547,11 @@ typesUserOf runtimeDecls coreDecls d =
   -- filter is kept as a harmless belt-and-suspenders no-op rather than removed
   -- (S-migrate-tool-consumers-remainder).
   let full =
-    checkOneToLinesWithRuntime defaultDriveInputs runtimeDecls coreDecls d
+    checkOneToLinesWithRuntime
+      (driveInputsFor !selectedProfile False [])
+      runtimeDecls
+      coreDecls
+      d
   let diag = hadTypeErrors () || hadMatchWarnings ()
   let userNames = funNamesOf d ++ externNamesOf d
   -- Filter the SUCCESS path (scheme dump) only; a diagnostic run has no schemes to trim.
@@ -592,11 +599,13 @@ coreIrOf d =
 evalOf : List Decl -> List Decl -> List Decl -> String
 evalOf runtimeDecls coreDecls d =
   let livePrelude = dropShadowedExp (funNamesOf d) coreDecls
-  let (elaborated, facts) = elaborateOneFacts
-    defaultDriveInputs
-    runtimeDecls
-    livePrelude
-    ("__user__", d)
+  let (elaborated, facts) = elaborateOneFacts (driveInputsFor
+    !selectedProfile
+    False
+    []) runtimeDecls livePrelude (
+    "__user__",
+    d,
+  )
   evalOneOutputFacts facts [] ("__main__", elaborated)
 
 -- ── the emit path (BOTH backends, ONE lowered CProgram) ──────────────────────
@@ -628,7 +637,10 @@ emitBoth root sel runtimeDecls userDecls =
   -- `entry_support.runEmitWith` runs (mirrors `llvm_emit_typed_main.mdk`'s
   -- `runEmit`), so a name-keyed table below sees the same stamped names a real
   -- build's tables do.
-  let elab = elaborateModules defaultDriveInputs runtimeDecls [] [
+  let elab = elaborateModules (driveInputsFor
+    !selectedProfile
+    False
+    []) runtimeDecls [] [
     ("__user__", userDecls),
   ]
   let (coreE, modulesE, _, _, evTable, _, _) = elab
@@ -1502,7 +1514,8 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "declaredRecordFieldOrders" false) (mem "lowerProgramEmitWith" false) (mem "lowerProgramWithFacts" false) (mem "returnsSelfTable" false) (mem "selfFnParamTable" false) (mem "methodIfaceTable" false) (mem "ctorFieldTypeNames" false) (mem "externArities" false) (mem "ffiExternTypeNames" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkOneToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "elaborateOneFacts" false) (mem "elaborateModules" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsFloat" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false) (mem "resetTypeErrorsSticky" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneToLinesWithRuntime" false) (mem "elaborateOneFacts" false) (mem "elaborateModules" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsFloat" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false) (mem "resetTypeErrorsSticky" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleUnitsEv" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "emptyFacts" false) (mem "factsOfElabWith" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalOneOutputFacts" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "noMainMsg" false))))
@@ -1593,9 +1606,9 @@ mapUnit f (x :: rest) =
 (DTypeSig false "markOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
 (DFunDef false "markOf" ((PVar "coreDecls") (PVar "d")) (EApp (EVar "programToSexp") (EApp (EApp (EVar "markWithPrelude") (EVar "coreDecls")) (EVar "d"))))
 (DTypeSig false "typesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "typesOf" ((PVar "runtimeDecls") (PVar "d")) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "d"))) (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PVar "text") (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntime") (EVar "defaultDriveInputs")) (EVar "runtimeDecls")) (EListLit)) (EVar "d"))) (DoExpr (ETuple (EVar "text") (EBinOp "||" (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EApp (EVar "hadMatchWarnings") (ELit LUnit)))))))
+(DFunDef false "typesOf" ((PVar "runtimeDecls") (PVar "d")) (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PVar "text") (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntime") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeDecls")) (EListLit)) (EVar "d"))) (DoExpr (ETuple (EVar "text") (EBinOp "||" (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EApp (EVar "hadMatchWarnings") (ELit LUnit)))))))
 (DTypeSig false "typesUserOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "String") (TyCon "Bool"))))))
-(DFunDef false "typesUserOf" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "d")) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "d"))) (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PVar "full") (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntime") (EVar "defaultDriveInputs")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "d"))) (DoLet false false (PVar "diag") (EBinOp "||" (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EApp (EVar "hadMatchWarnings") (ELit LUnit)))) (DoLet false false (PVar "userNames") (EBinOp "++" (EApp (EVar "funNamesOf") (EVar "d")) (EApp (EVar "externNamesOf") (EVar "d")))) (DoLet false false (PVar "text") (EIf (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EVar "full") (EApp (EVar "blockOf") (EApp (EApp (EVar "filterList") (EApp (EVar "userSchemeLine") (EVar "userNames"))) (EApp (EVar "contentLines") (EVar "full")))))) (DoExpr (ETuple (EVar "text") (EVar "diag")))))
+(DFunDef false "typesUserOf" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "d")) (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PVar "full") (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntime") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "d"))) (DoLet false false (PVar "diag") (EBinOp "||" (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EApp (EVar "hadMatchWarnings") (ELit LUnit)))) (DoLet false false (PVar "userNames") (EBinOp "++" (EApp (EVar "funNamesOf") (EVar "d")) (EApp (EVar "externNamesOf") (EVar "d")))) (DoLet false false (PVar "text") (EIf (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EVar "full") (EApp (EVar "blockOf") (EApp (EApp (EVar "filterList") (EApp (EVar "userSchemeLine") (EVar "userNames"))) (EApp (EVar "contentLines") (EVar "full")))))) (DoExpr (ETuple (EVar "text") (EVar "diag")))))
 (DTypeSig false "externNamesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "externNamesOf" ((PVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "externName")) (EVar "decls")))
 (DTypeSig false "externName" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1608,9 +1621,9 @@ mapUnit f (x :: rest) =
 (DTypeSig false "coreIrOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "coreIrOf" ((PVar "d")) (EApp (EVar "cprogramToSexp") (EApp (EApp (EVar "lowerProgramWithFacts") (EVar "emptyFacts")) (EApp (EVar "annotateProgram") (EVar "d")))))
 (DTypeSig false "evalOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
-(DFunDef false "evalOf" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "d")) (EBlock (DoLet false false (PVar "livePrelude") (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "d"))) (EVar "coreDecls"))) (DoLet false false (PTuple (PVar "elaborated") (PVar "facts")) (EApp (EApp (EApp (EApp (EVar "elaborateOneFacts") (EVar "defaultDriveInputs")) (EVar "runtimeDecls")) (EVar "livePrelude")) (ETuple (ELit (LString "__user__")) (EVar "d")))) (DoExpr (EApp (EApp (EApp (EVar "evalOneOutputFacts") (EVar "facts")) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "elaborated"))))))
+(DFunDef false "evalOf" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "d")) (EBlock (DoLet false false (PVar "livePrelude") (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "d"))) (EVar "coreDecls"))) (DoLet false false (PTuple (PVar "elaborated") (PVar "facts")) (EApp (EApp (EApp (EApp (EVar "elaborateOneFacts") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeDecls")) (EVar "livePrelude")) (ETuple (ELit (LString "__user__")) (EVar "d")))) (DoExpr (EApp (EApp (EApp (EVar "evalOneOutputFacts") (EVar "facts")) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "elaborated"))))))
 (DTypeSig false "emitBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "emitBoth" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EVar "defaultDriveInputs")) (EVar "runtimeDecls")) (EListLit)) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userDecls"))))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild (PVar "evTable") PWild PWild) (EVar "elab")) (DoLet false false (PTuple (PVar "coreD") (PVar "modules2") (PVar "evTableM")) (EApp (EApp (EApp (EVar "mangleUnitsEv") (EVar "evTable")) (EVar "coreE")) (EVar "modulesE"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "coreD") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules2")))) (DoLet false false (PVar "cp") (EApp (EApp (EVar "lowerProgramEmitWith") (EApp (EApp (EVar "factsOfElabWith") (EVar "evTableM")) (EVar "elab"))) (EVar "allDecls"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "llvmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit))) (DoExpr (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "wasmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit)))))
+(DFunDef false "emitBoth" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeDecls")) (EListLit)) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userDecls"))))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild (PVar "evTable") PWild PWild) (EVar "elab")) (DoLet false false (PTuple (PVar "coreD") (PVar "modules2") (PVar "evTableM")) (EApp (EApp (EApp (EVar "mangleUnitsEv") (EVar "evTable")) (EVar "coreE")) (EVar "modulesE"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "coreD") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules2")))) (DoLet false false (PVar "cp") (EApp (EApp (EVar "lowerProgramEmitWith") (EApp (EApp (EVar "factsOfElabWith") (EVar "evTableM")) (EVar "elab"))) (EVar "allDecls"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "llvmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit))) (DoExpr (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "wasmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit)))))
 (DTypeSig false "llvmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))
 (DFunDef false "llvmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeEmitInput") (EApp (EVar "returnsSelfTable") (EVar "allDecls"))) (EApp (EVar "selfFnParamTable") (EVar "allDecls"))) (EApp (EVar "methodIfaceTable") (EVar "allDecls"))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (EApp (EVar "externArities") (EVar "runtimeDecls"))) (EApp (EVar "mainTypeIsUnit") (ELit LUnit))) (EApp (EVar "mainTypeIsFloat") (ELit LUnit))) (ELit (LInt 0))) (EListLit)) (EListLit)) (ELit (LString ""))) (EApp (EVar "declaredRecordFieldOrders") (EVar "allDecls"))) (EApp (EApp (EVar "ffiExternTypeNames") (EVar "runtimeDecls")) (EVar "allDecls")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EApp (EVar "emitProgramRecord") (EVar "input")) (EApp (EApp (EVar "buildEmitPlan") (EVar "LlvmBackend")) (EVar "cp"))) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";"))) (EVar "text")) (EVar "gaps")))))
 (DTypeSig false "wasmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))
@@ -1833,7 +1846,8 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "declaredRecordFieldOrders" false) (mem "lowerProgramEmitWith" false) (mem "lowerProgramWithFacts" false) (mem "returnsSelfTable" false) (mem "selfFnParamTable" false) (mem "methodIfaceTable" false) (mem "ctorFieldTypeNames" false) (mem "externArities" false) (mem "ffiExternTypeNames" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkOneToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "elaborateOneFacts" false) (mem "elaborateModules" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsFloat" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false) (mem "resetTypeErrorsSticky" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneToLinesWithRuntime" false) (mem "elaborateOneFacts" false) (mem "elaborateModules" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsFloat" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false) (mem "resetTypeErrorsSticky" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleUnitsEv" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "emptyFacts" false) (mem "factsOfElabWith" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalOneOutputFacts" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "noMainMsg" false))))
@@ -1924,9 +1938,9 @@ mapUnit f (x :: rest) =
 (DTypeSig false "markOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
 (DFunDef false "markOf" ((PVar "coreDecls") (PVar "d")) (EApp (EVar "programToSexp") (EApp (EApp (EVar "markWithPrelude") (EVar "coreDecls")) (EVar "d"))))
 (DTypeSig false "typesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "typesOf" ((PVar "runtimeDecls") (PVar "d")) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "d"))) (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PVar "text") (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntime") (EVar "defaultDriveInputs")) (EVar "runtimeDecls")) (EListLit)) (EVar "d"))) (DoExpr (ETuple (EVar "text") (EBinOp "||" (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EApp (EVar "hadMatchWarnings") (ELit LUnit)))))))
+(DFunDef false "typesOf" ((PVar "runtimeDecls") (PVar "d")) (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PVar "text") (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntime") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeDecls")) (EListLit)) (EVar "d"))) (DoExpr (ETuple (EVar "text") (EBinOp "||" (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EApp (EVar "hadMatchWarnings") (ELit LUnit)))))))
 (DTypeSig false "typesUserOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "String") (TyCon "Bool"))))))
-(DFunDef false "typesUserOf" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "d")) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "d"))) (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PVar "full") (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntime") (EVar "defaultDriveInputs")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "d"))) (DoLet false false (PVar "diag") (EBinOp "||" (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EApp (EVar "hadMatchWarnings") (ELit LUnit)))) (DoLet false false (PVar "userNames") (EBinOp "++" (EApp (EVar "funNamesOf") (EVar "d")) (EApp (EVar "externNamesOf") (EVar "d")))) (DoLet false false (PVar "text") (EIf (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EVar "full") (EApp (EVar "blockOf") (EApp (EApp (EVar "filterList") (EApp (EVar "userSchemeLine") (EVar "userNames"))) (EApp (EVar "contentLines") (EVar "full")))))) (DoExpr (ETuple (EVar "text") (EVar "diag")))))
+(DFunDef false "typesUserOf" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "d")) (EBlock (DoLet false false PWild (EApp (EVar "resetTypeErrorsSticky") (ELit LUnit))) (DoLet false false (PVar "full") (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntime") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "d"))) (DoLet false false (PVar "diag") (EBinOp "||" (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EApp (EVar "hadMatchWarnings") (ELit LUnit)))) (DoLet false false (PVar "userNames") (EBinOp "++" (EApp (EVar "funNamesOf") (EVar "d")) (EApp (EVar "externNamesOf") (EVar "d")))) (DoLet false false (PVar "text") (EIf (EApp (EVar "hadTypeErrors") (ELit LUnit)) (EVar "full") (EApp (EVar "blockOf") (EApp (EApp (EVar "filterList") (EApp (EVar "userSchemeLine") (EVar "userNames"))) (EApp (EVar "contentLines") (EVar "full")))))) (DoExpr (ETuple (EVar "text") (EVar "diag")))))
 (DTypeSig false "externNamesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "externNamesOf" ((PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "externName")) (EVar "decls")))
 (DTypeSig false "externName" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1939,9 +1953,9 @@ mapUnit f (x :: rest) =
 (DTypeSig false "coreIrOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "coreIrOf" ((PVar "d")) (EApp (EVar "cprogramToSexp") (EApp (EApp (EVar "lowerProgramWithFacts") (EVar "emptyFacts")) (EApp (EVar "annotateProgram") (EVar "d")))))
 (DTypeSig false "evalOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
-(DFunDef false "evalOf" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "d")) (EBlock (DoLet false false (PVar "livePrelude") (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "d"))) (EVar "coreDecls"))) (DoLet false false (PTuple (PVar "elaborated") (PVar "facts")) (EApp (EApp (EApp (EApp (EVar "elaborateOneFacts") (EVar "defaultDriveInputs")) (EVar "runtimeDecls")) (EVar "livePrelude")) (ETuple (ELit (LString "__user__")) (EVar "d")))) (DoExpr (EApp (EApp (EApp (EVar "evalOneOutputFacts") (EVar "facts")) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "elaborated"))))))
+(DFunDef false "evalOf" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "d")) (EBlock (DoLet false false (PVar "livePrelude") (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "d"))) (EVar "coreDecls"))) (DoLet false false (PTuple (PVar "elaborated") (PVar "facts")) (EApp (EApp (EApp (EApp (EVar "elaborateOneFacts") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeDecls")) (EVar "livePrelude")) (ETuple (ELit (LString "__user__")) (EVar "d")))) (DoExpr (EApp (EApp (EApp (EVar "evalOneOutputFacts") (EVar "facts")) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "elaborated"))))))
 (DTypeSig false "emitBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "emitBoth" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EVar "defaultDriveInputs")) (EVar "runtimeDecls")) (EListLit)) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userDecls"))))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild (PVar "evTable") PWild PWild) (EVar "elab")) (DoLet false false (PTuple (PVar "coreD") (PVar "modules2") (PVar "evTableM")) (EApp (EApp (EApp (EVar "mangleUnitsEv") (EVar "evTable")) (EVar "coreE")) (EVar "modulesE"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "coreD") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules2")))) (DoLet false false (PVar "cp") (EApp (EApp (EVar "lowerProgramEmitWith") (EApp (EApp (EVar "factsOfElabWith") (EVar "evTableM")) (EVar "elab"))) (EVar "allDecls"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "llvmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit))) (DoExpr (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "wasmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit)))))
+(DFunDef false "emitBoth" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeDecls")) (EListLit)) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userDecls"))))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild (PVar "evTable") PWild PWild) (EVar "elab")) (DoLet false false (PTuple (PVar "coreD") (PVar "modules2") (PVar "evTableM")) (EApp (EApp (EApp (EVar "mangleUnitsEv") (EVar "evTable")) (EVar "coreE")) (EVar "modulesE"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "coreD") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules2")))) (DoLet false false (PVar "cp") (EApp (EApp (EVar "lowerProgramEmitWith") (EApp (EApp (EVar "factsOfElabWith") (EVar "evTableM")) (EVar "elab"))) (EVar "allDecls"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "llvmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit))) (DoExpr (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "wasmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit)))))
 (DTypeSig false "llvmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))
 (DFunDef false "llvmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeEmitInput") (EApp (EVar "returnsSelfTable") (EVar "allDecls"))) (EApp (EVar "selfFnParamTable") (EVar "allDecls"))) (EApp (EVar "methodIfaceTable") (EVar "allDecls"))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (EApp (EVar "externArities") (EVar "runtimeDecls"))) (EApp (EVar "mainTypeIsUnit") (ELit LUnit))) (EApp (EVar "mainTypeIsFloat") (ELit LUnit))) (ELit (LInt 0))) (EListLit)) (EListLit)) (ELit (LString ""))) (EApp (EVar "declaredRecordFieldOrders") (EVar "allDecls"))) (EApp (EApp (EVar "ffiExternTypeNames") (EVar "runtimeDecls")) (EVar "allDecls")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EApp (EVar "emitProgramRecord") (EVar "input")) (EApp (EApp (EVar "buildEmitPlan") (EVar "LlvmBackend")) (EVar "cp"))) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";"))) (EVar "text")) (EVar "gaps")))))
 (DTypeSig false "wasmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))

@@ -32,12 +32,12 @@
 
 import frontend.ast.{Decl}
 import types.typecheck.{
-  defaultDriveInputs,
   elaborateModules,
   constrainedSigNames,
   preludeReturnPosDictNames,
   preludeArgPosDictNames,
 }
+import types.tc_types.{DriveInputs(..)}
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
   methodIfaceTable,
@@ -54,10 +54,14 @@ import entries.entry_support.{driveModules}
 main : <IO> Unit
 main = driveModules runEmit
 
-runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
-runEmit runtimeDecls coreDecls modules =
+runEmit : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+runEmit inputs runtimeDecls coreDecls modules =
   -- #2809: elaborate the program as written, then mangle its elaborated trees.
-  let elab = elaborateModules defaultDriveInputs runtimeDecls coreDecls modules
+  let elab = elaborateModules inputs runtimeDecls coreDecls modules
   let (coreE, modulesE, _, _, evTable, _, _) = elab
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let allDecls0 = coreD ++ flatMap snd modules2

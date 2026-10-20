@@ -18,6 +18,7 @@ import test.{
 import frontend.ast.{
   Decl(..),
   EvId(..),
+  EvTable,
   EvVal(..),
   Expr(..),
   Loc(..),
@@ -74,9 +75,13 @@ import types.tc_types.{
   MethodReturnTraceStage(..),
   NumericPredicateTraceEntry(..),
   NumericPredicateTraceStage(..),
+  DriveInputs(..),
+  TraceSink(..),
 }
+import types.publish.{TcReport(..), CheckedProgram(..)}
 import types.typecheck.{
   defaultDriveInputs,
+  driveInputsFor,
   ModDiags,
   TcDiag(..),
   beginAssumptionTrace,
@@ -86,6 +91,7 @@ import types.typecheck.{
   beginNumericPredicateTrace,
   cellStoreMisses,
   checkModules,
+  checkModulesChainReportFor,
   checkModulesDiagsChain,
   checkModulesEntryReport,
   checkOneDiags,
@@ -109,7 +115,6 @@ import types.typecheck.{
   methodReturnTemplatePresenceProbe,
   resetTypeErrorsSticky,
   scopeFrameStats,
-  setStdlibOwnership,
   scopeTraceContext,
   spanKeys,
   stickyTypeErrorDiags,
@@ -117,7 +122,7 @@ import types.typecheck.{
   tcMsg,
   walkGoalSameProbe,
 }
-import types.target_profile.{selectProfile, selectedProfile}
+import types.target_profile.{selectProfile}
 import types.route_key.{EvIndex(..), evIndexOf}
 import support.ordmap.{omEmpty, omFromNames}
 import support.util.{
@@ -125,6 +130,29 @@ import support.util.{
   splitOnChar, startsWith
 }
 import list.{last, nub, sort}
+
+-- The inputs of a drive a test observes through [sink]: nothing stdlib-owned, no
+-- profile, the sink as the trace.
+traced : TraceSink -> DriveInputs
+traced sink = { defaultDriveInputs | diTrace = Some sink }
+
+-- `elaborateOne`'s decls beside the evidence table of the drive that built them.
+elaborateOneEvidence : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  (String, List Decl) ->
+  (List Decl, EvTable)
+elaborateOneEvidence inputs runtimeDecls coreDecls prog =
+  let (coreE, modulesE, _, _, evidence, _, _) =
+    elaborateModules inputs runtimeDecls coreDecls [prog]
+  (coreE ++ flatMap snd modulesE, evidence)
+
+-- The evidence table a check drive's report carries; an ill-typed drive's report
+-- carries none.
+reportEvidence : TcReport -> EvTable
+reportEvidence report = match report.trChecked
+  Some checked => checked.cpEvidence
+  None => []
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
@@ -226,13 +254,13 @@ numericBodySource collision body =
 
 numericCheckObserved : String -> (List String, List NumericTraceView)
 numericCheckObserved source =
-  beginNumericPredicateTrace ()
-  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+  let sink = beginNumericPredicateTrace ()
+  let (errors, _) = checkOneDiags (traced sink) [] (desugar
     (parse numericPreludeSource)) (
     "numeric_predicate",
     desugar (parseLocated source),
   )
-  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  let trace = map numericTraceView (finishNumericPredicateTrace sink)
   (map tcMsg errors, trace)
 
 numericStages : List NumericTraceView -> List NumericPredicateTraceStage
@@ -464,8 +492,8 @@ numericSchemeObserved : Option (Int, Int) ->
   String ->
   (List String, List NumericTraceView)
 numericSchemeObserved key source =
-  beginNumericPredicateTrace ()
-  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs key [] (desugar
+  let sink = beginNumericPredicateTrace ()
+  let (_, schemes) = checkOneSchemeFullK (traced sink) key [] (desugar
     (parse numericPreludeSource)) (
     "numeric_scheme",
     desugar (parseLocated source),
@@ -474,7 +502,7 @@ numericSchemeObserved key source =
     map
       (entry => ppScheme (snd entry).psScheme)
       (filter (entry => fst entry == "value") schemes)
-  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  let trace = map numericTraceView (finishNumericPredicateTrace sink)
   (values, trace)
 
 numericImportedObserved : Bool -> (Int, List NumericTraceView)
@@ -513,17 +541,17 @@ numericImportedObserved reverseOrder =
       [shape, forge, numeric, entry]
     else
       [shape, numeric, forge, entry]
-  beginNumericPredicateTrace ()
+  let sink = beginNumericPredicateTrace ()
   let results =
     checkModulesDiagsChain
-      defaultDriveInputs
+      (traced sink)
       None
       ""
       []
       []
       (desugar (parse numericPreludeSource))
       (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
-  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  let trace = map numericTraceView (finishNumericPredicateTrace sink)
   (modErrorCount results, trace)
 
 test "numeric predicates survive module and import order permutations" =
@@ -610,12 +638,13 @@ test "no-impl hint is dropped for a stdlib-owned type" =
     ("use", desugar (parse useSource)),
   ]
   let ownedReport =
-    let _ = setStdlibOwnership False ["eq", "boxes"]
-    checkModulesEntryReport defaultDriveInputs [] [] mods
+    checkModulesEntryReport
+      (driveInputsFor None False ["eq", "boxes"])
+      []
+      []
+      mods
   let userReport =
-    let _ = setStdlibOwnership False ["eq"]
-    checkModulesEntryReport defaultDriveInputs [] [] mods
-  let _ = setStdlibOwnership False []
+    checkModulesEntryReport (driveInputsFor None False ["eq"]) [] [] mods
   expectEqual
     (
       "TYPE ERROR: no impl of Eq for Box",
@@ -730,8 +759,8 @@ arithmeticSchemeObserved : Option (Int, Int) ->
   String ->
   (List (String, Int, String), List (String, String, Int))
 arithmeticSchemeObserved key source =
-  beginAssumptionTrace ()
-  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs key [] (desugar
+  let sink = beginAssumptionTrace ()
+  let (_, schemes) = checkOneSchemeFullK (traced sink) key [] (desugar
     (parse arithmeticPreludeSource)) (
     "arithmetic_scheme",
     desugar (parseLocated source),
@@ -753,7 +782,7 @@ arithmeticSchemeObserved key source =
           snd (scopeTraceContext binderScope),
           slot,
         ))
-      (finishAssumptionTrace ())
+      (finishAssumptionTrace sink)
   (values, assumptions)
 
 arithmeticErrorCodes : String -> List String
@@ -821,14 +850,13 @@ test "declared and inferred arithmetic retain one Num slot at finalized queries"
 arithmeticTraceObserved : String ->
   (List String, List NumericTraceView, List (String, String, Int))
 arithmeticTraceObserved source =
-  beginNumericPredicateTrace ()
-  beginAssumptionTrace ()
-  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+  let sink = { beginNumericPredicateTrace () | tsAssumptionEnabled = True }
+  let (errors, _) = checkOneDiags (traced sink) [] (desugar
     (parse arithmeticPreludeSource)) (
     "arithmetic_trace",
     desugar (parseLocated source),
   )
-  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  let trace = map numericTraceView (finishNumericPredicateTrace sink)
   let assumptions =
     map
       (entry =>
@@ -838,7 +866,7 @@ arithmeticTraceObserved source =
           snd (scopeTraceContext binderScope),
           slot,
         ))
-      (finishAssumptionTrace ())
+      (finishAssumptionTrace sink)
   (map tcMsg errors, trace, assumptions)
 
 test "operator events correlate by whole span scope and exact prelude Num predicate" =
@@ -977,17 +1005,17 @@ arithmeticImportedObserved reverseOrder =
       [shape, forge, numeric, entry]
     else
       [shape, numeric, forge, entry]
-  beginNumericPredicateTrace ()
+  let sink = beginNumericPredicateTrace ()
   let results =
     checkModulesDiagsChain
-      defaultDriveInputs
+      (traced sink)
       None
       ""
       []
       []
       (desugar (parse arithmeticPreludeSource))
       (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
-  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  let trace = map numericTraceView (finishNumericPredicateTrace sink)
   let arithmetic =
     filter
       (view =>
@@ -1113,8 +1141,8 @@ declaredNumMemberSchemeObserved : Option (Int, Int) ->
   String ->
   (List (Int, String), List (String, String, Int))
 declaredNumMemberSchemeObserved key member source =
-  beginAssumptionTrace ()
-  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs key [] (desugar
+  let sink = beginAssumptionTrace ()
+  let (_, schemes) = checkOneSchemeFullK (traced sink) key [] (desugar
     (parse numericPreludeSource)) (
     "declared_numeric_scheme",
     desugar (parseLocated source),
@@ -1135,7 +1163,7 @@ declaredNumMemberSchemeObserved key member source =
           snd (scopeTraceContext binderScope),
           slot,
         ))
-      (finishAssumptionTrace ())
+      (finishAssumptionTrace sink)
   (values, assumptions)
 
 declaredNumErrorCodes : String -> List String
@@ -1618,14 +1646,16 @@ methodEvInDecls target ((DFunDef _ _ _ body _ _) :: rest) =
 methodEvInDecls target (_ :: rest) = methodEvInDecls target rest
 
 test "ordinary return shares declaration identity vector and goal destination" =
-  beginMethodReturnTrace ()
-  let typed = elaborateOne defaultDriveInputs [] (desugar
+  let sink = beginMethodReturnTrace ()
+  let (typed, evidence) = elaborateOneEvidence (traced sink) [] (desugar
     (parse numericPreludeSource)) (
     "identity_return",
     desugar (parseLocated returnIdentitySource),
   )
   let trace =
-    filter (entry => entry.mrtMethod == "choose") (finishMethodReturnTrace ())
+    filter
+      (entry => entry.mrtMethod == "choose")
+      (finishMethodReturnTrace sink evidence)
   let goals = map methodTraceGoalText trace
   let aggregate = map evIdText (methodEvInDecls "choose" typed)
   let wanted = map methodWantedView trace
@@ -1709,13 +1739,15 @@ test "ordinary return shares declaration identity vector and goal destination" =
 
 methodCarrierStages : String -> String -> List MethodReturnTraceEntry
 methodCarrierStages method source =
-  beginMethodReturnTrace ()
-  let _ = elaborateOne defaultDriveInputs [] (desugar
+  let sink = beginMethodReturnTrace ()
+  let (_, evidence) = elaborateOneEvidence (traced sink) [] (desugar
     (parse numericPreludeSource)) (
     "method_carrier",
     desugar (parseLocated source),
   )
-  filter (entry => entry.mrtMethod == method) (finishMethodReturnTrace ())
+  filter
+    (entry => entry.mrtMethod == method)
+    (finishMethodReturnTrace sink evidence)
 
 test "ordinary return given evidence feeds checking and route publication" =
   let trace =
@@ -2146,20 +2178,24 @@ importedReturnObserved reverseOrder =
   )
   let sources =
     if reverseOrder then [foreign, owner, entry] else [owner, foreign, entry]
-  beginMethodReturnTrace ()
-  let results =
-    checkModulesDiagsChain
-      defaultDriveInputs
+  let sink = beginMethodReturnTrace ()
+  let report =
+    checkModulesChainReportFor
+      (traced sink)
+      False
       None
       ""
       []
       []
       (desugar (parse numericPreludeSource))
       (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
+  let results = report.trDiagnostics
   let trace =
     map
       methodTraceIdentityView
-      (filter (item => item.mrtMethod == "choose") (finishMethodReturnTrace ()))
+      (filter
+        (item => item.mrtMethod == "choose")
+        (finishMethodReturnTrace sink (reportEvidence report)))
   (modErrorCount results, trace)
 
 test "alias-qualified ordinary returns keep owner identity across import orders" =
@@ -2197,15 +2233,17 @@ test "alias-qualified ordinary returns keep owner identity across import orders"
 
 freshMethodReturnStages : String -> List MethodReturnTraceStage
 freshMethodReturnStages moduleId =
-  beginMethodReturnTrace ()
-  let _ = elaborateOne defaultDriveInputs [] (desugar
+  let sink = beginMethodReturnTrace ()
+  let (_, evidence) = elaborateOneEvidence (traced sink) [] (desugar
     (parse numericPreludeSource)) (
     moduleId,
     desugar (parseLocated returnIdentitySource),
   )
   map
     (entry => entry.mrtStage)
-    (filter (entry => entry.mrtMethod == "choose") (finishMethodReturnTrace ()))
+    (filter
+      (entry => entry.mrtMethod == "choose")
+      (finishMethodReturnTrace sink evidence))
 
 cachedMethodReturnObserved : String -> (Int, List MethodReturnTraceStage)
 cachedMethodReturnObserved entrySource =
@@ -2217,10 +2255,11 @@ cachedMethodReturnObserved entrySource =
     "export cached : Int",
     "cached = cachedChoose ()",
   ]
-  beginMethodReturnTrace ()
-  let results =
-    checkModulesDiagsChain
-      defaultDriveInputs
+  let sink = beginMethodReturnTrace ()
+  let report =
+    checkModulesChainReportFor
+      (traced sink)
+      False
       (Some (991, 997))
       "method-return-identity-cache"
       [Some "stable-method-return-prefix-v1", None]
@@ -2235,8 +2274,8 @@ cachedMethodReturnObserved entrySource =
       (entry => entry.mrtStage)
       (filter
         (entry => entry.mrtMethod == "cachedChoose")
-        (finishMethodReturnTrace ()))
-  (modErrorCount results, stages)
+        (finishMethodReturnTrace sink (reportEvidence report)))
+  (modErrorCount report.trDiagnostics, stages)
 
 test "ordinary return traces are fresh while cache hits replay no events" =
   let first = freshMethodReturnStages "return_fresh"
@@ -2843,17 +2882,17 @@ traceViewsNow entries = map traceView entries
 
 runModulesObserved : List (String, String) -> ModuleTraceView
 runModulesObserved sources =
-  beginAssumptionTrace ()
+  let sink = beginAssumptionTrace ()
   let results =
     checkModulesDiagsChain
-      defaultDriveInputs
+      (traced sink)
       None
       ""
       []
       []
       []
       (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
-  let assumptionEntries = finishAssumptionTrace ()
+  let assumptionEntries = finishAssumptionTrace sink
   ModuleTraceView {
     mtvAssumptions = traceViewsNow assumptionEntries,
     mtvErrors = modErrorCount results,
@@ -2861,10 +2900,10 @@ runModulesObserved sources =
 
 runObserved : String -> String -> RequestView
 runObserved moduleId source =
-  beginAssumptionTrace ()
+  let sink = beginAssumptionTrace ()
   let (errors, _) =
-    checkOneDiags defaultDriveInputs [] [] (moduleId, desugar (parse source))
-  let entries = finishAssumptionTrace ()
+    checkOneDiags (traced sink) [] [] (moduleId, desugar (parse source))
+  let entries = finishAssumptionTrace sink
   let views = traceViewsNow entries
   let (count, capacity) = scopeFrameStats ()
   RequestView {
@@ -2881,10 +2920,10 @@ modErrorCount ((_, (_, errors, _)) :: rest) =
 
 runCachedObserved : String -> RequestView
 runCachedObserved entrySource =
-  beginAssumptionTrace ()
+  let sink = beginAssumptionTrace ()
   let results =
     checkModulesDiagsChain
-      defaultDriveInputs
+      (traced sink)
       (Some (731, 733))
       "typecheck-scope-cache"
       [Some "stable-prefix-v1", None]
@@ -2894,7 +2933,7 @@ runCachedObserved entrySource =
         ("cache_prefix", desugar (parse scalarSource)),
         ("cache_entry", desugar (parse entrySource)),
       ]
-  let entries = finishAssumptionTrace ()
+  let entries = finishAssumptionTrace sink
   let views = traceViewsNow entries
   let (count, capacity) = scopeFrameStats ()
   RequestView {
@@ -3344,13 +3383,12 @@ test "an inherited default is inferred once, as the default body" =
 -- tests already exercise.
 evidenceObservationTrace : String -> List EvidenceObservationEntry
 evidenceObservationTrace source =
-  beginEvidenceObservation ()
-  let _ = elaborateOne defaultDriveInputs [] (desugar
-    (parse numericPreludeSource)) (
+  let sink = beginEvidenceObservation ()
+  let _ = elaborateOne (traced sink) [] (desugar (parse numericPreludeSource)) (
     "evidence_observation",
     desugar (parseLocated source),
   )
-  finishEvidenceObservation ()
+  finishEvidenceObservation sink
 
 evidenceEntriesOfKind : String ->
   List EvidenceObservationEntry ->
@@ -3535,12 +3573,12 @@ test "a default body's sibling call is answered by the body's receiver (#2095)" 
 
 localUseSiteObserved : String -> (List String, List EvidenceObservationEntry)
 localUseSiteObserved source =
-  beginEvidenceObservation ()
-  let (errors, _) = checkOneDiags defaultDriveInputs [] [] (
+  let sink = beginEvidenceObservation ()
+  let (errors, _) = checkOneDiags (traced sink) [] [] (
     "local_use_site",
     desugar (parseLocated source),
   )
-  let entries = finishEvidenceObservation ()
+  let entries = finishEvidenceObservation sink
   (map tcCode errors, entries)
 
 test "a generalized local is dictionary-abstracted: each use applies it to the given its own argument needs (#1082, #2095)" =
@@ -3972,10 +4010,10 @@ drainPreludeSource = joinNl [
   "println x = let _ = display x in ()",
 ]
 
-drainCheck : List String -> Unit
-drainCheck body =
+drainCheck : DriveInputs -> List String -> Unit
+drainCheck inputs body =
   let core = desugar (parse "\{arithmeticPreludeSource}\n\{drainPreludeSource}")
-  let _ = checkOneDiags defaultDriveInputs [] core (
+  let _ = checkOneDiags inputs [] core (
     "drain_quiescence",
     desugar (parseLocated (joinNl body)),
   )
@@ -3984,7 +4022,7 @@ drainCheck body =
 drainStickyObserved : List String -> List String
 drainStickyObserved body =
   let _ = resetTypeErrorsSticky ()
-  let _ = drainCheck body
+  let _ = drainCheck defaultDriveInputs body
   let raised = map (entry => tcMsg (snd entry)) (stickyTypeErrorDiags ())
   let _ = resetTypeErrorsSticky ()
   raised
@@ -4068,9 +4106,9 @@ test "the graph-end drain reports no scheme-quantified goal ambiguous" =
 -- a goal reaches is not chosen for a goal its caller owns, so both slots stay
 -- unrouted rather than keyed on `Float`.
 test "the graph-end drain mints no instance route for a scheme-quantified goal" =
-  let _ = beginEvidenceObservation ()
-  let _ = drainCheck drainProjectedGoalSource
-  let entries = finishEvidenceObservation ()
+  let sink = beginEvidenceObservation ()
+  let _ = drainCheck (traced sink) drainProjectedGoalSource
+  let entries = finishEvidenceObservation sink
   expectEqual
     [None, None]
     (map
@@ -4312,16 +4350,12 @@ ioJoinPrelude : String
 ioJoinPrelude =
   "effect Audit\nextern runIt : String -> <Exec> Unit\nextern say : String -> <Stdout> Unit\nextern emitAudit : Unit -> <Audit> Unit\nextern touchIo : Unit -> <IO> Unit\n"
 
--- Runs `k` with `name` selected the way `check --target` selects it, then puts
--- back no selection, so no other test sees the profile.
-underTarget : Option String -> (Unit -> a) -> a
-underTarget name k =
-  let _ = match selectProfile name None
-    Ok p => selectedProfile := p
-    Err m => panic m
-  let r = k ()
-  selectedProfile := None
-  r
+-- The drive inputs under the profile `name` names, selected the way
+-- `check --target` selects it.
+inputsUnder : Option String -> DriveInputs
+inputsUnder name = match selectProfile name None
+  Ok p => driveInputsFor p False []
+  Err m => panic m
 
 -- Each error as (module, line, code, message).
 ioJoinErrors : List ModDiags -> List (String, Int, String, String)
@@ -4338,16 +4372,16 @@ diagLine _ = 0
 ioJoinCheck : Option String ->
   List (String, String) ->
   List (String, Int, String, String)
-ioJoinCheck name sources = underTarget name (_ =>
+ioJoinCheck name sources =
   ioJoinErrors
     (checkModulesDiagsChain
-      defaultDriveInputs
+      (inputsUnder name)
       None
       ""
       []
       []
       (desugar (parseLocated ioJoinPrelude))
-      (map (s => (fst s, desugar (parseLocated (snd s)))) sources)))
+      (map (s => (fst s, desugar (parseLocated (snd s)))) sources))
 
 nodeJoinClause : String
 nodeJoinClause =
@@ -4475,19 +4509,18 @@ ioJoinKeyedCheck : Option String -> List (String, Int, String, String)
 ioJoinKeyedCheck name =
   let lib = "export\nlistDir : Unit -> <IO> Unit\nlistDir _ = runIt \"ls\"\n"
   let entry = "import lib.{listDir}\n\nmain : <IO> Unit\nmain = say \"hi\"\n"
-  underTarget name (_ =>
-    ioJoinErrors
-      (checkModulesDiagsChain
-        defaultDriveInputs
-        (Some (4032, 4033))
-        "io-join-profile-key"
-        [Some "lib-v1", None]
-        []
-        (desugar (parseLocated ioJoinPrelude))
-        [
-          ("lib", desugar (parseLocated lib)),
-          ("entry", desugar (parseLocated entry)),
-        ]))
+  ioJoinErrors
+    (checkModulesDiagsChain
+      (inputsUnder name)
+      (Some (4032, 4033))
+      "io-join-profile-key"
+      [Some "lib-v1", None]
+      []
+      (desugar (parseLocated ioJoinPrelude))
+      [
+        ("lib", desugar (parseLocated lib)),
+        ("entry", desugar (parseLocated entry)),
+      ])
 
 test "the memoized drive gives each profile its own result in one process" =
   let first = ioJoinKeyedCheck None

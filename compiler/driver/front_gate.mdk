@@ -6,7 +6,6 @@
 -- (the emitter child) can import this module without `medaka_cli.mdk`.
 
 import frontend.ast.{Decl, Loc(..)}
-import types.typecheck.{setStdlibOwnership}
 import json.{Json(..), parse, stringify}
 import frontend.parser.{
   parseLocated,
@@ -51,7 +50,6 @@ import driver.loader.{
   modIdToPath,
   projectTrustedMods,
   readSource,
-  stdlibOwnership,
   unknownModuleIdOf,
   findImportLoc,
   availableModulesHint,
@@ -392,9 +390,6 @@ frontGateJson allowInternal stdlibDir rsrc csrc entry =
       let pairs = map dropPathTriple mods
       let graph = frontGraphOf roots rsrc csrc mods
       let trusted = projectTrustedMods entry roots stdlibDir pairs
-      let (flatStdlib, ownedStdlib) =
-        stdlibOwnership entry roots stdlibDir pairs
-      let _ = setStdlibOwnership flatStdlib ownedStdlib
       Ok (
         graph,
         JsonFront {
