@@ -505,6 +505,7 @@ checkModulesEntryReport : DriveInputs -> List Decl -> List Decl -> List (String,
 checkModulesEntryReportOut : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (String, DriveOutputs)
 checkModulesK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
 checkModulesPartialK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> PartialAnalysis
+checkModulesPartialLast : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (PartialAnalysis, ModuleCtx)
 checkModulesPreambleK : DriveInputs -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, ModuleCtx)
 checkNestedReqs : SiteCtx -> ImplUniverse -> ReqWalk -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkOneCallObligation : ModuleCtx -> Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
@@ -875,7 +876,7 @@ defaultSourcelessAuthorities : ModuleCtx -> Map Int Unit -> EffRow -> Mono -> Un
 defaultSubject : String -> String -> String
 defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
 deferEffectRelation : ModuleCtx -> Bool -> EffRow -> EffRow -> Unit
-deferJoin : JoinContext -> (DynCtx -> List EffRow -> EffRow) -> List (Option Loc, Mono) -> Option Mono
+deferJoin : ModuleCtx -> JoinContext -> (DynCtx -> List EffRow -> EffRow) -> List (Option Loc, Mono) -> Option Mono
 deferRequiresMonadMsg : String
 definerPairsOf : String -> Map String (List (String, String)) -> List (String, String)
 definerReceiverDispatches : DynCtx -> String -> Mono -> Bool
@@ -2027,7 +2028,7 @@ matchOneSided : (a -> b -> MStep c a b) -> (c -> c -> Bool) -> (b -> b -> Bool) 
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))
 matchTyMonos : List Ty -> List Mono -> Option (List (String, Mono))
-matchWarningsNow : Unit -> Bool
+matchWarningsNow : ModuleCtx -> Bool
 materializeBinder : (String -> TyConOrigin -> Bool) -> PendingBinder -> BinderRow
 materializeBinderTypes : Unit -> Unit
 maybeInferConstraint : ModuleCtx -> List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> ScopeId -> Scheme -> Unit
@@ -2451,7 +2452,6 @@ payloadTypesE : ModuleCtx -> SigVars -> List (String, Mono) -> ConPayload -> Lis
 peelArrows : Int -> Mono -> List Mono
 peelOntoParams : DynCtx -> Option Mono -> List Mono -> List Pat -> Unit
 peelQual : Mono -> Mono
-perRun : Ref ModuleCtx
 performEffect : ModuleCtx -> Ref (List EffRow) -> EffRow -> Unit
 phantomExportMsg : String -> String -> String -> String
 phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind)) -> List String
@@ -2848,7 +2848,7 @@ requireGoalSeeds : List UObligation -> List (UObligation, ReqWalk)
 requireGoalsBelow : ModuleCtx -> (ReqWalk -> UObligation -> List (UObligation, ReqWalk)) -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
 requirePredicateSlot : ModuleCtx -> List (String, Mono) -> Require -> PredicateSlot
 requiredMethodNames : List IfaceMethod -> List String
-requiresCycleMsg : IfaceRef -> List Mono -> IfaceRef -> List Mono -> String
+requiresCycleMsg : ModuleCtx -> IfaceRef -> List Mono -> IfaceRef -> List Mono -> String
 requiresDepthMsg : IfaceRef -> List Mono -> String
 requiresKindMsg : String -> String -> String
 requiresNonShrinkingFuel : Int

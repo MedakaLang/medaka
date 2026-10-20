@@ -5857,10 +5857,10 @@ deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 -- This index is deliberately syntactic: an identity-keyed table over the raw
 -- `Variant`/`Field`/`Ty` declaration nodes, carrying no elaborated
 -- `Scheme`/`RecordInfo`/`Mono`. Elaborating (`registerAllData`,
--- `insertCtorPop`, `insertRecordPop`) writes `perRun`/`GraphCtx.crossRun` refs as
+-- `insertCtorPop`, `insertRecordPop`) writes `ModuleCtx`/`GraphCtx.crossRun` refs as
 -- a side effect (`recordParamKinds`, `registerRecordInfoKeyed`, alias
--- resolution through `perRun.value.aliasTableRef`) and emits diagnostics
--- deduped per module (`perRun.typeErrorMsgSetRef`, reset by `freshModuleCtx`).
+-- resolution through `ModuleCtx.aliasTableRef`) and emits diagnostics
+-- deduped per module (`ModuleCtx.typeErrorMsgSetRef`, reset by `freshModuleCtx`).
 -- `buildDeclEnvs` runs in the driver preamble, before any module's own state
 -- exists, so calling those functions here would merge the diagnostic dedupe
 -- scope across the whole module graph and relocate the push outside any
@@ -9216,10 +9216,10 @@ resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
 -- so locs don't drift as inference continues past the error.  severity = 1.
 --
 -- issue 1146 — THE CHANNEL IS SPLIT BY ROLE.  "Which diagnostics are REPORTED"
--- is OUTPUT and lives in `perRun.typeErrors`, a `Windowed TcDiag` like its
+-- is OUTPUT and lives in `ModuleCtx.typeErrors`, a `Windowed TcDiag` like its
 -- obligation-channel siblings (see `Windowed` above — `wPush`/`wReset`/`wRestore` are
 -- its sole WRITERS, so its list and its count cannot drift apart).  "An error
--- OCCURRED" is CONTROL and lives in `perRun.errorsDetected`, a monotone-per-module
+-- OCCURRED" is CONTROL and lives in `ModuleCtx.errorsDetected`, a monotone-per-module
 -- occurrence counter that is not a diagnostics channel at all.
 --
 -- The counter counts errors DETECTED, not errors STORED (PR2).  The three dedup
@@ -9250,7 +9250,7 @@ resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
 -- emit/eval.
 --
 -- #2089 / #2544 (M4): `GraphCtx.typeErrorsStickyDiags` holds the diagnostics behind
--- the flag, newest first, across every module of the graph.  `perRun.typeErrors` is
+-- the flag, newest first, across every module of the graph.  `ModuleCtx.typeErrors` is
 -- wiped per module, so this is the only place a caller with no per-module hook can
 -- read what armed the sticky flag rather than merely that it was armed — it is what
 -- `elaborateModules` returns as its residual, each entry with its own `Loc`.  Written
@@ -9296,7 +9296,7 @@ typeErrorsArmed _ = graphCtx.value.typeErrorsSticky.value
 -- establishes cannot drift apart at one site and not another: the diagnostic is
 -- STORED, the build/run sticky gate is ARMED, and an error OCCURRED.
 --
--- ⚠️ It is NOT the sole writer of `perRun.errorsDetected` — that would put the
+-- It is NOT the sole writer of `ModuleCtx.errorsDetected` — that would put the
 -- counter back in step with the list, which is exactly what PR2 removed.  The counter
 -- is bumped by `noteTypeErrorDetected` below, from here AND from each dedup
 -- short-circuit, so it counts errors DETECTED rather than errors STORED.  Do not
@@ -9306,7 +9306,7 @@ typeErrorsArmed _ = graphCtx.value.typeErrorsSticky.value
 -- ⚠️ ONE standing obligation, and it is not discharged here: anywhere the channel is
 -- ROLLED BACK, this counter must be rolled back WITH it, or a region straddling the
 -- rollback would see a detection that no longer has a diagnostic behind it.  No site
--- rolls the channel back within one `perRun` lifetime today: `checkGraphFinish`
+-- rolls the channel back within one module record's lifetime today: `checkGraphFinish`
 -- rolls back only the two cells that OUTLIVE a module (`typeErrorsSticky` and its
 -- message list), around a memo path's drain.  Any future rollback of `typeErrors`
 -- owes the same pairing.
@@ -9321,7 +9321,7 @@ typeErrorsArmed _ = graphCtx.value.typeErrorsSticky.value
 -- key).  Keeping the insert HERE — inside the one funnel — is what makes the
 -- index unable to disagree with the channel: there is no second push site to
 -- forget.  A rollback of the channel owes the index the same pairing the counter
--- states above; today there is none within a `perRun` lifetime (see there).
+-- states above; today there is none within a module record's lifetime (see there).
 recordTypeError : ModuleCtx -> TcDiag -> Unit
 recordTypeError mctx raw =
   let d = writtenDiag raw
@@ -9416,7 +9416,7 @@ locKey (Some (Loc file line col _ _)) =
 -- is what made a message-rendering change able to flip an inference branch.
 --
 -- #2068: the membership test is an OrdMap lookup on `typeErrorMsgSetRef`, not the
--- `anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value` scan it used
+-- `anyList (e => tcMsg e == msg) mctx.typeErrors.items.value` scan it used
 -- to be.  The scan was O(accumulated) per push, hence O(N^2) over a program whose
 -- N diagnostics are pairwise DISTINCT — which is the common case for this family
 -- (`pushNoImplError` renders the interface AND the type into every message).  It
@@ -9727,8 +9727,8 @@ hadMatchWarnings o = o.doHadMatchWarnings
 -- `hadMatchWarnings` of the last module checked: the only read of a drive that returns no
 -- outputs (the projections).
 export
-matchWarningsNow : Unit -> Bool
-matchWarningsNow _ = match perRun.value.matchWarnings.value
+matchWarningsNow : ModuleCtx -> Bool
+matchWarningsNow mctx = match mctx.matchWarnings.value
   [] => False
   _ => True
 
@@ -10568,7 +10568,7 @@ currentScopeStore : Unit -> ScopeStore
 currentScopeStore _ = graphCtx.value.graphRun.scopeStore
 
 -- #2549 M2: the next evidence id for the module currently being inferred.  The
--- module component comes from `perRun`, which `checkBodyImpl` sets once per
+-- module component comes from the module's record, which `checkBodyImpl` mints once per
 -- module before any body of it is inferred; the ordinal is this run's counter.
 -- `evCounter` is graph-global, and `graphLineageRun` carries it across every new
 -- lineage (a memo hit rewinds it to its snapshot's), so the ordinal alone is what makes an id unique — the module half does
@@ -10793,10 +10793,9 @@ methodReturnMemoSupers supers =
 defaultBodyBinderNamesProbe : Unit -> List String
 defaultBodyBinderNamesProbe _ =
   let savedGraph = graphCtx.value.graphRun
-  let saved = perRun.value
+  let saved = initialModuleCtx ()
   installRun (freshGraphRun ())
   let mctx = carryModuleCtx saved
-  perRun := mctx
   let iface =
     IfaceRef { irName = "Supply", irOrigin = OriginModule "owner-module" }
   let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = "copy" }
@@ -10815,7 +10814,6 @@ defaultBodyBinderNamesProbe _ =
     renderEvidenceBinder (Scopes.binderAt body defaultReceiverOrdinal),
   ]
   installRun savedGraph
-  perRun := saved
   rendered
 
 -- > defaultBodyBinderNamesProbe ()
@@ -11018,14 +11016,6 @@ freshModuleCtx seed mid = ModuleCtx {
   currentModuleRef = Ref mid,
   invocationViewRef = Ref (InvocationView [] [] []),
 }
-
--- The module shim: the last-minted `ModuleCtx`, which every reader without a record
--- of its own reads.  Effect domains are not a module field:
--- `populateEffectDomainsGraph` fills them once over the whole import graph, before
--- the first module, and a per-module mint must not wipe module A's declared domains
--- before module B is checked.
-perRun : Ref ModuleCtx
-perRun = Ref (initialModuleCtx ())
 
 -- The record a process starts from: no module, an empty oracle, no warnings.
 initialModuleCtx : Unit -> ModuleCtx
@@ -11527,8 +11517,9 @@ walkGoalSameProbe : Unit -> List Bool
 walkGoalSameProbe _ =
   let iface = ifaceRefBare "C"
   let int = tconBuiltin "Int"
-  let row1 = EffRow [] (Some (freshEffvar perRun.value ()))
-  let row2 = EffRow [] (Some (freshEffvar perRun.value ()))
+  let mctx = initialModuleCtx ()
+  let row1 = EffRow [] (Some (freshEffvar mctx ()))
+  let row2 = EffRow [] (Some (freshEffvar mctx ()))
   let goal1 = [TFun int row1 int]
   let goal2 = [TFun int row2 int]
   [
@@ -11562,7 +11553,7 @@ reqWalkReported mctx loc (ReqCycle parentIface parentArgs iface args) =
       mctx
       "T-REQUIRES-CYCLE"
       loc
-      (requiresCycleMsg parentIface parentArgs iface args)
+      (requiresCycleMsg mctx parentIface parentArgs iface args)
   None
 reqWalkReported mctx loc (ReqDeep iface args) =
   let _ =
@@ -13189,8 +13180,8 @@ ownContext mctx n =
   optionOr [] (lookupSchemeObls n id mctx.schemeObligationsRef.value)
 
 -- A module's own schemes, each with its context, taken when the module closes:
--- `perRun` still holds that module's tables, and the next module's check
--- overwrites them.
+-- [mctx] still holds that module's tables, and the next module's check
+-- mints its own record.
 publishOwn : ModuleCtx -> List (String, Scheme) -> List (String, PubScheme)
 publishOwn mctx = map (b => (
   fst b,
@@ -13228,7 +13219,7 @@ coreOwnContexts mctx =
 -- prelude `isEven`'s context (#2054's shape).  The prelude's contexts are consulted
 -- ONLY for a name this module does not bind and whose per-run table has no entry
 -- at all: on the module arm each module gets its own `freshModuleCtx`, so the
--- prelude's obligations are not in `perRun`, and a prelude scheme would otherwise
+-- prelude's obligations are not in [mctx], and a prelude scheme would otherwise
 -- render without its `=>`.
 -- The third step reads [coreContexts], the prelude's contexts keyed by bare name.
 seedContext : ModuleCtx -> OrdMap (List VecObl) -> String -> List VecObl
@@ -13251,13 +13242,13 @@ captureEntryTables mctx coreContexts modules = match last modules
     etModule = mid,
     etLocals =
       map
-        ((n, loc, s) => (n, freezePub s (ownContext perRun.value n), loc))
+        ((n, loc, s) => (n, freezePub s (ownContext mctx n), loc))
         mctx.localSchemesOut.value,
     etSeed =
       map
         (b => (
           fst b,
-          freezePub (snd b) (seedContext perRun.value coreContexts (fst b)),
+          freezePub (snd b) (seedContext mctx coreContexts (fst b)),
         ))
         mctx.seedSchemesOut.value,
   }
@@ -24148,7 +24139,7 @@ valueJoinOps : DynCtx ->
   ValueJoinOps (Option Loc)
 valueJoinOps dyn context collector =
   let ops = decidingJoinOps dyn context collector
-  { ops | vjoDefer = values => deferJoin context collector values }
+  { ops | vjoDefer = values => deferJoin dyn.dcModule context collector values }
 
 -- The join services that decide on the spot: resolving a recorded join
 -- must not record it again.
@@ -24171,23 +24162,24 @@ decidingJoinOps dyn context collector = ValueJoinOps {
 -- are not equated: equality would give both the same latent row before a
 -- later use shapes one of them.  Inside a binding scope the join is recorded
 -- and decided when the scope closes (§6.8); outside one it is decided now.
-deferJoin : JoinContext ->
+deferJoin : ModuleCtx ->
+  JoinContext ->
   (DynCtx -> List EffRow -> EffRow) ->
   List (Option Loc, Mono) ->
   Option Mono
-deferJoin context collector values =
-  if EffectSolver.hasSummaryScope perRun.value.effectSummaries
+deferJoin mctx context collector values =
+  if EffectSolver.hasSummaryScope mctx.effectSummaries
     && distinctVariables values then
-    let result = freshVar perRun.value ()
-    perRun.value.pendingJoinsRef :=
+    let result = freshVar mctx ()
+    mctx.pendingJoinsRef :=
       PendingJoin {
           pjResult = result,
           pjValues = values,
-          pjLevel = perRun.value.currentLevel.value,
+          pjLevel = mctx.currentLevel.value,
           pjContext = context,
           pjCollector = collector,
         }
-        :: perRun.value.pendingJoinsRef.value
+        :: mctx.pendingJoinsRef.value
     Some result
   else
     None
@@ -25392,7 +25384,7 @@ intersectDeclAtoms (first :: rest) =
 -- can never become registered by iterating, because its polarity is not a fact
 -- about this declaration at all — it depends on what `f` is instantiated to at
 -- each use.  See that arm's own note in `paramOccPolarities` below.
--- ⚠️ THE TABLE IT COMPOSES AGAINST IS AN ARGUMENT, NOT `perRun`, and that is
+-- The table it composes against is an argument, not a module record's, and that is
 -- load-bearing: `declEnvPolarityChain` runs this over the WHOLE import graph
 -- while building the cross-module seed, at a point where the per-run ref holds
 -- nothing yet.  Reading the ref here would have made cross-module transitivity
@@ -26334,7 +26326,8 @@ registerLocalGroupAbs : TcEnv ->
 registerLocalGroupAbs env _ _ [] = ()
 registerLocalGroupAbs genv oblN0 callN0 ((bind@(LetBind name _ _ _), lscope) :: rest) =
   let _ = match lookupVar genv name
-    Some sch => registerLocalAbsIf perRun.value name lscope sch oblN0 callN0
+    Some sch =>
+      registerLocalAbsIf genv.teDyn.dcModule name lscope sch oblN0 callN0
     None => ()
   registerLocalGroupAbs genv oblN0 callN0 rest
 
@@ -28528,7 +28521,7 @@ ieRowAdmittedBy ir (Some ifaces) = anyList (ieRowIfaceMatches ir) ifaces
 -- binding, not bare name).  "Does an impl exist" and "which impl entails" must agree on ONE
 -- impl table — a drift between them would be a real dispatch bug.  #415 item 2: that
 -- agreement is STRUCTURAL, not a standing obligation.
--- 🚨 ARCH B-2.1-g REBASED BOTH READS, TOGETHER, ONTO `perRun.bodyImplEnvRef`, and the
+-- Arch B-2.1-g rebased both reads, together, onto `ModuleCtx.bodyImplEnvRef`, and the
 -- sentence that stood here — "There is no second table in scope to drift TO" — WAS ALREADY
 -- FALSE and is what licensed a bad scoping.  `bodyImplEnvRef` has been a second impl table,
 -- in scope from anywhere, since B-2.1-a2, and B-2.1-b2 moved three SELECTION legs onto it
@@ -32003,7 +31996,7 @@ implKeyTc : String -> List Ty -> String
 implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 
 -- The route word a method site stamps, and the row it names, selected once over
--- `perRun.bodyImplEnvRef` (the graph-global `IE`): the selected instance's canonical
+-- `ModuleCtx.bodyImplEnvRef` (the graph-global `IE`): the selected instance's canonical
 -- key (`rowRouteKey`), whichever other rows share its head, so one instance has one
 -- word in every module.  #609: [goals] is the interface's FULL param-mono vector `τ̄`
 -- at this site (recovered by `ifaceParamMonos`), or the singleton result mono when
@@ -33131,7 +33124,7 @@ resolveDictApps sx (app :: rest) =
 -- No selector call may be reachable from `entailAssum`, `entailAssumVar` or
 -- `entailAssumRoute` — verified at this pin by enumerating the assum chain
 -- (`activeDictVarOfEncl`/`activeDictVarForEncl`/`enclDictVarOf`/`opDictVarOf`/
--- `activeDictPredOf`/`ifaceOfMethodName`): every one is a `perRun` registry lookup and
+-- `activeDictPredOf`/`ifaceOfMethodName`): every one is a module-record registry lookup and
 -- none reaches a selector.
 --
 -- `entailFallback` has two reaching paths, and neither is a violation, but they are why
@@ -35647,7 +35640,6 @@ checkBodyImpl : CheckRunSeed ->
 checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   let seed = moduleSeed.msSchemes
   let mctx = freshModuleCtx runSeed mid
-  perRun := mctx
   let moduleScope =
     Scopes.freshScope
       (currentScopeStore ())
@@ -35655,14 +35647,14 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
       mctx.currentLevel.value
       mid
       ModuleOwner
-  let _ = openScope perRun.value moduleScope
+  let _ = openScope mctx moduleScope
   let _ = recordModuleStart mid
   -- #1675: this module's own `import`/`export import` decls, checked for a name the
   -- named dependency exports under two different definitions.  Here rather than in
   -- `importSeed` because the seed is built BEFORE this `freshModuleCtx` — see
   -- `reportAmbiguousImports`.  Reads only `deAmbigValues`, so a driver with no graph
   -- envelope (Flat, single-file) is a no-op.
-  let _ = reportAmbiguousImports perRun.value prog0
+  let _ = reportAmbiguousImports mctx prog0
   let prog = prog0
   let aliasSpellings = aliasMethodSpellings prog
   -- P1 (#1446) / DICT §8 I7: the four operator-and-literal classes' identities, read
@@ -35682,7 +35674,7 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   -- twin.  The Flat callers marked their whole program before this call.
   let stampRes =
     let (top, ids) = stampTopScope prog
-    let _ = beginModuleMarking perRun.value mid prog top moduleSeed
+    let _ = beginModuleMarking mctx mid prog top moduleSeed
     (prog, ids)
   let progS = fst stampRes
   -- #907: index name→id as an OrdMap (was a List scanned linearly per rendered
@@ -35723,8 +35715,8 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   -- (BREAK #3) effect domains: FLAT populates inline; MODULE relies on the driver
   -- preamble (checkModulesPreambleK / elaborateModules) populating ONCE over the whole
   -- import graph — a per-module populate would wipe another module's domains.
-  let _ = checkEffectParams perRun.value prog
-  let _ = checkLetRecDecls perRun.value prog
+  let _ = checkEffectParams mctx prog
+  let _ = checkLetRecDecls mctx prog
   -- #154 PR1: on the Module path, grow the persistent universe accumulators by THIS
   -- module's decls BEFORE the shadow/key reads below consult them — so they see the
   -- same universe `fullUniverse` (which appended prog0) did.
@@ -35898,7 +35890,7 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
     -- IDS table, and this is a whole-table replacement of all three.
     let _ =
       setFunPredicateSlots
-        perRun.value
+        mctx
         (selfDeclArities
           mid
           prog
@@ -35944,8 +35936,7 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
     -- #1386: the alias-qualified spellings (`A.mth`) this module's imports supply.
     -- Built eagerly, here, because a key that names two declarations is reported
     -- (`T-AMBIGUOUS-ALIAS-METHOD`) whether or not the module ever spells it.
-    mctx.methodAliasEntriesRef :=
-      aliasQualifiedMethodEntries perRun.value prog omEmpty
+    mctx.methodAliasEntriesRef := aliasQualifiedMethodEntries mctx prog omEmpty
     -- #1386: the ORIGIN name behind each of those alias-qualified keys, from the
     -- same rows, in the same module scope, on the same line as the supply they
     -- accompany — `originMethodName`'s source.
@@ -35965,7 +35956,7 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
     -- above `loadDataUniverse` changes nothing else.
     let envs = graphCtx.value.declEnvsRef.value
     let cur = declEnvsOrdOf mid envs
-    let _ = loadDataUniverse perRun.value cur
+    let _ = loadDataUniverse mctx cur
     -- #674: OVERLAY the ctors of the types THIS module imports so a bare ctor name
     -- resolves to the module the unit imports it from, not the universe's load-order
     -- winner.  Reads the persistent universe DECLS (not the Module `accData` field —
@@ -36042,7 +36033,7 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
     -- `prog0`), same content, one ordinal-aware source.  See `declEnvSeedChain` for
     -- why the reader's OWN row is excluded here and registered by the two
     -- `registerAllData` calls below instead.
-    let _ = declEnvSeedDataUniverse perRun.value mid envs
+    let _ = declEnvSeedDataUniverse mctx mid envs
     -- `omInsert` tables, so the LAST row wins, and the overlay's named-outranks-wildcard
     -- rule therefore needs the `UseGroup` rows LAST.  The oracle call site takes the
     -- opposite order for the opposite reason — see the partition note at
@@ -36052,20 +36043,20 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
         (withCtors mctx (spFloor graphCtx.value.crossRun.universeCtorPop.value))
         (importedCtorTypeDeclsLastWins prog0 cur envs.deModules)
     let env0 = registerAllData base prog0
-    let _ = applyRecordScopeOverrides perRun.value prog0
+    let _ = applyRecordScopeOverrides mctx prog0
     applyCtorScopeOverrides prog0 env0
   let _ = recordInvocationView dataEnv
   -- #784: reject under-determined return-only effect vars on interface methods.
   -- MUST run AFTER `dataEnv` above populated `dataParamKindsRef` — the kind-aware
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
   -- (`Async e a`, pins the effect) from a type-kinded one (`List e`, does not).
-  let _ = checkUndeterminedRetEffVars perRun.value prog
+  let _ = checkUndeterminedRetEffVars mctx prog
   -- EFFECTS-SEMANTICS §6.4/§6.5: declared-kind consistency.  Same placement — the
   -- slot-kind reads consult the table `dataEnv` just populated.
-  let _ = checkDeclaredKinds perRun.value prog
+  let _ = checkDeclaredKinds mctx prog
   -- One authority, one domain, for a declaration's `Authority` parameters.
   -- Same placement: an index slot's domain is read from that table.
-  let _ = checkDeclAuthorityUses perRun.value prog
+  let _ = checkDeclAuthorityUses mctx prog
   -- #822: instance-head kind check for graded interfaces.  Same placement rationale
   -- as the line above for the HEAD-constructor half, which still reads
   -- `dataParamKindsRef` that `dataEnv` above has just populated.
@@ -36084,9 +36075,8 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   let classEnvHere =
     let envs = graphCtx.value.declEnvsRef.value
     (envs.deIfaces, declEnvsOrdOf mid envs)
-  let _ =
-    checkGradedImplHeads perRun.value (fst classEnvHere) (snd classEnvHere) prog
-  let _ = rejectCyclicAliases perRun.value ()
+  let _ = checkGradedImplHeads mctx (fst classEnvHere) (snd classEnvHere) prog
+  let _ = rejectCyclicAliases mctx ()
   -- #1280: `prog` reached here through a driver's stamping walk already, and
   -- `stampTyHead` is first-write-immune, so the builtins-only scope can only fill
   -- a head no driver could attribute — an `extern` written in a FLAT user file,
@@ -36094,15 +36084,15 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   -- #2072: `userExternSchemes`, not `externSchemes` — this is the extern
   -- DECLARATION site (the program under check).  It builds the declared type
   -- verbatim; the two guards below are what hold a user extern to its row.
-  let currentMethodRows = ifaceMethodSchemeRows perRun.value prog
+  let currentMethodRows = ifaceMethodSchemeRows mctx prog
   let _ = recordMethodGrants currentMethodRows
-  let visibleMethodRows = ifaceMethodSchemeRows perRun.value implDecls
+  let visibleMethodRows = ifaceMethodSchemeRows mctx implDecls
   let visibleMethodRowIndex =
     methodRowsByIdentity
       (isNonEmptyL importerShadows)
       visibleMethodRows
       regEmpty
-  let externS = userExternSchemes perRun.value (externTyOriginScope []) prog
+  let externS = userExternSchemes mctx (externTyOriginScope []) prog
   let globalS = legacyMethodSchemes currentMethodRows ++ externS
   -- #2074 / F1 (epic #2070): the USER-EXTERN DECLARATION guards, all gated on
   -- the same `ffiStampMode` ownership Bool — a stdlib-owned program's externs ARE
@@ -36118,10 +36108,10 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   -- catalog-row rule fires ONLY on a catalog name), and folding them together
   -- would force one `if` to speak for four notions of "this declaration is not
   -- mine".
-  let _ = ffiCheckExternsCrossable perRun.value (ffiStampMode mid) prog
-  let _ = ffiCheckExternsLabelled perRun.value (ffiStampMode mid) prog
-  let _ = ffiCheckExternsShadow perRun.value (ffiStampMode mid) prog
-  let _ = ffiCheckExternsCatalogRow perRun.value (ffiStampMode mid) prog
+  let _ = ffiCheckExternsCrossable mctx (ffiStampMode mid) prog
+  let _ = ffiCheckExternsLabelled mctx (ffiStampMode mid) prog
+  let _ = ffiCheckExternsShadow mctx (ffiStampMode mid) prog
+  let _ = ffiCheckExternsCatalogRow mctx (ffiStampMode mid) prog
   -- (#4 cont) post-globalS mode setup.  Module: shadowMethodSchemes env layer (rebinding
   -- imported method names to the interface-method scheme) + the method-constraint cross
   -- seed (AFTER globalS's row registration, per installMethodPredicateSlots).
@@ -36131,14 +36121,14 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
     -- must not become another graph-lived authority.
     let ifaceSchemes = legacyMethodSchemes visibleMethodRows
     -- #259/#2157: seed both halves from the same already-minted row selection.
-    let _ = seedNumLitFromIntAnchor perRun.value visibleMethodRows
+    let _ = seedNumLitFromIntAnchor mctx visibleMethodRows
     -- #1351 L2 MIGRATE.  The importer-shadow layer now binds each shadowed method
     -- name to the scheme of the declaration THIS module's import scope admits
     -- (`methodScopeAt`), not to `lookupAssoc`'s decl-walk first match.
     -- Falls back to the bare-name answer on a miss — see `pickSchemesByDecl`.
     let sm =
       pickSchemesByDecl
-        perRun.value
+        mctx
         importerShadows
         ifaceSchemes
         visibleMethodRowIndex
@@ -36208,7 +36198,7 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   -- lint-disable-next-line rule-prefer-assign-op
 
   let _ =
-    let _ = dedupPredicateSlotsTable perRun.value ()
+    let _ = dedupPredicateSlotsTable mctx ()
     -- #1425: restore the rows the per-module view masked (see `selfNameRows`) — the view
     -- must not propagate as a graph-wide deletion into the next module's seed.
     let _ =
@@ -36276,11 +36266,7 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   -- every interface, and the miss arm is `[]` — every live rejection here would become a
   -- silent accept.  `classEnvHere`'s `Flat _` arm is what prevents that.
   let _ =
-    checkImplCompletenessMap
-      perRun.value
-      (fst classEnvHere)
-      (snd classEnvHere)
-      prog
+    checkImplCompletenessMap mctx (fst classEnvHere) (snd classEnvHere) prog
   -- (#5 / BREAK #2) obligation channels.  FLAT runs both channels + setNumlitFloats
   -- here so the per-module pass can
   -- stamp the Float-typed int literals, and a Flat consumer that read them unstamped
@@ -36303,22 +36289,17 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
     -- reach codegen through `build`'s own elaboration.  `setNumlitFloats` is not called
     -- here on any driver any more: the Float literal stamp is `SSNumlitFloats`,
     -- first step of the graph-end drain every Module-arm driver now runs.
-    let _ = recordLiveRoots perRun.value ()
-    let _ = judgeQuiescentGoals perRun.value ()
-    let _ = refileDeterminedRows perRun.value ()
-    let _ =
-      checkCallObligationsU perRun.value True obUniv mctx.implObls.items.value
-    let _ =
-      checkCallObligationsU perRun.value False obUniv mctx.obls.items.value
-    let _ = settleDeferredPatLits perRun.value ()
-    let _ =
-      checkDeferredMatches
-        perRun.value
-        (reverseL mctx.matchChecksDeferred.value)
-    let _ = checkFixedWidthLiterals perRun.value mctx.numlitRanges.value
-    let _ = checkWideLiterals perRun.value mctx.wideLitRanges.value
+    let _ = recordLiveRoots mctx ()
+    let _ = judgeQuiescentGoals mctx ()
+    let _ = refileDeterminedRows mctx ()
+    let _ = checkCallObligationsU mctx True obUniv mctx.implObls.items.value
+    let _ = checkCallObligationsU mctx False obUniv mctx.obls.items.value
+    let _ = settleDeferredPatLits mctx ()
+    let _ = checkDeferredMatches mctx (reverseL mctx.matchChecksDeferred.value)
+    let _ = checkFixedWidthLiterals mctx mctx.numlitRanges.value
+    let _ = checkWideLiterals mctx mctx.wideLitRanges.value
     ()
-  mctx.localSchemesOut := mapLocalSchemes perRun.value mctx.localBindRefs.value
+  mctx.localSchemesOut := mapLocalSchemes mctx mctx.localBindRefs.value
   mctx.seedSchemesOut := seed
   -- #154 PR-A: grow the persistent DATA-universe by THIS module's PUBLIC data, AFTER the
   -- module's inference is complete (so the copy+overlay above saw pub 1..k-1 and NEVER this
@@ -36328,7 +36309,7 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   let _ =
     -- A-3.2b residual (#1512): `mid` is BOUND here now — `appendDataUniverse`'s
     -- reload reads the alias universe at this module's own ordinal.
-    appendDataUniverse perRun.value mid prog0
+    appendDataUniverse mctx mid prog0
   let result = (
     ModuleBindings {
       mbSchemes = globalS ++ topSchemes,
@@ -36337,7 +36318,7 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
     progOut,
     mctx,
   )
-  let _ = closeScope perRun.value ()
+  let _ = closeScope mctx ()
   result
 -- D2: check top-level `let rec` bindings for non-function members before
 -- type-checking the DFunDef groups (the LetRecNonFunction guard,
@@ -38379,15 +38360,9 @@ judgeLiveGoal saved byModule (found, judged) lg =
       let diags = captureTypeErrors stamp (_ =>
         fold
           (_ o =>
-            undeterminedVectorVerdict
-              perRun.value
-              rigidIds
-              omEmpty
-              lg.lgWindow
-              o)
+            undeterminedVectorVerdict stamp rigidIds omEmpty lg.lgWindow o)
           ()
-          (lg.lgGoal
-            :: nestedRequireGoals perRun.value rigidIds omEmpty [lg.lgGoal]))
+          (lg.lgGoal :: nestedRequireGoals stamp rigidIds omEmpty [lg.lgGoal]))
       match diags
         [] => (found, judged)
         _ => (
@@ -40534,7 +40509,7 @@ methodBodyLaunderMsg DefaultBody iface mname escaping =
 --     the body's own added impl obligations are TRUNCATED back to the pre-body
 --     snapshot: the method's type is already known wrong, so its body's induced
 --     obligations (e.g. `(5 : Bool)` ⇒ `Num Bool`) are cascade victims.  All three
---     read `perRun.errorsDetected` via `erredDuring`, never the diagnostic list
+--     read `ModuleCtx.errorsDetected` via `erredDuring`, never the diagnostic list
 --     (issue 1146).  The leaf mismatch the unify region expects is pushed
 --     NON-deduped: `dcMethodMismatch` is `Some mname` across the whole region,
 --     which selects typeMismatchReport's first arm.
@@ -42572,7 +42547,7 @@ expandAliasHeadTy mctx ty = expandAliasHeadTyWith mctx.aliasTableRef.value ty
 
 -- The explicit-table form is the carrier seam for post-typecheck consumers.  The
 -- live declaration checks above call `expandAliasHeadTy`, whose table is the
--- current module's `perRun.aliasTableRef`; the emitter-side FFI index calls this
+-- current module's `ModuleCtx.aliasTableRef`; the emitter-side FFI index calls this
 -- same function body with stage K's module-scoped alias projection.  Keeping the
 -- table as an argument here means lowering does not grow a second alias expander
 -- (or a third alias registry) merely because it runs after the per-module Ref has
@@ -44236,7 +44211,7 @@ withDeclParamKinds : ModuleCtx -> List Decl -> (Unit -> a) -> a
 withDeclParamKinds mctx ds k =
   let kinds = mctx.dataParamKindsRef.value
   let names = mctx.dataParamNameIndexRef.value
-  let _ = fold (_ d => recordDeclaredKinds perRun.value d) () ds
+  let _ = fold (_ d => recordDeclaredKinds mctx d) () ds
   let result = k ()
   mctx.dataParamKindsRef := kinds
   mctx.dataParamNameIndexRef := names
@@ -46985,10 +46960,9 @@ isLegacyPredicateAnswer _ = False
 scopeGivenProbe : Unit -> List Bool
 scopeGivenProbe _ =
   let savedGraph = graphCtx.value.graphRun
-  let saved = perRun.value
+  let saved = initialModuleCtx ()
   installRun (freshGraphRun ())
   let mctx = carryModuleCtx saved
-  perRun := mctx
   let store = currentScopeStore ()
   let root = Scopes.freshScope store None 0 "given-probe" ModuleOwner
   let owner =
@@ -47056,7 +47030,6 @@ scopeGivenProbe _ =
     isLegacyPredicateAnswer (firstPredForEncl compatibleRequest owner givens),
   ]
   installRun savedGraph
-  perRun := saved
   result
 
 -- > scopeGivenProbe ()
@@ -47212,10 +47185,9 @@ methodRowNumObservation saved caseName builtinDecls decls =
   let savedGraph = graphCtx.value.graphRun
   installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
   let mctx = carryModuleCtx saved
-  perRun := mctx
   graphCtx.value.crossRun.builtinClassesRef := builtinClassesOf builtinDecls
-  let rows = ifaceMethodSchemeRows perRun.value decls
-  let _ = seedNumLitFromIntAnchor perRun.value rows
+  let rows = ifaceMethodSchemeRows mctx decls
+  let _ = seedNumLitFromIntAnchor mctx rows
   let observation = match mctx.numLitFromIntAnchorRef.value
     None => NumAnchorTestObservation {
       natoCase = caseName,
@@ -47232,21 +47204,18 @@ methodRowNumObservation saved caseName builtinDecls decls =
       natoDeclaredType = ppTy anchor.msrType,
     }
   installSubRecords savedCross savedGraph
-  perRun := saved
   observation
 
 observeMethodSchemeRowsForTest : Unit -> MethodRowTestObservation
 observeMethodSchemeRowsForTest _ =
   let savedCross = graphCtx.value.crossRun
   let savedGraph = graphCtx.value.graphRun
-  let saved = perRun.value
+  let saved = initialModuleCtx ()
 
   installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
   let rows1 = carryModuleCtx saved
-  perRun := rows1
   let constrainedRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows perRun.value [methodRowTestFoldMapDecl])
+    firstMethodRow (ifaceMethodSchemeRows rows1 [methodRowTestFoldMapDecl])
   let constrainedIds = schemeIds constrainedRow.msrScheme
   let constrainedSlots = constrainedRow.msrMethodSlots
   let constrainedBoundIds = methodSlotBoundIds constrainedSlots
@@ -47257,47 +47226,34 @@ observeMethodSchemeRowsForTest _ =
 
   installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
   let rows2 = carryModuleCtx rows1
-  perRun := rows2
   let counterBefore = graphCtx.value.graphRun.tyvarCounter.value
   let firstRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows perRun.value [methodRowTestFoldMapDecl])
+    firstMethodRow (ifaceMethodSchemeRows rows2 [methodRowTestFoldMapDecl])
   let counterAfterFirst = graphCtx.value.graphRun.tyvarCounter.value
   let secondRow =
-    firstMethodRow
-      (ifaceMethodSchemeRows perRun.value [methodRowTestFoldMapDecl])
+    firstMethodRow (ifaceMethodSchemeRows rows2 [methodRowTestFoldMapDecl])
   let counterAfterSecond = graphCtx.value.graphRun.tyvarCounter.value
   let firstSchemeIds = schemeIds firstRow.msrScheme
   let secondSchemeIds = schemeIds secondRow.msrScheme
   let firstRowSlotIds = methodSlotBoundIds firstRow.msrMethodSlots
   let secondRowSlotIds = methodSlotBoundIds secondRow.msrMethodSlots
   let registryAfterSecondSlotIds =
-    methodRowRegistrySlotIds
-      perRun.value
-      (methodSlotKey firstRow.msrIface "foldMap")
+    methodRowRegistrySlotIds rows2 (methodSlotKey firstRow.msrIface "foldMap")
 
   installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
   let rows3 = carryModuleCtx rows2
-  perRun := rows3
   let sameNameForward =
     methodRowSameNameView
-      (ifaceMethodSchemeRows perRun.value [
-        methodRowTestSameA, methodRowTestSameB
-      ])
+      (ifaceMethodSchemeRows rows3 [methodRowTestSameA, methodRowTestSameB])
   installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
   let rows4 = carryModuleCtx rows3
-  perRun := rows4
   let sameNameReverse =
     methodRowSameNameView
-      (ifaceMethodSchemeRows perRun.value [
-        methodRowTestSameB, methodRowTestSameA
-      ])
+      (ifaceMethodSchemeRows rows4 [methodRowTestSameB, methodRowTestSameA])
 
   installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
   let rows5 = carryModuleCtx rows4
-  perRun := rows5
-  let constantRows =
-    ifaceMethodSchemeRows perRun.value [methodRowTestConstantDecl]
+  let constantRows = ifaceMethodSchemeRows rows5 [methodRowTestConstantDecl]
   let constantRow = firstMethodRow constantRows
   let constantBodyIsFunction =
     match normalize (schemeBodyOf constantRow.msrScheme)
@@ -47306,9 +47262,8 @@ observeMethodSchemeRowsForTest _ =
 
   installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
   let rows6 = carryModuleCtx rows5
-  perRun := rows6
   let attributed = DAttrib [] methodRowTestFoldMapDecl
-  let attributedRows = ifaceMethodSchemeRows perRun.value [attributed]
+  let attributedRows = ifaceMethodSchemeRows rows6 [attributed]
   let attributedMethods =
     methodEnvGo [declEnvModule 0 "foldable-test" [attributed]] emptyMethodEnv
   let (attributedParamIface, attributedParamTyparams) =
@@ -47380,7 +47335,6 @@ observeMethodSchemeRowsForTest _ =
     mrtoNumAnchors = numAnchors,
   }
   installSubRecords savedCross savedGraph
-  perRun := saved
   observation
 
 methodRowSlotAllocationProbe : Unit ->
@@ -47516,14 +47470,13 @@ methodReturnVectorCompletenessProbe : Unit ->
 methodReturnVectorCompletenessProbe _ =
   let savedCross = graphCtx.value.crossRun
   let savedGraph = graphCtx.value.graphRun
-  let saved = perRun.value
+  let saved = initialModuleCtx ()
   installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
   let mctx = carryModuleCtx saved
-  perRun := mctx
-  let _ = methodReturnProbeScope perRun.value "return-vector"
+  let _ = methodReturnProbeScope mctx "return-vector"
   let zeroRow =
     firstMethodRow
-      (ifaceMethodSchemeRows perRun.value [
+      (ifaceMethodSchemeRows mctx [
         methodRowTestIface "return-zero" "Zero" [] [
           IfaceMethod
             "make"
@@ -47534,7 +47487,7 @@ methodReturnVectorCompletenessProbe _ =
       ])
   let partialRow =
     firstMethodRow
-      (ifaceMethodSchemeRows perRun.value [
+      (ifaceMethodSchemeRows mctx [
         methodRowTestIface
           "return-partial"
           "Partial"
@@ -47548,13 +47501,11 @@ methodReturnVectorCompletenessProbe _ =
           ],
       ])
   let zeroArgs =
-    map
-      (map ppMono)
-      (methodReturnArgs (methodReturnProbeRequest perRun.value zeroRow))
+    map (map ppMono) (methodReturnArgs (methodReturnProbeRequest mctx zeroRow))
   let partialArgs =
     map
       (map ppMono)
-      (methodReturnArgs (methodReturnProbeRequest perRun.value partialRow))
+      (methodReturnArgs (methodReturnProbeRequest mctx partialRow))
   let observed = (
     zeroArgs,
     partialArgs,
@@ -47562,7 +47513,6 @@ methodReturnVectorCompletenessProbe _ =
     allMethodParamsMentioned partialRow.msrTyparams partialRow.msrType,
   )
   installSubRecords savedCross savedGraph
-  perRun := saved
   observed
 
 -- The absent `b` of `Partial` reads the occurrence's own unbound variable.
@@ -47574,13 +47524,12 @@ methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
 methodReturnTemplatePresenceProbe _ =
   let savedCross = graphCtx.value.crossRun
   let savedGraph = graphCtx.value.graphRun
-  let saved = perRun.value
+  let saved = initialModuleCtx ()
   installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
   let mctx = carryModuleCtx saved
-  perRun := mctx
   let present =
     firstMethodRow
-      (ifaceMethodSchemeRows perRun.value [
+      (ifaceMethodSchemeRows mctx [
         methodRowTestIface
           "return-template-present"
           "Present"
@@ -47597,7 +47546,7 @@ methodReturnTemplatePresenceProbe _ =
       ])
   let absent =
     firstMethodRow
-      (ifaceMethodSchemeRows perRun.value [
+      (ifaceMethodSchemeRows mctx [
         methodRowTestIface
           "return-template-absent"
           "Absent"
@@ -47615,7 +47564,6 @@ methodReturnTemplatePresenceProbe _ =
     map isSome absent.msrPredicateTemplate.mptArguments,
   )
   installSubRecords savedCross savedGraph
-  perRun := saved
   observed
 
 -- Runs in a carry of [prev], the caller's record, and returns it beside the codes:
@@ -47627,22 +47575,21 @@ methodReturnProbeCodes : ModuleCtx ->
 methodReturnProbeCodes prev ownedRow impls =
   installRun (freshGraphRun ())
   let mctx = carryModuleCtx prev
-  perRun := mctx
-  let _ = methodReturnProbeScope perRun.value "return-owner-checker"
+  let _ = methodReturnProbeScope mctx "return-owner-checker"
   let foreignRow =
     firstMethodRow
-      (ifaceMethodSchemeRows perRun.value [
+      (ifaceMethodSchemeRows mctx [
         methodReturnProbeIface
           "return-foreign"
           "Foreign"
           (TyFun (tyConBuiltin "Unit" None) (TyVar "a")),
       ])
-  let request = methodReturnProbeRequest perRun.value ownedRow
-  let _ = methodReturnProbeSpelling perRun.value foreignRow
-  let _ = recordExactMethodObligation perRun.value request
+  let request = methodReturnProbeRequest mctx ownedRow
+  let _ = methodReturnProbeSpelling mctx foreignRow
+  let _ = recordExactMethodObligation mctx request
   let universe = buildImplUniverse impls
   mctx.bodyImplEnvRef := buildFlatImplEnv impls
-  let _ = checkCallObligationsU perRun.value True universe (wAll mctx.implObls)
+  let _ = checkCallObligationsU mctx True universe (wAll mctx.implObls)
   (map tcCode (reverseL mctx.typeErrors.items.value), mctx)
 
 methodReturnProbeRouteKey : Route -> String
@@ -47658,10 +47605,9 @@ methodReturnProbeStamp : ModuleCtx ->
 methodReturnProbeStamp prev ownedRow foreignRow impls =
   installRun (freshGraphRun ())
   let mctx = carryModuleCtx prev
-  perRun := mctx
-  let scope = methodReturnProbeScope perRun.value "return-owner-stamper"
-  let request = methodReturnProbeRequest perRun.value ownedRow
-  let _ = methodReturnProbeSpelling perRun.value foreignRow
+  let scope = methodReturnProbeScope mctx "return-owner-stamper"
+  let request = methodReturnProbeRequest mctx ownedRow
+  let _ = methodReturnProbeSpelling mctx foreignRow
   let env = buildFlatImplEnv impls
   mctx.bodyImplEnvRef := env
   let tagRef = Ref RNone
@@ -47697,7 +47643,7 @@ methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
 methodReturnOwnershipProbe _ =
   let savedCross = graphCtx.value.crossRun
   let savedGraph = graphCtx.value.graphRun
-  let saved = perRun.value
+  let saved = initialModuleCtx ()
   let savedSticky = graphCtx.value.typeErrorsSticky.value
   let savedStickyDiags = graphCtx.value.typeErrorsStickyDiags.value
   installCross (freshCrossRun builtinCtors)
@@ -47713,13 +47659,11 @@ methodReturnOwnershipProbe _ =
       (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
   installRun (freshGraphRun ())
   let ownedCtx = carryModuleCtx saved
-  perRun := ownedCtx
-  let ownedRow = firstMethodRow (ifaceMethodSchemeRows perRun.value [ownedDecl])
+  let ownedRow = firstMethodRow (ifaceMethodSchemeRows ownedCtx [ownedDecl])
   installRun (freshGraphRun ())
   let foreignCtx = carryModuleCtx ownedCtx
-  perRun := foreignCtx
   let foreignRow =
-    firstMethodRow (ifaceMethodSchemeRows perRun.value [foreignDecl])
+    firstMethodRow (ifaceMethodSchemeRows foreignCtx [foreignDecl])
   let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
   let foreignImpl = methodReturnProbeImpl "return-foreign" "Foreign"
   let (rejected, rejectedCtx) =
@@ -47738,7 +47682,6 @@ methodReturnOwnershipProbe _ =
     actualKey /= foreignKey,
   )
   installSubRecords savedCross savedGraph
-  perRun := saved
   graphCtx.value.typeErrorsSticky := savedSticky
   graphCtx.value.typeErrorsStickyDiags := savedStickyDiags
   observed
@@ -47751,22 +47694,21 @@ methodReturnResolutionMutationProbe : Unit -> (Bool, Bool, Bool, Bool)
 methodReturnResolutionMutationProbe _ =
   let savedCross = graphCtx.value.crossRun
   let savedGraph = graphCtx.value.graphRun
-  let saved = perRun.value
+  let saved = initialModuleCtx ()
   installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
   let mctx = carryModuleCtx saved
-  perRun := mctx
-  let _ = methodReturnProbeScope perRun.value "return-outcome-validation"
+  let _ = methodReturnProbeScope mctx "return-outcome-validation"
   let ownedDecl =
     methodReturnProbeIface
       "return-owner"
       "Owner"
       (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-  let ownedRow = firstMethodRow (ifaceMethodSchemeRows perRun.value [ownedDecl])
+  let ownedRow = firstMethodRow (ifaceMethodSchemeRows mctx [ownedDecl])
   let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
   mctx.bodyImplEnvRef := buildFlatImplEnv [ownedImpl]
-  let request = methodReturnProbeRequest perRun.value ownedRow
+  let request = methodReturnProbeRequest mctx ownedRow
   let resolution = solveExactReturnOnce (siteFor mctx) request
-  let valid = methodReturnResolutionValid perRun.value request resolution
+  let valid = methodReturnResolutionValid mctx request resolution
   let (wrongSelection, wrongPrerequisites) = match resolution.mrrOutcome
     Solved (InstanceEvidence _ args prerequisites supers) => (
       MethodReturnResolution {
@@ -47813,12 +47755,11 @@ methodReturnResolutionMutationProbe _ =
   }
   let observed = (
     valid,
-    not (methodReturnResolutionValid perRun.value request wrongSelection),
-    not (methodReturnResolutionValid perRun.value request wrongPrerequisites),
-    not (methodReturnResolutionValid perRun.value request disagreement),
+    not (methodReturnResolutionValid mctx request wrongSelection),
+    not (methodReturnResolutionValid mctx request wrongPrerequisites),
+    not (methodReturnResolutionValid mctx request disagreement),
   )
   installSubRecords savedCross savedGraph
-  perRun := saved
   observed
 
 methodReturnSelectedIdentity : MethodReturnResolution -> Int
@@ -47855,20 +47796,19 @@ methodReturnProbeSlotCase : ModuleCtx ->
 methodReturnProbeSlotCase prev ownedRow foreignRow retainOwner =
   installRun (freshGraphRun ())
   let mctx = carryModuleCtx prev
-  perRun := mctx
-  let _ = methodReturnProbeScope perRun.value "return-owner-slots"
+  let _ = methodReturnProbeScope mctx "return-owner-slots"
   mctx.methodPredicateSlotsRef :=
     [(methodSlotKey foreignRow.msrIface "make", foreignRow.msrMethodSlots)]
-  let _ = methodReturnProbeSpelling perRun.value foreignRow
+  let _ = methodReturnProbeSpelling mctx foreignRow
   let env =
     if retainOwner then
       extendMethodRow (envFor mctx) "make" ownedRow
     else
       extendVar (envFor mctx) "make" ownedRow.msrScheme
-  let inst = instantiateMethodTracked perRun.value ownedRow.msrScheme
+  let inst = instantiateMethodTracked mctx ownedRow.msrScheme
   let _ =
     unify
-      perRun.value
+      mctx
       (stripArrows inst.mtiBody)
       (tupleMono [tconBuiltin "Int", tconBuiltin "Int"])
   let _ =
@@ -47899,13 +47839,12 @@ methodReturnSlotOwnershipProbe : Unit ->
 methodReturnSlotOwnershipProbe _ =
   let savedCross = graphCtx.value.crossRun
   let savedGraph = graphCtx.value.graphRun
-  let saved = perRun.value
+  let saved = initialModuleCtx ()
   installSubRecords (freshCrossRun builtinCtors) (freshGraphRun ())
   let ownedCtx = carryModuleCtx saved
-  perRun := ownedCtx
   let ownedRow =
     firstMethodRow
-      (ifaceMethodSchemeRows perRun.value [
+      (ifaceMethodSchemeRows ownedCtx [
         methodReturnProbeIface
           "return-owner-slots"
           "OwnedSlots"
@@ -47915,10 +47854,9 @@ methodReturnSlotOwnershipProbe _ =
       ])
   installRun (freshGraphRun ())
   let emptyCtx = carryModuleCtx ownedCtx
-  perRun := emptyCtx
   let emptyRow =
     firstMethodRow
-      (ifaceMethodSchemeRows perRun.value [
+      (ifaceMethodSchemeRows emptyCtx [
         methodReturnProbeIface
           "return-empty-slots"
           "EmptySlots"
@@ -47926,10 +47864,9 @@ methodReturnSlotOwnershipProbe _ =
       ])
   installRun (freshGraphRun ())
   let foreignCtx = carryModuleCtx emptyCtx
-  perRun := foreignCtx
   let foreignRow =
     firstMethodRow
-      (ifaceMethodSchemeRows perRun.value [
+      (ifaceMethodSchemeRows foreignCtx [
         methodReturnProbeIface
           "return-foreign-slots"
           "ForeignSlots"
@@ -47945,7 +47882,6 @@ methodReturnSlotOwnershipProbe _ =
     methodReturnProbeSlotCase emptiedCtx ownedRow foreignRow False
   let observed = (retained, emptied, missing)
   installSubRecords savedCross savedGraph
-  perRun := saved
   observed
 
 -- > methodReturnSlotOwnershipProbe ()
@@ -48076,9 +48012,14 @@ requiresDepthMsg iface args =
 -- `T-REQUIRES-CYCLE`: following `requires` from a goal reached that same goal again, so
 -- no finite chain resolves it.  It names the impl whose `requires` posed the repeat (the
 -- one the selector picks for the parent goal), and the repeated goal.
-requiresCycleMsg : IfaceRef -> List Mono -> IfaceRef -> List Mono -> String
-requiresCycleMsg parentIface parentArgs iface args =
-  "cannot resolve this constraint: the `requires` of \{requiringImplLabel perRun.value parentIface parentArgs} asks for `\{iface.irName} \{ppPredArgsShared args}`, which this chain of `requires` is already resolving, so it never ends; change that `requires` clause so it does not lead back to a goal it resolves"
+requiresCycleMsg : ModuleCtx ->
+  IfaceRef ->
+  List Mono ->
+  IfaceRef ->
+  List Mono ->
+  String
+requiresCycleMsg mctx parentIface parentArgs iface args =
+  "cannot resolve this constraint: the `requires` of \{requiringImplLabel mctx parentIface parentArgs} asks for `\{iface.irName} \{ppPredArgsShared args}`, which this chain of `requires` is already resolving, so it never ends; change that `requires` clause so it does not lead back to a goal it resolves"
 
 -- The impl the selector picks for [iface] at [args], as written in its declaration.
 requiringImplLabel : ModuleCtx -> IfaceRef -> List Mono -> String
@@ -48565,7 +48506,7 @@ prependPredicateSlots (slot :: rest) acc =
 -- Private producer probe: same-lead predicates stay distinct, an exact duplicate
 -- collapses, a multi-argument predicate owns one slot, a vector whose lead is another
 -- predicate's non-lead survives, and a trace-only id retains PSArgsUnknown.
--- > inferredPredicateSlotsProbe ()
+-- > inferredPredicateSlotsProbe (initialModuleCtx ()) ()
 -- [("Tweak", ["a", "Int"], ["a"]), ("Tweak", ["a", "Bool"], ["a"]), ("Ix", ["a", "b"], ["a", "b"]), ("Num", ["b"], ["b"]), ("", ["?"], ["c"])]
 inferredPredicateSlotsProbe : ModuleCtx ->
   Unit ->
@@ -52441,7 +52382,7 @@ workModules _ _ _ _ _ _ _ _ done prev [] = (done, prev)
 workModules _wantData _wantAll worker baseSeed coreV depEnv accData accAll done prev [(mid, prog)] =
   let seed =
     moduleImportSeed
-      perRun.value
+      prev
       baseSeed
       (importSeed coreV (admittedIn mid) prog depEnv)
   let (_, extra, next) = worker prev mid seed accData accAll prog
@@ -52449,7 +52390,7 @@ workModules _wantData _wantAll worker baseSeed coreV depEnv accData accAll done 
 workModules wantData wantAll worker baseSeed coreV depEnv accData accAll done prev ((mid, prog) :: rest) =
   let seed =
     moduleImportSeed
-      perRun.value
+      prev
       baseSeed
       (importSeed coreV (admittedIn mid) prog depEnv)
   let (schemes, extra, next) = worker prev mid seed accData accAll prog
@@ -52560,7 +52501,6 @@ checkCoreMemoized : ModuleCtx ->
 checkCoreMemoized prev key coreDecls runtimeSeed = match coreCheckMemoHit key
   Some m =>
     let resumed = resumeModuleCtx prev m.ccmModule
-    perRun := resumed
     (
       m.ccmCoreSchemes,
       m.ccmCorePub,
@@ -52676,7 +52616,6 @@ mintGraphCtx inputs admitted =
       builtinCtors
       (graphLineageRun inputs.diMarked carried.lineage)
   let initial = initialModuleCtx ()
-  perRun := initial
   installGraphCtx GraphCtx { base |
     trace = inputs.diTrace,
     graphAdmittedMethodsRef = Ref admitted,
@@ -52776,10 +52715,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- (`netSend : Socket h -> … <Net h> …`), and a name in an index slot is an
   -- authority binder only by the head's declared kind.
   let runtimeSeed = withDeclParamKinds initial coreDecls (u =>
-    externSchemes
-      perRun.value
-      (runtimeExternTyOriginScope coreDecls)
-      runtimeDecls)
+    externSchemes initial (runtimeExternTyOriginScope coreDecls) runtimeDecls)
   let _ = seedAbstractRecordTypes coreDecls modules
   -- #2705: BOTH arms MARK (solving is not optional), with the same sets, and each
   -- module is marked on the schedule inside `checkBodyImpl` — after any memo
@@ -52897,7 +52833,7 @@ cmCheckWorker prev mid seed _accData _accAll prog =
   -- ceiling) and would re-solve the whole graph per hover.  The memoized solve that
   -- makes this path one driver with the others is #2719.
   let (schemes, _, mctx) = checkBodyImpl (checkRunResidue prev) seed mid [] prog
-  (schemes, publishOwn perRun.value schemes.mbSchemes, mctx)
+  (schemes, publishOwn mctx schemes.mbSchemes, mctx)
 
 -- The graph every Module-mode driver typechecks: type-constructor identity
 -- acquired over the whole graph (`stampGraphTyOrigins`), then every impl head in
@@ -52983,6 +52919,19 @@ checkModulesPartialK : DriveInputs ->
   List (String, List Decl) ->
   PartialAnalysis
 checkModulesPartialK inputs preludeKey runtimeDecls coreDecls0 modules0 =
+  fst
+    (checkModulesPartialLast inputs preludeKey runtimeDecls coreDecls0 modules0)
+
+-- `checkModulesPartialK` beside the record its drive ends in, for the callers that
+-- read what the drive left (`matchWarningsNow`).
+export
+checkModulesPartialLast : DriveInputs ->
+  Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (PartialAnalysis, ModuleCtx)
+checkModulesPartialLast inputs preludeKey runtimeDecls coreDecls0 modules0 =
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modules0
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _, coreCtx) =
     graphPreamble
@@ -52994,10 +52943,13 @@ checkModulesPartialK inputs preludeKey runtimeDecls coreDecls0 modules0 =
       coreDecls
       modules
   let (rows, lastCtx) = cmFold runtimeSeed coreSchemes coreCtx modules
-  partialAnalysis
-    rows
-    (publishedCore coreClosed coreContexts coreSchemes)
-    (captureEntryTables lastCtx coreContexts modules)
+  (
+    partialAnalysis
+      rows
+      (publishedCore coreClosed coreContexts coreSchemes)
+      (captureEntryTables lastCtx coreContexts modules),
+    lastCtx,
+  )
 
 -- [coreCtx] is the record the core pass left current; the last module's record comes
 -- back beside the rows.
@@ -53162,7 +53114,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- are also paired with the prelude's.
   let _ =
     runFinalChecks
-      perRun.value
+      mctx
       prog
       ceHere
       ceHere
@@ -53258,7 +53210,7 @@ graphModuleWorker sel _prev mid seed accData accAll prog =
   let implDecls = accAll ++ prog
   let (schemes, marked, errs, warns, mctx) =
     checkModuleFullDiags mid seed accData implDecls prog
-  let published = publishOwn perRun.value schemes.mbSchemes
+  let published = publishOwn mctx schemes.mbSchemes
   let _ = match sel
     GOutTrees =>
       let _ = match lookupAssoc "main" schemes.mbSchemes
@@ -53585,7 +53537,6 @@ checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys ru
         ([], publicDataDecls coreDecls, coreDecls, [], graphCtx.value, coreCtx)
       Some st =>
         let resumed = resumeModuleCtx coreCtx st.csModule
-        perRun := resumed
         (
           st.csDepEnv,
           st.csAccData,
@@ -53640,7 +53591,7 @@ checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys ru
   -- `driveGraphK`'s freeze point: the rows no recorded step froze.
   let perMod =
     attachCoherenceConflict
-      perRun.value
+      lastCtx
       (attachDrainFindings
         (findings ++ wanted)
         (reverseL (freezeNewest open finalResults)))
@@ -53687,7 +53638,7 @@ chainGo _ _ _ _ _ results open _ steps prev [] = (results, open, steps, prev)
 chainGo baseSeed coreV depEnv accData accAll results open _ steps prev [(mid, prog)] =
   let seed =
     moduleImportSeed
-      perRun.value
+      prev
       baseSeed
       (importSeed coreV (admittedIn mid) prog depEnv)
   let (_, (_, published, errs, warns), next) =
@@ -53697,7 +53648,7 @@ chainGo baseSeed coreV depEnv accData accAll results open _ steps prev [(mid, pr
 chainGo baseSeed coreV depEnv accData accAll results open keys steps prev ((mid, prog) :: rest) =
   let seed =
     moduleImportSeed
-      perRun.value
+      prev
       baseSeed
       (importSeed coreV (admittedIn mid) prog depEnv)
   let (schemes, (_, published, errs, warns), next) =
@@ -53891,12 +53842,12 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
 -- the result.  [mctx] is the record the drive ends in.
 driveOutputsNow : ModuleCtx -> DriveOutputs
 driveOutputsNow mctx = DriveOutputs {
-  doMainIsUnit = mainIsUnitNow perRun.value (),
+  doMainIsUnit = mainIsUnitNow mctx (),
   doMainIsFloat = mainIsFloatNow (),
   doMainIsAsync = mainIsAsyncNow (),
   doMainAsyncPayloadIsUnit = mainAsyncPayloadIsUnitNow (),
   doHadTypeErrors = typeErrorsArmed (),
-  doHadMatchWarnings = matchWarningsNow (),
+  doHadMatchWarnings = matchWarningsNow mctx,
   doInvocationView = frozenInvocationView mctx.invocationViewRef.value,
   doGrantsEnabled = grantsEnabled (),
   doEffectDomains = graphCtx.value.effectDomains.value,
@@ -54012,7 +53963,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
   -- have run, so the published rows are frozen now, once.
   let perMod =
     attachCoherenceConflict
-      perRun.value
+      lastCtx
       (attachDrainFindings (findings ++ wanted) (map freezeModDiags perModRaw))
   -- Before the tree arm's `dictPass`, which writes the record's slot tables.
   let entryTables = captureEntryTables lastCtx coreContexts modules
@@ -54158,7 +54109,7 @@ autoPrintWanted mctx True executes findings perMod coreDecls modules =
     printlnIface decls,
   )
     (Some scheme, Some (mid, entry), Some iface) =>
-      if mainIsUnitNow perRun.value () then
+      if mainIsUnitNow mctx () then
         ([], None)
       else if mainIsAsyncNow () then
         (asyncDriverFindings mctx executes mid entry scheme perMod, None)
@@ -54167,19 +54118,19 @@ autoPrintWanted mctx True executes findings perMod coreDecls modules =
         -- of its own.
         let scope =
           Scopes.freshScope (currentScopeStore ()) None 0 mid ModuleOwner
-        let _ = openScope perRun.value scope
+        let _ = openScope mctx scope
         let savedLoc = graphCtx.value.currentLocRef.value
         let loc = mainBodySpan entry
         graphCtx.value.currentLocRef := loc
         let posed = Ref None
         let diags = captureTypeErrors mctx (_ =>
-          posed := Some (judgeAutoPrintUse perRun.value iface scheme loc))
+          posed := Some (judgeAutoPrintUse mctx iface scheme loc))
         let ev = match (executes, diags, posed.value)
           (Some _, [], Some tau) =>
-            Some (autoPrintEvidence perRun.value mid scope iface tau)
+            Some (autoPrintEvidence mctx mid scope iface tau)
           _ => None
         graphCtx.value.currentLocRef := savedLoc
-        let _ = closeScope perRun.value ()
+        let _ = closeScope mctx ()
         let reported = driveErrs findings perMod
         let kept =
           if anyList (d => inMainBinding entry (tcLoc d)) reported then
@@ -54235,15 +54186,14 @@ asyncDriverFindings mctx executes mid entry scheme perMod =
     Some driver if mainAsyncPayloadIsUnitNow () =>
       let scope =
         Scopes.freshScope (currentScopeStore ()) None 0 mid ModuleOwner
-      let _ = openScope perRun.value scope
+      let _ = openScope mctx scope
       let savedLoc = graphCtx.value.currentLocRef.value
       graphCtx.value.currentLocRef := mainBodySpan entry
       let diags = captureTypeErrors mctx (_ =>
-        let _ =
-          judgeMainUse perRun.value (asyncDriverUse perRun.value driver) scheme
+        let _ = judgeMainUse mctx (asyncDriverUse mctx driver) scheme
         ())
       graphCtx.value.currentLocRef := savedLoc
-      let _ = closeScope perRun.value ()
+      let _ = closeScope mctx ()
       map (verdictFinding mid False) diags
     _ => []
 
@@ -54978,7 +54928,7 @@ dictPassModulesIfEnabled mctx dictNames core2 modules2 =
     graphCtx.value.crossRun.crossModuleFunPredicateSlotsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
   setFunPredicateSlots
-    perRun.value
+    mctx
     (scopePredicateSlots promotedQ allMods (core2 ++ allModDecls))
   -- 🚨 B-2.2-b1: THE SIDECAR IS CLEARED, NOT LEFT ALONE.  `f` shipped arguing that
   -- writing no companion here is "absence, which is correct"; it is not — FAIL-CLOSED
@@ -54993,14 +54943,14 @@ dictPassModulesIfEnabled mctx dictNames core2 modules2 =
     scopeMethodPredicateSlots
       graphCtx.value.crossRun.crossModuleMethodPredicateSlotsQualRef.value
       allMods
-  let core2' = dictPass perRun.value idx "" dictNames core2
+  let core2' = dictPass mctx idx "" dictNames core2
   -- ONE reverse-reachability index for the whole run: `dictPassModulesScoped` asks the
   -- importer question once per module, and re-deriving it there re-walked the graph
   -- (twice — ids and decls) with a decl-list scan at every visited node.
   let importerReach = importerReachIndex modules2
   let modules2' =
     dictPassModulesScoped
-      perRun.value
+      mctx
       idx
       dictNames
       promotedQ
@@ -55189,7 +55139,7 @@ selfDeclArities mid prog qual bare =
 -- ── the other half of `selfDeclArities`, and it is NOT optional ──────────────
 -- `selfDeclArities` is a per-module VIEW; the ref it is written to is ALSO the ref the
 -- cross-module accumulator is snapshotted FROM at the end of the same body
--- (`crossModuleFunConstraintsRef` ← `perRun.funConstraintsRef`).  Without this restore the
+-- (`crossModuleFunConstraintsRef` ← `ModuleCtx.funConstraintsRef`).  Without this restore the
 -- view becomes a graph-wide LOSS: the rows masked while checking module `mid` never reach
 -- the modules processed after it.
 --
@@ -55945,22 +55895,18 @@ shadowBareName sm n = match lookupAssoc n sm
 -- trees; the driver it feeds (`checkModules`) takes the run as `diMarked` and keeps
 -- those cells when its preamble mints the graph.  The marking runs in the record a
 -- drive starts from (`initialModuleCtx`), so the cells it mints belong to no module, as
--- in a process that marks before any drive; the caller's record is current again on
--- return.
+-- in a process that marks before any drive.
 export
 markModules : List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl), GraphRun)
 markModules coreDecls modules =
-  let saved = perRun.value
   let mctx = initialModuleCtx ()
-  perRun := mctx
   installRun (graphLineageRun None interners.value.lineage)
   let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
-  let core2 = prePassDict perRun.value rpNames [] coreDecls
-  let modules2 = map (prePassModulePair perRun.value rpNames) modules
+  let core2 = prePassDict mctx rpNames [] coreDecls
+  let modules2 = map (prePassModulePair mctx rpNames) modules
   installRun GraphRun { graphCtx.value.graphRun | markedAhead = True }
-  perRun := saved
   (core2, modules2, graphCtx.value.graphRun)
 
 -- typecheck one module (seeded like checkModuleFull) AND immediately stamp the
@@ -56272,8 +56218,8 @@ captureTypeErrors mctx act =
 -- Runs every queued stamping context, then judges the evidence they finished.
 -- Returns the verdicts the drain decides (held live-root goals, admitted-set
 -- occurrences) and one `T-UNROUTED-DISPATCH` per hole, each under its module.
--- [saved] is the current record when the drain begins; each stamp context's walk runs
--- in the record the drain enters for it, and [saved] is current again at the end.
+-- [saved] is the record the drain begins with; each stamp context's walk runs in the
+-- record the drain enters for it (`enterStampCtx`).
 drainStampQueue : ModuleCtx -> List DrainFinding
 drainStampQueue saved =
   let ctxs = reverseL graphCtx.value.graphRun.stampCtxs.value
@@ -56292,7 +56238,6 @@ drainStampQueue saved =
       (judgeEvidence ctxs)
   let _ = materializeBinderTypes ()
   graphCtx.value.graphRun.stampCtxs := []
-  perRun := saved
   held ++ verdicts ++ holes
 
 -- The completeness judgment (`types/evidence_complete.mdk`) over the evidence this
@@ -56468,13 +56413,13 @@ runStampCtxs saved ctxs =
 runStampCtx : ModuleCtx -> StampCtx -> List DrainFinding
 runStampCtx saved ctx =
   let stamp = enterStampCtx saved ctx
-  let _ = refileDeterminedRows perRun.value ()
+  let _ = refileDeterminedRows stamp ()
   let _ = runStampSteps stamp ctx moduleStampOrder
   let _ = recordEvidence ctx.scGoals
   let liveSpans = omFromNames ctx.scLiveLocs omEmpty
   map
     (d => verdictFinding ctx.scModule (isLiveSpan liveSpans (tcLoc d)) d)
-    (captureTypeErrors stamp (_ => checkAdmittedOccObls perRun.value ()))
+    (captureTypeErrors stamp (_ => checkAdmittedOccObls stamp ()))
 
 -- Installs [ctx]'s record, with the two module tables the drain reads taken from
 -- [saved], the record current when the drain began: the stamp context holds no
@@ -56487,9 +56432,7 @@ enterStampCtx saved ctx =
   -- `superDeclsRef` the interface decls of the module's universe (`stampCtxOf`), the
   -- only decls the stampers' super-expansion reads.
   let s = ctx.scModuleCtx
-  let stamp = moduleCtxFrom False s s saved s
-  perRun := stamp
-  stamp
+  moduleCtxFrom False s s saved s
 
 -- #2549 M2: publish this module's solved evidence, AFTER its stampers have run and
 -- READ BACK OUT OF THE CELLS THEY WROTE.  Deriving the table any other way would make

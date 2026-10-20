@@ -2863,7 +2863,7 @@ esac
 #           pass).  That split is pinned as its own row below rather than hidden.
 #           🚨 ARCH B-2.1-g CLOSED ALL OF THAT AND BOTH SA-4c LEGS ARE RE-CUT BELOW.
 #           `keyForSite` now selects and counts over the graph-global
-#           `perRun.bodyImplEnvRef`, so the prefix-vs-graph disagreement no longer
+#           `ModuleCtx.bodyImplEnvRef`, so the prefix-vs-graph disagreement no longer
 #           exists: `f`'s guard is unreachable, `T-ROUTE-WORD-AMBIGUOUS` is retired, and
 #           the program BUILDS AND RUNS CORRECTLY in both import orders.  The
 #           `check`-blindness row is retired WITH it — with nothing to report, `check 0`

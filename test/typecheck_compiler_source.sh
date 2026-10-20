@@ -1041,8 +1041,8 @@ seedNumLitFromIntAnchor : ModuleCtx -> List MethodSchemeRow -> Unit
 pickSchemesByDecl : ModuleCtx ->
 admittedSchemeFor : ModuleCtx ->
   List MethodSchemeRow ->
-  let currentMethodRows = ifaceMethodSchemeRows perRun.value prog
-  let visibleMethodRows = ifaceMethodSchemeRows perRun.value implDecls'
+  let currentMethodRows = ifaceMethodSchemeRows mctx prog
+  let visibleMethodRows = ifaceMethodSchemeRows mctx implDecls'
 
 printf '%s\n' "$method_row_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
@@ -1066,12 +1066,12 @@ printf '%s\n' "$method_row_types_required" | while IFS= read -r required; do
   fi
 done || exit 1
 
-method_row_current_count="$(grep -Fc 'ifaceMethodSchemeRows perRun.value prog' "$predicate_slot_src")"
+method_row_current_count="$(grep -Fc 'ifaceMethodSchemeRows mctx prog' "$predicate_slot_src")"
 if [ "$method_row_current_count" -ne 1 ]; then
   echo "FAIL: expected exactly one current-module ifaceMethodSchemeRows construction, got $method_row_current_count"
   exit 1
 fi
-method_row_module_count="$(grep -Fc 'ifaceMethodSchemeRows perRun.value implDecls' "$predicate_slot_src")"
+method_row_module_count="$(grep -Fc 'ifaceMethodSchemeRows mctx implDecls' "$predicate_slot_src")"
 if [ "$method_row_module_count" -ne 1 ]; then
   echo "FAIL: expected exactly one visible-module ifaceMethodSchemeRows construction, got $method_row_module_count"
   exit 1

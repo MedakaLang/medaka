@@ -11,7 +11,7 @@ import types.publish.{ppPubScheme, PartialAnalysis(..)}
 import types.typecheck.{
   defaultDriveInputs, checkModulesPartialK, checkModulesChainReportFor,
   checkModulesK, elaborateModulesWithReport, hadTypeErrors, matchWarningsNow,
-  currentLocIsSet
+  currentLocIsSet, checkModulesPartialLast
 }
 
 preludeSrc : String
@@ -83,6 +83,18 @@ partial : Option (Int, Int) -> List (String, String) -> PartialAnalysis
 partial key ms =
   checkModulesPartialK defaultDriveInputs key [] (prelude ()) (mods ms)
 
+-- Whether the last module of a partial drive had match warnings.
+partialWarns : Option (Int, Int) -> List (String, String) -> Bool
+partialWarns key ms =
+  matchWarningsNow
+    (snd
+      (checkModulesPartialLast
+        defaultDriveInputs
+        key
+        []
+        (prelude ())
+        (mods ms)))
+
 plainK : Option (Int, Int) -> List (String, String) -> Int
 plainK key ms =
   length (checkModulesK defaultDriveInputs key [] (prelude ()) (mods ms))
@@ -149,21 +161,17 @@ test "#4336: a projection after a renaming drive admits nothing the renaming dri
 -- once after a drive that seeded `Q`'s constructors, judges its match identically.
 test "#4330: a partial drive's match verdict does not depend on earlier drives" =
   let _ = elab [("q", mainSrc)]
-  let _ = partial None [("c", cleanSrc)]
-  let afterQuiet = matchWarningsNow ()
+  let afterQuiet = partialWarns None [("c", cleanSrc)]
   let _ = diags None [("m", seededSrc), ("b", badSrc)]
   let _ = diags None [("c", cleanSrc)]
-  let _ = partial None [("c", cleanSrc)]
-  expectEqual afterQuiet (matchWarningsNow ())
+  expectEqual afterQuiet (partialWarns None [("c", cleanSrc)])
 
 test "#4330: a keyed partial drive's match verdict does not depend on earlier drives" =
   let key = Some (8401, 8402)
-  let _ = partial key [("z", keyedSrc)]
-  let afterQuiet = matchWarningsNow ()
+  let afterQuiet = partialWarns key [("z", keyedSrc)]
   let _ = diags key [("z", keyedSrc)]
   let _ = plainK key [("z", keyedSrc)]
-  let _ = partial key [("z", keyedSrc)]
-  expectEqual afterQuiet (matchWarningsNow ())
+  expectEqual afterQuiet (partialWarns key [("z", keyedSrc)])
 
 -- A drive over no declarations enters no location, so what it leaves in the cell is
 -- what it started with.
