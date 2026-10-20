@@ -35,6 +35,7 @@ import types.repr.{
 }
 import support.ordmap.{
   OrdMap,
+  omEmpty,
 }
 import map.{
   Map(..),
@@ -989,6 +990,52 @@ public export data DriveInputs = DriveInputs {
   diTrace : Option TraceSink,
   diIoJoinGrants : List (String, EffParamTy),
   diProfileName : String,
+}
+
+-- What a drive hands back to its caller, as plain data frozen at the drive's end
+-- (after the drain and the sticky rollback): the answers a driver asks of the
+-- drive it ran.  No `Decl`, no closure and no
+-- live cell: `doInvocationView`'s schemes are re-minted copies, and the rest is
+-- booleans and immutable tables.  It is not a `TcReport` field because
+-- `types.publish` cannot import this module.
+--
+-- `doStickyDiags` is the sticky list as the drive left it, newest first, not yet
+-- deduplicated (`stickyTypeErrorDiags` reads it); `doFfiAliases` and `doOrdIndex`
+-- are the two tables of the declaration envelope that `checkedFfiExternTypeNamesModules`
+-- reads.
+public export data DriveOutputs = DriveOutputs {
+  doMainIsUnit : Bool,
+  doMainIsFloat : Bool,
+  doMainIsAsync : Bool,
+  doMainAsyncPayloadIsUnit : Bool,
+  doHadTypeErrors : Bool,
+  doHadMatchWarnings : Bool,
+  doInvocationView : InvocationView,
+  doGrantsEnabled : Bool,
+  doEffectDomains : List (String, Param),
+  doStickyDiags : List (String, TcDiag),
+  doIfaceExports : OrdMap (List (String, List String)),
+  doFfiAliases : List (TabKey, AliasDecl),
+  doOrdIndex : OrdMap Int,
+}
+
+-- The outputs of a program no drive checked.
+export
+emptyDriveOutputs : Unit -> DriveOutputs
+emptyDriveOutputs _ = DriveOutputs {
+  doMainIsUnit = False,
+  doMainIsFloat = False,
+  doMainIsAsync = False,
+  doMainAsyncPayloadIsUnit = False,
+  doHadTypeErrors = False,
+  doHadMatchWarnings = False,
+  doInvocationView = InvocationView [] [] [],
+  doGrantsEnabled = False,
+  doEffectDomains = [],
+  doStickyDiags = [],
+  doIfaceExports = omEmpty,
+  doFfiAliases = [],
+  doOrdIndex = omEmpty,
 }
 
 -- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by
@@ -3152,6 +3199,8 @@ public export data GraphDrive = GraphDrive {
   -- The drive's graph record as the drive left it.  Its `Ref` fields are the
   -- process's, so a later drive writes them.
   gdGraph : GraphCtx,
+  -- The drive's frozen answers to the post-drive questions.
+  gdOutputs : DriveOutputs,
 }
 
 -- ── TYPED multi-module elaboration (bootstrap eval front-end) ──────────────

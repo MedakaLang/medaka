@@ -356,6 +356,7 @@ import types.tc_types.{
   TcConfig(..),
   TraceSink(..),
   DriveInputs(..),
+  DriveOutputs(..),
   Windowed(..),
   CSlot(..),
   PredicateSlotArgs(..),
@@ -527,6 +528,8 @@ import types.publish.{
   noEntryTables,
   partialAnalysis,
   freezePub,
+  emptyZonk,
+  zonkScheme,
   freezeRows,
   freezeModDiags,
   freezeNewest,
@@ -919,18 +922,24 @@ lookupDomain l ((k, p) :: rest) = if l == k then p else lookupDomain l rest
 -- ⊤ parameter for a label's domain (design §2.1): consults the registry;
 -- labels with no Prefix entry are atomic ⇒ PUnit.
 dtopFor : EffLabel -> Param
-dtopFor label =
-  match lookupDomain (labelKey label) graphCtx.value.effectDomains.value
-    PPrefix None => PPrefix None
-    PPath None => PPath None
-    PSet None => PSet None
-    p@(PProduct _) => p
-    _ => PUnit
+dtopFor label = dtopIn graphCtx.value.effectDomains.value label
 
--- lift one of the language's own labels to its ⊤-param atom
+-- `dtopFor` over the effect domains [domains] a drive left (`doEffectDomains`).
+dtopIn : List (String, Param) -> EffLabel -> Param
+dtopIn domains label = match lookupDomain (labelKey label) domains
+  PPrefix None => PPrefix None
+  PPath None => PPath None
+  PSet None => PSet None
+  p@(PProduct _) => p
+  _ => PUnit
+
+-- lift one of the language's own labels to its ⊤-param atom, under the effect
+-- domains [domains] (`doEffectDomains` of the drive that registered them; `[]`
+-- before any drive)
 export
-atomOfLabel : String -> Atom
-atomOfLabel l = atomWith (builtinLabel l) (dtopFor (builtinLabel l))
+atomOfLabel : List (String, Param) -> String -> Atom
+atomOfLabel domains l =
+  atomWith (builtinLabel l) (dtopIn domains (builtinLabel l))
 
 ioLabel : EffLabel
 ioLabel = builtinLabel "IO"
@@ -951,15 +960,15 @@ ioLabel = builtinLabel "IO"
 -- profile that is all eleven at their tops.  Every module of the program is
 -- judged against the one join, the shipped stdlib included.
 export
-ioJoinAtoms : List (String, EffParamTy) -> List Atom
-ioJoinAtoms grants =
+ioJoinAtoms : List (String, Param) -> List (String, EffParamTy) -> List Atom
+ioJoinAtoms domains grants =
   filterMap
     (l =>
       map
         (granted =>
           atomWith
             (builtinLabel l)
-            (writtenParam (dtopFor (builtinLabel l)) granted))
+            (writtenParam (dtopIn domains (builtinLabel l)) granted))
         (lookupAssoc l grants))
     hostLabels
 
@@ -2032,7 +2041,7 @@ effectLeakMsg bound extras =
 ioJoinClause : List Atom -> String
 ioJoinClause atoms =
   let join = graphCtx.value.config.value.tcIoJoin
-  let full = map atomOfLabel hostLabels
+  let full = map (atomOfLabel graphCtx.value.effectDomains.value) hostLabels
   if isSome (findAtom (labelKey ioLabel) atoms)
     && isNonEmptyL (atomsDiff full join) then
     "; `IO` on `\{graphCtx.value.config.value.tcIoJoinProfile}` is <\{renderAtoms join}>"
@@ -3475,9 +3484,12 @@ effectParamProblems l _ (EPProduct _) =
 -- Never the domain's top for a malformed parameter: a consumer reading an
 -- allowance would otherwise widen it.
 export
-decodeWrittenParam : EffLabel -> EffParamTy -> Result String Param
-decodeWrittenParam label p =
-  let top = dtopFor label
+decodeWrittenParam : List (String, Param) ->
+  EffLabel ->
+  EffParamTy ->
+  Result String Param
+decodeWrittenParam domains label p =
+  let top = dtopIn domains label
   match effectParamProblems (effLabelName label) top p
     [] => Ok (writtenParam top p)
     m :: _ => Err (effectParamMsg (effLabelName label) m)
@@ -4541,7 +4553,12 @@ ieCandidacyVisibleAt _ _ = True
 -- index, the remedy is at the READER (abstain loudly / fail the pass), not here — a
 -- sentinel that means "everything" would break the consuming readers symmetrically.
 declEnvsOrdOf : String -> DeclEnvs -> Int
-declEnvsOrdOf mid envs = match omLookup mid envs.deOrdIndex
+declEnvsOrdOf mid envs = ordOfIndex mid envs.deOrdIndex
+
+-- `declEnvsOrdOf` over the ordinal index alone (`DeclEnvs.deOrdIndex`, or a
+-- drive's `doOrdIndex`).
+ordOfIndex : String -> OrdMap Int -> Int
+ordOfIndex mid index = match omLookup mid index
   Some k => k
   None => 0 - 1
 
@@ -9084,21 +9101,14 @@ resetTypeErrorsSticky _ =
   graphCtx.value.typeErrorsSticky := False
   graphCtx.value.typeErrorsStickyDiags := []
 
--- #2089: every message that armed the sticky gate since the last reset, in push
--- order, deduplicated by rendered text.
-export
-stickyTypeErrorMessages : Unit -> List String
-stickyTypeErrorMessages _ = map (p => tcMsg (snd p)) (stickyTypeErrorDiags ())
-
 -- #2544 (M4): every diagnostic that armed the sticky gate since the last reset, each
 -- tagged with the module it was recorded in, in push order, deduplicated PER GOAL —
 -- module, code, location and text together — never by text alone (a text key would
 -- re-introduce the suppressed-check shape OD5 forbids: two goals at two sites with
 -- the same rendering are two findings).
 export
-stickyTypeErrorDiags : Unit -> List (String, TcDiag)
-stickyTypeErrorDiags _ =
-  dedupBy tcDiagGoalKey (reverseL graphCtx.value.typeErrorsStickyDiags.value)
+stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
+stickyTypeErrorDiags o = dedupBy tcDiagGoalKey (reverseL o.doStickyDiags)
 
 -- The diagnostics pushed since `before` was read off `typeErrorsStickyDiags` — the
 -- list is consed at the head, so they are its first `now - before` entries.
@@ -9119,10 +9129,15 @@ locGoalKey None = ""
 locGoalKey (Some (Loc file sl sc el ec)) =
   "\{file}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
 
--- True iff any type error was pushed since the last resetTypeErrorsSticky.
+-- True iff any type error was pushed since the last resetTypeErrorsSticky, as the
+-- drive left it.
 export
-hadTypeErrors : Unit -> Bool
-hadTypeErrors _ = graphCtx.value.typeErrorsSticky.value
+hadTypeErrors : DriveOutputs -> Bool
+hadTypeErrors o = o.doHadTypeErrors
+
+-- The same question asked during a drive, of the live sticky flag.
+typeErrorsArmed : Unit -> Bool
+typeErrorsArmed _ = graphCtx.value.typeErrorsSticky.value
 
 -- issue 1146 — THE SOLE WRITER of the `typeErrors` channel.  Every push, deduped
 -- or not, helper-mediated or not, funnels through here, so the three facts one push
@@ -9403,8 +9418,12 @@ currentLoc = Ref None
 -- The head must be the stdlib `async` module's `Async`, by origin — a user type
 -- that happens to be named `Async` is an ordinary value main.
 export
-mainTypeIsAsync : Unit -> Bool
-mainTypeIsAsync _ = match graphCtx.value.mainSchemeRef.value
+mainTypeIsAsync : DriveOutputs -> Bool
+mainTypeIsAsync o = o.doMainIsAsync
+
+-- `mainTypeIsAsync` of the live graph, for the drive's own auto-print judgment.
+mainIsAsyncNow : Unit -> Bool
+mainIsAsyncNow _ = match graphCtx.value.mainSchemeRef.value
   Some (Forall _ _ _ _ _ t) => match headMonoNode t
     TCon "Async" (OriginModule "async") => True
     _ => False
@@ -9415,8 +9434,12 @@ mainTypeIsAsync _ = match graphCtx.value.mainSchemeRef.value
 -- is rejected with a diagnostic before the rewrite rather than by the driver's
 -- unification failure.
 export
-mainAsyncPayloadIsUnit : Unit -> Bool
-mainAsyncPayloadIsUnit _ = match graphCtx.value.mainSchemeRef.value
+mainAsyncPayloadIsUnit : DriveOutputs -> Bool
+mainAsyncPayloadIsUnit o = o.doMainAsyncPayloadIsUnit
+
+-- `mainAsyncPayloadIsUnit` of the live graph.
+mainAsyncPayloadIsUnitNow : Unit -> Bool
+mainAsyncPayloadIsUnitNow _ = match graphCtx.value.mainSchemeRef.value
   Some (Forall _ _ _ _ _ t) => match normalize t
     TApp _ payload => match normalize payload
       TCon "Unit" _ => True
@@ -9441,8 +9464,12 @@ mainAsyncPayloadIsUnit _ = match graphCtx.value.mainSchemeRef.value
 -- `main = applyEff f 42` where `applyEff : (a -> <IO> b) -> a -> <IO> b` and
 -- `f : Int -> <IO> Unit` — and by the auto-print wrap (driver/main_autoprint.mdk).
 export
-mainTypeIsUnit : Unit -> Bool
-mainTypeIsUnit _ = match graphCtx.value.mainSchemeRef.value
+mainTypeIsUnit : DriveOutputs -> Bool
+mainTypeIsUnit o = o.doMainIsUnit
+
+-- `mainTypeIsUnit` of the live graph and the last module checked.
+mainIsUnitNow : Unit -> Bool
+mainIsUnitNow _ = match graphCtx.value.mainSchemeRef.value
   Some (Forall _ _ _ _ _ t) => match normalize t
     TCon "Unit" _ => True
     TVar _ =>
@@ -9458,8 +9485,12 @@ mainTypeIsUnit _ = match graphCtx.value.mainSchemeRef.value
 -- even when a structural guess at `main`'s result can't see through a polymorphic
 -- HOF's return type (e.g. `main = fold (acc x => acc + x) 0.0 [1.0, 2.0, 3.0]`).
 export
-mainTypeIsFloat : Unit -> Bool
-mainTypeIsFloat _ = match graphCtx.value.mainSchemeRef.value
+mainTypeIsFloat : DriveOutputs -> Bool
+mainTypeIsFloat o = o.doMainIsFloat
+
+-- `mainTypeIsFloat` of the live graph.
+mainIsFloatNow : Unit -> Bool
+mainIsFloatNow _ = match graphCtx.value.mainSchemeRef.value
   Some (Forall _ _ _ _ _ t) => match normalize t
     TCon "Float" _ => True
     _ => False
@@ -9515,8 +9546,12 @@ mainTypeIsFloat _ = match graphCtx.value.mainSchemeRef.value
 -- the accumulator rather than sniffing the rendered text: the renderer must not have to
 -- guess which of its own lines are diagnostics.
 export
-hadMatchWarnings : Unit -> Bool
-hadMatchWarnings _ = match perRun.value.matchWarnings.value
+hadMatchWarnings : DriveOutputs -> Bool
+hadMatchWarnings o = o.doHadMatchWarnings
+
+-- `hadMatchWarnings` of the last module checked.
+matchWarningsNow : Unit -> Bool
+matchWarningsNow _ = match perRun.value.matchWarnings.value
   [] => False
   _ => True
 
@@ -11800,10 +11835,10 @@ recordInvocationView env =
       perRun.value.dataParamPolarityRef.value
       perRun.value.dataParamKindsRef.value
 
--- The summary's operations over the view of the entry the last drive checked.
+-- The summary's operations over the view of the entry the drive [o] checked.
 export
-lastInvocationOps : Unit -> InvocationOps
-lastInvocationOps _ = match perRun.value.invocationViewRef.value
+lastInvocationOps : DriveOutputs -> InvocationOps
+lastInvocationOps o = match o.doInvocationView
   InvocationView ctors pols kinds =>
     let byHead = ctorsByHead ctors
     InvocationOps {
@@ -16185,9 +16220,9 @@ grantOrder (Forall _ _ avars _ force body) =
 -- How many grants a top-level binding with this scheme takes ahead of its value
 -- arguments.
 export
-bindingGrantArity : String -> Scheme -> Int
-bindingGrantArity _ sch =
-  if grantsEnabled () then listLen (grantOrder sch) else 0
+bindingGrantArity : DriveOutputs -> String -> Scheme -> Int
+bindingGrantArity o _ sch =
+  if o.doGrantsEnabled then listLen (grantOrder sch) else 0
 
 authOrderIn : Mono -> List Int -> List Int
 authOrderIn t acc = match normalize t
@@ -32760,7 +32795,7 @@ argImplRequiresRoutesForRow sx encl useScope m goals walk row =
 -- recorded it is a compiler invariant failure, never a silent `[]` (#1910).
 requiresRouteWalkCut : ReqStep -> List Route
 requiresRouteWalkCut _ =
-  if hadTypeErrors () then
+  if typeErrorsArmed () then
     []
   else
     panic "requires route walk reached a goal the solving walks did not accept"
@@ -41827,21 +41862,19 @@ checkedFfiExternTypeNames decls =
   ffiExternTypeRowsWith (aliasOwnAt 0 denv.deAliases) decls
 
 export
-checkedFfiExternTypeNamesModules : List (String, List Decl) ->
+checkedFfiExternTypeNamesModules : DriveOutputs ->
+  List (String, List Decl) ->
   List (String, (List (String, String), (List String, String)))
-checkedFfiExternTypeNamesModules modules =
-  flatMap
-    (checkedFfiExternTypeNamesModule graphCtx.value.declEnvsRef.value)
-    modules
+checkedFfiExternTypeNamesModules o modules =
+  flatMap (checkedFfiExternTypeNamesModule o) modules
 
-checkedFfiExternTypeNamesModule : DeclEnvs ->
+checkedFfiExternTypeNamesModule : DriveOutputs ->
   (String, List Decl) ->
   List (String, (List (String, String), (List String, String)))
-checkedFfiExternTypeNamesModule envs (mid, decls) =
-  let cur = declEnvsOrdOf mid envs
+checkedFfiExternTypeNamesModule o (mid, decls) =
+  let cur = ordOfIndex mid o.doOrdIndex
   let aliases =
-    aliasOwnAt cur envs.deData.deAliases
-      ++ aliasUniverseAt cur envs.deData.deAliases
+    aliasOwnAt cur o.doFfiAliases ++ aliasUniverseAt cur o.doFfiAliases
   ffiExternTypeRowsWith aliases decls
 
 -- The current module's aliases arrive in front of its imported alias universe in
@@ -47475,7 +47508,6 @@ nameableIfaceMethodSet prog =
 -- `ifaceMethodRows prog` is `allIfaceMethodNames prog` grouped by declaration: both walk
 -- `DAttrib`/`DInterface` in the same order and take `ifaceMethodNames methods`, so the
 -- flattening above is the previous expression term for term.
-export
 nameableIfaceRows : List Decl -> List (String, List String)
 nameableIfaceRows prog = nameableIfaceRowsIn (ifaceExportsIndex ()) prog
 
@@ -47528,11 +47560,12 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 -- miscompiles, while this one only decides a warning, where a graph-global operand would
 -- fire on collisions the module cannot name.
 export
-importedStandaloneShadows : List (String, List Decl) ->
+importedStandaloneShadows : DriveOutputs ->
+  List (String, List Decl) ->
   List Decl ->
   List (String, String, Option Ty, Ty, Loc)
-importedStandaloneShadows graph prog =
-  importedStandaloneShadowsIn (ifaceExportsIndex ()) graph prog
+importedStandaloneShadows o graph prog =
+  importedStandaloneShadowsIn o.doIfaceExports graph prog
 
 -- `importedStandaloneShadows` over the interface-row index [idx], for a caller whose
 -- index is not the last drive's: a single file analysed before its drive passes
@@ -50765,7 +50798,8 @@ preludePreambleStore k coreDecls coreRow =
 -- effect domains it reads), the profile's name, and the stdlib ownership.
 tcConfigOf : DriveInputs -> TcConfig
 tcConfigOf inputs = TcConfig {
-  tcIoJoin = ioJoinAtoms inputs.diIoJoinGrants,
+  tcIoJoin =
+    ioJoinAtoms graphCtx.value.effectDomains.value inputs.diIoJoinGrants,
   tcIoJoinProfile = inputs.diProfileName,
   tcStdlibOwned = inputs.diStdlibOwned,
   tcFlatEntryIsStdlib = inputs.diFlatEntryIsStdlib,
@@ -51604,18 +51638,20 @@ checkModulesDiagsChainFor : DriveInputs ->
   List (String, List Decl) ->
   List ModDiags
 checkModulesDiagsChainFor inputs valueMain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
-  (checkModulesChainReportFor
-    inputs
-    valueMain
-    preludeKey
-    chainKey
-    stepKeys
-    runtimeDecls
-    coreDecls0
-    modules0).trDiagnostics
+  (fst
+    (checkModulesChainReportFor
+      inputs
+      valueMain
+      preludeKey
+      chainKey
+      stepKeys
+      runtimeDecls
+      coreDecls0
+      modules0)).trDiagnostics
 
--- `checkModulesDiagsChainFor` returning the drive's whole report.  The keyed arm
--- builds it with the same `graphReport` call as `driveGraphK`'s diags arm.
+-- `checkModulesDiagsChainFor` returning the drive's whole report beside its
+-- outputs.  The keyed arm builds the report with the same `graphReport` call as
+-- `driveGraphK`'s diags arm.
 export
 checkModulesChainReportFor : DriveInputs ->
   Bool ->
@@ -51625,17 +51661,19 @@ checkModulesChainReportFor : DriveInputs ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  TcReport
+  (TcReport, DriveOutputs)
 checkModulesChainReportFor inputs valueMain None _ _ runtimeDecls coreDecls0 modules0 =
-  (driveGraphK
-    inputs
-    GOutDiags
-    valueMain
-    None
-    None
-    runtimeDecls
-    coreDecls0
-    modules0).gdReport
+  let g =
+    driveGraphK
+      inputs
+      GOutDiags
+      valueMain
+      None
+      None
+      runtimeDecls
+      coreDecls0
+      modules0
+  (g.gdReport, g.gdOutputs)
 checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   -- The keyed arm mirrors `driveGraphK`'s prologue by hand, so it owes the same
   -- method-alias rewrite: without it this arm typechecks a graph in which
@@ -51714,15 +51752,17 @@ checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys ru
   let entryTables = captureEntryTables coreContexts modules
   -- Built for the report, not installed: no lowering reads a check drive's table.
   let dispositions = buildDispositions graphCtx.value.declEnvsRef.value
-  graphReport
-    perMod
-    (publishedCore coreClosed coreContexts coreSchemes)
-    []
-    drivenEvidence
-    dispositions
-    graphCtx.value.graphRun.binderRows.value
-    None
-    entryTables
+  let report =
+    graphReport
+      perMod
+      (publishedCore coreClosed coreContexts coreSchemes)
+      []
+      drivenEvidence
+      dispositions
+      graphCtx.value.graphRun.binderRows.value
+      None
+      entryTables
+  (report, driveOutputsNow ())
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `driveGraphK GOutDiags`'s `foldModules` exactly:
@@ -51917,6 +51957,31 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
     -- test/run_check_agreement_fixtures/p0_17_missing_impl_method.mdk.
     restRows
 
+-- The drive's answers to the post-drive questions, read once at its end (after the
+-- drain, the tree arm's dictionary pass and the sticky rollback), exactly when a
+-- caller used to read the cells.  The invocation view's schemes are re-minted
+-- copies, so no cell inference writes is reachable from the result.
+driveOutputsNow : Unit -> DriveOutputs
+driveOutputsNow _ = DriveOutputs {
+  doMainIsUnit = mainIsUnitNow (),
+  doMainIsFloat = mainIsFloatNow (),
+  doMainIsAsync = mainIsAsyncNow (),
+  doMainAsyncPayloadIsUnit = mainAsyncPayloadIsUnitNow (),
+  doHadTypeErrors = typeErrorsArmed (),
+  doHadMatchWarnings = matchWarningsNow (),
+  doInvocationView = frozenInvocationView perRun.value.invocationViewRef.value,
+  doGrantsEnabled = grantsEnabled (),
+  doEffectDomains = graphCtx.value.effectDomains.value,
+  doStickyDiags = graphCtx.value.typeErrorsStickyDiags.value,
+  doIfaceExports = ifaceExportsIndex (),
+  doFfiAliases = graphCtx.value.declEnvsRef.value.deData.deAliases,
+  doOrdIndex = graphCtx.value.declEnvsRef.value.deOrdIndex,
+}
+
+frozenInvocationView : InvocationView -> InvocationView
+frozenInvocationView (InvocationView ctors pols kinds) =
+  InvocationView (map (c => snd (zonkScheme emptyZonk c)) ctors) pols kinds
+
 -- Drive the whole module graph ONCE: stamp type-constructor identity, run the
 -- shared preamble, check every module dependency-first through one worker, drain
 -- at graph end, and attach the whole-graph coherence verdict.  `sel` chooses what
@@ -52041,6 +52106,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
           None
           entryTables,
       gdGraph = graphCtx.value,
+      gdOutputs = driveOutputsNow (),
     }
     GOutTrees =>
       -- The set `dictPass` prepends dict params for: the bare set plus every
@@ -52077,6 +52143,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
           trAutoPrint = autoPrint,
         },
         gdGraph = graphCtx.value,
+        gdOutputs = driveOutputsNow (),
       }
 
 -- The prelude's published rows: the core pass's own when that pass closed core
@@ -52152,9 +52219,9 @@ autoPrintWanted True executes findings perMod coreDecls modules =
     printlnIface decls,
   )
     (Some scheme, Some (mid, entry), Some iface) =>
-      if mainTypeIsUnit () then
+      if mainIsUnitNow () then
         ([], None)
-      else if mainTypeIsAsync () then
+      else if mainIsAsyncNow () then
         (asyncDriverFindings executes mid entry scheme perMod, None)
       else
         -- A top-level `main` has no givens: the use is judged in a module scope
@@ -52222,7 +52289,7 @@ asyncDriverFindings executes mid entry scheme perMod =
     Some (rows, _, _) => rows
     None => []
   match option None (d => lookupAssoc d published) executes
-    Some driver if mainAsyncPayloadIsUnit () =>
+    Some driver if mainAsyncPayloadIsUnitNow () =>
       let scope =
         Scopes.freshScope (currentScopeStore ()) None 0 mid ModuleOwner
       let _ = openScope scope
@@ -52387,13 +52454,14 @@ checkModulesEntryFullSplitK : DriveInputs ->
   (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryFullSplitK inputs valueMain preludeKey runtimeDecls coreDecls0 modules0 =
   entrySplit
-    (checkModulesEntryFullReportK
-      inputs
-      valueMain
-      preludeKey
-      runtimeDecls
-      coreDecls0
-      modules0)
+    (fst
+      (checkModulesEntryFullReportK
+        inputs
+        valueMain
+        preludeKey
+        runtimeDecls
+        coreDecls0
+        modules0))
 
 -- `checkModulesEntryFullSplitK`'s four parts, read off its drive's report.
 export
@@ -52403,7 +52471,8 @@ entrySplit r =
   let (schemes, errs, warns) = checkModulesEntryFromDiags r.trDiagnostics
   (r.trPartial.paCore, schemes, errs, warns)
 
--- `checkModulesEntryFullSplitK` returning its drive's whole report.
+-- `checkModulesEntryFullSplitK` returning its drive's whole report beside its
+-- outputs.
 export
 checkModulesEntryFullReportK : DriveInputs ->
   Bool ->
@@ -52411,7 +52480,7 @@ checkModulesEntryFullReportK : DriveInputs ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  TcReport
+  (TcReport, DriveOutputs)
 checkModulesEntryFullReportK inputs valueMain preludeKey runtimeDecls coreDecls0 modules0 =
   -- The single-file front door loads stdlib/core.mdk twice: once as its prelude and
   -- once as the singleton `__user__` module.  Resolve already owns the syntactic
@@ -52428,15 +52497,17 @@ checkModulesEntryFullReportK inputs valueMain preludeKey runtimeDecls coreDecls0
         else
           (preludeKey, coreDecls0, modules0)
       _ => (preludeKey, coreDecls0, modules0)
-  (driveGraphK
-    inputs
-    GOutDiags
-    valueMain
-    None
-    effectivePreludeKey
-    runtimeDecls
-    effectiveCoreDecls0
-    effectiveModules0).gdReport
+  let g =
+    driveGraphK
+      inputs
+      GOutDiags
+      valueMain
+      None
+      effectivePreludeKey
+      runtimeDecls
+      effectiveCoreDecls0
+      effectiveModules0
+  (g.gdReport, g.gdOutputs)
 
 -- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
 prependDiagOpt : String ->
@@ -52460,11 +52531,27 @@ checkModulesEntryReport : DriveInputs ->
   List (String, List Decl) ->
   String
 checkModulesEntryReport inputs runtimeDecls coreDecls modules =
-  let (schemes, errs, warns) =
-    checkModulesEntryFull inputs runtimeDecls coreDecls modules
+  fst (checkModulesEntryReportOut inputs runtimeDecls coreDecls modules)
+
+-- `checkModulesEntryReport` beside the outputs of its drive.
+checkModulesEntryReportOut : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (String, DriveOutputs)
+checkModulesEntryReportOut inputs runtimeDecls coreDecls modules =
+  let (report, outputs) =
+    checkModulesEntryFullReportK
+      inputs
+      False
+      None
+      runtimeDecls
+      coreDecls
+      modules
+  let (_, schemes, errs, warns) = entrySplit report
   match errs
-    [] => joinNl (schemeLines schemes ++ map tcMsg warns)
-    _ => joinNl (typeErrorLines (map tcMsg errs))
+    [] => (joinNl (schemeLines schemes ++ map tcMsg warns), outputs)
+    _ => (joinNl (typeErrorLines (map tcMsg errs)), outputs)
 
 -- exit-code predicate analog of checkHasErrors: any type error in ANY module of
 -- the resolved graph (entry or imported — see checkModulesEntryFromDiags).
@@ -52588,13 +52675,15 @@ checkOneReportK : DriveInputs ->
   List Decl ->
   (String, List Decl) ->
   TcReport
-checkOneReportK inputs valueMain preludeKey runtimeDecls coreDecls (rootId, prog) = checkModulesEntryFullReportK
-  inputs
-  valueMain
-  preludeKey
-  runtimeDecls
-  coreDecls
-  [(rootId, prog)]
+checkOneReportK inputs valueMain preludeKey runtimeDecls coreDecls (rootId, prog) =
+  fst
+    (checkModulesEntryFullReportK
+      inputs
+      valueMain
+      preludeKey
+      runtimeDecls
+      coreDecls
+      [(rootId, prog)])
 
 -- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers, matching
 -- `checkToLinesWithRuntime`'s / `checkErrorsWithRuntime`'s (runtimeDecls, coreProg,
@@ -52610,9 +52699,12 @@ checkOneToLinesWithRuntime : DriveInputs ->
   List Decl ->
   List Decl ->
   List Decl ->
-  String
-checkOneToLinesWithRuntime inputs runtimeDecls coreProg userProg =
-  checkModulesEntryReport inputs runtimeDecls coreProg [("__user__", userProg)]
+  (String, DriveOutputs)
+checkOneToLinesWithRuntime inputs runtimeDecls coreProg userProg = checkModulesEntryReportOut
+  inputs
+  runtimeDecls
+  coreProg
+  [("__user__", userProg)]
 
 -- `checkOneToLinesWithRuntime` with the prelude key for the core-check memo (see
 -- `checkCoreMemoized`): same contract as `checkOneSchemeFullK`.  Same render as
@@ -52638,7 +52730,7 @@ checkOneToLinesWithRuntimeK inputs preludeKey runtimeDecls coreProg userProg =
 export
 checkOneToLines : DriveInputs -> List Decl -> String
 checkOneToLines inputs userProg =
-  checkModulesEntryReport inputs [] [] [("__user__", userProg)]
+  fst (checkOneToLinesWithRuntime inputs [] [] userProg)
 
 export
 checkOneErrorsWithRuntime : DriveInputs ->
@@ -52763,7 +52855,7 @@ elaborateModulesWithSchemes : DriveInputs ->
   List (String, List Decl) ->
   (ElabResult, List (String, PubScheme), List (String, PubScheme))
 elaborateModulesWithSchemes inputs valueMain runtimeDecls coreDecls0 modulesIn =
-  let (result, r) =
+  let (result, r, _) =
     elaborateModulesWithReport
       inputs
       valueMain
@@ -52774,8 +52866,8 @@ elaborateModulesWithSchemes inputs valueMain runtimeDecls coreDecls0 modulesIn =
   let (core, entrySchemes, _, _) = entrySplit r
   (result, core, entrySchemes)
 
--- `elaborateModulesWithSchemes` returning its drive's whole report beside the
--- elaboration.  `executes` names the `async` driver of a caller that runs or
+-- `elaborateModulesWithSchemes` returning its drive's whole report and outputs
+-- beside the elaboration.  `executes` names the `async` driver of a caller that runs or
 -- emits the trees: its report then carries the auto-print evidence (`trAutoPrint`).
 export
 elaborateModulesWithReport : DriveInputs ->
@@ -52784,7 +52876,7 @@ elaborateModulesWithReport : DriveInputs ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (ElabResult, TcReport)
+  (ElabResult, TcReport, DriveOutputs)
 elaborateModulesWithReport inputs valueMain executes runtimeDecls coreDecls0 modulesIn =
   let g =
     driveGraphK
@@ -52807,6 +52899,7 @@ elaborateModulesWithReport inputs valueMain executes runtimeDecls coreDecls0 mod
       g.gdBinders,
     ),
     g.gdReport,
+    g.gdOutputs,
   )
 
 -- The report of `elaborateModules`' drive, for a test that reads it.
@@ -52817,14 +52910,14 @@ elaborateModulesReport : DriveInputs ->
   List (String, List Decl) ->
   TcReport
 elaborateModulesReport inputs runtimeDecls coreDecls0 modulesIn =
-  snd
-    (elaborateModulesWithReport
-      inputs
-      False
-      None
-      runtimeDecls
-      coreDecls0
-      modulesIn)
+  match (elaborateModulesWithReport
+    inputs
+    False
+    None
+    runtimeDecls
+    coreDecls0
+    modulesIn)
+    (_, report, _) => report
 -- arg-position interface-method names whose route resolveArgStamps may stamp
 -- (populated on every path; an empty set would degenerate prePassDictArg to prePassDict)
 

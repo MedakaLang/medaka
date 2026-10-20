@@ -38,6 +38,7 @@ import frontend.ast.{
   UseMember(..),
 }
 import types.typecheck.{mainTypeIsUnit, mainTypeIsAsync, mainAsyncPayloadIsUnit}
+import types.tc_types.{DriveOutputs}
 import types.private_mangle.{mangledName}
 import types.publish.{TcReport(..), CheckedProgram(..)}
 
@@ -71,12 +72,15 @@ definesPrintln (_ :: rest) = definesPrintln rest
 
 -- Auto-print fires iff main's inferred type is neither Unit-shaped (`Unit`, or
 -- a bare type variable: see `mainTypeIsUnit`) nor `Async _`, and the program is a
--- value-main candidate.  Requires the caller to have run an elaborate first
--- (populates mainSchemeRef).
+-- value-main candidate.  [outputs] are those of the elaboration that judged the
+-- program.
 export
-shouldAutoPrintMain : List Decl -> List (String, List Decl) -> Bool
-shouldAutoPrintMain coreDecls modules =
-  if mainTypeIsUnit () || mainTypeIsAsync () then
+shouldAutoPrintMain : DriveOutputs ->
+  List Decl ->
+  List (String, List Decl) ->
+  Bool
+shouldAutoPrintMain outputs coreDecls modules =
+  if mainTypeIsUnit outputs || mainTypeIsAsync outputs then
     False
   else
     valueMainCandidate coreDecls modules
@@ -195,13 +199,14 @@ pinnedCopies origin pin (_ :: rest) = pinnedCopies origin pin rest
 -- A printed `main` with no evidence is refused: running it unprinted would exit
 -- 0 with nothing on stdout.
 export
-executedTrees : Option EvId ->
+executedTrees : DriveOutputs ->
+  Option EvId ->
   String ->
   (List Decl, List (String, List Decl)) ->
   (List Decl, List (String, List Decl)) ->
   Result String (List Decl, List (String, List Decl))
-executedTrees autoPrint driver (coreD, modsD) (coreE, modsE) =
-  if shouldAutoPrintMain coreD modsD then match autoPrint
+executedTrees outputs autoPrint driver (coreD, modsD) (coreE, modsE) =
+  if shouldAutoPrintMain outputs coreD modsD then match autoPrint
     Some ev => Ok (
       autoPrintPinCore coreE,
       onEntry (wrapEntryMain (EDictAt autoPrintPinName ev)) modsE,
@@ -209,7 +214,7 @@ executedTrees autoPrint driver (coreD, modsD) (coreE, modsE) =
     None =>
       Err
         "internal error: the typecheck published no evidence for printing the value `main`"
-  else if shouldAsyncWrapMain driver modsD then
+  else if shouldAsyncWrapMain outputs driver modsD then
     Ok (coreE, asyncWrapModules driver modsE)
   else
     Ok (coreE, modsE)
@@ -218,13 +223,14 @@ executedTrees autoPrint driver (coreD, modsD) (coreE, modsE) =
 -- judged.  A report with no checked program has nothing to run: the driver's
 -- gate refused it before this point, so reaching here is an internal error.
 export
-executedFromReport : TcReport ->
+executedFromReport : DriveOutputs ->
+  TcReport ->
   String ->
   (List Decl, List (String, List Decl)) ->
   Result String (List Decl, List (String, List Decl))
-executedFromReport report driver source = match report.trChecked
+executedFromReport outputs report driver source = match report.trChecked
   Some checked => match checked.cpTrees
-    Some trees => executedTrees report.trAutoPrint driver source trees
+    Some trees => executedTrees outputs report.trAutoPrint driver source trees
     None => noChecked
   None => noChecked
 
@@ -304,11 +310,11 @@ asyncModuleId = "async"
 
 -- Fires iff main's inferred type heads in `Async`, the entry `main` is a
 -- zero-arg VALUE, and the `async` module is loaded and defines `driver`.
--- Requires the caller to have run an elaborate first (populates mainSchemeRef).
+-- [outputs] are those of the elaboration that judged the program.
 export
-shouldAsyncWrapMain : String -> List (String, List Decl) -> Bool
-shouldAsyncWrapMain driver modules =
-  if not (mainTypeIsAsync () && mainAsyncPayloadIsUnit ()) then
+shouldAsyncWrapMain : DriveOutputs -> String -> List (String, List Decl) -> Bool
+shouldAsyncWrapMain outputs driver modules =
+  if not (mainTypeIsAsync outputs && mainAsyncPayloadIsUnit outputs) then
     False
   else match entryPair modules
     None => False
@@ -320,11 +326,11 @@ shouldAsyncWrapMain driver modules =
 -- The one `Async` main shape the drivers cannot take: a payload other than
 -- `Unit` (`main : Async e Int`).  Every driver reports this before the rewrite
 -- so the failure is this message, not the driver's own unification error.
--- Requires the caller to have run an elaborate first.
+-- [outputs] are those of the elaboration that judged the program.
 export
-asyncMainShapeError : List (String, List Decl) -> Option String
-asyncMainShapeError modules =
-  if not (mainTypeIsAsync ()) || mainAsyncPayloadIsUnit () then
+asyncMainShapeError : DriveOutputs -> List (String, List Decl) -> Option String
+asyncMainShapeError outputs modules =
+  if not (mainTypeIsAsync outputs) || mainAsyncPayloadIsUnit outputs then
     None
   else match entryPair modules
     None => None

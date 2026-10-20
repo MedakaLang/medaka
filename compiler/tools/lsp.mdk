@@ -1844,7 +1844,7 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.
   match keyed
-    Some (report, graph) =>
+    Some ((report, _), graph) =>
       if report.trPartial.paModule == graph.giEntry then
         Some (KeptGraph text graph report.trPartial)
       else
