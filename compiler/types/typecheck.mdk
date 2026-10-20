@@ -8006,6 +8006,7 @@ emptyTcConfig = TcConfig {
   tcIoJoinProfile = "",
   tcStdlibOwned = omEmpty,
   tcFlatEntryIsStdlib = False,
+  tcKey = "\n\n",
 }
 
 -- The process's first graph record, before any drive minted one.  `env` is the
@@ -50643,7 +50644,7 @@ coreCheckMemoHit None = None
 coreCheckMemoHit (Some key) = match !coreCheckMemoRef
   None => None
   Some m =>
-    if m.ccmKey == (key, graphCtx.value.config.value.tcIoJoinProfile) then
+    if m.ccmKey == (key, graphCtx.value.config.value.tcKey) then
       Some m
     else
       None
@@ -50749,7 +50750,7 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
       None => ()
       Some k =>
         coreCheckMemoRef := Some CoreCheckMemo {
-          ccmKey = (k, graphCtx.value.config.value.tcIoJoinProfile),
+          ccmKey = (k, graphCtx.value.config.value.tcKey),
           ccmCoreSchemes = coreSchemes,
           ccmCorePub = corePub,
           ccmCrossRun = copyCrossRun graphCtx.value.crossRun,
@@ -50776,7 +50777,7 @@ preludePreambleFor : Option (Int, Int) ->
 preludePreambleFor None coreDecls coreRow = preludePreambleOf coreDecls coreRow
 preludePreambleFor (Some k) coreDecls coreRow = match !preludePreambleMemoRef
   Some entry =>
-    if fst entry == (k, graphCtx.value.config.value.tcIoJoinProfile) then
+    if fst entry == (k, graphCtx.value.config.value.tcKey) then
       snd entry
     else
       preludePreambleStore k coreDecls coreRow
@@ -50790,12 +50791,12 @@ preludePreambleStore : (Int, Int) ->
   PreludePreamble
 preludePreambleStore k coreDecls coreRow =
   let p = preludePreambleOf coreDecls coreRow
-  preludePreambleMemoRef :=
-    Some ((k, graphCtx.value.config.value.tcIoJoinProfile), p)
+  preludePreambleMemoRef := Some ((k, graphCtx.value.config.value.tcKey), p)
   p
 
 -- The drive's configuration: the IO join of the selected profile's grants (after the
 -- effect domains it reads), the profile's name, and the stdlib ownership.
+export
 tcConfigOf : DriveInputs -> TcConfig
 tcConfigOf inputs = TcConfig {
   tcIoJoin =
@@ -50803,6 +50804,8 @@ tcConfigOf inputs = TcConfig {
   tcIoJoinProfile = inputs.diProfileName,
   tcStdlibOwned = inputs.diStdlibOwned,
   tcFlatEntryIsStdlib = inputs.diFlatEntryIsStdlib,
+  tcKey =
+    "\{inputs.diProfileName}\n\{inputs.diFlatEntryIsStdlib}\n\{joinWith "," (omKeys inputs.diStdlibOwned)}",
 }
 
 -- Mint the drive's graph record, once, at the head of `graphPreamble`.  The
@@ -51692,7 +51695,7 @@ checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys ru
       coreDecls
       modules
   let fullKey =
-    "\{graphCtx.value.config.value.tcIoJoinProfile}\n\{chainFullKey rk ck chainKey}\n\{chainGraphKey modules}"
+    "\{graphCtx.value.config.value.tcKey}\n\{chainFullKey rk ck chainKey}\n\{chainGraphKey modules}"
   let steps = match !moduleChainMemoRef
     Some m => if m.chKey == fullKey then m.chSteps else []
     None => []
