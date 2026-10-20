@@ -732,7 +732,7 @@ public export data ImplAcc = ImplAcc {
 -- construction mirrors that exactly, and hits the identical wall A-3.2a's
 -- `DataEnv` construction hit: elaborating a method signature would call
 -- `fromAstTypeE`/`registerRecordInfoKeyed`-shaped machinery, which MUTATES
--- `perRun` refs and EMITS diagnostics through a `perRun`-scoped dedupe —
+-- `ModuleCtx` refs and EMITS diagnostics through a `ModuleCtx`-scoped dedupe —
 -- machinery that does not exist yet in the driver PREAMBLE.  This sentence
 -- used to say that machinery "mints fresh tyvar ids off the global counter";
 -- that is FALSE (`tyvarCounter` is a `GraphRun` field, not a global) and it
@@ -1444,7 +1444,7 @@ public export data CrossRun = CrossRun {
   --      cannot desynchronize that marshalling pair.
   --   `universeIfaceParamKinds` (A-3.5c, #1557) -- `declEnvsRef.deIfaces`, projected at
   --      the reader's ordinal by `ceSlotKindsAt`.  #822's iface half of the kind
-  --      universe; its `perRun` half `ifaceParamKindsRef` and its writer went too.
+  --      universe; its `ModuleCtx` half `ifaceParamKindsRef` and its writer went too.
   --   `universeAliasTable` (A-3.2b residual, #1512) -- `declEnvsRef.deData.deAliases`,
   --      projected by `aliasUniverseAt`.  A copy would silently carry
   --      `rejectCyclicAliases`' per-module deletions.
@@ -1917,8 +1917,8 @@ public export data CheckRunSeed = CheckRunSeed {
 -- without appearing in `freshModuleCtx`, nor without a class in the module-field
 -- partition (`moduleCtxFrom`).  The drivers hand the record to every reader after the
 -- module (the graph-level diagnostics, and `driveOutputsNow`, which freezes
--- `lastInvocationOps`' view); a reader not yet handed one reads the `perRun` cell, which
--- holds the same record.  This is a record OF Refs (fields stay `Ref …`),
+-- `lastInvocationOps`' view); every reader receives it as a parameter, or through
+-- `DynCtx.dcModule` / `SiteCtx.sxModule`.  This is a record OF Refs (fields stay `Ref …`),
 -- NOT a record of values: the hot accumulators (typeErrors, poisonedVars,
 -- localBindRefs, …) are pushed with `setRef x (v :: x.value)`, so the field must be a
 -- Ref for that to stay one Ref-write — a record of values would rebuild the whole

@@ -750,7 +750,7 @@ DIAGBUCKET_N="${IR_DIAGBUCKET_N:-300}"
 # post-fix on this box: net Ir at N = 400/800/1600 was 871409915 / 1774831855 /
 # 3621459149, fitting net(N) = a*N + b*N^2 over 400->1600 gives a = 2.15e6,
 # b ~= 71 — down from 165 (lineage: 239 [pre-#2068] -> 165 [pre-#2158] -> ~71
-# [post-#2158]). The residual b is NOT zero: this shape still walks `perRun`
+# [post-#2158]). The residual b is NOT zero: this shape still walks module-record
 # state proportional to N somewhere else (e.g. diagnostic accumulation shared
 # with the `errs`/`diagbucket` bands above), so a further quadratic may remain;
 # re-derive rather than trusting this number if the surrounding code moves.
@@ -854,7 +854,7 @@ gen_diagbucket() {
 
 # The #2068 shape: N DISTINCT diagnostic MESSAGES, all pushed through the
 # deduping `pushTypeErrorOnceAt` (compiler/types/typecheck.mdk), whose dedup test
-# is `anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value` — a
+# is `anyList (e => tcMsg e == msg) mctx.typeErrors.items.value` — a
 # linear scan of everything accumulated so far. That scan is O(N^2) only if the
 # messages are DISTINCT: with a repeated message the scan short-circuits on the
 # first element and the list never grows past 1.
