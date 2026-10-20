@@ -10,7 +10,7 @@ import tools.test_cmd.{
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
-import types.typecheck.{elaborateModules}
+import types.typecheck.{defaultDriveInputs, elaborateModules}
 import eval.eval.{Value(..), evalOneFacts, force}
 import types.program_facts.{factsOfElab, withFacts}
 import support.util.{lookupAssoc}
@@ -56,7 +56,7 @@ methodProgram = [
 -- them, as the property worker does.
 mainAfterHelperDiags : Unit -> Int
 mainAfterHelperDiags _ =
-  let elab = elaborateModules [] [] methodProgram
+  let elab = elaborateModules defaultDriveInputs [] [] methodProgram
   let (coreE, modulesE, _, _, _, _, _) = elab
   let _ = helperElabDiags [] [] methodProgram
   let facts = factsOfElab elab

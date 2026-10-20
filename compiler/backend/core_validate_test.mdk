@@ -22,7 +22,7 @@ import support.util.{dedup, listLen, joinNl, reverseL}
 import frontend.marker.{declRefs}
 import map as BM
 import types.annotate.{annotateProgram}
-import types.typecheck.{elaborateOneFacts, grantWholeDomain}
+import types.typecheck.{defaultDriveInputs, elaborateOneFacts, grantWholeDomain}
 import types.program_facts.{emptyFacts}
 import ir.core_ir.{
   CBind(..),
@@ -515,7 +515,8 @@ i2078Src =
 
 typedLowered : String -> String -> CProgram
 typedLowered preludeSrc src =
-  let (decls, facts) = elaborateOneFacts [] (desugar (parse preludeSrc)) (
+  let (decls, facts) = elaborateOneFacts defaultDriveInputs [] (desugar
+    (parse preludeSrc)) (
     "calls",
     grantWholeDomain (desugar (parse src)),
   )
@@ -1445,8 +1446,8 @@ loweredSource : String -> <IO, FileRead> Result String CProgram
 loweredSource src = do
   rsrc <- readFile (underRoot "stdlib/runtime.mdk")
   csrc <- readFile (underRoot "stdlib/core.mdk")
-  let (decls, facts) = elaborateOneFacts (desugar (parse rsrc)) (desugar
-    (parse csrc)) (
+  let (decls, facts) = elaborateOneFacts defaultDriveInputs (desugar
+    (parse rsrc)) (desugar (parse csrc)) (
     "main",
     grantWholeDomain (desugar (parse src)),
   )

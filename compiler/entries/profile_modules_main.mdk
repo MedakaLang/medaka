@@ -25,7 +25,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveModulesToLines}
 import driver.loader.{loadProgram}
-import types.typecheck.{checkModules, markModules}
+import types.typecheck.{defaultDriveInputs, checkModules, markModules}
 import support.timer.{
   perfEnabled,
   now,
@@ -149,7 +149,7 @@ runStaged on rsrc csrc entry roots =
       let tT0 = now ()
       let aT0 = allocSnap ()
       let oT0 = opSnap ()
-      let _ = checkModules rDecls core2 mods2
+      let _ = checkModules defaultDriveInputs rDecls core2 mods2
       let tT1 = now ()
       let _ =
         emitPhaseAO

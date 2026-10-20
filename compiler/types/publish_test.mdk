@@ -33,10 +33,11 @@ import types.runtime_types.{binderOrdinal, emptyBinderTypes}
 import map.{values}
 import types.tc_types.{MethodReturnMemoView(..)}
 import types.typecheck.{
-  checkOneSchemeFullK, checkModulesDiagsChain, checkModulesAllLines,
-  elaborateModulesReport, checkModules, methodReturnMemoCurrentViews,
-  methodReturnMemoRetentionStats, chainMemoReplayedSteps, tcCode, tcMsg,
-  checkModulesChainReportFor, checkOneReportK, checkModulesPartialK
+  defaultDriveInputs, checkOneSchemeFullK, checkModulesDiagsChain,
+  checkModulesAllLines, elaborateModulesReport, checkModules,
+  methodReturnMemoCurrentViews, methodReturnMemoRetentionStats,
+  chainMemoReplayedSteps, tcCode, tcMsg, checkModulesChainReportFor,
+  checkOneReportK, checkModulesPartialK
 }
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
@@ -245,8 +246,10 @@ qSrc = joinNl [
 
 drive : String -> String -> List (String, PubScheme)
 drive mid src =
-  let (_, own) =
-    checkOneSchemeFullK None [] [] (mid, desugar (parseLocated src))
+  let (_, own) = checkOneSchemeFullK defaultDriveInputs None [] [] (
+    mid,
+    desugar (parseLocated src),
+  )
   own
 
 rendered : List (String, PubScheme) -> List String
@@ -286,7 +289,7 @@ shadowedPrelude = joinNl [
 ]
 
 test "#2054: a shadowing buffer binding carries its own context, not the prelude's" =
-  let (core, own) = checkOneSchemeFullK None [] (desugar
+  let (core, own) = checkOneSchemeFullK defaultDriveInputs None [] (desugar
     (parse shadowedPrelude)) (
     "buffer",
     desugar (parseLocated "isEven x = \"s\""),
@@ -349,6 +352,7 @@ accDrive : String ->
 accDrive chainKey prefixSource entrySource stepKey =
   let report =
     checkModulesChainReportFor
+      defaultDriveInputs
       False
       (Some (4053, 4055))
       chainKey
@@ -511,6 +515,7 @@ weakChainSteps held =
   ]
   let _ =
     checkModulesDiagsChain
+      defaultDriveInputs
       (Some (4053, 4056))
       "acc-weak-\{held}"
       [Some src, None]
@@ -557,6 +562,7 @@ instErrors key withImpl =
   let bSrc = instHolder withImpl
   let mods =
     checkModulesDiagsChain
+      defaultDriveInputs
       (Some (4266, 4267))
       key
       [Some instIface, Some instUse, Some bSrc, None]
@@ -616,6 +622,7 @@ markDrive key constrained =
   let bSrc = markB constrained
   let report =
     checkModulesChainReportFor
+      defaultDriveInputs
       False
       (Some (4266, 4267))
       key
@@ -650,6 +657,7 @@ replayDrive key entrySrc =
   let bSrc = instHolder True
   let _ =
     checkModulesChainReportFor
+      defaultDriveInputs
       False
       (Some (4266, 4267))
       key
@@ -748,7 +756,8 @@ isLinkCell (LinkCell _ _ _) = True
 isLinkCell _ = False
 
 test "checkModules publishes no live Link" =
-  let mods = checkModules [] [] [("p", desugar (parseLocated pSrc))]
+  let mods =
+    checkModules defaultDriveInputs [] [] [("p", desugar (parseLocated pSrc))]
   let found =
     flatMap (m => flatMap (e => liveCells (fst e) (snd e)) (snd m)) mods
   expectEqual [] (filter isLinkCell found)
@@ -756,7 +765,7 @@ test "checkModules publishes no live Link" =
 test "checkModulesAllLines shows useSpeak's context under its module" =
   let ls =
     lines
-      (checkModulesAllLines [] [] [
+      (checkModulesAllLines defaultDriveInputs [] [] [
         ("p", desugar (parseLocated pSrc)),
         ("q", desugar (parseLocated "other = 1")),
       ])
@@ -783,7 +792,8 @@ talkBuffer : String
 talkBuffer = "own x = talk x\nuse = talk 1\nn = 1 + 2\n"
 
 talkReport : Unit -> TcReport
-talkReport _ = elaborateModulesReport [] (desugar (parse talkPrelude)) [
+talkReport _ = elaborateModulesReport defaultDriveInputs [] (desugar
+  (parse talkPrelude)) [
   ("b", desugar (parseLocated talkBuffer)),
 ]
 
@@ -887,11 +897,11 @@ talkCore : List Decl
 talkCore = desugar (parse talkPrelude)
 
 test "diags arm: the captured locals and seed render as the hover renderers did" =
-  let one = checkOneReportK False None [] talkCore (
+  let one = checkOneReportK defaultDriveInputs False None [] talkCore (
     "b",
     desugar (parseLocated localBuffer),
   )
-  let project = checkModulesPartialK None [] talkCore [
+  let project = checkModulesPartialK defaultDriveInputs None [] talkCore [
     ("b", desugar (parseLocated localBuffer)),
   ]
   expectEach [

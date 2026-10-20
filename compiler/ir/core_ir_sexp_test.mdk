@@ -20,7 +20,7 @@ import test.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{elaborateOneFacts, grantWholeDomain}
+import types.typecheck.{defaultDriveInputs, elaborateOneFacts, grantWholeDomain}
 import types.program_facts.{factsOfElabWith}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import frontend.ast.{
@@ -200,7 +200,8 @@ src =
 
 typed : CProgram
 typed =
-  let (decls, facts) = elaborateOneFacts [] (desugar (parse prelude)) (
+  let (decls, facts) = elaborateOneFacts defaultDriveInputs [] (desugar
+    (parse prelude)) (
     "sexp",
     grantWholeDomain (desugar (parse src)),
   )
@@ -303,7 +304,8 @@ fnSrc =
 
 test "a function's return type survives the round trip" =
   let typed =
-    let (decls, facts) = elaborateOneFacts [] (desugar (parse prelude)) (
+    let (decls, facts) = elaborateOneFacts defaultDriveInputs [] (desugar
+      (parse prelude)) (
       "sexp",
       grantWholeDomain (desugar (parse fnSrc)),
     )
@@ -367,6 +369,7 @@ loweredEntry runtimeDecls coreDecls entry roots =
       let _ = setStdlibOwnership flatStdlib ownedStdlib
       let elab =
         elaborateModules
+          defaultDriveInputs
           runtimeDecls
           coreDecls
           (map (p => (fst p, desugarIn (fst p) (snd p))) pairs)

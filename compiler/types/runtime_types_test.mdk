@@ -16,7 +16,7 @@ import test_process.{underRoot}
 import frontend.parser.{parse, parseLocated}
 import frontend.desugar.{desugar, desugarIn}
 import frontend.ast.{BinderId(..)}
-import types.typecheck.{elaborateModules}
+import types.typecheck.{defaultDriveInputs, elaborateModules}
 import types.runtime_types.{
   BinderRow(..),
   RuntimeType(..),
@@ -39,6 +39,7 @@ rowsOf modules = do
   csrc <- readFile (underRoot "stdlib/core.mdk")
   let (_, _, _, _, _, _, binders) =
     elaborateModules
+      defaultDriveInputs
       (desugar (parse rsrc))
       (desugar (parse csrc))
       (map

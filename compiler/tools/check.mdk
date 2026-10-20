@@ -37,6 +37,7 @@ import frontend.resolve.{
 import frontend.exhaust.{exhaustToLinesWith}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import types.typecheck.{
+  defaultDriveInputs,
   checkOneToLinesWithRuntimeK,
   setCoherenceUserDecls,
   checkOneErrorsWithRuntime,
@@ -119,6 +120,7 @@ cleanReport rsrc csrc runtimeP coreP raw desugared =
   -- `desugaredPrelude src` is `desugar (parsePrelude src)`, the same tree.
   let schemes =
     checkOneToLinesWithRuntimeK
+      defaultDriveInputs
       (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
       (desugaredPrelude rsrc)
       (desugaredPrelude csrc)
@@ -160,7 +162,11 @@ checkHasErrors rsrc csrc tsrc =
       match resDiags
         "" =>
           let _ = setCoherenceUserDecls desugared
-          checkOneErrorsWithRuntime (desugar runtimeP) (desugar coreP) desugared
+          checkOneErrorsWithRuntime
+            defaultDriveInputs
+            (desugar runtimeP)
+            (desugar coreP)
+            desugared
         _ => True
 
 -- ── multi-module `check` (DRIVER-COLLAPSE Phase 4, OPTION A) ───────────────

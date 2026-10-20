@@ -15,7 +15,7 @@
 -- `medaka` binary and not in the emitter seed graph — so it owes no re-mint.
 
 import frontend.ast.{Decl}
-import types.typecheck.{elaborateModulesWithReport}
+import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
 import types.publish.{TcReport(..)}
 import types.program_facts.{factsOfElab}
 import eval.eval.{evalModulesOutputFacts}
@@ -33,6 +33,7 @@ runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runElab runtimeDecls coreDecls modules =
   let (elab, report) =
     elaborateModulesWithReport
+      defaultDriveInputs
       (valueMainCandidate coreDecls modules)
       (Some "runAsyncMain")
       runtimeDecls

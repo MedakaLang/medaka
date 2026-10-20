@@ -978,12 +978,12 @@ public export data TraceSink = TraceSink {
 
 -- What the drivers hand the typechecker before a drive: the stdlib ownership of the
 -- loader's module list, the user declarations coherence is checked over, and the
--- trace sink.  Held in the config-lifetime cell `driveInputs`.
+-- trace sink (`None`: every trace off).  Held in the config-lifetime cell `driveInputs`.
 public export data DriveInputs = DriveInputs {
   diStdlibOwned : OrdMap Unit,
   diFlatEntryIsStdlib : Bool,
   diCoherenceUserDecls : List Decl,
-  diTrace : TraceSink,
+  diTrace : Option TraceSink,
 }
 
 -- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by

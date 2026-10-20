@@ -5,8 +5,8 @@ import test.{expectAll, expectEqual, expectTrue, expectFalse}
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import types.typecheck.{
-  checkOneDiags, checkOneSchemeFullK, checkModulesDiagsChain, ModDiags, tcCode,
-  tcMsg, TcDiag(..)
+  defaultDriveInputs, checkOneDiags, checkOneSchemeFullK,
+  checkModulesDiagsChain, ModDiags, tcCode, tcMsg, TcDiag(..)
 }
 import types.repr.{Scheme(..), ppScheme}
 import frontend.ast.{Loc(..)}
@@ -32,7 +32,7 @@ prelude =
 
 codes : String -> List String
 codes source =
-  let (errors, _) = checkOneDiags [] [] (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] [] (
     "authority",
     desugar (parseLocated (prelude ++ source)),
   )
@@ -40,7 +40,7 @@ codes source =
 
 schemeOf : String -> String -> String
 schemeOf source name =
-  let (_, schemes) = checkOneSchemeFullK None [] [] (
+  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs None [] [] (
     "authority",
     desugar (parseLocated (prelude ++ source)),
   )
@@ -616,7 +616,8 @@ moduleCodesOf : String -> String -> List String
 moduleCodesOf prov body =
   flatMap
     moduleCodes
-    (checkModulesDiagsChain None "" [] [] (desugar (parseLocated prelude)) [
+    (checkModulesDiagsChain defaultDriveInputs None "" [] [] (desugar
+      (parseLocated prelude)) [
       ("provider", desugar (parseLocated prov)),
       (
         "entry",
@@ -775,7 +776,7 @@ test "an existential record: a read is the top, an update repacks the binder who
 -- prelude: a report at the site that matters, not at the walk's last leaf.
 errorLines : String -> List Int
 errorLines source =
-  let (errors, _) = checkOneDiags [] [] (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] [] (
     "authority",
     desugar (parseLocated (prelude ++ source)),
   )
@@ -826,7 +827,7 @@ test "the review's S2 findings: one domain per binder, the offending site, disti
 -- The messages a program's diagnostics carry, for a row about wording.
 messagesOf : String -> List String
 messagesOf source =
-  let (errors, _) = checkOneDiags [] [] (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] [] (
     "authority",
     desugar (parseLocated (prelude ++ source)),
   )
@@ -956,7 +957,8 @@ reexportCodes : String -> String -> List String
 reexportCodes facade body =
   flatMap
     moduleCodes
-    (checkModulesDiagsChain None "" [] [] (desugar (parseLocated prelude)) [
+    (checkModulesDiagsChain defaultDriveInputs None "" [] [] (desugar
+      (parseLocated prelude)) [
       (
         "eff",
         desugar
@@ -1204,7 +1206,8 @@ residualModuleCodes : String -> List String
 residualModuleCodes body =
   flatMap
     moduleCodes
-    (checkModulesDiagsChain None "" [] [] (desugar (parseLocated prelude)) [
+    (checkModulesDiagsChain defaultDriveInputs None "" [] [] (desugar
+      (parseLocated prelude)) [
       (
         "dirs",
         desugar
@@ -1348,7 +1351,8 @@ libCodes body =
   flatMap
     (m => match m
       (_, (_, errors, _)) => map tcCode errors)
-    (checkModulesDiagsChain None "" [] [] (desugar (parseLocated prelude)) [
+    (checkModulesDiagsChain defaultDriveInputs None "" [] [] (desugar
+      (parseLocated prelude)) [
       (
         "lib",
         desugar
@@ -1406,7 +1410,8 @@ aliasResidualLine =
     flatMap
       (m => match m
         (_, (_, errors, _)) => errors)
-      (checkModulesDiagsChain None "" [] [] (desugar (parseLocated prelude)) [
+      (checkModulesDiagsChain defaultDriveInputs None "" [] [] (desugar
+        (parseLocated prelude)) [
         (
           "dirs",
           desugar
@@ -2065,7 +2070,8 @@ patternModuleCodes : String -> List String
 patternModuleCodes body =
   flatMap
     moduleCodes
-    (checkModulesDiagsChain None "" [] [] (desugar (parseLocated prelude)) [
+    (checkModulesDiagsChain defaultDriveInputs None "" [] [] (desugar
+      (parseLocated prelude)) [
       ("provider", desugar (parseLocated patternProvider)),
       (
         "entry",

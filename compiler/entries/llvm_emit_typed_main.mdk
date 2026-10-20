@@ -22,6 +22,7 @@ import frontend.ast.{Decl, Lit(..), BinderId(..), noDeclLoc}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{
+  defaultDriveInputs,
   elaborateModules,
   mainTypeIsUnit,
   mainTypeIsFloat,
@@ -129,7 +130,9 @@ emit runtimeDecls preludeDecls userDecls =
 runEmit : List Decl -> List Decl -> List Decl -> String
 runEmit runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
-  let elab = elaborateModules runtimeDecls livePrelude [("__user__", userDecls)]
+  let elab = elaborateModules defaultDriveInputs runtimeDecls livePrelude [
+    ("__user__", userDecls),
+  ]
   let (coreE, modulesE, _, _, evTable, _, _) = elab
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let mangled = coreD ++ flatMap snd modules2

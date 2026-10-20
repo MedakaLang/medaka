@@ -1,6 +1,8 @@
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
-import types.typecheck.{checkOneDiags, checkModulesDiagsChain, tcCode}
+import types.typecheck.{
+  defaultDriveInputs, checkOneDiags, checkModulesDiagsChain, tcCode
+}
 import test.{expectAll, expectEqual}
 
 invalidProperties : String
@@ -16,13 +18,15 @@ validProperties =
 
 flatCodes : String -> List String
 flatCodes source =
-  let (errors, _) =
-    checkOneDiags [] [] ("prop_contract", desugar (parseLocated source))
+  let (errors, _) = checkOneDiags defaultDriveInputs [] [] (
+    "prop_contract",
+    desugar (parseLocated source),
+  )
   map tcCode errors
 
 moduleCodes : String -> List String
 moduleCodes source =
-  let results = checkModulesDiagsChain None "" [] [] [] [
+  let results = checkModulesDiagsChain defaultDriveInputs None "" [] [] [] [
     (
       "dependency",
       desugar (parseLocated "export identity : Bool -> Bool\nidentity b = b\n"),

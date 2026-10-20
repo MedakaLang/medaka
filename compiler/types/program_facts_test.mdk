@@ -19,7 +19,7 @@ import types.route_key.{
   evIndexOf,
   evSiteRouteIn,
 }
-import types.typecheck.{elaborateModules}
+import types.typecheck.{defaultDriveInputs, elaborateModules}
 import support.util.{joinNl}
 
 routeFacts : ProgramFacts
@@ -72,6 +72,7 @@ twoModuleFacts =
     joinNl ["import pick_owner.{pick}", "value : Int", "value = pick 41"]
   factsOfElab
     (elaborateModules
+      defaultDriveInputs
       []
       []
       (map

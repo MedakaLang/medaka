@@ -9,6 +9,7 @@ import list.{drop, filter, indexed, reverse, take}
 import string.{fromChars, isAlphaNum, isLower, isSpace, join, toChars}
 import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
 import types.typecheck.{
+  defaultDriveInputs,
   ModDiags,
   checkModulesDiagsChain,
   checkOneDiags,
@@ -50,7 +51,7 @@ flatDiagnosticsWith : String -> String -> List (String, String)
 flatDiagnosticsWith extra source =
   let prelude = desugar (parseLocated (lawPrelude ++ extra))
   let program = ("law", desugar (parseLocated source))
-  let (errors, _) = checkOneDiags [] prelude program
+  let (errors, _) = checkOneDiags defaultDriveInputs [] prelude program
   map (e => (tcCode e, tcMsg e)) errors
 
 -- `flatDiagnostics` through the module-graph route: `source` is the single
@@ -73,6 +74,7 @@ graphResults : List (String, String) -> List ModDiags
 graphResults modules =
   let parsed = map ((id, source) => (id, desugar (parseLocated source))) modules
   checkModulesDiagsChain
+    defaultDriveInputs
     None
     ""
     []

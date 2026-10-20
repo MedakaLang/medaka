@@ -76,6 +76,7 @@ import types.tc_types.{
   NumericPredicateTraceStage(..),
 }
 import types.typecheck.{
+  defaultDriveInputs,
   ModDiags,
   TcDiag(..),
   beginAssumptionTrace,
@@ -226,7 +227,8 @@ numericBodySource collision body =
 numericCheckObserved : String -> (List String, List NumericTraceView)
 numericCheckObserved source =
   beginNumericPredicateTrace ()
-  let (errors, _) = checkOneDiags [] (desugar (parse numericPreludeSource)) (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+    (parse numericPreludeSource)) (
     "numeric_predicate",
     desugar (parseLocated source),
   )
@@ -265,7 +267,8 @@ numericNestedBodySource = joinNl [
 -- each attributed program reports exactly what the bare one does.
 attributedSigErrors : String -> String -> List String
 attributedSigErrors attrs sigAndDef =
-  let (errors, _) = checkOneDiags [] (desugar (parse numericPreludeSource)) (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+    (parse numericPreludeSource)) (
     "attributed_sig",
     desugar (parseLocated (attrs ++ sigAndDef)),
   )
@@ -462,7 +465,7 @@ numericSchemeObserved : Option (Int, Int) ->
   (List String, List NumericTraceView)
 numericSchemeObserved key source =
   beginNumericPredicateTrace ()
-  let (_, schemes) = checkOneSchemeFullK key [] (desugar
+  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs key [] (desugar
     (parse numericPreludeSource)) (
     "numeric_scheme",
     desugar (parseLocated source),
@@ -513,6 +516,7 @@ numericImportedObserved reverseOrder =
   beginNumericPredicateTrace ()
   let results =
     checkModulesDiagsChain
+      defaultDriveInputs
       None
       ""
       []
@@ -575,8 +579,10 @@ test "prelude-free split graphs retain every builtin class identity" =
   expectEqual
     (expected, expected)
     (
-      checkModulesEntryReport [] [] [("one", desugar (parse oneSource))],
-      checkModulesEntryReport [] [] [
+      checkModulesEntryReport defaultDriveInputs [] [] [
+        ("one", desugar (parse oneSource)),
+      ],
+      checkModulesEntryReport defaultDriveInputs [] [] [
         ("eq", desugar (parse eqSource)),
         ("num", desugar (parse numSource)),
         ("use", desugar (parse useSource)),
@@ -605,10 +611,10 @@ test "no-impl hint is dropped for a stdlib-owned type" =
   ]
   let ownedReport =
     let _ = setStdlibOwnership False ["eq", "boxes"]
-    checkModulesEntryReport [] [] mods
+    checkModulesEntryReport defaultDriveInputs [] [] mods
   let userReport =
     let _ = setStdlibOwnership False ["eq"]
-    checkModulesEntryReport [] [] mods
+    checkModulesEntryReport defaultDriveInputs [] [] mods
   let _ = setStdlibOwnership False []
   expectEqual
     (
@@ -725,7 +731,7 @@ arithmeticSchemeObserved : Option (Int, Int) ->
   (List (String, Int, String), List (String, String, Int))
 arithmeticSchemeObserved key source =
   beginAssumptionTrace ()
-  let (_, schemes) = checkOneSchemeFullK key [] (desugar
+  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs key [] (desugar
     (parse arithmeticPreludeSource)) (
     "arithmetic_scheme",
     desugar (parseLocated source),
@@ -752,7 +758,8 @@ arithmeticSchemeObserved key source =
 
 arithmeticErrorCodes : String -> List String
 arithmeticErrorCodes source =
-  let (errors, _) = checkOneDiags [] (desugar (parse arithmeticPreludeSource)) (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+    (parse arithmeticPreludeSource)) (
     "arithmetic_errors",
     desugar (parseLocated source),
   )
@@ -816,7 +823,8 @@ arithmeticTraceObserved : String ->
 arithmeticTraceObserved source =
   beginNumericPredicateTrace ()
   beginAssumptionTrace ()
-  let (errors, _) = checkOneDiags [] (desugar (parse arithmeticPreludeSource)) (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+    (parse arithmeticPreludeSource)) (
     "arithmetic_trace",
     desugar (parseLocated source),
   )
@@ -972,6 +980,7 @@ arithmeticImportedObserved reverseOrder =
   beginNumericPredicateTrace ()
   let results =
     checkModulesDiagsChain
+      defaultDriveInputs
       None
       ""
       []
@@ -1105,7 +1114,7 @@ declaredNumMemberSchemeObserved : Option (Int, Int) ->
   (List (Int, String), List (String, String, Int))
 declaredNumMemberSchemeObserved key member source =
   beginAssumptionTrace ()
-  let (_, schemes) = checkOneSchemeFullK key [] (desugar
+  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs key [] (desugar
     (parse numericPreludeSource)) (
     "declared_numeric_scheme",
     desugar (parseLocated source),
@@ -1131,7 +1140,8 @@ declaredNumMemberSchemeObserved key member source =
 
 declaredNumErrorCodes : String -> List String
 declaredNumErrorCodes source =
-  let (errors, _) = checkOneDiags [] (desugar (parse numericPreludeSource)) (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+    (parse numericPreludeSource)) (
     "declared_numeric_errors",
     desugar (parseLocated source),
   )
@@ -1366,7 +1376,7 @@ blockRecEvalValue =
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated source)
   let (elaborated, facts) =
-    elaborateOneFacts [] core ("block_rec_eval", program)
+    elaborateOneFacts defaultDriveInputs [] core ("block_rec_eval", program)
   withFacts facts (_ =>
     let bindings = evalOneFacts facts [] ("block_rec_eval", elaborated)
     match lookupAssoc "main" bindings
@@ -1442,7 +1452,7 @@ wrappedReturnRoutes source =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated source)
   let (elaborated, elabFacts) =
-    elaborateOneFacts [] core ("wrapped_return", program)
+    elaborateOneFacts defaultDriveInputs [] core ("wrapped_return", program)
   let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   returnBindRoutes binds
 
@@ -1450,7 +1460,7 @@ wrappedReturnFlatRoutes : String -> Option (List String)
 wrappedReturnFlatRoutes source =
   let program = desugar (parseLocated "\{numericPreludeSource}\n\{source}")
   let (elaborated, elabFacts) =
-    elaborateOneFacts [] [] ("wrapped_return_flat", program)
+    elaborateOneFacts defaultDriveInputs [] [] ("wrapped_return_flat", program)
   let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   returnBindRoutes binds
 
@@ -1473,8 +1483,10 @@ test "wrapped return checking rejects an instance for only the result wrapper" =
   let source = wrappedReturnSource False True
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated source)
-  let (moduleErrors, _) = checkOneDiags [] core ("wrapped_return", program)
-  let (flatErrors, _) = checkOneDiags [] core ("__user__", program)
+  let (moduleErrors, _) =
+    checkOneDiags defaultDriveInputs [] core ("wrapped_return", program)
+  let (flatErrors, _) =
+    checkOneDiags defaultDriveInputs [] core ("__user__", program)
   expectAll [
     expectTrue (contains "no impl of Seed for Int" (map tcMsg moduleErrors)),
     expectTrue (contains "no impl of Seed for Int" (map tcMsg flatErrors)),
@@ -1493,7 +1505,7 @@ test "wrapped return routes use the specific instance's empty context" =
 test "wrapped return routes survive an intervening failed request" =
   let before = wrappedReturnRoutes (wrappedReturnSource True True)
   let core = desugar (parse numericPreludeSource)
-  let (errors, _) = checkOneDiags [] core (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] core (
     "wrapped_return_failure",
     desugar (parseLocated (wrappedReturnSource False True)),
   )
@@ -1607,7 +1619,8 @@ methodEvInDecls target (_ :: rest) = methodEvInDecls target rest
 
 test "ordinary return shares declaration identity vector and goal destination" =
   beginMethodReturnTrace ()
-  let typed = elaborateOne [] (desugar (parse numericPreludeSource)) (
+  let typed = elaborateOne defaultDriveInputs [] (desugar
+    (parse numericPreludeSource)) (
     "identity_return",
     desugar (parseLocated returnIdentitySource),
   )
@@ -1697,7 +1710,8 @@ test "ordinary return shares declaration identity vector and goal destination" =
 methodCarrierStages : String -> String -> List MethodReturnTraceEntry
 methodCarrierStages method source =
   beginMethodReturnTrace ()
-  let _ = elaborateOne [] (desugar (parse numericPreludeSource)) (
+  let _ = elaborateOne defaultDriveInputs [] (desugar
+    (parse numericPreludeSource)) (
     "method_carrier",
     desugar (parseLocated source),
   )
@@ -1891,7 +1905,8 @@ test "absent return formal completes from the exact enclosing given" =
 
 absentReturnCodes : Bool -> List String
 absentReturnCodes reverseImpls =
-  let (errors, _) = checkOneDiags [] (desugar (parse numericPreludeSource)) (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+    (parse numericPreludeSource)) (
     "absent_return_ambiguity",
     desugar (parseLocated (absentReturnSource reverseImpls False)),
   )
@@ -1945,7 +1960,7 @@ methodBodyAmbiguitySource genericDefault =
 
 methodBodyCheck : String -> String -> List (String, Bool)
 methodBodyCheck name source =
-  let (errors, _) = checkOneDiags [] [] (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] [] (
     name,
     desugar (parseLocated source),
   )
@@ -2134,6 +2149,7 @@ importedReturnObserved reverseOrder =
   beginMethodReturnTrace ()
   let results =
     checkModulesDiagsChain
+      defaultDriveInputs
       None
       ""
       []
@@ -2182,7 +2198,8 @@ test "alias-qualified ordinary returns keep owner identity across import orders"
 freshMethodReturnStages : String -> List MethodReturnTraceStage
 freshMethodReturnStages moduleId =
   beginMethodReturnTrace ()
-  let _ = elaborateOne [] (desugar (parse numericPreludeSource)) (
+  let _ = elaborateOne defaultDriveInputs [] (desugar
+    (parse numericPreludeSource)) (
     moduleId,
     desugar (parseLocated returnIdentitySource),
   )
@@ -2203,6 +2220,7 @@ cachedMethodReturnObserved entrySource =
   beginMethodReturnTrace ()
   let results =
     checkModulesDiagsChain
+      defaultDriveInputs
       (Some (991, 997))
       "method-return-identity-cache"
       [Some "stable-method-return-prefix-v1", None]
@@ -2222,7 +2240,7 @@ cachedMethodReturnObserved entrySource =
 
 test "ordinary return traces are fresh while cache hits replay no events" =
   let first = freshMethodReturnStages "return_fresh"
-  let (failedErrors, _) = checkOneDiags [] [] (
+  let (failedErrors, _) = checkOneDiags defaultDriveInputs [] [] (
     "return_failed",
     desugar (parseLocated "value : Int\nvalue = \"wrong\"\n"),
   )
@@ -2314,6 +2332,7 @@ returnMemoObserved : String -> String -> String -> ReturnMemoRequestView
 returnMemoObserved prefixSource entrySource stepKey =
   let results =
     checkModulesDiagsChain
+      defaultDriveInputs
       (Some (1091, 1093))
       "method-return-request-fence"
       [Some stepKey, None]
@@ -2487,7 +2506,7 @@ loweredMethodArity source bindName method =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated source)
   let (elaborated, elabFacts) =
-    elaborateOneFacts [] core ("method_arity", program)
+    elaborateOneFacts defaultDriveInputs [] core ("method_arity", program)
   let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   bindMethodArity bindName method binds
 
@@ -2641,7 +2660,7 @@ blockRecCoreFacts =
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated source)
   let (elaborated, elabFacts) =
-    elaborateOneFacts [] core ("block_rec_core", program)
+    elaborateOneFacts defaultDriveInputs [] core ("block_rec_core", program)
   let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   fold
     (facts bind => mergeLocalCoreFacts facts (blockRecValueFacts bind))
@@ -2682,8 +2701,10 @@ lamThenGroupCoreFacts : LocalCoreFacts
 lamThenGroupCoreFacts =
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated lamThenGroupSource)
-  let (elaborated, elabFacts) =
-    elaborateOneFacts [] core ("lam_then_group_core", program)
+  let (elaborated, elabFacts) = elaborateOneFacts defaultDriveInputs [] core (
+    "lam_then_group_core",
+    program,
+  )
   let (CProgram binds _ _ _ _ _) = lowerProgramWithFacts elabFacts elaborated
   fold
     (facts bind => mergeLocalCoreFacts facts (lamThenGroupBindFacts bind))
@@ -2723,7 +2744,7 @@ localNumOwnSource = joinNl [
 ]
 
 test "each local boundary defaults its own numeric root to Int" =
-  let (_, schemes) = checkOneSchemeFullK None [] (desugar
+  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs None [] (desugar
     (parse numericPreludeSource)) (
     "local_numeric_own",
     desugar (parseLocated localNumOwnSource),
@@ -2825,6 +2846,7 @@ runModulesObserved sources =
   beginAssumptionTrace ()
   let results =
     checkModulesDiagsChain
+      defaultDriveInputs
       None
       ""
       []
@@ -2840,7 +2862,8 @@ runModulesObserved sources =
 runObserved : String -> String -> RequestView
 runObserved moduleId source =
   beginAssumptionTrace ()
-  let (errors, _) = checkOneDiags [] [] (moduleId, desugar (parse source))
+  let (errors, _) =
+    checkOneDiags defaultDriveInputs [] [] (moduleId, desugar (parse source))
   let entries = finishAssumptionTrace ()
   let views = traceViewsNow entries
   let (count, capacity) = scopeFrameStats ()
@@ -2861,6 +2884,7 @@ runCachedObserved entrySource =
   beginAssumptionTrace ()
   let results =
     checkModulesDiagsChain
+      defaultDriveInputs
       (Some (731, 733))
       "typecheck-scope-cache"
       [Some "stable-prefix-v1", None]
@@ -3091,7 +3115,8 @@ mixedDirectFirstSource = joinNl [
 
 flatMessages : String -> List String
 flatMessages source =
-  let (errors, _) = checkOneDiags [] [] ("__user__", desugar (parse source))
+  let (errors, _) =
+    checkOneDiags defaultDriveInputs [] [] ("__user__", desugar (parse source))
   map tcMsg errors
 
 test "attributed-direct Num declarations reject mismatches without cross-pairing rows" =
@@ -3320,7 +3345,8 @@ test "an inherited default is inferred once, as the default body" =
 evidenceObservationTrace : String -> List EvidenceObservationEntry
 evidenceObservationTrace source =
   beginEvidenceObservation ()
-  let _ = elaborateOne [] (desugar (parse numericPreludeSource)) (
+  let _ = elaborateOne defaultDriveInputs [] (desugar
+    (parse numericPreludeSource)) (
     "evidence_observation",
     desugar (parseLocated source),
   )
@@ -3510,7 +3536,7 @@ test "a default body's sibling call is answered by the body's receiver (#2095)" 
 localUseSiteObserved : String -> (List String, List EvidenceObservationEntry)
 localUseSiteObserved source =
   beginEvidenceObservation ()
-  let (errors, _) = checkOneDiags [] [] (
+  let (errors, _) = checkOneDiags defaultDriveInputs [] [] (
     "local_use_site",
     desugar (parseLocated source),
   )
@@ -3559,6 +3585,7 @@ dispositionsAfter : List (String, String) -> DispositionTable
 dispositionsAfter sources =
   let (_, _, _, _, _, dispositions, _) =
     elaborateModules
+      defaultDriveInputs
       []
       (desugar (parse numericPreludeSource))
       (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
@@ -3746,14 +3773,15 @@ placedNumCodes : Bool -> List String
 placedNumCodes inherited =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated (placedNumSource inherited))
-  let (errors, _) = checkOneDiags [] core ("placed_num", program)
+  let (errors, _) =
+    checkOneDiags defaultDriveInputs [] core ("placed_num", program)
   map tcCode errors
 
 placedNumElaborated : Bool -> (List Decl, ProgramFacts)
 placedNumElaborated inherited =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated (placedNumSource inherited))
-  elaborateOneFacts [] core ("placed_num", program)
+  elaborateOneFacts defaultDriveInputs [] core ("placed_num", program)
 
 placedNumSuppliedValue : Int
 placedNumSuppliedValue = placedNumValue False
@@ -3804,8 +3832,12 @@ binderShadowObserved : String -> List String -> (List String, Option String)
 binderShadowObserved name body =
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated (binderShadowSource body))
-  let (errors, _) = checkOneDiags [] core ("binder_shadow", program)
-  let (_, schemes) = checkOneSchemeFullK None [] core ("binder_shadow", program)
+  let (errors, _) =
+    checkOneDiags defaultDriveInputs [] core ("binder_shadow", program)
+  let (_, schemes) = checkOneSchemeFullK defaultDriveInputs None [] core (
+    "binder_shadow",
+    program,
+  )
   (map tcMsg errors, map (p => ppScheme p.psScheme) (lookupAssoc name schemes))
 
 test "a let binder shadowing a top-level name keeps the enclosing scheme its own" =
@@ -3943,7 +3975,7 @@ drainPreludeSource = joinNl [
 drainCheck : List String -> Unit
 drainCheck body =
   let core = desugar (parse "\{arithmeticPreludeSource}\n\{drainPreludeSource}")
-  let _ = checkOneDiags [] core (
+  let _ = checkOneDiags defaultDriveInputs [] core (
     "drain_quiescence",
     desugar (parseLocated (joinNl body)),
   )
@@ -4144,7 +4176,8 @@ scalingCheckAlloc body =
   let core = desugar (parse arithmeticPreludeSource)
   let decls = desugar (parseLocated (joinNl body))
   let before = allocBytes ()
-  let (errors, _) = checkOneDiags [] core ("requires_scaling", decls)
+  let (errors, _) =
+    checkOneDiags defaultDriveInputs [] core ("requires_scaling", decls)
   (allocBytes () - before, map tcMsg errors)
 
 -- Checks one family at three evenly spaced sizes and returns the two allocation
@@ -4240,7 +4273,8 @@ cellInnerSource = joinNl [
 ]
 
 test "every goal that writes a method cell notes into that cell's summary" =
-  let _ = elaborateOne [] (desugar (parse numericPreludeSource)) (
+  let _ = elaborateOne defaultDriveInputs [] (desugar
+    (parse numericPreludeSource)) (
     "cell_inner",
     desugar (parseLocated cellInnerSource),
   )
@@ -4307,6 +4341,7 @@ ioJoinCheck : Option String ->
 ioJoinCheck name sources = underTarget name (_ =>
   ioJoinErrors
     (checkModulesDiagsChain
+      defaultDriveInputs
       None
       ""
       []
@@ -4443,6 +4478,7 @@ ioJoinKeyedCheck name =
   underTarget name (_ =>
     ioJoinErrors
       (checkModulesDiagsChain
+        defaultDriveInputs
         (Some (4032, 4033))
         "io-join-profile-key"
         [Some "lib-v1", None]
@@ -4500,9 +4536,9 @@ preludeOutcome prelude sources =
     flatMap
       (row => match row
         (_, (_, errors, _)) => map tcCode errors)
-      (checkModulesDiagsChain None "" [] [] core modules)
+      (checkModulesDiagsChain defaultDriveInputs None "" [] [] core modules)
   if isEmptyL codes then
-    let elab = elaborateModules [] core modules
+    let elab = elaborateModules defaultDriveInputs [] core modules
     let (coreD, elaborated, _, _, _, _, _) = elab
     let rootId = optionOr "" (map fst (last sources))
     let facts = factsOfElab elab
@@ -5299,7 +5335,7 @@ test "a literal applied as a function is rejected at its use" = expectEach [
 -- alias-head prelude; the whole report when no such line exists.
 superGoalScheme : String -> List String -> String
 superGoalScheme name source =
-  let report = checkModulesEntryReport [] (desugar
+  let report = checkModulesEntryReport defaultDriveInputs [] (desugar
     (parseLocated aliasHeadPrelude)) [
     ("super_goal", desugar (parseLocated (joinNl source))),
   ]
@@ -5593,7 +5629,7 @@ test "a stable super selection builds each use's super" =
 -- instance).
 closedGoalOutcome : String -> List String -> ((String, Int, Int), Bool)
 closedGoalOutcome prelude lines =
-  let elab = elaborateModules [] (desugar (parse prelude)) [
+  let elab = elaborateModules defaultDriveInputs [] (desugar (parse prelude)) [
     ("closed_goal", desugar (parseLocated (joinNl lines))),
   ]
   let (coreD, modules, _, residual, _, _, _) = elab
@@ -5724,10 +5760,11 @@ spanProgramModule = (
 -- unkeyed `elaborateModules` drive.
 elaborateSpans : Unit -> (Int, Int)
 elaborateSpans _ =
-  let (_, _, _, _, table, _, _) = elaborateModules [] (desugar
-    (parse numericPreludeSource)) [
-    spanProgramModule,
-  ]
+  let (_, _, _, _, table, _, _) = elaborateModules
+    defaultDriveInputs
+    []
+    (desugar (parse numericPreludeSource))
+    [spanProgramModule]
   match evIndexOf table
     EvIndex _ arr => (evCellsSpanProbe (), arrayLength arr)
 
@@ -5735,7 +5772,11 @@ elaborateSpans _ =
 diagsSpan : Unit -> Int
 diagsSpan _ =
   let _ =
-    checkOneDiags [] (desugar (parse numericPreludeSource)) spanProgramModule
+    checkOneDiags
+      defaultDriveInputs
+      []
+      (desugar (parse numericPreludeSource))
+      spanProgramModule
   evCellsSpanProbe ()
 
 -- [drive]'s reading after the first and after the [n]th of [n] drives.
@@ -5804,4 +5845,6 @@ preMarkedModules = [
 -- marked trees, whose preamble resets the graph.
 test "checkModules completes over modules markModules marked first" =
   let (core2, mods2) = markModules [] preMarkedModules
-  expectEqual ["pre_a", "pre_b"] (map fst (checkModules [] core2 mods2))
+  expectEqual
+    ["pre_a", "pre_b"]
+    (map fst (checkModules defaultDriveInputs [] core2 mods2))
