@@ -555,7 +555,7 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    nor #2548 (the quiescence drain + `ImplBuckets` deletion) touched the general call
    graph these boundaries close over — both moved specific table representations, not the
    `infer`-depth coupling R3 originally measured. **D in particular is re-confirmed still
-   open** (70/99, reading `currentLoc`/`perRun`/`typeErrors`/`typeErrorsSticky`/`goals`/
+   open** (70/99, reading `currentLoc` (since replaced by the lexical rule, arch-p2-6e)/`perRun`/`typeErrors`/`typeErrorsSticky`/`goals`/
    `activeDictVars` directly) — R3's "no inbound dependency from inference" premise for D
    stays falsified, consistent with `TYPECHECK-ARCHITECTURE.md` §7 item 4's own
    withdrawal (#1120). No extraction taken; nothing moved. Full per-boundary command and

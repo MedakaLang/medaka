@@ -289,10 +289,10 @@ this is the #158/#176 design, and it landed.
 | `CrossRun` | 25 | 15 `universe*` accumulators, 6 `crossModule*` constraint tables (each a bare/`Qual` **pair**), 3 `obUniv*`, and `coreSchemeObligationsRef` | survives the per-module mint by design (`resetState`, since deleted) |
 | `DriverState` *(since replaced by `GraphCtx`, which `mintGraphCtx` re-mints per graph drive)* | 18 | driver-mode flags, the match oracle + warnings, promotion harvest, `main` scheme, dict-eligibility sets | survives; re-minted per driver entry |
 | toggles *(now `DynCtx`)* | 3 | dynamic-scope suppression flags, now the `DynCtx` fields `dcSuppressRLocalRecord`, `dcSuppressArgStamp`, `dcShadowHeadCtx` that `TcEnv` carries, so no save/restore remains | none: `envFor` and `withCtors` start from `dynFor` |
-| *(loose)* | **7** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, and the toggles cell, since deleted; the bundles have since been reorganised, see `types/CELL-LIFETIMES.md`) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc` | varies |
+| *(loose)* | **7** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, and the toggles cell, since deleted; the bundles have since been reorganised, see `types/CELL-LIFETIMES.md`) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc` *(since replaced by the scoped value `ModuleCtx.mcLoc`, arch-p2-6e: a lexical location, no cell)* | varies |
 
 **The seven cells with no single owning function** (≥6 distinct writers) are the residual
-state-discipline debt (`perRun` since replaced by `ModuleCtx` as a parameter): `perRun` (56 writers), `driverState` (14, since `graphCtx`; `graphCtx` since replaced by `GraphCtx` as a parameter, arch-p2-6d), `currentLoc` (8),
+state-discipline debt (`perRun` since replaced by `ModuleCtx` as a parameter): `perRun` (56 writers), `driverState` (14, since `graphCtx`; `graphCtx` since replaced by `GraphCtx` as a parameter, arch-p2-6d), `currentLoc` (8; since replaced by the lexical rule, arch-p2-6e, no cell),
 `typeErrorsSticky` (8), `crossRun` (7), the toggles cell (6, since deleted), `funConstraintsRef` (6).
 
 ⚠️ Two granularities are mixed in that list: `funConstraintsRef` is a `PerRun` *field* (now `ModuleCtx`), so

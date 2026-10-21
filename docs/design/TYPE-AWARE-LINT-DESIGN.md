@@ -1,5 +1,11 @@
 # Type-Aware Lint Tier — Design
 
+> **Update (arch-p2-6e):** `currentLoc` and its set-on-enter defect (#1752) are since replaced by
+> the lexical rule: a diagnostic's location is the span of the innermost enclosing construct,
+> carried as a scoped value (`ModuleCtx.mcLoc`), so §2.3's blocker and §10.3 describe the
+> pre-replacement tree and are not re-derived here. #1752's four workarounds remain ("carry a
+> construct's span to a later pass"). The `file:line` references below are historical.
+
 **Status:** PARTLY SHIPPED and RE-COSTED; TIER 1 UNBLOCKED, TIER 2 STILL BLOCKED. Re-derived 2026-08-30
 against `main` at `33c7247a` (worktree level with `origin/main`). The body was previously
 derived 2026-08-19 at `8b7b5517`; §4.2 and §10.1 have been rewritten at `33c7247a` because

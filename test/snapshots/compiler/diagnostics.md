@@ -8,8 +8,8 @@ stages=DESUGAR,MARK
 -- WITHOUT exit-on-first-error, returning a structured List Diag.
 --
 -- B.10.2b: the compiler AST carries expr-level spans via the transparent
--- `ELoc` wrapper, and typecheck pairs each error with the `currentLoc` span in
--- effect at the push site (`checkProgramDiags` returns `(msg, Option Loc)`).  So
+-- `ELoc` wrapper, and typecheck pairs each error with the span of the innermost
+-- enclosing construct at the push site (`checkProgramDiags` returns `(msg, Option Loc)`).  So
 -- `Diag` carries an `Option Loc` — `Some` for type errors (expr-level span),
 -- `None` for resolve / guard / match-exhaustiveness diagnostics, which the
 -- compiler pipeline does not yet attribute to a span (they fall back to the

@@ -125,6 +125,8 @@ eqIfaceRegistered _ = anyList eqEntry methodIfaceParamsRef.value
 eqEntry (_, (iface, _, _)) = iface == "Eq"
 ```
 
+(`currentLoc` in this prototype is since replaced by the lexical rule, arch-p2-6e: the obligation's location is the span of the innermost enclosing construct, a scoped value.)
+
 This reuses the entire existing obligation pipeline:
 - `pendingImplObligations` → `checkImplObligations`: a concrete non-`Eq` head
   with no impl → **`No impl of Eq for <T>`**; a still-polymorphic head **defers**
