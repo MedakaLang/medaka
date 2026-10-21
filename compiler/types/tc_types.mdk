@@ -629,7 +629,7 @@ public export data InstRef = InstRef String Int Int
 --
 -- `ImplEnv` below KEEPS its named fields, and that is not an inconsistency: its
 -- construction site `emptyImplEnv` is reachable from `emptyDeclEnvs` ←
--- `initialGraphCtx`, which the `graphCtx` initializer builds — which is why the panic
+-- `initialGraphCtx`, which the `interners` initializer builds — which is why the panic
 -- named `ieOrd` and not `ieRows`.  A later editor who makes `emptyImplEnv`
 -- unreachable re-arms the same trap on `ImplEnv`.
 --
@@ -815,7 +815,7 @@ public export data ImplAcc = ImplAcc {
 -- label table, so it cannot hit this.  `ClassEnv` below KEEPS named fields,
 -- for the identical reason `ImplEnv` does: its construction site
 -- (`emptyClassEnv`) is reachable from `emptyDeclEnvs` ← `initialGraphCtx`,
--- which the `graphCtx` initializer builds.
+-- which the `interners` initializer builds.
 --
 -- Fields, in order: this interface's identity key (`ifaceTabKey` lifted
 -- through `regKeyOfTab`, the same mint `oblIfaceKeys`/`ifaceSlotKey` use);
@@ -1011,7 +1011,10 @@ public export data DriveInputs = DriveInputs {
 -- `doStickyDiags` is the sticky list as the drive left it, newest first, not yet
 -- deduplicated (`stickyTypeErrorDiags` reads it); `doFfiAliases` and `doOrdIndex`
 -- are the two tables of the declaration envelope that `checkedFfiExternTypeNamesModules`
--- reads.
+-- reads.  `doEffvarNext` is the drive's effect-variable counter at its end: a
+-- consumer that mints effect variables over `doInvocationView`'s schemes
+-- (`lastInvocationOps`) starts its own counter there, so its ids cannot collide with
+-- an id the drive's schemes hold.
 public export data DriveOutputs = DriveOutputs {
   doMainIsUnit : Bool,
   doMainIsFloat : Bool,
@@ -1026,6 +1029,7 @@ public export data DriveOutputs = DriveOutputs {
   doIfaceExports : OrdMap (List (String, List String)),
   doFfiAliases : List (TabKey, AliasDecl),
   doOrdIndex : OrdMap Int,
+  doEffvarNext : Int,
 }
 
 -- The outputs of a program no drive checked.
@@ -1045,6 +1049,7 @@ emptyDriveOutputs _ = DriveOutputs {
   doIfaceExports = omEmpty,
   doFfiAliases = [],
   doOrdIndex = omEmpty,
+  doEffvarNext = 0,
 }
 
 -- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by

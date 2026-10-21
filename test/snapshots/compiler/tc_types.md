@@ -1,5 +1,5 @@
 # META
-source_lines=3491
+source_lines=3496
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -633,7 +633,7 @@ public export data InstRef = InstRef String Int Int
 --
 -- `ImplEnv` below KEEPS its named fields, and that is not an inconsistency: its
 -- construction site `emptyImplEnv` is reachable from `emptyDeclEnvs` ←
--- `initialGraphCtx`, which the `graphCtx` initializer builds — which is why the panic
+-- `initialGraphCtx`, which the `interners` initializer builds — which is why the panic
 -- named `ieOrd` and not `ieRows`.  A later editor who makes `emptyImplEnv`
 -- unreachable re-arms the same trap on `ImplEnv`.
 --
@@ -819,7 +819,7 @@ public export data ImplAcc = ImplAcc {
 -- label table, so it cannot hit this.  `ClassEnv` below KEEPS named fields,
 -- for the identical reason `ImplEnv` does: its construction site
 -- (`emptyClassEnv`) is reachable from `emptyDeclEnvs` ← `initialGraphCtx`,
--- which the `graphCtx` initializer builds.
+-- which the `interners` initializer builds.
 --
 -- Fields, in order: this interface's identity key (`ifaceTabKey` lifted
 -- through `regKeyOfTab`, the same mint `oblIfaceKeys`/`ifaceSlotKey` use);
@@ -1015,7 +1015,10 @@ public export data DriveInputs = DriveInputs {
 -- `doStickyDiags` is the sticky list as the drive left it, newest first, not yet
 -- deduplicated (`stickyTypeErrorDiags` reads it); `doFfiAliases` and `doOrdIndex`
 -- are the two tables of the declaration envelope that `checkedFfiExternTypeNamesModules`
--- reads.
+-- reads.  `doEffvarNext` is the drive's effect-variable counter at its end: a
+-- consumer that mints effect variables over `doInvocationView`'s schemes
+-- (`lastInvocationOps`) starts its own counter there, so its ids cannot collide with
+-- an id the drive's schemes hold.
 public export data DriveOutputs = DriveOutputs {
   doMainIsUnit : Bool,
   doMainIsFloat : Bool,
@@ -1030,6 +1033,7 @@ public export data DriveOutputs = DriveOutputs {
   doIfaceExports : OrdMap (List (String, List String)),
   doFfiAliases : List (TabKey, AliasDecl),
   doOrdIndex : OrdMap Int,
+  doEffvarNext : Int,
 }
 
 -- The outputs of a program no drive checked.
@@ -1049,6 +1053,7 @@ emptyDriveOutputs _ = DriveOutputs {
   doIfaceExports = omEmpty,
   doFfiAliases = [],
   doOrdIndex = omEmpty,
+  doEffvarNext = 0,
 }
 
 -- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by
@@ -3544,9 +3549,9 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "TcConfig" () ((variant "TcConfig" (ConNamed (field "tcIoJoin" (TyApp (TyCon "List") (TyCon "Atom"))) (field "tcIoJoinProfile" (TyCon "String")) (field "tcStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "tcFlatEntryIsStdlib" (TyCon "Bool")) (field "tcKey" (TyCon "String"))))) ())
 (DData Public "TraceSink" () ((variant "TraceSink" (ConNamed (field "tsAssumptionEnabled" (TyCon "Bool")) (field "tsAssumptionEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry")))) (field "tsNumericPredicateEnabled" (TyCon "Bool")) (field "tsNumericPredicateEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry")))) (field "tsMethodReturnEnabled" (TyCon "Bool")) (field "tsMethodReturnEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry")))) (field "tsEvidenceObservationEnabled" (TyCon "Bool")) (field "tsEvidenceObservationEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))))) ())
 (DData Public "DriveInputs" () ((variant "DriveInputs" (ConNamed (field "diStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "diFlatEntryIsStdlib" (TyCon "Bool")) (field "diTrace" (TyApp (TyCon "Option") (TyCon "TraceSink"))) (field "diIoJoinGrants" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))) (field "diProfileName" (TyCon "String")) (field "diMarked" (TyApp (TyCon "Option") (TyCon "GraphRun")))))) ())
-(DData Public "DriveOutputs" () ((variant "DriveOutputs" (ConNamed (field "doMainIsUnit" (TyCon "Bool")) (field "doMainIsFloat" (TyCon "Bool")) (field "doMainIsAsync" (TyCon "Bool")) (field "doMainAsyncPayloadIsUnit" (TyCon "Bool")) (field "doHadTypeErrors" (TyCon "Bool")) (field "doHadMatchWarnings" (TyCon "Bool")) (field "doInvocationView" (TyCon "InvocationView")) (field "doGrantsEnabled" (TyCon "Bool")) (field "doEffectDomains" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))) (field "doStickyDiags" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "doIfaceExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "doFfiAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl")))) (field "doOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int")))))) ())
+(DData Public "DriveOutputs" () ((variant "DriveOutputs" (ConNamed (field "doMainIsUnit" (TyCon "Bool")) (field "doMainIsFloat" (TyCon "Bool")) (field "doMainIsAsync" (TyCon "Bool")) (field "doMainAsyncPayloadIsUnit" (TyCon "Bool")) (field "doHadTypeErrors" (TyCon "Bool")) (field "doHadMatchWarnings" (TyCon "Bool")) (field "doInvocationView" (TyCon "InvocationView")) (field "doGrantsEnabled" (TyCon "Bool")) (field "doEffectDomains" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))) (field "doStickyDiags" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "doIfaceExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "doFfiAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl")))) (field "doOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "doEffvarNext" (TyCon "Int"))))) ())
 (DTypeSig true "emptyDriveOutputs" (TyFun (TyCon "Unit") (TyCon "DriveOutputs")))
-(DFunDef false "emptyDriveOutputs" (PWild) (ERecordCreate "DriveOutputs" ((fa "doMainIsUnit" (EVar "False")) (fa "doMainIsFloat" (EVar "False")) (fa "doMainIsAsync" (EVar "False")) (fa "doMainAsyncPayloadIsUnit" (EVar "False")) (fa "doHadTypeErrors" (EVar "False")) (fa "doHadMatchWarnings" (EVar "False")) (fa "doInvocationView" (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit))) (fa "doGrantsEnabled" (EVar "False")) (fa "doEffectDomains" (EListLit)) (fa "doStickyDiags" (EListLit)) (fa "doIfaceExports" (EVar "omEmpty")) (fa "doFfiAliases" (EListLit)) (fa "doOrdIndex" (EVar "omEmpty")))))
+(DFunDef false "emptyDriveOutputs" (PWild) (ERecordCreate "DriveOutputs" ((fa "doMainIsUnit" (EVar "False")) (fa "doMainIsFloat" (EVar "False")) (fa "doMainIsAsync" (EVar "False")) (fa "doMainAsyncPayloadIsUnit" (EVar "False")) (fa "doHadTypeErrors" (EVar "False")) (fa "doHadMatchWarnings" (EVar "False")) (fa "doInvocationView" (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit))) (fa "doGrantsEnabled" (EVar "False")) (fa "doEffectDomains" (EListLit)) (fa "doStickyDiags" (EListLit)) (fa "doIfaceExports" (EVar "omEmpty")) (fa "doFfiAliases" (EListLit)) (fa "doOrdIndex" (EVar "omEmpty")) (fa "doEffvarNext" (ELit (LInt 0))))))
 (DData Public "Windowed" ("a") ((variant "Windowed" (ConNamed (field "items" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyVar "a")))) (field "n" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DData Public "CSlot" () ((variant "CSlot" (ConNamed (field "csIface" (TyCon "IfaceRef")) (field "csId" (TyCon "Int"))))) ())
 (DData Public "PredicateSlotArgs" () ((variant "PSArgsUnknown" (ConPos)) (variant "PSArgsKnown" (ConPos (TyApp (TyCon "List") (TyCon "Mono"))))) ())
@@ -3748,9 +3753,9 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "TcConfig" () ((variant "TcConfig" (ConNamed (field "tcIoJoin" (TyApp (TyCon "List") (TyCon "Atom"))) (field "tcIoJoinProfile" (TyCon "String")) (field "tcStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "tcFlatEntryIsStdlib" (TyCon "Bool")) (field "tcKey" (TyCon "String"))))) ())
 (DData Public "TraceSink" () ((variant "TraceSink" (ConNamed (field "tsAssumptionEnabled" (TyCon "Bool")) (field "tsAssumptionEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry")))) (field "tsNumericPredicateEnabled" (TyCon "Bool")) (field "tsNumericPredicateEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry")))) (field "tsMethodReturnEnabled" (TyCon "Bool")) (field "tsMethodReturnEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry")))) (field "tsEvidenceObservationEnabled" (TyCon "Bool")) (field "tsEvidenceObservationEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))))) ())
 (DData Public "DriveInputs" () ((variant "DriveInputs" (ConNamed (field "diStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "diFlatEntryIsStdlib" (TyCon "Bool")) (field "diTrace" (TyApp (TyCon "Option") (TyCon "TraceSink"))) (field "diIoJoinGrants" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))) (field "diProfileName" (TyCon "String")) (field "diMarked" (TyApp (TyCon "Option") (TyCon "GraphRun")))))) ())
-(DData Public "DriveOutputs" () ((variant "DriveOutputs" (ConNamed (field "doMainIsUnit" (TyCon "Bool")) (field "doMainIsFloat" (TyCon "Bool")) (field "doMainIsAsync" (TyCon "Bool")) (field "doMainAsyncPayloadIsUnit" (TyCon "Bool")) (field "doHadTypeErrors" (TyCon "Bool")) (field "doHadMatchWarnings" (TyCon "Bool")) (field "doInvocationView" (TyCon "InvocationView")) (field "doGrantsEnabled" (TyCon "Bool")) (field "doEffectDomains" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))) (field "doStickyDiags" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "doIfaceExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "doFfiAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl")))) (field "doOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int")))))) ())
+(DData Public "DriveOutputs" () ((variant "DriveOutputs" (ConNamed (field "doMainIsUnit" (TyCon "Bool")) (field "doMainIsFloat" (TyCon "Bool")) (field "doMainIsAsync" (TyCon "Bool")) (field "doMainAsyncPayloadIsUnit" (TyCon "Bool")) (field "doHadTypeErrors" (TyCon "Bool")) (field "doHadMatchWarnings" (TyCon "Bool")) (field "doInvocationView" (TyCon "InvocationView")) (field "doGrantsEnabled" (TyCon "Bool")) (field "doEffectDomains" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))) (field "doStickyDiags" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "doIfaceExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "doFfiAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl")))) (field "doOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "doEffvarNext" (TyCon "Int"))))) ())
 (DTypeSig true "emptyDriveOutputs" (TyFun (TyCon "Unit") (TyCon "DriveOutputs")))
-(DFunDef false "emptyDriveOutputs" (PWild) (ERecordCreate "DriveOutputs" ((fa "doMainIsUnit" (EVar "False")) (fa "doMainIsFloat" (EVar "False")) (fa "doMainIsAsync" (EVar "False")) (fa "doMainAsyncPayloadIsUnit" (EVar "False")) (fa "doHadTypeErrors" (EVar "False")) (fa "doHadMatchWarnings" (EVar "False")) (fa "doInvocationView" (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit))) (fa "doGrantsEnabled" (EVar "False")) (fa "doEffectDomains" (EListLit)) (fa "doStickyDiags" (EListLit)) (fa "doIfaceExports" (EVar "omEmpty")) (fa "doFfiAliases" (EListLit)) (fa "doOrdIndex" (EVar "omEmpty")))))
+(DFunDef false "emptyDriveOutputs" (PWild) (ERecordCreate "DriveOutputs" ((fa "doMainIsUnit" (EVar "False")) (fa "doMainIsFloat" (EVar "False")) (fa "doMainIsAsync" (EVar "False")) (fa "doMainAsyncPayloadIsUnit" (EVar "False")) (fa "doHadTypeErrors" (EVar "False")) (fa "doHadMatchWarnings" (EVar "False")) (fa "doInvocationView" (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit))) (fa "doGrantsEnabled" (EVar "False")) (fa "doEffectDomains" (EListLit)) (fa "doStickyDiags" (EListLit)) (fa "doIfaceExports" (EVar "omEmpty")) (fa "doFfiAliases" (EListLit)) (fa "doOrdIndex" (EVar "omEmpty")) (fa "doEffvarNext" (ELit (LInt 0))))))
 (DData Public "Windowed" ("a") ((variant "Windowed" (ConNamed (field "items" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyVar "a")))) (field "n" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DData Public "CSlot" () ((variant "CSlot" (ConNamed (field "csIface" (TyCon "IfaceRef")) (field "csId" (TyCon "Int"))))) ())
 (DData Public "PredicateSlotArgs" () ((variant "PSArgsUnknown" (ConPos)) (variant "PSArgsKnown" (ConPos (TyApp (TyCon "List") (TyCon "Mono"))))) ())
