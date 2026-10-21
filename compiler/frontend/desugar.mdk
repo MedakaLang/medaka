@@ -417,6 +417,11 @@ widenLoc (Loc f sl sc el ec) (Loc _ sl2 sc2 el2 ec2) =
 outerLocs : Expr -> List Loc -> List Loc
 outerLocs (ELoc l _) acc = l :: acc
 outerLocs (EDoOrigin l _) acc = l :: acc
+-- The commonest unwrapped nodes are walked directly; the rest through
+-- `mapChildren`, whose rebuilt node is discarded.
+outerLocs (EApp f x) acc = outerLocs f (outerLocs x acc)
+outerLocs (EBinOp _ a b _) acc = outerLocs a (outerLocs b acc)
+outerLocs (EFieldAccess r _ _) acc = outerLocs r acc
 outerLocs e acc =
   let found = Ref acc
   let _ =

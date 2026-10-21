@@ -1,0 +1,24 @@
+-- A body checked against its declared type is located at the value it
+-- returns: a block's last expression, not the block from its first `let`.
+average : List Int -> Int
+average xs =
+  let n = length xs
+  let s = fold (+) 0 xs
+  intToString (s / n)
+
+interface Size a where
+  size : a -> Int
+
+data Box = Box Int
+
+impl Size Box where
+  size b =
+    let n = 1
+    let m = 2
+    "n + m"
+
+prop "the successor is larger" (k : Int) =
+  let m = k + 1
+  m
+
+main = println (average [1, 2])

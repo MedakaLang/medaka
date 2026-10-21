@@ -1,0 +1,11 @@
+-- A condition that is not a `Bool` is located at the condition: the `if`'s
+-- condition, a guard's expression.
+label : Int -> String
+label n = if n then "yes" else "no"
+
+sign : Int -> Int
+sign k
+  | k + 1 = 1
+  | otherwise = 0
+
+main = println (label 1)

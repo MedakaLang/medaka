@@ -1,0 +1,10 @@
+-- The alias is declared below the last line of the importer's file.
+export x : Int
+x = 1
+
+pad1 = 1
+pad2 = 2
+pad3 = 3
+pad4 = 4
+
+export type Foo = List Foo

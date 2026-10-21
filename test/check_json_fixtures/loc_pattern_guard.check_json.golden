@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"T-TYPE-MISMATCH","kind":"type","message":"type mismatch: Bool vs Option Int","range":{"end":{"character":26,"line":4},"start":{"character":20,"line":4}},"severity":1,"source":"medaka"}]}]}

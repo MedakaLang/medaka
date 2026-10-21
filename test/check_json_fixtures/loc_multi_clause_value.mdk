@@ -1,0 +1,9 @@
+-- A clause that does not fit the declared type is located at the value that
+-- clause returns, not at a span joined across every clause.
+classify : Int -> String
+classify 0 = "zero"
+classify n =
+  let half = n / 2
+  half
+
+main = println (classify 1)
