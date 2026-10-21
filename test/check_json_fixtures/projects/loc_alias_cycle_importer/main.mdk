@@ -1,0 +1,8 @@
+-- A recursive alias declared in `lib` is reported in this module at the
+-- import that brings it in, not at `lib`'s line and column.
+import lib.{Foo, x}
+
+y : Foo
+y = []
+
+main = x

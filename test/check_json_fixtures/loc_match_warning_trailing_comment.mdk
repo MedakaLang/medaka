@@ -1,0 +1,10 @@
+-- A non-exhaustive match is located at the match through its last arm, which
+-- stops before a comment that follows the last arm on its own line.
+data Color = Red | Green | Blue
+
+pick : Color -> Int
+pick c = match c
+  Red => 1
+  Green => 2 -- a trailing comment on the last arm
+
+main = println (pick Red)

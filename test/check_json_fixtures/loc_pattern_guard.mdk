@@ -1,0 +1,9 @@
+-- A pattern guard whose pattern does not fit its expression is located at the
+-- guard's expression, not at the whole `match`.
+firstBig : Option Int -> Int
+firstBig o = match o
+  Some n if True <- Some n => n
+  Some _ => 1
+  None => 0
+
+main = println (firstBig (Some 3))

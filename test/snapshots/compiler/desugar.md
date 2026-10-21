@@ -1,5 +1,5 @@
 # META
-source_lines=1357
+source_lines=1362
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -421,6 +421,11 @@ widenLoc (Loc f sl sc el ec) (Loc _ sl2 sc2 el2 ec2) =
 outerLocs : Expr -> List Loc -> List Loc
 outerLocs (ELoc l _) acc = l :: acc
 outerLocs (EDoOrigin l _) acc = l :: acc
+-- The commonest unwrapped nodes are walked directly; the rest through
+-- `mapChildren`, whose rebuilt node is discarded.
+outerLocs (EApp f x) acc = outerLocs f (outerLocs x acc)
+outerLocs (EBinOp _ a b _) acc = outerLocs a (outerLocs b acc)
+outerLocs (EFieldAccess r _ _) acc = outerLocs r acc
 outerLocs e acc =
   let found = Ref acc
   let _ =
@@ -1543,6 +1548,9 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "outerLocs" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "Loc")))))
 (DFunDef false "outerLocs" ((PCon "ELoc" (PVar "l") PWild) (PVar "acc")) (EBinOp "::" (EVar "l") (EVar "acc")))
 (DFunDef false "outerLocs" ((PCon "EDoOrigin" (PVar "l") PWild) (PVar "acc")) (EBinOp "::" (EVar "l") (EVar "acc")))
+(DFunDef false "outerLocs" ((PCon "EApp" (PVar "f") (PVar "x")) (PVar "acc")) (EApp (EApp (EVar "outerLocs") (EVar "f")) (EApp (EApp (EVar "outerLocs") (EVar "x")) (EVar "acc"))))
+(DFunDef false "outerLocs" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild) (PVar "acc")) (EApp (EApp (EVar "outerLocs") (EVar "a")) (EApp (EApp (EVar "outerLocs") (EVar "b")) (EVar "acc"))))
+(DFunDef false "outerLocs" ((PCon "EFieldAccess" (PVar "r") PWild PWild) (PVar "acc")) (EApp (EApp (EVar "outerLocs") (EVar "r")) (EVar "acc")))
 (DFunDef false "outerLocs" ((PVar "e") (PVar "acc")) (EBlock (DoLet false false (PVar "found") (EApp (EVar "Ref") (EVar "acc"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "child")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "found")) (EApp (EApp (EVar "outerLocs") (EVar "child")) (EFieldAccess (EVar "found") "value")))) (DoExpr (EVar "child"))))) (EVar "e"))) (DoExpr (EFieldAccess (EVar "found") "value"))))
 (DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EApp (EApp (EVar "locatedAt") (EApp (EVar "exprSpanLoc") (EVar "e"))) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont"))))))
@@ -2041,6 +2049,9 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "outerLocs" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "Loc")))))
 (DFunDef false "outerLocs" ((PCon "ELoc" (PVar "l") PWild) (PVar "acc")) (EBinOp "::" (EVar "l") (EVar "acc")))
 (DFunDef false "outerLocs" ((PCon "EDoOrigin" (PVar "l") PWild) (PVar "acc")) (EBinOp "::" (EVar "l") (EVar "acc")))
+(DFunDef false "outerLocs" ((PCon "EApp" (PVar "f") (PVar "x")) (PVar "acc")) (EApp (EApp (EVar "outerLocs") (EVar "f")) (EApp (EApp (EVar "outerLocs") (EVar "x")) (EVar "acc"))))
+(DFunDef false "outerLocs" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild) (PVar "acc")) (EApp (EApp (EVar "outerLocs") (EVar "a")) (EApp (EApp (EVar "outerLocs") (EVar "b")) (EVar "acc"))))
+(DFunDef false "outerLocs" ((PCon "EFieldAccess" (PVar "r") PWild PWild) (PVar "acc")) (EApp (EApp (EVar "outerLocs") (EVar "r")) (EVar "acc")))
 (DFunDef false "outerLocs" ((PVar "e") (PVar "acc")) (EBlock (DoLet false false (PVar "found") (EApp (EVar "Ref") (EVar "acc"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "child")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "found")) (EApp (EApp (EVar "outerLocs") (EVar "child")) (EFieldAccess (EVar "found") "value")))) (DoExpr (EVar "child"))))) (EVar "e"))) (DoExpr (EFieldAccess (EVar "found") "value"))))
 (DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EApp (EApp (EVar "locatedAt") (EApp (EVar "exprSpanLoc") (EVar "e"))) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont"))))))

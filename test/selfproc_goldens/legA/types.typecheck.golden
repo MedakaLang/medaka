@@ -36,6 +36,7 @@ aliasArgBindings : ModuleCtx -> SigVars -> List (String, Mono) -> List String ->
 aliasArgScope : ModuleCtx -> SigVars -> List (String, Mono) -> TabKey -> List String -> List Ty -> (SigVars, List (String, Mono))
 aliasArityMsg : String -> Int -> Int -> String
 aliasConstraintEntries : GraphCtx -> List Decl -> List ((String, String), a) -> List (String, a)
+aliasDeclaredBy : String -> TabKey -> Bool
 aliasDfsVisit : Map String (List String) -> Ref (Map String Unit) -> Ref (List String) -> Ref (Map String Unit) -> Ref (List String) -> String -> Unit
 aliasDfsVisitAll : Map String (List String) -> Ref (Map String Unit) -> Ref (List String) -> Ref (Map String Unit) -> Ref (List String) -> List String -> Unit
 aliasDfsVisitNeighbors : Map String (List String) -> Ref (Map String Unit) -> Ref (List String) -> Ref (Map String Unit) -> Ref (List String) -> List String -> Unit
@@ -130,6 +131,7 @@ appArgExpr : Expr -> Option Expr
 appArgLoc : Expr -> Option Loc
 appFallback : ModuleCtx -> SigVars -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
 appNodeArg : Expr -> Expr
+appSpanLoc : Option Loc -> Expr -> Option Loc
 appSpineArgCount : Expr -> Int
 appSpineExpr : Expr -> (Expr, List Expr)
 appSpineExprGo : Expr -> List Expr -> (Expr, List Expr)
@@ -261,6 +263,7 @@ beginEvidenceObservation : Unit -> TraceSink
 beginMethodReturnTrace : Unit -> TraceSink
 beginModuleMarking : ModuleCtx -> String -> List Decl -> Map String Int -> ModuleSeed -> Unit
 beginNumericPredicateTrace : Unit -> TraceSink
+beginsWithSpan : Option Loc -> Loc -> Bool
 bestFieldCandidate : String -> Int -> List String -> Option (String, Int) -> Option (String, Int)
 bindEach : List (Ref Effvar) -> EffRow -> Unit
 bindFrom : DynCtx -> Mono -> Mono -> Unit
@@ -732,7 +735,7 @@ ctorsByHead : List Scheme -> Map String (List (List Mono, List Mono))
 ctorsOfHead : ModuleCtx -> HeadKey -> Option (List String)
 currentModuleMarks : GraphCtx -> Unit -> GraphMarks
 currentScopeStore : GraphCtx -> Unit -> ScopeStore
-cycleReportLoc : List Decl -> Int -> CeRow -> Option Loc
+cycleReportLoc : Map String (Map String Unit) -> List Decl -> Int -> CeRow -> Option Loc
 cyclicSuperIfaceMsg : List String -> String
 dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
 dataEnvFinish : DataEnv -> DataEnv
@@ -1023,7 +1026,7 @@ elaborateModulesWithSchemes : DriveInputs -> Bool -> List Decl -> List Decl -> L
 elaborateOne : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOneFacts : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List Decl, ProgramFacts)
 elselessIfHelp : String
-emitCyclicAliasErrors : ModuleCtx -> List (TabKey, (List String, Ty)) -> List String -> Unit
+emitCyclicAliasErrors : ModuleCtx -> List Decl -> List (TabKey, (List String, Ty)) -> List String -> Unit
 emitValueShadowGate : ModuleCtx -> String -> Bool
 emptyBuiltinClasses : BuiltinClasses
 emptyClassEnv : ClassEnv
@@ -1609,7 +1612,9 @@ implTupleHeadKindMsg : String -> Int -> List Kind -> String
 importDefinersOf : GraphCtx -> List Decl -> List (String, (String, String))
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, a)) -> UsePath -> List (String, a) -> List (String, a)
+importLocFor : Map String (Map String Unit) -> List Decl -> String -> Option Loc
 importLocOf : String -> Decl -> Option Loc
+importLocReaching : Map String (Map String Unit) -> String -> Decl -> Option Loc
 importMemberShadow : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> List Decl -> UseMember -> List (String, String, Option Ty, Ty, Loc)
 importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
 importSeed : GraphCtx -> List (String, a) -> List (String, String) -> List Decl -> List (String, List (String, a)) -> List (String, (Option String, a))
@@ -2791,7 +2796,7 @@ registerImplMethodDictOne : GraphCtx -> ScopeId -> Int -> String -> List (String
 registerImplMethodDicts : GraphCtx -> ScopeId -> List String -> Ty -> List (String, Mono) -> Unit
 registerImplMethodDictsGo : GraphCtx -> ScopeId -> Int -> List String -> List (String, Mono) -> Unit
 registerImplRequires : ModuleCtx -> ClassEnv -> Int -> IfaceRef -> List (String, Mono) -> List String -> List Require -> List ScopedImplMethod -> Unit
-registerImportOverlay : TcEnv -> List Decl -> TcEnv
+registerImportOverlay : TcEnv -> List Decl -> List Decl -> TcEnv
 registerInferredConstraints : ModuleCtx -> List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List ScopedScheme -> Unit
 registerInferredFor : ModuleCtx -> String -> ScopeId -> List Int -> List (IfaceRef, Int, List Mono) -> Unit
 registerLocalAbs : ModuleCtx -> String -> ScopeId -> Scheme -> Int -> Int -> Unit
@@ -2816,7 +2821,7 @@ registerSlotPredGivens : GraphCtx -> ScopeId -> Int -> List PredicateSlot -> Uni
 registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List (Option KindAnn) -> List Variant -> List (List (String, KindAnn)) -> TcEnv
 registersElementDict : ModuleCtx -> String -> List String -> Bool
 rejectAdmittedValueOccurrence : ModuleCtx -> String -> Unit
-rejectCyclicAliases : ModuleCtx -> Unit -> Unit
+rejectCyclicAliases : ModuleCtx -> List Decl -> Unit
 rejectUndeterminedVectors : ModuleCtx -> Map String Unit -> Map String Unit -> List UObligation -> List UObligation -> Unit
 rejectWithheldAmbiguity : ModuleCtx -> Map String Unit -> List Mono -> List UObligation -> Unit
 removeAllS : List String -> List String -> List String
@@ -3225,6 +3230,7 @@ synthesizedAdmissions : List (String, List String) -> List Decl -> List (String,
 tabKeyIndex : List TabKey -> Map String (List TabKey)
 tabKeyIndexGo : List TabKey -> Map String (List TabKey) -> Map String (List TabKey)
 tabKeyIndexHas : Map String (List TabKey) -> TabKey -> Bool
+tabKeyModule : TabKey -> Option String
 tagAllLitLocs : ModuleCtx -> Mono -> JoinContext -> Unit
 tagLitLocsWithRoot : ModuleCtx -> Int -> JoinContext -> List (Mono, Loc) -> Unit
 tagModuleExports : Map String Scheme -> List (String, Scheme) -> List (String, ExportBinding)

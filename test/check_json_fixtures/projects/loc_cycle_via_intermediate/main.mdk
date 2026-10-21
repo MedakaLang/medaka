@@ -1,0 +1,7 @@
+-- An interface cycle declared in `cmod` reaches this module through `bmod`;
+-- it is reported here at the import that brings it in, not without a span.
+import bmod.{bfn}
+
+z = 3
+
+main = bfn z

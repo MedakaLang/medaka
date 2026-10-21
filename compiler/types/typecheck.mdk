@@ -13622,26 +13622,48 @@ aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut (k :: ks) =
   aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut ks
 
 -- Each report is located at the alias's right-hand side, the type that refers
--- back to it.
+-- back to it, when the reading module declares the alias; an alias another
+-- module declares is reported at the import that brings it in ([prog] is the
+-- reading module's declarations), since its right-hand side is in another file.
 emitCyclicAliasErrors : ModuleCtx ->
+  List Decl ->
   List (TabKey, (List String, Ty)) ->
   List String ->
   Unit
-emitCyclicAliasErrors mctx _ [] = ()
-emitCyclicAliasErrors mctx table (name :: rest) =
-  let rhsLoc =
-    findMap
-      (e =>
-        if tabKeyName (fst e) == name then firstTyLoc (snd (snd e)) else None)
-      table
+emitCyclicAliasErrors mctx _ _ [] = ()
+emitCyclicAliasErrors mctx prog table (name :: rest) =
+  let reader = mctx.mcCells.currentModuleRef.value
+  let named = filterList (e => tabKeyName (fst e) == name) table
+  let loc = match find (e => aliasDeclaredBy reader (fst e)) named
+    Some e => firstTyLoc (snd (snd e))
+    None =>
+      findMap
+        (e => match tabKeyModule (fst e)
+          Some owner =>
+            importLocFor mctx.mcGraph.declEnvsRef.value.deReach prog owner
+          None => None)
+        named
   let _ =
     pushTypeErrorOnce
-      (mctxAtIfSome rhsLoc mctx)
+      (mctxAtIfSome loc mctx)
       "T-RECURSIVE-ALIAS"
       ("type alias `"
         ++ name
         ++ "` is recursive; a type alias cannot refer to itself, so declare a `data` type instead")
-  emitCyclicAliasErrors mctx table rest
+  emitCyclicAliasErrors mctx prog table rest
+
+-- Does module [reader] declare the alias keyed [key]?  A key with no module
+-- (a flat program's) is the reader's own.
+aliasDeclaredBy : String -> TabKey -> Bool
+aliasDeclaredBy reader key = match tabKeyModule key
+  Some owner => owner == reader
+  None => True
+
+-- The module a key's declaration belongs to, if it names one.
+tabKeyModule : TabKey -> Option String
+tabKeyModule (TkIdent (Ident _ origin _)) =
+  identOriginFold None (mid => Some mid) origin
+tabKeyModule (TkBare _ _) = None
 
 -- Cycle-detection pre-pass over aliasTableRef.  MUST run after the aliases are
 -- in the table and BEFORE any fromAstType* call (which would infinite-loop on a
@@ -13653,10 +13675,12 @@ emitCyclicAliasErrors mctx table (name :: rest) =
 --   (1) emits a deduped type_error naming the offending alias;
 --   (2) removes it from aliasTableRef so the expansion seam falls through to an
 --       opaque TCon and cannot recurse → no stack overflow.
-rejectCyclicAliases : ModuleCtx -> Unit -> Unit
+-- [prog] is the reading module's declarations, whose imports locate a report of
+-- an alias another module declares.
+rejectCyclicAliases : ModuleCtx -> List Decl -> Unit
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
-rejectCyclicAliases mctx _ =
+rejectCyclicAliases mctx prog =
   let table = mctx.mcCells.aliasTableRef.value
   -- BARE NAMES on purpose — see `buildAliasGraphEntry`.
   let aliasKeys = map (e => tabKeyName (fst e)) table
@@ -13677,7 +13701,7 @@ rejectCyclicAliases mctx _ =
       cyclicOut
       aliasKeys
   let cyclic = !cyclicOut
-  let _ = emitCyclicAliasErrors mctx table cyclic
+  let _ = emitCyclicAliasErrors mctx prog table cyclic
   let cyclicSet = omFromNames cyclic omEmpty
   setRef
     mctx.mcCells.aliasTableRef
@@ -21578,6 +21602,25 @@ appArgLoc (ELoc _ e) = appArgLoc e
 appArgLoc (EApp _ x) = exprSpanLoc x
 appArgLoc _ = None
 
+-- The span of a check about the application [app] itself: its own span, head
+-- through last argument, or the [enclosing] construct's when that construct
+-- begins with the application (at its first column, or one before it: an
+-- opening bracket), so it does not start on unrelated code.
+appSpanLoc : Option Loc -> Expr -> Option Loc
+appSpanLoc enclosing app = match exprSpanLoc app
+  None => enclosing
+  Some own => if beginsWithSpan enclosing own then enclosing else Some own
+
+-- Does [outer] start where [inner] starts, or one column before it, and reach
+-- at least as far?
+beginsWithSpan : Option Loc -> Loc -> Bool
+beginsWithSpan (Some (Loc _ sl sc el ec)) (Loc _ isl isc iel iec) =
+  sl == isl
+    && isc - sc >= 0
+    && isc - sc <= 1
+    && (el > iel || el == iel && ec >= iec)
+beginsWithSpan None _ = False
+
 -- ── #1815: application spines ───────────────────────────────────────────────
 -- The ultimate head of an application spine, ELoc wrappers peeled.  A non-application
 -- expression is its own head (so `appSpineNodes` below answers [] for it, which is what
@@ -22222,7 +22265,7 @@ inferShadowApp : TcEnv ->
 inferShadowApp env mname arityRefs tagRefs f x =
   -- the application's loc, so a domain mismatch localizes to the call site, not
   -- the argument.
-  let dloc = env.teDyn.dcModule.mcLoc
+  let dloc = appSpanLoc env.teDyn.dcModule.mcLoc (EApp f x)
   let tx = infer env x
   -- The dict-var carve-out (S5/Fork 2) applies to importer shadows too: a receiver that is
   -- the enclosing fn's `=>`-bound constraint var DISPATCHES through that dict, so it must
@@ -22298,7 +22341,14 @@ inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
       let smono = occurrence.svoInstance.mtiBody
       let _ = stampMethodArities arityRefs (funArity smono)
       let r = freshVar env.teDyn.dcModule ()
-      let eff = applicationRow env (EApp f x) smono tx r
+      -- At the call site, as `inferShadowApp`'s domain check.
+      let eff =
+        applicationRow
+          (envAtIfSome (appSpanLoc env.teDyn.dcModule.mcLoc (EApp f x)) env)
+          (EApp f x)
+          smono
+          tx
+          r
       let _ =
         performEffect
           env.teDyn.dcModule
@@ -22353,7 +22403,8 @@ inferShadowAppAt : TcEnv ->
   Expr ->
   Mono
 inferShadowAppAt env mname arityRefs tagRefs hd nodes f x =
-  let dloc = env.teDyn.dcModule.mcLoc
+  -- the application's loc, as in `inferShadowApp`.
+  let dloc = appSpanLoc env.teDyn.dcModule.mcLoc (EApp f x)
   let pre = inferSpineArgs env nodes
   let k = listLen pre
   let tx = infer env x
@@ -22427,7 +22478,13 @@ inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx =
       let _ = recordStandaloneAt env.teDyn.dcModule mname hd occurrence
       let smono = occurrence.svoInstance.mtiBody
       let _ = stampMethodArities arityRefs (funArity smono)
-      let r = unifySpineResult env f smono (pre ++ [(x, tx)])
+      -- At the call site, as `inferShadowApp`'s domain check.
+      let r =
+        unifySpineResult
+          (envAtIfSome (appSpanLoc env.teDyn.dcModule.mcLoc (EApp f x)) env)
+          f
+          smono
+          (pre ++ [(x, tx)])
       let _ = stampRoutes (map fst tagRefs)
       let _ =
         recordSelectedStandaloneRoutes
@@ -22654,7 +22711,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
   let sym = recoveredShadowSym name tagRef
   -- P0-19: the application's location, so a standalone-domain mismatch reports at
   -- the call site.
-  let dloc = env.teDyn.dcModule.mcLoc
+  let dloc = appSpanLoc env.teDyn.dcModule.mcLoc (EApp f x)
   -- #1815: the arguments the spine already applied, inferred in source order (exactly
   -- the order the recursive walk visited them in before).
   let pre = inferSpineArgs env nodes
@@ -22831,7 +22888,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
     None
   else
     standaloneSchemeFor env name sym)
-    Some _ => unifySpineResult env f ft (pre ++ [(x, xt)])
+    Some _ => unifySpineResult (envAtIfSome dloc env) f ft (pre ++ [(x, xt)])
     None =>
       let _ = if sym == "" then enforceStandaloneDomainAt env name xt dloc k
       inferAppNodes env ft (pre ++ [(EApp f x, xt)])
@@ -23367,7 +23424,8 @@ inferDefinerShadowVarAppAt : TcEnv ->
   Expr ->
   Mono
 inferDefinerShadowVarAppAt env name hd nodes f x =
-  let dloc = env.teDyn.dcModule.mcLoc
+  -- the application's location, as in `inferDefinerShadowAppAt`.
+  let dloc = appSpanLoc env.teDyn.dcModule.mcLoc (EApp f x)
   let pre = inferSpineArgs env nodes
   let xt = infer env x
   let isDictVar = definerReceiverIsDictVar env.teDyn name xt
@@ -23438,7 +23496,11 @@ inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc =
       -- standalone's declared type against `TFun xt … r` when the receiver is argument 1
       -- is what equated `Int -> Int -> Int` (the standalone) with `b -> r` (the annotated
       -- `wrap`'s second parameter) and monomorphised the user's written signature.
-      unifySpineResult env f occurrence.svoInstance.mtiBody (pre ++ [(x, xt)])
+      unifySpineResult
+        (envAtIfSome dloc env)
+        f
+        occurrence.svoInstance.mtiBody
+        (pre ++ [(x, xt)])
     None =>
       let ft = infer (shadowHeadEnv env) hd
       let _ = enforceStandaloneDomainAt env name xt dloc (listLen pre)
@@ -24212,18 +24274,20 @@ inferAppNotFunction : ModuleCtx -> Expr -> Mono -> Mono -> Mono
 inferAppNotFunction mctx appExpr ft r =
   let applied = appSpineArgCount appExpr
   let takes = applied - 1
+  -- Reported at the application, not at a construct around it.
+  let loc = appSpanLoc mctx.mcLoc appExpr
   let _ = match appSpineName appExpr
     Some name =>
       if takes >= 1 then
         pushTypeError
-          mctx
+          (mctxAt loc mctx)
           "T-NOT-A-FUNCTION"
           (overAppliedMsg name takes applied)
       else
         pushTypeErrorHelpFixAt
           mctx
           "T-NOT-A-FUNCTION"
-          mctx.mcLoc
+          loc
           (notAFunctionMsgFor (Some name) (ppMono (normalize ft)))
           (notAFunctionHint (Some name))
           None
@@ -24231,7 +24295,7 @@ inferAppNotFunction mctx appExpr ft r =
       pushTypeErrorHelpFixAt
         mctx
         "T-NOT-A-FUNCTION"
-        mctx.mcLoc
+        loc
         (notAFunctionMsg (ppMono (normalize ft)))
         (notAFunctionHint None)
         None
@@ -24465,7 +24529,12 @@ inferLetBody env bodyLoc pat t1 _ _ e2 _ _ _ _ =
 
 inferIf : TcEnv -> Expr -> Expr -> Expr -> Mono
 inferIf env c t e =
-  let _ = unifyIn env.teDyn (infer env c) (tconBuiltin "Bool")
+  -- A condition that is not a `Bool` is reported at the condition.
+  let _ =
+    unifyIn
+      (dynAtIfSome (exprSpanLoc c) env.teDyn)
+      (infer env c)
+      (tconBuiltin "Bool")
   let tt = infer env t
   let ee = infer env e
   let context = if isOmittedElse e then JoinElselessIf else JoinIf
@@ -24842,13 +24911,19 @@ inferMatch env scrutTy arms =
   result
 
 -- A match's warnings are located at the match through its last arm.  The
--- match's own span runs on to the token after it, over any comment or blank
--- line that follows, so it is cut at the last arm's last line.
+-- match's own span runs on over any comment or blank line that follows, on the
+-- last arm's line or after it, so it is cut at the end of the last arm.  On
+-- that arm's own line the cut takes the body's own span (its `ELoc`): the
+-- parts of an unwrapped body do not reach its end (a field access's name has
+-- no span).
 matchWarningLoc : Option Loc -> List Arm -> Option Loc
 matchWarningLoc (Some (Loc f sl sc el ec)) arms = match last arms
   Some (Arm _ _ body) => match exprSpanLoc body
     Some (Loc _ _ _ bel bec) if bel < el => Some (Loc f sl sc bel bec)
-    _ => Some (Loc f sl sc el ec)
+    _ => match exprLoc body
+      Some (Loc _ _ _ bel bec) if bel == el && bec < ec =>
+        Some (Loc f sl sc bel bec)
+      _ => Some (Loc f sl sc el ec)
   None => Some (Loc f sl sc el ec)
 matchWarningLoc None _ = None
 
@@ -25198,18 +25273,24 @@ existentialEscapeMsg name =
 
 -- Thread an arm's guard qualifiers left-to-right: a `GBool` must be `Bool` and leaves the env unchanged; a
 -- `GBind p e` infers `e`, binds `p` against it, and extends the env so the bound
--- vars are in scope for LATER qualifiers and the arm body.
+-- vars are in scope for LATER qualifiers and the arm body.  A qualifier's own
+-- check is located at its expression.
 inferArmGuards : TcEnv -> List Guard -> TcEnv
 inferArmGuards env [] = env
 inferArmGuards env ((GBool g) :: rest) =
-  let _ = unifyIn env.teDyn (infer env g) (tconBuiltin "Bool")
+  let _ =
+    unifyIn
+      (dynAtIfSome (exprSpanLoc g) env.teDyn)
+      (infer env g)
+      (tconBuiltin "Bool")
   inferArmGuards env rest
 inferArmGuards env ((GBind p e) :: rest) =
   let te = infer env e
-  let lits = takePatLits env.teDyn.dcModule ()
-  let pr = inferPat env p
-  let _ = bindFrom env.teDyn (fst pr) te
-  let _ = settlePatLits env.teDyn lits
+  let at = envAtIfSome (exprSpanLoc e) env
+  let lits = takePatLits at.teDyn.dcModule ()
+  let pr = inferPat at p
+  let _ = bindFrom at.teDyn (fst pr) te
+  let _ = settlePatLits at.teDyn lits
   inferArmGuards (extendLocalVars env (snd pr)) rest
 
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
@@ -30970,33 +31051,13 @@ pushIncompleteImpl : ModuleCtx -> (Option Loc, String) -> Unit
 pushIncompleteImpl mctx (loc, msg) =
   pushTypeErrorOnceAt mctx "T-INCOMPLETE-IMPL" loc msg
 
--- a loc to attribute the error to: the first present impl-method body's span (the
--- impl head carries no Loc of its own).  None for a wholly-empty impl body.
---
--- 🚨 [RUN-METHID-035, F6] Computed from the impl-method's OWN parsed AST body,
--- independent of whether that body was ever type-inferred.  `exprLoc` alone
--- only recognizes an OUTERMOST `ELoc`/`EDoOrigin` wrapper (by design — see its
--- own comment), and a body shaped `f x` (an application, e.g. `gandThen2 p =
--- gandThen2 p`) is NOT itself ELoc-wrapped at that outer node, so `exprLoc`
--- alone returns `None` for it.  Before this fix, `pushTypeErrorOnceAt`'s
--- `orElseLoc loc` fallback to the walk's last-entered span then anchored T-INCOMPLETE-IMPL at
--- whatever OTHER declaration the type-inference walk had most recently
--- entered — which was RIGHT, by ACCIDENT, only when a same-spelled-but-
--- unrelated sibling interface caused this method's body to be (wrongly)
--- type-inferred anyway, setting that span as a side effect (#1647 removed
--- that accident; see RUN-METHID-035).  `appArgLoc` (Bite 3, above) peels one
--- application to the argument's own span, so `f x` resolves to `x`'s loc —
--- a location genuinely inside the impl block, sourced from the AST alone.
---
--- ⚠️ [RUN-METHID-161] THIS FIX IS CURRENTLY INERT, and that is expected: its
--- trigger is #1647 — the change that introduced the reachability guarded against
--- above — and #1647 was REVERTED in this same sprint at `f585bfbb`.  At the
--- resulting BASE the diagnostic still lands correctly, by the same accident this
--- comment already describes (the same-spelled sibling interface type-infers the
--- body), so nothing on the tree today can discriminate this
--- fix from its absence.  A discriminating test pin becomes CONSTRUCTIBLE — and is
--- OWED — the moment #1647 or anything in its class re-lands.  Do not delete this
--- as dead code on the strength of it being unexercised.
+-- The span a missing-method error is attributed to: the first impl method's
+-- body, read from its parsed AST whether or not the body was ever inferred.
+-- `exprLoc` sees only an outermost `ELoc`/`EDoOrigin` wrapper, and a body shaped
+-- `f x` (an application) has none, so `appArgLoc` gives its argument's span, a
+-- location inside the impl block.  `None` for an impl with no method body or a
+-- body neither form locates; the caller then reports at the impl's interface
+-- name (`implIfaceLoc`).
 firstImplMethodLoc : List ImplMethod -> Option Loc
 firstImplMethodLoc [] = None
 firstImplMethodLoc ((ImplMethod _ _ body) :: _) =
@@ -32259,25 +32320,43 @@ checkOneIfaceCycle mctx prog ce cur done row =
   if not (omHasKey (ceRowDoneKey row) !done) then
     foreachUnit
       (pushTypeError
-        (mctxAt (cycleReportLoc prog cur row) mctx)
+        (mctxAt
+          (cycleReportLoc mctx.mcGraph.declEnvsRef.value.deReach prog cur row)
+          mctx)
         "T-CYCLIC-SUPERINTERFACE")
       (ifaceDfsCycle ce cur done [row] row)
 
 -- A cycle is reported at the name of the interface its walk started from when
 -- the reading module [cur] declares it.  A module that only sees it reports it
--- at the import of the declaring module, or with no span when the interface
--- reaches it otherwise: the interface's span is in another file.
-cycleReportLoc : List Decl -> Int -> CeRow -> Option Loc
-cycleReportLoc prog cur row
+-- at its import of the declaring module, or else at its first import of a
+-- module that reaches the declaring one ([reach], each module's import
+-- closure): the interface's span is in another file.  A module with no import
+-- path to it reports it with no span.
+cycleReportLoc : OrdMap (OrdMap Unit) -> List Decl -> Int -> CeRow -> Option Loc
+cycleReportLoc reach prog cur row
   | ceRowOrd row == cur = ceRowLoc row
   | otherwise = match (ceRowIface row).irOrigin
-    OriginModule owner => findMap (importLocOf owner) prog
+    OriginModule owner => importLocFor reach prog owner
     _ => None
+
+-- The import in [prog] that brings in module [owner]'s declarations: its own
+-- import, or else the first import of a module that reaches it.
+importLocFor : OrdMap (OrdMap Unit) -> List Decl -> String -> Option Loc
+importLocFor reach prog owner =
+  orElseLoc
+    (findMap (importLocOf owner) prog)
+    (findMap (importLocReaching reach owner) prog)
 
 importLocOf : String -> Decl -> Option Loc
 importLocOf owner (DUse _ path loc)
   | usePathModuleId path == owner = Some loc
 importLocOf _ _ = None
+
+importLocReaching : OrdMap (OrdMap Unit) -> String -> Decl -> Option Loc
+importLocReaching reach owner (DUse _ path loc)
+  | omHasKey owner (optionOr omEmpty (omLookup (usePathModuleId path) reach)) =
+    Some loc
+importLocReaching _ _ _ = None
 
 -- The `done`/`path` identity, rendered once.  `regKeyRender` is `RegKey`'s own
 -- collision-free renderer, so two same-spelled interfaces in unrelated modules
@@ -36685,6 +36764,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     let base =
       registerImportOverlay
         (withCtors mctx (spFloor gctx.crossRun.universeCtorPop.value))
+        prog0
         (importedCtorTypeDeclsLastWins prog0 cur envs.deModules)
     let env0 = registerAllData base prog0
     let _ = applyRecordScopeOverrides mctx prog0
@@ -36720,7 +36800,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     let envs = gctx.declEnvsRef.value
     (envs.deIfaces, declEnvsOrdOf mid envs)
   let _ = checkGradedImplHeads mctx (fst classEnvHere) (snd classEnvHere) prog
-  let _ = rejectCyclicAliases mctx ()
+  let _ = rejectCyclicAliases mctx prog
   -- #1280: `prog` reached here through a driver's stamping walk already, and
   -- `stampTyHead` is first-write-immune, so the builtins-only scope can only fill
   -- a head no driver could attribute — an `extern` written in a FLAT user file,
@@ -37028,7 +37108,8 @@ inferPropBodies env prog =
 inferPropBodiesGo : TcEnv -> List Decl -> Unit
 inferPropBodiesGo env [] = ()
 inferPropBodiesGo outer ((DProp _ name params body) :: rest) =
-  -- The body's checks are located at the body: the declaration has no span.
+  -- The body's checks are located at the body (the declaration has no span),
+  -- and its type at the value it returns.
   let env = envAtIfSome (exprSpanLoc body) outer
   let local = extendPropParams env params
   let _ = enterLevel env.teDyn.dcModule ()
@@ -37046,7 +37127,11 @@ inferPropBodiesGo outer ((DProp _ name params body) :: rest) =
   let oblMark = wMark env.teDyn.dcModule.mcCells.implObls
   let callMark = wMark env.teDyn.dcModule.mcCells.obls
   let dictMark = goalsMark env.teDyn.dcModule.mcGraph ()
-  let _ = unifyIn env.teDyn (infer local body) (tconBuiltin "Bool")
+  let _ =
+    unifyIn
+      (dynAtIfSome (valueSpanLoc body) env.teDyn)
+      (infer local body)
+      (tconBuiltin "Bool")
   let _ = exitLevel env.teDyn.dcModule ()
   let _ =
     settleClosedBody
@@ -37068,7 +37153,8 @@ inferPropBodiesGo env (_ :: rest) = inferPropBodiesGo env rest
 inferTestBodies : TcEnv -> List Decl -> Unit
 inferTestBodies env [] = ()
 inferTestBodies outer ((DTest _ name body) :: rest) =
-  -- The body's checks are located at the body: the declaration has no span.
+  -- The body's checks are located at the body (the declaration has no span),
+  -- and its type at the value it returns.
   let env = envAtIfSome (exprSpanLoc body) outer
   let _ = enterLevel env.teDyn.dcModule ()
   let parentScope = captureScope env.teDyn.dcModule ()
@@ -37091,7 +37177,11 @@ inferTestBodies outer ((DTest _ name body) :: rest) =
   -- language does not provide `Expectation`, and claiming §8 I6.2's
   -- program-global identity for a type some module declares would be a lie the
   -- shared carrier type cannot object to.
-  let _ = unifyIn env.teDyn (infer env body) (tconUnresolved "Expectation")
+  let _ =
+    unifyIn
+      (dynAtIfSome (valueSpanLoc body) env.teDyn)
+      (infer env body)
+      (tconUnresolved "Expectation")
   let _ = exitLevel env.teDyn.dcModule ()
   let _ =
     settleClosedBody
@@ -40835,8 +40925,8 @@ inferMethodBody : TcEnv ->
   Expr ->
   Unit
 inferMethodBody outer iface kind (params, mty, gscope) mname pats body =
-  -- The body's own checks (against the signature, its rigidity, its effect
-  -- contract) are located at the body.
+  -- The body's own checks (its rigidity, its effect contract) are located at
+  -- the body; its type meets the signature at the value it returns.
   let env = envAtIfSome (exprSpanLoc body) outer
   let _ = enterLevel env.teDyn.dcModule ()
   let bodyLevel = env.teDyn.dcModule.mcCells.currentLevel.value
@@ -41377,16 +41467,21 @@ checkMethodBodyAgainst env iface kind mname mty gscope inst contract loc pats bo
       -- a result index is judged against its signature at the call that ran it.
       let performedAt =
         if isEmptyL eager then None else performSiteIn sites actual
-      let unifyDyn = match kind
+      let bodyDyn = match kind
         DefaultBody => { env.teDyn | dcMethodMismatch = Some mname }
-        ImplBody _ => dynAtIfSome performedAt env.teDyn
+        ImplBody _ => env.teDyn
+      -- The body's type meets the signature at the value the body returns.
+      let valueDyn = dynAtIfSome (valueSpanLoc body) bodyDyn
+      let unifyDyn = match kind
+        DefaultBody => valueDyn
+        ImplBody _ => dynAtIfSome performedAt valueDyn
       let unifyErred =
         fst
           (erredDuring env.teDyn.dcModule (_ =>
             let _ = match kind
               DefaultBody =>
                 rowInto
-                  unifyDyn
+                  bodyDyn
                   True
                   (inst.mbiCheckedForce ())
                   (effrowNorm (snd inferred))
@@ -44964,7 +45059,7 @@ registerAllDataGo env ds =
 registerDeclsAliasesFirst : TcEnv -> List Decl -> TcEnv
 registerDeclsAliasesFirst env ds =
   let env1 = fold (e d => if isAliasDecl d then registerData e d else e) env ds
-  let _ = rejectCyclicAliases env.teDyn.dcModule ()
+  let _ = rejectCyclicAliases env.teDyn.dcModule ds
   fold (e d => if isAliasDecl d then e else registerData e d) env1 ds
 
 -- Only `type` declares an alias, so the wildcard is right for every other Decl.
@@ -44986,8 +45081,9 @@ isAliasDecl _ = False
 -- Its field-owner keys are still added, as `registerRecordInfoKeyed` adds them.
 -- The overlay is folded in list order, because its tables are last-write-wins and
 -- its named rows come last (`importedCtorTypeDeclsLastWins`).
-registerImportOverlay : TcEnv -> List Decl -> TcEnv
-registerImportOverlay env overlay =
+-- [prog] is the reading module's own declarations.
+registerImportOverlay : TcEnv -> List Decl -> List Decl -> TcEnv
+registerImportOverlay env prog overlay =
   let _ = seedParamPolarityFixpointScoped env.teDyn.dcModule overlay overlay
   let ctorPop = env.teDyn.dcModule.mcGraph.crossRun.universeCtorPop.value
   let recordPop = env.teDyn.dcModule.mcGraph.crossRun.universeRecordPop.value
@@ -45005,7 +45101,7 @@ registerImportOverlay env overlay =
       env
       served
   -- Cycles out before any field elaborates, as in `registerDeclsAliasesFirst`.
-  let _ = rejectCyclicAliases env.teDyn.dcModule ()
+  let _ = rejectCyclicAliases env.teDyn.dcModule prog
   fold
     (e p => match snd p
       None => if isAliasDecl (fst p) then e else registerData e (fst p)
@@ -46399,10 +46495,15 @@ clauseSpans span grouped names =
     names
 
 -- The span of the expression whose value [e] is: a `let … in`, which has no
--- span of its own, returns its body's value.
+-- span of its own, returns its body's value, and a block returns its last
+-- statement's.
 valueSpanLoc : Expr -> Option Loc
+valueSpanLoc (ELoc l _) = Some l
 valueSpanLoc (ELet _ _ _ _ body) = valueSpanLoc body
 valueSpanLoc (ELetGroup _ body) = valueSpanLoc body
+valueSpanLoc (EBlock stmts) = match last stmts
+  Some (DoExpr e) => valueSpanLoc e
+  _ => exprSpanLoc (EBlock stmts)
 valueSpanLoc e = exprSpanLoc e
 
 -- the peel source for a member: Some placeholder if it has a signature (peel the
@@ -46449,10 +46550,18 @@ inferClauseValues : TcEnv ->
 inferClauseValues env _ _ [] = ([], [])
 inferClauseValues env peel owned (cl :: rest) =
   let ce = inferClauseEff env peel cl
-  let _ = unifySourceDomains env.teDyn (listLen (fst cl)) owned.bsValue (fst ce)
+  -- A clause that does not fit the member's type is reported at the value it
+  -- returns.
+  let value = valueSpanLoc (snd cl)
+  let _ =
+    unifySourceDomains
+      (dynAtIfSome value env.teDyn)
+      (listLen (fst cl))
+      owned.bsValue
+      (fst ce)
   let _ = recordEffectBody env.teDyn.dcModule owned.bsBody (snd ce)
   let (values, effects) = inferClauseValues env peel owned rest
-  ((exprLoc (snd cl), fst ce) :: values, snd ce :: effects)
+  ((value, fst ce) :: values, snd ce :: effects)
 
 unifySourceDomains : DynCtx -> Int -> Mono -> Mono -> Unit
 unifySourceDomains dyn arity owned actual =

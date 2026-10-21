@@ -62,6 +62,7 @@ implHeadGround	Decl	2/14
 implHeadNormalDecl	Decl	1/14
 implHeadParametric	Decl	2/14
 importLocOf	Decl	1/14
+importLocReaching	Decl	1/14
 importOverlayDecls	Decl	2/14
 importShadowsOfDecl	Decl	2/14
 infer	Expr	30/42
@@ -117,5 +118,5 @@ stampTailDecl	Decl	1/14
 stmtCalleeName	Expr	10/42
 tupleArgElems	Expr	2/42
 useModuleId	Decl	1/14
-valueSpanLoc	Expr	2/42
+valueSpanLoc	Expr	4/42
 wholeDomainExpr	Expr	1/42
