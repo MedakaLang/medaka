@@ -41,9 +41,9 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 | `effect_policy.mdk` | Does an entry's invocation summary fit a policy | `policyRefusals`, `viaChain` |
 
 ## Cell lifetimes
-`CELL-LIFETIMES.md` lists every typechecker cell (4 module-level cells, `interners` and the three memos, and the 191 fields of
-`ModuleCtx` 91, `GroupCtx` 2, `GraphCtx` 20, `GraphRun` 30, `CrossRun` 14, `Interners` 2, `Lineage` 3, `TcConfig` 5, `DriveInputs` 6, `TraceSink` 8, `DynCtx` 8, `SiteCtx` 2) with its measured lifetime, target home and whether
-an interface load would have to fill it. Lifetimes (197 rows): process 13, config 14, graph 66, module 80, group 3, run 21. Its "Interface fills" section names the producer and kind of each row playbook C1 restores.
+`CELL-LIFETIMES.md` lists every typechecker cell (the 4 module-level cells of `types.typecheck`: `interners` and the three memos, and the 194 fields of
+`ModuleCtx` 92, `GroupCtx` 2, `GraphCtx` 20, `GraphRun` 30, `CrossRun` 14, `Interners` 2, `Lineage` 3, `TcConfig` 5, `DriveInputs` 6, `TraceSink` 8, `DynCtx` 9, `SiteCtx` 3) with its measured lifetime, target home and whether
+an interface load would have to fill it. Lifetimes (203 rows, the 198 in the first table and the 5 outside it): process 16, config 15, graph 66, module 81, group 3, run 22. Its "Interface fills" section names the producer and kind of each row playbook C1 restores.
 The per-module cell counts are in `test/arch_goldens/cells.golden`.
 
 ## Laws that bind it

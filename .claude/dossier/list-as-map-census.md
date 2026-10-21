@@ -33,7 +33,7 @@ Every row below is a `List`-typed run-wide channel scanned with `lookupAssoc`,
 `lookupTab`, or `contains`/`elem`/`dedup`. Call-site counts are call sites found across
 the `lookupAssoc` / `lookupTab` / `contains`-family / `Ref (List ` sweeps (below), not
 independently re-verified beyond the naming convention (`perRun.value.*Ref.value` (perRun since replaced by `ModuleCtx` as a parameter),
-`graphCtx.value.*Ref.value`, `ModuleCtx`/`GraphCtx`/`GraphRun` record fields). All
+`graphCtx.value.*Ref.value` (graphCtx since replaced by `GraphCtx` as a parameter, arch-p2-6d), `ModuleCtx`/`GraphCtx`/`GraphRun` record fields). All
 scans found are **first-wins** (linear cons-list scan; no last-wins run-wide table was
 found) — an assoc-list to `OrdMap`/`HashMap` conversion on any of these preserves
 semantics with no first/last-wins hazard, unlike the `typecheck.mdk`-internal
@@ -213,7 +213,7 @@ site, not this note, before changing either.
 
 - Every row's `class`/`collection`/`container` was assigned by a small shell classifier
   (kept out of the tree per the packet — not checked in) matching on: `perRun.value.*
-  Ref.value` (perRun since replaced by `ModuleCtx` as a parameter) / `graphCtx.value.*Ref.value` / `graphCtx.value.graphRun.*` (→ graph), line
+  Ref.value` (perRun since replaced by `ModuleCtx` as a parameter) / `graphCtx.value.*Ref.value` (graphCtx since replaced by `GraphCtx` as a parameter, arch-p2-6d) / `graphCtx.value.graphRun.*` (→ graph), line
   ranges inside the `GraphCtx`/`GraphRun`/`ModuleCtx` record bodies in
   `compiler/types/typecheck.mdk` (→ graph, for the `Ref (List` sweep), `env.*Ambiguous`
   / `exp.exp*Ctors` (→ per-module), the three `haskell*Aliases` tables (→ bounded), and
