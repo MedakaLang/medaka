@@ -18094,14 +18094,13 @@ pushDiscardedValueError mctx nt e =
 
 pushDiscardedValueDesc : ModuleCtx -> String -> Expr -> Unit
 pushDiscardedValueDesc mctx desc e =
-  let loc = exprSpanLoc e
   pushTypeErrorHelpFixAt
     mctx
     "T-DISCARDED-VALUE"
-    loc
+    (exprSpanLoc e)
     (discardedValueMsg desc)
     "bind it with `let _ = ...` if dropping the value is intentional"
-    (discardedValueFix loc)
+    (discardedValueFix (exprLoc e))
 
 discardedValueMsg : String -> String
 discardedValueMsg desc =
