@@ -355,6 +355,11 @@ exprLoc (ELoc l _) = Some l
 exprLoc (EApp f _) = exprLoc f
 exprLoc _ = None
 
+-- Each node the lowering synthesizes is located at the statement it stands for,
+-- so a check on it names that statement: a bind's call at the statement's
+-- expression, a `let`'s rest of the block at the value the block goes on to
+-- return.  The continuation lambda carries no span of its own: its parameter
+-- belongs to the bind around it, and its body is located.
 lowerDo : Bool -> List DoStmt -> Expr
 lowerDo _ [DoExpr e] = e
 lowerDo d [DoBind pat e] =
@@ -363,8 +368,64 @@ lowerDo d ((DoExpr e) :: rest) = callAndThen d e (ELam [PWild] (lowerDo d rest))
 lowerDo d ((DoBind pat e) :: rest) =
   callAndThen d e (doCont pat (lowerDo d rest))
 lowerDo d ((DoLet _ isFun pat e site) :: rest) =
-  ELet site isFun pat e (lowerDo d rest)
+  let lowered = ELet site isFun pat e (lowerDo d rest)
+  match site
+    -- The parser's own `let` (`x : ty <- e`'s check, site `noDeclLoc`) belongs
+    -- to the bind before it, whose span already encloses it.
+    Loc _ 1 0 1 0 => lowered
+    _ => locatedAt (doResultLoc rest) lowered
 lowerDo _ _ = fallthrough
+
+-- The span of the statement whose value [stmts] returns: the first one that is
+-- not a `let`.
+doResultLoc : List DoStmt -> Option Loc
+doResultLoc ((DoLet _ _ _ _ _) :: rest) = doResultLoc rest
+doResultLoc ((DoExpr e) :: _) = exprSpanLoc e
+doResultLoc ((DoBind _ e) :: _) = exprSpanLoc e
+doResultLoc _ = None
+
+locatedAt : Option Loc -> Expr -> Expr
+locatedAt (Some l) e = ELoc l e
+locatedAt None e = e
+
+-- The span of [e] including a node the parser leaves unwrapped (an application,
+-- an operator, a field access): from the earliest start to the latest end of its
+-- outermost located parts.  A desugared node need not list its parts in source
+-- order, so the extremes are taken over all of them.
+export
+exprSpanLoc : Expr -> Option Loc
+exprSpanLoc e = joinLocs (outerLocs e [])
+
+-- One span from the earliest start to the latest end of [locs].
+export
+joinLocs : List Loc -> Option Loc
+joinLocs [] = None
+joinLocs (l :: ls) = Some (widenLocs l ls)
+
+widenLocs : Loc -> List Loc -> Loc
+widenLocs acc [] = acc
+widenLocs acc (l :: ls) = widenLocs (widenLoc acc l) ls
+
+widenLoc : Loc -> Loc -> Loc
+widenLoc (Loc f sl sc el ec) (Loc _ sl2 sc2 el2 ec2) =
+  let (bl, bc) =
+    if sl2 < sl || sl2 == sl && sc2 < sc then (sl2, sc2) else (sl, sc)
+  let (xl, xc) =
+    if el2 > el || el2 == el && ec2 > ec then (el2, ec2) else (el, ec)
+  Loc f bl bc xl xc
+
+outerLocs : Expr -> List Loc -> List Loc
+outerLocs (ELoc l _) acc = l :: acc
+outerLocs (EDoOrigin l _) acc = l :: acc
+outerLocs e acc =
+  let found = Ref acc
+  let _ =
+    mapChildren
+      (child =>
+        found := outerLocs child found.value
+        child)
+      e
+  found.value
 
 -- #894 review finding 1: `x <- b` / a bare statement line in `do` synthesizes
 -- an `andThen` call (below), and typecheck's `inferApp` needs to tell THIS
@@ -381,9 +442,9 @@ lowerDo _ _ = fallthrough
 -- no `Loc` (rare — `exprLoc` bottoms out); `inferApp` then falls back to the
 -- general container/List/Array message, which is safe, just less precise.
 callAndThen : Bool -> Expr -> Expr -> Expr
-callAndThen d e cont = match exprLoc e
+callAndThen d e cont = locatedAt (exprSpanLoc e) (match exprLoc e
   Some l => EApp (EApp (EDoOrigin l (EVar (bindMethodName d))) e) cont
-  None => callBin (bindMethodName d) e cont
+  None => callBin (bindMethodName d) e cont)
 
 -- bind continuation: a bare lambda for an irrefutable pattern, else a 1-arg
 -- lambda + 2-arm match whose wildcard arm fails (do_bind_fail = fallthrough)

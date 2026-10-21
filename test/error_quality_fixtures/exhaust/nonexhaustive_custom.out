@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 0
 ---
-warning: test/error_quality_fixtures/exhaust/nonexhaustive_custom.mdk:5:14: non-exhaustive match on `Shape`: missing `Triangle _`; add a `Triangle _ => ...` arm or a `_` wildcard
+warning: test/error_quality_fixtures/exhaust/nonexhaustive_custom.mdk:3:9: non-exhaustive match on `Shape`: missing `Triangle _`; add a `Triangle _ => ...` arm or a `_` wildcard
   |
-5 |   Square w => w
-  |               ^
+3 | area s = match s
+  |          ^

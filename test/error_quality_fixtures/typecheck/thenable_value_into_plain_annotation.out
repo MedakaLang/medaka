@@ -5,7 +5,7 @@ error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_annotatio
   |
 2 | n = forEach (x => println x) [1]
   |             ^
-error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_annotation.mdk:2:29: type mismatch: Int vs a Unit; `a Unit` is a value whose type implements `Thenable`, and `Int` is not
+error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_annotation.mdk:2:4: type mismatch: Int vs a Unit; `a Unit` is a value whose type implements `Thenable`, and `Int` is not
   |
 2 | n = forEach (x => println x) [1]
-  |                              ^
+  |     ^

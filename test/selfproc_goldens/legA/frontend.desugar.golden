@@ -38,12 +38,14 @@ desugar : List Decl -> List Decl
 desugarIn : String -> List Decl -> List Decl
 desugarRecordPuns : List Decl -> List Decl
 doCont : Pat -> Expr -> Expr
+doResultLoc : List DoStmt -> Option Loc
 doStmtLoc : DoStmt -> Option Loc
 eqArms : List Variant -> List Arm
 eqBody : Int -> List String -> List String -> Expr
 eqSameConArm : Variant -> Arm
 expandDecl : Decl -> List Decl
 exprLoc : Expr -> Option Loc
+exprSpanLoc : Expr -> Option Loc
 fallthrough : Expr
 firstDoStmtLoc : List DoStmt -> Option Loc
 foldlMethods : (Map String IfaceMethod, List String) -> List IfaceMethod -> (Map String IfaceMethod, List String)
@@ -63,8 +65,10 @@ interpPartToExpr : InterpPart -> Expr
 interpToCore : List InterpPart -> Expr
 isRefutable : Pat -> Bool
 isVarExpr : Expr -> Bool
+joinLocs : List Loc -> Option Loc
 kvToTuple : (Expr, Expr) -> Expr
 lexCompareExprs : List (Expr, Expr) -> Expr
+locatedAt : Option Loc -> Expr -> Expr
 lookupDeriver : String -> List (String, Unit -> Decl) -> Option Decl
 lowerContainerLiterals : List Decl -> List Decl
 lowerDo : Bool -> List DoStmt -> Expr
@@ -99,6 +103,7 @@ ordArms : List Variant -> List Arm
 ordBody : Int -> Int -> List String -> List String -> Expr
 ordCell : Int -> Variant -> (Int, Variant) -> Arm
 ordRow : List (Int, Variant) -> (Int, Variant) -> List Arm
+outerLocs : Expr -> List Loc -> List Loc
 paramReq : String -> String -> Require
 paramRequires : String -> List String -> List Require
 pinType : String -> List Ty -> Ty
@@ -139,6 +144,8 @@ stampStmt : String -> DoStmt -> DoStmt
 toRep : String -> Expr
 typeKindedParams : List String -> List (Option KindAnn) -> List String
 unknownDerive : String -> List String -> DeriveRef -> List (String, Option Loc)
+widenLoc : Loc -> Loc -> Loc
+widenLocs : Loc -> List Loc -> Loc
 wrapDoOrigin : List DoStmt -> Expr -> Expr
 wrappedFieldCall : String -> String -> Expr
 zipEqCalls : List String -> List String -> List Expr

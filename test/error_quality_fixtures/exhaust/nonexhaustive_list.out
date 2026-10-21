@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 0
 ---
-warning: test/error_quality_fixtures/exhaust/nonexhaustive_list.mdk:3:15: non-exhaustive match on `List`: missing `[]`; add a `[] => ...` arm or a `_` wildcard
+warning: test/error_quality_fixtures/exhaust/nonexhaustive_list.mdk:2:13: non-exhaustive match on `List`: missing `[]`; add a `[] => ...` arm or a `_` wildcard
   |
-3 |   x :: rest => x
-  |                ^
+2 | firstOf xs = match xs
+  |              ^
