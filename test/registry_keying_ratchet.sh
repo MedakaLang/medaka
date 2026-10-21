@@ -31,9 +31,10 @@
 #
 # SIX CHECKS:
 #   1. CrossRun + GraphCtx FIELD allowlist (compiler/types/tc_types.mdk)
-#   2. the cross-module WRITER ratchet: every `graphCtx.value.crossRun.*` /
-#      `graphCtx.value.*` WRITE site -- `setRef r v` or `r := v`, both live --
-#      pinned by TARGET FIELD (load-bearing)
+#   2. the cross-module WRITER ratchet: the SET of `CrossRun` and `GraphCtx` fields
+#      assigned anywhere in the compiler -- `setRef <path>.<field> v` or
+#      `<path>.<field> := v`, both live, whatever the receiver -- pinned by FIELD,
+#      plus a collision test against every other record's field names (load-bearing)
 #   3. the THREE parallel engine module-state builders' frame-seeding parity,
 #      plus exact delegation by the two root-environment wrappers
 #      (evalModulesWith / buildRootModuleStateWith / cevalModules;
@@ -63,11 +64,11 @@
 # FAIL and A, F pass.
 #   A  (unmodified tree)                                            -> pass
 #   B  add `rogueRef : Ref (OrdMap Int),` as a new CrossRun field    -> FAIL (check 1)
-#   C  add `let _ = setRef graphCtx.value.crossRun.rogueRef (f prog)` on its
-#      OWN line inside appendUniverseAccums                          -> FAIL (check 2)
+#   C  add `  gctx.graphAdmittedMethodsRef := omEmpty` on its OWN line inside
+#      appendUniverseAccums (a field only the mint sets)            -> FAIL (check 2)
 #   D  add, ON ONE LINE, an allowlisted write AND a rogue one:
-#      `let _ = setRef graphCtx.value.crossRun.universeFunNamesRef (f prog) in
-#       setRef graphCtx.value.crossRun.rogueRef (f prog)`            -> FAIL (check 2)
+#      `let _ = setRef gctx.effectDomains [] in
+#       setRef gctx.graphAdmittedMethodsRef omEmpty`                 -> FAIL (check 2)
 #         <- THE A-1 HOLE. If D passes while C fails, the filter is
 #            per-LINE (treats "line contains an allowed substring" as
 #            "line is accounted for") instead of per-OCCURRENCE, and
@@ -77,7 +78,7 @@
 #      buildRootModuleStateWith, or core_ir_eval.mdk's cevalModules)  -> FAIL (check 3)
 #      Change either root wrapper's `buildRootModuleStateWith` call to use
 #      different arguments                                             -> FAIL (check 3)
-#   F  add a COMMENT line mentioning `setRef graphCtx.value.crossRun.foo` -> pass
+#   F  add a COMMENT line mentioning `gctx.graphAdmittedMethodsRef := omEmpty` -> pass
 #      (a side comment is not a write: must not false-positive)
 #
 # All six were actually executed against this tree while writing this script
@@ -87,7 +88,7 @@
 # Implementation note on how D is made to fail correctly: every extraction
 # below uses `grep -oE` (extract ALL non-overlapping occurrences on a line),
 # never a line-level "does this line contain an allowed substring" test. A
-# line carrying two `graphCtx.value.crossRun.*` write targets yields TWO extracted
+# line carrying two write targets yields TWO extracted
 # tokens, each independently checked against the allowlist -- so an allowed
 # token sharing a line with a rogue one cannot hide the rogue one. This is the
 # occurrence-level discipline the #1110 Mono.TCon ratchet's own header
@@ -120,7 +121,7 @@ CIE="$ROOT/compiler/ir/core_ir_eval.mdk"
 #     (<value>)
 # (bare `setRef` at the end of one line, the target alone on the next) as well
 # as the single-line `setRef <target> (<value>)` form. A grep for the literal
-# substring `setRef graphCtx.value.crossRun.` on its own MISSES the split form outright
+# substring `setRef <path>.<field>` on its own MISSES the split form outright
 # -- verified against this file: the naive single-line grep the #1111 brief
 # itself suggests undercounts CrossRun's writer set by one field
 # (that field was `universeIfaceRequiredRef` until #1557 A-3.5a RETIRED it; the
@@ -151,38 +152,63 @@ strip_comments() {
   grep -vE '^[[:space:]]*--' | sed -E 's/[[:space:]]--[[:space:]].*$//'
 }
 
-# write_targets PATH: every `<PATH>.<field>` WRITE target in $TC, under EITHER
-# spelling, one per line, deduped.  PATH is an ERE with its dots escaped
-# (`graphCtx\.value\.crossRun`); the field must follow it directly, so a write
-# through a longer path (`graphCtx.value.crossRun.x` under `graphCtx\.value`) is
-# not one of the shorter path's targets.
-#
-# There are two, and both are live. `setRef r v` was the only spelling until the
-# `setRef` -> `:=` codemod; that migration left 12 multi-line calls on `setRef`
-# (their RHS spans lines, which the cold-bootstrap seed's parser cannot take in
-# the `:=` form -- #1744), so a grep for either spelling ALONE now undercounts.
-# Undercounting here is exactly the A-1 hole this ratchet exists to prevent, and
-# it fails OPEN (a rogue write simply is not seen), so both arms are required.
-#
-# The `:=` arm needs no `join_setref`: the operator sits immediately after the
-# target, so a split `target :=⏎  (value)` still matches on its FIRST line. Only
-# the `setRef` arm can be broken by the split layout, which is why join_setref
-# wraps that arm and not this one.
-#
-# Both arms use `grep -oE` so EVERY occurrence on a line is extracted
-# independently -- a line carrying two writes yields two tokens, so an allowed
-# token cannot mask a rogue one beside it (control D).
-write_targets() {
-  {
-    join_setref "$TC" \
+# assigned_fields FILE...: the name after the last dot of EVERY write target
+# `<path>.<name> :=` and `setRef <path>.<name>`, whatever the receiver, one per
+# line, deduped.
+
+# There are two spellings, and both are live. `setRef r v` was the only spelling
+# until the `setRef` -> `:=` codemod; that migration left multi-line calls on
+# `setRef` (their RHS spans lines, which the cold-bootstrap seed's parser cannot
+# take in the `:=` form -- #1744), so a grep for either spelling ALONE undercounts.
+# Undercounting fails OPEN (a rogue write simply is not seen), so both arms are
+# required.  The `:=` arm needs no `join_setref`: the operator sits immediately
+# after the target, so a split `target :=` then `(value)` still matches on its FIRST
+# line.  Both arms use `grep -oE`, so EVERY occurrence on a line is extracted
+# independently: a line carrying two writes yields two tokens, and an allowed
+# token cannot mask a rogue one beside it (control D).  The `setRef` path may open
+# with one parenthesised group, nested one level (`setRef (envFor mctx).teDyn.dcModule.<field> v`, `setRef (identity (b)).<field> v`), and the `:=` arm accepts no blank before the operator (`b.<field>:= v`).
+assigned_fields() {
+  for f in "$@"; do
+    join_setref "$f" \
       | strip_comments \
-      | grep -oE "setRef[ ]+$1\.[A-Za-z_][A-Za-z0-9_]*([^.A-Za-z0-9_]|$)" \
-      | sed -E 's/^setRef[ ]+//; s/[^.A-Za-z0-9_]$//'
-    strip_comments < "$TC" \
-      | grep -oE "$1\.[A-Za-z_][A-Za-z0-9_]*[ ]+:=" \
-      | sed -E 's/[ ]+:=$//'
-  } | LC_ALL=C sort -u
+      | grep -oE "setRef[ ]+(\(([^()]|\([^()]*\))*\))?[A-Za-z0-9_.']*\.[A-Za-z_][A-Za-z0-9_]*([^.A-Za-z0-9_]|$)" \
+      | sed -E 's/^setRef[ ]+//; s/[^.A-Za-z0-9_]$//; s/.*\.//'
+    strip_comments < "$f" \
+      | grep -oE "\.[A-Za-z_][A-Za-z0-9_]*[ ]*:=" \
+      | sed -E 's/[ ]*:=$//; s/^\.//'
+  done | LC_ALL=C sort -u
 }
+
+# record_field_names_except NAMES FILE...: the field names of every record declared
+# in the files except the records NAMES (an ERE alternation of record names), in the
+# one-line form (`data X = X { a : T, b : T }`) and in the multi-line forms (`{`
+# ending the header line, or ending a constructor line below a bare `data X =`).
+record_field_names_except() {
+  ex="$1"
+  shift
+  for f in "$@"; do
+    awk -v ex="$ex" '
+      /^(public export |export )?data / {
+        indata = 1; r = 0
+        skip = ($0 ~ ("^(public export |export )?data (" ex ") = "))
+        if (!skip && $0 ~ /\{.*\}/) { print }
+        else if (!skip && $0 ~ /\{[[:space:]]*$/) { r = 1 }
+        next
+      }
+      /^[^[:space:]]/ { indata = 0; r = 0; next }
+      indata && !skip {
+        if (r && $0 ~ /^[[:space:]]*\}/) { r = 0; next }
+        if (r && $0 ~ /^[[:space:]]+[a-z_][A-Za-z0-9_]*[[:space:]]*:/) { print; next }
+        if (!r && $0 ~ /\{[[:space:]]*$/) { r = 1; next }
+        if (!r && $0 ~ /\{.*\}/) { print }
+      }
+    ' "$f"
+  done | grep -oE '(^|[{,])[[:space:]]*[a-z_][A-Za-z0-9_]*[[:space:]]*:' \
+    | sed -E 's/^[{,]?[[:space:]]*//; s/[[:space:]]*:$//' | LC_ALL=C sort -u
+}
+
+# Every compiler source file a writer or a record can live in.
+compiler_files=$(find "$ROOT/compiler" -name '*.mdk' ! -name '*_test.mdk' | LC_ALL=C sort)
 
 # body_of FILE START_REGEX: a function's own equation line (the line START_REGEX
 # matches) through, but NOT including, the next top-level (column-0) decl --
@@ -295,7 +321,7 @@ ALLOWLIST_EOF
 declenvs_allowed=$(cat <<'ALLOWLIST_EOF'
 deModules -- the loader graph as ordinal-tagged module rows (prelude 0, then dependency-first). Not bare-name-keyed: the row key is the loader module id, i.e. a SCOPE
 deOrdIndex -- module id -> ordinal index; the lookup `declEnvsOrdOf` uses, fail-CLOSED at -1
-deDefiners -- RUN-XMOD-066: module id -> that module`s value exports, each mapped to (defining module, name at the definer). The WHOLE answer of `graphPubDefiners`, derived once per graph in `declEnvDefinerIndex` instead of re-walked per importer. KEY SCOPE, which is the thing this ratchet asks to be PROVEN: the key is the loader module id -- the SAME `demId` the deModules/deOrdIndex rows above are keyed by, and the same id `usePathModuleId` produces at the reader -- so it is a SCOPE, not a bare name, and two same-spelled bindings in unrelated modules land in DIFFERENT rows rather than colliding last-write-wins. Two graph positions cannot collide on it because `declEnvModulesFrom` mints exactly one row per loader module, and it cannot collide ACROSS graphs because this is a FIELD of the envelope, not a `graphCtx` ref: it is rebuilt whole by `buildDeclEnvs` at every write of declEnvsRef and is `omEmpty` in emptyDeclEnvs, so it has no reset point to forget -- deliberately NOT `mangledShadowMapRef`s pattern (RUN-XMOD-040), which is written once on the emit path with nothing invalidating it. LIVE: `graphPubDefiners` is a plain omLookup into it. WHY IT IS A TABLE AND NOT A WALK is the deKindsBefore rows story one gate over: the per-read recursion put `modules` typecheck TIME at 0.34/0.79/2.49s over N=100/200/400 and CI failed the climbing rule twice; the ALLOC arm SAW it here (net alloc +26/+97/+356 MB over base, growing 3.7x per doubling), and the table drops that to +1.9/+3.8/+7.5 MB, growing 2.0x -- linear. Row values are collapsed to one entry per local spelling (`firstRowPerName`), matching the first-match read every consumer already does and keeping a branching wildcard re-export DAG from making the ROW ITSELF Fibonacci-sized
+deDefiners -- RUN-XMOD-066: module id -> that module`s value exports, each mapped to (defining module, name at the definer). The WHOLE answer of `graphPubDefiners`, derived once per graph in `declEnvDefinerIndex` instead of re-walked per importer. KEY SCOPE, which is the thing this ratchet asks to be PROVEN: the key is the loader module id -- the SAME `demId` the deModules/deOrdIndex rows above are keyed by, and the same id `usePathModuleId` produces at the reader -- so it is a SCOPE, not a bare name, and two same-spelled bindings in unrelated modules land in DIFFERENT rows rather than colliding last-write-wins. Two graph positions cannot collide on it because `declEnvModulesFrom` mints exactly one row per loader module, and it cannot collide ACROSS graphs because this is a FIELD of the envelope, not a `GraphCtx` field: it is rebuilt whole by `buildDeclEnvs` at every write of declEnvsRef and is `omEmpty` in emptyDeclEnvs, so it has no reset point to forget -- deliberately NOT `mangledShadowMapRef`s pattern (RUN-XMOD-040), which is written once on the emit path with nothing invalidating it. LIVE: `graphPubDefiners` is a plain omLookup into it. WHY IT IS A TABLE AND NOT A WALK is the deKindsBefore rows story one gate over: the per-read recursion put `modules` typecheck TIME at 0.34/0.79/2.49s over N=100/200/400 and CI failed the climbing rule twice; the ALLOC arm SAW it here (net alloc +26/+97/+356 MB over base, growing 3.7x per doubling), and the table drops that to +1.9/+3.8/+7.5 MB, growing 2.0x -- linear. Row values are collapsed to one entry per local spelling (`firstRowPerName`), matching the first-match read every consumer already does and keeping a branching wildcard re-export DAG from making the ROW ITSELF Fibonacci-sized
 deAmbigValues -- #1675: `deDefiners`s SIBLING, out of the SAME `declEnvDefinerIndex` fold (`buildDeclEnvs` computes `definers = declEnvDefinerIndex omEmpty omEmpty mods` once and takes `fst`/`snd` for the two fields, so they cannot disagree). KEY SCOPE is IDENTICAL to `deDefiners` above, proven the same way: the outer key is the loader module id (the same `demId` `deModules`/`deOrdIndex`/`deDefiners` are keyed by, and the same id `usePathModuleId` produces at the reader), so two same-spelled ambiguous-export sets in unrelated modules land in DIFFERENT rows. Row VALUE is `List (String, List String)` -- local name -> the (≥2) definer module ids that name resolves to when NOT collapsed to the first-match `deDefiners` keeps -- payload describing an ambiguity, not itself a second bare-name table. LIVE: `graphAmbigValues` is a plain omLookup into it, read by `reportAmbiguousImport`/`reportAmbiguousImports` (`checkBodyImpl`, right after its module mint) to reject an import of a name a dependency exports under two distinct definitions, before any of `deDefiners`'s first-match collapse can silently pick one
 deAllDecls -- the flattened whole-graph decl list; the same list value each driver used to build inline as `coreDecls ++ flatMap snd modules`
 deData -- #1112 A-3.2a: the `DataEnv` half of stage K -- an identity-keyed index over the RAW declarations (no elaborated Scheme/RecordInfo/Mono), built once from `deAllDecls`. CONSTRUCTION ONLY and NOT LIVE: nothing outside its own block populates or reads it. Allowlisted HERE, by A-3.4, rather than by the unit that added it -- A-3.2a landed `deData` while `DeclEnvs` was still pinned by NOTHING (check 1 covered only CrossRun and DriverState), and A-3.4 is the unit that extends the extraction to this record. That is the gap this extension exists to close, and its first act is to retro-pin a field that was already in the tree. ⚠️ Scope-of-key question deliberately left OPEN by A-3.2a and not settled here: `buildDataEnv` folds EVERY decl including private ones, making it a SUPERSET of what the live `universeDataEnv` (public-only) ever held -- harmless while nothing reads it, a real decision the moment something does. #2563 (S-ctor-ladder-rehome): deData.deCtorExports is the CONSTRUCTOR export index (module id -> the (ctor name, owning type name, declaring Ident) rows a module row CARRIES, re-exports folded dependency-first), re-homed here from the retired DriverState field graphCtorExportsRef beside its method peer deMethods.meExports. Outer key is the loader module id, a SCOPE; values are identity rows. Read by depExportsCtorIdent (the ctor and record scope ladders) and reexportedCtorDecls (the exhaust oracle)
@@ -431,65 +457,95 @@ echo "  ok: $cross_n CrossRun field(s), $driver_n GraphCtx field(s), $declenvs_n
 # ═══════════════════════════════════════════════════════════════════════════
 # CHECK 2 — the cross-module WRITER ratchet (load-bearing)
 # ═══════════════════════════════════════════════════════════════════════════
-# Pins the exact SET of `graphCtx.value.crossRun.<field>` / `graphCtx.value.<field>`
-# write TARGETS anywhere in typecheck.mdk, under BOTH spellings -- `setRef r v`
-# and `r := v` (see write_targets above; both are live post-codemod). A new
-# cross-module accumulator (or a new write path to an existing one) cannot be
-# added without a reviewer editing this allowlist -- which is the review
-# point #1111 exists to create. Every field from check 1 is expected to
-# appear here too (every CrossRun field and every GraphCtx graph field IS written somewhere,
-# verified below) -- check 2 is a SEPARATE textual ratchet on the write SITES
-# themselves, not a restatement of check 1: it catches a NEW write occurrence
-# to a field regardless of whether that field is already declared.
-echo "checking #1111 graphCtx.value.crossRun / graphCtx.value writer ratchet (setRef + :=) ..."
+# Pins the exact SET of `CrossRun` and `GraphCtx` fields assigned anywhere in the
+# compiler, under BOTH spellings -- `setRef <path>.<field>` and `<path>.<field> :=`
+# (`assigned_fields` above) -- whatever the receiver.  The graph record is a value
+# since the shim cell was deleted: a writer reaches it as `gctx`, `mctx.mcGraph`,
+# `dyn.dcModule.mcGraph`, `prev.mcGraph`, `(envFor mctx).teDyn.dcModule.mcGraph`, ...,
+# and no receiver pattern names them all, so the extraction keys on the FIELD.
+# Every `CrossRun` field and every `GraphCtx` field of `driver_allowed` IS written
+# somewhere; the `GraphCtx` fields of `graphctx_container_allowed` are set only at
+# the mint (or are not `Ref`s) and must stay unwritten.  A first write to one of
+# those, or the loss of the last write to a pinned field, turns this red.
+#
+# The extraction cannot tell `gctx.items :=` from `w.items :=` (`Windowed`), so it
+# is sound only while no other record of the compiler declares a field named like a
+# `CrossRun` or `GraphCtx` field: the collision half below fails on one.
+#
+# What it does NOT guard: a new write site to a field that is already pinned (the
+# pin is per field, not per site), a write through an alias (`let r = gctx.<field>`
+# then `r := v`), and a write spelled any other way than the two forms above.
+echo "checking #1111 CrossRun / GraphCtx writer ratchet (setRef + :=, receiver-independent) ..."
 
-cross_write_allowed=$(printf '%s\n' "$cross_expected" | sed 's/^/graphCtx.value.crossRun./')
-driver_write_allowed=$(printf '%s\n' "$driver_expected" | sed 's/^/graphCtx.value./')
-
-# join_setref makes the split `setRef\n  target\n  (value)` layout visible to
-# the same single-line extraction as the one-line form; strip_comments closes
-# control F (a comment mentioning the pattern is not a write). grep -oE then
-# extracts EVERY `setRef <target>` occurrence independently -- a line with
-# TWO such occurrences (control D) yields two tokens, not one, so an allowed
-# token cannot hide a rogue one on the same line (the A-1 hole this ratchet
-# must not repeat).
-cross_write_actual=$(write_targets 'graphCtx\.value\.crossRun')
-driver_write_actual=$(write_targets 'graphCtx\.value')
+crossrun_tmp="${TMPDIR:-/tmp}/crossrun_fields.$$"
+graphctx_tmp="${TMPDIR:-/tmp}/graphctx_fields.$$"
+printf '%s\n' "$cross_actual" > "$crossrun_tmp"
+printf '%s\n' "$driver_actual" > "$graphctx_tmp"
+# shellcheck disable=SC2086
+graph_assigned=$(assigned_fields $compiler_files)
+cross_write_actual=$(printf '%s\n' "$graph_assigned" | LC_ALL=C comm -12 - "$crossrun_tmp")
+driver_write_actual=$(printf '%s\n' "$graph_assigned" | LC_ALL=C comm -12 - "$graphctx_tmp")
 
 cross_write_n=$(printf '%s\n' "$cross_write_actual" | grep -c .)
 driver_write_n=$(printf '%s\n' "$driver_write_actual" | grep -c .)
 if [ "$cross_write_n" -eq 0 ] || [ "$driver_write_n" -eq 0 ]; then
-  echo "FAIL: check 2 found ZERO write targets for graphCtx.value.crossRun ($cross_write_n)"
-  echo "  or graphCtx.value ($driver_write_n). Either the accessor pattern changed"
-  echo "  (graphCtx.value.crossRun.* / graphCtx.value.*) or this check validated"
-  echo "  nothing. Do not treat a zero extraction as a pass."
+  rm -f "$crossrun_tmp" "$graphctx_tmp"
+  echo "FAIL: check 2 found ZERO assigned CrossRun fields ($cross_write_n) or GraphCtx"
+  echo "  fields ($driver_write_n). The assignment spelling changed (\`.<field> :=\` /"
+  echo "  \`setRef <path>.<field>\`) or this check validated nothing. Do not treat a"
+  echo "  zero extraction as a pass."
   exit 1
 fi
 
-if [ "$cross_write_actual" != "$(printf '%s\n' "$cross_write_allowed" | LC_ALL=C sort)" ]; then
-  echo "FAIL: the set of \`graphCtx.value.crossRun.*\` write targets changed."
+if [ "$cross_write_actual" != "$cross_expected" ]; then
+  rm -f "$crossrun_tmp" "$graphctx_tmp"
+  echo "FAIL: the set of assigned CrossRun fields changed."
   echo "  allowed:"
-  printf '%s\n' "$cross_write_allowed" | LC_ALL=C sort | sed 's/^/    /'
+  printf '%s\n' "$cross_expected" | sed 's/^/    /'
   echo "  actual:"
   printf '%s\n' "$cross_write_actual" | sed 's/^/    /'
-  echo "  REMEDY WHEN THIS FIRES: add the offending write target to"
-  echo "  cross_write_allowed above (it should already be a field in"
-  echo "  cross_allowed -- if not, check 1 owes a row too) and justify it in"
-  echo "  the PR. Never widen the graphCtx.value.crossRun. pattern above."
+  echo "  REMEDY WHEN THIS FIRES: a CrossRun field lost its last writer, or a new"
+  echo "  field (check 1 owes it a row) has none yet. Say in the PR who writes it --"
+  echo "  never widen the extraction patterns."
   exit 1
 fi
-if [ "$driver_write_actual" != "$(printf '%s\n' "$driver_write_allowed" | LC_ALL=C sort)" ]; then
-  echo "FAIL: the set of \`graphCtx.value.*\` write targets changed."
-  echo "  allowed:"
-  printf '%s\n' "$driver_write_allowed" | LC_ALL=C sort | sed 's/^/    /'
+if [ "$driver_write_actual" != "$driver_expected" ]; then
+  rm -f "$crossrun_tmp" "$graphctx_tmp"
+  echo "FAIL: the set of assigned GraphCtx fields changed."
+  echo "  allowed (driver_allowed):"
+  printf '%s\n' "$driver_expected" | sed 's/^/    /'
   echo "  actual:"
   printf '%s\n' "$driver_write_actual" | sed 's/^/    /'
-  echo "  REMEDY WHEN THIS FIRES: add the offending write target to"
-  echo "  driver_write_allowed above and justify it in the PR. Never widen the"
-  echo "  graphCtx.value. pattern above."
+  echo "  REMEDY WHEN THIS FIRES: a field of graphctx_container_allowed (set only at the"
+  echo "  mint) gained a writer, or a driver_allowed field lost its last one. Move the"
+  echo "  field's row between the two allowlists and justify it in the PR -- never"
+  echo "  widen the extraction patterns."
   exit 1
 fi
-echo "  ok: $cross_write_n graphCtx.value.crossRun.* write target(s), $driver_write_n graphCtx.value.* write target(s), no rogue writer"
+
+# shellcheck disable=SC2086
+graph_other_names=$(record_field_names_except 'CrossRun|GraphCtx' $compiler_files)
+graph_other_n=$(printf '%s\n' "$graph_other_names" | grep -c .)
+if [ "$graph_other_n" -eq 0 ]; then
+  rm -f "$crossrun_tmp" "$graphctx_tmp"
+  echo "FAIL: check 2 extracted ZERO field names from the other records of the compiler"
+  echo "  (the collision test would be vacuous). The record declaration forms changed."
+  exit 1
+fi
+graph_other_tmp="${TMPDIR:-/tmp}/graph_other_names.$$"
+printf '%s\n' "$graph_other_names" > "$graph_other_tmp"
+graph_collisions=$(LC_ALL=C sort -u "$crossrun_tmp" "$graphctx_tmp" \
+  | LC_ALL=C comm -12 - "$graph_other_tmp")
+rm -f "$crossrun_tmp" "$graphctx_tmp" "$graph_other_tmp"
+if [ -n "$graph_collisions" ]; then
+  echo "FAIL: CrossRun / GraphCtx field name(s) also declared as a field of another record:"
+  printf '%s\n' "$graph_collisions" | sed 's/^/    /'
+  echo "  The writer extraction above is receiver-independent, so a write to the other"
+  echo "  record's field (\`w.items :=\`) would count as a graph-record write. REMEDY:"
+  echo "  rename one of the fields -- the extraction cannot tell the receivers apart."
+  exit 1
+fi
+echo "  ok: $cross_write_n CrossRun field(s) and $driver_write_n GraphCtx field(s) assigned (of $(printf '%s\n' "$graph_assigned" | grep -c .) assigned field name(s) in the compiler), no rogue writer, no field name shared with another record ($graph_other_n checked)"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CHECK 3 — the engine frame ratchet (THREE parallel module-state builders)
@@ -961,7 +1017,8 @@ if [ -z "$preamble_lo" ] || [ -z "$preamble_hi" ] || [ "$preamble_hi" -le "$prea
 fi
 
 # check_parity_row LABEL PATTERN NAME: fail-closed, naming the ROW. Two halves:
-#   (a) `graphPreamble` CARRIES the call, spelled exactly as PATTERN;
+#   (a) `graphPreamble` CARRIES the call, spelled exactly as PATTERN (matched on the
+#       body with line breaks and runs of blanks folded to one space);
 #   (b) SOLE SITE -- every non-comment line of this file that mentions NAME (the
 #       callee/ref alone, so the check does not depend on any one caller's parameter
 #       names) is inside graphPreamble's body, apart from NAME's own column-0
@@ -971,7 +1028,7 @@ check_parity_row() {
   label="$1"
   pattern="$2"
   name="$3"
-  cc=$(printf '%s\n' "$preamble_body" | grep -Fc "$pattern")
+  cc=$(printf '%s\n' "$preamble_body" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g' | grep -Fc "$pattern")
   if [ "$cc" -lt 1 ]; then
     echo "FAIL: graphPreamble is missing the '$label' writer/seed call"
     echo "  (looked for: $pattern)."
@@ -1009,16 +1066,16 @@ check_parity_row() {
 }
 
 check_parity_row "mintGraphCtx" "mintGraphCtx inputs admitted" "mintGraphCtx"
-check_parity_row "populateEffectDomainsGraph" "populateEffectDomainsGraph coreDecls modules" "populateEffectDomainsGraph"
+check_parity_row "populateEffectDomainsGraph" "populateEffectDomainsGraph gctx coreDecls modules" "populateEffectDomainsGraph"
 check_parity_row "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :=" "mangledFunDefsPresentRef :="
 check_parity_row "declEnvsRef :=" "declEnvsRef :=" "declEnvsRef :="
-check_parity_row "seedAbstractRecordTypes" "seedAbstractRecordTypes coreDecls modules" "seedAbstractRecordTypes"
+check_parity_row "seedAbstractRecordTypes" "seedAbstractRecordTypes gctx coreDecls modules" "seedAbstractRecordTypes"
 # The harvest CLEAR is the entry-only fact; `graphModuleWorker`'s per-module
 # accumulation writes the same ref and is not a second copy of it, so this row's
 # sole-site half keys on the cleared spelling rather than on the bare ref name.
 check_parity_row "promotionHarvestRef :=" "promotionHarvestRef := []" "promotionHarvestRef := []"
 
-check_parity_row "mark sets" "markSetsOf prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls" "markSetsOf"
+check_parity_row "mark sets" "markSetsOf gctx prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls" "markSetsOf"
 echo "  ok: graphPreamble carries the whole-graph writer/seed set, and no other body"
 echo "      in the file carries a copy of any row"
 
@@ -1026,7 +1083,7 @@ echo "      in the file carries a copy of any row"
 # that the site is graphPreamble. This one proves the CALL COUNT: graphPreamble
 # is called from exactly these four sites, one row each with its reason:
 #   driveGraphK                  -- the one graph driver
-#   checkModulesChainReportFor   -- the keyed chain arm (`chainGo`'s caller). It
+#   checkModulesChainReportForGraph -- the keyed chain arm (`chainGo`'s caller). It
 #                                    mirrors driveGraphK's prologue by hand because
 #                                    the memo resumes mid-fold, and it needs the
 #                                    preamble's core closure and contexts to build
@@ -1045,7 +1102,7 @@ gp_calls=$(grep -n 'graphPreamble' "$TC" | grep -v ':[[:space:]]*--' | grep -vc 
 if [ "$gp_calls" -ne 4 ]; then
   echo "FAIL: graphPreamble has $gp_calls call site(s) in compiler/types/typecheck.mdk,"
   echo "  expected exactly 4 (driveGraphK, the keyed chain arm of"
-  echo "  checkModulesChainReportFor, and the checkModulesPreambleK and"
+  echo "  checkModulesChainReportForGraph, and the checkModulesPreambleK and"
   echo "  checkModulesPartialK projections)."
   echo "  A fifth caller is a new Module-mode driver entry.  REMEDY: route it through"
   echo "  driveGraphK's output selection instead, or -- if a genuinely new entry is"
@@ -1061,7 +1118,7 @@ echo "  ok: graphPreamble has exactly 4 call sites (two drivers + two projection
 check_order() {
   label="$1"
   body="$2"
-  before_line=$(printf '%s\n' "$body" | grep -n 'populateEffectDomainsGraph coreDecls modules' | head -1 | cut -d: -f1)
+  before_line=$(printf '%s\n' "$body" | grep -n 'populateEffectDomainsGraph gctx coreDecls modules' | head -1 | cut -d: -f1)
   after_line=$(printf '%s\n' "$body" | grep -n 'declEnvsRef :=' | head -1 | cut -d: -f1)
   if [ -z "$before_line" ] || [ -z "$after_line" ]; then
     echo "FAIL: $label -- could not locate both populateEffectDomainsGraph and"
@@ -1229,6 +1286,7 @@ markingRef W -- one Option of the module`s marking; not a table
 matchChecksDeferred W -- list; not keyed
 matchOracle - -- one exhaustiveness oracle value; not a table of this record
 matchWarnings W -- list of warnings; not keyed
+mcGraph - -- one GraphCtx value, the drive's graph record the module is checked in; not a table. A ModuleCtx field, not a GraphCtx one: the module record names its graph, set by the mint and by moduleCtxFrom's run class, never assigned
 methodAliasEntriesRef W -- OrdMap keyed by the alias method spelling (`A.mth`) of this module`s own imports
 methodDispatchIdxByIdRef W -- assoc list keyed ((IfaceRef, String), Int): interface identity carries the origin, so same-spelled interfaces do not collide
 methodPredicateSlotsRef W -- assoc list keyed by the method slot key (interface identity and method name)
@@ -1284,49 +1342,6 @@ modulectx_fields_of() {
     | LC_ALL=C sort
 }
 
-# assigned_fields FILE...: the name after the last dot of EVERY write target
-# `<path>.<name> :=` and `setRef <path>.<name>`, whatever the receiver, one per
-# line, deduped.  Same two spellings and the same per-occurrence extraction as
-# `write_targets`.
-assigned_fields() {
-  for f in "$@"; do
-    join_setref "$f" \
-      | strip_comments \
-      | grep -oE "setRef[ ]+(\([^()]*\))?[A-Za-z0-9_.']*\.[A-Za-z_][A-Za-z0-9_]*([^.A-Za-z0-9_]|$)" \
-      | sed -E 's/^setRef[ ]+//; s/[^.A-Za-z0-9_]$//; s/.*\.//'
-    strip_comments < "$f" \
-      | grep -oE "\.[A-Za-z_][A-Za-z0-9_]*[ ]+:=" \
-      | sed -E 's/[ ]+:=$//; s/^\.//'
-  done | LC_ALL=C sort -u
-}
-
-# record_field_names FILE...: the field names of every record declared in the
-# files except `ModuleCtx`, in the one-line form (`data X = X { a : T, b : T }`)
-# and in the multi-line forms (`{` ending the header line, or ending a
-# constructor line below a bare `data X =`).
-record_field_names() {
-  for f in "$@"; do
-    awk '
-      /^(public export |export )?data / {
-        indata = 1; r = 0
-        skip = ($0 ~ /^(public export |export )?data ModuleCtx = /)
-        if (!skip && $0 ~ /\{.*\}/) { print }
-        else if (!skip && $0 ~ /\{[[:space:]]*$/) { r = 1 }
-        next
-      }
-      /^[^[:space:]]/ { indata = 0; r = 0; next }
-      indata && !skip {
-        if (r && $0 ~ /^[[:space:]]*\}/) { r = 0; next }
-        if (r && $0 ~ /^[[:space:]]+[a-z_][A-Za-z0-9_]*[[:space:]]*:/) { print; next }
-        if (!r && $0 ~ /\{[[:space:]]*$/) { r = 1; next }
-        if (!r && $0 ~ /\{.*\}/) { print }
-      }
-    ' "$f"
-  done | grep -oE '(^|[{,])[[:space:]]*[a-z_][A-Za-z0-9_]*[[:space:]]*:' \
-    | sed -E 's/^[{,]?[[:space:]]*//; s/[[:space:]]*:$//' | LC_ALL=C sort -u
-}
-
-compiler_files=$(find "$ROOT/compiler" -name '*.mdk' ! -name '*_test.mdk' | LC_ALL=C sort)
 
 modulectx_actual=$(modulectx_fields_of "$TCT")
 modulectx_n=$(printf '%s\n' "$modulectx_actual" | grep -c .)
@@ -1376,7 +1391,7 @@ if [ "$modulectx_written" != "$modulectx_written_expected" ]; then
 fi
 
 # shellcheck disable=SC2086
-other_names=$(record_field_names $compiler_files)
+other_names=$(record_field_names_except 'ModuleCtx' $compiler_files)
 other_names_n=$(printf '%s\n' "$other_names" | grep -c .)
 if [ "$other_names_n" -eq 0 ]; then
   echo "FAIL: check 8 extracted ZERO field names from the other records of the compiler"

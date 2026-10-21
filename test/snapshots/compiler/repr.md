@@ -8,7 +8,7 @@ stages=DESUGAR,MARK
 -- (`ppMono`, `ppScheme`, `ppTy`, …) plus `normalize`, the union-find dereference.
 --
 -- What lives here reads NO typechecker state cell — nothing in this module touches
--- a `ModuleCtx` or `graphCtx` — and is closed under its own
+-- a `ModuleCtx` or a `GraphCtx` — and is closed under its own
 -- references.  That is the criterion for a file of its own rather than a region of
 -- `typecheck.mdk` (#2586); the two context readers that DO read state
 -- (`ownContext`, `seedContext`, which consult the scheme-obligation tables)

@@ -93,7 +93,7 @@ Real call sites read `pushTypeError "T-EFFECT-LEAK" (effectLeakMsg bound escapin
 
 - **`pushTypeError` does NOT dedup** — it plain-conses. `pushTypeErrorOnce` is the
   deduping variant.
-- **`pushTypeError` captures `graphCtx.value.currentLocRef` itself.** That is correct
+- **`pushTypeError` captures `mctx.mcGraph.currentLocRef` itself.** That is correct
   *during* the `infer` walk, but **stale in post-HM passes** — by then it points at
   the last expression inferred. If your error fires from a deferred/post-HM pass,
   capture the loc at *record* time into the obligation tuple (that is why

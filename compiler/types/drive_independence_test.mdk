@@ -8,8 +8,9 @@ import frontend.ast.{Decl}
 import list.{filter}
 import support.util.{joinNl}
 import types.publish.{ppPubScheme, PartialAnalysis(..)}
+import types.tc_types.{GraphCtx(..)}
 import types.typecheck.{
-  defaultDriveInputs, checkModulesPartialK, checkModulesChainReportFor,
+  defaultDriveInputs, checkModulesPartialK, checkModulesChainReportForGraph,
   checkModulesK, elaborateModulesWithReport, hadTypeErrors, matchWarningsNow,
   currentLocIsSet, checkModulesPartialLast
 }
@@ -100,9 +101,15 @@ plainK key ms =
   length (checkModulesK defaultDriveInputs key [] (prelude ()) (mods ms))
 
 diags : Option (Int, Int) -> List (String, String) -> List String
-diags key ms =
-  let (r, _) =
-    checkModulesChainReportFor
+diags key ms = fst (diagsGraph key ms)
+
+-- `diags` beside the graph record its drive ends in.
+diagsGraph : Option (Int, Int) ->
+  List (String, String) ->
+  (List String, GraphCtx)
+diagsGraph key ms =
+  let ((r, _), gctx) =
+    checkModulesChainReportForGraph
       defaultDriveInputs
       False
       key
@@ -111,7 +118,7 @@ diags key ms =
       []
       (prelude ())
       (mods ms)
-  flatMap ((mid, (_, errs, _)) => map (_ => mid) errs) r.trDiagnostics
+  (flatMap ((mid, (_, errs, _)) => map (_ => mid) errs) r.trDiagnostics, gctx)
 
 -- The published scheme of `mid.name` in a projection, rendered.
 schemeOf : String -> String -> PartialAnalysis -> List String
@@ -173,10 +180,10 @@ test "#4330: a keyed partial drive's match verdict does not depend on earlier dr
   let _ = plainK key [("z", keyedSrc)]
   expectEqual afterQuiet (partialWarns key [("z", keyedSrc)])
 
--- A drive over no declarations enters no location, so what it leaves in the cell is
--- what it started with.
+-- A drive over no declarations enters no location, so its record holds what it
+-- started with.
 test "a drive starts with no location entered, whatever the previous drive entered" =
-  let _ = diags None [("b", badSrc)]
-  let located = currentLocIsSet ()
-  let _ = checkModulesPartialK defaultDriveInputs None [] [] []
-  expectEqual (True, False) (located, currentLocIsSet ())
+  let (_, entered) = diagsGraph None [("b", badSrc)]
+  let located = currentLocIsSet entered
+  let (_, last) = checkModulesPartialLast defaultDriveInputs None [] [] []
+  expectEqual (True, False) (located, currentLocIsSet last.mcGraph)

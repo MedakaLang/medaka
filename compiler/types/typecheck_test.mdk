@@ -77,6 +77,7 @@ import types.tc_types.{
   NumericPredicateTraceStage(..),
   DriveInputs(..),
   DriveOutputs(..),
+  GraphCtx(..),
   TraceSink(..),
 }
 import types.publish.{TcReport(..), CheckedProgram(..)}
@@ -94,12 +95,16 @@ import types.typecheck.{
   checkModules,
   checkModulesChainReportFor,
   checkModulesDiagsChain,
+  checkModulesDiagsChainGraph,
   checkModulesEntryFullReportK,
   checkModulesEntryReport,
   checkOneDiags,
+  checkOneDiagsGraph,
   checkOneSchemeFullK,
+  checkOneSchemeFullKGraph,
   constrainedSigNames,
   elaborateModules,
+  elaborateModulesGraph,
   elaborateOne,
   elaborateOneFacts,
   evCellsSpanProbe,
@@ -181,8 +186,8 @@ numericRouteView (RScalar name) = "scalar:" ++ name
 numericRouteView (RProj route path) =
   "projected:\{numericRouteView route}.\{joinWith "." (map intToString path)}"
 
-numericTraceView : NumericPredicateTraceEntry -> NumericTraceView
-numericTraceView entry =
+numericTraceView : GraphCtx -> NumericPredicateTraceEntry -> NumericTraceView
+numericTraceView gctx entry =
   let predicate = entry.nptPredicate
   let iface = predicate.predicateInterface
   let origin = match iface.irOrigin
@@ -207,7 +212,7 @@ numericTraceView entry =
     ntvStage = entry.nptStage,
     ntvInterface = "\{origin}::\{iface.irName}",
     ntvArguments = map ppMono predicate.predicateArguments,
-    ntvOwner = snd (scopeTraceContext entry.nptScope),
+    ntvOwner = snd (scopeTraceContext gctx entry.nptScope),
     ntvOrigin = originSpan,
     ntvSelected = selected,
     ntvSelectedIdentity = selectedIdentity,
@@ -256,12 +261,12 @@ numericBodySource collision body =
 numericCheckObserved : String -> (List String, List NumericTraceView)
 numericCheckObserved source =
   let sink = beginNumericPredicateTrace ()
-  let (errors, _) = checkOneDiags (traced sink) [] (desugar
+  let ((errors, _), gctx) = checkOneDiagsGraph (traced sink) [] (desugar
     (parse numericPreludeSource)) (
     "numeric_predicate",
     desugar (parseLocated source),
   )
-  let trace = map numericTraceView (finishNumericPredicateTrace sink)
+  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
   (map tcMsg errors, trace)
 
 numericStages : List NumericTraceView -> List NumericPredicateTraceStage
@@ -494,8 +499,8 @@ numericSchemeObserved : Option (Int, Int) ->
   (List String, List NumericTraceView)
 numericSchemeObserved key source =
   let sink = beginNumericPredicateTrace ()
-  let (_, schemes) = checkOneSchemeFullK (traced sink) key [] (desugar
-    (parse numericPreludeSource)) (
+  let ((_, schemes), gctx) = checkOneSchemeFullKGraph (traced
+    sink) key [] (desugar (parse numericPreludeSource)) (
     "numeric_scheme",
     desugar (parseLocated source),
   )
@@ -503,7 +508,7 @@ numericSchemeObserved key source =
     map
       (entry => ppScheme (snd entry).psScheme)
       (filter (entry => fst entry == "value") schemes)
-  let trace = map numericTraceView (finishNumericPredicateTrace sink)
+  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
   (values, trace)
 
 numericImportedObserved : Bool -> (Int, List NumericTraceView)
@@ -543,8 +548,8 @@ numericImportedObserved reverseOrder =
     else
       [shape, numeric, forge, entry]
   let sink = beginNumericPredicateTrace ()
-  let results =
-    checkModulesDiagsChain
+  let (results, gctx) =
+    checkModulesDiagsChainGraph
       (traced sink)
       None
       ""
@@ -552,7 +557,7 @@ numericImportedObserved reverseOrder =
       []
       (desugar (parse numericPreludeSource))
       (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
-  let trace = map numericTraceView (finishNumericPredicateTrace sink)
+  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
   (modErrorCount results, trace)
 
 test "numeric predicates survive module and import order permutations" =
@@ -761,8 +766,8 @@ arithmeticSchemeObserved : Option (Int, Int) ->
   (List (String, Int, String), List (String, String, Int))
 arithmeticSchemeObserved key source =
   let sink = beginAssumptionTrace ()
-  let (_, schemes) = checkOneSchemeFullK (traced sink) key [] (desugar
-    (parse arithmeticPreludeSource)) (
+  let ((_, schemes), gctx) = checkOneSchemeFullKGraph (traced
+    sink) key [] (desugar (parse arithmeticPreludeSource)) (
     "arithmetic_scheme",
     desugar (parseLocated source),
   )
@@ -779,8 +784,8 @@ arithmeticSchemeObserved key source =
       (entry =>
         let (EvidenceBinderId binderScope slot) = entry.atBinder
         (
-          snd (scopeTraceContext entry.atGoalScope),
-          snd (scopeTraceContext binderScope),
+          snd (scopeTraceContext gctx entry.atGoalScope),
+          snd (scopeTraceContext gctx binderScope),
           slot,
         ))
       (finishAssumptionTrace sink)
@@ -852,19 +857,19 @@ arithmeticTraceObserved : String ->
   (List String, List NumericTraceView, List (String, String, Int))
 arithmeticTraceObserved source =
   let sink = { beginNumericPredicateTrace () | tsAssumptionEnabled = True }
-  let (errors, _) = checkOneDiags (traced sink) [] (desugar
+  let ((errors, _), gctx) = checkOneDiagsGraph (traced sink) [] (desugar
     (parse arithmeticPreludeSource)) (
     "arithmetic_trace",
     desugar (parseLocated source),
   )
-  let trace = map numericTraceView (finishNumericPredicateTrace sink)
+  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
   let assumptions =
     map
       (entry =>
         let (EvidenceBinderId binderScope slot) = entry.atBinder
         (
-          snd (scopeTraceContext entry.atGoalScope),
-          snd (scopeTraceContext binderScope),
+          snd (scopeTraceContext gctx entry.atGoalScope),
+          snd (scopeTraceContext gctx binderScope),
           slot,
         ))
       (finishAssumptionTrace sink)
@@ -1007,8 +1012,8 @@ arithmeticImportedObserved reverseOrder =
     else
       [shape, numeric, forge, entry]
   let sink = beginNumericPredicateTrace ()
-  let results =
-    checkModulesDiagsChain
+  let (results, gctx) =
+    checkModulesDiagsChainGraph
       (traced sink)
       None
       ""
@@ -1016,7 +1021,7 @@ arithmeticImportedObserved reverseOrder =
       []
       (desugar (parse arithmeticPreludeSource))
       (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
-  let trace = map numericTraceView (finishNumericPredicateTrace sink)
+  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
   let arithmetic =
     filter
       (view =>
@@ -1143,8 +1148,8 @@ declaredNumMemberSchemeObserved : Option (Int, Int) ->
   (List (Int, String), List (String, String, Int))
 declaredNumMemberSchemeObserved key member source =
   let sink = beginAssumptionTrace ()
-  let (_, schemes) = checkOneSchemeFullK (traced sink) key [] (desugar
-    (parse numericPreludeSource)) (
+  let ((_, schemes), gctx) = checkOneSchemeFullKGraph (traced
+    sink) key [] (desugar (parse numericPreludeSource)) (
     "declared_numeric_scheme",
     desugar (parseLocated source),
   )
@@ -1160,8 +1165,8 @@ declaredNumMemberSchemeObserved key member source =
       (entry =>
         let (EvidenceBinderId binderScope slot) = entry.atBinder
         (
-          snd (scopeTraceContext entry.atGoalScope),
-          snd (scopeTraceContext binderScope),
+          snd (scopeTraceContext gctx entry.atGoalScope),
+          snd (scopeTraceContext gctx binderScope),
           slot,
         ))
       (finishAssumptionTrace sink)
@@ -2370,8 +2375,15 @@ returnMemoConflictPrefix = joinNl [
 
 returnMemoObserved : String -> String -> String -> ReturnMemoRequestView
 returnMemoObserved prefixSource entrySource stepKey =
-  let results =
-    checkModulesDiagsChain
+  fst (returnMemoObservedGraph prefixSource entrySource stepKey)
+
+returnMemoObservedGraph : String ->
+  String ->
+  String ->
+  (ReturnMemoRequestView, GraphCtx)
+returnMemoObservedGraph prefixSource entrySource stepKey =
+  let (results, gctx) =
+    checkModulesDiagsChainGraph
       defaultDriveInputs
       (Some (1091, 1093))
       "method-return-request-fence"
@@ -2382,10 +2394,14 @@ returnMemoObserved prefixSource entrySource stepKey =
         ("return_memo_prefix", desugar (parseLocated prefixSource)),
         ("return_memo_entry", desugar (parseLocated entrySource)),
       ]
-  ReturnMemoRequestView {
-    rmrvModules = map returnMemoModuleView results,
-    rmrvReturns = filter returnMemoRelevant (methodReturnMemoCurrentViews ()),
-  }
+  (
+    ReturnMemoRequestView {
+      rmrvModules = map returnMemoModuleView results,
+      rmrvReturns =
+        filter returnMemoRelevant (methodReturnMemoCurrentViews gctx),
+    },
+    gctx,
+  )
 
 returnMemoErrorCount : ReturnMemoRequestView -> Int
 returnMemoErrorCount view = returnMemoErrorCountRows view.rmrvModules
@@ -2419,8 +2435,9 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
       returnMemoConflictPrefix
   let afterConflict = returnMemoObserved pSource returnMemoEntry pSource
   let changed = returnMemoObserved changedSource returnMemoEntry changedSource
-  let backToP = returnMemoObserved pSource returnMemoEntry pSource
-  let mutations = methodReturnMemoFenceMutationProbe ()
+  let (backToP, backToPGraph) =
+    returnMemoObservedGraph pSource returnMemoEntry pSource
+  let mutations = methodReturnMemoFenceMutationProbe backToPGraph
   let retained = methodReturnMemoRetentionStats ()
   let teardown = methodReturnMemoTeardownStats ()
   let forcedStale = returnMemoObserved changedSource returnMemoEntry pSource
@@ -2861,11 +2878,11 @@ data ContextView = ContextView {
 }
   deriving (Eq, Debug)
 
-traceView : AssumptionTraceEntry -> TraceView
-traceView entry =
+traceView : GraphCtx -> AssumptionTraceEntry -> TraceView
+traceView gctx entry =
   let (EvidenceBinderId binderScope _) = entry.atBinder
-  let (goalModule, goalOwner) = scopeTraceContext entry.atGoalScope
-  let (binderModule, binderOwner) = scopeTraceContext binderScope
+  let (goalModule, goalOwner) = scopeTraceContext gctx entry.atGoalScope
+  let (binderModule, binderOwner) = scopeTraceContext gctx binderScope
   TraceView {
     tvKind = entry.atKind,
     tvGoalModule = goalModule,
@@ -2878,14 +2895,14 @@ traceView entry =
 
 -- This recursion forces every context projection before the next request can
 -- reset the graph that owns the request-local ScopeIds.
-traceViewsNow : List AssumptionTraceEntry -> List TraceView
-traceViewsNow entries = map traceView entries
+traceViewsNow : GraphCtx -> List AssumptionTraceEntry -> List TraceView
+traceViewsNow gctx entries = map (traceView gctx) entries
 
 runModulesObserved : List (String, String) -> ModuleTraceView
 runModulesObserved sources =
   let sink = beginAssumptionTrace ()
-  let results =
-    checkModulesDiagsChain
+  let (results, gctx) =
+    checkModulesDiagsChainGraph
       (traced sink)
       None
       ""
@@ -2895,18 +2912,18 @@ runModulesObserved sources =
       (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
   let assumptionEntries = finishAssumptionTrace sink
   ModuleTraceView {
-    mtvAssumptions = traceViewsNow assumptionEntries,
+    mtvAssumptions = traceViewsNow gctx assumptionEntries,
     mtvErrors = modErrorCount results,
   }
 
 runObserved : String -> String -> RequestView
 runObserved moduleId source =
   let sink = beginAssumptionTrace ()
-  let (errors, _) =
-    checkOneDiags (traced sink) [] [] (moduleId, desugar (parse source))
+  let ((errors, _), gctx) =
+    checkOneDiagsGraph (traced sink) [] [] (moduleId, desugar (parse source))
   let entries = finishAssumptionTrace sink
-  let views = traceViewsNow entries
-  let (count, capacity) = scopeFrameStats ()
+  let views = traceViewsNow gctx entries
+  let (count, capacity) = scopeFrameStats gctx
   RequestView {
     rvTrace = views,
     rvErrors = listLen errors,
@@ -2922,8 +2939,8 @@ modErrorCount ((_, (_, errors, _)) :: rest) =
 runCachedObserved : String -> RequestView
 runCachedObserved entrySource =
   let sink = beginAssumptionTrace ()
-  let results =
-    checkModulesDiagsChain
+  let (results, gctx) =
+    checkModulesDiagsChainGraph
       (traced sink)
       (Some (731, 733))
       "typecheck-scope-cache"
@@ -2935,8 +2952,8 @@ runCachedObserved entrySource =
         ("cache_entry", desugar (parse entrySource)),
       ]
   let entries = finishAssumptionTrace sink
-  let views = traceViewsNow entries
-  let (count, capacity) = scopeFrameStats ()
+  let views = traceViewsNow gctx entries
+  let (count, capacity) = scopeFrameStats gctx
   RequestView {
     rvTrace = views,
     rvErrors = modErrorCount results,
@@ -4308,12 +4325,11 @@ cellInnerSource = joinNl [
 ]
 
 test "every goal that writes a method cell notes into that cell's summary" =
-  let _ = elaborateOne defaultDriveInputs [] (desugar
-    (parse numericPreludeSource)) (
-    "cell_inner",
-    desugar (parseLocated cellInnerSource),
-  )
-  let observed = cellGoalInnerAliasing ()
+  let (_, gctx) = elaborateModulesGraph defaultDriveInputs [] (desugar
+    (parse numericPreludeSource)) [
+    ("cell_inner", desugar (parseLocated cellInnerSource)),
+  ]
+  let observed = cellGoalInnerAliasing gctx
   expectAll [
     expectEqual [] (filter (o => not (snd o)) observed),
     expectEqual
@@ -5789,25 +5805,29 @@ spanProgramModule = (
 -- The method-cell index's length and the returned table's slot count after one
 -- unkeyed `elaborateModules` drive.
 elaborateSpans : Unit -> (Int, Int)
-elaborateSpans _ =
-  let (_, _, _, _, table, _, _) = elaborateModules
+elaborateSpans _ = fst (elaborateSpansGraph ())
+
+-- `elaborateSpans` beside the graph record of its drive.
+elaborateSpansGraph : Unit -> ((Int, Int), GraphCtx)
+elaborateSpansGraph _ =
+  let ((_, _, _, _, table, _, _), gctx) = elaborateModulesGraph
     defaultDriveInputs
     []
     (desugar (parse numericPreludeSource))
     [spanProgramModule]
   match evIndexOf table
-    EvIndex _ arr => (evCellsSpanProbe (), arrayLength arr)
+    EvIndex _ arr => ((evCellsSpanProbe gctx, arrayLength arr), gctx)
 
 -- The method-cell index's length after one unkeyed `checkOneDiags` drive.
 diagsSpan : Unit -> Int
 diagsSpan _ =
-  let _ =
-    checkOneDiags
+  let (_, gctx) =
+    checkOneDiagsGraph
       defaultDriveInputs
       []
       (desugar (parse numericPreludeSource))
       spanProgramModule
-  evCellsSpanProbe ()
+  evCellsSpanProbe gctx
 
 -- [drive]'s reading after the first and after the [n]th of [n] drives.
 firstAndNth : Int -> (Unit -> a) -> (a, a)
@@ -5835,17 +5855,17 @@ test "twenty unkeyed checkOneDiags drives keep the method-cell index one graph w
 -- an id minted before the current graph lineage began.
 test "the cell stores report an unminted site and an id from an earlier graph" =
   let _ = elaborateSpans ()
-  let _ = elaborateSpans ()
+  let (_, gctx) = elaborateSpansGraph ()
   expectAll [
     expectEqual
       "site reached inference unminted"
-      (fst (cellStoreMisses unminted)),
+      (fst (cellStoreMisses gctx unminted)),
     expectEqual
       (
         "site cell span_probe#0 is from an earlier graph",
         "method cell span_probe#0 is from an earlier graph",
       )
-      (cellStoreMisses (EvId "span_probe" 0)),
+      (cellStoreMisses gctx (EvId "span_probe" 0)),
   ]
 
 -- Two modules whose return-position method occurrences the mark pre-pass mints.

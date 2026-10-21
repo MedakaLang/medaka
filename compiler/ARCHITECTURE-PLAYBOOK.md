@@ -111,8 +111,10 @@ below. The cut rulings P1-D1 to P1-D22 and the exit outputs are on #4206.
 
 ## 4. Phase 2: state by lifetime (A3)
 
+**Status (2026-10-20): Phase 2 met** at `d111d97fc` (sprint arch-p2-6d, the stage-6 exit). `types/typecheck.mdk` has four module-level cells, all process-lifetime: `interners` and the three memo refs (the amended exit counts the memos as process-lifetime interners, NOTES Q1). `graphCtx` and `perRun` are deleted; `resetState` does not exist. The cell table is `types/CELL-LIFETIMES.md`.
+
 This is component X: `PerRun`'s 88 fields and `resetState` (#2547's three units and #2548
-landed 2026-09-03/04). It is the precondition of the file split (ruling 8). Whether it is
+landed 2026-09-03/04; the counts are those of the plan at `c98fa3894`). It is the precondition of the file split (ruling 8). Whether it is
 also the precondition of the interface artifact is what S1 decides (see the 2026-10-18
 amendment below).
 

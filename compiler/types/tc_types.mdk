@@ -629,7 +629,7 @@ public export data InstRef = InstRef String Int Int
 --
 -- `ImplEnv` below KEEPS its named fields, and that is not an inconsistency: its
 -- construction site `emptyImplEnv` is reachable from `emptyDeclEnvs` ←
--- `initialGraphCtx`, which the `graphCtx` initializer builds — which is why the panic
+-- `initialGraphCtx`, which the `interners` initializer builds — which is why the panic
 -- named `ieOrd` and not `ieRows`.  A later editor who makes `emptyImplEnv`
 -- unreachable re-arms the same trap on `ImplEnv`.
 --
@@ -815,7 +815,7 @@ public export data ImplAcc = ImplAcc {
 -- label table, so it cannot hit this.  `ClassEnv` below KEEPS named fields,
 -- for the identical reason `ImplEnv` does: its construction site
 -- (`emptyClassEnv`) is reachable from `emptyDeclEnvs` ← `initialGraphCtx`,
--- which the `graphCtx` initializer builds.
+-- which the `interners` initializer builds.
 --
 -- Fields, in order: this interface's identity key (`ifaceTabKey` lifted
 -- through `regKeyOfTab`, the same mint `oblIfaceKeys`/`ifaceSlotKey` use);
@@ -915,7 +915,7 @@ public export data MethodScope =
 -- from the drive's inputs, the admitted map its driver computed, and the process's
 -- `Interners`: every field is the drive's own, except the lineage objects of
 -- `graphRun` and the extern catalog `builtinExternNamesRef`, which are the
--- interners' (the record installed last).
+-- interners' (those of the record most recently minted or restored).
 --
 -- NO TRAILING `--` comment on any field below (#829/[T-PERRUN-COMMENTS] corrupts
 -- this header shape) — field prose lives on the reader, e.g. `dispatchIdxScoped`.
@@ -1011,7 +1011,10 @@ public export data DriveInputs = DriveInputs {
 -- `doStickyDiags` is the sticky list as the drive left it, newest first, not yet
 -- deduplicated (`stickyTypeErrorDiags` reads it); `doFfiAliases` and `doOrdIndex`
 -- are the two tables of the declaration envelope that `checkedFfiExternTypeNamesModules`
--- reads.
+-- reads.  `doEffvarNext` is the drive's effect-variable counter at its end: a
+-- consumer that mints effect variables over `doInvocationView`'s schemes
+-- (`lastInvocationOps`) starts its own counter there, so its ids cannot collide with
+-- an id the drive's schemes hold.
 public export data DriveOutputs = DriveOutputs {
   doMainIsUnit : Bool,
   doMainIsFloat : Bool,
@@ -1026,6 +1029,7 @@ public export data DriveOutputs = DriveOutputs {
   doIfaceExports : OrdMap (List (String, List String)),
   doFfiAliases : List (TabKey, AliasDecl),
   doOrdIndex : OrdMap Int,
+  doEffvarNext : Int,
 }
 
 -- The outputs of a program no drive checked.
@@ -1045,6 +1049,7 @@ emptyDriveOutputs _ = DriveOutputs {
   doIfaceExports = omEmpty,
   doFfiAliases = [],
   doOrdIndex = omEmpty,
+  doEffvarNext = 0,
 }
 
 -- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by
@@ -1849,7 +1854,7 @@ public export data GraphRun = GraphRun {
 }
 
 -- What one graph run hands the next: the evidence-ordinal counter, the binder-name
--- state and the grant state, as the objects of the run installed last (not copies),
+-- state and the grant state, as the objects of the run most recently minted or restored (not copies),
 -- so the next lineage continues from the counter's value at the next mint.
 public export data Lineage = Lineage {
   lnEvCounter : Ref Int,
@@ -1861,7 +1866,7 @@ public export data Lineage = Lineage {
 -- keeps ids and local binder names unique across the drives of a long-lived
 -- process; the builtin extern catalog is the union of every catalog a drive built,
 -- because a later drive with a shorter runtime list must not exempt the FFI guards.
--- Both are the objects of the graph record installed last.
+-- Both are the objects of the graph record most recently minted or restored.
 public export data Interners = Interners {
   lineage : Lineage,
   externCatalog : Ref (OrdMap (Ty, List (String, Int))),
@@ -1929,7 +1934,8 @@ public export data CheckRunSeed = CheckRunSeed {
 -- The fields after `markingRef` are the module's inputs and tables.  `checkBodyImpl`
 -- writes each before any read, except `currentModuleRef`, `matchOracle` and
 -- `matchWarnings`, which the mint sets: the module id, and the `CheckRunSeed` (or, on a
--- path that does not seed, the previous record's oracle and warnings).
+-- path that does not seed, the previous record's oracle and warnings).  `mcGraph` is
+-- the mint's too: the graph record its caller passes.
 public export data ModuleCtx = ModuleCtx {
   currentScope : Ref ScopeCursor,
   -- #2705 / S2-DECL (d): method occurrences whose bare spelling has two or more
@@ -2063,6 +2069,11 @@ public export data ModuleCtx = ModuleCtx {
   -- The module's constructors and variance table, read by `driveOutputsNow` into
   -- `DriveOutputs` — see `InvocationView`.
   invocationViewRef : Ref InvocationView,
+  -- The graph record of the drive the module is checked in: the record the driver
+  -- passes to the module's mint, never read from a cell.  A memo stores a record whose
+  -- graph is the memo's own detached snapshot, and a hit re-points it at the hitting
+  -- drive's record, so no stored record keeps a drive's graph alive.
+  mcGraph : GraphCtx,
 }
 
 -- DICT-SEMANTICS §3 W2: the one termination measure every `requires` walk shares.  A
