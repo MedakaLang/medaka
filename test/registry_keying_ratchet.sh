@@ -166,16 +166,16 @@ strip_comments() {
 # line.  Both arms use `grep -oE`, so EVERY occurrence on a line is extracted
 # independently: a line carrying two writes yields two tokens, and an allowed
 # token cannot mask a rogue one beside it (control D).  The `setRef` path may open
-# with one parenthesised group (`setRef (envFor mctx).teDyn.dcModule.<field> v`).
+# with one parenthesised group, nested one level (`setRef (envFor mctx).teDyn.dcModule.<field> v`, `setRef (identity (b)).<field> v`), and the `:=` arm accepts no blank before the operator (`b.<field>:= v`).
 assigned_fields() {
   for f in "$@"; do
     join_setref "$f" \
       | strip_comments \
-      | grep -oE "setRef[ ]+(\([^()]*\))?[A-Za-z0-9_.']*\.[A-Za-z_][A-Za-z0-9_]*([^.A-Za-z0-9_]|$)" \
+      | grep -oE "setRef[ ]+(\(([^()]|\([^()]*\))*\))?[A-Za-z0-9_.']*\.[A-Za-z_][A-Za-z0-9_]*([^.A-Za-z0-9_]|$)" \
       | sed -E 's/^setRef[ ]+//; s/[^.A-Za-z0-9_]$//; s/.*\.//'
     strip_comments < "$f" \
-      | grep -oE "\.[A-Za-z_][A-Za-z0-9_]*[ ]+:=" \
-      | sed -E 's/[ ]+:=$//; s/^\.//'
+      | grep -oE "\.[A-Za-z_][A-Za-z0-9_]*[ ]*:=" \
+      | sed -E 's/[ ]*:=$//; s/^\.//'
   done | LC_ALL=C sort -u
 }
 

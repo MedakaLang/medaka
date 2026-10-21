@@ -919,7 +919,7 @@ public export data MethodScope =
 -- from the drive's inputs, the admitted map its driver computed, and the process's
 -- `Interners`: every field is the drive's own, except the lineage objects of
 -- `graphRun` and the extern catalog `builtinExternNamesRef`, which are the
--- interners' (the record installed last).
+-- interners' (those of the record most recently minted or restored).
 --
 -- NO TRAILING `--` comment on any field below (#829/[T-PERRUN-COMMENTS] corrupts
 -- this header shape) — field prose lives on the reader, e.g. `dispatchIdxScoped`.
@@ -1858,7 +1858,7 @@ public export data GraphRun = GraphRun {
 }
 
 -- What one graph run hands the next: the evidence-ordinal counter, the binder-name
--- state and the grant state, as the objects of the run installed last (not copies),
+-- state and the grant state, as the objects of the run most recently minted or restored (not copies),
 -- so the next lineage continues from the counter's value at the next mint.
 public export data Lineage = Lineage {
   lnEvCounter : Ref Int,
@@ -1870,7 +1870,7 @@ public export data Lineage = Lineage {
 -- keeps ids and local binder names unique across the drives of a long-lived
 -- process; the builtin extern catalog is the union of every catalog a drive built,
 -- because a later drive with a shorter runtime list must not exempt the FFI guards.
--- Both are the objects of the graph record installed last.
+-- Both are the objects of the graph record most recently minted or restored.
 public export data Interners = Interners {
   lineage : Lineage,
   externCatalog : Ref (OrdMap (Ty, List (String, Int))),
