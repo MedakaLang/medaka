@@ -20,7 +20,7 @@ commands before citing them.
 
 ---
 
-## 1. Where we are (measured 2026-10-18 at `c98fa3894`, the end of Phase 1)
+## 1. Where we are (measured 2026-10-21 at `17e977db4`, the end of Phase 2)
 
 Re-derive with `make arch-census` and the census scripts archived with the evaluation at
 `archive/findings/architecture-evaluation-2026-10-15/census/` (run as
@@ -29,21 +29,22 @@ records the method and the full tables).
 
 | Measure | Value |
 |---|---|
-| Compiler source, non-test | 180 modules, 213,087 lines; median 234, p90 2,257 |
-| `types/typecheck.mdk` | 57,406 lines (30,997 code, 22,662 comment); 27% of the compiler; 81% of `types/` |
-| Its growth during Phase 1 | +400 code lines (30,597 to 30,997) under 16 `Arch-Growth-Override:` commits, every one a Phase 1 sprint; about 10,000 lines a month before Phase 0 |
-| Modules over 3,000 code lines | 8 (`test/arch_goldens/oversize.golden`); 2 state a reason in their header (`frontend/resolve.mdk`, `tools/test_cmd.mdk`) |
-| Module-level `= Ref` cells | 85 in 26 modules (`test/arch_goldens/cells.golden`; Phase 0 counted 108 in 28); typecheck 5 plus 154 fields in 4 bundles (`ModuleCtx` 91, `GraphRun` 30, `GraphCtx` 19, `CrossRun` 14) and the records `TcConfig` 5, `DriveInputs` 5, `TraceSink` 8; Phase 0 counted 159 fields with `PerRun` 88 and `DriverState` 27 |
-| Import graph | 1,088 intra-compiler edges, 0 cycles, 3 layering violations (`layering.golden`) |
-| llvm_emit / wasm_emit twins | 93 named pairs (`twins.golden`) |
+| Compiler source, non-test | 183 modules, 217,929 lines; median 230, p90 2,249 |
+| `types/typecheck.mdk` | 58,083 lines (33,730 code, 20,710 comment); 27% of the compiler; 60% of `types/` (`tc_types.mdk` holds 1,184 code lines of it since T1) |
+| Its growth during Phase 2 | +2,733 code lines (30,997 to 33,730) under 33 `Arch-Growth-Override:` commits across ten sprints, each naming `types/tc_driver.mdk` or a Phase 4 leaf as the destination. T1 took −799; stage 6 (the threading) +2,848, of which 2,603 are parameters and `fmt` re-wraps and 95 net logic. About 10,000 lines a month before Phase 0; +400 during Phase 1 |
+| Modules over 3,000 code lines | 8 (`test/arch_goldens/oversize.golden`, unchanged); 2 state a reason in their header (`frontend/resolve.mdk`, `tools/test_cmd.mdk`) |
+| Module-level `= Ref` cells | 84 in 26 modules (`test/arch_goldens/cells.golden`; Phase 1 ended at 108 in 28); `types.typecheck` 4 (`interners` and the three memo refs) plus 196 fields in 13 records (`ModuleCells` 91, `GraphRun` 30, `GraphCtx` 19, `CrossRun` 14, `DynCtx` 10, `TraceSink` 8, `DriveInputs` 6, `TcConfig` 5, `ModuleCtx` 3, `Lineage` 3, `SiteCtx` 3, `Interners` 2, `GroupCtx` 2), every one a row of `types/CELL-LIFETIMES.md` |
+| Import graph | 0 cycles, 3 layering violations (`layering.golden`, unchanged) |
+| llvm_emit / wasm_emit twins | 93 named pairs (`twins.golden`, unchanged) |
 | Identical bodies in 2+ modules | 0 (pinned empty by `dupbodies.golden`) |
-| `lookupAssoc` call sites | 195 in 24 modules (87 in typecheck) |
-| Prelude cost | re-parsed and re-typechecked per process, about 90% of a hello-world `check` (as of Oct 14; the stage counts are pinned by `stage_counts.golden`) |
-| CPU per verb, Phase 0 end to Phase 1 end | `check`/`run`/`build` of a value `main` 0.16/0.16/0.71 s to 0.07/0.09/0.52 s; `test stdlib/list.mdk` 1.86 s to 1.41 s; `check` of the 72-module CLI graph unchanged within noise (17 to 20 s, either binary on either tree) |
-| Design docs in `compiler/` | 21 files, 19,626 lines (the keep list) |
+| `lookupAssoc` call sites | 225 in compiler modules, 134 in typecheck (Phase 1 end: 223 and 105; the records' mint, copy and restore paths added the 29) |
+| Prelude cost | callgrind of `check hello.mdk` at `17e977db4`: 392M Ir in all; the typecheck drive 285M (73%), of which the prelude's core pass (`checkCoreMemoized`) is 247M (63% of the process); load and parse about 89M (23%). `typecheck.module` is 2 on every verb's hello probe (`stage_counts.golden`) |
+| CPU per verb, Phase 1 end to Phase 2 end | unchanged within noise: hello `check`/`run`/`build` 0.07/0.07/0.42 s to 0.06/0.08/0.48 s; a value `main` 0.07/0.07/0.45 s to 0.07/0.07/0.48 s; `test stdlib/list.mdk` 1.32 s to 1.19 s; `check` of the CLI graph 17.3 s to 17.9 s on the same source tree (each binary on each tree, median of 3, user+sys) |
+| Design docs in `compiler/` | 21 files, 19,672 lines (the keep list) |
 
-Open milestones this plan draws on (2026-10-18): M-PUBLISH (1 open), M-PIPELINE (1),
-M-CACHE (5), M-BOUNDARIES (3), M-IDENTITY (11); run-once O2 (2), O3 (2), O4 (8), O5 (5).
+Open milestones this plan draws on (2026-10-21): M-PUBLISH (1 open), M-PIPELINE (1),
+M-CACHE (4), M-BOUNDARIES (3), M-IDENTITY (11); run-once O2 (2), O3 (2), O4 (8), O5 (5).
+The Phase 1 and Phase 2 milestones are still open with 3 and 5 issues each (§3, §4).
 
 ---
 
@@ -109,33 +110,60 @@ below. The cut rulings P1-D1 to P1-D22 and the exit outputs are on #4206.
 
 ---
 
-## 4. Phase 2: state by lifetime (A3)
+## 4. Phase 2: state by lifetime (A3) — met 2026-10-20
 
-**Status (2026-10-20): Phase 2 met** at `d111d97fc` (sprint arch-p2-6d, the stage-6 exit). `types/typecheck.mdk` has four module-level cells, all process-lifetime: `interners` and the three memo refs (the amended exit counts the memos as process-lifetime interners, NOTES Q1). `graphCtx` and `perRun` are deleted; `resetState` does not exist. The cell table is `types/CELL-LIFETIMES.md`.
+**Exit criterion, met 2026-10-20 at `d111d97fc`** (epic #4206; ten sprints #4303, #4304,
+#4321, #4325, #4326, #4338, #4341, #4346, #4353 and the optional #4356; PRs #4309, #4311,
+#4322, #4327, #4334, #4339, #4342, #4347, #4354, #4360):
+`grep -cE "^[a-z][A-Za-z0-9_']* *= *(Ref|newRef)" compiler/types/typecheck.mdk` is 4, every
+one an interner or a memo (`interners`, the evidence lineage and the builtin extern catalog;
+`coreCheckMemoRef`, `preludePreambleMemoRef`, `moduleChainMemoRef`); `resetState` and
+`resetCrossModuleState` do not exist; `cells.golden` pins `types.typecheck` at 4 (26 at the
+phase's start); `test/arch_boundaries_test.mdk` pins that the row set of
+`types/CELL-LIFETIMES.md` equals the cell census; `compiler/types/publish_test.mdk` is green.
+Every remaining cell lives in a record whose constructor is its reset point, and the record
+is a parameter or a field of the drive's result, never a module-level cell. The cut rulings
+P2-D1 to P2-D18 and the stage-6 questions are on #4206; the plan, facts, contracts and
+reports are under `/var/tmp/medaka-sprints/arch-p2*/` on the build box.
 
-This is component X: `PerRun`'s 88 fields and `resetState` (#2547's three units and #2548
-landed 2026-09-03/04; the counts are those of the plan at `c98fa3894`). It is the precondition of the file split (ruling 8). Whether it is
-also the precondition of the interface artifact is what S1 decides (see the 2026-10-18
-amendment below).
+| Id | Action | Landed |
+|---|---|---|
+| **S1** | Classify every cell | 2026-10-19 (P2-D1, D2): `types/CELL-LIFETIMES.md`, one row per cell and bundle field with its lifetime, owner, writers, reset, target and whether a loaded interface would have to fill it; the row set is pinned against the census. Sprint 1, PR #4309. |
+| **T1** | The data leaf | 2026-10-19 (P2-D3 to D5): 152 declarations moved body-identical into `types/tc_types.mdk` (−799 code lines); `closure.types.tc_types.golden`. Sprint 1, PR #4309. |
+| **S4** | Consumers read `CheckedProgram` | 2026-10-19 (P2-D6 to D10, D16): lowering, the three evaluator drivers and the backends read a `ProgramFacts` value built from the drive's result; the installers, their readers and three cells deleted; `mangleUnitsEv` remaps the value. Sprint 2, PR #4311; #2705's reader half. Residual: one run-owned facts cell, `program_facts.currentFacts` (#4317). |
+| **S2** | Per-run and per-group state are arguments | 2026-10-19 (P2-D11, D12): the "current …" cells became fields of `DynCtx` and `SiteCtx`, carried by `TcEnv` (sprint 3, PR #4322); `GroupCtx` is minted by `processSCC` and `ModuleCtx` by the module worker (sprint 4, PR #4327). |
+| **S3** | Module and graph records with owners | 2026-10-20 (P2-D13): `GraphCtx` minted by `graphPreamble`, `TcConfig` built once per drive, memo hits return values, `DriverState` and `resetState` deleted (sprint 5, PR #4334). Stage 6 then threaded the shims: a drive's configuration is `DriveInputs` and its answers a frozen `DriveOutputs` (6a, PR #4339; #4337 closed); a drive starts from its inputs and the interners alone (6b, PR #4342; #4330, #4335, #4336 closed); `perRun` and `graphCtx` deleted by threading `ModuleCtx` through 787 functions and `GraphCtx` through about 380, both as tool-generated sweeps reviewed by regeneration (6c, 6d, PRs #4347, #4354). |
+| **6e** (optional) | Lexical diagnostic locations | 2026-10-21: `currentLoc` replaced by `ModuleCtx.mcLoc`, a scoped value; 188 diagnostics moved, each classified by rule and approved; #1449 and #3846 closed, #1752 open on its second half. PR #4360. |
 
-| Id | Action | Mechanism | Acceptance | Size | Needs |
-|---|---|---|---|---|---|
-| **S1** | Classify every cell | A table, committed in `types/ARCHITECTURE.md`, assigning each of the 26 loose cells and 159 bundle fields (`PerRun` 88, `GraphRun` 30, `DriverState` 27, `CrossRun` 14) a lifetime: process, graph, module, group, solver run. Fields whose lifetime no one can state are listed as such. The table also marks which cells a loaded `ModuleInterface` would have to fill, which is the input to the ordering decision below. | The table covers every cell (G3's count is the denominator). | slice | G3 |
-| **T1** | The data leaf, pulled forward from Phase 4 | `types/tc_types.mdk`: the 150 `data` declarations and S1's state records move out of `typecheck.mdk` into a leaf with a closure golden that contains no inference module. No state is threaded; this is the one Phase 4 extraction that needs nothing from S2. | `typecheck.mdk` falls by the moved lines; `closure.types.tc_types.golden` pinned; fixpoint; LEG A additive-only. | slice | S1 |
-| **S4** | Consumers read `CheckedProgram` | `core_ir_lower`, `eval` and the emit path read evidence, dispositions and runtime types from the `CheckedProgram` the drive returned, not from the installed tables; the in-place remap after mangling becomes a remap of the value. Closes A2's second half. | A2's check gains "no reader of an installed table outside `types/`" as a boundary pin; two-arm IR identity over the engines corpus. | sprint | S1, V2 (#2705) |
-| **S2** | Per-group state becomes an argument | A `GroupCtx` record created when `processSCC` enters a group and dropped when it leaves, holding the pending channels and the per-group inference state; `checkBodyImpl` and `infer` take it as a parameter. Threading is done group-at-a-time, never all 25 arms at once; a shim reads the bundle while a region is unmigrated. | `PerRun` field count falls as fields move (G3 pins it); byte-identical goldens; fixpoint; the M2 instruction-count instrument stays within its soft budget. | arc | S1, V1 |
-| **S3** | Per-module and per-graph state become records with owners | `ModuleCtx` minted by the module worker, `GraphCtx` by the graph driver; `resetState` is deleted because there is nothing ambient to reset; the dynamic-context flags are fields of the immutable `DynCtx` that `TcEnv` carries. | `grep -cE "^[a-z][A-Za-z0-9_']* *= *(Ref|newRef)" compiler/types/typecheck.mdk` is 0 outside interners; `resetState` does not exist; the memo layers no longer snapshot and reinstall mutable state. | sprint | S2 |
+**What the phase measured.** N_fill was 19 strict rows and 6 caveat rows
+(`CELL-LIFETIMES.md` § "Interface fills"), so the gate of the 2026-10-18 amendment read
+"S2 and S3 first" and Val took it (2026-10-19); the amendment is spent. Cost: the four
+cachegrind rows within +0.3% per slice and the big check −1% over stage 6; retention flat
+except #4355 (MCP `type_at` loop peak RSS +17%, Boehm heap growth with a lower live heap;
+accepted and tracked). CPU per verb unchanged (§1). The real cost is growth: +2,733 code
+lines in `typecheck.mdk`, all parameters, re-wraps and records, loaned against
+`types/tc_driver.mdk`.
 
-**Exit criterion.** Zero module-level cells in the typechecker outside interners; every
-cell's lifetime is the record that holds it.
-
-**Amended 2026-10-18 (Phase 1 wrap): the order of Phases 2 and 3.** S1 runs first, as one
-slice. Then Phase 3's C1 and C2 run before S2, unless S1's table shows that a loaded
-interface would have to fill cells beyond the published value's own tables; in that case
-S2 and S3 run first and C1 waits. The reason: C1's dependency is V2 (its Needs column), not
-Phase 2; Phase 3 is the stated perf lever, and Phase 1's measured CPU change on the 72-module
-check was nil; S2 is the riskiest arc in the plan and should not gate the lever by default.
-T1 runs beside either order. Phase 4 proper still waits on S2 (ruling 8).
+**What Phase 2 did not do**, and where each residual lives:
+- Lowering and eval take the facts through one run-owned cell, not a parameter (P2-D16):
+  #4317, `types.program_facts 1` in `cells.golden`.
+- `ElabResult` is still a positional 7-tuple at about 40 sites: #4318, with the Phase 4
+  driver leaf.
+- The evidence lineage and the extern catalog are process-wide on purpose (`interners`,
+  6b Q1), so local dictionary binder names depend on drive history (#4284); a cross-process
+  artifact must normalise or fix that before it carries evidence rows.
+- The in-process memos are the one approved form of cross-drive state, and only the diags
+  arm uses the core memo: the tree arm (`run`, `build`'s child, `medaka test`'s phases)
+  needs core's marked declarations back, which a memo may not hold (`graphPreamble`'s
+  comment), so `typecheck.module` is 2 on every verb's hello probe. Phase 3 inherits both
+  facts (§5).
+- Style debt the diff-scoped review cannot see (#4350); a nested-group effect-escape bug
+  found beside the work (#4331); the Phase 2 milestone is still open on these five.
+- Every refusal in the phase (sprint 4, 6d and 6e, two each) was a measured set smaller
+  than the affected set, or a packet fact that contact contradicted; none was a wrong
+  change. The end-of-sprint review found what per-slice checks missed each time it fired:
+  6b's chain-memo retention regression (392 to 932 MB over 30 rounds), 6d's #4355, 6e's
+  six location shapes no corpus contained.
 
 ---
 
@@ -153,6 +181,65 @@ after S1 rather than after Phase 2.
 
 **Exit criterion.** Nothing proven in one process is re-proven in the next for an
 unchanged input; the prelude is checked at build time only.
+
+**Amended 2026-10-21 (Phase 2 wrap): what Phase 2 changed about this phase.** The three
+rows above stand as the actions; the points below are their refinements, derived from the
+cell table, the memo code and the stage-6 measurements, and they are the inputs to the cut.
+The `Needs` column is met: V2 and V3 landed in Phase 1, F1 in #4314, and #2724 (the
+module-count superlinearity #2732 waited on) is closed.
+
+1. **C1's content is the fill table.** A loaded interface restores, beside the published
+   value (`cpSchemes`, `cpCore`, `cpDispositions`), the 19 strict and 6 caveat rows of
+   `types/CELL-LIFETIMES.md` § "Interface fills". Rows of kind *accumulated module by
+   module* (the `CrossRun` universes, predicate slots and declared prefixes,
+   `GraphRun.ctorExistentialsRef`) are interface content, one contribution per module.
+   Rows of kind *computed once from the whole graph's declarations* (`effectDomains`,
+   `declEnvsRef`, `markSetsRef`, `argDispatchIdxByIdRef`, `mangledShadowMapRef`,
+   `abstractRecordTypesRef`, `builtinClassesRef`, `dictEligible*`) are recomputed by the
+   loader over the loaded graph's declaration view, so the interface carries that view
+   (heads, signatures, effect-domain declarations) in a `Decl`-free form. The admissibility
+   rule is the one `PreludePreamble` already states in `types/tc_types.mdk`: every field a
+   pure function of the module's declarations; no `Decl`, no `Ref`, no live `Scheme`
+   (`PubScheme` is the admitted form); no read of process state. `cpEvidence` and
+   `cpBinders` are not C1 content: no fill row reads them, and they belong to the tree-arm
+   artifact (point 2), where #4284 is a prerequisite.
+2. **C2 is the core memo served from a file, and it splits by output arm.**
+   `CoreCheckMemo` plus `PreludePreamble` is the shipped prelude's content and
+   `checkCoreMemoized`'s hit path (`restoreGraphCtx`, `copyCrossRun`) is its loader; the key
+   family is the memos' (`ccmKey`), widened per D7 to the join's atom list (the in-process
+   memo keys on the profile name, which the file key must not). **C2a** serves the diags arm
+   (`check`, the LSP, MCP, the playground, `medaka test`'s gate): acceptance as written, and
+   `check_hello.typecheck.module` 2 to 1. At `17e977db4` the prelude's core pass is 63% of a
+   hello-world `check`'s instructions (§1), 85% with its parse. **C2b** serves the tree arm
+   (`run`, `build`'s child, `medaka test`'s phases), which needs the prelude's elaborated,
+   dict-passed trees: that artifact carries them (`ir/core_ir_sexp.mdk` and its parser are
+   the codec precedent; #4172's prelude object is the native link's half), and
+   `run_hello`/`build_hello` `typecheck.module` go 2 to 1. C2a lands first; C2b is its own
+   sprint.
+3. **C3's preconditions.** The in-session reuse C3 promises cannot be shown on the
+   compiler's own graph until #4167 (the chain memo records nothing past 64 modules) and
+   #2797 (the 24-entry MRU caches) are closed; both join C3's `Needs`. The per-module
+   accumulator copies (#4165, #4166) are the cost of the *accumulated* rows C3 restores and
+   are measured in its cost rows.
+4. **Zero growth.** Phase 3 adds no net code lines to `types/typecheck.mdk`: the codec is a
+   new leaf (`types/interface.mdk`; closure `tc_types`, `publish`, `repr`, `ir/sexp`, never
+   `typecheck`), the loader side lives in `driver/`, and the typechecker's one change is the
+   memo hit path accepting a loaded value. An `Arch-Growth-Override:` in a Phase 3 sprint
+   is a review finding. Phase 2's loaned +2,733 lines are Phase 4's to move.
+5. **Parity.** Interface-on versus interface-off is a two-arm differential over the wide
+   corpus (every program under `test/` and the inline test programs; stage 6e's survey
+   measured five rejected corpora and the wide census then moved 102 more rows), plus the
+   stage-6 multi-drive probe set (a loaded interface is a drive, so 6b's rows must not
+   move) and the retention and peak-RSS rows (6b's chain-memo regression, #4355). The
+   tooling is Phase 2's: `arch-p2/facts/stage6/cost/` and `arch-p1/tools/ir_identity.sh`
+   under `/var/tmp/medaka-sprints/`. A mismatched fingerprint falls back to a full check and
+   says so; a slice that deletes a prelude drive names a program only that drive judged.
+6. **Order against Phase 4.** Ruling 8's precondition (S2) is met, so Phase 4 is unblocked
+   too. Phase 3 runs first: it is the perf lever, and its typechecker footprint is one hit
+   path, after which Phase 4's leaves move the loaned lines. A Phase 4 leaf that touches no
+   driver region may interleave between Phase 3 sprints, the way F1 did between Phase 2's.
+7. The Phase 1 exception rows C3 owns are unchanged (§3), and
+   `compiler/types/drive_independence_test.mdk` (6b) stays green across C3's session reuse.
 
 ---
 
@@ -215,8 +302,8 @@ exists when F3 lands, F3 adds the full view to the interface under a format-vers
 |---|---|---|
 | Phase 0 | epic #4206, milestone `Architecture: Phase 0 (the guards)`: G1 #4200, G2a #4201, G2b #4202, G3 #4203, G4 #4204, G5 #4205, G6 #4189 | adds the guards no existing plan has |
 | Phase 1 V1, V2, V3 | milestone `Architecture: Phase 1 (output is a value)`; #2549 phase 2, M-PUBLISH (#2544, #4053), M-PIPELINE (#2874), run-once #4151, #4152, #4154, #4160, #4157, #3901, #3902 | landed 2026-10-18; residuals S4 (#2705), #4279, #4282 |
-| Phase 2 | component X (`PerRun`, `resetState`); #2547 and #2548 landed 2026-09-03/04; S4 is #2705; T1 is #2586's first leaf | same work; this document adds the cell-lifetime table and the exit grep |
-| Phase 3 | M-CACHE #2732, run-once O3 (#4160, #3902) and O5 (#4169 to #4172, #3903) | same work; prelude-first ordering and D6 |
+| Phase 2 | milestone `Architecture: Phase 2 (state by lifetime)`; component X (`PerRun`, `resetState`); #2547 and #2548 landed 2026-09-03/04; S4 is #2705; T1 is #2586's first leaf | landed 2026-10-20; residuals #4317, #4318, #4350, #4355 and the found bug #4331 |
+| Phase 3 | M-CACHE #2732, run-once O3 (#3902) and O5 (#4169 to #4172, #3903); C3 also needs O4's #4167 and M-CACHE's #2797 (§5 amendment, point 3); #4284 before the tree-arm artifact | same work; prelude-first ordering, D6, D7, and the 2026-10-21 refinements in §5 |
 | Phase 4 | #2586, ruling 8 | same sequencing; this document names the layer axis and the per-module acceptance |
 | Phase 5 | #1398 R3 to R9, #4107 | unchanged |
 | F1 to F3 (§7 amendment) | `docs/design/TEST-SIBLING-ACCESS-DESIGN.md`, style ruling R35 | added 2026-10-19 |

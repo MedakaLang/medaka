@@ -156,12 +156,14 @@ environment it depends on and the selected target profile's IO join (D7); the pr
 ships pre-checked. Cache validity is a contract
 (`TYPECHECK-CONTRACTS.md` §5), not a prefix hash.
 
-- *Today (2026-10-18):* the prelude is re-typechecked in every process (about 90% of a
-  hello-world `check`). Within a process the duplicates are gone: a value `main` and an
-  `Async` main drive once on every verb, `build`'s child owns the front end and the parent
-  does none, and the per-verb stage counts are pinned (G6). Phase 1 halved the CPU of
-  `check`, `run` and `build` on a value `main` and left the 72-module check unchanged; the
-  prelude is the remaining lever.
+- *Today (2026-10-21, Phase 2 met):* the prelude is re-typechecked in every process: its
+  core pass is 63% of a hello-world `check`'s instructions, 85% with its parse (callgrind
+  at `17e977db4`), and the tree arm cannot use the in-process core memo at all. Within a
+  process the duplicates are gone: a value `main` and an `Async` main drive once on every
+  verb, `build`'s child owns the front end and the parent does none, and the per-verb
+  stage counts are pinned (G6). Phase 1 halved the CPU of `check`, `run` and `build` on a
+  value `main`; Phase 2 left every verb's CPU unchanged; the prelude is the remaining
+  lever (the playbook's Phase 3).
 - *Check:* per-verb stage-count pins (`stage_counts.golden`, G6); prelude typechecks per
   process equals zero (Phase 3).
 
