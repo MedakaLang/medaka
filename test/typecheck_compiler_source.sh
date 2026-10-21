@@ -1367,7 +1367,7 @@ fi
 # Arithmetic with a prelude Num declaration carries that exact predicate through
 # its single route goal. The scalar-only recorder remains only as the fallback
 # inside recordBinopGoals for prelude-free arithmetic.
-numeric_operator_required='  let _ = recordBinopGoals env.teDyn.dcModule op dref lt
+numeric_operator_required='  let _ = recordBinopGoals at.teDyn.dcModule op dref lt
 goalRequestOfKind mctx _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
 entailAssumVar mctx request m encl _ useScope (EKPredicateOp _ _ _) =
 entailInst sx name m encl useScope tag (EKPredicateOp _ _ predicate) =
@@ -1459,8 +1459,8 @@ require_typecheck_arm registerAmbiguousConstraintsOwnedBy oblDispatchMonos 'regi
 
 # Impl bodies read their method declaration and graded scope from one identity-keyed
 # ClassEnv row at the module ordinal.  The spelling-keyed fast/slow pair is retired.
+require_signature_flat 'inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List (Option Loc, Decl) -> Unit'
 ce_method_required='inferUserImplBodies : TcEnv -> List Decl -> ClassEnv -> Int -> List Decl -> Unit
-inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List Decl -> Unit
 match ceMethodTyAt iface mname cur ce
 ceMethodTyAt : IfaceRef ->
   match ceLookupAt key cur ce

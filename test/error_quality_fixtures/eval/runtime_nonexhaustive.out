@@ -1,8 +1,8 @@
 cmd: medaka run
 exit: 1
 ---
-warning: test/error_quality_fixtures/eval/runtime_nonexhaustive.mdk:3:7: non-exhaustive match on `Int`: missing `_`; add a `_ => ...` arm
+warning: test/error_quality_fixtures/eval/runtime_nonexhaustive.mdk:1:23: non-exhaustive match on `Int`: missing `_`; add a `_ => ...` arm
   |
-3 |   1 => "one"))
-  |        ^
+1 | main = println (debug (match 7
+  |                        ^
 test/error_quality_fixtures/eval/runtime_nonexhaustive.mdk:1:23: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match

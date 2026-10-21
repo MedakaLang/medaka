@@ -1,5 +1,5 @@
 # META
-source_lines=1296
+source_lines=1357
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -359,6 +359,11 @@ exprLoc (ELoc l _) = Some l
 exprLoc (EApp f _) = exprLoc f
 exprLoc _ = None
 
+-- Each node the lowering synthesizes is located at the statement it stands for,
+-- so a check on it names that statement: a bind's call at the statement's
+-- expression, a `let`'s rest of the block at the value the block goes on to
+-- return.  The continuation lambda carries no span of its own: its parameter
+-- belongs to the bind around it, and its body is located.
 lowerDo : Bool -> List DoStmt -> Expr
 lowerDo _ [DoExpr e] = e
 lowerDo d [DoBind pat e] =
@@ -367,8 +372,64 @@ lowerDo d ((DoExpr e) :: rest) = callAndThen d e (ELam [PWild] (lowerDo d rest))
 lowerDo d ((DoBind pat e) :: rest) =
   callAndThen d e (doCont pat (lowerDo d rest))
 lowerDo d ((DoLet _ isFun pat e site) :: rest) =
-  ELet site isFun pat e (lowerDo d rest)
+  let lowered = ELet site isFun pat e (lowerDo d rest)
+  match site
+    -- The parser's own `let` (`x : ty <- e`'s check, site `noDeclLoc`) belongs
+    -- to the bind before it, whose span already encloses it.
+    Loc _ 1 0 1 0 => lowered
+    _ => locatedAt (doResultLoc rest) lowered
 lowerDo _ _ = fallthrough
+
+-- The span of the statement whose value [stmts] returns: the first one that is
+-- not a `let`.
+doResultLoc : List DoStmt -> Option Loc
+doResultLoc ((DoLet _ _ _ _ _) :: rest) = doResultLoc rest
+doResultLoc ((DoExpr e) :: _) = exprSpanLoc e
+doResultLoc ((DoBind _ e) :: _) = exprSpanLoc e
+doResultLoc _ = None
+
+locatedAt : Option Loc -> Expr -> Expr
+locatedAt (Some l) e = ELoc l e
+locatedAt None e = e
+
+-- The span of [e] including a node the parser leaves unwrapped (an application,
+-- an operator, a field access): from the earliest start to the latest end of its
+-- outermost located parts.  A desugared node need not list its parts in source
+-- order, so the extremes are taken over all of them.
+export
+exprSpanLoc : Expr -> Option Loc
+exprSpanLoc e = joinLocs (outerLocs e [])
+
+-- One span from the earliest start to the latest end of [locs].
+export
+joinLocs : List Loc -> Option Loc
+joinLocs [] = None
+joinLocs (l :: ls) = Some (widenLocs l ls)
+
+widenLocs : Loc -> List Loc -> Loc
+widenLocs acc [] = acc
+widenLocs acc (l :: ls) = widenLocs (widenLoc acc l) ls
+
+widenLoc : Loc -> Loc -> Loc
+widenLoc (Loc f sl sc el ec) (Loc _ sl2 sc2 el2 ec2) =
+  let (bl, bc) =
+    if sl2 < sl || sl2 == sl && sc2 < sc then (sl2, sc2) else (sl, sc)
+  let (xl, xc) =
+    if el2 > el || el2 == el && ec2 > ec then (el2, ec2) else (el, ec)
+  Loc f bl bc xl xc
+
+outerLocs : Expr -> List Loc -> List Loc
+outerLocs (ELoc l _) acc = l :: acc
+outerLocs (EDoOrigin l _) acc = l :: acc
+outerLocs e acc =
+  let found = Ref acc
+  let _ =
+    mapChildren
+      (child =>
+        found := outerLocs child found.value
+        child)
+      e
+  found.value
 
 -- #894 review finding 1: `x <- b` / a bare statement line in `do` synthesizes
 -- an `andThen` call (below), and typecheck's `inferApp` needs to tell THIS
@@ -385,9 +446,9 @@ lowerDo _ _ = fallthrough
 -- no `Loc` (rare — `exprLoc` bottoms out); `inferApp` then falls back to the
 -- general container/List/Array message, which is safe, just less precise.
 callAndThen : Bool -> Expr -> Expr -> Expr
-callAndThen d e cont = match exprLoc e
+callAndThen d e cont = locatedAt (exprSpanLoc e) (match exprLoc e
   Some l => EApp (EApp (EDoOrigin l (EVar (bindMethodName d))) e) cont
-  None => callBin (bindMethodName d) e cont
+  None => callBin (bindMethodName d) e cont)
 
 -- bind continuation: a bare lambda for an irrefutable pattern, else a 1-arg
 -- lambda + 2-arm match whose wildcard arm fails (do_bind_fail = fallthrough)
@@ -1459,10 +1520,32 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "lowerDo" ((PVar "d") (PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EApp (EVar "pureMethodName") (EVar "d")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
-(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "site")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest"))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EBlock (DoLet false false (PVar "lowered") (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "site")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))) (DoExpr (EMatch (EVar "site") (arm (PCon "Loc" PWild (PLit (LInt 1)) (PLit (LInt 0)) (PLit (LInt 1)) (PLit (LInt 0))) () (EVar "lowered")) (arm PWild () (EApp (EApp (EVar "locatedAt") (EApp (EVar "doResultLoc") (EVar "rest"))) (EVar "lowered")))))))
 (DFunDef false "lowerDo" (PWild PWild) (EVar "fallthrough"))
+(DTypeSig false "doResultLoc" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "doResultLoc" ((PCons (PCon "DoLet" PWild PWild PWild PWild PWild) (PVar "rest"))) (EApp (EVar "doResultLoc") (EVar "rest")))
+(DFunDef false "doResultLoc" ((PCons (PCon "DoExpr" (PVar "e")) PWild)) (EApp (EVar "exprSpanLoc") (EVar "e")))
+(DFunDef false "doResultLoc" ((PCons (PCon "DoBind" PWild (PVar "e")) PWild)) (EApp (EVar "exprSpanLoc") (EVar "e")))
+(DFunDef false "doResultLoc" (PWild) (EVar "None"))
+(DTypeSig false "locatedAt" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DFunDef false "locatedAt" ((PCon "Some" (PVar "l")) (PVar "e")) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "e")))
+(DFunDef false "locatedAt" ((PCon "None") (PVar "e")) (EVar "e"))
+(DTypeSig true "exprSpanLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "exprSpanLoc" ((PVar "e")) (EApp (EVar "joinLocs") (EApp (EApp (EVar "outerLocs") (EVar "e")) (EListLit))))
+(DTypeSig true "joinLocs" (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "joinLocs" ((PList)) (EVar "None"))
+(DFunDef false "joinLocs" ((PCons (PVar "l") (PVar "ls"))) (EApp (EVar "Some") (EApp (EApp (EVar "widenLocs") (EVar "l")) (EVar "ls"))))
+(DTypeSig false "widenLocs" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyCon "Loc"))))
+(DFunDef false "widenLocs" ((PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "widenLocs" ((PVar "acc") (PCons (PVar "l") (PVar "ls"))) (EApp (EApp (EVar "widenLocs") (EApp (EApp (EVar "widenLoc") (EVar "acc")) (EVar "l"))) (EVar "ls")))
+(DTypeSig false "widenLoc" (TyFun (TyCon "Loc") (TyFun (TyCon "Loc") (TyCon "Loc"))))
+(DFunDef false "widenLoc" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PCon "Loc" PWild (PVar "sl2") (PVar "sc2") (PVar "el2") (PVar "ec2"))) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "bc")) (EIf (EBinOp "||" (EBinOp "<" (EVar "sl2") (EVar "sl")) (EBinOp "&&" (EBinOp "==" (EVar "sl2") (EVar "sl")) (EBinOp "<" (EVar "sc2") (EVar "sc")))) (ETuple (EVar "sl2") (EVar "sc2")) (ETuple (EVar "sl") (EVar "sc")))) (DoLet false false (PTuple (PVar "xl") (PVar "xc")) (EIf (EBinOp "||" (EBinOp ">" (EVar "el2") (EVar "el")) (EBinOp "&&" (EBinOp "==" (EVar "el2") (EVar "el")) (EBinOp ">" (EVar "ec2") (EVar "ec")))) (ETuple (EVar "el2") (EVar "ec2")) (ETuple (EVar "el") (EVar "ec")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "bl")) (EVar "bc")) (EVar "xl")) (EVar "xc")))))
+(DTypeSig false "outerLocs" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "Loc")))))
+(DFunDef false "outerLocs" ((PCon "ELoc" (PVar "l") PWild) (PVar "acc")) (EBinOp "::" (EVar "l") (EVar "acc")))
+(DFunDef false "outerLocs" ((PCon "EDoOrigin" (PVar "l") PWild) (PVar "acc")) (EBinOp "::" (EVar "l") (EVar "acc")))
+(DFunDef false "outerLocs" ((PVar "e") (PVar "acc")) (EBlock (DoLet false false (PVar "found") (EApp (EVar "Ref") (EVar "acc"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "child")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "found")) (EApp (EApp (EVar "outerLocs") (EVar "child")) (EFieldAccess (EVar "found") "value")))) (DoExpr (EVar "child"))))) (EVar "e"))) (DoExpr (EFieldAccess (EVar "found") "value"))))
 (DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont")))))
+(DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EApp (EApp (EVar "locatedAt") (EApp (EVar "exprSpanLoc") (EVar "e"))) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont"))))))
 (DTypeSig false "doCont" (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "doCont" ((PVar "pat") (PVar "body")) (EIf (EApp (EVar "isRefutable") (EVar "pat")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "__do_x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__do_x")))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EListLit)) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "fallthrough"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ELam") (EListLit (EVar "pat"))) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isRefutable" (TyFun (TyCon "Pat") (TyCon "Bool")))
@@ -1935,10 +2018,32 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "lowerDo" ((PVar "d") (PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EApp (EVar "pureMethodName") (EVar "d")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
-(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "site")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest"))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EBlock (DoLet false false (PVar "lowered") (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "site")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))) (DoExpr (EMatch (EVar "site") (arm (PCon "Loc" PWild (PLit (LInt 1)) (PLit (LInt 0)) (PLit (LInt 1)) (PLit (LInt 0))) () (EVar "lowered")) (arm PWild () (EApp (EApp (EVar "locatedAt") (EApp (EVar "doResultLoc") (EVar "rest"))) (EVar "lowered")))))))
 (DFunDef false "lowerDo" (PWild PWild) (EVar "fallthrough"))
+(DTypeSig false "doResultLoc" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "doResultLoc" ((PCons (PCon "DoLet" PWild PWild PWild PWild PWild) (PVar "rest"))) (EApp (EVar "doResultLoc") (EVar "rest")))
+(DFunDef false "doResultLoc" ((PCons (PCon "DoExpr" (PVar "e")) PWild)) (EApp (EVar "exprSpanLoc") (EVar "e")))
+(DFunDef false "doResultLoc" ((PCons (PCon "DoBind" PWild (PVar "e")) PWild)) (EApp (EVar "exprSpanLoc") (EVar "e")))
+(DFunDef false "doResultLoc" (PWild) (EVar "None"))
+(DTypeSig false "locatedAt" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DFunDef false "locatedAt" ((PCon "Some" (PVar "l")) (PVar "e")) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "e")))
+(DFunDef false "locatedAt" ((PCon "None") (PVar "e")) (EVar "e"))
+(DTypeSig true "exprSpanLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "exprSpanLoc" ((PVar "e")) (EApp (EVar "joinLocs") (EApp (EApp (EVar "outerLocs") (EVar "e")) (EListLit))))
+(DTypeSig true "joinLocs" (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "joinLocs" ((PList)) (EVar "None"))
+(DFunDef false "joinLocs" ((PCons (PVar "l") (PVar "ls"))) (EApp (EVar "Some") (EApp (EApp (EVar "widenLocs") (EVar "l")) (EVar "ls"))))
+(DTypeSig false "widenLocs" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyCon "Loc"))))
+(DFunDef false "widenLocs" ((PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "widenLocs" ((PVar "acc") (PCons (PVar "l") (PVar "ls"))) (EApp (EApp (EVar "widenLocs") (EApp (EApp (EVar "widenLoc") (EVar "acc")) (EVar "l"))) (EVar "ls")))
+(DTypeSig false "widenLoc" (TyFun (TyCon "Loc") (TyFun (TyCon "Loc") (TyCon "Loc"))))
+(DFunDef false "widenLoc" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PCon "Loc" PWild (PVar "sl2") (PVar "sc2") (PVar "el2") (PVar "ec2"))) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "bc")) (EIf (EBinOp "||" (EBinOp "<" (EVar "sl2") (EVar "sl")) (EBinOp "&&" (EBinOp "==" (EVar "sl2") (EVar "sl")) (EBinOp "<" (EVar "sc2") (EVar "sc")))) (ETuple (EVar "sl2") (EVar "sc2")) (ETuple (EVar "sl") (EVar "sc")))) (DoLet false false (PTuple (PVar "xl") (PVar "xc")) (EIf (EBinOp "||" (EBinOp ">" (EVar "el2") (EVar "el")) (EBinOp "&&" (EBinOp "==" (EVar "el2") (EVar "el")) (EBinOp ">" (EVar "ec2") (EVar "ec")))) (ETuple (EVar "el2") (EVar "ec2")) (ETuple (EVar "el") (EVar "ec")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "bl")) (EVar "bc")) (EVar "xl")) (EVar "xc")))))
+(DTypeSig false "outerLocs" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "Loc")))))
+(DFunDef false "outerLocs" ((PCon "ELoc" (PVar "l") PWild) (PVar "acc")) (EBinOp "::" (EVar "l") (EVar "acc")))
+(DFunDef false "outerLocs" ((PCon "EDoOrigin" (PVar "l") PWild) (PVar "acc")) (EBinOp "::" (EVar "l") (EVar "acc")))
+(DFunDef false "outerLocs" ((PVar "e") (PVar "acc")) (EBlock (DoLet false false (PVar "found") (EApp (EVar "Ref") (EVar "acc"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "child")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "found")) (EApp (EApp (EVar "outerLocs") (EVar "child")) (EFieldAccess (EVar "found") "value")))) (DoExpr (EVar "child"))))) (EVar "e"))) (DoExpr (EFieldAccess (EVar "found") "value"))))
 (DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont")))))
+(DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EApp (EApp (EVar "locatedAt") (EApp (EVar "exprSpanLoc") (EVar "e"))) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont"))))))
 (DTypeSig false "doCont" (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "doCont" ((PVar "pat") (PVar "body")) (EIf (EApp (EVar "isRefutable") (EVar "pat")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "__do_x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__do_x")))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EListLit)) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "fallthrough"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ELam") (EListLit (EVar "pat"))) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isRefutable" (TyFun (TyCon "Pat") (TyCon "Bool")))

@@ -5709,7 +5709,7 @@ test "a closed return goal with no instance keeps no route" = expectEach [
   (
     "deferred: a rigid result the one instance does not cover",
     expectEqual
-      (("T-MISSING-CONSTRAINT", 7, 9), False)
+      (("T-MISSING-CONSTRAINT", 7, 6), False)
       (closedGoalOutcome numericPreludeSource [
         "interface Mk a where",
         "  mk : Int -> a",
@@ -5738,7 +5738,7 @@ test "a closed return goal with no instance keeps no route" = expectEach [
   (
     "vector: a phantom method selected on its interface vector",
     expectEqual
-      (("T-PHANTOM-METHOD", 7, 12), False)
+      (("T-PHANTOM-METHOD", 3, 12), False)
       (closedGoalOutcome numericPreludeSource [
         "interface Mk a where",
         "  mk : Int -> a",

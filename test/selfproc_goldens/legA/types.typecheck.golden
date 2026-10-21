@@ -193,7 +193,7 @@ astEffrowE : GraphCtx -> SigVars -> Ty -> EffRow
 astTypeFreshTbl : ModuleCtx -> Ty -> (Mono, List (String, Mono))
 asyncDriverFindings : ModuleCtx -> Option String -> String -> List Decl -> Scheme -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List DrainFinding
 asyncDriverUse : ModuleCtx -> PubScheme -> Mono -> Unit
-atSignature : GraphCtx -> Ty -> (Unit -> a) -> a
+atSignature : ModuleCtx -> Ty -> (ModuleCtx -> a) -> a
 atomAuthorityName : GraphCtx -> EffAtomTy -> List (String, Option Loc)
 atomBindersIn : (EffAtomTy -> List a) -> Ty -> List a
 atomNaming : String -> EffAtomTy -> List String
@@ -376,6 +376,7 @@ ceRowIface : CeRow -> IfaceRef
 ceRowIfaceName : CeRow -> String
 ceRowIfaceNameAt : String -> Int -> ClassEnv -> String
 ceRowKey : CeRow -> RegKey
+ceRowLoc : CeRow -> Option Loc
 ceRowMethodNames : CeRow -> List String
 ceRowMethodNamesAt : String -> Int -> ClassEnv -> List String
 ceRowMethodTysAt : String -> Int -> ClassEnv -> List String
@@ -473,7 +474,7 @@ checkImplHeadRigidity : ModuleCtx -> String -> String -> ImplBodySite -> List (S
 checkImplSuperContexts : ModuleCtx -> List Decl -> ClassEnv -> Int -> List ImplRow -> Decl -> Unit
 checkIndexOnlyEffVarsOpen : ModuleCtx -> String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkIndexOnlyGo : ModuleCtx -> String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
-checkInterfaceCycles : ModuleCtx -> ClassEnv -> Int -> Unit
+checkInterfaceCycles : ModuleCtx -> List Decl -> ClassEnv -> Int -> Unit
 checkLetBind : ModuleCtx -> String -> List FunClause -> Unit
 checkLetBinds : ModuleCtx -> List LetBind -> Unit
 checkLetGroupBindsGo : ModuleCtx -> List LetBind -> Unit
@@ -518,7 +519,7 @@ checkOneDiagsGraph : DriveInputs -> List Decl -> List Decl -> (String, List Decl
 checkOneDiagsK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneEffectParam : ModuleCtx -> String -> Param -> EffParamTy -> Unit
 checkOneErrorsWithRuntime : DriveInputs -> List Decl -> List Decl -> List Decl -> Bool
-checkOneIfaceCycle : ModuleCtx -> ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
+checkOneIfaceCycle : ModuleCtx -> List Decl -> ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
 checkOneMatchToLines : DriveInputs -> List Decl -> List Decl -> String
 checkOneReportK : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> TcReport
 checkOneReportKGraph : DriveInputs -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (TcReport, GraphCtx)
@@ -564,10 +565,10 @@ checkedFfiExternTypeNamesModule : Map String (Ty, List (String, Int)) -> DriveOu
 checkedFfiExternTypeNamesModules : DriveOutputs -> List (String, List Decl) -> List (String, (List (String, String), (List String, String)))
 checkedInto : TcEnv -> Expr -> Mono -> Mono -> Mono
 clampPrefix : List CSlot -> Option CDeclaredPrefix -> CDeclaredPrefix
-classEnvDeclFact : Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
-classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
+classEnvDeclFact : Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc)
+classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc)
 classEnvFinish : ClassEnv -> ClassEnv
-classEnvRowsOf : GraphCtx -> Int -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin) -> List CeRow
+classEnvRowsOf : GraphCtx -> Int -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) -> List CeRow
 clauseEagerlyRefsGroup : List String -> FunClause -> Bool
 clauseImplDictUser : ModuleCtx -> EvIndex -> IfaceRef -> Int -> ImplMethod -> List String
 clauseIsNonFunction : FunClause -> Bool
@@ -575,10 +576,12 @@ clauseIsValue : TcEnv -> FunClause -> Bool
 clauseRefs : (List Pat, Expr) -> List String
 clauseRefsUnder : Map String Unit -> (List Pat, Expr) -> List String
 clauseResult : Int -> (Option Loc, Mono) -> (Option Loc, Mono)
+clauseSpans : (Expr -> Option Loc) -> Map String (List (List Pat, Expr)) -> List String -> List Loc
 clausesAreValue : TcEnv -> List FunClause -> Bool
 clausesAt : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
 clausesLoc : List FunClause -> Option Loc
 clausesOf : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
+clausesSpanLoc : List FunClause -> Option Loc
 closeExistentialScope : ModuleCtx -> ExistentialScope -> Mono -> Option Loc -> Unit
 closeLocalScope : ModuleCtx -> Option ScopeId -> Unit
 closeScope : ModuleCtx -> Unit -> Unit
@@ -727,9 +730,9 @@ ctorSiblingWithholdingName : ModuleCtx -> Option HeadKey -> String -> String -> 
 ctorSiblingWithholds : ModuleCtx -> HeadKey -> String -> String -> Bool
 ctorsByHead : List Scheme -> Map String (List (List Mono, List Mono))
 ctorsOfHead : ModuleCtx -> HeadKey -> Option (List String)
-currentLocIsSet : GraphCtx -> Bool
 currentModuleMarks : GraphCtx -> Unit -> GraphMarks
 currentScopeStore : GraphCtx -> Unit -> ScopeStore
+cycleReportLoc : List Decl -> Int -> CeRow -> Option Loc
 cyclicSuperIfaceMsg : List String -> String
 dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
 dataEnvFinish : DataEnv -> DataEnv
@@ -904,6 +907,7 @@ depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List
 derefOp : DynCtx -> Mono -> Mono
 derivableIface : String -> Bool
 derivedImplDeclLoc : List Decl -> List Ty -> Option Loc
+derivingTypeLoc : Decl -> Option Loc
 determinationCandidates : ModuleCtx -> GoalWindow -> List Mono -> List (ImplRow, List (Int, Mono)) -> List (ImplRow, List (Int, Mono))
 determineByUniqueInstance : ModuleCtx -> Map String Unit -> List UObligation -> Unit
 determineByUniqueInstanceGo : ModuleCtx -> Map String Unit -> GoalWindow -> Bool -> List (Int, UObligation) -> Bool
@@ -971,7 +975,9 @@ dropModSchemes : (String, (List (String, PubScheme), List TcDiag, List TcDiag)) 
 dropRenameSuffixes : List String -> String
 dtopFor : GraphCtx -> EffLabel -> Param
 dtopIn : List (String, Param) -> EffLabel -> Param
-eagerIndexOnlyVars : ModuleCtx -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> List EffRow -> Mono -> Mono -> List String
+dynAt : Option Loc -> DynCtx -> DynCtx
+dynAtIfSome : Option Loc -> DynCtx -> DynCtx
+eagerIndexOnlyVars : List String -> List (String, Ref Effvar) -> List EffRow -> Mono -> Mono -> List String
 eagerRefs : Expr -> List String
 eagerRefsArm : Arm -> List String
 eagerRefsClauseAllPats : FunClause -> List String
@@ -1017,7 +1023,7 @@ elaborateModulesWithSchemes : DriveInputs -> Bool -> List Decl -> List Decl -> L
 elaborateOne : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOneFacts : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List Decl, ProgramFacts)
 elselessIfHelp : String
-emitCyclicAliasErrors : ModuleCtx -> List String -> Unit
+emitCyclicAliasErrors : ModuleCtx -> List (TabKey, (List String, Ty)) -> List String -> Unit
 emitValueShadowGate : ModuleCtx -> String -> Bool
 emptyBuiltinClasses : BuiltinClasses
 emptyClassEnv : ClassEnv
@@ -1063,6 +1069,8 @@ entryOwnSchemes : List (String, List (String, a)) -> List (String, a)
 entryReportFromDiags : List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> String
 entrySplit : TcReport -> (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
 envAlphaLets : TcEnv -> List (String, AlphaBinder)
+envAt : Option Loc -> TcEnv -> TcEnv
+envAtIfSome : Option Loc -> TcEnv -> TcEnv
 envFor : ModuleCtx -> TcEnv
 envVarType : TcEnv -> String -> Option Mono
 eqCompareOp : DynCtx -> Mono -> Mono -> Mono
@@ -1494,6 +1502,7 @@ ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
 ieRowIfaceMatches : IfaceRef -> IfaceRef -> Bool
 ieRowInheritsDefault : GraphCtx -> ImplRow -> String -> Bool
 ieRowInst : ImplRow -> InstRef
+ieRowLoc : ImplRow -> Option Loc
 ieRowMethodNames : ImplRow -> List String
 ieRowOfEntry : ImplEnv -> Option KeyEntry -> Option ImplRow
 ieRowOfIface : IfaceRef -> ImplRow -> Bool
@@ -1560,8 +1569,9 @@ implAccFinish : ImplAcc -> ImplEnv
 implBodyGivens : ModuleCtx -> IfaceRef -> ImplBodySite -> List (String, Mono) -> Ty -> List PredicateSlot
 implBodyLoc : Expr -> Option Loc
 implCompletenessMsgsOfMap : ClassEnv -> Int -> Decl -> List (Option Loc, String)
-implDeclFact : Decl -> List (IfaceRef, List Ty, List Require, List String)
-implDeclFacts : List Decl -> List (IfaceRef, List Ty, List Require, List String)
+implDeclFact : Decl -> List (IfaceRef, List Ty, List Require, List String, Option Loc)
+implDeclFacts : List Decl -> List (IfaceRef, List Ty, List Require, List String, Option Loc)
+implDeclLoc : Decl -> Option (Option Loc)
 implDeclWithReqs : Decl -> List (IfaceRef, List Ty, List Require)
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
 implDictNames : String -> Int -> Int -> List String
@@ -1592,12 +1602,13 @@ implReqDictVarOf : GraphCtx -> Option PredicateRequest -> Mono -> ScopeId -> Opt
 implRequiresRoot : ModuleCtx -> String -> Int -> List (String, Mono) -> List Require -> Bool
 implRowHasReqs : List Require -> Bool
 implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
-implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String) -> List ImplRow
+implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String, Option Loc) -> List ImplRow
 implSubject : String -> String -> String
 implTupleHeadKindMsg : String -> Int -> List Kind -> String
 importDefinersOf : GraphCtx -> List Decl -> List (String, (String, String))
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, a)) -> UsePath -> List (String, a) -> List (String, a)
+importLocOf : String -> Decl -> Option Loc
 importMemberShadow : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> List Decl -> UseMember -> List (String, String, Option Ty, Ty, Loc)
 importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
 importSeed : GraphCtx -> List (String, a) -> List (String, String) -> List Decl -> List (String, List (String, a)) -> List (String, (Option String, a))
@@ -1682,7 +1693,7 @@ inferGlobalDictAt : TcEnv -> String -> EvId -> Mono
 inferGrantedAt : TcEnv -> String -> EvId -> Mono
 inferHeadAnnot : TcEnv -> Expr -> Ty -> Mono
 inferIf : TcEnv -> Expr -> Expr -> Expr -> Mono
-inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List Decl -> Unit
+inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List (Option Loc, Decl) -> Unit
 inferImplMethod : TcEnv -> ClassEnv -> Int -> IfaceRef -> List (String, Mono) -> List Mono -> List Require -> ScopedImplMethod -> Unit
 inferImplMethods : TcEnv -> ClassEnv -> Int -> IfaceRef -> List (String, Mono) -> List Mono -> List Require -> List ScopedImplMethod -> Unit
 inferInfix : TcEnv -> String -> Expr -> Expr -> Mono
@@ -1693,7 +1704,7 @@ inferLamChecked : TcEnv -> Option Mono -> List Pat -> Expr -> Mono
 inferLastStmt : TcEnv -> DoStmt -> Mono
 inferLet : TcEnv -> Bool -> Pat -> Expr -> Expr -> Mono
 inferLetBinds : TcEnv -> List (LetBind, (String, BindingSummary)) -> List (Option ScopeId)
-inferLetBody : TcEnv -> Pat -> Mono -> List (Int, AuthResidual) -> Expr -> Expr -> Int -> Int -> Int -> Option ScopeId -> Mono
+inferLetBody : TcEnv -> Option Loc -> Pat -> Mono -> List (Int, AuthResidual) -> Expr -> Expr -> Int -> Int -> Int -> Option ScopeId -> Mono
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
 inferLetSimple : TcEnv -> Pat -> Expr -> Expr -> Mono
 inferListLit : TcEnv -> List Expr -> Mono
@@ -1747,6 +1758,7 @@ inferShadowStandaloneArm : TcEnv -> String -> List (Ref (Option Int)) -> List (R
 inferShadowStandaloneArmAt : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route, Ref Inner) -> Expr -> List (Expr, Mono) -> Expr -> Expr -> Mono -> Mono
 inferSpineArgs : TcEnv -> List Expr -> List (Expr, Mono)
 inferStmt : TcEnv -> DoStmt -> TcEnv
+inferStmtAt : TcEnv -> DoStmt -> TcEnv
 inferTestBodies : TcEnv -> List Decl -> Unit
 inferU64LitPat : ModuleCtx -> Int -> Int -> (Mono, List (String, Scheme))
 inferUnop : DynCtx -> String -> Mono -> Mono
@@ -1965,6 +1977,7 @@ localSlotArgs : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> List Mono
 localSlotLead : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> Mono
 localSourceName : String -> String
 locateTyAt : Option Loc -> Ty -> Ty
+locatedImpls : Option Loc -> List Decl -> List (Option Loc, Decl)
 lookupBinding : TcEnv -> String -> Option EnvBinding
 lookupBy : (a -> a -> Bool) -> a -> List (a, b) -> Option b
 lookupCtor : TcEnv -> String -> Option Scheme
@@ -2032,11 +2045,14 @@ matchOneSided : (a -> b -> MStep c a b) -> (c -> c -> Bool) -> (b -> b -> Bool) 
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))
 matchTyMonos : List Ty -> List Mono -> Option (List (String, Mono))
+matchWarningLoc : Option Loc -> List Arm -> Option Loc
 matchWarningsNow : ModuleCtx -> Bool
 materializeBinder : (String -> TyConOrigin -> Bool) -> PendingBinder -> BinderRow
 materializeBinderTypes : GraphCtx -> Unit -> Unit
 maybeInferConstraint : ModuleCtx -> List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> ScopeId -> Scheme -> Unit
 maybeStandaloneValueMono : TcEnv -> String -> Option Mono
+mctxAt : Option Loc -> ModuleCtx -> ModuleCtx
+mctxAtIfSome : Option Loc -> ModuleCtx -> ModuleCtx
 memberAliasCands : GraphCtx -> List Decl -> List (String, String, String, Ident, Loc)
 memberAliasEntry : String -> List ((String, String), a) -> UseMember -> List (String, a)
 memberAliasKeys : GraphCtx -> UsePath -> Loc -> List (String, String, String, Ident, Loc)
@@ -2055,6 +2071,7 @@ memberRole : Bool -> Bool -> BindingRole
 memberSchemeOblEntry : String -> List ((String, String), List VecObl) -> UseMember -> List (String, List VecObl)
 memberSuffix : String -> String
 memberTiedSurvivors : ModuleCtx -> Mono -> List UObligation -> Int -> Map String Unit
+membersSpanLoc : Map String (List (List Pat, Expr)) -> List String -> Option Loc
 mentionsEscaped : ModuleCtx -> Authority -> Bool
 mentionsOpened : ModuleCtx -> Authority -> Bool
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
@@ -2326,6 +2343,7 @@ noteNumericEntailment : SiteCtx -> EntailKind -> ScopeId -> Option IfaceRef -> R
 noteNumericObligationChecked : GraphCtx -> UObligation -> List Mono -> Unit
 noteNumericPredicateTrace : GraphCtx -> NumericPredicateTraceStage -> ClassPredicate -> ScopeId -> Option Loc -> Option IfaceRef -> Option Route -> List Route -> Unit
 noteNumlitCtx : ModuleCtx -> Mono -> Mono -> JoinContext -> Unit
+notePerformSite : TcEnv -> EffRow -> Unit
 noteRouteWalkCut : ReqWalk -> Unit
 noteTypeErrorDetected : ModuleCtx -> Unit -> Unit
 noteWalkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Unit
@@ -2457,9 +2475,10 @@ peelArrows : Int -> Mono -> List Mono
 peelOntoParams : DynCtx -> Option Mono -> List Mono -> List Pat -> Unit
 peelQual : Mono -> Mono
 performEffect : ModuleCtx -> Ref (List EffRow) -> EffRow -> Unit
+performSiteIn : Option (Ref (List (Ref Effvar, Option Loc))) -> Mono -> Option Loc
 phantomExportMsg : String -> String -> String -> String
-phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind)) -> List String
-phantomMethodMsgs : CeRow -> List String
+phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind)) -> List (Option Loc, String)
+phantomMethodMsgs : CeRow -> List (Option Loc, String)
 pickMostSpecificEntry : SiteCtx -> List Mono -> List KeyEntry -> Option KeyEntry
 pickNumLitRow : IfaceRef -> String -> List MethodSchemeRow -> Option MethodSchemeRow
 pickSchemes : List String -> Map String Scheme -> List (String, Scheme)
@@ -3032,7 +3051,6 @@ setDictEligible : GraphCtx -> List String -> Unit
 setFunConstraintEntry : ModuleCtx -> String -> List PredicateSlot -> Unit
 setFunPredicateSlots : ModuleCtx -> List (String, List PredicateSlot) -> Unit
 setGrantOcc : GraphCtx -> EvId -> GrantOcc -> Unit
-setLocIfSome : GraphCtx -> Option Loc -> Unit
 setMainSchemeIfEntry : GraphCtx -> Bool -> List (String, PubScheme) -> Unit
 setMethodPredicateSlotEntry : ModuleCtx -> String -> List MethodPredicateSlot -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
@@ -3153,6 +3171,7 @@ starSpelling : String -> Option String -> String
 stickyDiagsInPushOrder : List (String, TcDiag) -> List (String, TcDiag)
 stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
 stmtCalleeName : Expr -> Option String
+stmtSpanLoc : DoStmt -> Option Loc
 stripArrows : Mono -> Mono
 stripEff : Ty -> Ty
 stripLeadingMethodConstraints : Ty -> Ty
@@ -3366,6 +3385,7 @@ usePathWitnessesCtor : GraphCtx -> UsePath -> String -> String -> Ident -> Bool
 userExternSchemes : ModuleCtx -> Map String TyConOrigin -> List Decl -> List (String, Scheme)
 usesImplDict : GraphCtx -> EvIndex -> String -> Int -> Int -> Expr -> Bool
 valueJoinOps : DynCtx -> JoinContext -> (DynCtx -> List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
+valueSpanLoc : Expr -> Option Loc
 varHeadApps : String -> Ty -> List (List Ty)
 varHeadHere : String -> Ty -> List Ty -> List (List Ty)
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
