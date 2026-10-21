@@ -1367,7 +1367,7 @@ fi
 # Arithmetic with a prelude Num declaration carries that exact predicate through
 # its single route goal. The scalar-only recorder remains only as the fallback
 # inside recordBinopGoals for prelude-free arithmetic.
-numeric_operator_required='  let _ = recordBinopGoals env.teDyn.dcModule op dref lt
+numeric_operator_required='  let _ = recordBinopGoals at.teDyn.dcModule op dref lt
 goalRequestOfKind mctx _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
 entailAssumVar mctx request m encl _ useScope (EKPredicateOp _ _ _) =
 entailInst sx name m encl useScope tag (EKPredicateOp _ _ predicate) =

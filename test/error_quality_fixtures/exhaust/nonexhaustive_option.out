@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 0
 ---
-warning: test/error_quality_fixtures/exhaust/nonexhaustive_option.mdk:3:12: non-exhaustive match on `Option`: missing `None`; add a `None => ...` arm or a `_` wildcard
+warning: test/error_quality_fixtures/exhaust/nonexhaustive_option.mdk:2:11: non-exhaustive match on `Option`: missing `None`; add a `None => ...` arm or a `_` wildcard
   |
-3 |   Some x => x
-  |             ^
+2 | unwrap o = match o
+  |            ^

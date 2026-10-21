@@ -1,0 +1,1 @@
+{"files":[{"file":"<proj>/provider.mdk","diagnostics":[]},{"file":"<proj>/main.mdk","diagnostics":[{"code":"T-TYPE-MISMATCH","kind":"type","message":"type mismatch: Int vs a b","range":{"end":{"character":20,"line":4},"start":{"character":11,"line":4}},"severity":1,"source":"medaka"}]}]}

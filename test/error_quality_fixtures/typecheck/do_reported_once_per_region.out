@@ -41,10 +41,10 @@ error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:31:
   |
 31 |   let b = (2 : Int) == Some 4
   |           ^
-error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:32:7: type mismatch: a b vs Option
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:32:2: type mismatch: a b vs Option
   |
 32 |   Some x
-  |        ^
+  |   ^
 error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:29:9: type mismatch: Option vs a b
   |
 29 | k flag = defer

@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 0
 ---
-warning: test/error_quality_fixtures/exhaust/nonexhaustive_bool.mdk:3:10: non-exhaustive match on `Bool`: missing `False`; add a `False => ...` arm or a `_` wildcard
+warning: test/error_quality_fixtures/exhaust/nonexhaustive_bool.mdk:2:13: non-exhaustive match on `Bool`: missing `False`; add a `False => ...` arm or a `_` wildcard
   |
-3 |   True => "yes"
-  |           ^
+2 | describe b = match b
+  |              ^

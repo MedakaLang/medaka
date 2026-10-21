@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"T-NONREC-VALUE-LET","kind":"type","message":"`notFn` is bound by `let rec` but its right-hand side is not a function","range":{"end":{"character":17,"line":4},"start":{"character":16,"line":4}},"severity":1,"source":"medaka"}]}]}
