@@ -64,7 +64,10 @@ stdlib-only landings.)
 
 **§3 Mission.** One paragraph: the transformation and what is true after it
 lands. State the classification: parity (behavior identical, IR may prove it)
-or behavior-changing (say what changes).
+or behavior-changing (say what changes). A behavior-changing packet names the
+rule classes (C1..Cn) every moved row must fall into and the whole-tree census
+that finds the rows; it never carries an approved list of rows (sprint-plan
+step 3, field 4; Val, 2026-10-21).
 
 **§4 Already settled.** Facts the implementer must TRUST and not re-derive,
 each with the command that proved it. Copy the relevant rows from the

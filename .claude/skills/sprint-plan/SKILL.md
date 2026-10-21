@@ -123,6 +123,20 @@ deeper than this measured ~75% rework.
    `<module>_test.mdk`", "a `kind = "native"` gate-test row", "IR
    byte-identical"), not exact commands. Pick the vehicle with the
    `write-tests` skill; a shell gate needs its `shell-because:` reason.
+   **A semantics-changing slice is gated by rule, not by an approved list**
+   (Val, 2026-10-21, from the Phase 2 stage-6e retro): its acceptance is
+   "every moved row is classified by a numbered rule (C1..Cn) and the packet
+   lists the classes with counts", and the census that finds the moved rows
+   runs once, over the WHOLE tree (every `test/**` program plus the inline test
+   programs), in the survey slice. An approved list of rows is a measured set
+   smaller than the affected set: 6e's lexical-location slice was refused
+   twice (102 rows, then 1) for list completeness alone, and the 188 rows were
+   approved by class in the end anyway.
+   **A survey or decision slice that proposes a variant measures the
+   variant's retention** (`ret.sh`-style heap rows) before the landing slice
+   is cut, beside its instruction counts. 6e's landed variant then breached
+   the +5% heap bound (+20.9%), which cost a whole carrier slice and a
+   three-arm measurement the survey's own one-round number had foreshadowed.
 5. **Model** — name the selected harness role, model/reasoning and a one-line
    tier justification. **Claude:** three tiers. `haiku` for a mechanical slice
    whose transform, sites and expected values are all written down (a rename
