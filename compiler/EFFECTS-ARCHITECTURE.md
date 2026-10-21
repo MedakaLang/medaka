@@ -552,7 +552,7 @@ What landed, in the order the decision record prescribed:
    resolver checks lexical binder scope (`R-UNBOUND-AUTHORITY`,
    `R-MISPLACED-AUTHORITY-BINDER`).
 5. **Checking.** A signature's named binder elaborates to a rigid `κ` inside the
-   body (`ScopedMember.smDeclaredAuths`, `ModuleCtx.rigidAuthvarsRef`); the domain
+   body (`ScopedMember.smDeclaredAuths`, `ModuleCells.rigidAuthvarsRef`); the domain
    is `String @κ` (`T-AUTHORITY-BINDER`, `T-AUTHORITY-DOMAIN` on ill-formed
    binders). `argumentInto` is the one proof route: an argument flowing into a
    qualified domain wants `α(argument) ⊑ q` (`types/effect_infer.mdk`), through
