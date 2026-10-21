@@ -1,6 +1,6 @@
 -- A drive starts from its inputs and the process's interners alone: what an earlier
 -- drive in the same process left behind (type-error flag and list, admitted methods,
--- match oracle and warnings, last-entered location) is not visible to the next one.
+-- match oracle and warnings) is not visible to the next one.
 import test.{expectEqual}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
@@ -12,7 +12,7 @@ import types.tc_types.{GraphCtx(..)}
 import types.typecheck.{
   defaultDriveInputs, checkModulesPartialK, checkModulesChainReportForGraph,
   checkModulesK, elaborateModulesWithReport, hadTypeErrors, matchWarningsNow,
-  currentLocIsSet, checkModulesPartialLast
+  checkModulesPartialLast
 }
 
 preludeSrc : String
@@ -179,11 +179,3 @@ test "#4330: a keyed partial drive's match verdict does not depend on earlier dr
   let _ = diags key [("z", keyedSrc)]
   let _ = plainK key [("z", keyedSrc)]
   expectEqual afterQuiet (partialWarns key [("z", keyedSrc)])
-
--- A drive over no declarations enters no location, so its record holds what it
--- started with.
-test "a drive starts with no location entered, whatever the previous drive entered" =
-  let (_, entered) = diagsGraph None [("b", badSrc)]
-  let located = currentLocIsSet entered
-  let (_, last) = checkModulesPartialLast defaultDriveInputs None [] [] []
-  expectEqual (True, False) (located, currentLocIsSet last.mcGraph)

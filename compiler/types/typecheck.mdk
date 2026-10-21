@@ -1221,7 +1221,7 @@ recordEffectSites mctx eff =
       mctx.effectSitesRef :=
         omInsert
           key
-          ((atomAuth atom, mctx.mcGraph.currentLocRef.value) :: sites)
+          ((atomAuth atom, mctx.mcLoc) :: sites)
           mctx.effectSitesRef.value)
     ()
     (fst (rowFlat eff))
@@ -1270,7 +1270,7 @@ recordEffectBody mctx summary lower =
 
 obligationSiteHere : ModuleCtx -> Bool -> ObligationSite
 obligationSiteHere mctx covering = ObligationSite {
-  osLoc = mctx.mcGraph.currentLocRef.value,
+  osLoc = mctx.mcLoc,
   osFn = mctx.currentFn.value,
   osCovering = covering,
 }
@@ -1334,29 +1334,25 @@ reportEffectSummaryFailures : ModuleCtx ->
   List (SummaryFailure ObligationSite) ->
   Unit
 reportEffectSummaryFailures mctx [] = ()
-reportEffectSummaryFailures mctx (failure :: rest) =
-  let saved = mctx.mcGraph.currentLocRef.value
+reportEffectSummaryFailures outer (failure :: rest) =
   let fn = failure.esfContext.osFn
-  mctx.mcGraph.currentLocRef :=
-    orElseLoc
-      (effectSiteOf mctx fn failure.esfLabel (failureBound failure))
-      failure.esfContext.osLoc
+  let mctx =
+    mctxAt
+      (orElseLoc
+        (effectSiteOf outer fn failure.esfLabel (failureBound failure))
+        failure.esfContext.osLoc)
+      outer
   let _ = match failure.esfAuthority
     Some (lo, hi) =>
       if mentionsEscaped mctx lo || mentionsEscaped mctx hi then
         ()
       else if failure.esfExact then
-        reportIndexFailure
-          mctx
-          failure.esfContext.osCovering
-          mctx.mcGraph.currentLocRef.value
-          lo
-          hi
+        reportIndexFailure mctx failure.esfContext.osCovering mctx.mcLoc lo hi
       else
         pushTypeErrorAt
           mctx
           "T-AUTHORITY"
-          mctx.mcGraph.currentLocRef.value
+          mctx.mcLoc
           (authorityFailureMsg
             mctx
             fn
@@ -1369,8 +1365,7 @@ reportEffectSummaryFailures mctx (failure :: rest) =
       mctx.rowFailureReportedRef :=
         omInsert fn () mctx.rowFailureReportedRef.value
       reportRowFailure mctx failure
-  mctx.mcGraph.currentLocRef := saved
-  reportEffectSummaryFailures mctx rest
+  reportEffectSummaryFailures outer rest
 
 -- The authority the failing label was admitted at: the obligation's upper
 -- term, or the upper row's atom of that label.
@@ -3500,7 +3495,7 @@ implTupleHeadKindMsg iface n want =
 
 checkEffectParamsTy : ModuleCtx -> Ty -> Unit
 checkEffectParamsTy mctx (TyFun (TyNamed n a d) b) =
-  let _ = checkAuthorityBinder mctx n a b
+  let _ = checkAuthorityBinder (mctxAtIfSome (firstTyLoc a) mctx) n a b
   let _ = checkBinderDomain mctx n a d
   let _ = checkEffectParamsTy mctx a
   checkEffectParamsTy mctx b
@@ -3545,10 +3540,11 @@ checkEachEffectAtom mctx (a :: rest) =
     EPTop => ()
     p =>
       let l = EffLabel a.eatLabel a.eatOrigin
-      let saved = mctx.mcGraph.currentLocRef.value
-      mctx.mcGraph.currentLocRef := orElseLoc a.eatLoc saved
-      let _ = checkOneEffectParam mctx a.eatLabel (dtopFor mctx.mcGraph l) p
-      mctx.mcGraph.currentLocRef := saved
+      checkOneEffectParam
+        (mctxAtIfSome a.eatLoc mctx)
+        a.eatLabel
+        (dtopFor mctx.mcGraph l)
+        p
   checkEachEffectAtom mctx rest
 
 -- A row keeps the elements it writes for one label as a set, at most
@@ -3566,10 +3562,10 @@ checkWrittenElementCap mctx (a :: rest) =
   let top = dtopFor mctx.mcGraph l
   let _ = match writtenSetProblem (flatMap (writtenElement top) (a :: same))
     Some why =>
-      let saved = mctx.mcGraph.currentLocRef.value
-      mctx.mcGraph.currentLocRef := orElseLoc a.eatLoc saved
-      pushTypeError mctx "T-EFFECT-PARAM" (effectParamMsg a.eatLabel why)
-      mctx.mcGraph.currentLocRef := saved
+      pushTypeError
+        (mctxAtIfSome a.eatLoc mctx)
+        "T-EFFECT-PARAM"
+        (effectParamMsg a.eatLabel why)
     None => ()
   checkWrittenElementCap mctx others
 
@@ -3681,26 +3677,23 @@ checkAuthorityBinder mctx n a rest =
 -- elements, for a binder of a type the domain can abstract.
 checkBinderDomain : ModuleCtx -> String -> Ty -> Option EffAtomTy -> Unit
 checkBinderDomain mctx _ _ None = ()
-checkBinderDomain mctx n a (Some l) =
-  let saved = mctx.mcGraph.currentLocRef.value
-  mctx.mcGraph.currentLocRef := orElseLoc l.eatLoc saved
-  let _ =
-    if isStringTy
-      a then match dtopFor mctx.mcGraph (EffLabel l.eatLabel l.eatOrigin)
-      PUnit =>
+checkBinderDomain outer n a (Some l) =
+  let mctx = mctxAtIfSome l.eatLoc outer
+  if isStringTy
+    a then match dtopFor mctx.mcGraph (EffLabel l.eatLabel l.eatOrigin)
+    PUnit =>
+      pushTypeError
+        mctx
+        "T-EFFECT-PARAM"
+        (effectParamMsg l.eatLabel (atomicLabelParamText l.eatLabel))
+    top =>
+      if l.eatPattern && not (domainHasPatterns top) then
         pushTypeError
           mctx
-          "T-EFFECT-PARAM"
-          (effectParamMsg l.eatLabel (atomicLabelParamText l.eatLabel))
-      top =>
-        if l.eatPattern && not (domainHasPatterns top) then
-          pushTypeError
-            mctx
-            "T-AUTHORITY-PATTERN"
-            (patternDomainMsg ("@" ++ l.eatLabel ++ "*") l.eatLabel)
-    else
-      pushTypeError mctx "T-AUTHORITY-BINDER" (binderDomainTypeMsg n (ppTy a))
-  mctx.mcGraph.currentLocRef := saved
+          "T-AUTHORITY-PATTERN"
+          (patternDomainMsg ("@" ++ l.eatLabel ++ "*") l.eatLabel)
+  else
+    pushTypeError mctx "T-AUTHORITY-BINDER" (binderDomainTypeMsg n (ppTy a))
 
 binderDomainTypeMsg : String -> String -> String
 binderDomainTypeMsg n ty =
@@ -8261,7 +8254,6 @@ initialGraphCtx ctors run = GraphCtx {
   promotionHarvestRef = Ref [],
   mainSchemeRef = Ref None,
   markSetsRef = Ref None,
-  currentLocRef = Ref None,
   typeErrorsSticky = Ref False,
   typeErrorsStickyDiags = Ref [],
 }
@@ -8450,7 +8442,7 @@ methodReturnRequest : ModuleCtx ->
   Option EvId ->
   MethodReturnRequest
 methodReturnRequest mctx row occurrence subst goalEv =
-  let loc = mctx.mcGraph.currentLocRef.value
+  let loc = mctx.mcLoc
   let scope = captureScope mctx ()
   let qualifiedBody = match row.msrScheme
     Forall _ _ _ _ _ body =>
@@ -8848,7 +8840,7 @@ recordAbsorptions mctx (a :: rest) cell =
   let _ = wPush mctx.absorptions AbsorptionEvent {
     atom = a,
     cell = cell,
-    loc = mctx.mcGraph.currentLocRef.value,
+    loc = mctx.mcLoc,
   }
   recordAbsorptions mctx rest cell
 
@@ -9239,7 +9231,7 @@ recordArgStamp mctx suppressed name tagRef implRef innerRef idx mono omitted
           am
           mctx.currentFn.value
           (SKArg implRef mono omitted)
-          mctx.mcGraph.currentLocRef.value
+          mctx.mcLoc
           (captureScope mctx ())
           (freshEvId mctx ()))
     None => ()
@@ -9327,10 +9319,8 @@ resolveArgStamp sx name tagRef implRef am fullMono omitted encl origin scope =
 -- ill-typed programs emit matching `TYPE ERROR: …` lines.  occursCheckFailed
 -- is a per-bindVar flag: occursAdjustUnbound sets it so bindVar can skip the
 -- actual link (preventing a cyclic union-find entry).
--- B.10.2b: each accumulated error carries the `currentLoc` span in effect at the
--- push site (its `Option Loc`), captured at the RAISE site rather than reading the
--- global last-entered loc afterwards.  `pushTypeError` captures `sx.sxModule.mcGraph.currentLocRef.value`
--- so locs don't drift as inference continues past the error.  severity = 1.
+-- Each accumulated error carries the span of the construct around its push site
+-- (the record's `mcLoc`, see `mctxAt`) unless the push names one.  severity = 1.
 --
 -- issue 1146 — THE CHANNEL IS SPLIT BY ROLE.  "Which diagnostics are REPORTED"
 -- is OUTPUT and lives in `ModuleCtx.typeErrors`, a `Windowed TcDiag` like its
@@ -9487,18 +9477,16 @@ erredDuring mctx act =
   let result = act ()
   (mctx.errorsDetected.value /= before, result)
 
--- Push one type-error message, snapshotting the current ELoc span (B.10.2b).
+-- Push one type-error message at the span of the construct around it.
 pushTypeError : ModuleCtx -> String -> String -> Unit
 pushTypeError mctx code msg =
-  recordTypeError
-    mctx
-    (TcDiag code 1 mctx.mcGraph.currentLocRef.value msg None None)
+  recordTypeError mctx (TcDiag code 1 mctx.mcLoc msg None None)
 
--- Push one type-error message attributed to [loc] rather than the live
--- `currentLoc` (#414).  Same non-deduping semantics as `pushTypeError` — the
+-- Push one type-error message attributed to [loc] rather than the enclosing
+-- construct (#414).  Same non-deduping semantics as `pushTypeError` — the
 -- deduping `pushTypeErrorOnceAt` is for obligation errors, which two checkers can
 -- each detect; a coherence conflict is pushed exactly once per run.  `None` falls
--- back to `currentLoc`, i.e. the old behaviour.
+-- back to the enclosing construct's span.
 -- The same diagnostic at the same span is one diagnostic: a default body
 -- checked generically and again as each instance's copy, or two checks
 -- deriving one obligation, report it once.  The identity is the binding, the
@@ -9507,7 +9495,7 @@ pushTypeError mctx code msg =
 -- still keeps one report per binding.
 pushTypeErrorAt : ModuleCtx -> String -> Option Loc -> String -> Unit
 pushTypeErrorAt mctx code loc msg =
-  let at = orElseLoc loc mctx.mcGraph.currentLocRef.value
+  let at = orElseLoc loc mctx.mcLoc
   let key = "\{code}\t\{mctx.currentFn.value}\t\{locKey at}\t\{msg}"
   if isSome at && omHasKey key mctx.typeErrorKeySetRef.value then
     noteTypeErrorDetected mctx ()
@@ -9572,13 +9560,7 @@ pushTypeErrorOnceAt mctx code loc msg =
   else
     recordTypeError
       mctx
-      (TcDiag
-        code
-        1
-        (orElseLoc loc mctx.mcGraph.currentLocRef.value)
-        msg
-        None
-        None)
+      (TcDiag code 1 (orElseLoc loc mctx.mcLoc) msg None None)
 
 -- Like `pushTypeErrorOnceAt`, but the duplicate test is per SITE: the same text at
 -- another span is a second diagnostic, the same text at the same span (a signature
@@ -9587,7 +9569,7 @@ pushTypeErrorOnceAt mctx code loc msg =
 -- folds on its span instead (`pushAmbiguityAt`).
 pushTypeErrorOncePerSite : ModuleCtx -> String -> Option Loc -> String -> Unit
 pushTypeErrorOncePerSite mctx code loc msg =
-  let at = orElseLoc loc mctx.mcGraph.currentLocRef.value
+  let at = orElseLoc loc mctx.mcLoc
   if alreadyReportedAt mctx msg at then
     noteTypeErrorDetected mctx ()
   else
@@ -9601,7 +9583,7 @@ pushTypeErrorOncePerSite mctx code loc msg =
 -- ([namesGoal]) is kept.  An unlocated one folds on its text.
 pushAmbiguityAt : ModuleCtx -> Bool -> Option Loc -> String -> Unit
 pushAmbiguityAt mctx namesGoal loc msg =
-  let at = orElseLoc loc mctx.mcGraph.currentLocRef.value
+  let at = orElseLoc loc mctx.mcLoc
   let code = "T-AMBIGUOUS-INSTANCE"
   if isNone at then
     pushTypeErrorOnceAt mctx code at msg
@@ -9683,19 +9665,32 @@ pushTypeErrorHelpFixAt mctx code loc msg help fix =
   else
     recordTypeError
       mctx
-      (TcDiag
-        code
-        1
-        (orElseLoc loc mctx.mcGraph.currentLocRef.value)
-        msg
-        (Some help)
-        fix)
+      (TcDiag code 1 (orElseLoc loc mctx.mcLoc) msg (Some help) fix)
 
--- Source-location attribution (Phase B.10.2): the innermost ELoc span the
--- `infer` walk has entered.  Set by infer's transparent ELoc arm before
--- recursing.  Surfaced through Diag / the LSP via `pushTypeError`.  It is the
--- graph record's `currentLocRef` field (`mctx.mcGraph.currentLocRef`), `None`
--- until the first ELoc is entered (top-level decls aren't ELoc-wrapped).
+-- Source-location attribution: the span of the innermost construct around a check
+-- is the module record's `mcLoc`.  A construct hands the checks below it a copy
+-- carrying its own span (`mctxAt`); nothing restores it, because the caller's copy
+-- never changed.  `IfSome` keeps the enclosing span when the construct has none.
+mctxAt : Option Loc -> ModuleCtx -> ModuleCtx
+mctxAt loc mctx = { mctx | mcLoc = loc }
+
+mctxAtIfSome : Option Loc -> ModuleCtx -> ModuleCtx
+mctxAtIfSome None mctx = mctx
+mctxAtIfSome loc mctx = mctxAt loc mctx
+
+dynAt : Option Loc -> DynCtx -> DynCtx
+dynAt loc dyn = { dyn | dcModule = mctxAt loc dyn.dcModule }
+
+dynAtIfSome : Option Loc -> DynCtx -> DynCtx
+dynAtIfSome None dyn = dyn
+dynAtIfSome loc dyn = dynAt loc dyn
+
+envAt : Option Loc -> TcEnv -> TcEnv
+envAt loc env = { env | teDyn = dynAt loc env.teDyn }
+
+envAtIfSome : Option Loc -> TcEnv -> TcEnv
+envAtIfSome None env = env
+envAtIfSome loc env = envAt loc env
 
 -- ASYNC-DESIGN Stage 2 (D5): the entry program's inferred `main` scheme, stashed
 -- by `graphModuleWorker`'s `GOutTrees` arm so the native `run` driver can detect a
@@ -9847,12 +9842,6 @@ matchWarningsNow : ModuleCtx -> Bool
 matchWarningsNow mctx = match mctx.matchWarnings.value
   [] => False
   _ => True
-
--- True iff a location has been entered since [gctx]'s drive started: a read for the
--- drive-independence tests (`currentLocRef` is minted `None` per drive).
-export
-currentLocIsSet : GraphCtx -> Bool
-currentLocIsSet gctx = isSome gctx.currentLocRef.value
 
 -- The drive inputs of a driver that loads no stdlib ownership and selects no
 -- profile: no module stdlib-owned, the flat entry not stdlib, every trace off, and
@@ -11138,6 +11127,7 @@ freshModuleCtx gctx seed mid = ModuleCtx {
   currentModuleRef = Ref mid,
   invocationViewRef = Ref (InvocationView [] [] []),
   mcGraph = gctx,
+  mcLoc = None,
 }
 
 -- The record a drive starts from in the graph record [gctx]: no module, an empty
@@ -11283,6 +11273,7 @@ moduleCtxFrom detach run tables drain ident = ModuleCtx {
   methodDispatchIdxByIdRef = refFrom detach drain.methodDispatchIdxByIdRef,
   currentModuleRef = refFrom detach ident.currentModuleRef,
   invocationViewRef = refFrom detach ident.invocationViewRef,
+  mcLoc = None,
 }
 
 refFrom : Bool -> Ref a -> Ref a
@@ -11918,19 +11909,9 @@ wantAuthorityOne mctx origin exact covering lower upper
     True => ()
     False =>
       if exact then
-        reportIndexFailure
-          mctx
-          covering
-          mctx.mcGraph.currentLocRef.value
-          lower
-          upper
+        reportIndexFailure mctx covering mctx.mcLoc lower upper
       else
-        reportAuthorityFailure
-          mctx
-          mctx.mcGraph.currentLocRef.value
-          origin
-          lower
-          upper
+        reportAuthorityFailure mctx mctx.mcLoc origin lower upper
 
 -- Outside a scope, a flexible upper variable takes the lower bound as its
 -- solution, widened as the scoped solver widens a solution
@@ -12552,7 +12533,7 @@ typeMismatchReportJoin dyn a b = match dyn.dcJoin
     pushTypeErrorHelpFixAt
       dyn.dcModule
       "T-TYPE-MISMATCH"
-      dyn.dcModule.mcGraph.currentLocRef.value
+      dyn.dcModule.mcLoc
       "type mismatch: \{ppMono a} vs \{ppMono b}; \{elselessIfHelp}"
       elselessIfHelp
       None
@@ -12561,7 +12542,7 @@ typeMismatchReportJoin dyn a b = match dyn.dcJoin
       pushTypeErrorHelpFixAt
         dyn.dcModule
         "T-TYPE-MISMATCH"
-        dyn.dcModule.mcGraph.currentLocRef.value
+        dyn.dcModule.mcLoc
         "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
         help
         None
@@ -12616,7 +12597,7 @@ typeMismatchReportRest dyn a b = match activeDo dyn
       pushTypeErrorHelpFixAt
         dyn.dcModule
         "T-TYPE-MISMATCH"
-        dyn.dcModule.mcGraph.currentLocRef.value
+        dyn.dcModule.mcLoc
         "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
         help
         fix
@@ -12630,7 +12611,7 @@ typeMismatchReportRest dyn a b = match activeDo dyn
         pushTypeErrorHelpFixAt
           dyn.dcModule
           "T-TYPE-MISMATCH"
-          dyn.dcModule.mcGraph.currentLocRef.value
+          dyn.dcModule.mcLoc
           "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
           help
           None
@@ -13556,17 +13537,27 @@ aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut (k :: ks) =
   let _ = aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut k
   aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut ks
 
-emitCyclicAliasErrors : ModuleCtx -> List String -> Unit
-emitCyclicAliasErrors mctx [] = ()
-emitCyclicAliasErrors mctx (name :: rest) =
+-- Each report is located at the alias's right-hand side, the type that refers
+-- back to it.
+emitCyclicAliasErrors : ModuleCtx ->
+  List (TabKey, (List String, Ty)) ->
+  List String ->
+  Unit
+emitCyclicAliasErrors mctx _ [] = ()
+emitCyclicAliasErrors mctx table (name :: rest) =
+  let rhsLoc =
+    findMap
+      (e =>
+        if tabKeyName (fst e) == name then firstTyLoc (snd (snd e)) else None)
+      table
   let _ =
     pushTypeErrorOnce
-      mctx
+      (mctxAtIfSome rhsLoc mctx)
       "T-RECURSIVE-ALIAS"
       ("type alias `"
         ++ name
         ++ "` is recursive; a type alias cannot refer to itself, so declare a `data` type instead")
-  emitCyclicAliasErrors mctx rest
+  emitCyclicAliasErrors mctx table rest
 
 -- Cycle-detection pre-pass over aliasTableRef.  MUST run after the aliases are
 -- in the table and BEFORE any fromAstType* call (which would infinite-loop on a
@@ -13602,7 +13593,7 @@ rejectCyclicAliases mctx _ =
       cyclicOut
       aliasKeys
   let cyclic = !cyclicOut
-  let _ = emitCyclicAliasErrors mctx cyclic
+  let _ = emitCyclicAliasErrors mctx table cyclic
   let cyclicSet = omFromNames cyclic omEmpty
   setRef
     mctx.aliasTableRef
@@ -13614,7 +13605,7 @@ rejectCyclicAliases mctx _ =
 -- vars used in the Mono), so a caller can check post-unify whether each
 -- annotation tyvar stayed a distinct unbound var (C3 AnnotationTooGeneral).
 astTypeFreshTbl : ModuleCtx -> Ty -> (Mono, List (String, Mono))
-astTypeFreshTbl mctx ty = atSignature mctx.mcGraph ty (_ =>
+astTypeFreshTbl outer ty = atSignature outer ty (mctx =>
   let rows = rowArgNames mctx ty
   let auths = authArgBindersIn mctx ty
   let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
@@ -13623,13 +13614,8 @@ astTypeFreshTbl mctx ty = atSignature mctx.mcGraph ty (_ =>
 
 -- A diagnostic a signature's elaboration raises without a span of its own
 -- lands on the signature, not on whatever the walk last visited.
-atSignature : GraphCtx -> Ty -> (Unit -> a) -> a
-atSignature gctx ty body =
-  let saved = gctx.currentLocRef.value
-  gctx.currentLocRef := orElseLoc (firstTyLoc ty) saved
-  let result = body ()
-  gctx.currentLocRef := saved
-  result
+atSignature : ModuleCtx -> Ty -> (ModuleCtx -> a) -> a
+atSignature mctx ty body = body (mctxAtIfSome (firstTyLoc ty) mctx)
 
 freshTvMap : ModuleCtx -> List String -> List (String, Mono)
 freshTvMap mctx [] = []
@@ -13652,7 +13638,7 @@ sigToSchemeTvsIn : ModuleCtx ->
   List (String, List Kind) ->
   Ty ->
   (Scheme, List (String, Mono))
-sigToSchemeTvsIn mctx scope ty = atSignature mctx.mcGraph ty (_ =>
+sigToSchemeTvsIn outer scope ty = atSignature outer ty (mctx =>
   let rows = rowArgNamesIn mctx (qualifiedKindScope mctx scope ty) ty
   let auths = authArgBindersIn mctx ty
   let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
@@ -15299,7 +15285,7 @@ inferPat env (PLit (LI64 hi lo)) =
       env.teDyn.dcModule
       "I64"
       (i64HalvesLiteral hi lo)
-      env.teDyn.dcModule.mcGraph.currentLocRef.value
+      env.teDyn.dcModule.mcLoc
   (tconBuiltin "I64", [])
 inferPat env (PLit l) = (litType l, [])
 inferPat env (PCon name pats) = inferPatCon env name pats
@@ -15416,8 +15402,7 @@ inferRecPatFieldWith env ft _ _ (Some p) =
 inferIntLitPat : ModuleCtx -> Int -> (Mono, List (String, Scheme))
 inferIntLitPat mctx n =
   let a = freshVar mctx ()
-  mctx.patLitPending :=
-    (a, n, mctx.mcGraph.currentLocRef.value) :: mctx.patLitPending.value
+  mctx.patLitPending := (a, n, mctx.mcLoc) :: mctx.patLitPending.value
   (a, [])
 
 -- Open a pattern site: park the literals of any enclosing site and start
@@ -15467,7 +15452,7 @@ refuseOpenedExistentials mctx _ =
       pushTypeErrorAt
         mctx
         "T-AUTHORITY-EXISTENTIAL-SCOPE"
-        mctx.mcGraph.currentLocRef.value
+        mctx.mcLoc
         (existentialScopeMsg (authvarName cell))
   match mctx.openedExistentialsStackRef.value
     outer :: rest =>
@@ -15497,11 +15482,7 @@ settlePatLitsGo dyn final ((a, n, loc) :: rest) =
     TVar _ if not final =>
       dyn.dcModule.patLitDeferred :=
         (a, n, loc) :: dyn.dcModule.patLitDeferred.value
-    _ =>
-      let saved = dyn.dcModule.mcGraph.currentLocRef.value
-      dyn.dcModule.mcGraph.currentLocRef := orElseLoc loc saved
-      let _ = unifyIn dyn (tconBuiltin "Int") a
-      dyn.dcModule.mcGraph.currentLocRef := saved
+    _ => unifyIn (dynAtIfSome loc dyn) (tconBuiltin "Int") a
   settlePatLitsGo dyn final rest
 
 -- The module's inference is complete: every deferred literal pattern takes the
@@ -15553,19 +15534,14 @@ refuseBoxedLitPat mctx tag lit loc =
     (TcDiag
       "T-TYPE-MISMATCH"
       1
-      (orElseLoc loc mctx.mcGraph.currentLocRef.value)
+      (orElseLoc loc mctx.mcLoc)
       "the literal pattern `\{lit}` cannot match \{if isI64Head tag then "an" else "a"} `\{tag}`; compare in a guard instead"
       (Some "compare in a guard instead: `x if x == \{lit}`")
       None)
 
 inferU64LitPat : ModuleCtx -> Int -> Int -> (Mono, List (String, Scheme))
 inferU64LitPat mctx hi lo =
-  let _ =
-    refuseBoxedLitPat
-      mctx
-      "U64"
-      ("0x" ++ u64HalvesHex hi lo)
-      mctx.mcGraph.currentLocRef.value
+  let _ = refuseBoxedLitPat mctx "U64" ("0x" ++ u64HalvesHex hi lo) mctx.mcLoc
   (tconBuiltin "U64", [])
 
 inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
@@ -15670,11 +15646,18 @@ infer env (EListLit es) = inferListLit env es
 infer env (EAnnot e ty) = inferAnnot env e ty
 infer env (EBinOp op l r ev) =
   inferBinopE env op l r (siteRouteCell env.teDyn.dcModule.mcGraph ev)
+-- An operator or a field access the parser leaves unwrapped names its own span
+-- (its operand's: the operator and the field name carry none).
 infer env (EUnOp op e ev) =
-  inferUnopE env op e (siteRouteCell env.teDyn.dcModule.mcGraph ev)
+  inferUnopE
+    (envAtIfSome (exprSpanLoc e) env)
+    op
+    e
+    (siteRouteCell env.teDyn.dcModule.mcGraph ev)
 infer env (EInfix op l r) = inferInfix env op l r
 infer env (ERecordCreate name fields) = inferRecordCreate env name fields
-infer env (EFieldAccess e fname ev) = inferFieldAccess env e fname ev
+infer env (EFieldAccess e fname ev) =
+  inferFieldAccess (envAtIfSome (exprSpanLoc e) env) e fname ev
 infer env (ERecordUpdate base fields ev) = inferRecordUpdate env base fields ev
 infer env (EVariantUpdate cname base fields) =
   inferVariantUpdate env cname base fields
@@ -15692,18 +15675,9 @@ infer env (ERangeArray lo hi _) = inferIntRange env lo hi (tconBuiltin "Array")
 -- loud "unsupported expression" catch-all, and a non-container receiver becomes a
 -- "no impl of Slice" constraint error via normal method dispatch.
 infer env (EHeadAnnot e ty) = inferHeadAnnot env e ty
--- ELoc is transparent: capture the span in `currentLoc` (so any type error
--- recorded while inferring the wrapped expr is attributable to this position),
--- infer the inner expr, and leave the span set to this node's own on the way
--- out.  A check that runs after a subexpression — an application's argument
--- flow, a clause body against its signature, a branch join — then reads the
--- span of the subexpression it is about, not whichever leaf inside it was
--- entered last.
-infer env (ELoc l e) =
-  env.teDyn.dcModule.mcGraph.currentLocRef := Some l
-  let t = infer env e
-  env.teDyn.dcModule.mcGraph.currentLocRef := Some l
-  t
+-- ELoc is transparent: the wrapped expression and every check inside it are
+-- located at this span, until a nested construct names its own.
+infer env (ELoc l e) = infer (envAt (Some l) env) e
 -- Phase 150: a do-lowered chain.  Record the do-block loc so a monad-shape
 -- mismatch during inference is retargeted to the tailored "do requires a monad"
 -- error (see typeMismatch).  The chain's walk gets its own context; an inline
@@ -15766,7 +15740,7 @@ inferMethodAtCell env name c =
   let st = env.teDyn.dcModule.mcGraph.graphRun.grants
   st.gsLastMethodInst := None
   st.gsLastStandalone := None
-  c.ecLoc := env.teDyn.dcModule.mcGraph.currentLocRef.value
+  c.ecLoc := env.teDyn.dcModule.mcLoc
   c.ecName := name
   let t =
     inferMethodAt
@@ -15830,7 +15804,7 @@ inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef innerRef =
           env
           name
           sym
-          env.teDyn.dcModule.mcGraph.currentLocRef.value
+          env.teDyn.dcModule.mcLoc
           value
       let inst = occurrence.svoInstance
       let dicts = occurrence.svoDicts
@@ -15851,7 +15825,7 @@ inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef innerRef =
             receiver
             env.teDyn.dcModule.currentFn.value
             (SKRLocal sym True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs)
-            env.teDyn.dcModule.mcGraph.currentLocRef.value
+            env.teDyn.dcModule.mcLoc
             (captureScope env.teDyn.dcModule ())
             (freshEvId env.teDyn.dcModule ()))
       inst.mtiBody
@@ -15987,7 +15961,7 @@ recordRLocalSite env name tagRef innerRef inst
         inst
         env.teDyn.dcModule.currentFn.value
         (SKRLocal (routeLocalSym !tagRef) True [] [] [])
-        env.teDyn.dcModule.mcGraph.currentLocRef.value
+        env.teDyn.dcModule.mcLoc
         (captureScope env.teDyn.dcModule ())
         (freshEvId env.teDyn.dcModule ()))
   | not (omHasKey name env.teDyn.dcModule.standaloneValuesRef.value) = ()
@@ -16018,7 +15992,7 @@ recordRLocalSite env name tagRef innerRef inst
               dicts.sdMonos
               dicts.sdIfaces
               dicts.sdArgVecs)
-            env.teDyn.dcModule.mcGraph.currentLocRef.value
+            env.teDyn.dcModule.mcLoc
             (captureScope env.teDyn.dcModule ())
             (freshEvId env.teDyn.dcModule ()))
       None => ()
@@ -16379,7 +16353,7 @@ recordSite env name scheme ifaceRef tagRef implRef methodRef innerRef methodType
             SKAdmittedReturn ifaceRef implRef methodType
           else
             SKReturn implRef methodType)
-      env.teDyn.dcModule.mcGraph.currentLocRef.value
+      env.teDyn.dcModule.mcLoc
       (captureScope env.teDyn.dcModule ())
       siteEv)
   env.teDyn.dcModule.methodSiteFns :=
@@ -16625,7 +16599,7 @@ pushLocalDictApp mctx name ev la subst useScope =
     pdaIfaces = map (s => s.psIface) la.laSlots,
     pdaArgVecs = map (localSlotArgs mctx subst) la.laSlots,
     pdaEncl = mctx.currentFn.value,
-    pdaLoc = mctx.mcGraph.currentLocRef.value,
+    pdaLoc = mctx.mcLoc,
     pdaScope = useScope,
     pdaCallee = localSourceName name,
   }
@@ -17590,7 +17564,7 @@ inferDictAtFound mctx name ev inst =
       pdaIfaces = [],
       pdaArgVecs = [],
       pdaEncl = mctx.currentFn.value,
-      pdaLoc = mctx.mcGraph.currentLocRef.value,
+      pdaLoc = mctx.mcLoc,
       pdaScope = captureScope mctx (),
       pdaCallee = localSourceName name,
     }
@@ -17640,7 +17614,7 @@ inferDeclaredDictAt mctx name ev dc inst =
     pdaIfaces = map (s => s.csIface) expanded,
     pdaArgVecs = argVecs,
     pdaEncl = mctx.currentFn.value,
-    pdaLoc = mctx.mcGraph.currentLocRef.value,
+    pdaLoc = mctx.mcLoc,
     pdaScope = captureScope mctx (),
     pdaCallee = localSourceName name,
   }
@@ -17719,7 +17693,7 @@ recordCallObligations mctx (s :: ss) (mono :: ms) []
         }
         0
         PCallSlot
-        mctx.mcGraph.currentLocRef.value
+        mctx.mcLoc
     recordCallObligations mctx ss ms []
 recordCallObligations mctx (s :: ss) (mono :: ms) (args :: rest)
   | s.csIface.irName == "" = recordCallObligations mctx ss ms rest
@@ -17750,7 +17724,7 @@ recordCallObligations mctx (s :: ss) (mono :: ms) (args :: rest)
         Predicate { iface = s.csIface, args = goalArgs }
         0
         PCallSlot
-        mctx.mcGraph.currentLocRef.value
+        mctx.mcLoc
     recordCallObligations mctx ss ms rest
 
 -- instantiate a scheme, returning both the mono and the (quantified id → fresh
@@ -17983,8 +17957,23 @@ inferLastStmt env s =
   let _ = inferStmt env s
   tconBuiltin "Unit"
 
+-- A statement's own checks are located at its expression; the statements after
+-- it are the enclosing construct's again.
 inferStmt : TcEnv -> DoStmt -> TcEnv
-inferStmt env (DoExpr e) =
+inferStmt outer s =
+  envAt
+    outer.teDyn.dcModule.mcLoc
+    (inferStmtAt (envAtIfSome (stmtSpanLoc s) outer) s)
+
+stmtSpanLoc : DoStmt -> Option Loc
+stmtSpanLoc (DoExpr e) = exprSpanLoc e
+stmtSpanLoc (DoLet _ _ _ e _) = exprSpanLoc e
+stmtSpanLoc (DoAssign _ e) = exprSpanLoc e
+stmtSpanLoc (DoBind _ e) = exprSpanLoc e
+stmtSpanLoc _ = None
+
+inferStmtAt : TcEnv -> DoStmt -> TcEnv
+inferStmtAt env (DoExpr e) =
   let oblN0 = wMark env.teDyn.dcModule.implObls
   let t = infer env e
   let _ =
@@ -17999,10 +17988,10 @@ inferStmt env (DoExpr e) =
 -- in blockLet — so a pin note built from `exprLoc` of the curried lambda (which carries
 -- no ELoc wrapper) had no location and the diagnostic silently never fired for the most
 -- ordinary spelling of a local helper.  The binder pattern always has a real Loc.
-inferStmt env (DoLet _ True (PVar x xloc bid) e _) =
+inferStmtAt env (DoLet _ True (PVar x xloc bid) e _) =
   blockRecLet env x (Some xloc) bid e
-inferStmt env (DoLet _ _ pat e _) = blockLet env pat e
-inferStmt env (DoAssign x e) = extendLocalVar env x (monoScheme (infer env e))
+inferStmtAt env (DoLet _ _ pat e _) = blockLet env pat e
+inferStmtAt env (DoAssign x e) = extendLocalVar env x (monoScheme (infer env e))
 -- A `<-` bind (DoBind) reaching a bare block is a user error: `<-` is
 -- monadic-`do`-only, and a monadic `do` lowers to EDo (desugared before
 -- typecheck), so only a bare-block `<-` arrives here.  Emit a clean LOCATED
@@ -18010,7 +17999,7 @@ inferStmt env (DoAssign x e) = extendLocalVar env x (monoScheme (infer env e))
 -- for effect (surfacing its own errors + snapshotting its ELoc span for the
 -- caret) and bind the pattern's vars into env so downstream statements don't
 -- cascade spurious `Unbound variable` errors (mirrors inferRecPatField).
-inferStmt env (DoBind pat e) =
+inferStmtAt env (DoBind pat e) =
   let t = infer env e
   let _ = pushTypeError env.teDyn.dcModule "T-BIND-OUTSIDE-DO" bindOutsideDoMsg
   let lits = takePatLits env.teDyn.dcModule ()
@@ -18018,7 +18007,7 @@ inferStmt env (DoBind pat e) =
   let _ = bindFrom env.teDyn (fst pr) t
   let _ = settlePatLits env.teDyn lits
   extendLocalVars env (snd pr)
-inferStmt env _ = panic "typecheck: unsupported block statement"
+inferStmtAt env _ = panic "typecheck: unsupported block statement"
 
 -- A bare (non-final, non-`let`) block statement discards its value.  A free
 -- result var (nothing downstream constrained it) is pinned to `Unit` via plain
@@ -18105,7 +18094,7 @@ pushDiscardedValueError mctx nt e =
 
 pushDiscardedValueDesc : ModuleCtx -> String -> Expr -> Unit
 pushDiscardedValueDesc mctx desc e =
-  let loc = exprLoc e
+  let loc = exprSpanLoc e
   pushTypeErrorHelpFixAt
     mctx
     "T-DISCARDED-VALUE"
@@ -18264,10 +18253,12 @@ unifyFieldAssignIdx env rname ri subst fn val =
         "T-UNKNOWN-FIELD"
         (unknownFieldMsg fn rname)
     Some fm =>
-      let vt = infer env val
+      -- A supplied field flows into its slot at the value's span.
+      let at = envAtIfSome (exprSpanLoc val) env
+      let vt = infer at val
       argumentIntoOrd
         True
-        env
+        at
         (Some val)
         (substRecordField env.teDyn.dcModule.mcGraph subst fm)
         vt
@@ -19461,10 +19452,10 @@ pushUnknownFieldMaybeSuggest mctx fname rname declared =
       pushTypeErrorHelpFixAt
         mctx
         "T-UNKNOWN-FIELD"
-        mctx.mcGraph.currentLocRef.value
+        mctx.mcLoc
         (unknownFieldMsg fname rname ++ "; did you mean `\{sug}`?")
         "did you mean `\{sug}`?"
-        (fieldFixFrom mctx.mcGraph.currentLocRef.value fname sug)
+        (fieldFixFrom mctx.mcLoc fname sug)
 
 -- "did you mean" for a record field: nearest declared field name by
 -- Levenshtein distance, within a fixed distance of 2.  Skip names < 3 chars
@@ -19654,17 +19645,13 @@ inferBinopE : TcEnv -> String -> Expr -> Expr -> Ref Route -> Mono
 inferBinopE env op l r dref =
   let lt = infer env l
   let rt = infer env r
-  -- Type-error span (Bite 2, fork 1 = WHOLE BINOP): after inferring both
-  -- operands, the live `currentLoc` is the LAST operand atom (ELoc wraps
-  -- leaves, not the binop level).  Point mismatches at the whole `l <op> r`
-  -- span (l's start .. r's end) so both the Num-obligation errors and the
-  -- comparison/Eq/Ord `typeMismatch` binop errors squiggle the operator
-  -- expression rather than a lone operand.
-  let _ = match binopSpanLoc l r
-    Some sp => env.teDyn.dcModule.mcGraph.currentLocRef := Some sp
-    None => ()
-  let _ = recordBinopGoals env.teDyn.dcModule op dref lt
-  if op == "|>" then pipeOp env l r lt rt else inferBinop env.teDyn op lt rt
+  -- The binop node carries no `ELoc` (the parser wraps its operands), so its
+  -- own checks name the whole `l <op> r` span (l's start .. r's end): the
+  -- Num-obligation errors and the comparison/Eq/Ord `typeMismatch` binop
+  -- errors squiggle the operator expression rather than a lone operand.
+  let at = envAtIfSome (binopSpanLoc l r) env
+  let _ = recordBinopGoals at.teDyn.dcModule op dref lt
+  if op == "|>" then pipeOp at l r lt rt else inferBinop at.teDyn op lt rt
 
 -- Synthesize the whole-binop span from its operand Exprs: file + start of the
 -- left operand, end of the right operand.  Falls back to whichever single
@@ -19696,7 +19683,7 @@ recordBinopSite mctx op dref m = match binopMethod op
         m
         mctx.currentFn.value
         (SKOp mctx.currentImplBody.value)
-        mctx.mcGraph.currentLocRef.value
+        mctx.mcLoc
         (captureScope mctx ())
         (freshEvId mctx ()))
   None => ()
@@ -19728,7 +19715,7 @@ recordBinopGoals mctx op dref m = match arithDispatchMethod op
           NPTProduced
           predicate
           scope
-          mctx.mcGraph.currentLocRef.value
+          mctx.mcLoc
           None
           None
           []
@@ -19743,7 +19730,7 @@ recordBinopGoals mctx op dref m = match arithDispatchMethod op
             m
             mctx.currentFn.value
             (SKPredicateOp mctx.currentImplBody.value predicate)
-            mctx.mcGraph.currentLocRef.value
+            mctx.mcLoc
             scope
             (freshEvId mctx ()))
       ()
@@ -19800,7 +19787,7 @@ recordUnopSite mctx op dref m = match unopMethod op
         m
         mctx.currentFn.value
         kind
-        mctx.mcGraph.currentLocRef.value
+        mctx.mcLoc
         (captureScope mctx ())
         (freshEvId mctx ()))
   None => ()
@@ -19911,7 +19898,7 @@ recordIfaceObligation mctx c lt
       lt
       []
       POperator
-      mctx.mcGraph.currentLocRef.value
+      mctx.mcLoc
   | otherwise = ()
 
 -- the spelling each built-in class has in the prelude.  It is a CONSTANT of the
@@ -20157,7 +20144,7 @@ inferWideLit env hi lo ev lx =
       (Ref None)
       (siteRouteCell env.teDyn.dcModule.mcGraph ev)
   env.teDyn.dcModule.wideLitRanges :=
-    (a, lx, hi, lo, False, env.teDyn.dcModule.mcGraph.currentLocRef.value)
+    (a, lx, hi, lo, False, env.teDyn.dcModule.mcLoc)
       :: env.teDyn.dcModule.wideLitRanges.value
   a
 
@@ -20208,7 +20195,7 @@ inferNumLitMethod mctx anchor tagRef =
     predicateArguments =
       dispatchMonosOf anchor.msrTyparams anchor.msrType occurrence,
   }
-  let origin = mctx.mcGraph.currentLocRef.value
+  let origin = mctx.mcLoc
   let scope = captureScope mctx ()
   let _ =
     noteNumericPredicateTrace
@@ -20249,7 +20236,7 @@ inferNumLitBare mctx n fref =
     predicateInterface = builtinIfaceRef mctx.mcGraph BNum,
     predicateArguments = [a],
   }
-  let origin = mctx.mcGraph.currentLocRef.value
+  let origin = mctx.mcLoc
   let scope = captureScope mctx ()
   let _ =
     noteNumericPredicateTrace
@@ -20271,8 +20258,7 @@ inferNumLitBare mctx n fref =
 -- literal from an arithmetic-operator operand.  [currentLoc] is the ENumLit span.
 recordNumlitRange : ModuleCtx -> Mono -> Int -> Unit
 recordNumlitRange mctx a n =
-  mctx.numlitRanges :=
-    (a, n, mctx.mcGraph.currentLocRef.value) :: mctx.numlitRanges.value
+  mctx.numlitRanges := (a, n, mctx.mcLoc) :: mctx.numlitRanges.value
 
 -- INTEGER-TYPES-DESIGN §3.2 item 2: a literal whose type grounded to a fixed-width
 -- head must lie in that head's range, or it is `L-INT-OVERFLOW` naming the type and
@@ -20292,7 +20278,7 @@ checkFixedWidthLiterals mctx ((m, n, loc) :: rest) =
             (TcDiag
               "L-INT-OVERFLOW"
               1
-              (orElseLoc loc mctx.mcGraph.currentLocRef.value)
+              (orElseLoc loc mctx.mcLoc)
               "integer literal \{n} does not fit \{tag} (\{lo}..\{hi})"
               None
               None)
@@ -20303,7 +20289,7 @@ checkFixedWidthLiterals mctx ((m, n, loc) :: rest) =
             (TcDiag
               "L-INT-OVERFLOW"
               1
-              (orElseLoc loc mctx.mcGraph.currentLocRef.value)
+              (orElseLoc loc mctx.mcLoc)
               "integer literal \{n} does not fit U64 (\{u64RangeText})"
               None
               None)
@@ -20335,7 +20321,7 @@ checkWideLiterals : ModuleCtx ->
   Unit
 checkWideLiterals mctx [] = ()
 checkWideLiterals mctx ((m, lx, hi, lo, negated, loc) :: rest) =
-  let at = orElseLoc loc mctx.mcGraph.currentLocRef.value
+  let at = orElseLoc loc mctx.mcLoc
   let shown = if negated then "-" ++ lx else lx
   let pow62 = hi == 1073741824 && lo == 0
   let _ = match normalize m
@@ -20402,7 +20388,7 @@ wideAnnotateHelp shown negated =
   "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(\{shown} : \{ty})`"
 
 recordNumlitLoc : ModuleCtx -> Mono -> Unit
-recordNumlitLoc mctx a = match mctx.mcGraph.currentLocRef.value
+recordNumlitLoc mctx a = match mctx.mcLoc
   Some l =>
     mctx.numlitVarLocs := (a, l) :: mctx.numlitVarLocs.value
     mctx.numlitUntainted := (a, l) :: mctx.numlitUntainted.value
@@ -20554,8 +20540,8 @@ consOp dyn lt rt =
   TApp
     (tconBuiltin "List")
     (joinValueTypes dyn JoinCons [
-      (dyn.dcModule.mcGraph.currentLocRef.value, lt),
-      (dyn.dcModule.mcGraph.currentLocRef.value, tailElem),
+      (dyn.dcModule.mcLoc, lt),
+      (dyn.dcModule.mcLoc, tailElem),
     ])
 
 -- `x |> f` is `f x` spelled backwards, and the argument's syntax reaches the
@@ -20945,7 +20931,7 @@ recordSchemeCallObligations mctx originId (o :: rest) subst =
           }
           originId
           PSchemeReinst
-          mctx.mcGraph.currentLocRef.value
+          mctx.mcLoc
       recordSchemeCallObligations mctx originId rest subst
     None => recordSchemeCallObligations mctx originId rest subst
 
@@ -21123,7 +21109,7 @@ recordImplObligation mctx x mono omitted
           mono
           omitted
           PMethodOcc
-          mctx.mcGraph.currentLocRef.value
+          mctx.mcLoc
       -- #818 (#838 I3): also record each method-level `=>` constraint slot (e.g.
       -- `Ord b` on `peer : Ord b => a -> b -> b -> Bool`) as its OWN obligation, so an
       -- unsatisfiable slot (`Ord NoOrd`) is rejected by the unified checker at check
@@ -21165,8 +21151,7 @@ recordImplObligation mctx x mono omitted
 -- occurrence is left without a committed route.
 pushAdmittedOccObl : ModuleCtx -> String -> Mono -> Unit
 pushAdmittedOccObl mctx name mono =
-  mctx.admittedOccObls :=
-    (name, mono, mctx.mcGraph.currentLocRef.value) :: mctx.admittedOccObls.value
+  mctx.admittedOccObls := (name, mono, mctx.mcLoc) :: mctx.admittedOccObls.value
 
 checkAdmittedOccObls : ModuleCtx -> Unit -> Unit
 checkAdmittedOccObls mctx _ =
@@ -21453,7 +21438,7 @@ recordMethodLevelSlotObls mctx (c :: rest) subst =
         }
         0
         PMethodLevel
-        mctx.mcGraph.currentLocRef.value
+        mctx.mcLoc
   recordMethodLevelSlotObls mctx rest subst
 
 -- Expected-type propagation for an application whose argument is a lambda.
@@ -21474,12 +21459,45 @@ exprLoc (ELoc l _) = Some l
 exprLoc (EDoOrigin l _) = Some l
 exprLoc _ = None
 
+-- The span of [e] including a node the parser leaves unwrapped (an application,
+-- an operator, a field access): from the earliest start to the latest end of its
+-- outermost located parts.  A desugared node need not list its parts in source
+-- order, so the extremes are taken over all of them.
+exprSpanLoc : Expr -> Option Loc
+exprSpanLoc e = joinLocs (outerLocs e [])
+
+-- One span from the earliest start to the latest end of [locs].
+joinLocs : List Loc -> Option Loc
+joinLocs [] = None
+joinLocs (l :: ls) = Some (fold widenLoc l ls)
+
+widenLoc : Loc -> Loc -> Loc
+widenLoc (Loc f sl sc el ec) (Loc _ sl2 sc2 el2 ec2) =
+  let (bl, bc) =
+    if sl2 < sl || sl2 == sl && sc2 < sc then (sl2, sc2) else (sl, sc)
+  let (xl, xc) =
+    if el2 > el || el2 == el && ec2 > ec then (el2, ec2) else (el, ec)
+  Loc f bl bc xl xc
+
+outerLocs : Expr -> List Loc -> List Loc
+outerLocs (ELoc l _) acc = l :: acc
+outerLocs (EDoOrigin l _) acc = l :: acc
+outerLocs e acc =
+  let found = Ref acc
+  let _ =
+    mapChildren
+      (child =>
+        found := outerLocs child found.value
+        child)
+      e
+  found.value
+
 -- The span of an application's outermost argument (Bite 3): peel any ELoc
--- wrapper on the `EApp` head, then read the argument Expr's loc.  Non-EApp
--- shapes (never passed as `appExpr`) return None.
+-- wrapper on the `EApp` head, then read the argument Expr's span (an unwrapped
+-- argument included).  Non-EApp shapes (never passed as `appExpr`) return None.
 appArgLoc : Expr -> Option Loc
 appArgLoc (ELoc _ e) = appArgLoc e
-appArgLoc (EApp _ x) = exprLoc x
+appArgLoc (EApp _ x) = exprSpanLoc x
 appArgLoc _ = None
 
 -- ── #1815: application spines ───────────────────────────────────────────────
@@ -21599,19 +21617,17 @@ unifySpineProbeGo dyn ft (a :: rest) =
 -- other program is inferred exactly as before, so no diagnostic moves.
 inferExpected : TcEnv -> Expr -> Mono -> Mono
 inferExpected env (ELoc l e) expected =
-  env.teDyn.dcModule.mcGraph.currentLocRef := Some l
-  let t = inferExpected env e expected
-  env.teDyn.dcModule.mcGraph.currentLocRef := Some l
-  t
+  inferExpected (envAt (Some l) env) e expected
 -- A lambda meeting a known arrow takes the arrow's domains as its parameters
 -- before its body is inferred, so a signed `f = p => …` sees `String @κ` the
 -- way a clause `f p = …` does.
 inferExpected env (ELam pats body) expected = match normalize expected
   TFun _ _ _ =>
-    let _ = match exprLoc body
-      Some l => env.teDyn.dcModule.mcGraph.currentLocRef := Some l
-      None => ()
-    inferLamChecked env (Some (normalize expected)) pats body
+    inferLamChecked
+      (envAtIfSome (exprLoc body) env)
+      (Some (normalize expected))
+      pats
+      body
   _ => infer env (ELam pats body)
 inferExpected env e expected =
   -- The order only matters when an ARROW ROW sits inside a type-constructor
@@ -21683,9 +21699,8 @@ inferAppArgsAgainst env _ ft [] = ft
 inferAppArgsAgainst env appSoFar ft (x :: rest) =
   let xt = match lamUnderLoc x
     Some (loc, pats, body) =>
-      let _ = setLocIfSome env.teDyn.dcModule.mcGraph loc
       inferLamChecked
-        env
+        (envAtIfSome loc env)
         (Some (funDomain env.teDyn.dcModule (normalize ft)))
         pats
         body
@@ -21716,17 +21731,9 @@ unifyIntoOrd dyn valueFirst pos e a =
   let _ =
     if monoHasArrowInSlot e || monoHasArrowInSlot a then
       if pos then
-        recordFileValueFlow
-          dyn.dcModule
-          dyn.dcModule.mcGraph.currentLocRef.value
-          e
-          a
+        recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc e a
       else
-        recordFileValueFlow
-          dyn.dcModule
-          dyn.dcModule.mcGraph.currentLocRef.value
-          a
-          e
+        recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc a e
   unifyIntoStep dyn valueFirst pos e a
 
 -- Capture a directed judgment once; recursive descent does not rescan every
@@ -21805,14 +21812,9 @@ bindValueUpper dyn cell lower =
           dyn
           JoinArgument
           collectValueAllowance) [
-          (dyn.dcModule.mcGraph.currentLocRef.value, lower),
+          (dyn.dcModule.mcLoc, lower),
         ])
-    let _ =
-      recordFileValueFlow
-        dyn.dcModule
-        dyn.dcModule.mcGraph.currentLocRef.value
-        upper
-        lower
+    let _ = recordFileValueFlow dyn.dcModule dyn.dcModule.mcLoc upper lower
     bindVar dyn cell upper
 
 collectValueAllowance : DynCtx -> List EffRow -> EffRow
@@ -21917,11 +21919,10 @@ inferAppExpr : TcEnv -> Expr -> Expr -> Mono
 inferAppExpr env f x = match lamUnderLoc x
   Some (loc, pats, body) =>
     let ft = infer env f
-    let _ = setLocIfSome env.teDyn.dcModule.mcGraph loc
     -- ft is `(lamType) -> result`; its FIRST domain is the lambda's expected
     -- type.  Peel that, then peel the lambda type itself for its per-param types.
     let lamExpected = funDomain env.teDyn.dcModule (normalize ft)
-    let xt = inferLamChecked env (Some lamExpected) pats body
+    let xt = inferLamChecked (envAtIfSome loc env) (Some lamExpected) pats body
     inferApp env (EApp f x) ft xt
   None => match shadowStandaloneSpineHeadAt env f
     -- #2154: the IMPORTER-side spine arm, mirroring #1815's definer spine arms — it
@@ -22138,7 +22139,7 @@ inferShadowApp : TcEnv ->
 inferShadowApp env mname arityRefs tagRefs f x =
   -- capture the application's loc BEFORE inferring the argument (which moves currentLoc),
   -- so a domain mismatch localizes to the call site, not the argument.
-  let dloc = env.teDyn.dcModule.mcGraph.currentLocRef.value
+  let dloc = env.teDyn.dcModule.mcLoc
   let tx = infer env x
   -- The dict-var carve-out (S5/Fork 2) applies to importer shadows too: a receiver that is
   -- the enclosing fn's `=>`-bound constraint var DISPATCHES through that dict, so it must
@@ -22208,9 +22209,7 @@ inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
           env
           mname
           ""
-          (orElseLoc
-            (appSpineHeadLoc f)
-            env.teDyn.dcModule.mcGraph.currentLocRef.value)
+          (orElseLoc (appSpineHeadLoc f) env.teDyn.dcModule.mcLoc)
           value
       let _ = recordStandaloneAt env.teDyn.dcModule mname f occurrence
       let smono = occurrence.svoInstance.mtiBody
@@ -22267,7 +22266,7 @@ inferShadowAppAt : TcEnv ->
   Expr ->
   Mono
 inferShadowAppAt env mname arityRefs tagRefs hd nodes f x =
-  let dloc = env.teDyn.dcModule.mcGraph.currentLocRef.value
+  let dloc = env.teDyn.dcModule.mcLoc
   let pre = inferSpineArgs env nodes
   let k = listLen pre
   let tx = infer env x
@@ -22336,9 +22335,7 @@ inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx =
           env
           mname
           ""
-          (orElseLoc
-            (appSpineHeadLoc f)
-            env.teDyn.dcModule.mcGraph.currentLocRef.value)
+          (orElseLoc (appSpineHeadLoc f) env.teDyn.dcModule.mcLoc)
           value
       let _ = recordStandaloneAt env.teDyn.dcModule mname hd occurrence
       let smono = occurrence.svoInstance.mtiBody
@@ -22413,7 +22410,7 @@ recordSelectedStandaloneRoutes mctx mname dicts ((r, inner) :: rest) tx =
           dicts.sdMonos
           dicts.sdIfaces
           dicts.sdArgVecs)
-        mctx.mcGraph.currentLocRef.value
+        mctx.mcLoc
         (captureScope mctx ())
         (freshEvId mctx ()))
   recordSelectedStandaloneRoutes mctx mname dicts rest tx
@@ -22570,7 +22567,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
   let sym = recoveredShadowSym name tagRef
   -- P0-19: capture the application's location BEFORE inferring the argument (which
   -- moves currentLoc), so a standalone-domain mismatch reports at the call site.
-  let dloc = env.teDyn.dcModule.mcGraph.currentLocRef.value
+  let dloc = env.teDyn.dcModule.mcLoc
   -- #1815: the arguments the spine already applied, inferred in source order (exactly
   -- the order the recursive walk visited them in before).
   let pre = inferSpineArgs env nodes
@@ -22702,7 +22699,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
             dicts.sdMonos
             dicts.sdIfaces
             dicts.sdArgVecs)
-          env.teDyn.dcModule.mcGraph.currentLocRef.value
+          env.teDyn.dcModule.mcLoc
           (captureScope env.teDyn.dcModule ())
           (freshEvId env.teDyn.dcModule ()))
   let _ = match argDispatchOf env.teDyn.dcModule name
@@ -22722,7 +22719,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
           xt
           env.teDyn.dcModule.currentFn.value
           (SKArg implRef (if dispatches then ft else xt) [])
-          env.teDyn.dcModule.mcGraph.currentLocRef.value
+          env.teDyn.dcModule.mcLoc
           (captureScope env.teDyn.dcModule ())
           (freshEvId env.teDyn.dcModule ()))
     None => ()
@@ -22747,9 +22744,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
     None
   else
     standaloneSchemeFor env name sym)
-    Some _ =>
-      env.teDyn.dcModule.mcGraph.currentLocRef := dloc
-      unifySpineResult env f ft (pre ++ [(x, xt)])
+    Some _ => unifySpineResult env f ft (pre ++ [(x, xt)])
     None =>
       let _ = if sym == "" then enforceStandaloneDomainAt env name xt dloc k
       inferAppNodes env ft (pre ++ [(EApp f x, xt)])
@@ -22966,9 +22961,7 @@ shadowDomainForAt env _ sym k = match lookupVar env sym
 
 -- unify the standalone domain against the argument at the call's location.
 unifyStandaloneDomain : DynCtx -> Mono -> Mono -> Option Loc -> Unit
-unifyStandaloneDomain dyn dom xt dloc =
-  dyn.dcModule.mcGraph.currentLocRef := dloc
-  unifyIn dyn dom xt
+unifyStandaloneDomain dyn dom xt dloc = unifyIn (dynAt dloc dyn) dom xt
 
 -- a definer-shadow standalone's declared parameter type, freshly instantiated (so a
 -- polymorphic standalone domain does not leak vars across sites).  None when there is
@@ -23013,7 +23006,7 @@ maybeStandaloneValueMono env name =
         env
         name
         ""
-        env.teDyn.dcModule.mcGraph.currentLocRef.value
+        env.teDyn.dcModule.mcLoc
         value).svoInstance.mtiBody)
     (standaloneValueBinding env name)
 
@@ -23028,8 +23021,7 @@ rejectAdmittedValueOccurrence mctx name
   | isDefinerShadow mctx name = ()
   | otherwise =
     let ifs = methodAdmittedHere mctx name
-    if listLen ifs >= 2 then
-      pushAmbiguousShadowDecl mctx name ifs mctx.mcGraph.currentLocRef.value
+    if listLen ifs >= 2 then pushAmbiguousShadowDecl mctx name ifs mctx.mcLoc
 
 instantiateStandaloneOccurrence : TcEnv ->
   String ->
@@ -23037,8 +23029,8 @@ instantiateStandaloneOccurrence : TcEnv ->
   Option Loc ->
   ValueScheme ->
   SelectedValueOccurrence
-instantiateStandaloneOccurrence env name sym origin value =
-  env.teDyn.dcModule.mcGraph.currentLocRef := origin
+instantiateStandaloneOccurrence outer name sym origin value =
+  let env = envAt origin outer
   let inst = instantiateValueTracked env.teDyn.dcModule name value.vsScheme
   let declared =
     declaredEffectsAt env.teDyn.dcModule.mcGraph inst value.vsDeclared
@@ -23287,7 +23279,7 @@ inferDefinerShadowVarAppAt : TcEnv ->
   Expr ->
   Mono
 inferDefinerShadowVarAppAt env name hd nodes f x =
-  let dloc = env.teDyn.dcModule.mcGraph.currentLocRef.value
+  let dloc = env.teDyn.dcModule.mcLoc
   let pre = inferSpineArgs env nodes
   let xt = infer env x
   let isDictVar = definerReceiverIsDictVar env.teDyn name xt
@@ -23354,7 +23346,6 @@ inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc =
   match standaloneOccurrence env name "" (orElseLoc (appSpineHeadLoc f) dloc)
     Some occurrence =>
       let _ = recordStandaloneAt env.teDyn.dcModule name hd occurrence
-      env.teDyn.dcModule.mcGraph.currentLocRef := dloc
       -- #1815: consume the WHOLE applied prefix, not just the receiver.  Unifying the
       -- standalone's declared type against `TFun xt … r` when the receiver is argument 1
       -- is what equated `Int -> Int -> Int` (the standalone) with `b -> r` (the annotated
@@ -23493,12 +23484,6 @@ sigConstraintsOf _ = []
 constraintArgVarName : Ty -> Option String
 constraintArgVarName (TyVar v) = Some v
 constraintArgVarName _ = None
-
--- set currentLoc only when the lambda carried a span (mirror the ELoc arm), so
--- a bare unlocated lambda doesn't blank out an enclosing position.
-setLocIfSome : GraphCtx -> Option Loc -> Unit
-setLocIfSome gctx None = ()
-setLocIfSome gctx (Some l) = gctx.currentLocRef := Some l
 
 -- peek through an ELoc wrapper to a lambda; returns its loc, params and body.
 -- Non-lambda arguments (the common case) take the ordinary inference path.
@@ -23907,7 +23892,7 @@ inferApp env appExpr ft xt =
           pushTypeErrorHelpFixAt
             env.teDyn.dcModule
             "T-TYPE-MISMATCH"
-            env.teDyn.dcModule.mcGraph.currentLocRef.value
+            (orElseLoc (appArgLoc appExpr) env.teDyn.dcModule.mcLoc)
             msg
             hint
             None
@@ -23918,20 +23903,16 @@ inferApp env appExpr ft xt =
         let _ = poisonMismatchVars env.teDyn.dcModule r r
         r
       None =>
-        -- Type-error span (Bite 3, fork 3 = ARGUMENT): point a wrong-arg-type
-        -- mismatch at the argument expression rather than the callee.  The live
-        -- `currentLoc` after inferring the arg is its last atom; refine it to the
-        -- whole argument span so `len 5` (len : String -> Int) squiggles the `5`.
-        let _ = match appArgLoc appExpr
-          Some al => env.teDyn.dcModule.mcGraph.currentLocRef := Some al
-          None => ()
+        -- Type-error span (Bite 3, fork 3 = ARGUMENT): a wrong-arg-type
+        -- mismatch is located at the argument expression rather than the
+        -- callee, so `len 5` (len : String -> Int) squiggles the `5`.
+        let at = envAtIfSome (appArgLoc appExpr) env
         -- The argument flows INTO the callee's domain, so a closed~closed row
         -- pair there is checked directionally (`unifyInto`): a purer argument in
         -- an effect-allowing slot is accepted, the reverse is not.  A callee whose
         -- type is still a variable has no domain to direct against yet.
-        let eff = applicationRow env appExpr ft xt r
-        let _ =
-          performEffect env.teDyn.dcModule env.teDyn.dcModule.curEffect eff
+        let eff = applicationRow at appExpr ft xt r
+        let _ = performEffect at.teDyn.dcModule at.teDyn.dcModule.curEffect eff
         r
 
 -- The argument flows into the callee's domain.  A qualified domain also
@@ -23968,8 +23949,8 @@ checkedInto env e expected actual =
   let _ = recordValueFileBound env.teDyn.dcModule e expected
   match normalize expected
     TQual _ _ =>
-      let _ = setLocIfSome env.teDyn.dcModule.mcGraph (exprLoc e)
-      let _ = argumentInto env (Some e) expected actual
+      let _ =
+        argumentInto (envAtIfSome (exprLoc e) env) (Some e) expected actual
       expected
     _ => actual
 -- The same judgment where only the argument's type is at hand (a pipe, a
@@ -24136,7 +24117,7 @@ inferAppNotFunction mctx appExpr ft r =
         pushTypeErrorHelpFixAt
           mctx
           "T-NOT-A-FUNCTION"
-          mctx.mcGraph.currentLocRef.value
+          mctx.mcLoc
           (notAFunctionMsgFor (Some name) (ppMono (normalize ft)))
           (notAFunctionHint (Some name))
           None
@@ -24144,7 +24125,7 @@ inferAppNotFunction mctx appExpr ft r =
       pushTypeErrorHelpFixAt
         mctx
         "T-NOT-A-FUNCTION"
-        mctx.mcGraph.currentLocRef.value
+        mctx.mcLoc
         (notAFunctionMsg (ppMono (normalize ft)))
         (notAFunctionHint None)
         None
@@ -24154,15 +24135,8 @@ inferAppNotFunction mctx appExpr ft r =
 inferLam : TcEnv -> List Pat -> Expr -> Mono
 inferLam env pats body =
   -- Patterns carry no source Loc, so a pattern-level type error (e.g. an
-  -- over-applied nullary constructor `A _`) would otherwise be recorded at the
-  -- STALE `currentLoc` left by the previous clause/function's body inference —
-  -- mis-blaming an innocent sibling clause.  Anchor `currentLoc` to THIS clause's
-  -- body loc before inferring the patterns, so the error lands on the right
-  -- clause (the body re-sets `currentLoc` via its own ELoc arm afterwards).
-  let _ = match exprLoc body
-    Some l => env.teDyn.dcModule.mcGraph.currentLocRef := Some l
-    None => ()
-  inferLamChecked env None pats body
+  -- over-applied nullary constructor `A _`) is located at THIS clause's body.
+  inferLamChecked (envAtIfSome (exprLoc body) env) None pats body
 
 inferLet : TcEnv -> Bool -> Pat -> Expr -> Expr -> Mono
 inferLet env isFun pat e1 e2
@@ -24178,7 +24152,9 @@ inferLet env isFun pat e1 e2
 -- Self-recursive inline `let` binding (mirrors blockRecLet + the oracle is_fun
 -- arm): placeholder pre-bind, infer body, unify, generalize through the body.
 inferRecLet : TcEnv -> String -> Option Loc -> BinderId -> Expr -> Expr -> Mono
-inferRecLet env x xloc bid e1 e2 =
+inferRecLet outer x xloc bid e1 e2 =
+  -- Located at the right-hand side, as `inferLetSimple`.
+  let env = envAtIfSome (exprSpanLoc e1) outer
   let _ = checkRecBindNonFunction env.teDyn.dcModule x e1  -- #799
   let _ = enterLevel env.teDyn.dcModule ()
   let oblN0 = wMark env.teDyn.dcModule.implObls
@@ -24204,7 +24180,11 @@ inferRecLet env x xloc bid e1 e2 =
     genBindingRestricted env.teDyn Tip (residualsOf 0 residuals) True pureRow t1  -- #866
   let _ = registerLocalScheme env.teDyn.dcModule x sch oblN0 callN0 dictN0
   let _ = registerLocalAbsIf env.teDyn.dcModule x lscope sch oblN0 callN0
-  infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
+  infer
+    (envAt
+      outer.teDyn.dcModule.mcLoc
+      (seedAlphaLets (extendLocalVar env x sch) x e1))
+    e2  -- WS-2: α scope-seed
 
 -- Recursive local bindings are strict. Their initializer is charged here;
 -- recursive occurrences read only the value, never a lazy forcing descriptor.
@@ -24290,7 +24270,10 @@ declareQuantified mctx sch =
   declareRigidVars mctx (map intToString (schemeIds sch))
 
 inferLetSimple : TcEnv -> Pat -> Expr -> Expr -> Mono
-inferLetSimple env pat e1 e2 =
+inferLetSimple outer pat e1 e2 =
+  -- The binding's own checks are located at its right-hand side; the body is
+  -- the enclosing construct's.
+  let env = envAtIfSome (exprSpanLoc e1) outer
   let _ = enterLevel env.teDyn.dcModule ()
   let _ = beginEffectSummaryScope env.teDyn.dcModule ()
   let oblN0 = wMark env.teDyn.dcModule.implObls
@@ -24319,13 +24302,26 @@ inferLetSimple env pat e1 e2 =
     nbAmbiguityObls = addedObls,
     nbGuard = localNumGuard env.teDyn.dcModule addedObls callN0,
   }
-  inferLetBody env pat t1 residuals e1 e2 oblN0 callN0 dictN0 lscope
+  inferLetBody
+    env
+    outer.teDyn.dcModule.mcLoc
+    pat
+    t1
+    residuals
+    e1
+    e2
+    oblN0
+    callN0
+    dictN0
+    lscope
 
 patIsVar : Pat -> Bool
 patIsVar (PVar _ _ _) = True
 patIsVar _ = False
 
+-- [env] is located at the binding, [bodyLoc] is the span the body is inferred at.
 inferLetBody : TcEnv ->
+  Option Loc ->
   Pat ->
   Mono ->
   List (Int, AuthResidual) ->
@@ -24336,7 +24332,7 @@ inferLetBody : TcEnv ->
   Int ->
   Option ScopeId ->
   Mono
-inferLetBody env (PVar x xloc bid) t1 residuals e1 e2 oblN0 callN0 dictN0 lscope =
+inferLetBody env bodyLoc (PVar x xloc bid) t1 residuals e1 e2 oblN0 callN0 dictN0 lscope =
   let _ = recordLocalBind env.teDyn.dcModule x (Some xloc) bid t1  -- LSP hover (PVar let bypasses inferPat)
   let sch =
     genBindingRestricted
@@ -24348,13 +24344,13 @@ inferLetBody env (PVar x xloc bid) t1 residuals e1 e2 oblN0 callN0 dictN0 lscope
       t1  -- #866
   let _ = registerLocalScheme env.teDyn.dcModule x sch oblN0 callN0 dictN0
   let _ = registerLocalAbsIf env.teDyn.dcModule x lscope sch oblN0 callN0
-  infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
-inferLetBody env pat t1 _ _ e2 _ _ _ _ =
+  infer (envAt bodyLoc (seedAlphaLets (extendLocalVar env x sch) x e1)) e2  -- WS-2: α scope-seed
+inferLetBody env bodyLoc pat t1 _ _ e2 _ _ _ _ =
   let lits = takePatLits env.teDyn.dcModule ()
   let pr = inferPat env pat
   let _ = unifyIn env.teDyn (fst pr) t1
   let _ = settlePatLits env.teDyn lits
-  infer (extendLocalVars env (snd pr)) e2
+  infer (envAt bodyLoc (extendLocalVars env (snd pr))) e2
 
 inferIf : TcEnv -> Expr -> Expr -> Expr -> Mono
 inferIf env c t e =
@@ -24598,12 +24594,10 @@ checkRecursiveValue dyn owned =
   unifyInto dyn True owned.bsRecursiveValue owned.bsValue
 
 joinValueEqual : DynCtx -> JoinContext -> Option Loc -> Mono -> Mono -> Unit
-joinValueEqual dyn context loc left right =
-  let saved = dyn.dcModule.mcGraph.currentLocRef.value
-  let _ = setLocIfSome dyn.dcModule.mcGraph loc
+joinValueEqual outer context loc left right =
+  let dyn = dynAtIfSome loc outer
   let _ = noteNumlitCtx dyn.dcModule left right context
-  let _ = unifyIn { dyn | dcJoin = Some context } left right
-  dyn.dcModule.mcGraph.currentLocRef := saved
+  unifyIn { dyn | dcJoin = Some context } left right
 
 producedSlotCovariants : ModuleCtx -> Mono -> List Bool
 producedSlotCovariants mctx head = match headTyconMono head
@@ -24728,7 +24722,7 @@ inferMatch env scrutTy arms =
   let _ = match normalize scrutTy
     TVar _ =>
       env.teDyn.dcModule.matchChecksDeferred :=
-        (scrutTy, arms, env.teDyn.dcModule.mcGraph.currentLocRef.value)
+        (scrutTy, arms, env.teDyn.dcModule.mcLoc)
           :: env.teDyn.dcModule.matchChecksDeferred.value
     _ => checkMatchChecks env.teDyn.dcModule scrutTy arms
   result
@@ -24745,10 +24739,7 @@ checkMatchChecks mctx scrutTy arms =
 checkDeferredMatches : ModuleCtx -> List (Mono, List Arm, Option Loc) -> Unit
 checkDeferredMatches mctx [] = ()
 checkDeferredMatches mctx ((scrutTy, arms, loc) :: rest) =
-  let saved = mctx.mcGraph.currentLocRef.value
-  mctx.mcGraph.currentLocRef := loc
-  let _ = checkMatchChecks mctx scrutTy arms
-  mctx.mcGraph.currentLocRef := saved
+  let _ = checkMatchChecks (mctxAt loc mctx) scrutTy arms
   checkDeferredMatches mctx rest
 -- Type-aware exhaustiveness (`check_match`): run AFTER the arms have unified
 -- the scrutinee type, so `scrutTy` is fully resolved when we read its head.
@@ -24771,14 +24762,7 @@ checkMatchExhaustive mctx scrutTy arms =
   if useful mctx.matchOracle.value (matchCol0Type scrutTy) rows [PWild] then
     let (msg, help) = nonExhaustiveMsg mctx scrutTy rows
     mctx.matchWarnings :=
-      writtenDiag
-          (TcDiag
-            "W-NONEXHAUSTIVE"
-            2
-            mctx.mcGraph.currentLocRef.value
-            msg
-            help
-            None)
+      writtenDiag (TcDiag "W-NONEXHAUSTIVE" 2 mctx.mcLoc msg help None)
         :: mctx.matchWarnings.value
 
 -- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
@@ -24828,7 +24812,7 @@ checkRedundantGo mctx col0 prec heads offCol ((Arm pat gs body) :: rest) =
         TcDiag
             "W-UNREACHABLE-ARM"
             2
-            (orElseLoc (exprLoc body) mctx.mcGraph.currentLocRef.value)
+            (orElseLoc (exprLoc body) mctx.mcLoc)
             unreachableArmWarning
             None
             None
@@ -26155,13 +26139,16 @@ addVariants env tvs etbl paramTyIds rowEffvarIds authvarIds result ((Variant cna
       ctorEtbl
   -- a report from elaborating a field (a pattern slot a binder cannot fill)
   -- points at the constructor's fields
-  let saved = env.teDyn.dcModule.mcGraph.currentLocRef.value
-  let _ = match firstTyLocList (payloadAstTypes payload)
-    Some l => env.teDyn.dcModule.mcGraph.currentLocRef := Some l
-    None => ()
   let ctorType =
-    foldrFun (payloadTypesE env.teDyn.dcModule ctorEtbl tvs payload) result
-  env.teDyn.dcModule.mcGraph.currentLocRef := saved
+    foldrFun
+      (payloadTypesE
+        (mctxAtIfSome
+          (firstTyLocList (payloadAstTypes payload))
+          env.teDyn.dcModule)
+        ctorEtbl
+        tvs
+        payload)
+      result
   let env2 =
     addCtor
       env
@@ -26308,7 +26295,10 @@ checkLetBinds mctx ((LetBind name clauses _ _) :: rest) =
 checkLetBind : ModuleCtx -> String -> List FunClause -> Unit
 checkLetBind mctx name clauses
   | allList clauseIsNonFunction clauses =
-    pushTypeError mctx "T-NONREC-VALUE-LET" (letRecNonFunctionMsg name)
+    pushTypeError
+      (mctxAtIfSome (clausesSpanLoc clauses) mctx)
+      "T-NONREC-VALUE-LET"
+      (letRecNonFunctionMsg name)
   | otherwise = ()
 
 clauseIsNonFunction : FunClause -> Bool
@@ -26417,6 +26407,11 @@ clauseEagerlyRefsGroup names (FunClause _ rhs) = anyMember names (eagerRefs rhs)
 clausesLoc : List FunClause -> Option Loc
 clausesLoc [] = None
 clausesLoc ((FunClause _ rhs) :: _) = exprLoc rhs
+
+-- The span of the first clause's right-hand side, unwrapped nodes included.
+clausesSpanLoc : List FunClause -> Option Loc
+clausesSpanLoc [] = None
+clausesSpanLoc ((FunClause _ rhs) :: _) = exprSpanLoc rhs
 
 -- Names `e` reads WITHOUT first going under a lambda (a lambda DEFERS
 -- evaluation, so a reference inside one cannot observe a still-uninstalled
@@ -30470,7 +30465,7 @@ pushCoherenceWarning mctx loc msg =
     TcDiag
       "W-INCOMPARABLE-IMPLS"
       2
-      (orElseLoc loc mctx.mcGraph.currentLocRef.value)
+      (orElseLoc loc mctx.mcLoc)
       msg
       (Some cohIncomparableHelp)
       None
@@ -31885,10 +31880,11 @@ missingImplMethodMsg iface tys method =
 checkPhantomMethods : ModuleCtx -> ClassEnv -> Int -> Unit
 checkPhantomMethods mctx ce cur =
   foreachUnit
-    (pushTypeError mctx "T-PHANTOM-METHOD")
+    ((loc, msg) => pushTypeError (mctxAtIfSome loc mctx) "T-PHANTOM-METHOD" msg)
     (flatMap phantomMethodMsgs (ceRowsOwnedBy cur ce))
 
-phantomMethodMsgs : CeRow -> List String
+-- Each message with the span of the method's declared type it is about.
+phantomMethodMsgs : CeRow -> List (Option Loc, String)
 phantomMethodMsgs r =
   flatMap
     (phantomMethodMsg (ceRowIfaceName r) (ceRowTyparams r))
@@ -31901,7 +31897,7 @@ ceRowIfaceName r = match ceRowIface r
 phantomMethodMsg : String ->
   List String ->
   (String, Ty, List (String, List Kind)) ->
-  List String
+  List (Option Loc, String)
 phantomMethodMsg ifaceName typarams (mname, mty, _) =
   if isEmptyL typarams then
     []
@@ -31910,7 +31906,10 @@ phantomMethodMsg ifaceName typarams (mname, mty, _) =
   else
     let noun = if listLen typarams == 1 then "parameter" else "parameters"
     [
-      "method `\{mname}` of interface `\{ifaceName}` does not mention the interface \{noun} \{intercalateComma (map backticked typarams)}, so it cannot be dispatched",
+      (
+        firstTyLoc mty,
+        "method `\{mname}` of interface `\{ifaceName}` does not mention the interface \{noun} \{intercalateComma (map backticked typarams)}, so it cannot be dispatched",
+      ),
     ]
 
 intercalateComma : List String -> String
@@ -40586,7 +40585,10 @@ inferMethodBody : TcEnv ->
   List Pat ->
   Expr ->
   Unit
-inferMethodBody env iface kind (params, mty, gscope) mname pats body =
+inferMethodBody outer iface kind (params, mty, gscope) mname pats body =
+  -- The body's own checks (against the signature, its rigidity, its effect
+  -- contract) are located at the body.
+  let env = envAtIfSome (exprSpanLoc body) outer
   let _ = enterLevel env.teDyn.dcModule ()
   let bodyLevel = env.teDyn.dcModule.currentLevel.value
   let bodyScope = openMethodBodyScope env.teDyn.dcModule iface mname kind
@@ -45230,7 +45232,10 @@ processSCC : TcEnv ->
   OrdMap (List (List Pat, Expr)) ->
   List String ->
   (TcEnv, List (String, Scheme), OrdMap (List (List Pat, Expr)))
-processSCC env sigs grouped0 members =
+processSCC outer sigs grouped0 members =
+  -- The group's own checks (generalization, defaulting, its signatures'
+  -- coverage) are located at its members' clause bodies.
+  let env = envAtIfSome (membersSpanLoc grouped0 members) outer
   -- Marking on the schedule (ARCH §E): a Module-arm group is marked HERE, after
   -- every group it depends on has generalized, with the dict-name set as it stands;
   -- inference reads the stamped twin of the marked clauses.  Flat (`None`): the
@@ -45465,7 +45470,7 @@ processSCC env sigs grouped0 members =
         schemes
         groupedOut
     None => ()
-  (extendTermBindings env schemes, schemes, groupedOut)
+  (extendTermBindings outer schemes, schemes, groupedOut)
 
 -- A multi-member SCC is a mutually-recursive group (always a function group, like
 -- the oracle's DLetGroup); a singleton is a plain binding gated on its RHS.  Self-
@@ -45647,7 +45652,7 @@ preunifySigsEx mctx sigs (member :: rest) =
 instantiateSigTracked : ModuleCtx ->
   Ty ->
   (Mono, List (String, Mono), Option EffRow)
-instantiateSigTracked mctx ty = atSignature mctx.mcGraph ty (_ =>
+instantiateSigTracked outer ty = atSignature outer ty (mctx =>
   let rows = rowArgNames mctx ty
   let auths = authArgBindersIn mctx ty
   let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
@@ -46051,8 +46056,11 @@ inferMembers : TcEnv ->
   List ScopedMember ->
   Unit
 inferMembers env _ _ [] = ()
-inferMembers env sigs grouped (member :: rest) =
+inferMembers outer sigs grouped (member :: rest) =
   let m = member.smName
+  -- A member's own checks (its signature against its value, its forcing
+  -- bound, its effect escape) are located at its clauses' bodies.
+  let env = envAtIfSome (membersSpanLoc grouped [m]) outer
   let v = member.smMono
   let _ = openScope env.teDyn.dcModule member.smScope
   env.teDyn.dcModule.currentFn := m
@@ -46081,7 +46089,18 @@ inferMembers env sigs grouped (member :: rest) =
   let _ = match member.smForce
     None => checkEffectEscape env.teDyn sigs m effs
     Some _ => ()
-  inferMembers env sigs grouped rest
+  inferMembers outer sigs grouped rest
+
+-- The span of the named members' clause bodies (`exprSpanLoc`), joined.
+membersSpanLoc : OrdMap (List (List Pat, Expr)) -> List String -> Option Loc
+membersSpanLoc grouped names =
+  joinLocs
+    (flatMap
+      (m =>
+        flatMap
+          (cl => option [] (l => [l]) (exprSpanLoc (snd cl)))
+          (clausesOf m grouped))
+      names)
 
 -- the peel source for a member: Some placeholder if it has a signature (peel the
 -- declared arrow domains onto the clause params), None otherwise
@@ -46149,15 +46168,12 @@ unifySourceDomains dyn arity owned actual =
 -- signature's arrow domains and zip-unify them onto the clause param types BEFORE
 -- inferring the body (bidirectional checking mode).
 inferClauseEff : TcEnv -> Option Mono -> (List Pat, Expr) -> (Mono, EffRow)
-inferClauseEff env peel (pats, body) =
-  -- Anchor currentLoc to THIS clause's body loc before inferring patterns:
-  -- patterns carry no source Loc, so an over-applied-constructor / arity pattern
-  -- error would otherwise be recorded at the STALE loc left by the previous
-  -- clause's (or a previous function's) body inference — mis-blaming an innocent
-  -- sibling clause.  See the twin note in inferLam.
-  let _ = match exprLoc body
-    Some l => env.teDyn.dcModule.mcGraph.currentLocRef := Some l
-    None => ()
+inferClauseEff outer peel (pats, body) =
+  -- The clause is located at its body: patterns carry no source Loc, so an
+  -- over-applied-constructor / arity pattern error lands on this clause, and a
+  -- body the parser leaves unwrapped (an application, an operator) is still
+  -- located.  See the twin note in inferLam.
+  let env = envAtIfSome (exprSpanLoc body) outer
   let lits = takePatLits env.teDyn.dcModule ()
   let pr = inferPats env pats
   let _ = peelOntoParams env.teDyn peel (fst pr) pats
@@ -46244,7 +46260,7 @@ checkEffectEscapeIn mctx group sigs m effs =
           group.gcPendingEscapes :=
             (
                 m,
-                mctx.mcGraph.currentLocRef.value,
+                mctx.mcLoc,
                 effectEscapeMsg
                   m
                   (declaredEffects mctx.mcGraph ty)
@@ -54869,17 +54885,15 @@ autoPrintWanted mctx True executes findings perMod coreDecls modules =
             mid
             ModuleOwner
         let _ = openScope mctx scope
-        let savedLoc = mctx.mcGraph.currentLocRef.value
         let loc = mainBodySpan entry
-        mctx.mcGraph.currentLocRef := loc
+        let atMain = mctxAt loc mctx
         let posed = Ref None
-        let diags = captureTypeErrors mctx (_ =>
-          posed := Some (judgeAutoPrintUse mctx iface scheme loc))
+        let diags = captureTypeErrors atMain (_ =>
+          posed := Some (judgeAutoPrintUse atMain iface scheme loc))
         let ev = match (executes, diags, posed.value)
           (Some _, [], Some tau) =>
-            Some (autoPrintEvidence mctx mid scope iface tau)
+            Some (autoPrintEvidence atMain mid scope iface tau)
           _ => None
-        mctx.mcGraph.currentLocRef := savedLoc
         let _ = closeScope mctx ()
         let reported = driveErrs findings perMod
         let kept =
@@ -54942,12 +54956,10 @@ asyncDriverFindings mctx executes mid entry scheme perMod =
           mid
           ModuleOwner
       let _ = openScope mctx scope
-      let savedLoc = mctx.mcGraph.currentLocRef.value
-      mctx.mcGraph.currentLocRef := mainBodySpan entry
-      let diags = captureTypeErrors mctx (_ =>
-        let _ = judgeMainUse mctx (asyncDriverUse mctx driver) scheme
+      let atMain = mctxAt (mainBodySpan entry) mctx
+      let diags = captureTypeErrors atMain (_ =>
+        let _ = judgeMainUse atMain (asyncDriverUse atMain driver) scheme
         ())
-      mctx.mcGraph.currentLocRef := savedLoc
       let _ = closeScope mctx ()
       map (verdictFinding mid False) diags
     _ => []

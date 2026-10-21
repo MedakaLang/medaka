@@ -947,9 +947,6 @@ public export data GraphCtx = GraphCtx {
   -- schedule.  `None` until a preamble has run; a Module arm reading `None` is a
   -- driver that skipped its preamble, and fails loud.
   markSetsRef : Ref (Option MarkSets),
-  -- The innermost ELoc span the inference walk has entered (the walk's current
-  -- location), `None` until the drive's first one.
-  currentLocRef : Ref (Option Loc),
   -- Armed by every recorded type error (`recordTypeError`), read by
   -- `typeErrorsArmed` and `driveOutputsNow`; the diagnostics behind it, newest first, each with its module.
   typeErrorsSticky : Ref Bool,
@@ -2074,6 +2071,12 @@ public export data ModuleCtx = ModuleCtx {
   -- graph is the memo's own detached snapshot, and a hit re-points it at the hitting
   -- drive's record, so no stored record keeps a drive's graph alive.
   mcGraph : GraphCtx,
+  -- The span of the innermost construct around the check: the `ELoc` the walk is
+  -- inside, or the span a construct without one names for its own checks (`mctxAt`).
+  -- A construct hands its sub-walk an updated copy, so the span is gone when the
+  -- sub-walk returns.  `None` outside every construct: a mint, a whole-record copy
+  -- and every post-inference pass start with none.
+  mcLoc : Option Loc,
 }
 
 -- DICT-SEMANTICS §3 W2: the one termination measure every `requires` walk shares.  A
@@ -2285,10 +2288,10 @@ dynFor mctx = DynCtx {
 -- the routes and diagnostics below it.  A walk that works on a site is handed an
 -- updated copy.
 --   sxSite — the span of the site, for a diagnostic the route solver raises where
---     it has no span argument.  `currentLoc` cannot serve: inference has long left
---     the offending expression, so it names whichever span was entered last.
---     Absent (a walk outside a resolver drain, such as an obligation check), the
---     diagnostic falls back to `currentLoc`.
+--     it has no span argument.  The walk runs after inference, outside every
+--     construct, so its module record holds no span.  Absent (a walk outside a
+--     resolver drain, such as an obligation check), the diagnostic falls back to
+--     `sxModule`'s `mcLoc`: the enclosing construct's during inference, none after.
 --   sxInner — the notes accumulator of the running stamp: each route built below
 --     the destination's top level is ORed in.  Absent outside a stamp, where the
 --     notes are not wanted.
