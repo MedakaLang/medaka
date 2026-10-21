@@ -221,11 +221,14 @@ module-count superlinearity #2732 waited on) is closed.
    #2797 (the 24-entry MRU caches) are closed; both join C3's `Needs`. The per-module
    accumulator copies (#4165, #4166) are the cost of the *accumulated* rows C3 restores and
    are measured in its cost rows.
-4. **Zero growth.** Phase 3 adds no net code lines to `types/typecheck.mdk`: the codec is a
-   new leaf (`types/interface.mdk`; closure `tc_types`, `publish`, `repr`, `ir/sexp`, never
-   `typecheck`), the loader side lives in `driver/`, and the typechecker's one change is the
-   memo hit path accepting a loaded value. An `Arch-Growth-Override:` in a Phase 3 sprint
-   is a review finding. Phase 2's loaned +2,733 lines are Phase 4's to move.
+4. **Zero growth.** Phase 3 adds no net code lines to `types/typecheck.mdk`: the value and
+   its one process cache are a new leaf (`types/interface.mdk`), the codec another
+   (`types/interface_sexp.mdk`) over a new `support/sexp.mdk` (a `types → ir` import of
+   `ir/sexp.mdk` would be a layering violation, and that module has writers only; corrected
+   2026-10-22 at the Phase 3 cut, ruling P3-D19), the loader side lives in `driver/`, and the
+   typechecker's one change is the core memo's hit and miss paths going through the frozen
+   value. An `Arch-Growth-Override:` in a Phase 3 sprint is a review finding unless it names
+   that one path. Phase 2's loaned +2,733 lines are Phase 4's to move.
 5. **Parity.** Interface-on versus interface-off is a two-arm differential over the wide
    corpus (every program under `test/` and the inline test programs; stage 6e's survey
    measured five rejected corpora and the wide census then moved 102 more rows), plus the
