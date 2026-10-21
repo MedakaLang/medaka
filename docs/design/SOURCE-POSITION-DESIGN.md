@@ -65,7 +65,7 @@ solving one diagnostic's bad span, plus this facet (decl ranges) which never got
 |---|---|---|---|
 | `archive/design/PARSE-ERROR-LOCATION-DESIGN.md` | parse-error caret/column | (none — furthest-fail token index → `offsetToLineCol`) | PARTIAL/IMPLEMENTED |
 | `archive/design/RESOLVER-DIAG-LOCATION-DESIGN.md` | 3 resolver `{0,0}` diags | `TyCon String (Option Loc)`, `DUse Bool UsePath Loc` | IMPLEMENTED |
-| `archive/design/TYPE-ERROR-SPAN-DESIGN.md` | type-error squiggle width | (widened lexer string offset + `ELoc`/`currentLoc` reads) | IMPLEMENTED |
+| `archive/design/TYPE-ERROR-SPAN-DESIGN.md` | type-error squiggle width | (widened lexer string offset + `ELoc`/`currentLoc` reads; `currentLoc` since replaced by the lexical rule, arch-p2-6e) | IMPLEMENTED |
 
 **Verdict: they are three independent point-fixes, but they CONVERGED — without ever saying so
 — on a single latent convention.** That convention, never written down as a spec, is:
@@ -184,7 +184,7 @@ or `Positions`, does not pattern-match or accessor them, and carries no decl-pos
 source positions.) **Consequence: #331 and the near-term increments need not touch
 `typecheck.mdk` at all.** typecheck's own span needs are served by the *type-leaf* `Loc`
 (`TyCon`'s `Option Loc`, read by `tyFirstLoc`/`implHeadLoc`, `typecheck.mdk:9362-9370`) and by
-`ELoc`/`currentLoc` — both already on the `Loc` convention.
+`ELoc` and the scoped `ModuleCtx.mcLoc` (formerly the `currentLoc` ref, since replaced by the lexical rule, arch-p2-6e) — both already on the `Loc` convention.
 
 ### 1.5 The existing heuristic patch (`columnAfterName`)
 

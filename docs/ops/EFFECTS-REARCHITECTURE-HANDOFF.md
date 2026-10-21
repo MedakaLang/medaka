@@ -444,8 +444,9 @@ recommended option of a short proposal:**
   sites), so `String @p` with an unbound `p` at declaration level stays
   unlocated: owed.
 - *Locations on a body or a last arm.* The cause is that `infer`'s `ELoc` arm
-  sets `currentLoc` and never restores it, so a check that runs after a body
-  reads the body's last leaf. The general fix (restore after each `ELoc`)
+  set `currentLoc` and never restored it, so a check that ran after a body
+  read the body's last leaf (since replaced by the lexical rule, arch-p2-6e: a
+  location is the span of the innermost enclosing construct, a scoped value). The general fix (restore after each `ELoc`)
   moves pinned locations across the JSON and LSP corpora and was not taken in
   this pass; instead an effect failure derived from a row check is located by
   effect provenance: `performEffect` records, per binding and label, the

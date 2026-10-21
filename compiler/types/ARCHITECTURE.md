@@ -41,9 +41,9 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 | `effect_policy.mdk` | Does an entry's invocation summary fit a policy | `policyRefusals`, `viaChain` |
 
 ## Cell lifetimes
-`CELL-LIFETIMES.md` lists every typechecker cell (the 4 module-level cells of `types.typecheck`: `interners` and the three memos, and the 194 fields of
-`ModuleCtx` 92, `GroupCtx` 2, `GraphCtx` 20, `GraphRun` 30, `CrossRun` 14, `Interners` 2, `Lineage` 3, `TcConfig` 5, `DriveInputs` 6, `TraceSink` 8, `DynCtx` 9, `SiteCtx` 3) with its measured lifetime, target home and whether
-an interface load would have to fill it. Lifetimes (203 rows, the 198 in the first table and the 5 outside it): process 16, config 15, graph 66, module 81, group 3, run 22. Its "Interface fills" section names the producer and kind of each row playbook C1 restores.
+`CELL-LIFETIMES.md` lists every typechecker cell (the 4 module-level cells of `types.typecheck`: `interners` and the three memos, and the 196 fields of
+`ModuleCtx` 3 (`mcCells`, `mcGraph`, `mcLoc`), `ModuleCells` 91, `GroupCtx` 2, `GraphCtx` 19, `GraphRun` 30, `CrossRun` 14, `Interners` 2, `Lineage` 3, `TcConfig` 5, `DriveInputs` 6, `TraceSink` 8, `DynCtx` 10, `SiteCtx` 3) with its measured lifetime, target home and whether
+an interface load would have to fill it. Lifetimes (205 rows, the 200 in the first table and the 5 outside it): process 16, config 15, graph 65, module 83, group 3, run 23. `ModuleCtx.mcLoc` is a scoped value, not a cell: a construct hands its sub-walk an updated copy of the record, and the diagnostic location is the span of the innermost enclosing construct. Its "Interface fills" section names the producer and kind of each row playbook C1 restores.
 The per-module cell counts are in `test/arch_goldens/cells.golden`.
 
 ## Laws that bind it
