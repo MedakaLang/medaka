@@ -1,0 +1,7 @@
+-- #1449: `T-NONREC-VALUE-LET` is located at the binding's right-hand side, the
+-- `5` that is not a function, rather than reported with no location or at a
+-- span a walk of some other declaration left behind.  The rejection itself is
+-- correct; this pins where it lands.
+let rec notFn = 5
+
+main = println notFn

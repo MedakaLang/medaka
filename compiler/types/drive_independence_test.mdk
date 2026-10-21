@@ -1,6 +1,6 @@
 -- A drive starts from its inputs and the process's interners alone: what an earlier
 -- drive in the same process left behind (type-error flag and list, admitted methods,
--- match oracle and warnings, last-entered location) is not visible to the next one.
+-- match oracle and warnings, a location) is not visible to the next one.
 import test.{expectEqual}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
@@ -8,11 +8,11 @@ import frontend.ast.{Decl}
 import list.{filter}
 import support.util.{joinNl}
 import types.publish.{ppPubScheme, PartialAnalysis(..)}
-import types.tc_types.{GraphCtx(..)}
+import types.tc_types.{GraphCtx(..), ModuleCtx(..)}
 import types.typecheck.{
   defaultDriveInputs, checkModulesPartialK, checkModulesChainReportForGraph,
   checkModulesK, elaborateModulesWithReport, hadTypeErrors, matchWarningsNow,
-  currentLocIsSet, checkModulesPartialLast
+  checkModulesPartialLast
 }
 
 preludeSrc : String
@@ -180,10 +180,17 @@ test "#4330: a keyed partial drive's match verdict does not depend on earlier dr
   let _ = plainK key [("z", keyedSrc)]
   expectEqual afterQuiet (partialWarns key [("z", keyedSrc)])
 
--- A drive over no declarations enters no location, so its record holds what it
--- started with.
-test "a drive starts with no location entered, whatever the previous drive entered" =
-  let (_, entered) = diagsGraph None [("b", badSrc)]
-  let located = currentLocIsSet entered
-  let (_, last) = checkModulesPartialLast defaultDriveInputs None [] [] []
-  expectEqual (True, False) (located, currentLocIsSet last.mcGraph)
+-- A check's location is the span of the construct around it, carried in the copy
+-- of the module record that construct hands its sub-walk.  The record a drive
+-- ends in is outside every construct, so a drive's locations cannot reach the next
+-- drive through it.
+test "a drive ends outside every construct, whatever its checks were located at" =
+  let reported = diags None [("b", badSrc)]
+  let (_, last) =
+    checkModulesPartialLast
+      defaultDriveInputs
+      None
+      []
+      (prelude ())
+      (mods [("b", badSrc)])
+  expectEqual (True, True) (length reported > 0, isNone last.mcLoc)
