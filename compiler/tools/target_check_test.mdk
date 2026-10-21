@@ -11,11 +11,12 @@
 --
 -- Native-only: each pair spawns the `medaka` binary.
 
+import backend.emit_target.{Backend, profileColumn}
 import test_process.{medakaBin, boundedVerb, withScratchDir}
 import test.{Expectation, expectEach, expectEqual, expectTextContainsAll, fail}
 
 import types.target_profile.{TargetProfile, profileNames, lookupProfile}
-import backend.core_validate.{Backend, profileColumn, unprovidedOn}
+import backend.core_validate.{unprovidedOn}
 import backend.extern_catalog.{catalogRows, rowName}
 
 -- Every profile, with the (row, reason) pairs its column leaves unprovided.

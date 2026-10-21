@@ -25,6 +25,7 @@
 -- resolves every route, and the lowered program pulls in NOTHING but scalar/ADT/
 -- dispatch nodes the emitter can lower.
 
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{
   noBinderId,
   Decl,
@@ -76,7 +77,6 @@ import backend.wasm_emit.{
 }
 import entries.entry_support.{driveRuntime}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
 
 -- Every emission here builds its own plan from the program it emits.
 emitProgram : WasmEmitInput -> CProgram -> String

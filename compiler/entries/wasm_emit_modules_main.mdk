@@ -29,6 +29,8 @@
 -- to lowerProgramEmitWith (loader, mangle, elaborateModules, dceFilter) is identical to
 -- the LLVM modules driver.
 
+import frontend.ast.{externDecls}
+import backend.extern_catalog.{runtimeDomain}
 import frontend.ast.{Decl(..)}
 import types.typecheck.{
   constrainedSigNames,
@@ -56,7 +58,6 @@ import backend.wasm_emit.{
 import backend.emit_plan.{buildEmitPlanReached}
 import entries.entry_support.{
   driveEmitLocated,
-  runtimeExternNames,
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
@@ -99,7 +100,7 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
       (checkedFfiExternTypeNamesModules outputs modules2)
   let input =
     withRuntimeExternsW
-      (runtimeExternNames runtimeDecls)
+      (runtimeDomain (externDecls runtimeDecls))
       (makeWasmEmitInputFull
         (methodIfaceTable allDecls)
         (ctorFieldTypeNames allDecls)

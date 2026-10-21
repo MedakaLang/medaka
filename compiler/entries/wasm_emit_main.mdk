@@ -17,6 +17,7 @@
 -- consumer differs (WasmGC instead of LLVM) — the Axis-1 discipline (Core IR is
 -- backend-neutral; backends are sibling consumers) in miniature.
 
+import backend.emit_target.{Backend(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
@@ -30,7 +31,6 @@ import ir.core_ir_lower.{
 }
 import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
 
 main = match args ()
   [targetPath] => withTarget targetPath

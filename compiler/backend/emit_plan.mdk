@@ -2,6 +2,7 @@
 -- and neither recomputes.  Built once, right after lowering, from the program an
 -- emitter is about to receive.
 
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{Lit(..), Pat(..), hostRows}
 import ir.core_ir.{
   CProgram(..),
@@ -25,7 +26,7 @@ import backend.extern_catalog.{
   wasmTupleArities,
   wasmUses,
 }
-import backend.core_validate.{Backend(..), backendName}
+
 import support.ordmap.{
   OrdMap,
   omEmpty,
@@ -205,16 +206,6 @@ isTrmcFn v name = omHasKey name v.eligibleFns
 export
 isTrmcImpl : TrmcVerdicts -> String -> String -> Bool
 isTrmcImpl v method key = omHasKey (implGroupKey method key) v.eligibleImpls
-
--- Asserts that a plan was built for the calling emitter's own backend.
-export
-checkPlanBackend : Backend -> EmitPlan -> Unit
-checkPlanBackend expected plan =
-  if backendName plan.target == backendName expected then
-    ()
-  else
-    panic
-      "internal error: emit plan was built for the \{backendName plan.target} backend but the \{backendName expected} emitter received it"
 
 -- a function binding: it takes parameters, and it is not `main`
 isTopFn : CBind -> Bool

@@ -33,6 +33,7 @@
 -- compiler/entries/profile_modules_main.mdk (which times the full
 -- multi-module loader path).
 
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{Decl}
 import ir.core_ir.{CProgram}
 import frontend.parser.{parse, parseWithPositions}
@@ -64,7 +65,7 @@ import types.tc_types.{DriveOutputs}
 import types.private_mangle.{mangleUnits, mangleUnitsEv}
 import types.program_facts.{factsOfElabWith}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 -- `backend.wasm_emit` is the SECOND backend, and it exports its own `emitProgram` —
 -- that name collides with the LLVM

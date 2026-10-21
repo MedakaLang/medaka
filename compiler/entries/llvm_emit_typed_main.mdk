@@ -18,6 +18,7 @@
 -- `core_ir_lower` resolves the record by a bare-label first-match guess (the
 -- wrong-slot behaviour issue #38 closed).  Elaborate, mangle, then key every
 -- table off the mangled decls — the order `entry_support.runEmitWith` runs.
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{Decl, Lit(..), BinderId(..), noDeclLoc}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
@@ -47,7 +48,7 @@ import ir.core_ir.{
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import entries.entry_support.{driveRuntime, failWith}
 import support.util.{contains}
 

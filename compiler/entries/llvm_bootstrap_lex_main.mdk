@@ -22,6 +22,7 @@
 --
 --   medaka run compiler/entries/llvm_bootstrap_lex_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
 
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{Decl}
 import types.typecheck.{
   elaborateModulesWithReport,
@@ -45,7 +46,7 @@ import ir.core_ir_lower.{
 }
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{factsOfElabWith}
 import entries.entry_support.{driveModules}

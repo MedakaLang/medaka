@@ -1,5 +1,5 @@
 # META
-source_lines=2760
+source_lines=2767
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1885,6 +1885,13 @@ public export data ExternBind = ExternBind {
   ebLoc : Loc,
 }
 
+export
+externDecls : List Decl -> List ExternDecl
+externDecls [] = []
+externDecls ((DExtern d) :: rest) = d :: externDecls rest
+externDecls ((DAttrib _ d) :: rest) = externDecls (d :: rest)
+externDecls (_ :: rest) = externDecls rest
+
 -- The host bindings an extern declares: its `bind` clauses as written, or,
 -- with none, a `c` binding under its Medaka name.  A `js` binding is never
 -- implied.  The declaration rules, the target walls and both emitters read an
@@ -3052,6 +3059,11 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
 (DData Public "ExternDecl" () ((variant "ExternDecl" (ConNamed (field "edPub" (TyCon "Bool")) (field "edName" (TyCon "String")) (field "edTy" (TyCon "Ty")) (field "edLoc" (TyCon "Loc")) (field "edBinds" (TyApp (TyCon "List") (TyCon "ExternBind")))))) ())
 (DData Public "ExternBind" () ((variant "ExternBind" (ConNamed (field "ebHost" (TyCon "String")) (field "ebSymbol" (TyCon "String")) (field "ebLoc" (TyCon "Loc"))))) ())
+(DTypeSig true "externDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ExternDecl"))))
+(DFunDef false "externDecls" ((PList)) (EListLit))
+(DFunDef false "externDecls" ((PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "externDecls") (EVar "rest"))))
+(DFunDef false "externDecls" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "externDecls") (EBinOp "::" (EVar "d") (EVar "rest"))))
+(DFunDef false "externDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDecls") (EVar "rest")))
 (DTypeSig true "externBindings" (TyFun (TyCon "ExternDecl") (TyApp (TyCon "List") (TyCon "ExternBind"))))
 (DFunDef false "externBindings" ((PVar "d")) (EMatch (EFieldAccess (EVar "d") "edBinds") (arm (PList) () (EListLit (ERecordCreate "ExternBind" ((fa "ebHost" (ELit (LString "c"))) (fa "ebSymbol" (EFieldAccess (EVar "d") "edName")) (fa "ebLoc" (EFieldAccess (EVar "d") "edLoc")))))) (arm (PVar "bs") () (EVar "bs"))))
 (DTypeSig true "externRowCons" (TyFun (TyCon "Bool") (TyFun (TyCon "ExternDecl") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyVar "a")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyVar "a")))))))))
@@ -3522,6 +3534,11 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
 (DData Public "ExternDecl" () ((variant "ExternDecl" (ConNamed (field "edPub" (TyCon "Bool")) (field "edName" (TyCon "String")) (field "edTy" (TyCon "Ty")) (field "edLoc" (TyCon "Loc")) (field "edBinds" (TyApp (TyCon "List") (TyCon "ExternBind")))))) ())
 (DData Public "ExternBind" () ((variant "ExternBind" (ConNamed (field "ebHost" (TyCon "String")) (field "ebSymbol" (TyCon "String")) (field "ebLoc" (TyCon "Loc"))))) ())
+(DTypeSig true "externDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ExternDecl"))))
+(DFunDef false "externDecls" ((PList)) (EListLit))
+(DFunDef false "externDecls" ((PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "externDecls") (EVar "rest"))))
+(DFunDef false "externDecls" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "externDecls") (EBinOp "::" (EVar "d") (EVar "rest"))))
+(DFunDef false "externDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDecls") (EVar "rest")))
 (DTypeSig true "externBindings" (TyFun (TyCon "ExternDecl") (TyApp (TyCon "List") (TyCon "ExternBind"))))
 (DFunDef false "externBindings" ((PVar "d")) (EMatch (EFieldAccess (EVar "d") "edBinds") (arm (PList) () (EListLit (ERecordCreate "ExternBind" ((fa "ebHost" (ELit (LString "c"))) (fa "ebSymbol" (EFieldAccess (EVar "d") "edName")) (fa "ebLoc" (EFieldAccess (EVar "d") "edLoc")))))) (arm (PVar "bs") () (EVar "bs"))))
 (DTypeSig true "externRowCons" (TyFun (TyCon "Bool") (TyFun (TyCon "ExternDecl") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyVar "a")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyVar "a")))))))))

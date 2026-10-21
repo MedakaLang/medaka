@@ -72,6 +72,8 @@
 -- the thin cj* JSON shaping is reproduced (those live in medaka_cli.mdk, which is
 -- itself an entry and cannot be imported).
 
+import frontend.ast.{externDecls}
+import backend.extern_catalog.{runtimeDomain}
 import frontend.ast.{Decl(..), Loc(..), Pat, Expr(..)}
 import types.tc_types.{ElabResult}
 import frontend.parser.{
@@ -129,7 +131,6 @@ import support.char.{isIdentChar, isDigit}
 import entries.entry_support.{
   rootsOrDefault,
   desugarPair,
-  runtimeExternNames,
   stampModulePaths,
   failWith,
 }
@@ -717,7 +718,7 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
       (checkedFfiExternTypeNamesModules outputs modules2)
   let input =
     withRuntimeExternsW
-      (runtimeExternNames runtimeDecls)
+      (runtimeDomain (externDecls runtimeDecls))
       (makeWasmEmitInputFull
         (methodIfaceTable allDecls)
         (ctorFieldTypeNames allDecls)

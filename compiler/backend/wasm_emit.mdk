@@ -183,6 +183,7 @@
 -- `emitExpr` returns a flat list of instruction lines.  In ref-mode the value left
 -- on the stack is always `(ref eq)`; in scalar-mode it is i32.
 
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{
   noBinderId,
   BinderId(..),
@@ -226,32 +227,15 @@ import ir.core_ir.{
 import list.{replicate, take, drop}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import backend.extern_catalog.{
+  RuntimeExternDomain(..),
   WasmFamily(..),
   WasmUse(..),
   isWasmExternFamily,
   wasmFamily,
 }
 import backend.core_validate.{
-  Backend(..),
-  findingBinding,
-  isUnprovidedOn,
-  renderExternFinding,
-  renderExternRefusal,
-  renderRecordRefusal,
-  renderCallRefusal,
-  renderTailRefusal,
-  validateCalls,
-  validateImplSymbols,
-  validateImplSymbolInjectivity,
-  validateDictTags,
-  validateMethodContexts,
-  validateDispatchEvidence,
-  validateTails,
-  validateRecords,
-  validateBinderStamps,
-  renderBinderRefusal,
-  unrefusedExternMessage,
-  validateExterns,
+  findingBinding, isUnprovidedOn, renderExternFinding, renderExternRefusal,
+  unrefusedExternMessage, validateForEmission, coreDefectMessage
 }
 import support.ordmap.{
   OrdMap,
@@ -325,7 +309,6 @@ import backend.emit_plan.{
   TrmcVerdicts,
   isTrmcFn,
   isTrmcImpl,
-  checkPlanBackend,
 }
 import backend.emit_support.{
   bindEagerReach,
@@ -565,9 +548,9 @@ freshWasmEmit mode = WasmEmit {
 
 -- Declaration-derived semantic input. Raw lists retain table order where a full
 -- table is required; indexes preserve lookupAssoc's first-match result.  The
--- last field is the `stdlib/runtime.mdk` extern names (`withRuntimeExternsW`).
+-- last field is the loaded runtime declaration domain (`withRuntimeExternsW`).
 data WasmEmitInputData =
-  | WasmEmitInputData (List (String, List String)) (OrdMap (List Int)) Bool (OrdMap (List (String, String), (List String, String))) Bool (List String)
+  | WasmEmitInputData (List (String, List String)) (OrdMap (List Int)) Bool (OrdMap (List (String, String), (List String, String))) Bool RuntimeExternDomain
 
 export type WasmEmitInput = WasmEmitInputData
 
@@ -610,17 +593,16 @@ makeWasmEmitInputFull _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders 
     mainIsFloat
     (omFromPairs (reverseL ffiExternRows) omEmpty)
     mainIsUnit
-    []
+    PreludeFreeRuntime
 
--- The input with the extern names the entry declared from `stdlib/runtime.mdk`.
--- The extern check (`core_validate.validateExterns`) refuses any of them that
--- has no catalog row; an input built without them checks none.
+-- Installs the loaded runtime domain; the gateway checks every declaration
+-- for a catalog row, including declarations the program never references.
 export
-withRuntimeExternsW : List String -> WasmEmitInput -> WasmEmitInput
+withRuntimeExternsW : RuntimeExternDomain -> WasmEmitInput -> WasmEmitInput
 withRuntimeExternsW names (WasmEmitInputData c d e f g _) =
   WasmEmitInputData c d e f g names
 
-inputRuntimeExternsW : WasmEmitInput -> List String
+inputRuntimeExternsW : WasmEmitInput -> RuntimeExternDomain
 inputRuntimeExternsW (WasmEmitInputData _ _ _ _ _ names) = names
 
 inputMainIsFloat : WasmEmitInput -> Bool
@@ -1526,39 +1508,26 @@ emitProgramWith emit input plan cp =
     WGapRecord => ()
   text
 
--- Every free reference to a runtime extern wasm does not lower, refused before
--- any text is emitted: one panic naming each in strict mode, one gap event per
--- extern in record mode.  The emitter's own fallthrough for such a name then
--- records nothing (`unprovidedExternW`).
-refuseUnprovidedExternsW : WasmEmit -> WasmEmitInput -> CProgram -> Unit
-refuseUnprovidedExternsW emit input cp =
-  let _ = validateImplSymbolInjectivity cp
-  let _ = validateDictTags WasmBackend cp
-  let _ = match validateRecords cp
-    [] => ()
-    bad => panic ("internal error: " ++ renderRecordRefusal bad)
-  let _ = match validateBinderStamps cp
-    [] => ()
-    bad => panic ("internal error: " ++ renderBinderRefusal bad)
-  let badCalls =
-    validateCalls cp
-      ++ validateImplSymbols cp
-      ++ validateMethodContexts cp
-      ++ validateDispatchEvidence cp
-  let _ = match badCalls
-    [] => ()
-    bad => panic ("internal error: " ++ renderCallRefusal bad)
-  let _ = match validateTails cp
-    [] => ()
-    bad => panic ("internal error: " ++ renderTailRefusal bad)
-  match validateExterns WasmBackend (inputRuntimeExternsW input) cp
-    [] => ()
-    findings => match emit.gapMode
-      WGapStrict => panic (renderExternRefusal findings)
-      WGapRecord =>
-        forEachU
-          (f => noteGapAtW emit (findingBinding f) (renderExternFinding f))
-          findings
+-- Strict and record modes share one semantic gateway; only target gaps may
+-- become record events instead of a refusal.
+refuseUnprovidedExternsW : WasmEmit ->
+  WasmEmitInput ->
+  EmitPlan ->
+  CProgram ->
+  Unit
+refuseUnprovidedExternsW emit input plan cp =
+  let validation =
+    validateForEmission WasmBackend (inputRuntimeExternsW input) plan cp
+  match validation.defects
+    bad :: _ => panic (coreDefectMessage bad)
+    [] => match validation.externFindings
+      [] => ()
+      findings => match emit.gapMode
+        WGapStrict => panic (renderExternRefusal findings)
+        WGapRecord =>
+          forEachU
+            (f => noteGapAtW emit (findingBinding f) (renderExternFinding f))
+            findings
 
 emitProgramCore : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
 emitProgramCore emit input plan cp =
@@ -1566,8 +1535,7 @@ emitProgramCore emit input plan cp =
 
 emitUniqueProgram : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
 emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _ facts)) =
-  let _ = checkPlanBackend WasmBackend plan
-  let _ = refuseUnprovidedExternsW emit input cp
+  let _ = refuseUnprovidedExternsW emit input plan cp
   let _ = setRef emit.useStr (programUsesStr groups)
   -- the plan's demand only turns cells ON; `emit` is born with every cell off
   -- (freshWasmEmit).
@@ -1771,11 +1739,11 @@ emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String
 emitProgramGaps input plan cp0 =
   let (CProgram groups ctorArs ctorTypes impls mctx facts) = uniqueBinders cp0
   let emit = freshWasmEmit WGapRecord
-  let _ = checkPlanBackend WasmBackend plan
   let _ =
     refuseUnprovidedExternsW
       emit
       input
+      plan
       (CProgram groups ctorArs ctorTypes impls mctx facts)
   let _ = setRef emit.useStr (programUsesStr groups)
   let _ = seedDemandW emit plan.wasmDemand

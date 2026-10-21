@@ -30,6 +30,7 @@
 -- to lowerProgramEmitWith (loader, mangle, elaborateModules, dceFilter) is identical to
 -- the LLVM modules driver.
 
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{Decl}
 import types.typecheck.{
   elaborateModules,
@@ -48,7 +49,7 @@ import types.program_facts.{factsOfElabWith}
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInputFull}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import entries.entry_support.{driveModules}
 
 main : <IO> Unit

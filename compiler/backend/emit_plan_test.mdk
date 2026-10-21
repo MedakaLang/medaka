@@ -13,10 +13,19 @@
 -- constructor whose last field is a saturated self-call (at least one such leaf),
 -- and no self-call sits anywhere else, a match guard included.
 
+import backend.emit_target.{Backend(..)}
 import test_process.{medakaRoot}
 import test.{
-  Expectation, expectAll, expectEqual, expectNotEqual, expectFalse, expectTrue,
-  labelFail
+  Expectation,
+  expectAll,
+  expectEqual,
+  expectNotEqual,
+  expectFalse,
+  expectTrue,
+  labelFail,
+  expectEach,
+  expectTextContainsAll,
+  fail,
 }
 import string.{contains, endsWith, lines, trimLeft, startsWith}
 import frontend.ast.{
@@ -49,7 +58,7 @@ import backend.emit_plan.{
   isTrmcFn,
   isTrmcImpl,
 }
-import backend.core_validate.{Backend(..)}
+
 import backend.trmc_analysis.{ctorTailIsCons, dispMembersOf, dispRootOf}
 import backend.wasm_preamble.{jsImportField}
 
@@ -155,26 +164,37 @@ test "neither emitter recomputes a plan analysis" = expectAll [
   noRecompute "wasm_emit.mdk",
 ]
 
--- Each emitter refuses colliding impls itself, at its own dict-tag width.  The
--- impl-symbol arm can only fire on a defect in the symbol scheme, so no source
--- program reaches it and this check is its only wiring pin.
-refusesCollisions : String -> String -> <IO, FileRead> Expectation
-refusesCollisions file backend =
-  match readFile "\{medakaRoot}/compiler/backend/\{file}"
-    Err e => expectEqual "readable" "cannot read \{file}: \{e}"
-    Ok text => expectAll [
-      labelFail
-        "\{file} runs the impl-symbol arm"
-        (expectTrue (codeMentions "validateImplSymbolInjectivity cp" text)),
-      labelFail
-        "\{file} runs the dict-tag arm at its own width"
-        (expectTrue (codeMentions "validateDictTags \{backend} cp" text)),
-    ]
+test "each emitter uses the shared validation gateway and owns no collision sequence" =
+  expectEach
+    (map
+      (file => (
+        file,
+        match readFile "\{medakaRoot}/compiler/backend/\{file}"
+          Err e => fail e
+          Ok text => expectEach [
+            ("gateway", expectTextContainsAll ["validateForEmission"] text),
+            (
+              "no impl-symbol predicate",
+              expectFalse (codeMentions "validateImplSymbolInjectivity" text),
+            ),
+            (
+              "no dict-tag predicate",
+              expectFalse (codeMentions "validateDictTags" text),
+            ),
+          ],
+      ))
+      ["llvm_emit.mdk", "wasm_emit.mdk"])
 
-test "each emitter runs both collision arms" = expectAll [
-  refusesCollisions "llvm_emit.mdk" "LlvmBackend",
-  refusesCollisions "wasm_emit.mdk" "WasmBackend",
-]
+test "the gateway owns both collision checks before shape checks" =
+  match readFile "\{medakaRoot}/compiler/backend/core_validate.mdk"
+    Err e => fail e
+    Ok text =>
+      expectTextContainsAll
+        [
+          "match implSymbolCollision cp", "match dictTagCollision backend cp",
+          "firstShapeDefect"
+        ]
+        text
 
 -- Reach belongs to the plan builder: no entry calls the filter itself.
 noEntryReach : String -> <IO, FileRead> Expectation

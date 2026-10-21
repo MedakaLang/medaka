@@ -11,6 +11,7 @@
 -- lint-disable-file rule-duplicate-body
 -- `watOf` is the sibling trapmsg test's helper, kept local so each test file reads alone.
 
+import backend.emit_target.{Backend(..)}
 import test.{Expectation, expectAll, expectEqual, labelFail}
 import string.{split, stripSuffix}
 import frontend.parser.{parse}
@@ -25,7 +26,6 @@ import ir.core_ir_lower.{
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
 
 -- the emitted WAT of `src`, as the modules entry would print it for that program
 watOf : String -> String

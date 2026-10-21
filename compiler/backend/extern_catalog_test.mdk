@@ -16,6 +16,7 @@
 -- `--native` (the default): reading the live files needs `readFile`, which
 -- the interpreter's test capability list excludes.
 
+import backend.emit_target.{Backend(..)}
 import test.{
   Expectation,
   expectAll,
@@ -53,7 +54,7 @@ import backend.extern_catalog.{
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import eval.eval.{externBindings, ioExternBindings}
 import set as S
 

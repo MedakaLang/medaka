@@ -26,6 +26,9 @@
 -- The keys ELABORATION itself uses are the author's spellings under that order, so
 -- this argument covers the emitted program and not elaboration's own tables.
 
+import frontend.ast.{externDecls}
+import backend.extern_catalog.{runtimeDomain}
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{Decl(..)}
 import types.typecheck.{
   mainTypeIsUnit,
@@ -48,7 +51,7 @@ import ir.core_ir_lower.{
   noInlineFnNames,
 }
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import backend.llvm_emit.{
   emitProgram,
   emitProgramWithStats,
@@ -61,7 +64,6 @@ import ir.dce.{dceFilter}
 import driver.main_autoprint.{mainIsWrapped}
 import entries.entry_support.{
   driveEmitLocated,
-  runtimeExternNames,
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
@@ -156,7 +158,7 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
     if half == 2 then preludeSymsOf facts coreD else ([], [])
   let base =
     withRuntimeExterns
-      (runtimeExternNames runtimeDecls)
+      (runtimeDomain (externDecls runtimeDecls))
       (makeEmitInput
         (returnsSelfTable allDecls)
         (selfFnParamTable allDecls)
