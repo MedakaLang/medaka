@@ -1892,26 +1892,47 @@ public export data CheckRunSeed = CheckRunSeed {
   crsWarnings : List TcDiag,
 }
 
--- One module's state.  `checkBodyImpl` mints it once per module (`freshModuleCtx`) and
--- returns it, so the constructor is the reset: a new per-module field cannot be added
--- without appearing in `freshModuleCtx`, nor without a class in the module-field
--- partition (`moduleCtxFrom`).  The drivers hand the record to every reader after the
--- module (the graph-level diagnostics, and `driveOutputsNow`, which freezes
--- `lastInvocationOps`' view); every reader receives it as a parameter, or through
--- `DynCtx.dcModule` / `SiteCtx.sxModule`.  This is a record OF Refs (fields stay `Ref …`),
--- NOT a record of values: the hot accumulators (typeErrors, poisonedVars,
--- localBindRefs, …) are pushed with `setRef x (v :: x.value)`, so the field must be a
--- Ref for that to stay one Ref-write — a record of values would rebuild the whole
--- record on every push.  (`obls`, `implObls` — #838 I1 / #841 — are the exceptions:
--- each a small `Windowed a` VALUE whose own two fields are Refs — see `wPush` — so
--- pushing through one is still one Ref-write, not a whole-record rebuild.)
+-- One module's state: its cells, the graph record it is checked in, and the span of
+-- the construct around the check.  `checkBodyImpl` mints it once per module
+-- (`freshModuleCtx`) and returns it, so the constructor is the reset: a new per-module
+-- field cannot be added without appearing in `freshModuleCtx`, nor without a class in
+-- the module-field partition (`moduleCtxFrom`, `moduleCellsFrom`).  The drivers hand
+-- the record to every reader after the module (the graph-level diagnostics, and
+-- `driveOutputsNow`, which freezes `lastInvocationOps`' view); every reader receives
+-- it as a parameter, or through `DynCtx.dcModule` / `SiteCtx.sxModule`.  The span
+-- changes at every construct, so the record a construct copies holds three fields and
+-- the cells are one value every copy shares.
+public export data ModuleCtx = ModuleCtx {
+  -- The module's cells, shared by every copy of the record: a construct's copy
+  -- (`mctxAt`) replaces the span and keeps this one value.
+  mcCells : ModuleCells,
+  -- The graph record of the drive the module is checked in: the record the driver
+  -- passes to the module's mint, never read from a cell.  A memo stores a record whose
+  -- graph is the memo's own detached snapshot, and a hit re-points it at the hitting
+  -- drive's record, so no stored record keeps a drive's graph alive.
+  mcGraph : GraphCtx,
+  -- The span of the innermost construct around the check: the `ELoc` the walk is
+  -- inside, or the span a construct without one names for its own checks (`mctxAt`).
+  -- A construct hands its sub-walk an updated copy, so the span is gone when the
+  -- sub-walk returns.  `None` outside every construct: a mint starts with none, a
+  -- whole-record copy takes its run record's (none), and a post-inference pass
+  -- runs in a module-level record.
+  mcLoc : Option Loc,
+}
+
+-- The cells of one module's state (`ModuleCtx.mcCells`).  This is a record OF Refs
+-- (fields stay `Ref …`), NOT a record of values: the hot accumulators (typeErrors,
+-- poisonedVars, localBindRefs, …) are pushed with `setRef x (v :: x.value)`, so the
+-- field must be a Ref for that to stay one Ref-write — a record of values would rebuild
+-- the whole record on every push.  (`obls`, `implObls` — #838 I1 / #841 — are the
+-- exceptions: each a small `Windowed a` VALUE whose own two fields are Refs — see
+-- `wPush` — so pushing through one is still one Ref-write, not a whole-record rebuild.)
 --
 -- The fields after `markingRef` are the module's inputs and tables.  `checkBodyImpl`
 -- writes each before any read, except `currentModuleRef`, `matchOracle` and
 -- `matchWarnings`, which the mint sets: the module id, and the `CheckRunSeed` (or, on a
--- path that does not seed, the previous record's oracle and warnings).  `mcGraph` is
--- the mint's too: the graph record its caller passes.
-public export data ModuleCtx = ModuleCtx {
+-- path that does not seed, the previous record's oracle and warnings).
+public export data ModuleCells = ModuleCells {
   currentScope : Ref ScopeCursor,
   -- #2705 / S2-DECL (d): method occurrences whose bare spelling has two or more
   -- admitted declarations in this module's scope — (name, the occurrence's
@@ -2044,18 +2065,6 @@ public export data ModuleCtx = ModuleCtx {
   -- The module's constructors and variance table, read by `driveOutputsNow` into
   -- `DriveOutputs` — see `InvocationView`.
   invocationViewRef : Ref InvocationView,
-  -- The graph record of the drive the module is checked in: the record the driver
-  -- passes to the module's mint, never read from a cell.  A memo stores a record whose
-  -- graph is the memo's own detached snapshot, and a hit re-points it at the hitting
-  -- drive's record, so no stored record keeps a drive's graph alive.
-  mcGraph : GraphCtx,
-  -- The span of the innermost construct around the check: the `ELoc` the walk is
-  -- inside, or the span a construct without one names for its own checks (`mctxAt`).
-  -- A construct hands its sub-walk an updated copy, so the span is gone when the
-  -- sub-walk returns.  `None` outside every construct: a mint starts with none, a
-  -- whole-record copy takes its run record's (none), and a post-inference pass
-  -- runs in a module-level record.
-  mcLoc : Option Loc,
 }
 
 -- DICT-SEMANTICS §3 W2: the one termination measure every `requires` walk shares.  A

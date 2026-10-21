@@ -1299,6 +1299,7 @@ freshInferenceAuthvar : ModuleCtx -> Int -> Option (Ref Authvar) -> Ref Authvar
 freshInferenceEffvar : ModuleCtx -> Unit -> Ref Effvar
 freshLocalAbsName : GraphCtx -> String -> String
 freshLocalAbsState : Unit -> LocalAbsState
+freshModuleCells : CheckRunSeed -> String -> ModuleCells
 freshModuleCtx : GraphCtx -> CheckRunSeed -> String -> ModuleCtx
 freshRowHeads : ModuleCtx -> ImplRow -> List Mono
 freshRowHeadsTvs : ModuleCtx -> ImplRow -> (List (String, Mono), List Mono)
@@ -2248,6 +2249,7 @@ modDiagErrs : (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> 
 modInScope : String -> Map String Unit -> Bool
 moduleAliasEntry : String -> String -> ((String, String), a) -> List (String, a)
 moduleAliasKeys : GraphCtx -> UsePath -> Loc -> List (String, String, String, Ident, Loc)
+moduleCellsFrom : Bool -> ModuleCells -> ModuleCells -> ModuleCells -> ModuleCells -> ModuleCells
 moduleChainMemoRef : Ref (Option ChainMemo)
 moduleCtxFrom : Bool -> ModuleCtx -> ModuleCtx -> ModuleCtx -> ModuleCtx -> ModuleCtx
 moduleDictNames : List (String, List String) -> List String -> List (String, List Decl) -> List String
@@ -2997,6 +2999,7 @@ sameDomainTop : Param -> Param -> Bool
 sameIfaceDecl : IfaceRef -> IfaceRef -> Bool
 sameIfaceOrUnresolved : IfaceRef -> IfaceRef -> Bool
 sameRootId : Int -> Mono -> Bool
+sameSpan : Option Loc -> Option Loc -> Bool
 sameSpellingHint : Mono -> Mono -> Option String
 sameTraceEvId : EvId -> EvId -> Bool
 sameWalkGoal : IfaceRef -> List Mono -> Int -> (IfaceRef, List Mono, Int) -> Bool

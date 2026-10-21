@@ -767,6 +767,7 @@ fieldNameOf l =
 bundleRecords : List String
 bundleRecords = [
   "ModuleCtx",
+  "ModuleCells",
   "GroupCtx",
   "GraphRun",
   "GraphCtx",
@@ -825,19 +826,30 @@ test "arch_boundaries: CELL-LIFETIMES rows equal the cell census" =
         expectEqual [] (filterMap badWidth allRows),
       ]
 
--- The module-field partition (`moduleCtxFrom` in `types.typecheck`): each field it
--- builds, with the class argument it is taken from, read off its body's
--- `field = <class>.field` and `field = refFrom detach <class>.field` lines.
-partitionHeader : String
-partitionHeader = "moduleCtxFrom detach run tables drain ident = ModuleCtx {"
+-- The module-field partition (`moduleCtxFrom` and `moduleCellsFrom` in
+-- `types.typecheck`): each field the two build, with the class argument it is taken
+-- from, read off their bodies' `field = <class>.field` and
+-- `field = refFrom detach <class>.field` lines.  `ModuleCtx.mcCells` has no row of its
+-- own: `moduleCellsFrom` builds it, and its rows are the cells.
+partitionHeaders : List (String, String)
+partitionHeaders = [
+  ("ModuleCtx", "moduleCtxFrom detach run tables drain ident = ModuleCtx {"),
+  (
+    "ModuleCells",
+    "moduleCellsFrom detach run tables drain ident = ModuleCells {",
+  ),
+]
 
 partitionClasses : List String
 partitionClasses = ["run", "tables", "drain", "ident"]
 
-partitionRows : List String -> List (String, String)
-partitionRows ls =
-  let after = drop 1 (dropWhile (/= partitionHeader) ls)
-  filterMap partitionRow (takeWhile (l => not (startsWith "}" l)) after)
+-- The rows of the partition function under [header], each named `<record>.<field>`.
+partitionRows : List String -> (String, String) -> List (String, String)
+partitionRows ls (record, header) =
+  let after = drop 1 (dropWhile (/= header) ls)
+  map
+    (r => ("\{record}.\{fst r}", snd r))
+    (filterMap partitionRow (takeWhile (l => not (startsWith "}" l)) after))
 
 -- Some (field, class) for a `field = … class.field,` line.
 partitionRow : String -> Option (String, String)
@@ -853,18 +865,23 @@ classOf field w = match split "." (optionOr w (stripSuffix "," w))
   [cls, f] if f == field => Some (field, cls)
   _ => None
 
--- A new `ModuleCtx` field is unclassified until the partition names its class: the
--- partition and the record have the same fields, each once, each in a class.
+-- A new `ModuleCtx` or `ModuleCells` field is unclassified until the partition names
+-- its class: the partition and the records have the same fields, each once, each in a
+-- class.
 test "arch_boundaries: the module-field partition classifies every ModuleCtx field" =
   let mods = loadModules
   let linesFor m = optionOr [] (lookup m mods)
-  let fields = bundleFieldNames (linesFor "types.tc_types") "ModuleCtx"
-  let rows = partitionRows (linesFor "types.typecheck")
+  let fields =
+    filter
+      (/= "ModuleCtx.mcCells")
+      (flatMap
+        (h => bundleFieldNames (linesFor "types.tc_types") (fst h))
+        partitionHeaders)
+  let rows =
+    flatMap (partitionRows (linesFor "types.typecheck")) partitionHeaders
   expectAll [
     expectAtLeast 90 (length fields),
-    expectEqual
-      []
-      (symmetricDifference fields (map (r => "ModuleCtx.\{fst r}") rows)),
+    expectEqual [] (symmetricDifference fields (map fst rows)),
     expectEqual (length fields) (length rows),
     expectEqual [] (filter (r => not (elem (snd r) partitionClasses)) rows),
   ]
