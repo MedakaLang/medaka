@@ -929,28 +929,25 @@ predicate_slot_required='registerReqSlots : ModuleCtx ->
     psArgs = PSArgsKnown argMonos,
     psBoundIds = ids,
 setFunConstraintEntry : ModuleCtx -> String -> List PredicateSlot -> Unit
-registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
 && sameIfaceDecl request.prIface slot.psIface
 monoVecSameGiven requestArgs slotArgs
-givensForScope : ScopeId -> List GivenEntry
-pushGiven gm provenance slot binder =
+givensForScope : GraphCtx -> ScopeId -> List GivenEntry
+pushGiven gctx gm provenance slot binder =
 givenInScope : GivenScope -> GivenEntry -> Bool
-registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
-activeFunDictPredOf : PredicateRequest -> ScopeId -> Option AssumAnswer
-activeFunDictPredOf request useScope =
+registerFunPredGiven : GraphCtx -> PredicateSlot -> EvidenceBinderId -> Unit
+activeFunDictPredOf gctx request useScope =
 goalRequestOfKind : ModuleCtx -> String -> EntailKind -> Option PredicateRequest
 goalPredOf : ModuleCtx -> String -> Mono -> Option PredicateRequest
 goalPredOfOp : ModuleCtx -> String -> Option PredicateRequest
 activeDictVarOfEncl mctx None m encl useScope =
-map LegacyScalar (activeDictVarForEncl m useScope)
+map LegacyScalar (activeDictVarForEncl mctx.mcGraph m useScope)
 activeDictVarOfEncl mctx (Some request) m encl useScope =
 enclSlotIndex mctx None target encl = indexOfId target (enclSlotIds mctx encl)
 enclSlotIndex mctx (Some request) target encl =
-implReqDictVarOf (Some request) m useScope
+implReqDictVarOf mctx.mcGraph (Some request) m useScope
 entailAssumVar mctx _ m encl _ useScope (EKNestedTop iface _ _ rest) =
-goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
-anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
+goalMatchesGiven : GraphCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
 mctx.funPredicateSlotsRef :=
 mctx.methodPredicateSlotsRef :=
 graphCtx.value.crossRun.crossModuleFunPredicateSlotsRef
@@ -985,11 +982,14 @@ require_signature_flat() {
 require_signature_flat 'registerReqSlots : ModuleCtx -> ScopeId -> List (String, Mono) -> Int -> List Require -> Unit'
 require_signature_flat 'recordCallObligations : ModuleCtx -> List CSlot -> List Mono -> List (List Mono) -> Unit'
 require_signature_flat 'dedupPredicateSlotEntry : (String, List PredicateSlot) -> (String, List PredicateSlot)'
-require_signature_flat 'pushGiven : GivenMatch -> GivenProvenance -> PredicateSlot -> EvidenceBinderId -> Unit'
+require_signature_flat 'pushGiven : GraphCtx -> GivenMatch -> GivenProvenance -> PredicateSlot -> EvidenceBinderId -> Unit'
 require_signature_flat 'activeDictVarOfEncl : ModuleCtx -> Option PredicateRequest -> Mono -> String -> ScopeId -> Option AssumAnswer'
 require_signature_flat 'enclSlotIndex : ModuleCtx -> Option PredicateRequest -> Int -> String -> Option Int'
-require_signature_flat 'implReqDictVarOf : Option PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer'
-require_signature_flat 'firstPredForEnclAt : GivenScope -> Int -> PredicateRequest -> ScopeId -> List GivenEntry -> Option AssumAnswer'
+require_signature_flat 'implReqDictVarOf : GraphCtx -> Option PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer'
+require_signature_flat 'firstPredForEnclAt : GraphCtx -> GivenScope -> Int -> PredicateRequest -> ScopeId -> List GivenEntry -> Option AssumAnswer'
+require_signature_flat 'registerActiveDictVars : GraphCtx -> ScopeId -> Int -> List PredicateSlot -> Unit'
+require_signature_flat 'activeFunDictPredOf : GraphCtx -> PredicateRequest -> ScopeId -> Option AssumAnswer'
+require_signature_flat 'anyGivenMatches : GraphCtx -> PredicateRequest -> ScopeId -> List GivenEntry -> Bool'
 require_signature_flat 'installMethodPredicateSlots : ModuleCtx -> String -> List MethodPredicateSlot -> Unit'
 require_signature_flat 'setMethodPredicateSlotEntry : ModuleCtx -> String -> List MethodPredicateSlot -> Unit'
 require_signature_flat 'scopePredicateSlots : List ((String, String), List PredicateSlot) -> OrdMap Unit -> List Decl -> List (String, List PredicateSlot)'
@@ -1038,7 +1038,7 @@ done || exit 1
 any_given_scope_body=$(sed -n '/^anyGivenMatches :/,/^isSemanticGivenAnswer :/p' "$predicate_slot_src" \
   | sed '/^[[:space:]]*--/d' | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')
 for any_given_scope_guard in \
-  'anyGivenOnChain request (Scopes.visibleChain (currentScopeStore ()) scope) givens' \
+  'anyGivenOnChain request (Scopes.visibleChain (currentScopeStore gctx ()) scope) givens' \
   '&& Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder) && predicateRequestMatchesSlot request g.geSlot'; do
   if ! printf '%s\n' "$any_given_scope_body" | grep -Fq "$any_given_scope_guard"; then
     echo "FAIL: #1318 anyGivenMatches dropped nominal scope visibility: $any_given_scope_guard"
@@ -1216,7 +1216,7 @@ require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpNumLit _ => []'
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'OpNumLit _ => ()'
 require_typecheck_arm liveNumVarGo takeFirst 'OpNumLit occ => match findTvarInMono occ id'
 require_typecheck_arm noteNumericObligationChecked checkOneCallObligation '(_, OpNumLit _) =>'
-require_typecheck_arm determineByUniqueInstanceGo determineGoal 'uOblArgs o'
+require_typecheck_arm determineByUniqueInstanceGo determineGoal 'uOblArgs mctx.mcGraph o'
 require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpNumLit _ =>'
 require_typecheck_arm oblPredOf vecOblOfPred 'OpNumLit _ => match o.pred.args'
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpNumLit occ => match normalize occ'
@@ -1285,15 +1285,15 @@ require_typecheck_arm publishMethodReturnTrace lookupTraceEvidence 'mrtPublished
 
 require_typecheck_arm pushExactReturnObl methodReturnRequest 'pred = Predicate { iface = request.mrrIface, args = [] }'
 require_typecheck_arm pushExactReturnObl methodReturnRequest 'oblProj = OpExactReturn request'
-require_typecheck_arm uOblArgs callOblsWindow 'OpExactReturn request => optionOr [] (methodReturnArgs request)'
-require_typecheck_arm checkCallObligationsU noteNumericObligationChecked 'let occs = uOblArgs o'
+require_typecheck_arm uOblArgs callOblsWindow 'OpExactReturn request => optionOr [] (methodReturnArgs gctx request)'
+require_typecheck_arm checkCallObligationsU noteNumericObligationChecked 'let occs = uOblArgs mctx.mcGraph o'
 require_typecheck_arm recordSite recordNumLitSite 'Some request => SKExactReturn implRef request'
 require_typecheck_arm recordSite recordNumLitSite 'Some request => optionOr ev request.mrrGoalEv'
 require_typecheck_arm recordSite recordNumLitSite '      siteEv)'
 require_typecheck_arm recordSite recordNumLitSite '        recordMethodDictsFromSlots'
 require_typecheck_arm recordSite recordNumLitSite '          row.msrMethodSlots'
 require_typecheck_arm recordSite recordNumLitSite '          subst.misTypeSubst'
-require_typecheck_arm recordMethodLevelSlotsOwned recordInstantiatedMethodLevelSlots 'instantiateMethodPredicateSlots row.msrMethodSlots subst'
+require_typecheck_arm recordMethodLevelSlotsOwned recordInstantiatedMethodLevelSlots 'instantiateMethodPredicateSlots mctx.mcGraph row.msrMethodSlots subst'
 
 # The other projection readers retain their own policies; presence in one reader
 # cannot cover an omitted arm in another reader.
@@ -1302,7 +1302,7 @@ require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpExactReturn request
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'request.mrrScope'
 require_typecheck_arm liveNumVarGo takeFirst 'findTvarInMono request.mrrOccurrence id'
 require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpExactReturn request =>'
-require_typecheck_arm oblPredOf vecOblOfPred 'OpExactReturn request => match methodReturnArgs request'
+require_typecheck_arm oblPredOf vecOblOfPred 'OpExactReturn request => match methodReturnArgs gctx request'
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpExactReturn request => match normalize request.mrrOccurrence'
 
 ordinary_return_check_body="$(sed -n '/^checkCallObligationsU mctx deferNonGround univ (o :: rest) =/,/^solveExactReturnOnce :/p' "$predicate_slot_src")"
@@ -1572,7 +1572,7 @@ printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
     exit 1
   fi
 done || exit 1
-operator_scope_guard='| eid == id && Scopes.givenVisibleFrom (currentScopeStore ()) useScope (Scopes.binderScope binder) = Some binder'
+operator_scope_guard='| eid == id && Scopes.givenVisibleFrom (currentScopeStore gctx ()) useScope (Scopes.binderScope binder) = Some binder'
 operator_scope_body=$(sed -n '/^firstDictForEncl :/,/^activeDictVarOfEncl :/p' "$predicate_slot_src" \
   | sed '/^[[:space:]]*--/d' | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')
 if ! printf '%s\n' "$operator_scope_body" | grep -Fq "$operator_scope_guard"; then
@@ -1585,7 +1585,7 @@ if grep -Fq 'argImplDictRoutesFor :' "$predicate_slot_src"; then
 fi
 
 op_dict_block="$(sed -n '/^opDictVarOf :/,/^resolveOpSite :/p' "$predicate_slot_src")"
-printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = map LegacyScalar (activeDictVarOf m useScope)' || {
+printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = map LegacyScalar (activeDictVarOf mctx.mcGraph m useScope)' || {
   echo "FAIL: direct opDictVarOf in-impl residual must retain legacy classification and captured scope"
   exit 1
 }
