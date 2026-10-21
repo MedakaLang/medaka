@@ -950,10 +950,10 @@ entailAssumVar mctx _ m encl _ useScope (EKNestedTop iface _ _ rest) =
 goalMatchesGiven : GraphCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
 mctx.funPredicateSlotsRef :=
 mctx.methodPredicateSlotsRef :=
-graphCtx.value.crossRun.crossModuleFunPredicateSlotsRef
-graphCtx.value.crossRun.crossModuleFunPredicateSlotsQualRef
-graphCtx.value.crossRun.crossModuleMethodPredicateSlotsRef :=
-graphCtx.value.crossRun.crossModuleMethodPredicateSlotsQualRef
+gctx.crossRun.crossModuleFunPredicateSlotsRef
+gctx.crossRun.crossModuleFunPredicateSlotsQualRef
+gctx.crossRun.crossModuleMethodPredicateSlotsRef :=
+gctx.crossRun.crossModuleMethodPredicateSlotsQualRef
 methodDictArityOf : ModuleCtx -> String -> Int
 resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
 pending.pmdRoutesRef :=

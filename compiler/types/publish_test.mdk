@@ -40,8 +40,8 @@ import types.typecheck.{
   checkModulesAllLines, elaborateModulesReport, checkModules,
   methodReturnMemoCurrentViews, methodReturnMemoRetentionStats,
   chainMemoReplayedSteps, tcCode, tcMsg, checkModulesChainReportFor,
-  checkOneReportK, checkModulesPartialK, elaborateModulesWithReport,
-  driveInputsFor, tcConfigOf
+  checkModulesChainReportForGraph, checkOneReportK, checkModulesPartialK,
+  elaborateModulesWithReport, driveInputsFor, tcConfigOf
 }
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
@@ -354,8 +354,8 @@ accDrive : String ->
   String ->
   (TcReport, List MethodReturnMemoView)
 accDrive chainKey prefixSource entrySource stepKey =
-  let (report, _) =
-    checkModulesChainReportFor
+  let ((report, _), gctx) =
+    checkModulesChainReportForGraph
       defaultDriveInputs
       False
       (Some (4053, 4055))
@@ -367,7 +367,7 @@ accDrive chainKey prefixSource entrySource stepKey =
         ("acc_prefix", desugar (parseLocated prefixSource)),
         ("acc_entry", desugar (parseLocated entrySource)),
       ]
-  (report, methodReturnMemoCurrentViews ())
+  (report, methodReturnMemoCurrentViews gctx)
 
 -- Schemes WITH their context, diagnostics, the memo views, and the checked
 -- program's evidence and dispositions, rendered at the moment of the call.

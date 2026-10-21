@@ -2065,7 +2065,7 @@ openRowHint atoms = "`<\{renderAtoms atoms} | e>`"
 effectLeakCheck : ModuleCtx -> List Atom -> List Atom -> Unit
 effectLeakCheck mctx [] bound = ()
 effectLeakCheck mctx escaping bound =
-  pushTypeError mctx "T-EFFECT-LEAK" (effectLeakMsg bound escaping)
+  pushTypeError mctx "T-EFFECT-LEAK" (effectLeakMsg mctx.mcGraph bound escaping)
 
 -- Two CLOSED rows meeting at `unify` must carry the same atoms (#2557).  Neither
 -- has a tail to bind, and `unify` has no expected/actual role to read a direction
@@ -2100,9 +2100,9 @@ closedRowMismatchMsg : List Atom -> List Atom -> String
 closedRowMismatchMsg l1 l2 =
   "effect rows <\{renderAtoms l1}> and <\{renderAtoms l2}> cannot be made equal: the two values must have one type, and this position neither widens nor narrows a row; write the same row on both sides"
 
-effectLeakMsg : List Atom -> List Atom -> String
-effectLeakMsg bound extras =
-  "performs <\{renderAtoms extras}> where only <\{renderAtoms bound}> is allowed\{ioJoinClause graphCtx.value (bound ++ extras)}"
+effectLeakMsg : GraphCtx -> List Atom -> List Atom -> String
+effectLeakMsg gctx bound extras =
+  "performs <\{renderAtoms extras}> where only <\{renderAtoms bound}> is allowed\{ioJoinClause gctx (bound ++ extras)}"
 
 -- What `IO` means on the selected profile, for a message naming `IO` there:
 -- the reader cannot otherwise tell why `IO` does not cover a host label.
@@ -4617,7 +4617,7 @@ declEnvModule gctx k mid decls = DeclEnvModule {
   demId = mid,
   demDecls = decls,
   demPubDecls = publicDataDecls decls,
-  demKindEntries = declEnvKindEntries (filterList kindPublicDataDecl decls),
+  demKindEntries = declEnvKindEntries gctx (filterList kindPublicDataDecl decls),
 }
 
 declEnvOrdIndex : OrdMap Int -> List DeclEnvModule -> OrdMap Int
@@ -4892,9 +4892,12 @@ declEnvRowVisible cur m
 -- of the name axis, exactly as it would have been to A-3.6's had it landed here).
 -- The own-row arm is unfiltered because a module's own kinds are: `registerData`'s
 -- `DData` arm calls `recordParamKinds` regardless of `dataVis`.
-declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
-declEnvRowKindEntries cur m
-  | declEnvVisibleTo cur m.demOrd False = declEnvKindEntries m.demDecls
+declEnvRowKindEntries : GraphCtx ->
+  Int ->
+  DeclEnvModule ->
+  List (TabKey, List Kind)
+declEnvRowKindEntries gctx cur m
+  | declEnvVisibleTo cur m.demOrd False = declEnvKindEntries gctx m.demDecls
   | declEnvVisibleTo cur m.demOrd True = m.demKindEntries
   | otherwise = []
 
@@ -4913,18 +4916,19 @@ declEnvRowKindEntries cur m
 -- `DAttrib` arm, so an attributed PUBLIC data decl is still invisible to importers'
 -- kind entries.  That is the #1063-family export gap, a different question from
 -- #1228/#1586, and it is deliberately NOT touched here.
-declEnvKindEntries : List Decl -> List (TabKey, List Kind)
-declEnvKindEntries [] = []
-declEnvKindEntries ((DAttrib _ d) :: rest) = declEnvKindEntries (d :: rest)
-declEnvKindEntries ((DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataOrigin = o }) :: rest) =
-  (tyTabKey o n, declParamKinds graphCtx.value ps ks) :: declEnvKindEntries rest
-declEnvKindEntries ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeOrigin = o }) :: rest) =
-  (tyTabKey o n, declParamKinds graphCtx.value ps ks) :: declEnvKindEntries rest
+declEnvKindEntries : GraphCtx -> List Decl -> List (TabKey, List Kind)
+declEnvKindEntries gctx [] = []
+declEnvKindEntries gctx ((DAttrib _ d) :: rest) =
+  declEnvKindEntries gctx (d :: rest)
+declEnvKindEntries gctx ((DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataOrigin = o }) :: rest) =
+  (tyTabKey o n, declParamKinds gctx ps ks) :: declEnvKindEntries gctx rest
+declEnvKindEntries gctx ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeOrigin = o }) :: rest) =
+  (tyTabKey o n, declParamKinds gctx ps ks) :: declEnvKindEntries gctx rest
 -- #2121: an alias head's declared kinds travel cross-module exactly like a
 -- data head's (mirrors `registerData`'s `DTypeAlias` arm).
-declEnvKindEntries ((DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasOrigin = o }) :: rest) =
-  (tyTabKey o n, declParamKinds graphCtx.value ps ks) :: declEnvKindEntries rest
-declEnvKindEntries (_ :: rest) = declEnvKindEntries rest
+declEnvKindEntries gctx ((DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasOrigin = o }) :: rest) =
+  (tyTabKey o n, declParamKinds gctx ps ks) :: declEnvKindEntries gctx rest
+declEnvKindEntries gctx (_ :: rest) = declEnvKindEntries gctx rest
 
 -- The `""` seeds mirror `declEnvOrdIndex`'s: the core pass arrives under that
 -- spelling and its seed is empty because nothing precedes ordinal 0.
@@ -4944,7 +4948,7 @@ declEnvSeedChain : GraphCtx ->
   DeclEnvSeedAcc
 declEnvSeedChain gctx [] s = s
 declEnvSeedChain gctx (m :: rest) s =
-  let kents = declEnvRowKindEntries (m.demOrd + 1) m
+  let kents = declEnvRowKindEntries gctx (m.demOrd + 1) m
   declEnvSeedChain gctx rest DeclEnvSeedAcc {
     dsKAcc = kents ++ s.dsKAcc,
     dsOAcc =
@@ -5577,18 +5581,18 @@ declEnvSeedDataUniverse mctx mid envs =
 -- PRIVATE data and a PUBLIC NEWTYPE, so the kind-public projection is 3 (drop the
 -- private one) while the own-row projection is all 4.  Drop the `VisAbstract` arm
 -- or the `DNewtype` arm and the first number falls to 2 or 1.
--- > listLen deKindRow0.demKindEntries
+-- > listLen (deKindRow0 (probeGraphCtx ())).demKindEntries
 -- 3
--- > listLen (declEnvKindEntries deKindRow0.demDecls)
+-- > listLen (declEnvKindEntries (probeGraphCtx ()) (deKindRow0 (probeGraphCtx ())).demDecls)
 -- 4
 
 -- Both conjuncts, on the kind projection: own row ⇒ everything; earlier row ⇒ the
 -- kind-public projection; later row ⇒ nothing.
--- > listLen (declEnvRowKindEntries 0 deKindRow0)
+-- > listLen (declEnvRowKindEntries (probeGraphCtx ()) 0 (deKindRow0 (probeGraphCtx ())))
 -- 4
--- > listLen (declEnvRowKindEntries 1 deKindRow0)
+-- > listLen (declEnvRowKindEntries (probeGraphCtx ()) 1 (deKindRow0 (probeGraphCtx ())))
 -- 3
--- > listLen (declEnvRowKindEntries 0 deKindRow1)
+-- > listLen (declEnvRowKindEntries (probeGraphCtx ()) 0 (deKindRow1 (probeGraphCtx ())))
 -- 0
 
 -- The field-owner population: only a `ConNamed` variant votes, and it votes under
@@ -5650,11 +5654,11 @@ deKindFixtureDecls = [
   deKindNewtypeFixture,
 ]
 
-deKindRow0 : DeclEnvModule
-deKindRow0 = declEnvModule graphCtx.value 0 "m" deKindFixtureDecls
+deKindRow0 : GraphCtx -> DeclEnvModule
+deKindRow0 gctx = declEnvModule gctx 0 "m" deKindFixtureDecls
 
-deKindRow1 : DeclEnvModule
-deKindRow1 = declEnvModule graphCtx.value 1 "m" deKindFixtureDecls
+deKindRow1 : GraphCtx -> DeclEnvModule
+deKindRow1 gctx = declEnvModule gctx 1 "m" deKindFixtureDecls
 
 -- ── A-3.6 bite C-1: THE OWN-ROW EXCLUSION, ASSERTED RATHER THAN INCIDENTAL ────
 -- `declEnvSeedChain` stamps row [m]'s id with the accumulators as they stand
@@ -5684,13 +5688,13 @@ deKindRow1 = declEnvModule graphCtx.value 1 "m" deKindFixtureDecls
 --   * A ONE-row chain could not discriminate any of that (prefix and final
 --     accumulator coincide at the only row), which is why the probe carries two
 --     rows with DISTINCT ids rather than reusing `deKindRow0`/`deKindRow1`.
--- > listLen (optionOr [] (omLookup "m" deSeedChainKinds))
+-- > listLen (optionOr [] (omLookup "m" (deSeedChainKinds (probeGraphCtx ()))))
 -- 0
--- > optionOr [] (omLookup "x" (optionOr omEmpty (omLookup "m" deSeedChainOwners)))
+-- > optionOr [] (omLookup "x" (optionOr omEmpty (omLookup "m" (deSeedChainOwners (probeGraphCtx ())))))
 -- []
--- > listLen (optionOr [] (omLookup "n" deSeedChainKinds))
+-- > listLen (optionOr [] (omLookup "n" (deSeedChainKinds (probeGraphCtx ()))))
 -- 3
--- > optionOr [] (omLookup "x" (optionOr omEmpty (omLookup "n" deSeedChainOwners)))
+-- > optionOr [] (omLookup "x" (optionOr omEmpty (omLookup "n" (deSeedChainOwners (probeGraphCtx ())))))
 -- ["Pt"]
 
 -- #2158: the THIRD accumulator, on the SAME probe, so the own-row exclusion is
@@ -5699,9 +5703,9 @@ deKindRow1 = declEnvModule graphCtx.value 1 "m" deKindFixtureDecls
 -- kind-public names and NOT its own identical copies.  (`Priv` is absent from
 -- both for the separate reason `declEnvRowKindEntries`' cross-module arm drops
 -- a private decl — see the kind-count doctests above.)
--- > omKeys (optionOr omEmpty (omLookup "m" deSeedChainNames))
+-- > omKeys (optionOr omEmpty (omLookup "m" (deSeedChainNames (probeGraphCtx ()))))
 -- []
--- > omKeys (optionOr omEmpty (omLookup "n" deSeedChainNames))
+-- > omKeys (optionOr omEmpty (omLookup "n" (deSeedChainNames (probeGraphCtx ()))))
 -- ["Opq", "Pt", "Wrap"]
 
 -- 🚨 THE PARITY ASSERTION, AND IT IS THE ONE THAT PINS THE FIX.  #2158 first
@@ -5720,8 +5724,8 @@ deKindRow1 = declEnvModule graphCtx.value 1 "m" deKindFixtureDecls
 -- module id.  Same decls is deliberate: it makes the own-row contribution and the
 -- earlier row's contribution identical values, so the only thing the assertions
 -- above can be reading is WHICH ROWS were folded, never which decls.
-deSeedRowN : DeclEnvModule
-deSeedRowN = declEnvModule graphCtx.value 1 "n" deKindFixtureDecls
+deSeedRowN : GraphCtx -> DeclEnvModule
+deSeedRowN gctx = declEnvModule gctx 1 "n" deKindFixtureDecls
 
 -- The bare zero, NOT `emptyDeclEnvSeedAcc`: these probes assert which ROWS were
 -- folded, and the `""` core-pass seed would be an extra key in every assertion.
@@ -5735,18 +5739,18 @@ deSeedChainProbeZero = DeclEnvSeedAcc {
   dsNames = omEmpty,
 }
 
-deSeedChainProbe : DeclEnvSeedAcc
-deSeedChainProbe =
-  declEnvSeedChain graphCtx.value [deKindRow0, deSeedRowN] deSeedChainProbeZero
+deSeedChainProbe : GraphCtx -> DeclEnvSeedAcc
+deSeedChainProbe gctx =
+  declEnvSeedChain gctx [deKindRow0 gctx, deSeedRowN gctx] deSeedChainProbeZero
 
-deSeedChainKinds : OrdMap (List (TabKey, List Kind))
-deSeedChainKinds = deSeedChainProbe.dsKinds
+deSeedChainKinds : GraphCtx -> OrdMap (List (TabKey, List Kind))
+deSeedChainKinds gctx = (deSeedChainProbe gctx).dsKinds
 
-deSeedChainOwners : OrdMap (OrdMap (List String))
-deSeedChainOwners = deSeedChainProbe.dsOwners
+deSeedChainOwners : GraphCtx -> OrdMap (OrdMap (List String))
+deSeedChainOwners gctx = (deSeedChainProbe gctx).dsOwners
 
-deSeedChainNames : OrdMap (OrdMap Unit)
-deSeedChainNames = deSeedChainProbe.dsNames
+deSeedChainNames : GraphCtx -> OrdMap (OrdMap Unit)
+deSeedChainNames gctx = (deSeedChainProbe gctx).dsNames
 
 -- The accumulated name set for [mid] vs. the retired rebuild, computed here off
 -- the SAME row's kind seed.  `omKeys` is sorted ascending, so this compares KEY
@@ -5754,13 +5758,15 @@ deSeedChainNames = deSeedChainProbe.dsNames
 -- equivalence class the only reader (`noImplHintFor`'s `omHasKey`) can observe.
 deSeedNameParity : String -> Bool
 deSeedNameParity mid =
-  let accumulated = omKeys (optionOr omEmpty (omLookup mid deSeedChainNames))
+  let gctx = probeGraphCtx ()
+  let accumulated =
+    omKeys (optionOr omEmpty (omLookup mid (deSeedChainNames gctx)))
   let rebuilt =
     omKeys
       (omFromNames
         (map
           (p => tabKeyName (fst p))
-          (optionOr [] (omLookup mid deSeedChainKinds)))
+          (optionOr [] (omLookup mid (deSeedChainKinds gctx))))
         omEmpty)
   accumulated == rebuilt
 
@@ -5840,43 +5846,48 @@ deNameIdxSharedB = DData {
   dataNameLoc = None,
 }
 
-deNameIdxModA : DeclEnvModule
-deNameIdxModA =
-  declEnvModule graphCtx.value 0 "modA" [deNameIdxAlpha, deNameIdxSharedA]
+deNameIdxModA : GraphCtx -> DeclEnvModule
+deNameIdxModA gctx =
+  declEnvModule gctx 0 "modA" [deNameIdxAlpha, deNameIdxSharedA]
 
-deNameIdxModB : DeclEnvModule
-deNameIdxModB =
-  declEnvModule graphCtx.value 1 "modB" [deNameIdxBeta, deNameIdxSharedB]
+deNameIdxModB : GraphCtx -> DeclEnvModule
+deNameIdxModB gctx =
+  declEnvModule gctx 1 "modB" [deNameIdxBeta, deNameIdxSharedB]
 
 -- No data declaration anywhere in these two — a plain value binding, the
 -- "unrelated code" T-GLOBAL-TABLE asks for.
-deNameIdxModC : DeclEnvModule
-deNameIdxModC = declEnvModule graphCtx.value 2 "modC" [
+deNameIdxModC : GraphCtx -> DeclEnvModule
+deNameIdxModC gctx = declEnvModule gctx 2 "modC" [
   DFunDef True "modCHelper" [] (ELit (LInt 1)) noDeclLoc noBinderId,
 ]
 
-deNameIdxModD : DeclEnvModule
-deNameIdxModD = declEnvModule graphCtx.value 3 "modD" [
+deNameIdxModD : GraphCtx -> DeclEnvModule
+deNameIdxModD gctx = declEnvModule gctx 3 "modD" [
   DFunDef True "modDHelper" [] (ELit (LInt 2)) noDeclLoc noBinderId,
 ]
 
-deNameIdxChain : OrdMap (OrdMap Unit)
-deNameIdxChain =
+deNameIdxChain : GraphCtx -> OrdMap (OrdMap Unit)
+deNameIdxChain gctx =
   let s =
     declEnvSeedChain
-      graphCtx.value
-      [deNameIdxModA, deNameIdxModB, deNameIdxModC, deNameIdxModD]
+      gctx
+      [
+        deNameIdxModA gctx,
+        deNameIdxModB gctx,
+        deNameIdxModC gctx,
+        deNameIdxModD gctx,
+      ]
       deSeedChainProbeZero
   s.dsNames
 
 -- The SAME chain with the two data-free rows removed.  Comparing against this is
 -- what turns "unrelated code is unaffected" into an assertion rather than a hope.
-deNameIdxChainNoUnrelated : OrdMap (OrdMap Unit)
-deNameIdxChainNoUnrelated =
+deNameIdxChainNoUnrelated : GraphCtx -> OrdMap (OrdMap Unit)
+deNameIdxChainNoUnrelated gctx =
   let s =
     declEnvSeedChain
-      graphCtx.value
-      [deNameIdxModA, deNameIdxModB]
+      gctx
+      [deNameIdxModA gctx, deNameIdxModB gctx]
       deSeedChainProbeZero
   s.dsNames
 
@@ -5886,20 +5897,20 @@ deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 -- ── doctests ─────────────────────────────────────────────────────────────
 -- (a) A name declared in an EARLIER module is visible at a later module's seed.
 --     `modB` sees `modA`'s two names and no others.
--- > deNameIdxAt deNameIdxChain "modB"
+-- > deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modB"
 -- ["Alpha", "Shared"]
 
 -- (b) A name declared in the SAME module is NOT — own registrations go on TOP of
 --     the universe later, via `recordParamKinds` under `registerAllData … prog0`.
 --     `modB` declares `Beta`; `Beta` is absent from `modB`'s own seed and present
 --     one row later.
--- > omHasKey "Beta" (optionOr omEmpty (omLookup "modB" deNameIdxChain))
+-- > omHasKey "Beta" (optionOr omEmpty (omLookup "modB" (deNameIdxChain (probeGraphCtx ()))))
 -- False
--- > omHasKey "Beta" (optionOr omEmpty (omLookup "modC" deNameIdxChain))
+-- > omHasKey "Beta" (optionOr omEmpty (omLookup "modC" (deNameIdxChain (probeGraphCtx ()))))
 -- True
 
 --     …and the first row's seed is empty, own-row exclusion at the boundary.
--- > deNameIdxAt deNameIdxChain "modA"
+-- > deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modA"
 -- []
 
 -- (c) Unrelated code — `modC`/`modD` declare no data type at all.  They
@@ -5907,13 +5918,13 @@ deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 --     them added no name), and their presence perturbs NOTHING (`modA`/`modB`
 --     read identically in a chain that does not contain them at all).
 --     `Shared` appears ONCE across both declaring modules: bare-name by design.
--- > deNameIdxAt deNameIdxChain "modC"
+-- > deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modC"
 -- ["Alpha", "Beta", "Shared"]
--- > deNameIdxAt deNameIdxChain "modD" == deNameIdxAt deNameIdxChain "modC"
+-- > deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modD" == deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modC"
 -- True
--- > deNameIdxAt deNameIdxChainNoUnrelated "modA" == deNameIdxAt deNameIdxChain "modA"
+-- > deNameIdxAt (deNameIdxChainNoUnrelated (probeGraphCtx ())) "modA" == deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modA"
 -- True
--- > deNameIdxAt deNameIdxChainNoUnrelated "modB" == deNameIdxAt deNameIdxChain "modB"
+-- > deNameIdxAt (deNameIdxChainNoUnrelated (probeGraphCtx ())) "modB" == deNameIdxAt (deNameIdxChain (probeGraphCtx ())) "modB"
 -- True
 
 -- ── A-3.2a (#1112): the `DataEnv` slice ─────────────────────────────────────
@@ -6297,17 +6308,19 @@ aliasFixtureAttribCore =
       tyAliasNameLoc = None,
     }
 
-aliasFixtureEnv : DataEnv
-aliasFixtureEnv = buildDataEnv [
-  declEnvModule graphCtx.value 0 "core" [
+aliasFixtureEnv : GraphCtx -> DataEnv
+aliasFixtureEnv gctx = buildDataEnv [
+  declEnvModule gctx 0 "core" [
     aliasFixturePubCore, aliasFixturePrivCore, aliasFixtureAttribCore
   ],
-  declEnvModule graphCtx.value 1 "m" [aliasFixturePubM],
+  declEnvModule gctx 1 "m" [aliasFixturePubM],
 ]
 
 aliasNamesAt : Int -> List String
 aliasNamesAt cur =
-  map (e => tabKeyName (fst e)) (aliasUniverseAt cur aliasFixtureEnv.deAliases)
+  map
+    (e => tabKeyName (fst e))
+    (aliasUniverseAt cur (aliasFixtureEnv (probeGraphCtx ())).deAliases)
 
 -- ── doctests ─────────────────────────────────────────────────────────────
 -- The prelude reader (ordinal 0) sees NOTHING — not even its own public alias.
@@ -6336,7 +6349,7 @@ aliasNamesAt cur =
 -- the assertion that fails if a later edit "tidies" a visibility question back into
 -- the fold, re-creating the two-rows-one-record divergence `dataEnvAddDecl`'s note
 -- exists to prevent.
--- > listLen aliasFixtureEnv.deAliases
+-- > listLen (aliasFixtureEnv (probeGraphCtx ())).deAliases
 -- 4
 
 -- Fixture for the doctests below: two DIFFERENT modules ("m", "n") each
@@ -6395,22 +6408,18 @@ deFieldOwnerFixtureC = DData {
   dataNameLoc = None,
 }
 
-deFieldOwnerCollisionEnv : DataEnv
-deFieldOwnerCollisionEnv = buildDataEnv [
-  declEnvModule graphCtx.value 0 "m" [
-    deFieldOwnerFixtureA, deFieldOwnerFixtureB
-  ],
+deFieldOwnerCollisionEnv : GraphCtx -> DataEnv
+deFieldOwnerCollisionEnv gctx = buildDataEnv [
+  declEnvModule gctx 0 "m" [deFieldOwnerFixtureA, deFieldOwnerFixtureB],
 ]
 
-deFieldOwnerSingleEnv : DataEnv
-deFieldOwnerSingleEnv =
-  buildDataEnv [declEnvModule graphCtx.value 0 "m" [deFieldOwnerFixtureA]]
+deFieldOwnerSingleEnv : GraphCtx -> DataEnv
+deFieldOwnerSingleEnv gctx =
+  buildDataEnv [declEnvModule gctx 0 "m" [deFieldOwnerFixtureA]]
 
-deFieldOwnerSameNameEnv : DataEnv
-deFieldOwnerSameNameEnv = buildDataEnv [
-  declEnvModule graphCtx.value 0 "m" [
-    deFieldOwnerFixtureA, deFieldOwnerFixtureC
-  ],
+deFieldOwnerSameNameEnv : GraphCtx -> DataEnv
+deFieldOwnerSameNameEnv gctx = buildDataEnv [
+  declEnvModule gctx 0 "m" [deFieldOwnerFixtureA, deFieldOwnerFixtureC],
 ]
 
 -- Two-element owner list, DISTINCT `Ident`s (never a fixed answer): the
@@ -6464,10 +6473,10 @@ deRecordOrderFixtureB = DData {
 }
 
 -- Two modules in ORDINAL order, so "P1" is declared strictly before "P2".
-deRecordOrderEnv : DataEnv
-deRecordOrderEnv = buildDataEnv [
-  declEnvModule graphCtx.value 0 "m" [deRecordOrderFixtureA],
-  declEnvModule graphCtx.value 1 "n" [deRecordOrderFixtureB],
+deRecordOrderEnv : GraphCtx -> DataEnv
+deRecordOrderEnv gctx = buildDataEnv [
+  declEnvModule gctx 0 "m" [deRecordOrderFixtureA],
+  declEnvModule gctx 1 "n" [deRecordOrderFixtureB],
 ]
 
 deRecordIdentTyNames : List (Ident, String, List Field) -> List String
@@ -6476,18 +6485,18 @@ deRecordIdentTyNames ((_, tyName, _) :: rest) =
   tyName :: deRecordIdentTyNames rest
 
 -- ── doctests ─────────────────────────────────────────────────────────────
--- > map snd (optionOr [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
+-- > map snd (optionOr [] (omLookup "x" (deFieldOwnerCollisionEnv (probeGraphCtx ())).deFieldOwnerIdents))
 -- ["Pt", "Vec"]
--- > listLen (optionOr [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
+-- > listLen (optionOr [] (omLookup "x" (deFieldOwnerCollisionEnv (probeGraphCtx ())).deFieldOwnerIdents))
 -- 2
--- > map snd (optionOr [] (omLookup "x" deFieldOwnerSingleEnv.deFieldOwnerIdents))
+-- > map snd (optionOr [] (omLookup "x" (deFieldOwnerSingleEnv (probeGraphCtx ())).deFieldOwnerIdents))
 -- ["Pt"]
 
 -- The discriminating case: SAME declared name ("Pt") from two DIFFERENT
 -- modules stays two DISTINCT identities, not one bare-name collision.
--- > map snd (optionOr [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
+-- > map snd (optionOr [] (omLookup "x" (deFieldOwnerSameNameEnv (probeGraphCtx ())).deFieldOwnerIdents))
 -- ["Pt", "Pt"]
--- > distinctIdentsIn2 (optionOr [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
+-- > distinctIdentsIn2 (optionOr [] (omLookup "x" (deFieldOwnerSameNameEnv (probeGraphCtx ())).deFieldOwnerIdents))
 -- True
 
 -- #2147's order half, on `deRecordIdents` rather than `deFieldOwnerIdents`:
@@ -6495,9 +6504,9 @@ deRecordIdentTyNames ((_, tyName, _) :: rest) =
 -- (ordinal 1).  Remove `deRecordIdents`' `omMapValues reverseL` in
 -- `buildDataEnv` and this reads `["P2", "P1"]`; the length assertion beside it
 -- does not move, which is precisely why a length was never enough.
--- > deRecordIdentTyNames (optionOr [] (omLookup "Pt" deRecordOrderEnv.deRecordIdents))
+-- > deRecordIdentTyNames (optionOr [] (omLookup "Pt" (deRecordOrderEnv (probeGraphCtx ())).deRecordIdents))
 -- ["P1", "P2"]
--- > listLen (optionOr [] (omLookup "Pt" deRecordOrderEnv.deRecordIdents))
+-- > listLen (optionOr [] (omLookup "Pt" (deRecordOrderEnv (probeGraphCtx ())).deRecordIdents))
 -- 2
 
 -- 🚨 THE BLANK LINE ABOVE IS LOAD-BEARING — DO NOT CLOSE THE GAP.  A doctest's
@@ -7111,17 +7120,17 @@ ieProbeBareKey = regKeyNTab [
 
 -- ordinal 0 = `amod`, ordinal 1 = `zmod`; no import edge between them is needed
 -- or expressible here — that is the point of the shape.
-ieProbeEnv : ImplEnv
-ieProbeEnv = buildImplEnv [
-  declEnvModule graphCtx.value 0 "amod" [ieSameImplIn "amod"],
-  declEnvModule graphCtx.value 1 "zmod" [ieSameImplIn "zmod"],
+ieProbeEnv : GraphCtx -> ImplEnv
+ieProbeEnv gctx = buildImplEnv [
+  declEnvModule gctx 0 "amod" [ieSameImplIn "amod"],
+  declEnvModule gctx 1 "zmod" [ieSameImplIn "zmod"],
 ]
 
 -- 1. THE INTERFACE HALF IS A SCOPE.  Two same-spelled interfaces in two modules
 --    land in DIFFERENT buckets: each identity key resolves to exactly ONE row.
--- > listLen (mregLookupK (ieProbeKey "amod") ieProbeEnv.ieConcrete)
+-- > listLen (mregLookupK (ieProbeKey "amod") (ieProbeEnv (probeGraphCtx ())).ieConcrete)
 -- 1
--- > listLen (mregLookupK (ieProbeKey "zmod") ieProbeEnv.ieConcrete)
+-- > listLen (mregLookupK (ieProbeKey "zmod") (ieProbeEnv (probeGraphCtx ())).ieConcrete)
 -- 1
 --
 -- 1b. 🚨 AND THE BARE LEG STILL COLLAPSES THEM — asserted, not just admitted in
@@ -7131,7 +7140,7 @@ ieProbeEnv = buildImplEnv [
 --     identity.  Two rows, one bucket: that is #1438's shape, inherited on
 --     purpose, and #1482's to drain.  If this ever reads `1`, the leg was dropped
 --     and #1438's pin must have flipped with it.
--- > listLen (mregLookupK ieProbeBareKey ieProbeEnv.ieConcrete)
+-- > listLen (mregLookupK ieProbeBareKey (ieProbeEnv (probeGraphCtx ())).ieConcrete)
 -- 2
 --
 -- 2. ROW IDENTITY.  The two same-spelled impls get DISTINCT `InstRef`s — the
@@ -7144,9 +7153,9 @@ ieProbeEnv = buildImplEnv [
 --    module contributing TWO impls (then `ord = [0,0,1]` while `seq = [0,1,2]`).
 --    Not added here because it would also move the ordinal-filter counts in
 --    assertion 3, and this round is comment-only.
--- > map (r => instRefMid (ieRowInst r)) ieProbeEnv.ieRows
+-- > map (r => instRefMid (ieRowInst r)) (ieProbeEnv (probeGraphCtx ())).ieRows
 -- ["amod", "zmod"]
--- > map (r => instRefSeq (ieRowInst r)) ieProbeEnv.ieRows
+-- > map (r => instRefSeq (ieRowInst r)) (ieProbeEnv (probeGraphCtx ())).ieRows
 -- [0, 1]
 --
 -- 3. 🚨 TABLE SCOPE — AND SINCE A-3.6 (#1558) THE ASSERTION IS THE OPPOSITE ONE.
@@ -7172,17 +7181,17 @@ ieProbeEnv = buildImplEnv [
 --    that quietly became a `1`.  The sentinel is still live and still fail-CLOSED for
 --    the NAME axis — see `declEnvsOrdOf`, and the `declEnvVisibleTo` doctests far
 --    above, which assert the ordinal conjunct is still doing work there.
--- > listLen ieProbeEnv.ieUnivSnaps
+-- > listLen (ieProbeEnv (probeGraphCtx ())).ieUnivSnaps
 -- 2
--- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt 0 ieProbeEnv)))
+-- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt 0 (ieProbeEnv (probeGraphCtx ())))))
 -- 1
--- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
+-- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt 1 (ieProbeEnv (probeGraphCtx ())))))
 -- 1
--- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 0 ieProbeEnv)))
+-- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 0 (ieProbeEnv (probeGraphCtx ())))))
 -- 1
--- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
+-- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 (ieProbeEnv (probeGraphCtx ())))))
 -- 1
--- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt (0 - 1) ieProbeEnv)))
+-- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt (0 - 1) (ieProbeEnv (probeGraphCtx ())))))
 -- 1
 --
 -- 4. THE PROJECTION IS THE OBLIGATION CHANNEL'S OWN UNIVERSE, built by the SAME
@@ -7195,7 +7204,7 @@ ieProbeEnv = buildImplEnv [
 --    nothing — so the redundant line is DELETED rather than left in place looking like
 --    a test.  The surviving line still discriminates key minting: a row indexed under a
 --    mis-minted concrete key answers `0` here at every ordinal.
--- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
+-- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 (ieProbeEnv (probeGraphCtx ())))))
 -- 1
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUnivConcreteOf (ImplUniverse conc _) = conc
@@ -7279,16 +7288,16 @@ ieHeadProbeZmod =
 ieHeadProbeDecls : List Decl
 ieHeadProbeDecls = ieHeadProbeAmod ++ ieHeadProbeZmod
 
-ieHeadProbeEnv : ImplEnv
-ieHeadProbeEnv = buildImplEnv [
-  declEnvModule graphCtx.value 0 "amod" ieHeadProbeAmod,
-  declEnvModule graphCtx.value 1 "zmod" ieHeadProbeZmod,
+ieHeadProbeEnv : GraphCtx -> ImplEnv
+ieHeadProbeEnv gctx = buildImplEnv [
+  declEnvModule gctx 0 "amod" ieHeadProbeAmod,
+  declEnvModule gctx 1 "zmod" ieHeadProbeZmod,
 ]
 
 -- 5. THE POSITIVE CONTROL: the corpus is populated and numbered as claimed.  Read
 --    this first — every assertion below is a projection of it, so if this line is
 --    wrong they are all measuring the wrong thing.
--- > map (r => instRefSeq (ieRowInst r)) ieHeadProbeEnv.ieRows
+-- > map (r => instRefSeq (ieRowInst r)) (ieHeadProbeEnv (probeGraphCtx ())).ieRows
 -- [0, 1, 2, 3, 4]
 --
 -- 6. `ieByHead` — four properties, one line, each independently fail-capable:
@@ -7311,20 +7320,20 @@ ieHeadProbeEnv = buildImplEnv [
 --        same — because this key has no interface component.  An index that grew one
 --        drops seq 4 here.  (The head itself carries the TYPE's module, `amod`'s
 --        `Blob` for every row, #1397; an interface's origin never enters it.)
--- > map (r => instRefSeq (ieRowInst r)) (ieHeadRows (Some ieProbeBlobHead) ieHeadProbeEnv)
+-- > map (r => instRefSeq (ieRowInst r)) (ieHeadRows (Some ieProbeBlobHead) (ieHeadProbeEnv (probeGraphCtx ())))
 -- [0, 1, 2, 4]
 --
 -- 7. THE HEADLESS ROW IS IN THE HEADLESS BUCKET AND NOWHERE ELSE.  `impl Gen a` is
 --    seq 3, and item 6 shows it is absent from the concrete bucket — so the two
 --    arms of `headBucketKey` are not collapsing into one.
--- > map (r => instRefSeq (ieRowInst r)) (ieHeadRows None ieHeadProbeEnv)
+-- > map (r => instRefSeq (ieRowInst r)) (ieHeadRows None (ieHeadProbeEnv (probeGraphCtx ())))
 -- [3]
 --
 -- 8. THE CONTROL FOR 6b, and it is what proves that line tests something: the
 --    INTERFACE-keyed bucket over the SAME env answers with ONE row where the head
 --    bucket answers with three.  If `ieByHead` were a re-spelling of `ieConcrete`,
 --    item 6 would read this value instead.
--- > listLen (mregLookupK (ieProbeKey "amod") ieHeadProbeEnv.ieConcrete)
+-- > listLen (mregLookupK (ieProbeKey "amod") (ieHeadProbeEnv (probeGraphCtx ())).ieConcrete)
 -- 1
 --
 -- ⚠️ ITEM 9'S LAST EXPECTATION LINE IS FOLLOWED DIRECTLY BY A DECLARATION
@@ -7597,10 +7606,10 @@ ceSameDeclIn m methods = DInterface {
 -- ordinal 0 = amod, ordinal 1 = zmod; no import edge between them, exactly as
 -- `ieProbeEnv` needs none — the point of the shape is that identity alone,
 -- not any resolve-level relationship, keeps the two rows apart.
-ceProbeEnv : ClassEnv
-ceProbeEnv = buildClassEnv graphCtx.value [
-  declEnvModule graphCtx.value 0 "amod" [ceSameDeclIn "amod" [ceMethodFoo]],
-  declEnvModule graphCtx.value 1 "zmod" [ceSameDeclIn "zmod" [ceMethodBar]],
+ceProbeEnv : GraphCtx -> ClassEnv
+ceProbeEnv gctx = buildClassEnv gctx [
+  declEnvModule gctx 0 "amod" [ceSameDeclIn "amod" [ceMethodFoo]],
+  declEnvModule gctx 1 "zmod" [ceSameDeclIn "zmod" [ceMethodBar]],
 ]
 
 ceProbeKey : String -> RegKey
@@ -7718,7 +7727,7 @@ ceRowParamKindNamesAt key cur env = match ceLookupAt key cur env
   Some r => map (ks => map kindName ks) (ceRowParamKinds r)
 
 -- 1. WHOLE-GRAPH POPULATION: two rows, build order.
--- > listLen ceProbeEnv.ceRows
+-- > listLen (ceProbeEnv (probeGraphCtx ())).ceRows
 -- 2
 
 -- 1b. ROW ORDER, asserted directly — not merely implied by the identity-keyed
@@ -7728,25 +7737,25 @@ ceRowParamKindNamesAt key cur env = match ceLookupAt key cur env
 --     `classEnvFinish`'s `reverseL` leaves every OTHER doctest in this block
 --     green (they all look up by identity, never by position) and is caught
 --     ONLY by this one.
--- > map ceRowOriginTag ceProbeEnv.ceRows
+-- > map ceRowOriginTag (ceProbeEnv (probeGraphCtx ())).ceRows
 -- ["amod", "zmod"]
 
 -- 2. THE INTERFACE HALF IS A SCOPE — amod's identity-keyed lookup returns
 --    amod's OWN row (method "foo"), never zmod's (method "bar").  Under a
 --    bare-name key this would read ["bar"] for BOTH modules, since zmod is
 --    registered last.
--- > ceRowMethodNamesAt "amod" 1 ceProbeEnv
+-- > ceRowMethodNamesAt "amod" 1 (ceProbeEnv (probeGraphCtx ()))
 -- ["foo"]
--- > ceRowMethodNamesAt "zmod" 1 ceProbeEnv
+-- > ceRowMethodNamesAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))
 -- ["bar"]
 
 -- 2b. THE RAW `Ty` ITSELF, not just the method's name — the content Step 0
 --     is about.  `foo : a -> Int`, `bar : a -> String`; a mutation that
 --     replaced either with a bogus constant type is caught here, not by the
 --     name-only assertions above.
--- > ceRowMethodTysAt "amod" 1 ceProbeEnv
+-- > ceRowMethodTysAt "amod" 1 (ceProbeEnv (probeGraphCtx ()))
 -- ["a -> Int"]
--- > ceRowMethodTysAt "zmod" 1 ceProbeEnv
+-- > ceRowMethodTysAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))
 -- ["a -> String"]
 
 -- 3. TABLE SCOPE — the ordinal, applied through `declEnvVisibleAt` and
@@ -7757,9 +7766,9 @@ ceRowParamKindNamesAt key cur env = match ceLookupAt key cur env
 --    a countdown.  The `IE` block's item 3 asserts the OPPOSITE property for the
 --    same shape — that is the split, visible as two doctests that disagree on
 --    purpose.
--- > ceRowMethodNamesAt "zmod" 0 ceProbeEnv
+-- > ceRowMethodNamesAt "zmod" 0 (ceProbeEnv (probeGraphCtx ()))
 -- []
--- > ceRowMethodNamesAt "zmod" 1 ceProbeEnv
+-- > ceRowMethodNamesAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))
 -- ["bar"]
 
 -- 4. TYPARAMS and SUPERS are carried unelaborated, per-row, per-module (not
@@ -7768,15 +7777,15 @@ ceRowParamKindNamesAt key cur env = match ceLookupAt key cur env
 --    PRELUDE (`OriginModule "core"`), both distinct from the enclosing
 --    interface's own module — a mutation that garbled either would not be
 --    caught by `ceRowSuperHeadsAt` alone.
--- > ceRowTyparamsAt "amod" 1 ceProbeEnv
+-- > ceRowTyparamsAt "amod" 1 (ceProbeEnv (probeGraphCtx ()))
 -- ["a"]
--- > ceRowSuperHeadsAt "zmod" 1 ceProbeEnv
+-- > ceRowSuperHeadsAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))
 -- ["Eq"]
--- > ceRowSuperParamsAt "zmod" 1 ceProbeEnv
+-- > ceRowSuperParamsAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))
 -- ["a"]
--- > ceRowSuperOriginAt "zmod" 1 ceProbeEnv
+-- > ceRowSuperOriginAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))
 -- "core"
--- > ceRowIfaceNameAt "zmod" 1 ceProbeEnv
+-- > ceRowIfaceNameAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))
 -- "Same"
 
 -- ── a graded fixture: KRow inference must match `ifaceParamKindsOf` ──────────
@@ -7809,17 +7818,16 @@ ceGradedIface = DInterface {
   ifaceNameLoc = None,
 }
 
-ceGradedEnv : ClassEnv
-ceGradedEnv = buildClassEnv graphCtx.value [
-  declEnvModule graphCtx.value 0 "gmod" [ceGradedIface],
-]
+ceGradedEnv : GraphCtx -> ClassEnv
+ceGradedEnv gctx =
+  buildClassEnv gctx [declEnvModule gctx 0 "gmod" [ceGradedIface]]
 
 ceGradedKey : RegKey
 ceGradedKey = regKeyOfTab (ifaceTabKey (OriginModule "gmod") "Async")
 
 -- 5. GRADED KIND INFERENCE, positional with `ceTyparams` (here `["f"]`):
 --    slot 0 (f's first argument, `e`) is `KRow`; slot 1 (`a`) is `KType`.
--- > ceRowParamKindNamesAt ceGradedKey 0 ceGradedEnv
+-- > ceRowParamKindNamesAt ceGradedKey 0 (ceGradedEnv (probeGraphCtx ()))
 -- [["Effect", "Type"]]
 
 -- ── an UNGRADED fixture: every slot is still RECORDED ("EVERY slot is recorded,
@@ -7854,17 +7862,16 @@ ceFunctorIface = DInterface {
   ifaceNameLoc = None,
 }
 
-ceFunctorEnv : ClassEnv
-ceFunctorEnv = buildClassEnv graphCtx.value [
-  declEnvModule graphCtx.value 0 "fmod" [ceFunctorIface],
-]
+ceFunctorEnv : GraphCtx -> ClassEnv
+ceFunctorEnv gctx =
+  buildClassEnv gctx [declEnvModule gctx 0 "fmod" [ceFunctorIface]]
 
 ceFunctorKey : RegKey
 ceFunctorKey = regKeyOfTab (ifaceTabKey (OriginModule "fmod") "Functor")
 
 -- 6. UNGRADED KIND INFERENCE: `f`'s one applied slot is `KType`, present and
 --    correct — not dropped, not defaulted to empty.
--- > ceRowParamKindNamesAt ceFunctorKey 0 ceFunctorEnv
+-- > ceRowParamKindNamesAt ceFunctorKey 0 (ceFunctorEnv (probeGraphCtx ()))
 -- [["Type"]]
 
 -- 🚨 THE BLANK LINE ABOVE IS LOAD-BEARING — DO NOT CLOSE THE GAP.  Same trap
@@ -8233,7 +8240,7 @@ emptyTcConfig = TcConfig {
 -- A graph record with every field fresh and [run] as its graph run: the process's
 -- first record, before any drive, and the base each mint builds on.  [ctors] is the
 -- builtin constructor map (always `builtinCtors`), a parameter for the reason
--- `freshCrossRun` states: the `graphCtx` initializer must name `builtinCtors` in its
+-- `freshCrossRun` states: the `interners` initializer must name `builtinCtors` in its
 -- own body.
 initialGraphCtx : OrdMap Scheme -> GraphRun -> GraphCtx
 initialGraphCtx ctors run = GraphCtx {
@@ -8259,16 +8266,12 @@ initialGraphCtx ctors run = GraphCtx {
   typeErrorsStickyDiags = Ref [],
 }
 
--- The graph shim: the module-level cell holding the current drive's record.
-graphCtx : Ref GraphCtx
-graphCtx = Ref (initialGraphCtx builtinCtors (freshGraphRun ()))
-
 -- The process's interners (see `Interners`): the lineage objects and the extern
 -- catalog of the graph record a drive continues from.  The drive's mint, a memo hit's
 -- restored record and `markModules`' record each write it, so the next mint continues
--- from the last of them.
+-- from the last of them.  Before any drive they are a fresh record's.
 interners : Ref Interners
-interners = Ref (internersOf graphCtx.value)
+interners = Ref (internersOf (initialGraphCtx builtinCtors (freshGraphRun ())))
 
 internersOf : GraphCtx -> Interners
 internersOf c = Interners {
@@ -8995,14 +8998,14 @@ uOblIsDecidableNow gctx o =
 -- Construct every field-Ref fresh (each reproduces its former top-level ref's initial);
 -- the constructor is exhaustive, which is the property that matters.
 -- [ctors] is the builtin constructor map (always `builtinCtors`) and is a parameter
--- rather than a direct `builtinCtors` reference on purpose: the graph shim `graphCtx`
--- is a nullary top-level binding, a global initialized eagerly at startup, and the
+-- rather than a direct `builtinCtors` reference on purpose: the `interners` cell is
+-- a nullary top-level binding, a global initialized eagerly at startup, and the
 -- backends order those globals by the value globals each initializer names
--- (`eagerVars`, backend/emit_support.mdk).  A read hidden inside this function was
--- invisible to that order, so the shim would be initialized before `builtinCtors` and
+-- (`eagerVars`, backend/emit_support.mdk).  A read hidden inside this function is
+-- invisible to that order, so the cell would be initialized before `builtinCtors` and
 -- read a zero: a null dereference at wasm instantiate, and a silent zero on native
 -- until the first drive's mint overwrites it.  Taking the map as an argument puts
--- `builtinCtors` in the shim initializer's own body
+-- `builtinCtors` in that initializer's own body
 -- (`initialGraphCtx builtinCtors`).
 freshCrossRun : OrdMap Scheme -> CrossRun
 freshCrossRun ctors = CrossRun {
@@ -9845,11 +9848,11 @@ matchWarningsNow mctx = match mctx.matchWarnings.value
   [] => False
   _ => True
 
--- True iff a location has been entered since the current drive started: a read for
--- the drive-independence tests (`currentLocRef` is minted `None` per drive).
+-- True iff a location has been entered since [gctx]'s drive started: a read for the
+-- drive-independence tests (`currentLocRef` is minted `None` per drive).
 export
-currentLocIsSet : Unit -> Bool
-currentLocIsSet _ = isSome graphCtx.value.currentLocRef.value
+currentLocIsSet : GraphCtx -> Bool
+currentLocIsSet gctx = isSome gctx.currentLocRef.value
 
 -- The drive inputs of a driver that loads no stdlib ownership and selects no
 -- profile: no module stdlib-owned, the flat entry not stdlib, every trace off, and
@@ -10046,26 +10049,26 @@ goalKindName GKDictApp = "GKDictApp"
 goalKindName GKMethodDict = "GKMethodDict"
 goalKindName GKRecDictApp = "GKRecDictApp"
 
--- Test visibility (`typecheck_test.mdk`): each goal of the graph that writes a
+-- Test visibility (`typecheck_test.mdk`): each goal of [gctx]'s graph that writes a
 -- method cell's route or dictionaries, by kind, with whether its `oInner` is that
 -- cell's `ecInner`, so the stampers' notes reach the judgment (`judgeCells`).  Read
 -- by writing a marker through the goal's refs and looking for it in the cells, then
 -- restoring both.  A goal whose destination is no cell's (a throwaway) is skipped.
 export
-cellGoalInnerAliasing : Unit -> List (String, Bool)
-cellGoalInnerAliasing _ =
-  let g = graphCtx.value.graphRun
+cellGoalInnerAliasing : GraphCtx -> List (String, Bool)
+cellGoalInnerAliasing gctx =
+  let g = gctx.graphRun
   let cells = cellsFrom g.evCells.value 0 []
   filterMap
     (o =>
       map (c => (goalKindName o.oKind, innerAliases o c)) (cellOfGoal cells o))
     g.goals.value
 
--- Test visibility (`typecheck_test.mdk`): the length of the method-cell index, which
--- spans only the current graph lineage.
+-- Test visibility (`typecheck_test.mdk`): the length of [gctx]'s method-cell index,
+-- which spans only its graph lineage.
 export
-evCellsSpanProbe : Unit -> Int
-evCellsSpanProbe _ = arrayLength graphCtx.value.graphRun.evCells.value
+evCellsSpanProbe : GraphCtx -> Int
+evCellsSpanProbe gctx = arrayLength gctx.graphRun.evCells.value
 
 cellsFrom : Array (Option EvCell) -> Int -> List EvCell -> List EvCell
 cellsFrom arr i acc
@@ -10392,13 +10395,13 @@ renderEvidenceBinder gctx (EvidenceBinderId sid ordinal) =
     _ => panic "evidence binder outside binding scope"
 
 export
-scopeTraceContext : ScopeId -> (String, String)
-scopeTraceContext sid =
-  Scopes.scopeTraceContext (currentScopeStore graphCtx.value ()) sid
+scopeTraceContext : GraphCtx -> ScopeId -> (String, String)
+scopeTraceContext gctx sid =
+  Scopes.scopeTraceContext (currentScopeStore gctx ()) sid
 
 export
-scopeFrameStats : Unit -> (Int, Int)
-scopeFrameStats _ = Scopes.scopeFrameStats (currentScopeStore graphCtx.value ())
+scopeFrameStats : GraphCtx -> (Int, Int)
+scopeFrameStats gctx = Scopes.scopeFrameStats (currentScopeStore gctx ())
 
 freshGraphRun : Unit -> GraphRun
 freshGraphRun _ = GraphRun {
@@ -10627,13 +10630,13 @@ methodCellLookup gctx (EvId m n) =
     Some c => Ok c
     None => Err "method cell \{m}#\{intToString n} was never minted"
 
--- Test visibility (`typecheck_test.mdk`): why the site and the method cell stores
+-- Test visibility (`typecheck_test.mdk`): why [gctx]'s site and method cell stores
 -- hold no cell for [ev], each "" where one does.
 export
-cellStoreMisses : EvId -> (String, String)
-cellStoreMisses ev = (
-  missText (siteCellLookup graphCtx.value ev),
-  missText (methodCellLookup graphCtx.value ev),
+cellStoreMisses : GraphCtx -> EvId -> (String, String)
+cellStoreMisses gctx ev = (
+  missText (siteCellLookup gctx ev),
+  missText (methodCellLookup gctx ev),
 )
 
 missText : Result String a -> String
@@ -10917,14 +10920,12 @@ methodReturnMemoSupers supers =
 -- never a parameter -- lowering and eval rebind it per instance (`defaultReceiverDict`).
 defaultBodyBinderNamesProbe : Unit -> List String
 defaultBodyBinderNamesProbe _ =
-  let savedGraph = graphCtx.value
   let gctx = probeGraphCtx ()
-  graphCtx := gctx
   let mctx = initialModuleCtx gctx
   let iface =
     IfaceRef { irName = "Supply", irOrigin = OriginModule "owner-module" }
   let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = "copy" }
-  let store = currentScopeStore graphCtx.value ()
+  let store = currentScopeStore gctx ()
   let root = Scopes.freshScope store None 0 "owner-module" ModuleOwner
   let body =
     Scopes.freshScope
@@ -10934,13 +10935,10 @@ defaultBodyBinderNamesProbe _ =
       "owner-module"
       (DefaultBodyOwner owner)
   let rendered = [
-    renderEvidenceBinder graphCtx.value (Scopes.binderAt body 0),
-    renderEvidenceBinder graphCtx.value (Scopes.binderAt body 1),
-    renderEvidenceBinder
-      graphCtx.value
-      (Scopes.binderAt body defaultReceiverOrdinal),
+    renderEvidenceBinder gctx (Scopes.binderAt body 0),
+    renderEvidenceBinder gctx (Scopes.binderAt body 1),
+    renderEvidenceBinder gctx (Scopes.binderAt body defaultReceiverOrdinal),
   ]
-  graphCtx := savedGraph
   rendered
 
 -- > defaultBodyBinderNamesProbe ()
@@ -11651,7 +11649,7 @@ walkGoalSameProbe : Unit -> List Bool
 walkGoalSameProbe _ =
   let iface = ifaceRefBare "C"
   let int = tconBuiltin "Int"
-  let mctx = initialModuleCtx graphCtx.value
+  let mctx = initialModuleCtx (probeGraphCtx ())
   let row1 = EffRow [] (Some (freshEffvar mctx ()))
   let row2 = EffRow [] (Some (freshEffvar mctx ()))
   let goal1 = [TFun int row1 int]
@@ -12304,12 +12302,16 @@ recordInvocationView env =
       env.teDyn.dcModule.dataParamPolarityRef.value
       env.teDyn.dcModule.dataParamKindsRef.value
 
--- The summary's operations over the view of the entry the drive [o] checked.
+-- The summary's operations over the view of the entry the drive [o] checked.  The
+-- field instantiation runs in a graph record of its own, whose effect-variable
+-- counter continues from the drive's (`doEffvarNext`).
 export
 lastInvocationOps : DriveOutputs -> InvocationOps
 lastInvocationOps o = match o.doInvocationView
   InvocationView ctors pols kinds =>
     let byHead = ctorsByHead ctors
+    let gctx = initialGraphCtx builtinCtors (freshGraphRun ())
+    gctx.graphRun.effvarCounter := o.doEffvarNext
     InvocationOps {
       headVariances =
         h => match headTyconMono h
@@ -12320,7 +12322,7 @@ lastInvocationOps o = match o.doInvocationView
         applied =>
           let (h, args) = spineParts applied
           flatMap
-            (c => instantiateFields graphCtx.value args c)
+            (c => instantiateFields gctx args c)
             (optionOr [] (omLookup (invocationHeadKey h) byHead)),
       headKey = invocationHeadKey,
     }
@@ -16803,30 +16805,32 @@ fileGrantExterns =
 
 -- A program lowered without elaboration (the prelude-free emitter probes) has no
 -- inference to solve a grant from: each file extern it names is granted the
--- whole domain, and saturated as elaboration saturates it.
+-- whole domain, and saturated as elaboration saturates it.  The parameter names
+-- come from the process's grant counter (the interners' lineage), which the next
+-- drive continues.
 export
 grantWholeDomain : List Decl -> List Decl
 grantWholeDomain prog =
-  map (mapDeclBodies (wholeDomainExpr graphCtx.value)) prog
+  map (mapDeclBodies (wholeDomainExpr interners.value.lineage.lnGrants)) prog
 
-wholeDomainExpr : GraphCtx -> Expr -> Expr
-wholeDomainExpr gctx (e@(EApp _ _)) = match grantSpine e []
+wholeDomainExpr : GrantState -> Expr -> Expr
+wholeDomainExpr st (e@(EApp _ _)) = match grantSpine e []
   (EVar n, args) => match omLookup n fileGrantExterns
     Some (arity, paths) =>
       saturateGrants
-        gctx
+        st
         (EVar n)
         arity
         (replicate paths (EListLit []))
-        (map (wholeDomainExpr gctx) args)
-    None => mapChildren (wholeDomainExpr gctx) e
-  _ => mapChildren (wholeDomainExpr gctx) e
-wholeDomainExpr gctx (EVar n) = match omLookup n fileGrantExterns
+        (map (wholeDomainExpr st) args)
+    None => mapChildren (wholeDomainExpr st) e
+  _ => mapChildren (wholeDomainExpr st) e
+wholeDomainExpr st (EVar n) = match omLookup n fileGrantExterns
   Some (arity, paths) =>
-    saturateGrants gctx (EVar n) arity (replicate paths (EListLit [])) []
+    saturateGrants st (EVar n) arity (replicate paths (EListLit [])) []
   None => EVar n
 -- every other node: its children, through the one traversal every pass shares
-wholeDomainExpr gctx e = mapChildren (wholeDomainExpr gctx) e
+wholeDomainExpr st e = mapChildren (wholeDomainExpr st) e
 
 -- Apply [f] once to the root of every expression a declaration holds.
 export
@@ -22483,7 +22487,7 @@ occurrenceCarriesMangledShadowSym name tagRef =
 -- path the route is RNone (sym ""), so this is inert there.
 --
 -- L4: this predicate now names its two conjuncts separately instead of conflating them in
--- one `routeLocalSym … /= ""` test.  `graphCtx.value.mangledFunDefsPresentRef.value`
+-- one `routeLocalSym … /= ""` test.  `gctx.mangledFunDefsPresentRef.value`
 -- (L3) is the GRAPH-level fact "this compile's decls carry mangled funDefs at all";
 -- `occurrenceCarriesMangledShadowSym tagRef` is the mark pass's own PER-OCCURRENCE verdict
 -- for THIS route.  The new graph-level conjunct is ADDED, not substituted for the
@@ -34730,7 +34734,7 @@ grantMethodParams gctx mg n ps body =
   else
     let missing =
       map
-        (_ => freshGrantName gctx ())
+        (_ => freshGrantName gctx.graphRun.grants ())
         (rangeFromCount given (mg.mgArity - given))
     (
       ps ++ map (x => PVar x (Loc "" 0 0 0 0) noBinderId) missing ++ grants,
@@ -34808,7 +34812,7 @@ grantExprInner gctx (e@(EApp _ _)) = match grantSpine e []
     Some occ => match occ.goTrailing
       Some arity =>
         saturateGrants
-          gctx
+          gctx.graphRun.grants
           (EVar n)
           arity
           (grantTerms gctx occ)
@@ -34818,7 +34822,7 @@ grantExprInner gctx (e@(EApp _ _)) = match grantSpine e []
   (EMethodAt n seed ev, args) => match methodGrantUse gctx n ev
     MethodGrants arity grants =>
       saturateGrants
-        gctx
+        gctx.graphRun.grants
         (EMethodAt n seed ev)
         arity
         grants
@@ -34832,7 +34836,7 @@ grantExprInner gctx (e@(EApp _ _)) = match grantSpine e []
 grantExprInner gctx (EDictAt n ev) = grantUse gctx n ev
 grantExprInner gctx (EMethodAt n seed ev) = match methodGrantUse gctx n ev
   MethodGrants arity grants =>
-    saturateGrants gctx (EMethodAt n seed ev) arity grants []
+    saturateGrants gctx.graphRun.grants (EMethodAt n seed ev) arity grants []
   LeadingGrants _ grants => applyExprs (EMethodAt n seed ev) grants
   NoGrants => EMethodAt n seed ev
 grantExprInner gctx (ELet m r (PVar x xloc bid) e1 e2) =
@@ -34891,7 +34895,13 @@ grantUse gctx n ev =
   match grantOccOf gctx ev
     None => head
     Some occ => match occ.goTrailing
-      Some arity => saturateGrants gctx (EVar n) arity (grantTerms gctx occ) []
+      Some arity =>
+        saturateGrants
+          gctx.graphRun.grants
+          (EVar n)
+          arity
+          (grantTerms gctx occ)
+          []
       None => applyExprs head (grantTerms gctx occ)
 
 -- A method occurrence's grants.  One that dispatches passes the method's, after
@@ -34962,15 +34972,15 @@ applyExprs f args = fold (acc a => EApp acc a) f args
 -- or value use becomes a function of the arguments still missing; the arguments
 -- it was given are bound first, so each is evaluated once, where the program
 -- wrote it.
-saturateGrants : GraphCtx -> Expr -> Int -> List Expr -> List Expr -> Expr
-saturateGrants gctx head arity grants args =
+saturateGrants : GrantState -> Expr -> Int -> List Expr -> List Expr -> Expr
+saturateGrants st head arity grants args =
   let given = listLen args
   if given >= arity then
     applyExprs (applyExprs head (take arity args ++ grants)) (drop arity args)
   else
-    let bound = map (a => (freshGrantName gctx (), a)) args
+    let bound = map (a => (freshGrantName st (), a)) args
     let missing =
-      map (_ => freshGrantName gctx ()) (rangeFromCount given (arity - given))
+      map (_ => freshGrantName st ()) (rangeFromCount given (arity - given))
     let call =
       applyExprs
         head
@@ -34986,9 +34996,8 @@ saturateGrants gctx head arity grants args =
       (ELam (map (x => PVar x (Loc "" 0 0 0 0) noBinderId) missing) call)
       (reverseL bound)
 
-freshGrantName : GraphCtx -> Unit -> String
-freshGrantName gctx _ =
-  let st = gctx.graphRun.grants
+freshGrantName : GrantState -> Unit -> String
+freshGrantName st _ =
   let k = st.gsFresh.value
   st.gsFresh := k + 1
   "$grant_arg_\{intToString k}"
@@ -35171,8 +35180,8 @@ fileBoundValue : GraphCtx -> List GrantBinder -> Mono -> Expr -> Expr
 fileBoundValue gctx chain ty e =
   if hasFileBoundValue ty then match normalize ty
     TFun _ row result =>
-      let fn = freshGrantName gctx ()
-      let arg = freshGrantName gctx ()
+      let fn = freshGrantName gctx.graphRun.grants ()
+      let arg = freshGrantName gctx.graphRun.grants ()
       ELet
         noDeclLoc
         False
@@ -36089,13 +36098,13 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   let mctx = freshModuleCtx gctx runSeed mid
   let moduleScope =
     Scopes.freshScope
-      (currentScopeStore graphCtx.value ())
+      (currentScopeStore gctx ())
       None
       mctx.currentLevel.value
       mid
       ModuleOwner
   let _ = openScope mctx moduleScope
-  let _ = recordModuleStart graphCtx.value mid
+  let _ = recordModuleStart gctx mid
   -- #1675: this module's own `import`/`export import` decls, checked for a name the
   -- named dependency exports under two different definitions.  Here rather than in
   -- `importSeed` because the seed is built BEFORE this `freshModuleCtx` — see
@@ -36103,11 +36112,11 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- envelope (Flat, single-file) is a no-op.
   let _ = reportAmbiguousImports mctx prog0
   let prog = prog0
-  let aliasSpellings = aliasMethodSpellings graphCtx.value prog
+  let aliasSpellings = aliasMethodSpellings gctx prog
   -- P1 (#1446) / DICT §8 I7: the four operator-and-literal classes' identities, read
   -- off the PRELUDE's own `DInterface` decls before any body is inferred (the operator
   -- handlers consult them during inference).  See `seedBuiltinClasses`.
-  let _ = seedBuiltinClasses graphCtx.value mid prog
+  let _ = seedBuiltinClasses gctx mid prog
   -- #837: stamp binding ids on the program the bodies are INFERRED from.  `prog`
   -- itself stays unstamped for the pre-inference analyses (shadows/key table/…),
   -- which do not need ids; only the inferred bodies (defs + impl/default/prop/test)
@@ -36178,7 +36187,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- #1499 clause (b) / S1-PRELUDE (a): `mid` is BOUND here now — `appendUniverseAccums`
   -- must know whether this pass is the PRELUDE's, because the prelude contributes to
   -- S1's INTERFACE operand but NOT to its STANDALONE one.  See its header.
-  let _ = appendUniverseAccums graphCtx.value mid prog0
+  let _ = appendUniverseAccums gctx mid prog0
   -- 🚨 #1112 A-3.4 PR2 — THE `IE` READER FLIP.  A production read of stage K's `IE`
   -- (A-3.5b added a second, `ieRowsVisibleAt`; do NOT re-instate "the ONE place" here).
   -- It replaced the three `obUniv*` `CrossRun` accumulators, which are GONE rather than
@@ -36218,7 +36227,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- A third consumer should take this binding too, or say in writing why it needs a
   -- different ordinal.
   let moduleImplUniv =
-    let envs = graphCtx.value.declEnvsRef.value
+    let envs = gctx.declEnvsRef.value
     ieUniverseAt (declEnvsOrdOf mid envs) envs.deImpls
   -- #1549: stash the impl universe the RESIDUAL REDUCER entails against
   -- (`residualPredsOf`, called from each generalizing group's close).  This is NOT a
@@ -36245,22 +36254,19 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- The Flat arms are untouched: a single file is one module and its own interfaces are
   -- nameable in it.
   let isMethod =
-    let envs = graphCtx.value.declEnvsRef.value
+    let envs = gctx.declEnvsRef.value
     methodNameDeclaredAt (declEnvsOrdOf mid envs) envs.deMethods
   let definerShadows =
-    nameableIfaceShadows
-      graphCtx.value
-      prog0
-      (definerShadowsFromSet graphCtx.value isMethod prog0)
+    nameableIfaceShadows gctx prog0 (definerShadowsFromSet gctx isMethod prog0)
   let importerShadows =
     if isEmptyL implDecls then
       []
     else
       nameableIfaceShadows
-        graphCtx.value
+        gctx
         prog0
         (standaloneShadowsFromSet
-          graphCtx.value
+          gctx
           isMethod
           (omMapValues (_ => ()) moduleSeed.msImportedValues)
           prog0)
@@ -36287,7 +36293,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- read this ref.  Derive the set: `grep -n bodyImplEnvRef compiler/types/typecheck.mdk`.
   -- The Module arm is a pointer copy of the env `buildDeclEnvs` already built; it
   -- deliberately does NOT re-derive, for the reason `moduleImplUniv` gives above.
-  mctx.bodyImplEnvRef := graphCtx.value.declEnvsRef.value.deImpls
+  mctx.bodyImplEnvRef := gctx.declEnvsRef.value.deImpls
   -- (#4 + #3-restore) mode-specific pre-inference ref setup (all pure/independent of the
   -- register+globalS block below, so order-safe).  Module installs importer-shadow state and restores the cross-module dict
   -- accumulators `freshModuleCtx` just wiped.
@@ -36303,15 +36309,15 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     -- #1351: the per-module copy of the identity-keyed dispatch-index universe, read by
     -- `methodDispatchIdx` through `dispatchIdxScoped`.  Its bare-name peer was retired at L5.
     mctx.methodDispatchIdxByIdRef :=
-      graphCtx.value.crossRun.universeMethodDispatchIdxByIdRef.value
+      gctx.crossRun.universeMethodDispatchIdxByIdRef.value
     -- The list alone is seeded here and re-keyed twice below; nothing reads the
     -- name index until the final `setFunPredicateSlots` of this arm rebuilds it.
     mctx.funPredicateSlotsRef :=
-      graphCtx.value.crossRun.crossModuleFunPredicateSlotsRef.value
+      gctx.crossRun.crossModuleFunPredicateSlotsRef.value
     -- B-2.2-f (#1113): the declared-prefix sidecar rides the IDS table — every
     -- whole-table replacement of `funConstraintsRef` owes one of these.
     mctx.funConstraintDeclaredRef :=
-      graphCtx.value.crossRun.crossModuleFunConstraintDeclaredRef.value
+      gctx.crossRun.crossModuleFunConstraintDeclaredRef.value
     -- A module alias (`import m as A`) has no `currentImportDefinersRef` row for
     -- each dotted member, so its call sites resolve through these alias-local rows.
     -- The source is nevertheless exact: `aliasConstraintEntries` selects only the
@@ -36324,17 +36330,17 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
       setRef
         mctx.funPredicateSlotsRef
         (aliasConstraintEntries
-            graphCtx.value
+            gctx
             prog
-            graphCtx.value.crossRun.crossModuleFunPredicateSlotsQualRef.value
+            gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value
           ++ mctx.funPredicateSlotsRef.value)
     let _ =
       setRef
         mctx.funConstraintDeclaredRef
         (aliasConstraintEntries
-            graphCtx.value
+            gctx
             prog
-            graphCtx.value.crossRun.crossModuleFunConstraintDeclaredQualRef.value
+            gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value
           ++ mctx.funConstraintDeclaredRef.value)
     -- #1425 site 2: the three tables above were just seeded WHOLESALE from graph-wide
     -- BARE-NAME accumulators, so every name this module declares is currently answered by
@@ -36348,7 +36354,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
         (selfDeclArities
           mid
           prog
-          graphCtx.value.crossRun.crossModuleFunPredicateSlotsQualRef.value
+          gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value
           mctx.funPredicateSlotsRef.value)
     let _ =
       setRef
@@ -36356,12 +36362,12 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
         (selfDeclArities
           mid
           prog
-          graphCtx.value.crossRun.crossModuleFunConstraintDeclaredQualRef.value
+          gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value
           mctx.funConstraintDeclaredRef.value)
     -- RUN-XMOD-062: ONE derivation, two projections.  The two refs are read together
     -- (`qualConstraintKey` assembles a `(definer, origin)` key out of both), so they
     -- must not be derived by two independent walks that could admit different rows.
-    let admitted = importDefinersOf graphCtx.value prog
+    let admitted = importDefinersOf gctx prog
     mctx.currentImportDefinersRef :=
       omFromPairs (reverseL (definerRowsOf admitted)) omEmpty
     mctx.currentImportOriginsRef :=
@@ -36377,7 +36383,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
           (reverseL
             (importedSchemeOblEntries
               prog
-              graphCtx.value.crossRun.crossModuleSchemeOblsQualRef.value))
+              gctx.crossRun.crossModuleSchemeOblsQualRef.value))
           omEmpty)
     ()
   -- #2563: install THIS module's method scope — its decls and ordinal, the inputs
@@ -36386,7 +36392,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
 
   let _ =
     mctx.methodScopeCtxRef :=
-      Some (prog, declEnvsOrdOf mid graphCtx.value.declEnvsRef.value)
+      Some (prog, declEnvsOrdOf mid gctx.declEnvsRef.value)
     -- #1386: the alias-qualified spellings (`A.mth`) this module's imports supply.
     -- Built eagerly, here, because a key that names two declarations is reported
     -- (`T-AMBIGUOUS-ALIAS-METHOD`) whether or not the module ever spells it.
@@ -36408,7 +36414,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     -- after, because the reload's alias half is now a projection of `envs` at
     -- `cur`.  Both bindings are pure reads of `GraphCtx`, so hoisting them
     -- above `loadDataUniverse` changes nothing else.
-    let envs = graphCtx.value.declEnvsRef.value
+    let envs = gctx.declEnvsRef.value
     let cur = declEnvsOrdOf mid envs
     let _ = loadDataUniverse mctx cur
     -- #674: OVERLAY the ctors of the types THIS module imports so a bare ctor name
@@ -36494,7 +36500,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     -- `importedCtorTypeDeclsFirstWins`.  Swapping these two inverts the rule silently.
     let base =
       registerImportOverlay
-        (withCtors mctx (spFloor graphCtx.value.crossRun.universeCtorPop.value))
+        (withCtors mctx (spFloor gctx.crossRun.universeCtorPop.value))
         (importedCtorTypeDeclsLastWins prog0 cur envs.deModules)
     let env0 = registerAllData base prog0
     let _ = applyRecordScopeOverrides mctx prog0
@@ -36527,7 +36533,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- `fullUniverse = prog` (see its binding above), so `flatClassEnvOf prog` IS the
   -- `flatClassEnvOf fullUniverse` the completeness relocation calls for.
   let classEnvHere =
-    let envs = graphCtx.value.declEnvsRef.value
+    let envs = gctx.declEnvsRef.value
     (envs.deIfaces, declEnvsOrdOf mid envs)
   let _ = checkGradedImplHeads mctx (fst classEnvHere) (snd classEnvHere) prog
   let _ = rejectCyclicAliases mctx ()
@@ -36539,7 +36545,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- DECLARATION site (the program under check).  It builds the declared type
   -- verbatim; the two guards below are what hold a user extern to its row.
   let currentMethodRows = ifaceMethodSchemeRows mctx prog
-  let _ = recordMethodGrants graphCtx.value currentMethodRows
+  let _ = recordMethodGrants gctx currentMethodRows
   let visibleMethodRows = ifaceMethodSchemeRows mctx implDecls
   let visibleMethodRowIndex =
     methodRowsByIdentity
@@ -36562,10 +36568,10 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- catalog-row rule fires ONLY on a catalog name), and folding them together
   -- would force one `if` to speak for four notions of "this declaration is not
   -- mine".
-  let _ = ffiCheckExternsCrossable mctx (ffiStampMode graphCtx.value mid) prog
-  let _ = ffiCheckExternsLabelled mctx (ffiStampMode graphCtx.value mid) prog
-  let _ = ffiCheckExternsShadow mctx (ffiStampMode graphCtx.value mid) prog
-  let _ = ffiCheckExternsCatalogRow mctx (ffiStampMode graphCtx.value mid) prog
+  let _ = ffiCheckExternsCrossable mctx (ffiStampMode gctx mid) prog
+  let _ = ffiCheckExternsLabelled mctx (ffiStampMode gctx mid) prog
+  let _ = ffiCheckExternsShadow mctx (ffiStampMode gctx mid) prog
+  let _ = ffiCheckExternsCatalogRow mctx (ffiStampMode gctx mid) prog
   -- (#4 cont) post-globalS mode setup.  Module: shadowMethodSchemes env layer (rebinding
   -- imported method names to the interface-method scheme) + the method-constraint cross
   -- seed (AFTER globalS's row registration, per installMethodPredicateSlots).
@@ -36589,13 +36595,13 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
         moduleSeed.msImportedValues
     mctx.methodPredicateSlotsRef :=
       mctx.methodPredicateSlotsRef.value
-        ++ graphCtx.value.crossRun.crossModuleMethodPredicateSlotsRef.value
+        ++ gctx.crossRun.crossModuleMethodPredicateSlotsRef.value
     attachStandaloneSources moduleSeed.msImportedValues sm
   let envImported =
     annotateImportedMethodRows
       envSeed
-      (importedMethodBindingNames graphCtx.value prog0 aliasSpellings)
-      (nameableIfaceMethodSet graphCtx.value prog0)
+      (importedMethodBindingNames gctx prog0 aliasSpellings)
+      (nameableIfaceMethodSet gctx prog0)
       (namesToSet importerShadows omEmpty)
       visibleMethodRowIndex
   let envGlobal =
@@ -36609,8 +36615,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
       defs
       (groupNames defs omEmpty)
       (namesToSet (publicValNames prog) omEmpty)
-  let _ =
-    recordTopBinderTypes graphCtx.value (omFromPairs topSchemes omEmpty) progS
+  let _ = recordTopBinderTypes gctx (omFromPairs topSchemes omEmpty) progS
   -- The tail bodies (impl, default, prop and test bodies) see the top-level
   -- bindings as the binding groups do (`processTopGroups`' result env): each
   -- binding keeps its standalone descriptor, so an occurrence of a top-level value
@@ -36658,41 +36663,41 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     -- must not propagate as a graph-wide deletion into the next module's seed.
     let _ =
       setRef
-        graphCtx.value.crossRun.crossModuleFunPredicateSlotsRef
+        gctx.crossRun.crossModuleFunPredicateSlotsRef
         (predicateSlotTableWithoutArgs
           (mctx.funPredicateSlotsRef.value
             ++ selfNameRows
               prog
-              graphCtx.value.crossRun.crossModuleFunPredicateSlotsRef.value))
+              gctx.crossRun.crossModuleFunPredicateSlotsRef.value))
     let _ =
       setRef
-        graphCtx.value.crossRun.crossModuleFunPredicateSlotsQualRef
+        gctx.crossRun.crossModuleFunPredicateSlotsQualRef
         (attributeModuleEntries mid prog mctx.funPredicateSlotsRef.value
-          ++ graphCtx.value.crossRun.crossModuleFunPredicateSlotsQualRef.value)
+          ++ gctx.crossRun.crossModuleFunPredicateSlotsQualRef.value)
     -- B-2.2-f (#1113): the sidecar's two snapshots, paired with the ids snapshots above.
     let _ =
       setRef
-        graphCtx.value.crossRun.crossModuleFunConstraintDeclaredRef
+        gctx.crossRun.crossModuleFunConstraintDeclaredRef
         (mctx.funConstraintDeclaredRef.value
           ++ selfNameRows
             prog
-            graphCtx.value.crossRun.crossModuleFunConstraintDeclaredRef.value)
+            gctx.crossRun.crossModuleFunConstraintDeclaredRef.value)
     let _ =
       setRef
-        graphCtx.value.crossRun.crossModuleFunConstraintDeclaredQualRef
+        gctx.crossRun.crossModuleFunConstraintDeclaredQualRef
         (attributeModuleEntries mid prog mctx.funConstraintDeclaredRef.value
-          ++ graphCtx.value.crossRun.crossModuleFunConstraintDeclaredQualRef.value)
-    graphCtx.value.crossRun.crossModuleMethodPredicateSlotsRef :=
+          ++ gctx.crossRun.crossModuleFunConstraintDeclaredQualRef.value)
+    gctx.crossRun.crossModuleMethodPredicateSlotsRef :=
       mctx.methodPredicateSlotsRef.value
     let _ =
       setRef
-        graphCtx.value.crossRun.crossModuleMethodPredicateSlotsQualRef
+        gctx.crossRun.crossModuleMethodPredicateSlotsQualRef
         (emptyMethodModulePredicateSlots mid prog
           ++ attributeMethodModulePredicateSlots
             mid
             prog
             mctx.methodPredicateSlotsRef.value
-          ++ graphCtx.value.crossRun.crossModuleMethodPredicateSlotsQualRef.value)
+          ++ gctx.crossRun.crossModuleMethodPredicateSlotsQualRef.value)
     -- #1114 (#845, DICT-SEMANTICS §4.2 D6(a)): snapshot THIS module's scheme contexts
     -- alongside the three arity tables above.  The arity tables carry only what
     -- `funConstraintsRef` holds, whose INFERRED half is gated on `dictEligibleSetRef`
@@ -36704,13 +36709,13 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     -- source-exact (mid, name) key.
     let _ =
       setRef
-        graphCtx.value.crossRun.crossModuleSchemeOblsQualRef
+        gctx.crossRun.crossModuleSchemeOblsQualRef
         (attributeModuleSchemeObls
             mid
             prog
-            graphCtx.value.crossRun.crossModuleSchemeOblsQualRef.value
+            gctx.crossRun.crossModuleSchemeOblsQualRef.value
             mctx.schemeObligationsRef.value
-          ++ graphCtx.value.crossRun.crossModuleSchemeOblsQualRef.value)
+          ++ gctx.crossRun.crossModuleSchemeOblsQualRef.value)
     ()
   -- P0-17: impl missing a required method.  #1557 A-3.5a: ONE call, both modes — the
   -- arm split is gone because `classEnvHere` above already carries the mode's `CE` and
@@ -38835,7 +38840,7 @@ memberOfIds mctx members =
 -- A binding gets one verdict: the first of its goals that draws one.
 judgeLiveGoals : ModuleCtx -> List StampCtx -> List DrainFinding
 judgeLiveGoals saved ctxs =
-  let g = graphCtx.value.graphRun
+  let g = saved.mcGraph.graphRun
   let goals = reverseL g.liveGoals.value
   g.liveGoals := []
   if isEmptyL goals then
@@ -43970,8 +43975,9 @@ ffiTyHeadNameWith aliases ty = match expandAliasHeadTyWith aliases ty
 --   * module emitters read `DeclEnvs.deData.deAliases`, projected at each module's
 --     own ordinal by the same visibility machinery the live typecheck used.
 --
--- The builtin subtraction is `ffiIsBuiltinExternName`, i.e. a lookup in the map
--- seeded by `noteBuiltinExternNames`.  Lowering therefore no longer independently
+-- The builtin subtraction is a lookup in the extern catalog `noteBuiltinExternNames`
+-- seeds.  These producers run after their drive, so they read the catalog from the
+-- interners, which hold the catalog of the graph record installed last.  Lowering therefore no longer independently
 -- scans `runtimeDecls` to decide whether a checked declaration routes as a builtin.
 -- The raw-AST `ir.core_ir_lower.ffiExternTypeNames` remains only for the snapshot
 -- tool's intentionally untyped emitter stage.
@@ -43980,24 +43986,29 @@ checkedFfiExternTypeNames : List Decl ->
   List (String, (List (String, String), (List String, String)))
 checkedFfiExternTypeNames decls =
   let denv = dataEnvFromDeclsGo 0 decls emptyDataEnv
-  ffiExternTypeRowsWith graphCtx.value (aliasOwnAt 0 denv.deAliases) decls
+  ffiExternTypeRowsWith
+    interners.value.externCatalog.value
+    (aliasOwnAt 0 denv.deAliases)
+    decls
 
 export
 checkedFfiExternTypeNamesModules : DriveOutputs ->
   List (String, List Decl) ->
   List (String, (List (String, String), (List String, String)))
 checkedFfiExternTypeNamesModules o modules =
-  flatMap (checkedFfiExternTypeNamesModule graphCtx.value o) modules
+  flatMap
+    (checkedFfiExternTypeNamesModule interners.value.externCatalog.value o)
+    modules
 
-checkedFfiExternTypeNamesModule : GraphCtx ->
+checkedFfiExternTypeNamesModule : OrdMap (Ty, List (String, Int)) ->
   DriveOutputs ->
   (String, List Decl) ->
   List (String, (List (String, String), (List String, String)))
-checkedFfiExternTypeNamesModule gctx o (mid, decls) =
+checkedFfiExternTypeNamesModule catalog o (mid, decls) =
   let cur = ordOfIndex mid o.doOrdIndex
   let aliases =
     aliasOwnAt cur o.doFfiAliases ++ aliasUniverseAt cur o.doFfiAliases
-  ffiExternTypeRowsWith gctx aliases decls
+  ffiExternTypeRowsWith catalog aliases decls
 
 -- The current module's aliases arrive in front of its imported alias universe in
 -- `checkBodyImpl`.  `DataEnv.deAliases` is already reverse declaration order, so
@@ -44009,21 +44020,21 @@ aliasOwnAt cur ((key, ad) :: rest)
   | ad.adOrd == cur = (key, (ad.adParams, ad.adRhs)) :: aliasOwnAt cur rest
   | otherwise = aliasOwnAt cur rest
 
-ffiExternTypeRowsWith : GraphCtx ->
+ffiExternTypeRowsWith : OrdMap (Ty, List (String, Int)) ->
   List (TabKey, (List String, Ty)) ->
   List Decl ->
   List (String, (List (String, String), (List String, String)))
-ffiExternTypeRowsWith gctx _ [] = []
-ffiExternTypeRowsWith gctx aliases ((DExtern d) :: rest) =
+ffiExternTypeRowsWith _ _ [] = []
+ffiExternTypeRowsWith catalog aliases ((DExtern d) :: rest) =
   externRowCons
-    (ffiIsBuiltinExternName gctx d.edName)
+    (omHasKey d.edName catalog)
     d
     (ffiSigArgHeadsWith aliases d.edTy, ffiSigRetHeadWith aliases d.edTy)
-    (ffiExternTypeRowsWith gctx aliases rest)
-ffiExternTypeRowsWith gctx aliases ((DAttrib _ inner) :: rest) =
-  ffiExternTypeRowsWith gctx aliases (inner :: rest)
-ffiExternTypeRowsWith gctx aliases (_ :: rest) =
-  ffiExternTypeRowsWith gctx aliases rest
+    (ffiExternTypeRowsWith catalog aliases rest)
+ffiExternTypeRowsWith catalog aliases ((DAttrib _ inner) :: rest) =
+  ffiExternTypeRowsWith catalog aliases (inner :: rest)
+ffiExternTypeRowsWith catalog aliases (_ :: rest) =
+  ffiExternTypeRowsWith catalog aliases rest
 
 -- Walk the arrow spine.  Every PARAM position and the final RESULT position is
 -- a value that actually crosses; the row wrappers and the constraint prefix are
@@ -47592,11 +47603,9 @@ isLegacyPredicateAnswer _ = False
 -- removed from `anyGivenMatches`.
 scopeGivenProbe : Unit -> List Bool
 scopeGivenProbe _ =
-  let savedGraph = graphCtx.value
   let gctx = probeGraphCtx ()
-  graphCtx := gctx
   let mctx = initialModuleCtx gctx
-  let store = currentScopeStore graphCtx.value ()
+  let store = currentScopeStore gctx ()
   let root = Scopes.freshScope store None 0 "given-probe" ModuleOwner
   let owner =
     Scopes.freshScope store (Some root) 1 "given-probe" (BindingOwner "owner")
@@ -47610,13 +47619,7 @@ scopeGivenProbe _ =
     psArgs = PSArgsKnown args,
     psBoundIds = [41],
   }
-  let _ =
-    pushGiven
-      graphCtx.value
-      GMPredicate
-      DirectGiven
-      slot
-      (Scopes.binderAt owner 0)
+  let _ = pushGiven gctx GMPredicate DirectGiven slot (Scopes.binderAt owner 0)
   let exact = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
   let unknown = PredicateRequest { prIface = iface, prArgs = PSArgsUnknown }
   let truncated = PredicateRequest {
@@ -47638,7 +47641,7 @@ scopeGivenProbe _ =
   }
   let _ =
     pushGiven
-      graphCtx.value
+      gctx
       GMIdWitnessed
       DirectGiven
       witnessSlot
@@ -47658,48 +47661,29 @@ scopeGivenProbe _ =
   }
   let _ =
     pushGiven
-      graphCtx.value
+      gctx
       GMPredicate
       DirectGiven
       compatibleSlot
       (Scopes.binderAt owner 2)
-  let givens = givensForScope graphCtx.value owner
+  let givens = givensForScope gctx owner
   let result = [
-    anyGivenMatches graphCtx.value exact owner givens,
-    not (anyGivenMatches graphCtx.value exact sibling givens),
-    not (anyGivenMatches graphCtx.value truncated owner givens),
-    not (anyGivenMatches graphCtx.value witnessRequest owner givens),
+    anyGivenMatches gctx exact owner givens,
+    not (anyGivenMatches gctx exact sibling givens),
+    not (anyGivenMatches gctx truncated owner givens),
+    not (anyGivenMatches gctx witnessRequest owner givens),
     isSome
-      (firstPredForEnclAt
-        graphCtx.value
-        GSImplRequires
-        73
-        witnessRequest
-        owner
-        givens),
+      (firstPredForEnclAt gctx GSImplRequires 73 witnessRequest owner givens),
     isNone
-      (firstPredForEnclAt
-        graphCtx.value
-        GSImplRequires
-        74
-        witnessRequest
-        owner
-        givens),
-    isSemanticGivenAnswer (firstPredForEncl graphCtx.value exact owner givens),
+      (firstPredForEnclAt gctx GSImplRequires 74 witnessRequest owner givens),
+    isSemanticGivenAnswer (firstPredForEncl gctx exact owner givens),
     isLegacyPredicateAnswer
-      (firstPredForEnclAt
-        graphCtx.value
-        GSPredicateOnly
-        41
-        unknown
-        owner
-        givens),
+      (firstPredForEnclAt gctx GSPredicateOnly 41 unknown owner givens),
     isLegacyPredicateAnswer
-      (firstPredForEnclResidual graphCtx.value "PairGiven" args owner givens),
+      (firstPredForEnclResidual gctx "PairGiven" args owner givens),
     isLegacyPredicateAnswer
-      (firstPredForEncl graphCtx.value compatibleRequest owner givens),
+      (firstPredForEncl gctx compatibleRequest owner givens),
   ]
-  graphCtx := savedGraph
   result
 
 -- > scopeGivenProbe ()
@@ -47853,7 +47837,6 @@ methodRowNumObservation : ModuleCtx ->
   NumAnchorTestObservation
 methodRowNumObservation saved caseName builtinDecls decls =
   let gctx = freshSubRecordsOf saved.mcGraph
-  graphCtx := gctx
   let mctx = carryModuleCtx gctx saved
   gctx.crossRun.builtinClassesRef := builtinClassesOf builtinDecls
   let rows = ifaceMethodSchemeRows mctx decls
@@ -47873,15 +47856,12 @@ methodRowNumObservation saved caseName builtinDecls decls =
       natoSchemeBody = ppMono (schemeBodyOf anchor.msrScheme),
       natoDeclaredType = ppTy anchor.msrType,
     }
-  graphCtx := saved.mcGraph
   observation
 
 observeMethodSchemeRowsForTest : Unit -> MethodRowTestObservation
 observeMethodSchemeRowsForTest _ =
-  let savedGraph = graphCtx.value
   let graph1 = probeGraphCtx ()
 
-  graphCtx := graph1
   let rows1 = initialModuleCtx graph1
   let constrainedRow =
     firstMethodRow (ifaceMethodSchemeRows rows1 [methodRowTestFoldMapDecl])
@@ -47894,7 +47874,6 @@ observeMethodSchemeRowsForTest _ =
   let constrainedArgumentIds = methodSlotArgumentIds constrainedSlots
 
   let graph2 = freshSubRecordsOf graph1
-  graphCtx := graph2
   let rows2 = carryModuleCtx graph2 rows1
   let counterBefore = graph2.graphRun.tyvarCounter.value
   let firstRow =
@@ -47911,20 +47890,17 @@ observeMethodSchemeRowsForTest _ =
     methodRowRegistrySlotIds rows2 (methodSlotKey firstRow.msrIface "foldMap")
 
   let graph3 = freshSubRecordsOf graph1
-  graphCtx := graph3
   let rows3 = carryModuleCtx graph3 rows2
   let sameNameForward =
     methodRowSameNameView
       (ifaceMethodSchemeRows rows3 [methodRowTestSameA, methodRowTestSameB])
   let graph4 = freshSubRecordsOf graph1
-  graphCtx := graph4
   let rows4 = carryModuleCtx graph4 rows3
   let sameNameReverse =
     methodRowSameNameView
       (ifaceMethodSchemeRows rows4 [methodRowTestSameB, methodRowTestSameA])
 
   let graph5 = freshSubRecordsOf graph1
-  graphCtx := graph5
   let rows5 = carryModuleCtx graph5 rows4
   let constantRows = ifaceMethodSchemeRows rows5 [methodRowTestConstantDecl]
   let constantRow = firstMethodRow constantRows
@@ -47934,14 +47910,13 @@ observeMethodSchemeRowsForTest _ =
       _ => False
 
   let graph6 = freshSubRecordsOf graph1
-  graphCtx := graph6
   let rows6 = carryModuleCtx graph6 rows5
   let attributed = DAttrib [] methodRowTestFoldMapDecl
   let attributedRows = ifaceMethodSchemeRows rows6 [attributed]
   let attributedMethods =
     methodEnvGo
-      graphCtx.value
-      [declEnvModule graphCtx.value 0 "foldable-test" [attributed]]
+      graph6
+      [declEnvModule graph6 0 "foldable-test" [attributed]]
       emptyMethodEnv
   let (attributedParamIface, attributedParamTyparams) =
     match optionOr [] (omLookup "foldMap" attributedMethods.meByName)
@@ -48011,7 +47986,6 @@ observeMethodSchemeRowsForTest _ =
     mrtoAttributedParamTyparams = attributedParamTyparams,
     mrtoNumAnchors = numAnchors,
   }
-  graphCtx := savedGraph
   observation
 
 methodRowSlotAllocationProbe : Unit ->
@@ -48150,9 +48124,7 @@ methodReturnProbeRequest mctx row =
 methodReturnVectorCompletenessProbe : Unit ->
   (Option (List String), Option (List String), Bool, Bool)
 methodReturnVectorCompletenessProbe _ =
-  let savedGraph = graphCtx.value
   let gctx = probeGraphCtx ()
-  graphCtx := gctx
   let mctx = initialModuleCtx gctx
   let _ = methodReturnProbeScope mctx "return-vector"
   let zeroRow =
@@ -48184,20 +48156,17 @@ methodReturnVectorCompletenessProbe _ =
   let zeroArgs =
     map
       (map ppMono)
-      (methodReturnArgs graphCtx.value (methodReturnProbeRequest mctx zeroRow))
+      (methodReturnArgs gctx (methodReturnProbeRequest mctx zeroRow))
   let partialArgs =
     map
       (map ppMono)
-      (methodReturnArgs
-        graphCtx.value
-        (methodReturnProbeRequest mctx partialRow))
+      (methodReturnArgs gctx (methodReturnProbeRequest mctx partialRow))
   let observed = (
     zeroArgs,
     partialArgs,
     allMethodParamsMentioned zeroRow.msrTyparams zeroRow.msrType,
     allMethodParamsMentioned partialRow.msrTyparams partialRow.msrType,
   )
-  graphCtx := savedGraph
   observed
 
 -- The absent `b` of `Partial` reads the occurrence's own unbound variable.
@@ -48207,9 +48176,7 @@ methodReturnVectorCompletenessProbe _ =
 export
 methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
 methodReturnTemplatePresenceProbe _ =
-  let savedGraph = graphCtx.value
   let gctx = probeGraphCtx ()
-  graphCtx := gctx
   let mctx = initialModuleCtx gctx
   let present =
     firstMethodRow
@@ -48247,7 +48214,6 @@ methodReturnTemplatePresenceProbe _ =
     map isSome present.msrPredicateTemplate.mptArguments,
     map isSome absent.msrPredicateTemplate.mptArguments,
   )
-  graphCtx := savedGraph
   observed
 
 -- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
@@ -48258,7 +48224,6 @@ methodReturnProbeCodes : ModuleCtx ->
   (List String, ModuleCtx)
 methodReturnProbeCodes prev ownedRow impls =
   let gctx = GraphCtx { prev.mcGraph | graphRun = freshGraphRun () }
-  graphCtx := gctx
   let mctx = carryModuleCtx gctx prev
   let _ = methodReturnProbeScope mctx "return-owner-checker"
   let foreignRow =
@@ -48290,7 +48255,6 @@ methodReturnProbeStamp : ModuleCtx ->
   (String, String, String)
 methodReturnProbeStamp prev ownedRow foreignRow impls =
   let gctx = GraphCtx { prev.mcGraph | graphRun = freshGraphRun () }
-  graphCtx := gctx
   let mctx = carryModuleCtx gctx prev
   let scope = methodReturnProbeScope mctx "return-owner-stamper"
   let request = methodReturnProbeRequest mctx ownedRow
@@ -48312,7 +48276,7 @@ methodReturnProbeStamp prev ownedRow foreignRow impls =
       ""
       None
       scope
-  let goals = optionOr [] (methodReturnArgs graphCtx.value request)
+  let goals = optionOr [] (methodReturnArgs gctx request)
   let ownedKey =
     match ieSelectRowByIface (siteFor mctx) env ownedRow.msrIface goals
       Some selected => rowRouteKey selected
@@ -48328,7 +48292,6 @@ methodReturnProbeStamp prev ownedRow foreignRow impls =
 -- accept Owner's impl, and the stamper must select Owner's distinct route.
 methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
 methodReturnOwnershipProbe _ =
-  let savedGraph = graphCtx.value
   let ownedGraph = probeGraphCtx ()
   let ownedDecl =
     methodReturnProbeIface
@@ -48340,11 +48303,9 @@ methodReturnOwnershipProbe _ =
       "return-foreign"
       "Foreign"
       (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
-  graphCtx := ownedGraph
   let ownedCtx = initialModuleCtx ownedGraph
   let ownedRow = firstMethodRow (ifaceMethodSchemeRows ownedCtx [ownedDecl])
   let foreignGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
-  graphCtx := foreignGraph
   let foreignCtx = carryModuleCtx foreignGraph ownedCtx
   let foreignRow =
     firstMethodRow (ifaceMethodSchemeRows foreignCtx [foreignDecl])
@@ -48365,7 +48326,6 @@ methodReturnOwnershipProbe _ =
     actualKey == ownedKey,
     actualKey /= foreignKey,
   )
-  graphCtx := savedGraph
   observed
 
 -- > methodReturnOwnershipProbe ()
@@ -48374,9 +48334,7 @@ methodReturnOwnershipProbe _ =
 export
 methodReturnResolutionMutationProbe : Unit -> (Bool, Bool, Bool, Bool)
 methodReturnResolutionMutationProbe _ =
-  let savedGraph = graphCtx.value
   let gctx = probeGraphCtx ()
-  graphCtx := gctx
   let mctx = initialModuleCtx gctx
   let _ = methodReturnProbeScope mctx "return-outcome-validation"
   let ownedDecl =
@@ -48440,7 +48398,6 @@ methodReturnResolutionMutationProbe _ =
     not (methodReturnResolutionValid mctx request wrongPrerequisites),
     not (methodReturnResolutionValid mctx request disagreement),
   )
-  graphCtx := savedGraph
   observed
 
 methodReturnSelectedIdentity : MethodReturnResolution -> Int
@@ -48476,7 +48433,6 @@ methodReturnProbeSlotCase : ModuleCtx ->
   ((List String, List String), ModuleCtx)
 methodReturnProbeSlotCase prev ownedRow foreignRow retainOwner =
   let gctx = GraphCtx { prev.mcGraph | graphRun = freshGraphRun () }
-  graphCtx := gctx
   let mctx = carryModuleCtx gctx prev
   let _ = methodReturnProbeScope mctx "return-owner-slots"
   mctx.methodPredicateSlotsRef :=
@@ -48519,9 +48475,7 @@ methodReturnProbeSlotCase prev ownedRow foreignRow retainOwner =
 methodReturnSlotOwnershipProbe : Unit ->
   ((List String, List String), (List String, List String), (List String, List String))
 methodReturnSlotOwnershipProbe _ =
-  let savedGraph = graphCtx.value
   let ownedGraph = probeGraphCtx ()
-  graphCtx := ownedGraph
   let ownedCtx = initialModuleCtx ownedGraph
   let ownedRow =
     firstMethodRow
@@ -48534,7 +48488,6 @@ methodReturnSlotOwnershipProbe _ =
             (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
       ])
   let emptyGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
-  graphCtx := emptyGraph
   let emptyCtx = carryModuleCtx emptyGraph ownedCtx
   let emptyRow =
     firstMethodRow
@@ -48545,7 +48498,6 @@ methodReturnSlotOwnershipProbe _ =
           (TyFun (tyConBuiltin "Unit" None) (TyVar "a")),
       ])
   let foreignGraph = GraphCtx { ownedGraph | graphRun = freshGraphRun () }
-  graphCtx := foreignGraph
   let foreignCtx = carryModuleCtx foreignGraph emptyCtx
   let foreignRow =
     firstMethodRow
@@ -48564,7 +48516,6 @@ methodReturnSlotOwnershipProbe _ =
   let (missing, _) =
     methodReturnProbeSlotCase emptiedCtx ownedRow foreignRow False
   let observed = (retained, emptied, missing)
-  graphCtx := savedGraph
   observed
 
 -- > methodReturnSlotOwnershipProbe ()
@@ -49192,7 +49143,7 @@ prependPredicateSlots (slot :: rest) acc =
 -- Private producer probe: same-lead predicates stay distinct, an exact duplicate
 -- collapses, a multi-argument predicate owns one slot, a vector whose lead is another
 -- predicate's non-lead survives, and a trace-only id retains PSArgsUnknown.
--- > inferredPredicateSlotsProbe (initialModuleCtx graphCtx.value) ()
+-- > inferredPredicateSlotsProbe (initialModuleCtx (probeGraphCtx ())) ()
 -- [("Tweak", ["a", "Int"], ["a"]), ("Tweak", ["a", "Bool"], ["a"]), ("Ix", ["a", "b"], ["a", "b"]), ("Num", ["b"], ["b"]), ("", ["?"], ["c"])]
 inferredPredicateSlotsProbe : ModuleCtx ->
   Unit ->
@@ -53109,12 +53060,7 @@ workModules _wantData _wantAll worker baseSeed coreV depEnv accData accAll done 
     moduleImportSeed
       prev
       baseSeed
-      (importSeed
-        graphCtx.value
-        coreV
-        (admittedIn graphCtx.value mid)
-        prog
-        depEnv)
+      (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
   let (_, extra, next) = worker prev mid seed accData accAll prog
   ((mid, extra) :: done, next)
 workModules wantData wantAll worker baseSeed coreV depEnv accData accAll done prev ((mid, prog) :: rest) =
@@ -53122,12 +53068,7 @@ workModules wantData wantAll worker baseSeed coreV depEnv accData accAll done pr
     moduleImportSeed
       prev
       baseSeed
-      (importSeed
-        graphCtx.value
-        coreV
-        (admittedIn graphCtx.value mid)
-        prog
-        depEnv)
+      (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
   let (schemes, extra, next) = worker prev mid seed accData accAll prog
   let pubV = publicModuleExports prog schemes ++ reexportSeed coreV prog depEnv
   workModules
@@ -53200,7 +53141,7 @@ copyCrossRun c = CrossRun {
 snapshotGraphCtx : GraphCtx -> GraphCtx
 snapshotGraphCtx c = GraphCtx { initialGraphCtx builtinCtors (freshGraphRun ()) |
   crossRun = copyCrossRun c.crossRun,
-  graphRun = copyGraphRunForMemo graphCtx.value c.graphRun,
+  graphRun = copyGraphRunForMemo c c.graphRun,
   builtinExternNamesRef = Ref c.builtinExternNamesRef.value,
 }
 
@@ -53234,7 +53175,7 @@ checkCoreMemoized : ModuleCtx ->
   List (String, Scheme) ->
   (ModuleBindings, List (String, PubScheme), ModuleCtx)
 checkCoreMemoized prev key coreDecls runtimeSeed =
-  match coreCheckMemoHit graphCtx.value key
+  match coreCheckMemoHit prev.mcGraph key
     Some m =>
       let restored =
         restoreGraphCtx
@@ -53268,7 +53209,7 @@ checkCoreMemoized prev key coreDecls runtimeSeed =
       -- #837: coreSchemeObligationsRef is NAME-keyed (declaredCrossModuleObls reads it by
       -- bare cross-module name).
       let coreContexts = coreOwnContexts coreCtx
-      graphCtx.value.crossRun.coreSchemeObligationsRef := coreContexts
+      prev.mcGraph.crossRun.coreSchemeObligationsRef := coreContexts
       let corePub = freezeRows (publishCore coreContexts coreSchemes.mbSchemes)
       let _ = match key
         None => ()
@@ -53277,7 +53218,7 @@ checkCoreMemoized prev key coreDecls runtimeSeed =
           -- drive's record, which the memo would otherwise keep alive.
           let snap = snapshotGraphCtx coreCtx.mcGraph
           coreCheckMemoRef := Some CoreCheckMemo {
-            ccmKey = (k, graphCtx.value.config.value.tcIoJoinProfile),
+            ccmKey = (k, prev.mcGraph.config.value.tcIoJoinProfile),
             ccmCoreSchemes = coreSchemes,
             ccmCorePub = corePub,
             ccmCrossRun = snap.crossRun,
@@ -53361,7 +53302,6 @@ mintGraphCtx inputs admitted =
     graphAdmittedMethodsRef = Ref admitted,
     builtinExternNamesRef = carried.externCatalog,
   }
-  graphCtx := gctx
   interners := internersOf gctx
   gctx
 
@@ -53424,24 +53364,24 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- #1112 A-3.1: the units here are what `deAllDecls` flattens (`declEnvDeclsOf`),
   -- in the same order; `populateEffectDomainsGraph` walks them without building
   -- that concatenation a second time.
-  let _ = populateEffectDomainsGraph graphCtx.value coreDecls modules
+  let _ = populateEffectDomainsGraph gctx coreDecls modules
   -- What `IO` joins, from the grants of the profile the verb selected, after the
   -- domains the atoms take their tops from.  `run` checks against `runProfile` of
   -- that profile, whose host-label grants are the selected profile's own.
-  graphCtx.value.config := tcConfigOf graphCtx.value.effectDomains.value inputs
+  gctx.config := tcConfigOf gctx.effectDomains.value inputs
   -- the prelude's own contribution to every derivation below, from the memo when
   -- the caller supplied a prelude key -- see `PreludePreamble`.  The row is built
   -- HERE, not inside the memo, because it carries THIS analyze's decls.
-  let coreRow = declEnvModule graphCtx.value 0 "core" coreDecls
-  let modRows = declEnvModulesFrom graphCtx.value 1 modules
-  let prelude = preludePreambleFor graphCtx.value preludeKey coreDecls coreRow
+  let coreRow = declEnvModule gctx 0 "core" coreDecls
+  let modRows = declEnvModulesFrom gctx 1 modules
+  let prelude = preludePreambleFor gctx preludeKey coreDecls coreRow
   -- L3 (xmod-identity #1351 spine): the graph-level mangled-funDefs fact, under the
   -- two-part safety property stated on `meExports` (F3: unconditional
   -- whole-value overwrite at the Module-mode driver entry + no reset point after it
   -- is what keeps compile N's flag from leaking into compile N+1).  The two terms
   -- are the `("core", coreDecls) :: modules` unit list split on its head, which
   -- `graphCarriesMangledFunDefs` folds with `||`.
-  graphCtx.value.mangledFunDefsPresentRef :=
+  gctx.mangledFunDefsPresentRef :=
     prelude.ppMangledFunDefs || graphCarriesMangledFunDefs modules
   -- #1112 A-3.1: the whole-graph declaration envelope, under the same two-part
   -- property as the line above (nothing resets it within the drive, and the
@@ -53449,8 +53389,8 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- carries the method namespace (`deMethods`) and the constructor export index
   -- (`deData.deCtorExports`), so it is written before any module — the core pass
   -- included — reads a method's scope or a constructor's import witness.
-  let declEnvs = buildDeclEnvs graphCtx.value prelude.ppEnvAcc coreRow modRows
-  graphCtx.value.declEnvsRef := declEnvs
+  let declEnvs = buildDeclEnvs gctx prelude.ppEnvAcc coreRow modRows
+  gctx.declEnvsRef := declEnvs
   -- #1280: `coreDecls` arrives here ALREADY STAMPED (the caller's
   -- `stampGraphTyOrigins` line), but the scope is derived from its type
   -- NAMES, not its origins, so it is the same map either way.
@@ -53459,7 +53399,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- authority binder only by the head's declared kind.
   let runtimeSeed = withDeclParamKinds initial coreDecls (u =>
     externSchemes initial (runtimeExternTyOriginScope coreDecls) runtimeDecls)
-  let _ = seedAbstractRecordTypes graphCtx.value coreDecls modules
+  let _ = seedAbstractRecordTypes gctx coreDecls modules
   -- #2705: BOTH arms MARK (solving is not optional), with the same sets, and each
   -- module is marked on the schedule inside `checkBodyImpl` — after any memo
   -- restore of `GraphCtx.graphRun`, never before, which is what keeps a minted cell indexing
@@ -53470,12 +53410,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- return-position/non-nameable axis it scopes is expressed by
   -- `test/shadow_fixtures/d24_definer_return_pos_not_nameable/`.
   let ms =
-    markSetsOf
-      graphCtx.value
-      prelude.ppMarkFacts
-      coreDecls
-      modules
-      declEnvs.deAllDecls
+    markSetsOf gctx prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls
   -- Both arms PROMOTE: an unsignatured user fn whose body dispatches a method gets
   -- an inferred constraint and joins the dict-name set, so its occurrences route
   -- through its own dictionary parameter on every verb.  The completeness judgment
@@ -53483,8 +53418,8 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- see `RNone` where the tree arm sees `RDict`.  The eligible set is written and
   -- the harvest cleared at the entry of every drive, which `maybeInferConstraint`
   -- reads.
-  let _ = setDictEligible graphCtx.value (moduleUserFnNames modules)
-  graphCtx.value.promotionHarvestRef := []
+  let _ = setDictEligible gctx (moduleUserFnNames modules)
+  gctx.promotionHarvestRef := []
   -- The core pass.  The diags arm memoizes it under the caller's prelude key (see
   -- `checkCoreMemoized`, which also drains core's stamping context so a hit
   -- restores an empty queue).  The tree arm cannot: it needs core's MARKED decls
@@ -53500,7 +53435,6 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
         checkCoreMemoized initial preludeKey coreDecls runtimeSeed
       -- The graph record the drive continues from: a hit's restored one, or the
       -- minted one.  Nothing holds `initial` past this point.
-      graphCtx := coreCtx.mcGraph
       interners := internersOf coreCtx.mcGraph
       (
         bindings,
@@ -53764,7 +53698,7 @@ cmFold runtimeSeed coreSchemes coreCtx modules =
 -- the method index on `GraphCtx` (F1: `check` clean while `run`/`build` reported a
 -- type error).  For it the precondition is "overwrite with this run's graph before the
 -- first module":
---     graphCtx.value.declEnvsRef := declEnvs
+--     gctx.declEnvsRef := declEnvs
 -- which `graphPreamble` — the one Module-mode driver entry — does.  The failure modes
 -- differ in kind: skipping `mintGraphCtx` leaks the previous run's universe;
 -- skipping this write leaves the previous run's envelope in place, and a stale method
@@ -53815,7 +53749,7 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
   -- at stage K in lockstep with the `dataEnv` overlay — the two must stay on the same
   -- pool ("keeps the two overlays in lockstep", above), and `mid` is this function's
   -- own parameter, so the same loader-derived key reaches both.
-  let declEnvsHere = graphCtx.value.declEnvsRef.value
+  let declEnvsHere = gctx.declEnvsRef.value
   -- 🚨 `…FirstWins`: `oracleMap` is `omFromPairs (reverseL …)`, so the FIRST row wins and
   -- the `UseGroup` rows must come FIRST for an explicitly named member to outrank a
   -- wildcard.  The `dataEnv` overlay takes `…LastWins` — opposite order, same rule,
@@ -53828,7 +53762,7 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
           (declEnvsOrdOf mid declEnvsHere)
           declEnvsHere.deModules
         ++ oracleImportDecls
-          graphCtx.value
+          gctx
           prog
           (declEnvsOrdOf mid declEnvsHere)
           declEnvsHere.deModules
@@ -53969,11 +53903,10 @@ graphModuleWorker sel prev mid seed accData accAll prog =
   let _ = match sel
     GOutTrees =>
       let _ = match lookupAssoc "main" schemes.mbSchemes
-        Some sc => graphCtx.value.mainSchemeRef := Some sc
+        Some sc => prev.mcGraph.mainSchemeRef := Some sc
         None => ()
-      graphCtx.value.promotionHarvestRef :=
-        dedup
-          (graphCtx.value.promotionHarvestRef.value ++ mctx.promotedRef.value)
+      prev.mcGraph.promotionHarvestRef :=
+        dedup (prev.mcGraph.promotionHarvestRef.value ++ mctx.promotedRef.value)
       ()
     GOutDiags => ()
   (schemes, (marked, published, errs, warns), mctx)
@@ -54121,15 +54054,16 @@ chainMemoReplayedSteps _ = match moduleChainMemoRef.value
   None => 0
   Some memo => memo.chReplayed
 
+-- The method-return views of [gctx]: its live goals sealed, then its memoized views.
 export
-methodReturnMemoCurrentViews : Unit -> List MethodReturnMemoView
-methodReturnMemoCurrentViews _ =
+methodReturnMemoCurrentViews : GraphCtx -> List MethodReturnMemoView
+methodReturnMemoCurrentViews gctx =
   let (_, live) =
     sealMethodReturnGoals
-      graphCtx.value
-      graphCtx.value.graphRun.evTable.value
-      graphCtx.value.graphRun.goals.value
-  live ++ graphCtx.value.graphRun.memoMethodReturns.value
+      gctx
+      gctx.graphRun.evTable.value
+      gctx.graphRun.goals.value
+  live ++ gctx.graphRun.memoMethodReturns.value
 
 -- Test-only lifecycle observation: model session teardown by clearing the two
 -- GraphRun-owning memos, observe the family counters at their floor, then restore
@@ -54157,12 +54091,12 @@ firstExactReturnRequest (goal :: rest) = match exactReturnRequestOfGoal goal
 -- resolution Ref.  The third proves the memo projection removes that carrier and
 -- retains only a closed observation.
 export
-methodReturnMemoFenceMutationProbe : Unit -> (Bool, Bool, Bool)
-methodReturnMemoFenceMutationProbe _ =
-  match firstExactReturnRequest graphCtx.value.graphRun.goals.value
+methodReturnMemoFenceMutationProbe : GraphCtx -> (Bool, Bool, Bool)
+methodReturnMemoFenceMutationProbe gctx =
+  match firstExactReturnRequest gctx.graphRun.goals.value
     None => (False, False, False)
     Some request =>
-      let shallow = copyGraphRun graphCtx.value.graphRun
+      let shallow = copyGraphRun gctx.graphRun
       let skippedSeal = exactReturnGoalCount shallow.goals.value > 0
       let shallowShare = match firstExactReturnRequest shallow.goals.value
         None => False
@@ -54172,7 +54106,7 @@ methodReturnMemoFenceMutationProbe _ =
           let leaked = isNone request.mrrResolution.value
           request.mrrResolution := saved
           leaked
-      let sealed = copyGraphRunForMemo graphCtx.value graphCtx.value.graphRun
+      let sealed = copyGraphRunForMemo gctx gctx.graphRun
       let sealedSafe =
         exactReturnGoalCount sealed.goals.value == 0
           && isNonEmptyL sealed.memoMethodReturns.value
@@ -54250,7 +54184,55 @@ checkModulesChainReportFor : DriveInputs ->
   List Decl ->
   List (String, List Decl) ->
   (TcReport, DriveOutputs)
-checkModulesChainReportFor inputs valueMain None _ _ runtimeDecls coreDecls0 modules0 =
+checkModulesChainReportFor inputs valueMain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+  fst
+    (checkModulesChainReportForGraph
+      inputs
+      valueMain
+      preludeKey
+      chainKey
+      stepKeys
+      runtimeDecls
+      coreDecls0
+      modules0)
+
+-- `checkModulesDiagsChain` beside the graph record its drive ends in, for a test that
+-- observes that record after the drive.
+export
+checkModulesDiagsChainGraph : DriveInputs ->
+  Option (Int, Int) ->
+  String ->
+  List (Option String) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (List ModDiags, GraphCtx)
+checkModulesDiagsChainGraph inputs preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+  let ((report, _), gctx) =
+    checkModulesChainReportForGraph
+      inputs
+      False
+      preludeKey
+      chainKey
+      stepKeys
+      runtimeDecls
+      coreDecls0
+      modules0
+  (report.trDiagnostics, gctx)
+
+-- `checkModulesChainReportFor` beside the graph record its drive ends in, for a test
+-- that observes that record after the drive.
+export
+checkModulesChainReportForGraph : DriveInputs ->
+  Bool ->
+  Option (Int, Int) ->
+  String ->
+  List (Option String) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  ((TcReport, DriveOutputs), GraphCtx)
+checkModulesChainReportForGraph inputs valueMain None _ _ runtimeDecls coreDecls0 modules0 =
   let g =
     driveGraphK
       inputs
@@ -54261,8 +54243,8 @@ checkModulesChainReportFor inputs valueMain None _ _ runtimeDecls coreDecls0 mod
       runtimeDecls
       coreDecls0
       modules0
-  (g.gdReport, g.gdOutputs)
-checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+  ((g.gdReport, g.gdOutputs), g.gdGraph)
+checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   -- The keyed arm mirrors `driveGraphK`'s prologue by hand, so it owes the same
   -- method-alias rewrite: without it this arm typechecks a graph in which
   -- `import m as A` binds none of `m`'s methods under their origin name, and a bare
@@ -54281,7 +54263,7 @@ checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys ru
       coreDecls
       modules
   let fullKey =
-    "\{graphCtx.value.config.value.tcKey}\n\{chainFullKey rk ck chainKey}\n\{chainGraphKey modules}"
+    "\{coreCtx.mcGraph.config.value.tcKey}\n\{chainFullKey rk ck chainKey}\n\{chainGraphKey modules}"
   let steps = match !moduleChainMemoRef
     Some m => if m.chKey == fullKey then m.chSteps else []
     None => []
@@ -54305,7 +54287,6 @@ checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys ru
       )
   -- The graph record the suffix continues from: the restored prefix's, or the one the
   -- core pass left.  Nothing holds `coreCtx` past this point.
-  graphCtx := resumeModule.mcGraph
   interners := internersOf resumeModule.mcGraph
   let n = listLen kept
   -- A restored step's rows were frozen when it was recorded, so nothing is open.
@@ -54355,18 +54336,18 @@ checkModulesChainReportFor inputs valueMain (Some (rk, ck)) chainKey stepKeys ru
   let entryTables = captureEntryTables lastCtx coreContexts modules
   -- Built for the report, not installed: no lowering reads a check drive's table.
   let dispositions =
-    buildDispositions graphCtx.value graphCtx.value.declEnvsRef.value
+    buildDispositions lastCtx.mcGraph lastCtx.mcGraph.declEnvsRef.value
   let report =
     graphReport
       perMod
       (publishedCore coreClosed coreContexts coreSchemes)
       []
-      (drivenEvidence graphCtx.value)
+      (drivenEvidence lastCtx.mcGraph)
       dispositions
-      graphCtx.value.graphRun.binderRows.value
+      lastCtx.mcGraph.graphRun.binderRows.value
       None
       entryTables
-  (report, driveOutputsNow lastCtx)
+  ((report, driveOutputsNow lastCtx), lastCtx.mcGraph)
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `driveGraphK GOutDiags`'s `foldModules` exactly:
@@ -54398,27 +54379,17 @@ chainGo baseSeed coreV depEnv accData accAll results open _ steps prev [(mid, pr
     moduleImportSeed
       prev
       baseSeed
-      (importSeed
-        graphCtx.value
-        coreV
-        (admittedIn graphCtx.value mid)
-        prog
-        depEnv)
+      (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
   let (_, (_, published, errs, warns), next) =
     graphModuleWorker GOutDiags prev mid seed accData accAll prog
-  let _ = setMainSchemeIfEntry graphCtx.value True published
+  let _ = setMainSchemeIfEntry next.mcGraph True published
   ((mid, (published, errs, warns)) :: results, open + 1, steps, next)
 chainGo baseSeed coreV depEnv accData accAll results open keys steps prev ((mid, prog) :: rest) =
   let seed =
     moduleImportSeed
       prev
       baseSeed
-      (importSeed
-        graphCtx.value
-        coreV
-        (admittedIn graphCtx.value mid)
-        prog
-        depEnv)
+      (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
   let (schemes, (_, published, errs, warns), next) =
     graphModuleWorker GOutDiags prev mid seed accData accAll prog
   let pubV = publicModuleExports prog schemes ++ reexportSeed coreV prog depEnv
@@ -54432,7 +54403,7 @@ chainGo baseSeed coreV depEnv accData accAll results open keys steps prev ((mid,
     [] => (None, [])
   -- A live root still open is a later module's to ground, so this prefix is not
   -- closed and records no step: the step's drain would stamp its goals unground.
-  let stepKey = if liveRootsOpen graphCtx.value () then None else key
+  let stepKey = if liveRootsOpen next.mcGraph () then None else key
   match stepKey
     None =>
       -- No key for this module: nothing after it can be resumed either, so the rest
@@ -54626,6 +54597,7 @@ driveOutputsNow mctx = DriveOutputs {
   doIfaceExports = ifaceExportsIndex mctx.mcGraph (),
   doFfiAliases = mctx.mcGraph.declEnvsRef.value.deData.deAliases,
   doOrdIndex = mctx.mcGraph.declEnvsRef.value.deOrdIndex,
+  doEffvarNext = mctx.mcGraph.graphRun.effvarCounter.value,
 }
 
 frozenInvocationView : InvocationView -> InvocationView
@@ -54698,7 +54670,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       True
       True
       (graphModuleWorker sel)
-      (graphCollect graphCtx.value sel)
+      (graphCollect coreCtx.mcGraph sel)
       ([], [])
       (runtimeSeed ++ coreSchemes.mbSchemes)
       (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
@@ -54742,7 +54714,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
   -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
   -- above is already complete at this point, on both arms alike.
   let dispositions =
-    buildDispositions graphCtx.value graphCtx.value.declEnvsRef.value
+    buildDispositions lastCtx.mcGraph lastCtx.mcGraph.declEnvsRef.value
   match sel
     GOutDiags => GraphDrive {
       gdPerMod = perMod,
@@ -54751,17 +54723,17 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       gdCore = [],
       gdModules = [],
       gdResidual = [],
-      gdEvTable = graphCtx.value.graphRun.evTable.value,
+      gdEvTable = lastCtx.mcGraph.graphRun.evTable.value,
       gdDispositions = dispositions,
-      gdBinders = graphCtx.value.graphRun.binderRows.value,
+      gdBinders = lastCtx.mcGraph.graphRun.binderRows.value,
       gdReport =
         graphReport
           perMod
           corePub
           []
-          (drivenEvidence graphCtx.value)
+          (drivenEvidence lastCtx.mcGraph)
           dispositions
-          graphCtx.value.graphRun.binderRows.value
+          lastCtx.mcGraph.graphRun.binderRows.value
           None
           entryTables,
       gdGraph = lastCtx.mcGraph,
@@ -54774,9 +54746,9 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       -- `markRecursiveOccurrences`).
       let dictNames =
         markDictNames
-          graphCtx.value
+          lastCtx.mcGraph
           (dedup
-            (ms.msBareDictNames ++ graphCtx.value.promotionHarvestRef.value))
+            (ms.msBareDictNames ++ lastCtx.mcGraph.promotionHarvestRef.value))
           coreDecls
           modules
       let (coreD, modules3) =
@@ -54785,11 +54757,12 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       -- alias-qualified method occurrence (`A.mth` -> `mth`) that inference kept.
       -- Only the user modules go through it: core imports nothing, so it holds no
       -- alias-qualified spelling to restore.
-      let modulesOut = map (resolveAliasMethodSpellings graphCtx.value) modules3
+      let modulesOut =
+        map (resolveAliasMethodSpellings lastCtx.mcGraph) modules3
       let residual =
-        stickyDiagsInPushOrder graphCtx.value.typeErrorsStickyDiags.value
+        stickyDiagsInPushOrder lastCtx.mcGraph.typeErrorsStickyDiags.value
       -- read after `dictPass`, so it carries the `EMethodAt` nodes `dictPass` minted
-      let evidence = drivenEvidence graphCtx.value ()
+      let evidence = drivenEvidence lastCtx.mcGraph ()
       GraphDrive {
         gdPerMod = perMod,
         gdCoreSchemes = corePub,
@@ -54799,8 +54772,8 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
         gdResidual = residual,
         gdEvTable = evidence,
         gdDispositions = dispositions,
-        gdBinders = graphCtx.value.graphRun.binderRows.value,
-        gdReport = { graphReport perMod corePub residual (_ => evidence) dispositions graphCtx.value.graphRun.binderRows.value (Some (coreD, modulesOut)) entryTables |
+        gdBinders = lastCtx.mcGraph.graphRun.binderRows.value,
+        gdReport = { graphReport perMod corePub residual (_ => evidence) dispositions lastCtx.mcGraph.graphRun.binderRows.value (Some (coreD, modulesOut)) entryTables |
           trAutoPrint = autoPrint,
         },
         gdGraph = lastCtx.mcGraph,
@@ -55160,6 +55133,24 @@ checkModulesEntryFullReportK : DriveInputs ->
   List (String, List Decl) ->
   (TcReport, DriveOutputs)
 checkModulesEntryFullReportK inputs valueMain preludeKey runtimeDecls coreDecls0 modules0 =
+  fst
+    (checkModulesEntryFullReportKGraph
+      inputs
+      valueMain
+      preludeKey
+      runtimeDecls
+      coreDecls0
+      modules0)
+
+-- `checkModulesEntryFullReportK` beside the graph record its drive ends in.
+checkModulesEntryFullReportKGraph : DriveInputs ->
+  Bool ->
+  Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  ((TcReport, DriveOutputs), GraphCtx)
+checkModulesEntryFullReportKGraph inputs valueMain preludeKey runtimeDecls coreDecls0 modules0 =
   -- The single-file front door loads stdlib/core.mdk twice: once as its prelude and
   -- once as the singleton `__user__` module.  Resolve already owns the syntactic
   -- self-test that prevents double-seeding core.  Apply that same authority before
@@ -55185,7 +55176,7 @@ checkModulesEntryFullReportK inputs valueMain preludeKey runtimeDecls coreDecls0
       runtimeDecls
       effectiveCoreDecls0
       effectiveModules0
-  (g.gdReport, g.gdOutputs)
+  ((g.gdReport, g.gdOutputs), g.gdGraph)
 
 -- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
 prependDiagOpt : String ->
@@ -55310,10 +55301,22 @@ checkOneSchemeFullK : DriveInputs ->
   (String, List Decl) ->
   (List (String, PubScheme), List (String, PubScheme))
 checkOneSchemeFullK inputs preludeKey runtimeDecls coreDecls prog =
-  let (coreSchemes, schemes, _, _) =
-    entrySplit
-      (checkOneReportK inputs False preludeKey runtimeDecls coreDecls prog)
-  (coreSchemes, schemes)
+  fst (checkOneSchemeFullKGraph inputs preludeKey runtimeDecls coreDecls prog)
+
+-- `checkOneSchemeFullK` beside the graph record its drive ends in, for a test that
+-- observes that record after the drive.
+export
+checkOneSchemeFullKGraph : DriveInputs ->
+  Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  (String, List Decl) ->
+  ((List (String, PubScheme), List (String, PubScheme)), GraphCtx)
+checkOneSchemeFullKGraph inputs preludeKey runtimeDecls coreDecls prog =
+  let (report, gctx) =
+    checkOneReportKGraph inputs False preludeKey runtimeDecls coreDecls prog
+  let (coreSchemes, schemes, _, _) = entrySplit report
+  ((coreSchemes, schemes), gctx)
 
 -- diagnostics-returning sibling of `checkOneScheme`, matching the former wrapper's
 -- return shape (`(errs, warns)`) exactly, so a call site can swap targets with no
@@ -55326,6 +55329,20 @@ checkOneDiags : DriveInputs ->
   (List TcDiag, List TcDiag)
 checkOneDiags inputs runtimeDecls coreDecls prog =
   checkOneDiagsK inputs False None runtimeDecls coreDecls prog
+
+-- `checkOneDiags` beside the graph record its drive ends in, for a test that observes
+-- that record after the drive.
+export
+checkOneDiagsGraph : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  (String, List Decl) ->
+  ((List TcDiag, List TcDiag), GraphCtx)
+checkOneDiagsGraph inputs runtimeDecls coreDecls prog =
+  let (report, gctx) =
+    checkOneReportKGraph inputs False None runtimeDecls coreDecls prog
+  let (_, _, errs, warns) = entrySplit report
+  ((errs, warns), gctx)
 
 -- `checkOneDiags` with the prelude key for the core-check memo — same contract as
 -- `checkOneSchemeFullK` — and the caller's value-main candidate (`autoPrintWanted`).
@@ -55353,15 +55370,33 @@ checkOneReportK : DriveInputs ->
   List Decl ->
   (String, List Decl) ->
   TcReport
-checkOneReportK inputs valueMain preludeKey runtimeDecls coreDecls (rootId, prog) =
+checkOneReportK inputs valueMain preludeKey runtimeDecls coreDecls prog =
   fst
-    (checkModulesEntryFullReportK
+    (checkOneReportKGraph
       inputs
       valueMain
       preludeKey
       runtimeDecls
       coreDecls
-      [(rootId, prog)])
+      prog)
+
+-- `checkOneReportK` beside the graph record its drive ends in.
+checkOneReportKGraph : DriveInputs ->
+  Bool ->
+  Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  (String, List Decl) ->
+  (TcReport, GraphCtx)
+checkOneReportKGraph inputs valueMain preludeKey runtimeDecls coreDecls (rootId, prog) =
+  let ((report, _), gctx) = checkModulesEntryFullReportKGraph
+    inputs
+    valueMain
+    preludeKey
+    runtimeDecls
+    coreDecls
+    [(rootId, prog)]
+  (report, gctx)
 
 -- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers, matching
 -- `checkToLinesWithRuntime`'s / `checkErrorsWithRuntime`'s (runtimeDecls, coreProg,
@@ -55521,6 +55556,25 @@ elaborateModules inputs runtimeDecls coreDecls0 modulesIn =
     modulesIn)
     (result, _, _) => result
 
+-- `elaborateModules` beside the graph record its drive ends in, for a test that
+-- observes that record after the drive.
+export
+elaborateModulesGraph : DriveInputs ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (ElabResult, GraphCtx)
+elaborateModulesGraph inputs runtimeDecls coreDecls0 modulesIn =
+  let ((result, _, _), gctx) =
+    elaborateModulesWithReportGraph
+      inputs
+      False
+      None
+      runtimeDecls
+      coreDecls0
+      modulesIn
+  (result, gctx)
+
 -- `elaborateModules` together with the prelude's schemes and the entry module's own
 -- schemes, from the SAME drive: a verb that both reads types and evaluates the
 -- elaborated program (`check-policy`) typechecks once.  `valueMain` is the caller's
@@ -55556,6 +55610,24 @@ elaborateModulesWithReport : DriveInputs ->
   List (String, List Decl) ->
   (ElabResult, TcReport, DriveOutputs)
 elaborateModulesWithReport inputs valueMain executes runtimeDecls coreDecls0 modulesIn =
+  fst
+    (elaborateModulesWithReportGraph
+      inputs
+      valueMain
+      executes
+      runtimeDecls
+      coreDecls0
+      modulesIn)
+
+-- `elaborateModulesWithReport` beside the graph record its drive ends in.
+elaborateModulesWithReportGraph : DriveInputs ->
+  Bool ->
+  Option String ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  ((ElabResult, TcReport, DriveOutputs), GraphCtx)
+elaborateModulesWithReportGraph inputs valueMain executes runtimeDecls coreDecls0 modulesIn =
   let g =
     driveGraphK
       inputs
@@ -55568,16 +55640,19 @@ elaborateModulesWithReport inputs valueMain executes runtimeDecls coreDecls0 mod
       modulesIn
   (
     (
-      g.gdCore,
-      g.gdModules,
-      map dropModSchemes g.gdPerMod,
-      g.gdResidual,
-      g.gdEvTable,
-      g.gdDispositions,
-      g.gdBinders,
+      (
+        g.gdCore,
+        g.gdModules,
+        map dropModSchemes g.gdPerMod,
+        g.gdResidual,
+        g.gdEvTable,
+        g.gdDispositions,
+        g.gdBinders,
+      ),
+      g.gdReport,
+      g.gdOutputs,
     ),
-    g.gdReport,
-    g.gdOutputs,
+    g.gdGraph,
   )
 
 -- The report of `elaborateModules`' drive, for a test that reads it.
@@ -56698,14 +56773,12 @@ markModules coreDecls modules =
   let carried = interners.value
   let base = initialGraphCtx builtinCtors (graphLineageRun None carried.lineage)
   let gctx = GraphCtx { base | builtinExternNamesRef = carried.externCatalog }
-  graphCtx := gctx
   interners := internersOf gctx
   let mctx = initialModuleCtx gctx
   let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
   let core2 = prePassDict mctx rpNames [] coreDecls
   let modules2 = map (prePassModulePair mctx rpNames) modules
   let marked = GraphRun { gctx.graphRun | markedAhead = True }
-  graphCtx := GraphCtx { gctx | graphRun = marked }
   (core2, modules2, marked)
 
 -- typecheck one module (seeded like checkModuleFull) AND immediately stamp the
@@ -57019,7 +57092,7 @@ captureTypeErrors mctx act =
 -- record the drain enters for it (`enterStampCtx`).
 drainStampQueue : ModuleCtx -> List DrainFinding
 drainStampQueue saved =
-  let ctxs = reverseL graphCtx.value.graphRun.stampCtxs.value
+  let ctxs = reverseL saved.mcGraph.graphRun.stampCtxs.value
   let _ = defaultLiveNumRoots saved
   let held = judgeLiveGoals saved ctxs
   let verdicts = runStampCtxs saved ctxs
@@ -57032,9 +57105,9 @@ drainStampQueue saved =
         dfVerdict = False,
         dfLive = isLiveSpan liveLocs (tcLoc d),
       })
-      (judgeEvidence graphCtx.value ctxs)
-  let _ = materializeBinderTypes graphCtx.value ()
-  graphCtx.value.graphRun.stampCtxs := []
+      (judgeEvidence saved.mcGraph ctxs)
+  let _ = materializeBinderTypes saved.mcGraph ()
+  saved.mcGraph.graphRun.stampCtxs := []
   held ++ verdicts ++ holes
 
 -- The completeness judgment (`types/evidence_complete.mdk`) over the evidence this
@@ -57212,7 +57285,7 @@ runStampCtx saved ctx =
   let stamp = enterStampCtx saved ctx
   let _ = refileDeterminedRows stamp ()
   let _ = runStampSteps stamp ctx moduleStampOrder
-  let _ = recordEvidence graphCtx.value ctx.scGoals
+  let _ = recordEvidence saved.mcGraph ctx.scGoals
   let liveSpans = omFromNames ctx.scLiveLocs omEmpty
   map
     (d => verdictFinding ctx.scModule (isLiveSpan liveSpans (tcLoc d)) d)

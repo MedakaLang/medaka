@@ -73,7 +73,7 @@ on push but not a linear rescan.
 
 - `moduleWindow : Ref (List a) -> Int -> List a` (`compiler/types/typecheck.mdk:9304`)
   — `let now = cell.value in takeFirst (listLen now - mark) now`. Called on
-  `graphCtx.value.graphRun.goals` (line 2984) and `gctx.graphRun.numlitRefs` (lines 19834, 30440,
+  `gctx.graphRun.goals` (line 2984) and `gctx.graphRun.numlitRefs` (lines 19834, 30440,
   42378) — the run-wide goals/numlit channels.
 - the transitive-importer walk (`compiler/types/typecheck.mdk` ~41791 at the census base),
   called from `dictPassModulesScoped` (~41441) once per module in the program, each call a
@@ -1134,7 +1134,7 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:42103 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:42268 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:42487 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:42567 | contains/elem/dedup | `graphCtx.value.promotionHarvestRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:42567 | contains/elem/dedup | `prev.mcGraph.promotionHarvestRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 
 ### `lookupTab` sites (18)
 

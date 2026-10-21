@@ -23,4 +23,4 @@ tools.target_parse	2
 tools.test_cmd	1
 types.program_facts	1
 types.target_profile	1
-types.typecheck	5
+types.typecheck	4
