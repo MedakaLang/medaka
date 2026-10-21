@@ -1,0 +1,21 @@
+-- Applying a non-function, or applying a function to too many arguments, is
+-- located at the application, head through last argument, not at the `if`
+-- around it.  A parenthesised application keeps its brackets.
+grow : Int -> Int
+grow n =
+  if n > 0 then
+    n + 100
+  else
+    n 1
+
+render : Int -> String
+render k =
+  if k > 0 then
+    "positive"
+  else
+    intToString k 7
+
+shrink : Int -> Int
+shrink j = 1 + (j 2)
+
+main = println (grow 1)

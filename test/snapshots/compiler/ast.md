@@ -1,5 +1,5 @@
 # META
-source_lines=2759
+source_lines=2760
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1690,8 +1690,9 @@ public export data Expr =
   | EDictAt String EvId
   -- Transparent source-location wrapper.  The parser wraps atom/leaf and statement-form productions
   -- (matching parser.mly's atoms + let/if/match/function/do/lambda/as-pat) so
-  -- typecheck/resolve can attribute errors to a precise expression span via a
-  -- `currentLoc` ref.  Semantically transparent: every stage either recurses
+  -- typecheck/resolve can attribute errors to a precise expression span: the
+  -- typechecker scopes the span of the innermost enclosing construct as a value
+  -- (`ModuleCtx.mcLoc`), never a cell.  Semantically transparent: every stage either recurses
   -- through it or strips it.  sexp.mdk renders it transparently and core_ir_
   -- lower.mdk strips it before Core IR, keeping only the trap sites of the
   -- nodes that can abort (`Loc` above), so the parse and sexp gates stay

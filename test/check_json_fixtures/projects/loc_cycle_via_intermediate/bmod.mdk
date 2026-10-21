@@ -1,0 +1,4 @@
+import cmod.{cfn}
+
+export bfn : Int -> Int
+bfn n = cfn n

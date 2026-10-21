@@ -93,9 +93,10 @@ Real call sites read `pushTypeError "T-EFFECT-LEAK" (effectLeakMsg bound escapin
 
 - **`pushTypeError` does NOT dedup** — it plain-conses. `pushTypeErrorOnce` is the
   deduping variant.
-- **`pushTypeError` captures `mctx.mcGraph.currentLocRef` itself.** That is correct
-  *during* the `infer` walk, but **stale in post-HM passes** — by then it points at
-  the last expression inferred. If your error fires from a deferred/post-HM pass,
+- **`pushTypeError` captures `mctx.mcLoc` itself**, the span of the innermost
+  construct around the push (a construct hands its sub-walk a copy with its own
+  span, `mctxAt`/`envAt`). That is right *during* the `infer` walk, but a post-HM
+  pass runs outside every construct and holds no span. If your error fires from a deferred/post-HM pass,
   capture the loc at *record* time into the obligation tuple (that is why
   `pendingCallObligations` (`:1530`) and `pendingImplObligations` (`:1368`) both
   carry an `Option Loc`) and raise with `pushTypeErrorOnceAt` / `pushTypeErrorHelpFixAt`.
@@ -134,7 +135,7 @@ the name, not the number.
 |---|---|
 | Unification / generalization | `unify` (:2305), `normalize` (:2261), `generalize` (:2398), `instantiate` (:2518), `freshVar` (:754), `enterLevel`/`exitLevel` (:854/:857), `currentLevel` (:745), `freshModuleCtx` |
 | Value restriction | `isNonexpansive` (:2424), `genBindingRestricted` (:2494), `lowerToCurrent` (:2470), `occursAdjust` (:2277) |
-| Errors / rendering | `pushTypeError` (:1991), `pushTypeErrorOnce` (:2005), `pushTypeErrorOnceAt` (:2018), `pushTypeErrorHelpFixAt` (:2055), `currentLocRef`, `ppMono` (:2603), `ppScheme` (:2565), `ppMonosShared` (:10147) |
+| Errors / rendering | `pushTypeError` (:1991), `pushTypeErrorOnce` (:2005), `pushTypeErrorOnceAt` (:2018), `pushTypeErrorHelpFixAt` (:2055), `mctxAt`, `ppMono` (:2603), `ppScheme` (:2565), `ppMonosShared` (:10147) |
 | Group inference (letrec/SCC) | `processSCCs` (:10751) → `processSCC` (:10799) → `sccSchemes` (:11089), `isLetrecGroup` (:10867) |
 | Constraint obligations | `recordCallObligations` (:3561), `recordImplObligation` (:4635), `recordSchemeCallObligations` (:4615); state in `pendingCallObligations` (:1530), `pendingImplObligations` (:1368), `schemeObligationsRef` (:1555). `allConcreteHeads` (:14345) is the is-it-ground test the obligation checkers actually gate on (`checkCallObligationsU` :13838, `checkReqOne` :14135). ⚠️ This row used to name a monoConcrete helper — which never served that role: it was the swapped-argument hint's private predicate, deleted with that hint (issue 1147). |
 | Interfaces / supers | `methodEntryHere`, `lookupQualPayload`, `ifaceSelfAndSupers`; the one closure combinator `superClosure`/`directSupers` (`compiler/types/superclass.mdk`). A dictionary carries its direct supers (DICT §2): an instance's supers are solved at its construction goal (`directSuperGoals`, `superRoutesAt`), and a given's super is a projection (`RProj`, `assumAnswerRoute`), never selected again |

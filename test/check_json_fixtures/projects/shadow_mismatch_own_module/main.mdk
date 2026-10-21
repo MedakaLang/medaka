@@ -1,0 +1,6 @@
+-- #3846: the importer-shadow type mismatch is located at `length xs` in this
+-- file, not at the provider's last expression.
+import provider.*
+count : Mappable t => t a -> Int
+count xs = length xs
+main = println (count (Some 1))

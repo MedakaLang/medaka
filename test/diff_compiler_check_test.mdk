@@ -831,9 +831,9 @@ letInBodyRows = [
   (
     "let_in_call_body",
     "g : Int -> Int\ng x = x\nf : Int -> String\nf x =\n  let y = 1 in g y\nmain = println (f 1)\n",
-    ["let_in_call_body.mdk:5:17: type mismatch: String vs Int"],
+    ["let_in_call_body.mdk:5:15: type mismatch: String vs Int"],
     [
-      "\"message\":\"type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":18,\"line\":4},\"start\":{\"character\":17,\"line\":4}}",
+      "\"message\":\"type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":18,\"line\":4},\"start\":{\"character\":15,\"line\":4}}",
     ],
   ),
 ]

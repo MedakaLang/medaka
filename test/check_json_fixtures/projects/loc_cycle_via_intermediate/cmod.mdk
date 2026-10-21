@@ -1,0 +1,8 @@
+export interface Alpha a requires Beta a where
+  alpha : a -> Int
+
+export interface Beta a requires Alpha a where
+  beta : a -> Int
+
+export cfn : Int -> Int
+cfn n = n + 1

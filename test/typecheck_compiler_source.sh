@@ -948,8 +948,8 @@ enclSlotIndex mctx (Some request) target encl =
 implReqDictVarOf mctx.mcGraph (Some request) m useScope
 entailAssumVar mctx _ m encl _ useScope (EKNestedTop iface _ _ rest) =
 goalMatchesGiven : GraphCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
-mctx.funPredicateSlotsRef :=
-mctx.methodPredicateSlotsRef :=
+mctx.mcCells.funPredicateSlotsRef :=
+mctx.mcCells.methodPredicateSlotsRef :=
 gctx.crossRun.crossModuleFunPredicateSlotsRef
 gctx.crossRun.crossModuleFunPredicateSlotsQualRef
 gctx.crossRun.crossModuleMethodPredicateSlotsRef :=
@@ -1367,7 +1367,7 @@ fi
 # Arithmetic with a prelude Num declaration carries that exact predicate through
 # its single route goal. The scalar-only recorder remains only as the fallback
 # inside recordBinopGoals for prelude-free arithmetic.
-numeric_operator_required='  let _ = recordBinopGoals env.teDyn.dcModule op dref lt
+numeric_operator_required='  let _ = recordBinopGoals at.teDyn.dcModule op dref lt
 goalRequestOfKind mctx _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
 entailAssumVar mctx request m encl _ useScope (EKPredicateOp _ _ _) =
 entailInst sx name m encl useScope tag (EKPredicateOp _ _ predicate) =
@@ -1420,16 +1420,16 @@ printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
     require_typecheck_arm_flat inferPropBodiesGo inferTestBodies 'let _ = settleClosedBody env.teDyn.dcModule (tconBuiltin "Bool")'
     require_typecheck_arm inferTestBodies settleClosedBody 'let _ = exitLevel env.teDyn.dcModule ()'
     require_typecheck_arm_flat inferTestBodies settleClosedBody 'settleClosedBody env.teDyn.dcModule (tconUnresolved "Expectation")'
-    require_typecheck_arm "$reader" "$next" 'let level = mctx.currentLevel.value + 1'
+    require_typecheck_arm "$reader" "$next" 'let level = mctx.mcCells.currentLevel.value + 1'
     require_typecheck_arm "$reader" "$next" 'NumBoundaryOwnedMethodBody level'
     continue
   fi
   require_typecheck_arm "$reader" "$next" 'let _ = exitLevel env.teDyn.dcModule ()'
   if [ "$disposition" = NumBoundaryOwnedMethodBody ]; then
-    require_typecheck_arm "$reader" "$next" 'let bodyLevel = env.teDyn.dcModule.currentLevel.value'
+    require_typecheck_arm "$reader" "$next" 'let bodyLevel = env.teDyn.dcModule.mcCells.currentLevel.value'
     require_typecheck_arm "$reader" "$next" 'NumBoundaryOwnedMethodBody bodyLevel'
   else
-    require_typecheck_arm "$reader" "$next" '(env.teDyn.dcModule.currentLevel.value + 1)'
+    require_typecheck_arm "$reader" "$next" '(env.teDyn.dcModule.mcCells.currentLevel.value + 1)'
   fi
 done || exit 1
 
@@ -1459,8 +1459,8 @@ require_typecheck_arm registerAmbiguousConstraintsOwnedBy oblDispatchMonos 'regi
 
 # Impl bodies read their method declaration and graded scope from one identity-keyed
 # ClassEnv row at the module ordinal.  The spelling-keyed fast/slow pair is retired.
+require_signature_flat 'inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List (Option Loc, Decl) -> Unit'
 ce_method_required='inferUserImplBodies : TcEnv -> List Decl -> ClassEnv -> Int -> List Decl -> Unit
-inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List Decl -> Unit
 match ceMethodTyAt iface mname cur ce
 ceMethodTyAt : IfaceRef ->
   match ceLookupAt key cur ce

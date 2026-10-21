@@ -1,0 +1,22 @@
+-- A call of a standalone that shadows an interface method, at an argument
+-- outside the standalone's domain, is located at the call, not at the `if`
+-- around it.
+interface Sizeable a where
+  size : a -> Int
+
+data Box = Box Int
+
+impl Sizeable Box where
+  size (Box n) = n
+
+size : Int -> Int
+size n = n + 1
+
+q : Int -> Int
+q k =
+  if k > 3 then
+    k
+  else
+    size "hi"
+
+main = println (q 1)

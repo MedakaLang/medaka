@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"W-NONEXHAUSTIVE","help":"add a `Blue => ...` arm or a `_` wildcard","kind":"warning","message":"non-exhaustive match on `Color`: missing `Blue`; add a `Blue => ...` arm or a `_` wildcard","range":{"end":{"character":12,"line":7},"start":{"character":9,"line":5}},"severity":2,"source":"medaka"}]}]}

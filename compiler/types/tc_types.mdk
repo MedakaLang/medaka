@@ -216,11 +216,10 @@ public export data SiteKind =
 public export data PendingEntry =
   -- fields: name/method, route ref to stamp, primary mono, enclosing-fn name, kind,
   -- and the site's own source span.
-  -- #1155 (F-3c): the 6th field is the `currentLoc` span snapshotted at the RECORD
-  -- site — during inference, while the ELoc context is live — exactly as `implObls`'
-  -- 5th element is (see `pushPendingObl`).  The resolvers run POST-HM, long after
-  -- inference left this expression, so the live `currentLoc` there names whatever
-  -- ELoc was entered last (observed: the body of an unrelated impl three lines away).
+  -- #1155 (F-3c): the 6th field is the enclosing construct's span (`mcLoc`)
+  -- snapshotted at the RECORD site — during inference, while the construct is live —
+  -- exactly as `implObls`' 5th element is (see `pushPendingObl`).  The resolvers run
+  -- POST-HM, outside every construct, so only the snapshot can name this expression.
   -- Each resolver loop hands this span down as the walk's `sxSite` so the min⊑ selector's
   -- ambiguity reject can point at the goal it was actually posed by.
   -- #2549 M2: the 7th field is this site's EVIDENCE ID — the value-level name of
@@ -593,15 +592,6 @@ public export data InstRef = InstRef String Int Int
 
 -- One impl, with what §2 K specifies — full head, context, method table — plus its
 -- identity and the scope its visibility is filtered on.
---
--- NO `ieLoc` FIELD, and that is a DEPARTURE from the §9.4 data shape with a
--- derived reason rather than an omission: `DImpl` carries no source location
--- (`compiler/frontend/ast.mdk` has no `declLoc`/`dLoc`; only `DFunDef`, `DTypeSig`
--- and `DUse` carry a `Loc`, and `DImpl`'s labels are `pub`/`iface`/`tys`/`reqs`/
--- `methods`/`implOrigin`), so an `ieLoc : Option Loc` here could only be `None`.  A field that is structurally always-`None` is
--- worse than an absent one — it reads as available to A-3.7 and is not.  Whoever
--- needs it must first give `DImpl` a location (or derive one from a method body's
--- `Expr`), which is its own unit.
 -- Positional, not a named record — and this is a measured emitter constraint,
 -- not a style choice.  §9.4 spells the row with named fields; this is the one place
 -- that spelling cannot be honoured, so the reason is written here rather than left
@@ -639,17 +629,11 @@ public export data InstRef = InstRef String Int Int
 -- reader of it expands an alias); the context; and the explicit/synthesized impl
 -- method table.  The table is not a selection key;
 -- after exact row selection it also supplies the method route-word collision set.
---
--- NO `Loc`, and that is a second DEPARTURE from the §9.4 data shape with a
--- derived reason rather than an omission: `DImpl` carries no source location
--- (`compiler/frontend/ast.mdk` has no `declLoc`/`dLoc`; only `DFunDef`, `DTypeSig`
--- and `DUse` carry a `Loc`, and `DImpl`'s labels are `pub`/`iface`/`tys`/`reqs`/
--- `methods`/`implOrigin`), so an `Option Loc` here could only ever be `None`.  A field that is structurally always-`None` is worse than an
--- absent one — it reads as available to A-3.7 and is not.  Whoever needs it must
--- first give `DImpl` a location (or derive one from a method body's `Expr`), which
--- is its own unit.
+-- The last field is the declaration's `implIfaceLoc`: coherence runs over rows
+-- with no construct around it, so a conflict is located at the impl's interface
+-- name.  A synthesized impl (a derived one) has none.
 public export data ImplRow =
-  | ImplRow Int InstRef IfaceRef (List Ty) (List Require) (List String)
+  | ImplRow Int InstRef IfaceRef (List Ty) (List Require) (List String) (Option Loc)
 
 -- The registry.  `ieRows` is the POPULATION in build order (ordinal order across
 -- modules, `implDeclsWithReqs` order within one); the rest are INDEXES over it.
@@ -836,22 +820,16 @@ public export data ImplAcc = ImplAcc {
 -- arm and not a re-key (the historical single-program arm was on a
 -- bare first-match scan).
 --
--- NO `ceLoc` FIELD, and that is a deliberate departure from a literal
--- reading of this unit's row sketch, for the SAME reason `ImplRow` carries no
--- `ieLoc`: `DInterface` has no `Loc` field at all
--- (`compiler/frontend/ast.mdk`'s `DInterface` record — `pub`/`def`/`name`/
--- `typarams`/`supers`/`methods`/`ifaceOrigin`, nothing carrying a source
--- position), so a `ceLoc : Option Loc` here could only ever be `None`.  A
--- field that is structurally always-`None` is worse than an absent one — it
--- reads as available to a consumer and is not.  Whoever needs it must first
--- give `DInterface` a location, which is its own unit.
+-- The last field is the declaration's `ifaceNameLoc`: a whole-program check over
+-- the rows (an interface cycle, a phantom method) has no construct around it, so
+-- it is located at the interface's name.
 --
 -- The SCOPE component of each `ceMethods` triple is `declGradedScope typarams
 -- methods`, shared across every method of one interface. `ceMethodTyAt` consumes it
 -- beside the raw Ty when checking an impl body; separating those lookups would let
 -- same-named interfaces disagree on which graded scope elaborates the method.
 public export data CeRow =
-  | CeRow RegKey Int IfaceRef (List String) (List (String, Ty, List (String, List Kind))) (List Super) (List (List Kind)) (List String)
+  | CeRow RegKey Int IfaceRef (List String) (List (String, Ty, List (String, List Kind))) (List Super) (List (List Kind)) (List String) (Option Loc)
 
 -- The registry.  `ceRows` is the population in build order (ordinal order
 -- across modules, declaration order within one); `ceByKey` is the single
@@ -947,9 +925,6 @@ public export data GraphCtx = GraphCtx {
   -- schedule.  `None` until a preamble has run; a Module arm reading `None` is a
   -- driver that skipped its preamble, and fails loud.
   markSetsRef : Ref (Option MarkSets),
-  -- The innermost ELoc span the inference walk has entered (the walk's current
-  -- location), `None` until the drive's first one.
-  currentLocRef : Ref (Option Loc),
   -- Armed by every recorded type error (`recordTypeError`), read by
   -- `typeErrorsArmed` and `driveOutputsNow`; the diagnostics behind it, newest first, each with its module.
   typeErrorsSticky : Ref Bool,
@@ -1343,13 +1318,13 @@ public export data UObligation = UObligation {
 public export data AbsorptionEvent = AbsorptionEvent {
   atom : Atom,  -- the concrete atom absorbed into a shared tail
   cell : Ref Effvar,  -- resolve the absorbing tail live at query time
-  loc : Option Loc,  -- currentLoc at the unify, for the diagnostic seam (None-safe)
+  loc : Option Loc,  -- the enclosing construct's span at the unify, for the diagnostic seam (None-safe)
 }
 
--- #1155 (F-3c): [pdaLoc] is the `currentLoc` span snapshotted at the RECORD
+-- #1155 (F-3c): [pdaLoc] is the enclosing construct's span snapshotted at the RECORD
 -- site, the same reason and the same shape as `PendingEntry`'s 6th field and
--- `implObls`' 5th element — `resolveDictApps` runs post-HM, so the live `currentLoc`
--- there is stale.  `resolveDictApps` hands it down as the walk's `sxSite`.
+-- `implObls`' 5th element — `resolveDictApps` runs post-HM, outside every
+-- construct.  `resolveDictApps` hands it down as the walk's `sxSite`.
 public export data PendingDictApp = PendingDictApp {
   -- #2549 M2: the goal's OWN cell, minted with the goal.  It used to be the
   -- `EDictAt` node's cell, which is how a reader reached the answer; the node now
@@ -1917,26 +1892,47 @@ public export data CheckRunSeed = CheckRunSeed {
   crsWarnings : List TcDiag,
 }
 
--- One module's state.  `checkBodyImpl` mints it once per module (`freshModuleCtx`) and
--- returns it, so the constructor is the reset: a new per-module field cannot be added
--- without appearing in `freshModuleCtx`, nor without a class in the module-field
--- partition (`moduleCtxFrom`).  The drivers hand the record to every reader after the
--- module (the graph-level diagnostics, and `driveOutputsNow`, which freezes
--- `lastInvocationOps`' view); every reader receives it as a parameter, or through
--- `DynCtx.dcModule` / `SiteCtx.sxModule`.  This is a record OF Refs (fields stay `Ref …`),
--- NOT a record of values: the hot accumulators (typeErrors, poisonedVars,
--- localBindRefs, …) are pushed with `setRef x (v :: x.value)`, so the field must be a
--- Ref for that to stay one Ref-write — a record of values would rebuild the whole
--- record on every push.  (`obls`, `implObls` — #838 I1 / #841 — are the exceptions:
--- each a small `Windowed a` VALUE whose own two fields are Refs — see `wPush` — so
--- pushing through one is still one Ref-write, not a whole-record rebuild.)
+-- One module's state: its cells, the graph record it is checked in, and the span of
+-- the construct around the check.  `checkBodyImpl` mints it once per module
+-- (`freshModuleCtx`) and returns it, so the constructor is the reset: a new per-module
+-- field cannot be added without appearing in `freshModuleCtx`, nor without a class in
+-- the module-field partition (`moduleCtxFrom`, `moduleCellsFrom`).  The drivers hand
+-- the record to every reader after the module (the graph-level diagnostics, and
+-- `driveOutputsNow`, which freezes `lastInvocationOps`' view); every reader receives
+-- it as a parameter, or through `DynCtx.dcModule` / `SiteCtx.sxModule`.  The span
+-- changes at every construct, so the record a construct copies holds three fields and
+-- the cells are one value every copy shares.
+public export data ModuleCtx = ModuleCtx {
+  -- The module's cells, shared by every copy of the record: a construct's copy
+  -- (`mctxAt`) replaces the span and keeps this one value.
+  mcCells : ModuleCells,
+  -- The graph record of the drive the module is checked in: the record the driver
+  -- passes to the module's mint, never read from a cell.  A memo stores a record whose
+  -- graph is the memo's own detached snapshot, and a hit re-points it at the hitting
+  -- drive's record, so no stored record keeps a drive's graph alive.
+  mcGraph : GraphCtx,
+  -- The span of the innermost construct around the check: the `ELoc` the walk is
+  -- inside, or the span a construct without one names for its own checks (`mctxAt`).
+  -- A construct hands its sub-walk an updated copy, so the span is gone when the
+  -- sub-walk returns.  `None` outside every construct: a mint starts with none, a
+  -- whole-record copy takes its run record's (none), and a post-inference pass
+  -- runs in a module-level record.
+  mcLoc : Option Loc,
+}
+
+-- The cells of one module's state (`ModuleCtx.mcCells`).  This is a record OF Refs
+-- (fields stay `Ref …`), NOT a record of values: the hot accumulators (typeErrors,
+-- poisonedVars, localBindRefs, …) are pushed with `setRef x (v :: x.value)`, so the
+-- field must be a Ref for that to stay one Ref-write — a record of values would rebuild
+-- the whole record on every push.  (`obls`, `implObls` — #838 I1 / #841 — are the
+-- exceptions: each a small `Windowed a` VALUE whose own two fields are Refs — see
+-- `wPush` — so pushing through one is still one Ref-write, not a whole-record rebuild.)
 --
 -- The fields after `markingRef` are the module's inputs and tables.  `checkBodyImpl`
 -- writes each before any read, except `currentModuleRef`, `matchOracle` and
 -- `matchWarnings`, which the mint sets: the module id, and the `CheckRunSeed` (or, on a
--- path that does not seed, the previous record's oracle and warnings).  `mcGraph` is
--- the mint's too: the graph record its caller passes.
-public export data ModuleCtx = ModuleCtx {
+-- path that does not seed, the previous record's oracle and warnings).
+public export data ModuleCells = ModuleCells {
   currentScope : Ref ScopeCursor,
   -- #2705 / S2-DECL (d): method occurrences whose bare spelling has two or more
   -- admitted declarations in this module's scope — (name, the occurrence's
@@ -2069,11 +2065,6 @@ public export data ModuleCtx = ModuleCtx {
   -- The module's constructors and variance table, read by `driveOutputsNow` into
   -- `DriveOutputs` — see `InvocationView`.
   invocationViewRef : Ref InvocationView,
-  -- The graph record of the drive the module is checked in: the record the driver
-  -- passes to the module's mint, never read from a cell.  A memo stores a record whose
-  -- graph is the memo's own detached snapshot, and a hit re-points it at the hitting
-  -- drive's record, so no stored record keeps a drive's graph alive.
-  mcGraph : GraphCtx,
 }
 
 -- DICT-SEMANTICS §3 W2: the one termination measure every `requires` walk shares.  A
@@ -2233,6 +2224,11 @@ public export data TcEnv = TcEnv {
 --     declared type: a leaf mismatch names the method.
 --   dcGroup — inside the inference of a top-level binding group: that group's
 --     record.  Absent in a tail body and anywhere outside a group.
+--   dcPerformSites — inside an impl method body whose signature charges an
+--     effect variable only in a result index: each call there that runs a row
+--     with a variable tail, with the call's span, newest first.  The body's
+--     effect checks after inference name the call that ran the variable.  The
+--     one Ref is minted per such body.
 --   dcModule — the record of the module the walk is checking (or of the stamp
 --     context the drain entered).
 public export data DoCtx = DoCtx {
@@ -2263,6 +2259,7 @@ public export data DynCtx = DynCtx {
   dcDo : Option DoCtx,
   dcMethodMismatch : Option String,
   dcGroup : Option GroupCtx,
+  dcPerformSites : Option (Ref (List (Ref Effvar, Option Loc))),
   dcModule : ModuleCtx,
 }
 
@@ -2278,6 +2275,7 @@ dynFor mctx = DynCtx {
   dcDo = None,
   dcMethodMismatch = None,
   dcGroup = None,
+  dcPerformSites = None,
   dcModule = mctx,
 }
 
@@ -2285,10 +2283,10 @@ dynFor mctx = DynCtx {
 -- the routes and diagnostics below it.  A walk that works on a site is handed an
 -- updated copy.
 --   sxSite — the span of the site, for a diagnostic the route solver raises where
---     it has no span argument.  `currentLoc` cannot serve: inference has long left
---     the offending expression, so it names whichever span was entered last.
---     Absent (a walk outside a resolver drain, such as an obligation check), the
---     diagnostic falls back to `currentLoc`.
+--     it has no span argument.  The walk runs after inference, outside every
+--     construct, so its module record holds no span.  Absent (a walk outside a
+--     resolver drain, such as an obligation check), the diagnostic falls back to
+--     `sxModule`'s `mcLoc`: the enclosing construct's during inference, none after.
 --   sxInner — the notes accumulator of the running stamp: each route built below
 --     the destination's top level is ORed in.  Absent outside a stamp, where the
 --     notes are not wanted.
@@ -2994,9 +2992,12 @@ public export data MethodBodyInstance = MethodBodyInstance {
 }
 
 -- What checking a body against its declared type reports to the steps after it.
+-- [mbcPerformedAt] is the span of the call that ran an effect variable, in a body
+-- that collects them (`dcPerformSites`).
 public export data MethodBodyCheck = MethodBodyCheck {
   mbcLaunderFlagged : Bool,
   mbcEagerIndexed : List String,
+  mbcPerformedAt : Option Loc,
 }
 
 -- W3-inst (DICT-SEMANTICS §3): an impl head's type variables are the instance's

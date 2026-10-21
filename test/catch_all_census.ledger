@@ -38,6 +38,7 @@ declRefNames	Decl	7/14
 declRow	Decl	2/14
 definerShadowArgHead	Expr	2/42
 definerShadowVarHead	Expr	3/42
+derivingTypeLoc	Decl	3/14
 dictPassDecl	Decl	3/14
 directIfaceSchemeRows	Decl	1/14
 displayOperands	Expr	3/42
@@ -55,10 +56,13 @@ ifaceMethodRowOf	Decl	2/14
 implBodyLoc	Expr	4/42
 implCompletenessMsgsOfMap	Decl	1/14
 implDeclFact	Decl	2/14
+implDeclLoc	Decl	2/14
 implDeclWithReqs	Decl	2/14
 implHeadGround	Decl	2/14
 implHeadNormalDecl	Decl	1/14
 implHeadParametric	Decl	2/14
+importLocOf	Decl	1/14
+importLocReaching	Decl	1/14
 importOverlayDecls	Decl	2/14
 importShadowsOfDecl	Decl	2/14
 infer	Expr	30/42
@@ -114,4 +118,5 @@ stampTailDecl	Decl	1/14
 stmtCalleeName	Expr	10/42
 tupleArgElems	Expr	2/42
 useModuleId	Decl	1/14
+valueSpanLoc	Expr	4/42
 wholeDomainExpr	Expr	1/42

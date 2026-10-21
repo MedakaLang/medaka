@@ -2,7 +2,7 @@
 -- second function's first clause, `classify (TUpper _)`) must report its error at
 -- ITS OWN clause line — not at an innocent, well-typed clause of an earlier
 -- function.  Patterns carry no source Loc, so the pattern-arity error was being
--- recorded at the STALE currentLoc left by the previous function's body inference,
+-- recorded at the stale location left by the previous function's body inference,
 -- mis-blaming the `nextMode _ m = m` clause below.
 data Tok = TUpper | TIndent Int
 data Mode = MVariant | MPayload

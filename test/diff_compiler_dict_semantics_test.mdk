@@ -7401,7 +7401,7 @@ verbTable = [
 -- diagnostic's span is a property a change nowhere near the diagnostic can
 -- move: PR 1552 moved two of these fixtures' spans (`29:15` -> `29:25`,
 -- `46:15` -> `46:25`) while every code/value/verdict assertion in the tree
--- stayed green, because `sxSite` falls back to `currentLoc` and a
+-- stayed green, because `sxSite` falls back to the walk's location and a
 -- dedup-on-message push lets a badly-located site win. PIN THE SPAN, NOT THE
 -- MESSAGE -- prose is free to change (`DIAGNOSTIC-CODES-DESIGN.md`); `want`
 -- is matched against the FIRST `<file>:<line>:<col>:` prefix `medaka check`
@@ -7498,7 +7498,7 @@ spanTable = [
     entry = "s4-gen-sig-residual-uncovered-rejected.mdk",
     label =
       "issue 1549 gen-sig: the uncovered-residual reject lands at the DEFINITION (the body expression that needs it), which is the half a call-site span cannot distinguish",
-    want = "36:15",
+    want = "36:9",
   },
   SpanRow {
     entry = "s4-gen-sig-num-result-rejected.mdk",
@@ -7531,7 +7531,7 @@ spanTable = [
   SpanRow {
     entry = "requires-growing-context-depth-rejected.mdk",
     label =
-      "§3 W2 (#2120): the depth reject is attributed to the METHOD CALL that posed the goal (`tag (Wrap 1)` in `main`), at the goal's site -- NOT to whatever `currentLoc` holds when the walk runs out, which is the failure mode this whole section exists for",
+      "§3 W2 (#2120): the depth reject is attributed to the METHOD CALL that posed the goal (`tag (Wrap 1)` in `main`), at the goal's site -- NOT to whatever location the walk holds when it runs out, which is the failure mode this whole section exists for",
     want = "14:16",
   },
   SpanRow {

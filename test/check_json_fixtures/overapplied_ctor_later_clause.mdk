@@ -1,7 +1,7 @@
 -- Regression: an over-applied nullary constructor in a LATER clause (the second
 -- function's first clause) must report at ITS OWN clause, not at an innocent,
 -- well-typed clause of an earlier function.  Patterns carry no source Loc, so the
--- pattern-arity error was recorded at the STALE currentLoc left by the previous
+-- pattern-arity error was recorded at the stale location left by the previous
 -- function's body inference, mis-blaming `nextMode _ m = m` below.  The range must
 -- point at the `classify (TUpper _)` clause, never the earlier `nextMode` function.
 data Tok = TUpper | TIndent Int
