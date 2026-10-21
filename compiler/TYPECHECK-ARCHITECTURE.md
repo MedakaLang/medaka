@@ -292,7 +292,7 @@ this is the #158/#176 design, and it landed.
 | *(loose)* | **7** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, and the toggles cell, since deleted; the bundles have since been reorganised, see `types/CELL-LIFETIMES.md`) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc` | varies |
 
 **The seven cells with no single owning function** (≥6 distinct writers) are the residual
-state-discipline debt (`perRun` since replaced by `ModuleCtx` as a parameter): `perRun` (56 writers), `driverState` (14, since `graphCtx`), `currentLoc` (8),
+state-discipline debt (`perRun` since replaced by `ModuleCtx` as a parameter): `perRun` (56 writers), `driverState` (14, since `graphCtx`; `graphCtx` since replaced by `GraphCtx` as a parameter, arch-p2-6d), `currentLoc` (8),
 `typeErrorsSticky` (8), `crossRun` (7), the toggles cell (6, since deleted), `funConstraintsRef` (6).
 
 ⚠️ Two granularities are mixed in that list: `funConstraintsRef` is a `PerRun` *field* (now `ModuleCtx`), so
