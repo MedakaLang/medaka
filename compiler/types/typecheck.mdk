@@ -30889,12 +30889,13 @@ checkImplCompletenessMap mctx ce cur iterDecls =
 implCompletenessMsgsOfMap : ClassEnv -> Int -> Decl -> List (Option Loc, String)
 implCompletenessMsgsOfMap ce cur (DAttrib _ d) =
   implCompletenessMsgsOfMap ce cur d
-implCompletenessMsgsOfMap ce cur (DImpl { iface, tys, methods, implOrigin = o, ... }) =
+implCompletenessMsgsOfMap ce cur (DImpl { iface, tys, methods, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
   match ceRequiredAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
     None => []  -- unknown interface (reported elsewhere) → skip
     Some required =>
       let defined = map implMethodName methods
-      let loc = firstImplMethodLoc methods
+      -- An impl with no method body of its own is located at its interface name.
+      let loc = orElseLoc (firstImplMethodLoc methods) ifaceLoc
       map
         (m => (loc, missingImplMethodMsg iface tys m))
         (filter (m => not (contains m defined)) required)
