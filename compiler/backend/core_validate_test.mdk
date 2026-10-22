@@ -2280,6 +2280,21 @@ test "method result validation refuses a callback position lost from the plan" =
     ["method result", "index disagrees"]
     (joinNl (validateMethodResults plan methodFactControl))
 
+test "method result validation refuses a fact arity above its Core impl entry" =
+  let changed =
+    editMethodFacts
+      (map (row => { row | callbackPositions = [2], valueArity = 3 }))
+      methodFactControl
+  let plan = buildEmitPlan LlvmBackend changed
+  expectTextContainsAll
+    [
+      "method result",
+      "fact value arity 3",
+      "Core impl entry declared value arity 2",
+      "Chain#step",
+    ]
+    (joinNl (validateMethodResults plan changed))
+
 withoutCallbackPositions : MethodResultFact -> MethodResultFact
 withoutCallbackPositions row = { row | callbackPositions = [] }
 

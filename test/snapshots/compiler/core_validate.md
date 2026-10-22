@@ -1,5 +1,5 @@
 # META
-source_lines=1566
+source_lines=1582
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -153,7 +153,7 @@ import support.util.{dedupBy, isNonEmptyL, joinWith, listLen, reverseL}
 -- the backend, the row's gap kind and reason, and the top-level binding the
 -- first reference sits in.
 public export data ExternFinding =
-  | ExternFinding String Backend GapKind String String
+  ExternFinding String Backend GapKind String String
 
 -- Defects are fatal in every emission mode; target extern findings may instead
 -- be recorded. The first failing validation family keeps its original order.
@@ -378,10 +378,26 @@ callbackPositionsValid arity prev (n :: ns) =
 entryMethodResult : OrdMap (OrdMap MethodResultFact) ->
   CImplEntry ->
   List String
-entryMethodResult index (CImplEntry method _ _ (CImplTagged _ _ iface _ _ _ _)) =
-  missingMethodResult index iface method
-entryMethodResult index (CImplEntry method _ _ (CImplDefault iface _ _ _ _ _ _)) =
-  missingMethodResult index iface method
+entryMethodResult index (CImplEntry method _ declared (CImplTagged _ _ iface _ _ _ _)) =
+  entryMethodResultFact index iface method declared
+entryMethodResult index (CImplEntry method _ declared (CImplDefault iface _ _ _ _ _ _)) =
+  entryMethodResultFact index iface method declared
+
+entryMethodResultFact : OrdMap (OrdMap MethodResultFact) ->
+  String ->
+  String ->
+  Int ->
+  List String
+entryMethodResultFact index iface method declared =
+  match lookupMethodResult index iface method
+    Some row =>
+      if row.valueArity == declared then
+        []
+      else
+        [
+          "method result: fact value arity \{intToString row.valueArity} disagrees with Core impl entry declared value arity \{intToString declared} [\{iface}#\{method}]",
+        ]
+    None => ["method result: missing declaration fact [\{iface}#\{method}]"]
 
 missingMethodResult : OrdMap (OrdMap MethodResultFact) ->
   String ->
@@ -723,7 +739,7 @@ checkMissedNote backend =
 -- What `medaka build` checked the program against before lowering: the
 -- selected profile, and each runtime extern's declared labels.
 public export data CheckedTarget =
-  | CheckedTarget TargetProfile (OrdMap (List String))
+  CheckedTarget TargetProfile (OrdMap (List String))
 
 export
 checkedTargetOf : TargetProfile -> List Decl -> CheckedTarget
@@ -778,7 +794,7 @@ isProgramName top x = omHasKey x top || omHasKey ("core__" ++ x) top
 -- method occurrences whose routes contradict their declared context, each newest
 -- first.
 data Walk =
-  | Walk (OrdMap Unit) (List ExternFinding) (List String) (List String) (List String) (List String) (List String) (List String)
+  Walk (OrdMap Unit) (List ExternFinding) (List String) (List String) (List String) (List String) (List String) (List String)
 
 noFindings : Walk
 noFindings = Walk omEmpty [] [] [] [] [] [] []
@@ -787,7 +803,7 @@ noFindings = Walk omEmpty [] [] [] [] [] [] []
 -- table, the leading `$dict` parameter count of each top-level binding, the
 -- dictionary facts, and the top-level binding being read.
 data Ctx =
-  | Ctx Backend (OrdMap Unit) ArityEnv (OrdMap Int) (OrdMap Int) EvFacts String
+  Ctx Backend (OrdMap Unit) ArityEnv (OrdMap Int) (OrdMap Int) EvFacts String
 
 -- What a dictionary built at a site is held to (`DeclFacts`): each instance's
 -- `requires` count and each interface's super count.
@@ -1631,8 +1647,10 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "callbackPositionsValid" (PWild PWild (PList)) (EVar "True"))
 (DFunDef false "callbackPositionsValid" ((PVar "arity") (PVar "prev") (PCons (PVar "n") (PVar "ns"))) (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "n") (EVar "prev")) (EBinOp "<" (EVar "n") (EVar "arity"))) (EApp (EApp (EApp (EVar "callbackPositionsValid") (EVar "arity")) (EVar "n")) (EVar "ns"))))
 (DTypeSig false "entryMethodResult" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "entryMethodResult" ((PVar "index") (PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplTagged" PWild PWild (PVar "iface") PWild PWild PWild PWild))) (EApp (EApp (EApp (EVar "missingMethodResult") (EVar "index")) (EVar "iface")) (EVar "method")))
-(DFunDef false "entryMethodResult" ((PVar "index") (PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplDefault" (PVar "iface") PWild PWild PWild PWild PWild PWild))) (EApp (EApp (EApp (EVar "missingMethodResult") (EVar "index")) (EVar "iface")) (EVar "method")))
+(DFunDef false "entryMethodResult" ((PVar "index") (PCon "CImplEntry" (PVar "method") PWild (PVar "declared") (PCon "CImplTagged" PWild PWild (PVar "iface") PWild PWild PWild PWild))) (EApp (EApp (EApp (EApp (EVar "entryMethodResultFact") (EVar "index")) (EVar "iface")) (EVar "method")) (EVar "declared")))
+(DFunDef false "entryMethodResult" ((PVar "index") (PCon "CImplEntry" (PVar "method") PWild (PVar "declared") (PCon "CImplDefault" (PVar "iface") PWild PWild PWild PWild PWild PWild))) (EApp (EApp (EApp (EApp (EVar "entryMethodResultFact") (EVar "index")) (EVar "iface")) (EVar "method")) (EVar "declared")))
+(DTypeSig false "entryMethodResultFact" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "entryMethodResultFact" ((PVar "index") (PVar "iface") (PVar "method") (PVar "declared")) (EMatch (EApp (EApp (EApp (EVar "lookupMethodResult") (EVar "index")) (EVar "iface")) (EVar "method")) (arm (PCon "Some" (PVar "row")) () (EIf (EBinOp "==" (EFieldAccess (EVar "row") "valueArity") (EVar "declared")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method result: fact value arity ")) (EApp (EVar "display") (EApp (EVar "intToString") (EFieldAccess (EVar "row") "valueArity")))) (ELit (LString " disagrees with Core impl entry declared value arity "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "declared")))) (ELit (LString " ["))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString "]")))))) (arm (PCon "None") () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method result: missing declaration fact [")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString "]")))))))
 (DTypeSig false "missingMethodResult" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "missingMethodResult" ((PVar "index") (PVar "iface") (PVar "method")) (EMatch (EApp (EApp (EApp (EVar "lookupMethodResult") (EVar "index")) (EVar "iface")) (EVar "method")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method result: missing declaration fact [")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString "]")))))))
 (DTypeSig false "noteMethodResult" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
@@ -2086,8 +2104,10 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "callbackPositionsValid" (PWild PWild (PList)) (EVar "True"))
 (DFunDef false "callbackPositionsValid" ((PVar "arity") (PVar "prev") (PCons (PVar "n") (PVar "ns"))) (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "n") (EVar "prev")) (EBinOp "<" (EVar "n") (EVar "arity"))) (EApp (EApp (EApp (EVar "callbackPositionsValid") (EVar "arity")) (EVar "n")) (EVar "ns"))))
 (DTypeSig false "entryMethodResult" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "entryMethodResult" ((PVar "index") (PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplTagged" PWild PWild (PVar "iface") PWild PWild PWild PWild))) (EApp (EApp (EApp (EVar "missingMethodResult") (EMethodRef "index")) (EVar "iface")) (EVar "method")))
-(DFunDef false "entryMethodResult" ((PVar "index") (PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplDefault" (PVar "iface") PWild PWild PWild PWild PWild PWild))) (EApp (EApp (EApp (EVar "missingMethodResult") (EMethodRef "index")) (EVar "iface")) (EVar "method")))
+(DFunDef false "entryMethodResult" ((PVar "index") (PCon "CImplEntry" (PVar "method") PWild (PVar "declared") (PCon "CImplTagged" PWild PWild (PVar "iface") PWild PWild PWild PWild))) (EApp (EApp (EApp (EApp (EVar "entryMethodResultFact") (EMethodRef "index")) (EVar "iface")) (EVar "method")) (EVar "declared")))
+(DFunDef false "entryMethodResult" ((PVar "index") (PCon "CImplEntry" (PVar "method") PWild (PVar "declared") (PCon "CImplDefault" (PVar "iface") PWild PWild PWild PWild PWild PWild))) (EApp (EApp (EApp (EApp (EVar "entryMethodResultFact") (EMethodRef "index")) (EVar "iface")) (EVar "method")) (EVar "declared")))
+(DTypeSig false "entryMethodResultFact" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "entryMethodResultFact" ((PVar "index") (PVar "iface") (PVar "method") (PVar "declared")) (EMatch (EApp (EApp (EApp (EVar "lookupMethodResult") (EMethodRef "index")) (EVar "iface")) (EVar "method")) (arm (PCon "Some" (PVar "row")) () (EIf (EBinOp "==" (EFieldAccess (EVar "row") "valueArity") (EVar "declared")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method result: fact value arity ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EFieldAccess (EVar "row") "valueArity")))) (ELit (LString " disagrees with Core impl entry declared value arity "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "declared")))) (ELit (LString " ["))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "]")))))) (arm (PCon "None") () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method result: missing declaration fact [")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "]")))))))
 (DTypeSig false "missingMethodResult" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "missingMethodResult" ((PVar "index") (PVar "iface") (PVar "method")) (EMatch (EApp (EApp (EApp (EVar "lookupMethodResult") (EMethodRef "index")) (EVar "iface")) (EVar "method")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method result: missing declaration fact [")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "]")))))))
 (DTypeSig false "noteMethodResult" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
