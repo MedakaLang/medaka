@@ -206,8 +206,8 @@ lower (ERecordUpdate base fields ev) =
 lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
 lower (EBlock stmts) = CBlock (lowerStmts stmts)
--- SHARED-FLOAT-RESIDUAL §3(C): dictPass wraps a scalar-tagged binop (arithmetic
--- "Float" or comparison "Int") in `EAnnot (EBinOp …) (TyCon tag)`; a bare EBinOp
+-- dictPass wraps a scalar-tagged binop (primitive arithmetic or an allowed
+-- comparison tag) in `EAnnot (EBinOp …) (TyCon tag)`; a bare EBinOp
 -- carries no tag.  Read the tag into CBinPrim's scalar field so the emitter picks
 -- that type's primitive.  Must precede the transparent `EAnnot e _` strip below.
 lower (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag })) =

@@ -5523,7 +5523,7 @@ floatVarReg _ _ = None
 
 -- arithmetic preserves operand type (well-typed: both operands share a type).
 -- SHARED-FLOAT-RESIDUAL §3(C): [tag] is the typecheck-stamped scalar type of this
--- arithmetic node ("Float"/"Int"/""; from CBinPrim's RScalar route).  When it is
+-- arithmetic node (a supported primitive tag, or ""; from CBinPrim's RScalar route). When it is
 -- "Float" (fieldNameToLTy → LTFloat) route to the float path whatever the
 -- operands are; an absent tag (an untyped program) leaves it to the operands.
 scalarTagIsFloat : String -> Bool
@@ -5532,7 +5532,8 @@ scalarTagIsFloat tag = match fieldNameToLTy tag
   _ => False
 
 -- #2356: the POSITIVE Int witness — typecheck stamped `RScalar "Int"` on this node
--- because the operand mono ground to concrete `Int` (stampOpRouteVal).  It is a
+-- because the operand mono grounded to concrete `Int` (resolveArithSite for
+-- arithmetic, stampOpRouteVal for comparison). It is a
 -- string equality on the stamp and NOT a test on the operands' LTy: `LTInt` is this
 -- emitter's default for an operand whose type it could not recover, so keying an
 -- inline `icmp` on LTy would order boxed String/Float heap addresses.  An empty or
@@ -5643,6 +5644,10 @@ emitArithUnsized e env op l r tag site =
     || isFloatFieldAccess e l
     || isFloatFieldAccess e r then
     emitFloatArith e env op l r
+  else if tag == "Int" then
+    let (lv, _) = emitExpr e env l
+    let (rv, _) = emitExpr e env r
+    emitIntArithChecked e op lv rv site
   else
     emitArithW e env op l r site
 

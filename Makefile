@@ -268,6 +268,11 @@ inlang-backend-llvm-emit-tail-call-test-o2: | inlang-backend-llvm-emit-tail-call
 inlang-backend-llvm-emit-char-cmp-test:
 	./medaka test --native compiler/backend/llvm_emit_char_cmp_test.mdk
 
+## Solved Int arithmetic returned through polymorphic calls must take the checked
+## inline emitter path; the sibling is native-only and has no other runner.
+inlang-backend-llvm-emit-arith-test:
+	./medaka test --native compiler/backend/llvm_emit_arith_test.mdk
+
 ## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
 ## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
 ## else runs this file's doctests — no gate script invokes `medaka test` on

@@ -1,0 +1,120 @@
+-- Arithmetic whose operand arrives through a polymorphic call still has its solved
+-- scalar type at the use site. Native emission must preserve these values while
+-- selecting checked inline Int arithmetic. The constrained generic control keeps
+-- its dictionary route until an actual type supplies the operation.
+--
+-- Run it: medaka test --native compiler/backend/llvm_emit_arith_test.mdk
+
+import test.{expectAll, expectEqual, expectFalse, expectTextContainsAll}
+import string.{contains}
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_target.{Backend(..)}
+import backend.emit_plan.{buildEmitPlan}
+import backend.llvm_emit.{emitProgram, makeEmitInput}
+import frontend.ast.{Addr(..), BinderId(..), Lit(..), Pat(..), noDeclLoc}
+import ir.core_ir.{
+  CBind(..), CClause(..), CExpr(..), CProgram(..), DeclFacts(..)
+}
+import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+
+fstPlusOne : (Int, Bool) -> Int
+fstPlusOne pair = fst pair + 1
+
+optionPlusOne : Option Int -> Int
+optionPlusOne option = optionOr 0 option + 1
+
+genericPlus : Num a => a -> a -> a
+genericPlus x y = x + y
+
+arithProgram : String -> CProgram
+arithProgram tag =
+  CProgram
+    [
+      CBind
+        "generic"
+        [
+          CClause
+            [
+              PVar "x" noDeclLoc (BinderId "arith" 2),
+              PVar "y" noDeclLoc (BinderId "arith" 3),
+            ]
+            (CBinPrim
+              "+"
+              (CVar "x" (ALocal 0 0))
+              (CVar "y" (ALocal 0 0))
+              tag
+              noDeclLoc),
+        ]
+        noDeclLoc
+        (BinderId "arith" 1),
+      CBind "main" [CClause [] (CLit (LInt 42))] noDeclLoc (BinderId "arith" 4),
+    ]
+    []
+    []
+    []
+    []
+    DeclFacts {
+      factMethodResults = [],
+      factRequires = [],
+      factSupers = [],
+      factEntryOutcome = None,
+      factBinders = [
+        BinderRow {
+          brId = BinderId "arith" 1,
+          brName = "generic",
+          brType = RTValue,
+          brReturns = Some RTValue,
+          brSigned = False,
+        },
+        BinderRow {
+          brId = BinderId "arith" 2,
+          brName = "x",
+          brType = RTValue,
+          brReturns = None,
+          brSigned = False,
+        },
+        BinderRow {
+          brId = BinderId "arith" 3,
+          brName = "y",
+          brType = RTValue,
+          brReturns = None,
+          brSigned = False,
+        },
+        BinderRow {
+          brId = BinderId "arith" 4,
+          brName = "main",
+          brType = RTInt,
+          brReturns = Some RTInt,
+          brSigned = False,
+        },
+      ],
+    }
+
+arithLlvm : String -> String
+arithLlvm tag =
+  let cp = arithProgram tag
+  emitProgram
+    (makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" [])
+    (buildEmitPlan LlvmBackend cp)
+    cp
+
+test "fst result selects Int arithmetic" =
+  expectEqual 42 (fstPlusOne (41, True))
+
+test "optionOr result selects Int arithmetic" =
+  expectEqual 42 (optionPlusOne (Some 41))
+
+test "generic Num arithmetic preserves dictionary dispatch" =
+  expectEqual 42 (genericPlus 40 2)
+
+test "a generic Core arithmetic tag keeps runtime numeric dispatch" =
+  expectTextContainsAll ["call i64 @mdk_num_add("] (arithLlvm "")
+
+test "a solved Int Core arithmetic tag selects checked inline emission" =
+  let llvm = arithLlvm "Int"
+  expectAll [
+    expectTextContainsAll
+      ["call { i64, i1 } @llvm.sadd.with.overflow.i64"]
+      llvm,
+    expectFalse (contains "call i64 @mdk_num_add(" llvm),
+  ]
