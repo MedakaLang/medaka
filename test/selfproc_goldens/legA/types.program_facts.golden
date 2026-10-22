@@ -2,6 +2,6 @@ currentFacts : Ref (Option ProgramFacts)
 emptyFacts : ProgramFacts
 factsNow : Unit -> ProgramFacts
 factsOfChecked : CheckedProgram -> ProgramFacts
-factsOfElab : (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow) -> ProgramFacts
-factsOfElabWith : List EvEntry -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow) -> ProgramFacts
+factsOfElab : (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts) -> ProgramFacts
+factsOfElabWith : List EvEntry -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts) -> ProgramFacts
 withFacts : ProgramFacts -> (Unit -> <a> b) -> <a> b

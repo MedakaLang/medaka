@@ -1,5 +1,5 @@
 # META
-source_lines=3467
+source_lines=3466
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -1348,7 +1348,6 @@ undrivenReport = TcReport {
   trResidual = [],
   trChecked = None,
   trEvidenceFaults = [],
-  trAutoPrint = None,
 }
 
 -- resolve over runtime + core (prelude) + target
@@ -3636,7 +3635,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "drivenOutput" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyFun (TyCon "TcReport") (TyFun (TyCon "DriveOutputs") (TyFun (TyVar "a") (TyApp (TyCon "FrontOutput") (TyVar "a")))))))
 (DFunDef false "drivenOutput" ((PVar "buckets") (PVar "r") (PVar "outputs") (PVar "kept")) (ERecordCreate "FrontOutput" ((fa "foDiags" (EVar "buckets")) (fa "foReport" (EIf (EApp (EApp (EVar "anyList") (EVar "cjHasErrD")) (EVar "buckets")) (ERecordUpdate (EVar "r") ((fa "trChecked" (EVar "None")))) (EVar "r"))) (fa "foOutputs" (EVar "outputs")) (fa "foDriven" (EApp (EVar "Some") (EVar "kept"))))))
 (DTypeSig false "undrivenReport" (TyCon "TcReport"))
-(DFunDef false "undrivenReport" () (ERecordCreate "TcReport" ((fa "trPartial" (EApp (EApp (EApp (EVar "partialAnalysis") (EListLit)) (EListLit)) (EVar "noEntryTables"))) (fa "trDiagnostics" (EListLit)) (fa "trResidual" (EListLit)) (fa "trChecked" (EVar "None")) (fa "trEvidenceFaults" (EListLit)) (fa "trAutoPrint" (EVar "None")))))
+(DFunDef false "undrivenReport" () (ERecordCreate "TcReport" ((fa "trPartial" (EApp (EApp (EApp (EVar "partialAnalysis") (EListLit)) (EListLit)) (EVar "noEntryTables"))) (fa "trDiagnostics" (EListLit)) (fa "trResidual" (EListLit)) (fa "trChecked" (EVar "None")) (fa "trEvidenceFaults" (EListLit)))))
 (DTypeSig false "deriveErrToDiag" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Diag")))
 (DFunDef false "deriveErrToDiag" ((PTuple (PVar "msg") (PVar "loc"))) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-CANNOT-DERIVE"))) (EVar "msg")) (EVar "loc")))
 (DTypeSig false "guardWarnToDiag" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Diag")))
@@ -4108,7 +4107,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "drivenOutput" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyFun (TyCon "TcReport") (TyFun (TyCon "DriveOutputs") (TyFun (TyVar "a") (TyApp (TyCon "FrontOutput") (TyVar "a")))))))
 (DFunDef false "drivenOutput" ((PVar "buckets") (PVar "r") (PVar "outputs") (PVar "kept")) (ERecordCreate "FrontOutput" ((fa "foDiags" (EVar "buckets")) (fa "foReport" (EIf (EApp (EApp (EVar "anyList") (EVar "cjHasErrD")) (EVar "buckets")) (ERecordUpdate (EVar "r") ((fa "trChecked" (EVar "None")))) (EVar "r"))) (fa "foOutputs" (EVar "outputs")) (fa "foDriven" (EApp (EVar "Some") (EVar "kept"))))))
 (DTypeSig false "undrivenReport" (TyCon "TcReport"))
-(DFunDef false "undrivenReport" () (ERecordCreate "TcReport" ((fa "trPartial" (EApp (EApp (EApp (EVar "partialAnalysis") (EListLit)) (EListLit)) (EVar "noEntryTables"))) (fa "trDiagnostics" (EListLit)) (fa "trResidual" (EListLit)) (fa "trChecked" (EVar "None")) (fa "trEvidenceFaults" (EListLit)) (fa "trAutoPrint" (EVar "None")))))
+(DFunDef false "undrivenReport" () (ERecordCreate "TcReport" ((fa "trPartial" (EApp (EApp (EApp (EVar "partialAnalysis") (EListLit)) (EListLit)) (EVar "noEntryTables"))) (fa "trDiagnostics" (EListLit)) (fa "trResidual" (EListLit)) (fa "trChecked" (EVar "None")) (fa "trEvidenceFaults" (EListLit)))))
 (DTypeSig false "deriveErrToDiag" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Diag")))
 (DFunDef false "deriveErrToDiag" ((PTuple (PVar "msg") (PVar "loc"))) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-CANNOT-DERIVE"))) (EVar "msg")) (EVar "loc")))
 (DTypeSig false "guardWarnToDiag" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Diag")))

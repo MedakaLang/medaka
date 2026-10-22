@@ -1,5 +1,5 @@
 # META
-source_lines=58052
+source_lines=58068
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -9754,6 +9754,22 @@ envAtIfSome loc env = envAt loc env
 -- dependency order), matching bin/main.ml's `final_schemes` lookup.  `None` until
 -- a module binding `main` is elaborated; reset at the top of elaborateModules so a
 -- prior run can't leak.  Type-level only → no emitted IR changes → fixpoint-safe.
+
+export
+mainTypeIsAsync : DriveOutputs -> Bool
+mainTypeIsAsync outputs = outputs.doEntryOutcome.eoMainIsAsync
+
+export
+mainAsyncPayloadIsUnit : DriveOutputs -> Bool
+mainAsyncPayloadIsUnit outputs = outputs.doEntryOutcome.eoMainAsyncPayloadIsUnit
+
+export
+mainTypeIsUnit : DriveOutputs -> Bool
+mainTypeIsUnit outputs = outputs.doEntryOutcome.eoMainIsUnit
+
+export
+mainTypeIsFloat : DriveOutputs -> Bool
+mainTypeIsFloat outputs = outputs.doEntryOutcome.eoMainIsFloat
 
 -- The stdlib `async` module's `Async` head by origin; a same-named user type is
 -- an ordinary value main.
@@ -59603,6 +59619,14 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "envAtIfSome" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "TcEnv") (TyCon "TcEnv"))))
 (DFunDef false "envAtIfSome" ((PCon "None") (PVar "env")) (EVar "env"))
 (DFunDef false "envAtIfSome" ((PVar "loc") (PVar "env")) (EApp (EApp (EVar "envAt") (EVar "loc")) (EVar "env")))
+(DTypeSig true "mainTypeIsAsync" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
+(DFunDef false "mainTypeIsAsync" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsAsync"))
+(DTypeSig true "mainAsyncPayloadIsUnit" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
+(DFunDef false "mainAsyncPayloadIsUnit" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainAsyncPayloadIsUnit"))
+(DTypeSig true "mainTypeIsUnit" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
+(DFunDef false "mainTypeIsUnit" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsUnit"))
+(DTypeSig true "mainTypeIsFloat" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
+(DFunDef false "mainTypeIsFloat" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsFloat"))
 (DTypeSig false "mainIsAsyncNow" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))
 (DFunDef false "mainIsAsyncNow" ((PVar "gctx") PWild) (EMatch (EFieldAccess (EFieldAccess (EVar "gctx") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "headMonoNode") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Async")) (PCon "OriginModule" (PLit (LString "async")))) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "mainAsyncPayloadIsUnitNow" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))
@@ -69034,6 +69058,14 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "envAtIfSome" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "TcEnv") (TyCon "TcEnv"))))
 (DFunDef false "envAtIfSome" ((PCon "None") (PVar "env")) (EVar "env"))
 (DFunDef false "envAtIfSome" ((PVar "loc") (PVar "env")) (EApp (EApp (EVar "envAt") (EVar "loc")) (EVar "env")))
+(DTypeSig true "mainTypeIsAsync" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
+(DFunDef false "mainTypeIsAsync" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsAsync"))
+(DTypeSig true "mainAsyncPayloadIsUnit" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
+(DFunDef false "mainAsyncPayloadIsUnit" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainAsyncPayloadIsUnit"))
+(DTypeSig true "mainTypeIsUnit" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
+(DFunDef false "mainTypeIsUnit" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsUnit"))
+(DTypeSig true "mainTypeIsFloat" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
+(DFunDef false "mainTypeIsFloat" ((PVar "outputs")) (EFieldAccess (EFieldAccess (EVar "outputs") "doEntryOutcome") "eoMainIsFloat"))
 (DTypeSig false "mainIsAsyncNow" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))
 (DFunDef false "mainIsAsyncNow" ((PVar "gctx") PWild) (EMatch (EFieldAccess (EFieldAccess (EVar "gctx") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "headMonoNode") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Async")) (PCon "OriginModule" (PLit (LString "async")))) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "mainAsyncPayloadIsUnitNow" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))

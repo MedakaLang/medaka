@@ -1,5 +1,5 @@
 # META
-source_lines=380
+source_lines=373
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -41,10 +41,8 @@ import frontend.ast.{
   UsePath(..),
   UseMember(..),
 }
-import types.typecheck.{mainTypeIsUnit, mainTypeIsAsync, mainAsyncPayloadIsUnit}
-import types.tc_types.{DriveOutputs}
 import types.private_mangle.{mangledName}
-import types.publish.{TcReport(..), CheckedProgram(..)}
+import types.publish.{TcReport(..), CheckedProgram(..), EntryOutcome(..)}
 
 -- The loader hands modules dependency-first, so the ENTRY module is last.
 entryPair : List (String, List Decl) -> Option (String, List Decl)
@@ -75,16 +73,15 @@ definesPrintln ((DFunDef _ "println" _ _ _ _) :: _) = True
 definesPrintln (_ :: rest) = definesPrintln rest
 
 -- Auto-print fires iff main's inferred type is neither Unit-shaped (`Unit`, or
--- a bare type variable: see `mainTypeIsUnit`) nor `Async _`, and the program is a
--- value-main candidate.  [outputs] are those of the elaboration that judged the
--- program.
+-- a bare type variable: see `eoMainIsUnit`) nor `Async _`, and the program is a
+-- value-main candidate. [outcome] is from the elaboration that judged the program.
 export
-shouldAutoPrintMain : DriveOutputs ->
+shouldAutoPrintMain : EntryOutcome ->
   List Decl ->
   List (String, List Decl) ->
   Bool
-shouldAutoPrintMain outputs coreDecls modules =
-  if mainTypeIsUnit outputs || mainTypeIsAsync outputs then
+shouldAutoPrintMain outcome coreDecls modules =
+  if outcome.eoMainIsUnit || outcome.eoMainIsAsync then
     False
   else
     valueMainCandidate coreDecls modules
@@ -196,21 +193,20 @@ pinnedCopies origin pin (_ :: rest) = pinnedCopies origin pin rest
 --   * A printed value `main`: `main = <e>` becomes `main = 0autoprintln <e>`.
 --     The callee is the drive's own elaborated copy of `println`, re-bound under
 --     the pin (`autoPrintPinCore`).  The application is dict-passed by the
---     auto-print evidence the drive published (`trAutoPrint`).
+--     auto-print evidence the checked program's entry outcome published.
 --   * An `Async` main: `main = <e>` becomes `main = 0runasync <e>`.  Its driver
 --     is unconstrained, so it needs no evidence.
 --   * Any other `main`: the trees unchanged.
 -- A printed `main` with no evidence is refused: running it unprinted would exit
 -- 0 with nothing on stdout.
 export
-executedTrees : DriveOutputs ->
-  Option EvId ->
+executedTrees : EntryOutcome ->
   String ->
   (List Decl, List (String, List Decl)) ->
   (List Decl, List (String, List Decl)) ->
   Result String (List Decl, List (String, List Decl))
-executedTrees outputs autoPrint driver (coreD, modsD) (coreE, modsE) =
-  if shouldAutoPrintMain outputs coreD modsD then match autoPrint
+executedTrees outcome driver (coreD, modsD) (coreE, modsE) =
+  if shouldAutoPrintMain outcome coreD modsD then match outcome.eoAutoPrint
     Some ev => Ok (
       autoPrintPinCore coreE,
       onEntry (wrapEntryMain (EDictAt autoPrintPinName ev)) modsE,
@@ -218,7 +214,7 @@ executedTrees outputs autoPrint driver (coreD, modsD) (coreE, modsE) =
     None =>
       Err
         "internal error: the typecheck published no evidence for printing the value `main`"
-  else if shouldAsyncWrapMain outputs driver modsD then
+  else if shouldAsyncWrapMain outcome driver modsD then
     Ok (coreE, asyncWrapModules driver modsE)
   else
     Ok (coreE, modsE)
@@ -227,14 +223,13 @@ executedTrees outputs autoPrint driver (coreD, modsD) (coreE, modsE) =
 -- judged.  A report with no checked program has nothing to run: the driver's
 -- gate refused it before this point, so reaching here is an internal error.
 export
-executedFromReport : DriveOutputs ->
-  TcReport ->
+executedFromReport : TcReport ->
   String ->
   (List Decl, List (String, List Decl)) ->
   Result String (List Decl, List (String, List Decl))
-executedFromReport outputs report driver source = match report.trChecked
+executedFromReport report driver source = match report.trChecked
   Some checked => match checked.cpTrees
-    Some trees => executedTrees outputs report.trAutoPrint driver source trees
+    Some trees => executedTrees checked.cpEntryOutcome driver source trees
     None => noChecked
   None => noChecked
 
@@ -314,11 +309,10 @@ asyncModuleId = "async"
 
 -- Fires iff main's inferred type heads in `Async`, the entry `main` is a
 -- zero-arg VALUE, and the `async` module is loaded and defines `driver`.
--- [outputs] are those of the elaboration that judged the program.
 export
-shouldAsyncWrapMain : DriveOutputs -> String -> List (String, List Decl) -> Bool
-shouldAsyncWrapMain outputs driver modules =
-  if not (mainTypeIsAsync outputs && mainAsyncPayloadIsUnit outputs) then
+shouldAsyncWrapMain : EntryOutcome -> String -> List (String, List Decl) -> Bool
+shouldAsyncWrapMain outcome driver modules =
+  if not (outcome.eoMainIsAsync && outcome.eoMainAsyncPayloadIsUnit) then
     False
   else match entryPair modules
     None => False
@@ -330,11 +324,10 @@ shouldAsyncWrapMain outputs driver modules =
 -- The one `Async` main shape the drivers cannot take: a payload other than
 -- `Unit` (`main : Async e Int`).  Every driver reports this before the rewrite
 -- so the failure is this message, not the driver's own unification error.
--- [outputs] are those of the elaboration that judged the program.
 export
-asyncMainShapeError : DriveOutputs -> List (String, List Decl) -> Option String
-asyncMainShapeError outputs modules =
-  if not (mainTypeIsAsync outputs) || mainAsyncPayloadIsUnit outputs then
+asyncMainShapeError : EntryOutcome -> List (String, List Decl) -> Option String
+asyncMainShapeError outcome modules =
+  if not outcome.eoMainIsAsync || outcome.eoMainAsyncPayloadIsUnit then
     None
   else match entryPair modules
     None => None
@@ -384,10 +377,8 @@ asyncPinImport =
     synthLoc
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "EvId" false) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "mainAsyncPayloadIsUnit" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true) (mem "EntryOutcome" true))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -402,8 +393,8 @@ asyncPinImport =
 (DFunDef false "definesPrintln" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "definesPrintln") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "definesPrintln" ((PCons (PCon "DFunDef" PWild (PLit (LString "println")) PWild PWild PWild PWild) PWild)) (EVar "True"))
 (DFunDef false "definesPrintln" ((PCons PWild (PVar "rest"))) (EApp (EVar "definesPrintln") (EVar "rest")))
-(DTypeSig true "shouldAutoPrintMain" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
-(DFunDef false "shouldAutoPrintMain" ((PVar "outputs") (PVar "coreDecls") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "mainTypeIsUnit") (EVar "outputs")) (EApp (EVar "mainTypeIsAsync") (EVar "outputs"))) (EVar "False") (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "modules"))))
+(DTypeSig true "shouldAutoPrintMain" (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
+(DFunDef false "shouldAutoPrintMain" ((PVar "outcome") (PVar "coreDecls") (PVar "modules")) (EIf (EBinOp "||" (EFieldAccess (EVar "outcome") "eoMainIsUnit") (EFieldAccess (EVar "outcome") "eoMainIsAsync")) (EVar "False") (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "modules"))))
 (DTypeSig true "valueMainCandidate" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool"))))
 (DFunDef false "valueMainCandidate" ((PVar "coreDecls") (PVar "modules")) (EIf (EApp (EVar "not") (EApp (EVar "definesPrintln") (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EVar "True")) (arm PWild () (EVar "False")))))))
 (DTypeSig false "isMainTypeSig" (TyFun (TyCon "Decl") (TyCon "Bool")))
@@ -422,10 +413,10 @@ asyncPinImport =
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DTypeSig" PWild (PVar "n") (PVar "ty") (PVar "site")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "True")) (EVar "pin")) (EVar "ty")) (EVar "site")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (EVar "pin")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest")))
-(DTypeSig true "executedTrees" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "Option") (TyCon "EvId")) (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))
-(DFunDef false "executedTrees" ((PVar "outputs") (PVar "autoPrint") (PVar "driver") (PTuple (PVar "coreD") (PVar "modsD")) (PTuple (PVar "coreE") (PVar "modsE"))) (EIf (EApp (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "outputs")) (EVar "coreD")) (EVar "modsD")) (EMatch (EVar "autoPrint") (arm (PCon "Some" (PVar "ev")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "autoPrintPinCore") (EVar "coreE")) (EApp (EApp (EVar "onEntry") (EApp (EVar "wrapEntryMain") (EApp (EApp (EVar "EDictAt") (EVar "autoPrintPinName")) (EVar "ev")))) (EVar "modsE"))))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no evidence for printing the value `main`"))))) (EIf (EApp (EApp (EApp (EVar "shouldAsyncWrapMain") (EVar "outputs")) (EVar "driver")) (EVar "modsD")) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EApp (EApp (EVar "asyncWrapModules") (EVar "driver")) (EVar "modsE")))) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EVar "modsE"))))))
-(DTypeSig true "executedFromReport" (TyFun (TyCon "DriveOutputs") (TyFun (TyCon "TcReport") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
-(DFunDef false "executedFromReport" ((PVar "outputs") (PVar "report") (PVar "driver") (PVar "source")) (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "Some" (PVar "checked")) () (EMatch (EFieldAccess (EVar "checked") "cpTrees") (arm (PCon "Some" (PVar "trees")) () (EApp (EApp (EApp (EApp (EApp (EVar "executedTrees") (EVar "outputs")) (EFieldAccess (EVar "report") "trAutoPrint")) (EVar "driver")) (EVar "source")) (EVar "trees"))) (arm (PCon "None") () (EVar "noChecked")))) (arm (PCon "None") () (EVar "noChecked"))))
+(DTypeSig true "executedTrees" (TyFun (TyCon "EntryOutcome") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
+(DFunDef false "executedTrees" ((PVar "outcome") (PVar "driver") (PTuple (PVar "coreD") (PVar "modsD")) (PTuple (PVar "coreE") (PVar "modsE"))) (EIf (EApp (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "outcome")) (EVar "coreD")) (EVar "modsD")) (EMatch (EFieldAccess (EVar "outcome") "eoAutoPrint") (arm (PCon "Some" (PVar "ev")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "autoPrintPinCore") (EVar "coreE")) (EApp (EApp (EVar "onEntry") (EApp (EVar "wrapEntryMain") (EApp (EApp (EVar "EDictAt") (EVar "autoPrintPinName")) (EVar "ev")))) (EVar "modsE"))))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no evidence for printing the value `main`"))))) (EIf (EApp (EApp (EApp (EVar "shouldAsyncWrapMain") (EVar "outcome")) (EVar "driver")) (EVar "modsD")) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EApp (EApp (EVar "asyncWrapModules") (EVar "driver")) (EVar "modsE")))) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EVar "modsE"))))))
+(DTypeSig true "executedFromReport" (TyFun (TyCon "TcReport") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
+(DFunDef false "executedFromReport" ((PVar "report") (PVar "driver") (PVar "source")) (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "Some" (PVar "checked")) () (EMatch (EFieldAccess (EVar "checked") "cpTrees") (arm (PCon "Some" (PVar "trees")) () (EApp (EApp (EApp (EApp (EVar "executedTrees") (EFieldAccess (EVar "checked") "cpEntryOutcome")) (EVar "driver")) (EVar "source")) (EVar "trees"))) (arm (PCon "None") () (EVar "noChecked")))) (arm (PCon "None") () (EVar "noChecked"))))
 (DTypeSig false "noChecked" (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "noChecked" () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no checked program to run"))))
 (DTypeSig true "mainIsWrapped" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
@@ -457,10 +448,10 @@ asyncPinImport =
 (DFunDef false "asyncMainPinName" () (ELit (LString "0runasync")))
 (DTypeSig false "asyncModuleId" (TyCon "String"))
 (DFunDef false "asyncModuleId" () (ELit (LString "async")))
-(DTypeSig true "shouldAsyncWrapMain" (TyFun (TyCon "DriveOutputs") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
-(DFunDef false "shouldAsyncWrapMain" ((PVar "outputs") (PVar "driver") (PVar "modules")) (EIf (EApp (EVar "not") (EBinOp "&&" (EApp (EVar "mainTypeIsAsync") (EVar "outputs")) (EApp (EVar "mainAsyncPayloadIsUnit") (EVar "outputs")))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EApp (EVar "any") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EVar "asyncModuleId")) (EApp (EApp (EVar "definesFun") (EVar "driver")) (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))) (arm PWild () (EVar "False")))))))
-(DTypeSig true "asyncMainShapeError" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "asyncMainShapeError" ((PVar "outputs") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "not") (EApp (EVar "mainTypeIsAsync") (EVar "outputs"))) (EApp (EVar "mainAsyncPayloadIsUnit") (EVar "outputs"))) (EVar "None") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EVar "Some") (ELit (LString "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead")))) (arm PWild () (EVar "None")))))))
+(DTypeSig true "shouldAsyncWrapMain" (TyFun (TyCon "EntryOutcome") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
+(DFunDef false "shouldAsyncWrapMain" ((PVar "outcome") (PVar "driver") (PVar "modules")) (EIf (EApp (EVar "not") (EBinOp "&&" (EFieldAccess (EVar "outcome") "eoMainIsAsync") (EFieldAccess (EVar "outcome") "eoMainAsyncPayloadIsUnit"))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EApp (EVar "any") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EVar "asyncModuleId")) (EApp (EApp (EVar "definesFun") (EVar "driver")) (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))) (arm PWild () (EVar "False")))))))
+(DTypeSig true "asyncMainShapeError" (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "asyncMainShapeError" ((PVar "outcome") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "not") (EFieldAccess (EVar "outcome") "eoMainIsAsync")) (EFieldAccess (EVar "outcome") "eoMainAsyncPayloadIsUnit")) (EVar "None") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EVar "Some") (ELit (LString "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead")))) (arm PWild () (EVar "None")))))))
 (DTypeSig false "definesFun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "definesFun" (PWild (PList)) (EVar "False"))
 (DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "definesFun") (EVar "n")) (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -478,10 +469,8 @@ asyncPinImport =
 (DFunDef false "asyncPinImport" () (EApp (EApp (EApp (EVar "DUse") (EVar "False")) (EApp (EApp (EVar "UseGroup") (EListLit (EVar "asyncModuleId"))) (EListLit (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "asyncMainPinName")) (EVar "False")) (EVar "synthLoc")) (EVar "None"))))) (EVar "synthLoc")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "EvId" false) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "mainAsyncPayloadIsUnit" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true) (mem "EntryOutcome" true))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -496,8 +485,8 @@ asyncPinImport =
 (DFunDef false "definesPrintln" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "definesPrintln") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "definesPrintln" ((PCons (PCon "DFunDef" PWild (PLit (LString "println")) PWild PWild PWild PWild) PWild)) (EVar "True"))
 (DFunDef false "definesPrintln" ((PCons PWild (PVar "rest"))) (EApp (EVar "definesPrintln") (EVar "rest")))
-(DTypeSig true "shouldAutoPrintMain" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
-(DFunDef false "shouldAutoPrintMain" ((PVar "outputs") (PVar "coreDecls") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "mainTypeIsUnit") (EVar "outputs")) (EApp (EVar "mainTypeIsAsync") (EVar "outputs"))) (EVar "False") (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "modules"))))
+(DTypeSig true "shouldAutoPrintMain" (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
+(DFunDef false "shouldAutoPrintMain" ((PVar "outcome") (PVar "coreDecls") (PVar "modules")) (EIf (EBinOp "||" (EFieldAccess (EVar "outcome") "eoMainIsUnit") (EFieldAccess (EVar "outcome") "eoMainIsAsync")) (EVar "False") (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "modules"))))
 (DTypeSig true "valueMainCandidate" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool"))))
 (DFunDef false "valueMainCandidate" ((PVar "coreDecls") (PVar "modules")) (EIf (EApp (EVar "not") (EApp (EVar "definesPrintln") (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EVar "True")) (arm PWild () (EVar "False")))))))
 (DTypeSig false "isMainTypeSig" (TyFun (TyCon "Decl") (TyCon "Bool")))
@@ -516,10 +505,10 @@ asyncPinImport =
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DTypeSig" PWild (PVar "n") (PVar "ty") (PVar "site")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "True")) (EVar "pin")) (EVar "ty")) (EVar "site")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (EVar "pin")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest")))
-(DTypeSig true "executedTrees" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "Option") (TyCon "EvId")) (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))
-(DFunDef false "executedTrees" ((PVar "outputs") (PVar "autoPrint") (PVar "driver") (PTuple (PVar "coreD") (PVar "modsD")) (PTuple (PVar "coreE") (PVar "modsE"))) (EIf (EApp (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "outputs")) (EVar "coreD")) (EVar "modsD")) (EMatch (EVar "autoPrint") (arm (PCon "Some" (PVar "ev")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "autoPrintPinCore") (EVar "coreE")) (EApp (EApp (EVar "onEntry") (EApp (EVar "wrapEntryMain") (EApp (EApp (EVar "EDictAt") (EVar "autoPrintPinName")) (EVar "ev")))) (EVar "modsE"))))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no evidence for printing the value `main`"))))) (EIf (EApp (EApp (EApp (EVar "shouldAsyncWrapMain") (EVar "outputs")) (EVar "driver")) (EVar "modsD")) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EApp (EApp (EVar "asyncWrapModules") (EVar "driver")) (EVar "modsE")))) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EVar "modsE"))))))
-(DTypeSig true "executedFromReport" (TyFun (TyCon "DriveOutputs") (TyFun (TyCon "TcReport") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
-(DFunDef false "executedFromReport" ((PVar "outputs") (PVar "report") (PVar "driver") (PVar "source")) (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "Some" (PVar "checked")) () (EMatch (EFieldAccess (EVar "checked") "cpTrees") (arm (PCon "Some" (PVar "trees")) () (EApp (EApp (EApp (EApp (EApp (EVar "executedTrees") (EVar "outputs")) (EFieldAccess (EVar "report") "trAutoPrint")) (EVar "driver")) (EVar "source")) (EVar "trees"))) (arm (PCon "None") () (EVar "noChecked")))) (arm (PCon "None") () (EVar "noChecked"))))
+(DTypeSig true "executedTrees" (TyFun (TyCon "EntryOutcome") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
+(DFunDef false "executedTrees" ((PVar "outcome") (PVar "driver") (PTuple (PVar "coreD") (PVar "modsD")) (PTuple (PVar "coreE") (PVar "modsE"))) (EIf (EApp (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "outcome")) (EVar "coreD")) (EVar "modsD")) (EMatch (EFieldAccess (EVar "outcome") "eoAutoPrint") (arm (PCon "Some" (PVar "ev")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "autoPrintPinCore") (EVar "coreE")) (EApp (EApp (EVar "onEntry") (EApp (EVar "wrapEntryMain") (EApp (EApp (EVar "EDictAt") (EVar "autoPrintPinName")) (EVar "ev")))) (EVar "modsE"))))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no evidence for printing the value `main`"))))) (EIf (EApp (EApp (EApp (EVar "shouldAsyncWrapMain") (EVar "outcome")) (EVar "driver")) (EVar "modsD")) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EApp (EApp (EVar "asyncWrapModules") (EVar "driver")) (EVar "modsE")))) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EVar "modsE"))))))
+(DTypeSig true "executedFromReport" (TyFun (TyCon "TcReport") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
+(DFunDef false "executedFromReport" ((PVar "report") (PVar "driver") (PVar "source")) (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "Some" (PVar "checked")) () (EMatch (EFieldAccess (EVar "checked") "cpTrees") (arm (PCon "Some" (PVar "trees")) () (EApp (EApp (EApp (EApp (EVar "executedTrees") (EFieldAccess (EVar "checked") "cpEntryOutcome")) (EVar "driver")) (EVar "source")) (EVar "trees"))) (arm (PCon "None") () (EVar "noChecked")))) (arm (PCon "None") () (EVar "noChecked"))))
 (DTypeSig false "noChecked" (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "noChecked" () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no checked program to run"))))
 (DTypeSig true "mainIsWrapped" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
@@ -551,10 +540,10 @@ asyncPinImport =
 (DFunDef false "asyncMainPinName" () (ELit (LString "0runasync")))
 (DTypeSig false "asyncModuleId" (TyCon "String"))
 (DFunDef false "asyncModuleId" () (ELit (LString "async")))
-(DTypeSig true "shouldAsyncWrapMain" (TyFun (TyCon "DriveOutputs") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
-(DFunDef false "shouldAsyncWrapMain" ((PVar "outputs") (PVar "driver") (PVar "modules")) (EIf (EApp (EVar "not") (EBinOp "&&" (EApp (EVar "mainTypeIsAsync") (EVar "outputs")) (EApp (EVar "mainAsyncPayloadIsUnit") (EVar "outputs")))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EApp (EDictApp "any") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EVar "asyncModuleId")) (EApp (EApp (EVar "definesFun") (EVar "driver")) (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))) (arm PWild () (EVar "False")))))))
-(DTypeSig true "asyncMainShapeError" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "asyncMainShapeError" ((PVar "outputs") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "not") (EApp (EVar "mainTypeIsAsync") (EVar "outputs"))) (EApp (EVar "mainAsyncPayloadIsUnit") (EVar "outputs"))) (EVar "None") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EVar "Some") (ELit (LString "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead")))) (arm PWild () (EVar "None")))))))
+(DTypeSig true "shouldAsyncWrapMain" (TyFun (TyCon "EntryOutcome") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
+(DFunDef false "shouldAsyncWrapMain" ((PVar "outcome") (PVar "driver") (PVar "modules")) (EIf (EApp (EVar "not") (EBinOp "&&" (EFieldAccess (EVar "outcome") "eoMainIsAsync") (EFieldAccess (EVar "outcome") "eoMainAsyncPayloadIsUnit"))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EApp (EDictApp "any") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EVar "asyncModuleId")) (EApp (EApp (EVar "definesFun") (EVar "driver")) (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))) (arm PWild () (EVar "False")))))))
+(DTypeSig true "asyncMainShapeError" (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "asyncMainShapeError" ((PVar "outcome") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "not") (EFieldAccess (EVar "outcome") "eoMainIsAsync")) (EFieldAccess (EVar "outcome") "eoMainAsyncPayloadIsUnit")) (EVar "None") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EVar "Some") (ELit (LString "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead")))) (arm PWild () (EVar "None")))))))
 (DTypeSig false "definesFun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "definesFun" (PWild (PList)) (EVar "False"))
 (DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "definesFun") (EVar "n")) (EBinOp "::" (EVar "d") (EVar "rest"))))
