@@ -2,7 +2,7 @@
 
 One row per piece of mutable typechecker state: the four module-level cells of `compiler/types/typecheck.mdk`, the fields of its bundle records (`ModuleCtx`, `GraphCtx`, `GraphRun`, `CrossRun`, declared in `compiler/types/tc_types.mdk`), the fields of the process's interners (`Interners`, `Lineage`), the fields of the records that carry the drive's configuration (`TcConfig`, `DriveInputs`, `TraceSink`) and of the context records that replace the old cells (`GroupCtx`, `DynCtx`, `SiteCtx`), and the cells outside the file that a drive reads or writes. It is the inventory the state-by-lifetime split works from.
 
-Counts: 4 module-level cells in `types.typecheck`; field rows `ModuleCtx` 3, `ModuleCells` 91, `GraphRun` 30, `CrossRun` 14, `GraphCtx` 19, `Interners` 2, `Lineage` 3, `TcConfig` 5, `DriveInputs` 6, `TraceSink` 8, `GroupCtx` 2, `DynCtx` 10, `SiteCtx` 3; 200 rows in the first table (the 4 cells and 196 fields) and 5 rows outside the file. The first table is pinned to the cell census by `test/arch_boundaries_test.mdk`.
+Counts: 3 module-level cells in `types.typecheck`; field rows `ModuleCtx` 3, `ModuleCells` 91, `GraphRun` 30, `CrossRun` 14, `GraphCtx` 19, `Interners` 2, `Lineage` 3, `TcConfig` 5, `DriveInputs` 6, `TraceSink` 8, `GroupCtx` 2, `DynCtx` 10, `SiteCtx` 3; 199 rows in the first table (the 3 cells and 196 fields) and 6 rows outside the file. The first table is pinned to the cell census by `test/arch_boundaries_test.mdk`.
 
 Stage-6 denominators: met at `d111d97fc` (the sprint head after the last code slice of arch-p2-6d, the Phase 2 exit). The four module-level cells are `interners` and the three memo refs; `perRun` (arch-p2-6c) and `graphCtx` (arch-p2-6d) are deleted. The module record is a parameter of its readers or comes through `DynCtx.dcModule` and `SiteCtx.sxModule`; the graph record is a parameter of the drive layer or comes through `ModuleCtx.mcGraph`. The 6c frontier counts (`graphCtx` 276 / 1457 / 463 at the head of arch-p2-6c, over `compiler/types/typecheck.mdk` with the carrier holders as stops) describe the cell that is now gone.
 
@@ -18,7 +18,6 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 
 | name | holds | lifetime | owner-today | writers | reset | target | interface-fills | source | issue |
 |---|---|---|---|---|---|---|---|---|---|
-| coreCheckMemoRef | process-wide core-pass memo, one entry (holds copies of the core pass's two sub-records and extern-name map, and a module record whose `mcGraph` is a detached snapshot) | process | module-level | checkCoreMemoized | never (test helper methodReturnMemoTeardownStats clears and restores) | interner | no | - | - |
 | preludePreambleMemoRef | prelude preamble memo, one entry of pure values | process | module-level | preludePreambleStore | never | interner | no | - | - |
 | moduleChainMemoRef | module-chain prefix memo (each step holds one `GraphCtx` snapshot, `csCtx`, and one `ModuleCtx`, `csModule`, whose `mcGraph` is that snapshot) | process | module-level | checkModulesChainReportForGraph | never (test helper clears and restores) | interner | no | - | - |
 | interners | the process's interners (`Interners`): the evidence lineage and the builtin extern catalog of the graph record a drive continues from, read by the next mint and by markModules, and by the readers that run with no drive or after one: grantWholeDomain (the lineage's grant state) and checkedFfiExternTypeNames, checkedFfiExternTypeNamesModules (the catalog) | process | module-level | mintGraphCtx, graphPreamble (checkCoreMemoized hit), checkModulesChainReportForGraph (chain hit), markModules (each `internersOf` its record) | never (each writer replaces it with its record's objects) | interner | no | - | #4284 |
@@ -227,6 +226,7 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | binderOrdinalRef | desugar binder ordinal counter (frontend/desugar.mdk); ordinals are never reused within a process | process | module-level | freshBinderId | never | interner | no | - | - |
 | preludeScopeMemoRef | prelude scope memo, one entry (frontend/resolve.mdk) | process | module-level | preludeScopeFor | never | interner | no | - | - |
 | loadedSourcesRef | path to source text of every loaded file (driver/loader.mdk, the one driver.loader cell in cells.golden) | process | module-level | noteLoadedSource | never | interner | no | - | - |
+| preludeCacheRef | process-wide prelude interface cache, one entry: the interface sections of one compiler generation, each valid for the IO joins it lists (types/prelude_interface.mdk) | process | module-level | seedPreludeInterface, called by checkCoreMemoized on its miss path | never | interner | no | - | - |
 | program_facts.currentFacts | the ProgramFacts value lowering and eval read for the run in progress (types/program_facts.mdk); deleted by the issue "thread ProgramFacts through lower and EvalEnv" | run | module-level | withFacts | withFacts restores the previous value | delete | n/a | - | #4317 |
 
 ## Interface fills (input to playbook C1)
@@ -260,3 +260,20 @@ The rows of the typechecker tables whose `interface-fills` is `yes` and whose `s
 | CrossRun.crossModuleFunPredicateSlotsRef | GraphCtx.crossRun | checkBodyImpl | accumulated module by module | caveat, derived(cpSchemes) |
 | CrossRun.crossModuleFunPredicateSlotsQualRef | GraphCtx.crossRun | checkBodyImpl | accumulated module by module | caveat, derived(cpSchemes) |
 | CrossRun.crossModuleSchemeOblsQualRef | GraphCtx.crossRun | checkBodyImpl | accumulated module by module | caveat, derived(cpSchemes) |
+
+### Kind to field (the interface value, `types.prelude_interface`)
+
+The interface value is `PreludeInterface` (`compiler/types/prelude_interface.mdk`). `freezeInterface` reads each row's cell into one of its `pi*` fields, and `thawInterface` writes the fields back into fresh cells. The correspondence by `kind`:
+
+- *accumulated* rows map to the `pi*` field that holds the cell's value: `CrossRun.universeFunNamesRef` to `piFunNames`, `universeMethodDispatchIdxByIdRef` to `piMethodDispatchIdx`, `universeDataCtors` to `piDataCtors`, `universeCtorPop` to `piCtorPop`, `universeRecordPop` to `piRecordPop`, `crossModuleFunPredicateSlotsRef` and its `Qual` twin to `piFunPredicateSlots` and `piFunPredicateSlotsQual`, `crossModuleFunConstraintDeclaredRef` and its `Qual` twin to `piFunConstraintDeclared` and `piFunConstraintDeclaredQual`, `crossModuleMethodPredicateSlotsRef` and its `Qual` twin to `piMethodPredicateSlots` and `piMethodPredicateSlotsQual`, `GraphRun.ctorExistentialsRef` to `piCtorExistentials`, `GraphRun.anyExistentialsRef` to `piAnyExistentials`.
+- The two named extras map to `pi*` fields too: `CrossRun.builtinClassesRef` (computed once, from the prelude's declarations alone) to `piBuiltinClasses`, and `GraphCtx.builtinExternNamesRef` (accumulated by union over the catalog builds) to `piExternNames`.
+- *computed once* rows are not fields. They are recomputed by `graphPreamble` on every drive, hit and miss alike: `GraphCtx.effectDomains`, `declEnvsRef`, `abstractRecordTypesRef`, `argDispatchIdxByIdRef`, `mangledShadowMapRef`, `markSetsRef`, `dictEligibleRef`, `dictEligibleSetRef`.
+- Exception rows, with no `pi*` field of their own: the id counters (`piTyvarNext`, `piEffvarNext`, restored through `GraphRunSeed`), the standalone name set (`piStandaloneNames`), `cpCore` (`piCore`, thawed into `ModuleBindings` and the `CrossRun` schemes), `CrossRun.crossModuleSchemeOblsQualRef` (not a field: `thawInterface` starts it empty on every drive), and `selectedProfile` (not frozen: its value is the cache key's IO join, `preludeCacheHit gen join`).
+
+Settled readers of the state the interface restores (one sentence each; the rows are the test named in parentheses):
+- `cpEvidence` (`drivenEvidence`): a cold drive publishes the evidence a warm drive publishes, with no core rows in it (`publish_test.mdk`, "P -> Q -> P").
+- `cpBinders`: on the diagnostics arm it is the same on a miss and on a hit (R:H7).
+- `GraphRun.scopeStore` (read by `scopeFrameStats`): core leaves no scope frame in the drive's run on either path, so the frame count is 4 on every run (`typecheck_test.mdk`, "every run leaves the same frame count").
+- `ChainStep.csCtx` (the chain memo's steps): every step carries one shape of core state, whether core was checked or thawed.
+- `methodReturnMemoRetentionStats` and `methodReturnMemoTeardownStats`: the core contribution is `(0, 0)` by construction, because a frozen value holds no goals.
+- The first module of `checkModulesK`: its seed is an empty oracle with no warnings; core's record no longer carries the spurious empty-oracle warnings (R:H6, `typecheck_test.mdk`, "checkModulesK seeds its first module").

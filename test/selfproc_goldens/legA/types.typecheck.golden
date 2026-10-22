@@ -434,7 +434,7 @@ checkBodyImpl : GraphCtx -> CheckRunSeed -> ModuleSeed -> String -> List Decl ->
 checkCallObligationsU : ModuleCtx -> Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : ModuleCtx -> List String -> String -> List FunClause -> Unit
 checkCoherence : ModuleCtx -> ImplEnv -> Int -> Unit
-checkCoreMemoized : ModuleCtx -> Option (Int, Int) -> List Decl -> List (String, Scheme) -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
+checkCoreMemoized : ModuleCtx -> Option GraphRun -> Option (Int, Int) -> List Decl -> List (String, Scheme) -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
 checkDeclAuthorityDomains : ModuleCtx -> List (String, Param) -> List (String, KindAnn) -> List Ty -> Unit
 checkDeclAuthorityUses : ModuleCtx -> List Decl -> Unit
 checkDeclAuthorityUsesDecl : ModuleCtx -> Decl -> Unit
@@ -699,6 +699,7 @@ containsIfacePair : (IfaceRef, Int) -> List (IfaceRef, Int) -> Bool
 containsPair : (String, String) -> List (String, String) -> Bool
 containsRowKey : String -> List CeRow -> Bool
 containsVecObl : VecObl -> List VecObl -> Bool
+continueFromInterface : GraphCtx -> GraphRun -> PreludeInterface -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
 contraRowCheck : ModuleCtx -> List Atom -> List Atom -> List Atom -> Unit
 contraRowMsg : List Atom -> List Atom -> List Atom -> String
 copyCrossRun : CrossRun -> CrossRun
@@ -707,8 +708,6 @@ copyGraphRun : GraphRun -> GraphRun
 copyGraphRunForMemo : GraphCtx -> GraphRun -> GraphRun
 copyLocalAbsState : LocalAbsState -> LocalAbsState
 coreAliasSchemes : UsePath -> List (String, a) -> List (String, a)
-coreCheckMemoHit : GraphCtx -> Option (Int, Int) -> Option CoreCheckMemo
-coreCheckMemoRef : Ref (Option CoreCheckMemo)
 coreOwnContexts : ModuleCtx -> Map String (List VecObl)
 coreQualScheme : String -> (String, a) -> (String, a)
 coreRenameScheme : List (String, a) -> UseMember -> List (String, a)
