@@ -11,7 +11,6 @@
 import frontend.ast.{
   noBinderId,
   BinderId(..),
-  EvId(..),
   Lit(..),
   Pat(..),
   RecPatField(..),
@@ -34,6 +33,7 @@ import ir.core_ir.{
   ImplSym(..),
   CProgram(..),
   DeclFacts(..),
+  EntryFact(..),
   MethodResultFact(..),
   noDeclFacts,
   CallMode(..),
@@ -46,7 +46,6 @@ import ir.core_ir.{
   withBinderRows,
 }
 import types.runtime_types.{BinderRow(..), RuntimeType, runtimeTypeFromName}
-import types.publish.{EntryOutcome(..)}
 import map as BM
 import support.util.{reverseL}
 
@@ -589,20 +588,10 @@ toMethodResult (SList ((SAtom "mr") :: [iface, method, returnsHead, SList positi
 toMethodResult other =
   panic ("core_ir_sexp_parse: bad method result fact: " ++ sexprToStr other)
 
-toEntryOutcome : SExp -> EntryOutcome
-toEntryOutcome (SList ((SAtom "entry") :: [unit, float, async, payload, autoPrint])) = EntryOutcome {
-  eoMainIsUnit = toBool unit,
-  eoMainIsFloat = toBool float,
-  eoMainIsAsync = toBool async,
-  eoMainAsyncPayloadIsUnit = toBool payload,
-  eoAutoPrint = match autoPrint
-    SAtom "none" => None
-    SList ((SAtom "ev") :: [mid, ordinal]) =>
-      Some (EvId (toStr mid) (toInt ordinal))
-    other =>
-      panic
-        ("core_ir_sexp_parse: bad entry auto-print evidence: "
-          ++ sexprToStr other),
+toEntryOutcome : SExp -> EntryFact
+toEntryOutcome (SList ((SAtom "entry") :: [unit, float])) = EntryFact {
+  entryMainIsUnit = toBool unit,
+  entryMainIsFloat = toBool float,
 }
 toEntryOutcome other =
   panic ("core_ir_sexp_parse: bad entry outcome: " ++ sexprToStr other)

@@ -24,6 +24,7 @@ import ir.core_ir.{
   ImplSym(..),
   CProgram(..),
   DeclFacts(..),
+  EntryFact(..),
   MethodResultFact(..),
   CallMode(..),
   CallSite(..),
@@ -32,8 +33,7 @@ import ir.core_ir.{
   CHead(..),
   programBinderIds,
 }
-import frontend.ast.{BinderId(..), EvId(..)}
-import types.publish.{EntryOutcome(..)}
+import frontend.ast.{BinderId(..)}
 import types.runtime_types.{BinderRow(..), binderOrdinal, runtimeTypeName}
 import map as BM
 import ir.sexp.{boolStr, node, slist, litSexp, patSexp}
@@ -379,15 +379,10 @@ declFactsSexp facts =
         Some outcome => [entryOutcomeSexp outcome]
         None => []))
 
-entryOutcomeSexp : EntryOutcome -> String
+entryOutcomeSexp : EntryFact -> String
 entryOutcomeSexp outcome = node "entry" [
-  boolStr outcome.eoMainIsUnit,
-  boolStr outcome.eoMainIsFloat,
-  boolStr outcome.eoMainIsAsync,
-  boolStr outcome.eoMainAsyncPayloadIsUnit,
-  match outcome.eoAutoPrint
-    Some (EvId mid ordinal) => node "ev" [escStr mid, intToString ordinal]
-    None => "none",
+  boolStr outcome.entryMainIsUnit,
+  boolStr outcome.entryMainIsFloat,
 ]
 
 methodResultSexp : MethodResultFact -> String

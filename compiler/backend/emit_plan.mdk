@@ -4,9 +4,9 @@
 
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{Lit(..), Pat(..), hostRows}
-import types.publish.{EntryOutcome(..)}
 import ir.core_ir.{
   CProgram(..),
+  EntryFact(..),
   MethodResultFact(..),
   CArm(..),
   CBind(..),
@@ -79,7 +79,7 @@ import backend.trmc_analysis.{
 -- three are empty on an LLVM plan.
 public export data EmitPlan = EmitPlan {
   target : Backend,
-  entryOutcome : Option EntryOutcome,
+  entryOutcome : Option EntryFact,
   methodResults : OrdMap (OrdMap MethodResultFact),
   wasmOnlyReach : Option ReachUnits,
   lazyGlobals : List String,
@@ -206,13 +206,13 @@ planOver target reach ffiRows (CProgram groups ctorArs _ impls _ facts) =
 export
 planEntryMainIsUnit : EmitPlan -> Bool
 planEntryMainIsUnit plan = match plan.entryOutcome
-  Some outcome => outcome.eoMainIsUnit
+  Some outcome => outcome.entryMainIsUnit
   None => False
 
 export
 planEntryMainIsFloat : EmitPlan -> Bool
 planEntryMainIsFloat plan = match plan.entryOutcome
-  Some outcome => outcome.eoMainIsFloat
+  Some outcome => outcome.entryMainIsFloat
   None => False
 
 -- The two-level index preserves qualified interface identity without joining

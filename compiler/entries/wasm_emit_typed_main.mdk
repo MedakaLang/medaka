@@ -42,11 +42,11 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{defaultDriveInputs, elaborateModules}
 import types.private_mangle.{mangleUnitsEv}
-import types.publish.{EntryOutcome(..)}
 import types.program_facts.{ProgramFacts, emptyFacts, factsOfElabWith}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir.{
   CProgram(..),
+  EntryFact(..),
   noDeclFacts,
   CBind(..),
   CClause(..),
@@ -232,7 +232,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let mainPlan = buildEmitPlan WasmBackend mainProgram
         let floatPlan = match mainPlan.entryOutcome
           Some outcome => { mainPlan |
-            entryOutcome = Some { outcome | eoMainIsFloat = True },
+            entryOutcome = Some ({ outcome | entryMainIsFloat = True }),
           }
           None => mainPlan
         let mainWat =
