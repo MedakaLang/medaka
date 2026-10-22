@@ -407,6 +407,15 @@ configuredAudiences =
     Ok table => Some table
     Err message => panic "read_routes: audience table setup failed: \{message}"
 
+videoConfiguredAudiences : Option AppviewTable
+videoConfiguredAudiences =
+  let configured =
+    makeAppviewTable (mustRoute "did:web:video.bsky.app" configuredChatPort) []
+  match configured
+    Ok table => Some table
+    Err message =>
+      panic "read_routes: video audience table setup failed: \{message}"
+
 {- | The session every proxy cell below calls as.
 
    A proxied read is made on behalf of the logged-in account, so `classifyProxy`
@@ -1237,6 +1246,29 @@ runServiceAuthCells corpus =
         (serviceAuthTarget "aud=\{videoDid}&lxm=\{uploadBlob}"))
       (invalidRequestLine
         "a credential for \{videoDid} cannot be requested for \{uploadBlob}; it is minted for: \{uploadLimits}")
+  let videoFragment =
+    serviceAuthCell
+      "service-auth-video-fragment"
+      None
+      (proxyRequestNoHeader
+        (serviceAuthTarget
+          "aud=\{videoDid}%23atproto_video&lxm=\{uploadLimits}"))
+      (mintedLine videoDid uploadLimits defaultExpiry)
+  let videoAuthorityCase =
+    serviceAuthCell
+      "service-auth-video-lxm-authority-case"
+      None
+      (proxyRequestNoHeader
+        (serviceAuthTarget
+          "aud=\{videoDid}&lxm=APP.BSKY.video.getUploadLimits"))
+      (mintedLine videoDid uploadLimits defaultExpiry)
+  let videoOperatorRow =
+    serviceAuthCell
+      "service-auth-video-operator-configured"
+      videoConfiguredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{videoDid}&lxm=app.bsky.video.getJobStatus"))
+      (mintedLine videoDid "app.bsky.video.getJobStatus" defaultExpiry)
   mintedWithLxm
     + ownUploadBlob
     + ownFragment
@@ -1252,6 +1284,9 @@ runServiceAuthCells corpus =
     + videoNoTable
     + videoMethodless
     + videoOtherMethod
+    + videoFragment
+    + videoAuthorityCase
+    + videoOperatorRow
     + mintedNoLxm
     + foreignAudience
     + protectedMethod
@@ -1490,8 +1525,8 @@ runCells corpus =
       + originOnly404
   let () =
     println
-      "cells: \{intToString cells}/78 repository-free routes, proxy dispositions and service-auth mints"
-  if cells == 78 then
+      "cells: \{intToString cells}/81 repository-free routes, proxy dispositions and service-auth mints"
+  if cells == 81 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

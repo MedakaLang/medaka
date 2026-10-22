@@ -1195,7 +1195,9 @@ requiredParam name params = match QueryParams.soleParam name params
    This server's own DID is admitted for exactly the methods the registry
    marks as taking a service token (`serviceAuthRouteNsids`): the credential is
    then spendable only on this server, for a route that accepts it, and the
-   method is mandatory so it can never be a blanket one. Any other DID is
+   method is mandatory so it can never be a blanket one. The video service's
+   DID is built in for one read-only method, unless the operator configured
+   that DID, in which case the operator's row governs. Any other DID is
    graded against the SET this operator configured — `lib.proxy`'s own table,
    asked with `appviewRouteFor`, the same lookup and the same stripped-fragment
    form the proxy seam uses — and a server carrying no table mints for no
@@ -1220,13 +1222,19 @@ admitServiceAudience account registry table raw lxm = match proxyServiceDid raw
   Some bare =>
     if bare == serverDid account then
       map (map (canonical => (bare, canonical))) (admitOwnMethod registry lxm)
-    else if bare == videoServiceDid then
+    else if bare == videoServiceDid && not (isConfigured table bare) then
       map (canonical => Some (bare, canonical)) (admitVideoMethod lxm)
     else match table
       None => Err (serviceAuthRefusal serviceAuthForeignAudienceMessage)
       Some configured => match appviewRouteFor configured bare
         None => Err (serviceAuthRefusal serviceAuthForeignAudienceMessage)
         Some _ => Ok None
+
+isConfigured : Option AppviewTable -> String -> Bool
+isConfigured None _ = False
+isConfigured (Some configured) bare = match appviewRouteFor configured bare
+  None => False
+  Some _ => True
 
 -- | The video service's DID: the audience the official client names for the
 -- upload-limits query that precedes an upload.

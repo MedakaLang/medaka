@@ -123,7 +123,10 @@ transcript = [
   "CELL service-auth-video-upload-limits-no-table PASS decision=minted iss=\{did} aud=did:web:video.bsky.app lxm=app.bsky.video.getUploadLimits jti=\{jti} iat=1700000000 exp=1700000060",
   "CELL service-auth-video-methodless PASS decision=refused status=400 error=InvalidRequest message=a credential for did:web:video.bsky.app must name the method it is for signed=none",
   "CELL service-auth-video-other-method PASS decision=refused status=400 error=InvalidRequest message=a credential for did:web:video.bsky.app cannot be requested for com.atproto.repo.uploadBlob; it is minted for: app.bsky.video.getUploadLimits signed=none",
+  "CELL service-auth-video-fragment PASS decision=minted iss=\{did} aud=did:web:video.bsky.app lxm=app.bsky.video.getUploadLimits jti=\{jti} iat=1700000000 exp=1700000060",
+  "CELL service-auth-video-lxm-authority-case PASS decision=minted iss=\{did} aud=did:web:video.bsky.app lxm=app.bsky.video.getUploadLimits jti=\{jti} iat=1700000000 exp=1700000060",
+  "CELL service-auth-video-operator-configured PASS decision=minted iss=\{did} aud=did:web:video.bsky.app lxm=app.bsky.video.getJobStatus jti=\{jti} iat=1700000000 exp=1700000060",
   "CELL service-auth-protected-methods-corpus PASS corpus=16 transcribed=16 same-set",
-  "cells: 78/78 repository-free routes, proxy dispositions and service-auth mints",
+  "cells: 81/81 repository-free routes, proxy dispositions and service-auth mints",
   "TOTAL: PASS",
 ]

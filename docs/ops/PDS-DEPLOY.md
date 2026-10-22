@@ -388,7 +388,8 @@ client can upload a video blob through this PDS. A video above 5 MiB is refused 
 The web client first asks for a credential for `did:web:video.bsky.app` naming
 `app.bsky.video.getUploadLimits` (seen in the Caddy journal of the 2026-10-22 run). That
 audience is built in, needs no flag, and is minted for that one method only; any other
-method for it is refused. Whether the video service then calls this PDS back, and with what
+method for it is refused, unless `--proxy-audience` already names `did:web:video.bsky.app`,
+in which case that row governs and the built-in one steps aside. Whether the video service then calls this PDS back, and with what
 `aud`, is pending the real-client run.
 
 ### More than one service
