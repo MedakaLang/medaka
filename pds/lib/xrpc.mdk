@@ -211,13 +211,12 @@ registryEndpoints (Registry endpoints) = endpoints
    order. -}
 export
 serviceAuthRouteNsids : Registry -> List String
-serviceAuthRouteNsids (Registry endpoints) = serviceAuthNsids endpoints
-
-serviceAuthNsids : List Endpoint -> List String
-serviceAuthNsids [] = []
-serviceAuthNsids ((Endpoint nsid _ AccessOrServiceRoute) :: rest) =
-  nsid :: serviceAuthNsids rest
-serviceAuthNsids (_ :: rest) = serviceAuthNsids rest
+serviceAuthRouteNsids (Registry endpoints) =
+  endpoints
+    |> filter (endpoint => match endpointAuth endpoint
+      AccessOrServiceRoute => True
+      _ => False)
+    |> map endpointNsid
 
 findEndpoint : String -> List Endpoint -> Option Endpoint
 findEndpoint _ [] = None

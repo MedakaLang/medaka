@@ -1129,9 +1129,10 @@ badExpirationRefusal message =
 
 {- | What a caller that reaches `handle` for this nsid is answered.
 
-   The pure core holds no key on any deployment, so it cannot mint anything.
-   501 and not 400: the request is not wrong, and not 500 either, because
-   nothing failed — the signing lives in the shell, outside this path. -}
+   The pure core holds no key, so it cannot mint anything: the credential is
+   signed by the server shell, which holds the account key, before `handle`
+   is reached. 501 and not 400: the request is not wrong, and not 500 either,
+   because nothing failed — only a direct caller of `handle` lands here. -}
 export
 serviceAuthUnavailableResponse : Response
 serviceAuthUnavailableResponse =
@@ -1139,7 +1140,7 @@ serviceAuthUnavailableResponse =
     501
     "Not Implemented"
     "NotImplemented"
-    "This server has no signing key configured for \{getServiceAuthNsid}"
+    "\{getServiceAuthNsid} is not minted by this handler; the server shell signs the credential"
 
 -- | This server's own DID: the audience the official client names when it asks
 -- for a credential to present to this PDS itself.
