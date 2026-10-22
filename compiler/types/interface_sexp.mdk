@@ -45,7 +45,49 @@
 --   unit | (prefix <opt>) | (path <opt>)      `Param`
 --   (set none) | (set (<str> ...)) | (product ((<name> <param>) ...))
 --   none | (some <str>)                       an optional string
+--
+-- The prelude interface's other components.  A container decoder takes its
+-- element decoders and the path it reads at, as `atomInt` does; `nested` lets
+-- a component's own decoder stand as an element.  A map is written as its
+-- pairs in key order, and a decoded map whose keys do not ascend strictly is
+-- refused.  A surface type is written without its locations, which decode as
+-- `None`, so two types that differ only in a location encode alike.  A
+-- record, a slot and a method slot are one value each for the cell rule above,
+-- as their freeze zonks each from an empty state; a population's payloads are
+-- one value each.
+--   (<x> ...) | (<a> <b>) | (<a> <b> <c>)    list, pair, triple
+--   none | (some <x>)                         `Option`
+--   ()                                        `Unit`
+--   ((<key> <v>) ...)                         `OrdMap`, `Map Int`, key order
+--   (scon <name> <origin>) | (svar <name>)    surface type heads
+--   (sapp <ty> <ty>) | (sfun <ty> <ty>) | (stuple (<ty> ...))
+--   (seffect (<seat> ...) (<name> ...) <ty>)  effect atoms, tails, the type
+--   (sconstrained (<constraint> ...) <ty>)
+--   (snamed <name> <ty> <seat-opt>)           a binder and its domain
+--   (squal <ty> (<sparam> ...)) | (sauth (<sparam> ...))
+--   (srow (<seat> ...) (<name> ...))          a bare row
+--   (seat <name> <origin> <sparam> <bool>)    label, origin, parameter, pattern
+--   stop | (slit <str>) | (sname <name>)      `EffParamTy`
+--   (sset (<str> ...)) | (sproduct ((<name> <sparam>) ...))
+--   (constraint <name> (<ty> ...) <origin>)   a surface predicate
+--   (variant <name> <payload>)                `Variant`
+--   (pos (<ty> ...)) | (named ((field <name> <ty>) ...) <bool>)
+--   (ident <ns> <origin> <name>)              never `unresolved`
+--   type | iface | method | ctor | field | value     `Ns`
+--   (tkident <ident>) | (tkbare <ns> <name>)  `TabKey`
+--   private | abstract | public               `DataVis`
+--   (record (<id> ...) (<id> ...) <mono> ((<name> <mono>) ...) <map>)
+--   (slot <iface> <args> (<id> ...))          `PredicateSlot`
+--   psunknown | (psknown (<mono> ...))        its arguments
+--   (mslot <slot> (<int> ...))                `MethodPredicateSlot`
+--   cdpunknown | (cdplen <int>)               `CDeclaredPrefix`
+--   (classes <origin> x4 <bool> x5)           `BuiltinClasses`, field order
+--   (pop <map> <map> (<name> ...))            rows, floor, collided spellings
+--   (sprow <ident> <name> <payload>)          one row: identity, owner
+import list.{mapAccumL}
 import map as IdMap
+import map.{Map}
+import support.ordmap.{OrdMap}
 import support.sexp_value.{
   SExp(..), SexpError(..), expectAtom, atomInt, atomBool
 }
@@ -53,13 +95,24 @@ import types.publish.{
   PubScheme(..), ZState(..), LiveCell(..), emptyZonk, zonkMono, zonkRow,
   zonkAuthority, zonkVecObl, zonkScheme, freezePub, liveCells
 }
+import types.registry.{
+  SpellingPop, spRows, spFloor, spCollided, spFromProjections
+}
 import types.repr.{
   Mono(..), Tyvar(..), Scheme(..), AuthResidual(..), VecObl(..), IfaceRef(..)
+}
+import types.tc_types.{
+  RecordInfo(..), PredicateSlot(..), PredicateSlotArgs(..),
+  MethodPredicateSlot(..), CDeclaredPrefix(..), BuiltinClasses(..)
 }
 import types.effect_rows.{EffRow(..), Effvar(..), Atom(..), EffLabel(..)}
 import types.effect_authority.{Authority(..), Authvar(..)}
 import types.effect_domain.{Param(..)}
-import frontend.ast.{TyConOrigin(..)}
+import frontend.ast.{
+  TyConOrigin(..), Ty(..), EffAtomTy(..), EffParamTy(..), Constraint(..),
+  Variant(..), ConPayload(..), Field(..), Ident(..), Ns(..), TabKey(..),
+  DataVis(..), identOriginFold, mkIdent
+}
 
 -- ── writing ─────────────────────────────────────────────────────────────────
 
@@ -76,8 +129,7 @@ idsNode : List Int -> SExp
 idsNode ids = SList (map intNode ids)
 
 optNode : Option String -> SExp
-optNode None = SAtom "none"
-optNode (Some s) = tagged "some" [SAtom s]
+optNode o = optionSExp SAtom o
 
 originNode : TyConOrigin -> SExp
 originNode OriginUnresolved = SAtom "unresolved"
@@ -242,6 +294,231 @@ bindingSExp name p = match filter notFrozen (liveCells name p)
   [] => tagged "binding" [SAtom name, pubSchemeSExp p]
   faults => panic "interface row \{name} is not frozen: \{debug faults}"
 
+-- ── writing the other components ────────────────────────────────────────────
+
+export
+listSExp : (a -> SExp) -> List a -> SExp
+listSExp f xs = SList (map f xs)
+
+export
+pairSExp : (a -> SExp) -> (b -> SExp) -> (a, b) -> SExp
+pairSExp f g (a, b) = SList [f a, g b]
+
+export
+tripleSExp : (a -> SExp) -> (b -> SExp) -> (c -> SExp) -> (a, b, c) -> SExp
+tripleSExp f g h (a, b, c) = SList [f a, g b, h c]
+
+export
+optionSExp : (a -> SExp) -> Option a -> SExp
+optionSExp _ None = SAtom "none"
+optionSExp f (Some x) = tagged "some" [f x]
+
+export
+unitSExp : Unit -> SExp
+unitSExp _ = SList []
+
+mapNode : (k -> SExp) -> (v -> SExp) -> Map k v -> SExp
+mapNode key value m = listSExp (pairSExp key value) (IdMap.entries m)
+
+export
+ordMapSExp : (a -> SExp) -> OrdMap a -> SExp
+ordMapSExp value m = mapNode SAtom value m
+
+export
+intMapSExp : (a -> SExp) -> Map Int a -> SExp
+intMapSExp value m = mapNode intNode value m
+
+surfaceNode : Ty -> SExp
+surfaceNode (TyCon { tyConName = name, tyConOrigin = origin }) =
+  tagged "scon" [SAtom name, originNode origin]
+surfaceNode (TyVar name) = tagged "svar" [SAtom name]
+surfaceNode (TyApp f a) = tagged "sapp" [surfaceNode f, surfaceNode a]
+surfaceNode (TyFun a b) = tagged "sfun" [surfaceNode a, surfaceNode b]
+surfaceNode (TyTuple tys) = tagged "stuple" [listSExp surfaceNode tys]
+surfaceNode (TyEffect atoms tails t) = tagged "seffect" [
+  listSExp effAtomNode atoms,
+  listSExp SAtom tails,
+  surfaceNode t,
+]
+surfaceNode (TyConstrained cs t) =
+  tagged "sconstrained" [listSExp constraintNode cs, surfaceNode t]
+surfaceNode (TyNamed name t domain) = tagged "snamed" [
+  SAtom name,
+  surfaceNode t,
+  optionSExp effAtomNode domain,
+]
+surfaceNode (TyQual t params _) =
+  tagged "squal" [surfaceNode t, listSExp effParamNode params]
+surfaceNode (TyRow atoms tails _) =
+  tagged "srow" [listSExp effAtomNode atoms, listSExp SAtom tails]
+surfaceNode (TyAuth params _) = tagged "sauth" [listSExp effParamNode params]
+
+effAtomNode : EffAtomTy -> SExp
+effAtomNode a = tagged "seat" [
+  SAtom a.eatLabel,
+  originNode a.eatOrigin,
+  effParamNode a.eatParam,
+  boolNode a.eatPattern,
+]
+
+effParamNode : EffParamTy -> SExp
+effParamNode EPTop = SAtom "stop"
+effParamNode (EPLit s) = tagged "slit" [SAtom s]
+effParamNode (EPName s) = tagged "sname" [SAtom s]
+effParamNode (EPSet members) = tagged "sset" [listSExp SAtom members]
+effParamNode (EPProduct axes) =
+  tagged "sproduct" [listSExp (pairSExp SAtom effParamNode) axes]
+
+constraintNode : Constraint -> SExp
+constraintNode c = tagged "constraint" [
+  SAtom c.constraintHead,
+  listSExp surfaceNode c.constraintArgs,
+  originNode c.constraintOrigin,
+]
+
+variantNode : Variant -> SExp
+variantNode (Variant name payload) =
+  tagged "variant" [SAtom name, payloadNode payload]
+
+payloadNode : ConPayload -> SExp
+payloadNode (ConPos tys) = tagged "pos" [listSExp surfaceNode tys]
+payloadNode (ConNamed fields nameOmitted) =
+  tagged "named" [listSExp fieldNode fields, boolNode nameOmitted]
+
+fieldNode : Field -> SExp
+fieldNode (Field name t) = tagged "field" [SAtom name, surfaceNode t]
+
+nsNode : Ns -> SExp
+nsNode NsType = SAtom "type"
+nsNode NsIface = SAtom "iface"
+nsNode NsMethod = SAtom "method"
+nsNode NsCtor = SAtom "ctor"
+nsNode NsField = SAtom "field"
+nsNode NsValue = SAtom "value"
+
+identNode : Ident -> SExp
+identNode (Ident ns origin name) = tagged "ident" [
+  nsNode ns,
+  originNode (identOriginFold OriginBuiltin OriginModule origin),
+  SAtom name,
+]
+
+tabKeyNode : TabKey -> SExp
+tabKeyNode (TkIdent ident) = tagged "tkident" [identNode ident]
+tabKeyNode (TkBare ns name) = tagged "tkbare" [nsNode ns, SAtom name]
+
+dataVisNode : DataVis -> SExp
+dataVisNode VisPrivate = SAtom "private"
+dataVisNode VisAbstract = SAtom "abstract"
+dataVisNode VisPublic = SAtom "public"
+
+recordNode : RecordInfo -> SExp
+recordNode (RecordInfo ids authIds result fields index) = tagged "record" [
+  idsNode ids,
+  idsNode authIds,
+  monoNode result,
+  listSExp (pairSExp SAtom monoNode) fields,
+  ordMapSExp monoNode index,
+]
+
+slotNode : PredicateSlot -> SExp
+slotNode s = tagged "slot" [
+  ifaceNode s.psIface,
+  slotArgsNode s.psArgs,
+  idsNode s.psBoundIds,
+]
+
+slotArgsNode : PredicateSlotArgs -> SExp
+slotArgsNode PSArgsUnknown = SAtom "psunknown"
+slotArgsNode (PSArgsKnown args) = tagged "psknown" [listSExp monoNode args]
+
+methodSlotNode : MethodPredicateSlot -> SExp
+methodSlotNode m =
+  tagged "mslot" [slotNode m.mpsPredicate, idsNode m.mpsPositions]
+
+prefixNode : CDeclaredPrefix -> SExp
+prefixNode CDPUnknown = SAtom "cdpunknown"
+prefixNode (CDPLen n) = tagged "cdplen" [intNode n]
+
+classesNode : BuiltinClasses -> SExp
+classesNode b = tagged "classes" [
+  originNode b.bcNum,
+  originNode b.bcEq,
+  originNode b.bcOrd,
+  originNode b.bcSemigroup,
+  boolNode b.bcNumPresent,
+  boolNode b.bcEqPresent,
+  boolNode b.bcOrdPresent,
+  boolNode b.bcSemigroupPresent,
+  boolNode b.bcPreludeSeeded,
+]
+
+popRowNode : (a -> SExp) -> (Ident, String, a) -> SExp
+popRowNode payload (ident, owner, p) =
+  tagged "sprow" [identNode ident, SAtom owner, payload p]
+
+zonkNamed : ZState -> (String, Mono) -> (ZState, (String, Mono))
+zonkNamed z (name, m) =
+  let (z1, m1) = zonkMono z m
+  (z1, (name, m1))
+
+zonkSlotArgs : PredicateSlot -> PredicateSlot
+zonkSlotArgs s = match s.psArgs
+  PSArgsUnknown => s
+  PSArgsKnown args =>
+    { s | psArgs = PSArgsKnown (snd (mapAccumL zonkMono emptyZonk args)) }
+
+export
+surfaceTySExp : Ty -> SExp
+surfaceTySExp = surfaceNode
+
+export
+variantSExp : Variant -> SExp
+variantSExp = variantNode
+
+export
+tabKeySExp : TabKey -> SExp
+tabKeySExp = tabKeyNode
+
+export
+dataVisSExp : DataVis -> SExp
+dataVisSExp = dataVisNode
+
+-- The result, the fields and the index zonked from one state, as the freeze
+-- zonks a record, so the fields and the index keep sharing their variables.
+export
+recordInfoSExp : RecordInfo -> SExp
+recordInfoSExp (RecordInfo ids authIds result fields index) =
+  let (z1, result1) = zonkMono emptyZonk result
+  let (z2, fields1) = mapAccumL zonkNamed z1 fields
+  let (_, index1) = mapAccumL zonkNamed z2 (IdMap.entries index)
+  recordNode (RecordInfo ids authIds result1 fields1 (IdMap.fromList index1))
+
+export
+predicateSlotSExp : PredicateSlot -> SExp
+predicateSlotSExp s = slotNode (zonkSlotArgs s)
+
+export
+methodPredicateSlotSExp : MethodPredicateSlot -> SExp
+methodPredicateSlotSExp m =
+  methodSlotNode { m | mpsPredicate = zonkSlotArgs m.mpsPredicate }
+
+export
+cDeclaredPrefixSExp : CDeclaredPrefix -> SExp
+cDeclaredPrefixSExp = prefixNode
+
+export
+builtinClassesSExp : BuiltinClasses -> SExp
+builtinClassesSExp = classesNode
+
+export
+spellingPopSExp : (a -> SExp) -> SpellingPop a -> SExp
+spellingPopSExp payload pop = tagged "pop" [
+  ordMapSExp (listSExp (popRowNode payload)) (spRows pop),
+  ordMapSExp payload (spFloor pop),
+  listSExp SAtom (spCollided pop),
+]
+
 -- ── reading ─────────────────────────────────────────────────────────────────
 
 type Dec a = Result SexpError (ZState, a)
@@ -313,10 +590,7 @@ same path node first v =
     refuse path node "this id was written differently before"
 
 decOpt : String -> SExp -> Result SexpError (Option String)
-decOpt _ (SAtom "none") = Ok None
-decOpt path (SList [SAtom "some", s]) =
-  map Some (expectAtom (at path "some" 1) s)
-decOpt path node = misfit path [("none", 0), ("some", 1)] node
+decOpt path node = optionOfSExp expectAtom path node
 
 decOrigin : String -> SExp -> Result SexpError TyConOrigin
 decOrigin _ (SAtom "unresolved") = Ok OriginUnresolved
@@ -598,3 +872,368 @@ bindingOfSExp (SList [SAtom "binding", n, p]) = do
   (_, pub) <- decPub emptyZonk (at "binding" "binding" 2) p
   Ok (name, pub)
 bindingOfSExp node = misfit "binding" [("binding", 2)] node
+
+-- ── reading the other components ────────────────────────────────────────────
+
+type Reader a = String -> SExp -> Result SexpError a
+
+-- [dec] read at [path]: its refusal's path is put under [path].
+export
+nested : (SExp -> Result SexpError a) -> Reader a
+nested dec path node =
+  mapErr (e => { e | sePath = "\{path}/\{e.sePath}" }) (dec node)
+
+export
+listOfSExp : Reader a -> Reader (List a)
+listOfSExp item path node = decList item path node
+
+export
+pairOfSExp : Reader a -> Reader b -> Reader (a, b)
+pairOfSExp first second path (SList [a, b]) = do
+  x <- first "\{path}/0" a
+  y <- second "\{path}/1" b
+  Ok (x, y)
+pairOfSExp _ _ path node = refuse path node "expected a pair"
+
+export
+tripleOfSExp : Reader a -> Reader b -> Reader c -> Reader (a, b, c)
+tripleOfSExp first second third path (SList [a, b, c]) = do
+  x <- first "\{path}/0" a
+  y <- second "\{path}/1" b
+  w <- third "\{path}/2" c
+  Ok (x, y, w)
+tripleOfSExp _ _ _ path node = refuse path node "expected a triple"
+
+export
+optionOfSExp : Reader a -> Reader (Option a)
+optionOfSExp _ _ (SAtom "none") = Ok None
+optionOfSExp item path (SList [SAtom "some", x]) =
+  map Some (item (at path "some" 1) x)
+optionOfSExp _ path node = misfit path [("none", 0), ("some", 1)] node
+
+export
+unitOfSExp : Reader Unit
+unitOfSExp _ (SList []) = Ok ()
+unitOfSExp path node = refuse path node "expected ()"
+
+ascending : Ord a => List a -> Bool
+ascending (a :: rest@(b :: _)) = a < b && ascending rest
+ascending _ = True
+
+-- The pairs of [node] as a map, refused unless their keys ascend strictly,
+-- the order the writer uses.
+keyed : Ord k => String -> SExp -> List (k, v) -> Result SexpError (Map k v)
+keyed path node pairs =
+  if ascending (map fst pairs) then
+    Ok (IdMap.fromList pairs)
+  else
+    refuse path node "keys must ascend strictly"
+
+decMap : Ord k => Reader k -> Reader v -> Reader (Map k v)
+decMap key value path node = do
+  pairs <- decList (pairOfSExp key value) path node
+  keyed path node pairs
+
+export
+ordMapOfSExp : Reader a -> Reader (OrdMap a)
+ordMapOfSExp value path node = decMap expectAtom value path node
+
+export
+intMapOfSExp : Reader a -> Reader (Map Int a)
+intMapOfSExp value path node = decMap atomInt value path node
+
+surfaceHeads : List (String, Int)
+surfaceHeads = [
+  ("scon", 2),
+  ("svar", 1),
+  ("sapp", 2),
+  ("sfun", 2),
+  ("stuple", 1),
+  ("seffect", 3),
+  ("sconstrained", 2),
+  ("snamed", 3),
+  ("squal", 2),
+  ("srow", 2),
+  ("sauth", 1),
+]
+
+decSurface : Reader Ty
+decSurface path (SList [SAtom "scon", n, o]) = do
+  name <- expectAtom (at path "scon" 1) n
+  origin <- decOrigin (at path "scon" 2) o
+  Ok TyCon { tyConName = name, tyConLoc = None, tyConOrigin = origin }
+decSurface path (SList [SAtom "svar", n]) =
+  map TyVar (expectAtom (at path "svar" 1) n)
+decSurface path (SList [SAtom "sapp", f, a]) = do
+  f1 <- decSurface (at path "sapp" 1) f
+  a1 <- decSurface (at path "sapp" 2) a
+  Ok (TyApp f1 a1)
+decSurface path (SList [SAtom "sfun", a, b]) = do
+  a1 <- decSurface (at path "sfun" 1) a
+  b1 <- decSurface (at path "sfun" 2) b
+  Ok (TyFun a1 b1)
+decSurface path (SList [SAtom "stuple", tys]) =
+  map TyTuple (decList decSurface (at path "stuple" 1) tys)
+decSurface path (SList [SAtom "seffect", atoms, tails, t]) = do
+  atoms1 <- decList decEffAtom (at path "seffect" 1) atoms
+  tails1 <- decList expectAtom (at path "seffect" 2) tails
+  t1 <- decSurface (at path "seffect" 3) t
+  Ok (TyEffect atoms1 tails1 t1)
+decSurface path (SList [SAtom "sconstrained", cs, t]) = do
+  cs1 <- decList decConstraint (at path "sconstrained" 1) cs
+  t1 <- decSurface (at path "sconstrained" 2) t
+  Ok (TyConstrained cs1 t1)
+decSurface path (SList [SAtom "snamed", n, t, d]) = do
+  name <- expectAtom (at path "snamed" 1) n
+  t1 <- decSurface (at path "snamed" 2) t
+  domain <- optionOfSExp decEffAtom (at path "snamed" 3) d
+  Ok (TyNamed name t1 domain)
+decSurface path (SList [SAtom "squal", t, ps]) = do
+  t1 <- decSurface (at path "squal" 1) t
+  ps1 <- decList decEffParam (at path "squal" 2) ps
+  Ok (TyQual t1 ps1 None)
+decSurface path (SList [SAtom "srow", atoms, tails]) = do
+  atoms1 <- decList decEffAtom (at path "srow" 1) atoms
+  tails1 <- decList expectAtom (at path "srow" 2) tails
+  Ok (TyRow atoms1 tails1 None)
+decSurface path (SList [SAtom "sauth", ps]) =
+  map (ps1 => TyAuth ps1 None) (decList decEffParam (at path "sauth" 1) ps)
+decSurface path node = misfit path surfaceHeads node
+
+decEffAtom : Reader EffAtomTy
+decEffAtom path (SList [SAtom "seat", l, o, p, pat]) = do
+  label <- expectAtom (at path "seat" 1) l
+  origin <- decOrigin (at path "seat" 2) o
+  param <- decEffParam (at path "seat" 3) p
+  patterned <- atomBool (at path "seat" 4) pat
+  Ok EffAtomTy {
+    eatLabel = label,
+    eatOrigin = origin,
+    eatParam = param,
+    eatLoc = None,
+    eatPattern = patterned,
+  }
+decEffAtom path node = misfit path [("seat", 4)] node
+
+effParamHeads : List (String, Int)
+effParamHeads =
+  [("stop", 0), ("slit", 1), ("sname", 1), ("sset", 1), ("sproduct", 1)]
+
+decEffParam : Reader EffParamTy
+decEffParam _ (SAtom "stop") = Ok EPTop
+decEffParam path (SList [SAtom "slit", s]) =
+  map EPLit (expectAtom (at path "slit" 1) s)
+decEffParam path (SList [SAtom "sname", s]) =
+  map EPName (expectAtom (at path "sname" 1) s)
+decEffParam path (SList [SAtom "sset", members]) =
+  map EPSet (decList expectAtom (at path "sset" 1) members)
+decEffParam path (SList [SAtom "sproduct", axes]) =
+  map
+    EPProduct
+    (decList (pairOfSExp expectAtom decEffParam) (at path "sproduct" 1) axes)
+decEffParam path node = misfit path effParamHeads node
+
+decConstraint : Reader Constraint
+decConstraint path (SList [SAtom "constraint", h, args, o]) = do
+  name <- expectAtom (at path "constraint" 1) h
+  args1 <- decList decSurface (at path "constraint" 2) args
+  origin <- decOrigin (at path "constraint" 3) o
+  Ok Constraint {
+    constraintHead = name,
+    constraintArgs = args1,
+    constraintOrigin = origin,
+  }
+decConstraint path node = misfit path [("constraint", 3)] node
+
+decVariant : Reader Variant
+decVariant path (SList [SAtom "variant", n, p]) = do
+  name <- expectAtom (at path "variant" 1) n
+  payload <- decPayload (at path "variant" 2) p
+  Ok (Variant name payload)
+decVariant path node = misfit path [("variant", 2)] node
+
+decPayload : Reader ConPayload
+decPayload path (SList [SAtom "pos", tys]) =
+  map ConPos (decList decSurface (at path "pos" 1) tys)
+decPayload path (SList [SAtom "named", fs, omitted]) = do
+  fields <- decList decField (at path "named" 1) fs
+  nameOmitted <- atomBool (at path "named" 2) omitted
+  Ok (ConNamed fields nameOmitted)
+decPayload path node = misfit path [("pos", 1), ("named", 2)] node
+
+decField : Reader Field
+decField path (SList [SAtom "field", n, t]) = do
+  name <- expectAtom (at path "field" 1) n
+  t1 <- decSurface (at path "field" 2) t
+  Ok (Field name t1)
+decField path node = misfit path [("field", 2)] node
+
+nsHeads : List (String, Int)
+nsHeads = [
+  ("type", 0),
+  ("iface", 0),
+  ("method", 0),
+  ("ctor", 0),
+  ("field", 0),
+  ("value", 0),
+]
+
+decNs : Reader Ns
+decNs _ (SAtom "type") = Ok NsType
+decNs _ (SAtom "iface") = Ok NsIface
+decNs _ (SAtom "method") = Ok NsMethod
+decNs _ (SAtom "ctor") = Ok NsCtor
+decNs _ (SAtom "field") = Ok NsField
+decNs _ (SAtom "value") = Ok NsValue
+decNs path node = misfit path nsHeads node
+
+decIdent : Reader Ident
+decIdent path (SList [SAtom "ident", ns, o, n]) = do
+  ns1 <- decNs (at path "ident" 1) ns
+  origin <- decOrigin (at path "ident" 2) o
+  name <- expectAtom (at path "ident" 3) n
+  match mkIdent ns1 origin name
+    Some ident => Ok ident
+    None => refuse (at path "ident" 2) o "an identity names a module or builtin"
+decIdent path node = misfit path [("ident", 3)] node
+
+decTabKey : Reader TabKey
+decTabKey path (SList [SAtom "tkident", i]) =
+  map TkIdent (decIdent (at path "tkident" 1) i)
+decTabKey path (SList [SAtom "tkbare", ns, n]) = do
+  ns1 <- decNs (at path "tkbare" 1) ns
+  name <- expectAtom (at path "tkbare" 2) n
+  Ok (TkBare ns1 name)
+decTabKey path node = misfit path [("tkident", 1), ("tkbare", 2)] node
+
+decDataVis : Reader DataVis
+decDataVis _ (SAtom "private") = Ok VisPrivate
+decDataVis _ (SAtom "abstract") = Ok VisAbstract
+decDataVis _ (SAtom "public") = Ok VisPublic
+decDataVis path node =
+  misfit path [("private", 0), ("abstract", 0), ("public", 0)] node
+
+decNamedMono : ZState -> String -> SExp -> Dec (String, Mono)
+decNamedMono z path (SList [n, m]) = do
+  name <- expectAtom "\{path}/0" n
+  (z1, m1) <- decMono z "\{path}/1" m
+  Ok (z1, (name, m1))
+decNamedMono _ path node = refuse path node "expected a pair (NAME MONO)"
+
+decRecord : ZState -> String -> SExp -> Dec RecordInfo
+decRecord z path (SList [SAtom "record", ids, authIds, r, fs, ix]) = do
+  ids1 <- decList atomInt (at path "record" 1) ids
+  authIds1 <- decList atomInt (at path "record" 2) authIds
+  (z1, result) <- decMono z (at path "record" 3) r
+  (z2, fields) <- decEach decNamedMono z1 (at path "record" 4) fs
+  (z3, pairs) <- decEach decNamedMono z2 (at path "record" 5) ix
+  index <- keyed (at path "record" 5) ix pairs
+  Ok (z3, RecordInfo ids1 authIds1 result fields index)
+decRecord _ path node = misfit path [("record", 5)] node
+
+decSlotArgs : ZState -> String -> SExp -> Dec PredicateSlotArgs
+decSlotArgs z _ (SAtom "psunknown") = Ok (z, PSArgsUnknown)
+decSlotArgs z path (SList [SAtom "psknown", args]) =
+  map
+    (r => (fst r, PSArgsKnown (snd r)))
+    (decEach decMono z (at path "psknown" 1) args)
+decSlotArgs _ path node = misfit path [("psunknown", 0), ("psknown", 1)] node
+
+decSlot : ZState -> String -> SExp -> Dec PredicateSlot
+decSlot z path (SList [SAtom "slot", i, a, ids]) = do
+  iface <- decIface (at path "slot" 1) i
+  (z1, args) <- decSlotArgs z (at path "slot" 2) a
+  ids1 <- decList atomInt (at path "slot" 3) ids
+  Ok (z1, PredicateSlot { psIface = iface, psArgs = args, psBoundIds = ids1 })
+decSlot _ path node = misfit path [("slot", 3)] node
+
+decMethodSlot : ZState -> String -> SExp -> Dec MethodPredicateSlot
+decMethodSlot z path (SList [SAtom "mslot", s, ps]) = do
+  (z1, slot) <- decSlot z (at path "mslot" 1) s
+  positions <- decList atomInt (at path "mslot" 2) ps
+  Ok (z1, MethodPredicateSlot { mpsPredicate = slot, mpsPositions = positions })
+decMethodSlot _ path node = misfit path [("mslot", 2)] node
+
+decPrefix : Reader CDeclaredPrefix
+decPrefix _ (SAtom "cdpunknown") = Ok CDPUnknown
+decPrefix path (SList [SAtom "cdplen", n]) =
+  map CDPLen (atomInt (at path "cdplen" 1) n)
+decPrefix path node = misfit path [("cdpunknown", 0), ("cdplen", 1)] node
+
+decClasses : Reader BuiltinClasses
+decClasses path (SList [SAtom "classes", num, eq, ord, semi, numP, eqP, ordP, semiP, seeded]) =
+  do
+    numO <- decOrigin (at path "classes" 1) num
+    eqO <- decOrigin (at path "classes" 2) eq
+    ordO <- decOrigin (at path "classes" 3) ord
+    semiO <- decOrigin (at path "classes" 4) semi
+    numB <- atomBool (at path "classes" 5) numP
+    eqB <- atomBool (at path "classes" 6) eqP
+    ordB <- atomBool (at path "classes" 7) ordP
+    semiB <- atomBool (at path "classes" 8) semiP
+    seededB <- atomBool (at path "classes" 9) seeded
+    Ok BuiltinClasses {
+      bcNum = numO,
+      bcEq = eqO,
+      bcOrd = ordO,
+      bcSemigroup = semiO,
+      bcNumPresent = numB,
+      bcEqPresent = eqB,
+      bcOrdPresent = ordB,
+      bcSemigroupPresent = semiB,
+      bcPreludeSeeded = seededB,
+    }
+decClasses path node = misfit path [("classes", 9)] node
+
+decPopRow : Reader a -> Reader (Ident, String, a)
+decPopRow payload path (SList [SAtom "sprow", i, o, p]) = do
+  ident <- decIdent (at path "sprow" 1) i
+  owner <- expectAtom (at path "sprow" 2) o
+  p1 <- payload (at path "sprow" 3) p
+  Ok (ident, owner, p1)
+decPopRow _ path node = misfit path [("sprow", 3)] node
+
+export
+spellingPopOfSExp : Reader a -> Reader (SpellingPop a)
+spellingPopOfSExp payload path (SList [SAtom "pop", rows, floor, collided]) = do
+  rows1 <- ordMapOfSExp (decList (decPopRow payload)) (at path "pop" 1) rows
+  floor1 <- ordMapOfSExp payload (at path "pop" 2) floor
+  collided1 <- decList expectAtom (at path "pop" 3) collided
+  Ok (spFromProjections rows1 floor1 collided1)
+spellingPopOfSExp _ path node = misfit path [("pop", 3)] node
+
+export
+surfaceTyOfSExp : SExp -> Result SexpError Ty
+surfaceTyOfSExp = decSurface "ty"
+
+export
+variantOfSExp : SExp -> Result SexpError Variant
+variantOfSExp = decVariant "variant"
+
+export
+tabKeyOfSExp : SExp -> Result SexpError TabKey
+tabKeyOfSExp = decTabKey "tabkey"
+
+export
+dataVisOfSExp : SExp -> Result SexpError DataVis
+dataVisOfSExp = decDataVis "vis"
+
+export
+recordInfoOfSExp : SExp -> Result SexpError RecordInfo
+recordInfoOfSExp = rooted decRecord "record"
+
+export
+predicateSlotOfSExp : SExp -> Result SexpError PredicateSlot
+predicateSlotOfSExp = rooted decSlot "slot"
+
+export
+methodPredicateSlotOfSExp : SExp -> Result SexpError MethodPredicateSlot
+methodPredicateSlotOfSExp = rooted decMethodSlot "mslot"
+
+export
+cDeclaredPrefixOfSExp : SExp -> Result SexpError CDeclaredPrefix
+cDeclaredPrefixOfSExp = decPrefix "prefix"
+
+export
+builtinClassesOfSExp : SExp -> Result SexpError BuiltinClasses
+builtinClassesOfSExp = decClasses "classes"
