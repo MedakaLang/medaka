@@ -301,7 +301,7 @@ ordKey n = lenKey "\{n}"
 -- A-1's greppability. A dispatch key whose positions can be rigid therefore
 -- carries the rigid positions OUTSIDE this type — see `dispKeyRender` below.
 public export data RegKey =
-  | RegKey (List TabKey) (List Int)
+  RegKey (List TabKey) (List Int)
   deriving (Eq, Ord, Debug)
 
 -- The one-identity case — by far the most common, and the shape the
@@ -663,7 +663,7 @@ sregMergeGo (k :: rest) acc = sregMergeGo rest (sregAddK k acc)
 -- The payload type is a parameter, so the elaborated payloads stay with the
 -- typechecker and this module reads none of its state.
 export data SpellingPop a =
-  | SpellingPop (OrdMap (List (Ident, String, a))) (OrdMap a) (List String)
+  SpellingPop (OrdMap (List (Ident, String, a))) (OrdMap a) (List String)
 
 export
 spEmpty : SpellingPop a
@@ -673,6 +673,16 @@ spEmpty = SpellingPop omEmpty omEmpty []
 export
 spFromFloor : OrdMap a -> SpellingPop a
 spFromFloor floor = SpellingPop omEmpty floor []
+
+-- The population whose three projections are [rows], [floor] and [collided],
+-- for a reader rebuilding one from projections it was written as.  It checks
+-- nothing: projections that `spInsert` would not have produced stay so.
+export
+spFromProjections : OrdMap (List (Ident, String, a)) ->
+  OrdMap a ->
+  List String ->
+  SpellingPop a
+spFromProjections rows floor collided = SpellingPop rows floor collided
 
 -- Registers [payload] under [spelling], owned by the declaration named
 -- [owner].  `None` for the identity updates the floor alone.

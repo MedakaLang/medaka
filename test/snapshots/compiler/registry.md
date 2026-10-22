@@ -1,5 +1,5 @@
 # META
-source_lines=1676
+source_lines=1686
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -305,7 +305,7 @@ ordKey n = lenKey "\{n}"
 -- A-1's greppability. A dispatch key whose positions can be rigid therefore
 -- carries the rigid positions OUTSIDE this type — see `dispKeyRender` below.
 public export data RegKey =
-  | RegKey (List TabKey) (List Int)
+  RegKey (List TabKey) (List Int)
   deriving (Eq, Ord, Debug)
 
 -- The one-identity case — by far the most common, and the shape the
@@ -667,7 +667,7 @@ sregMergeGo (k :: rest) acc = sregMergeGo rest (sregAddK k acc)
 -- The payload type is a parameter, so the elaborated payloads stay with the
 -- typechecker and this module reads none of its state.
 export data SpellingPop a =
-  | SpellingPop (OrdMap (List (Ident, String, a))) (OrdMap a) (List String)
+  SpellingPop (OrdMap (List (Ident, String, a))) (OrdMap a) (List String)
 
 export
 spEmpty : SpellingPop a
@@ -677,6 +677,16 @@ spEmpty = SpellingPop omEmpty omEmpty []
 export
 spFromFloor : OrdMap a -> SpellingPop a
 spFromFloor floor = SpellingPop omEmpty floor []
+
+-- The population whose three projections are [rows], [floor] and [collided],
+-- for a reader rebuilding one from projections it was written as.  It checks
+-- nothing: projections that `spInsert` would not have produced stay so.
+export
+spFromProjections : OrdMap (List (Ident, String, a)) ->
+  OrdMap a ->
+  List String ->
+  SpellingPop a
+spFromProjections rows floor collided = SpellingPop rows floor collided
 
 -- Registers [payload] under [spelling], owned by the declaration named
 -- [owner].  `None` for the identity updates the floor alone.
@@ -1818,6 +1828,8 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "spEmpty" () (EApp (EApp (EApp (EVar "SpellingPop") (EVar "omEmpty")) (EVar "omEmpty")) (EListLit)))
 (DTypeSig true "spFromFloor" (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "SpellingPop") (TyVar "a"))))
 (DFunDef false "spFromFloor" ((PVar "floor")) (EApp (EApp (EApp (EVar "SpellingPop") (EVar "omEmpty")) (EVar "floor")) (EListLit)))
+(DTypeSig true "spFromProjections" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a")))) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "SpellingPop") (TyVar "a"))))))
+(DFunDef false "spFromProjections" ((PVar "rows") (PVar "floor") (PVar "collided")) (EApp (EApp (EApp (EVar "SpellingPop") (EVar "rows")) (EVar "floor")) (EVar "collided")))
 (DTypeSig true "spInsert" (TyFun (TyApp (TyCon "Option") (TyCon "Ident")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "SpellingPop") (TyVar "a"))))))))
 (DFunDef false "spInsert" ((PCon "None") (PVar "spelling") PWild (PVar "payload") (PCon "SpellingPop" (PVar "rows") (PVar "floor") (PVar "collided"))) (EApp (EApp (EApp (EVar "SpellingPop") (EVar "rows")) (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "payload")) (EVar "floor"))) (EVar "collided")))
 (DFunDef false "spInsert" ((PCon "Some" (PVar "ident")) (PVar "spelling") (PVar "owner") (PVar "payload") (PCon "SpellingPop" (PVar "rows") (PVar "floor") (PVar "collided"))) (EBlock (DoLet false false (PVar "prior") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "spelling")) (EVar "rows")))) (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "row")) (EBinOp "/=" (EApp (EVar "spRowIdent") (EVar "row")) (EVar "ident")))) (EVar "prior")) (EListLit (ETuple (EVar "ident") (EVar "owner") (EVar "payload"))))) (DoLet false false (PVar "collided2") (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "next")) (ELit (LInt 2))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "spelling")) (EVar "collided")))) (EBinOp "::" (EVar "spelling") (EVar "collided")) (EVar "collided"))) (DoExpr (EApp (EApp (EApp (EVar "SpellingPop") (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "next")) (EVar "rows"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "payload")) (EVar "floor"))) (EVar "collided2")))))
@@ -2103,6 +2115,8 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "spEmpty" () (EApp (EApp (EApp (EVar "SpellingPop") (EVar "omEmpty")) (EVar "omEmpty")) (EListLit)))
 (DTypeSig true "spFromFloor" (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "SpellingPop") (TyVar "a"))))
 (DFunDef false "spFromFloor" ((PVar "floor")) (EApp (EApp (EApp (EVar "SpellingPop") (EVar "omEmpty")) (EVar "floor")) (EListLit)))
+(DTypeSig true "spFromProjections" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a")))) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "SpellingPop") (TyVar "a"))))))
+(DFunDef false "spFromProjections" ((PVar "rows") (PVar "floor") (PVar "collided")) (EApp (EApp (EApp (EVar "SpellingPop") (EVar "rows")) (EVar "floor")) (EVar "collided")))
 (DTypeSig true "spInsert" (TyFun (TyApp (TyCon "Option") (TyCon "Ident")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "SpellingPop") (TyVar "a"))))))))
 (DFunDef false "spInsert" ((PCon "None") (PVar "spelling") PWild (PVar "payload") (PCon "SpellingPop" (PVar "rows") (PVar "floor") (PVar "collided"))) (EApp (EApp (EApp (EVar "SpellingPop") (EVar "rows")) (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "payload")) (EVar "floor"))) (EVar "collided")))
 (DFunDef false "spInsert" ((PCon "Some" (PVar "ident")) (PVar "spelling") (PVar "owner") (PVar "payload") (PCon "SpellingPop" (PVar "rows") (PVar "floor") (PVar "collided"))) (EBlock (DoLet false false (PVar "prior") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "spelling")) (EVar "rows")))) (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "row")) (EBinOp "/=" (EApp (EVar "spRowIdent") (EVar "row")) (EVar "ident")))) (EVar "prior")) (EListLit (ETuple (EVar "ident") (EVar "owner") (EVar "payload"))))) (DoLet false false (PVar "collided2") (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "next")) (ELit (LInt 2))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "spelling")) (EVar "collided")))) (EBinOp "::" (EVar "spelling") (EVar "collided")) (EVar "collided"))) (DoExpr (EApp (EApp (EApp (EVar "SpellingPop") (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "next")) (EVar "rows"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "payload")) (EVar "floor"))) (EVar "collided2")))))
