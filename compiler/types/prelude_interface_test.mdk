@@ -68,7 +68,7 @@ obligedPub : PubScheme
 obligedPub = { identityPub |
   psContext = [
     VecObl {
-      voIface = IfaceRef { irName = "Eq", irOrigin = OriginUnresolved },
+      voIface = IfaceRef { irName = "Eq", irOrigin = OriginBuiltin },
       voIds = [7],
       voArgs = [],
     },
@@ -221,7 +221,7 @@ test "a thawed interface holds no live cell" =
         ++ ctorRows (roundTrip pi)))
 
 test "standalone rows keep the first published row per name" =
-  let row = n => Forall [] [] [] [] (EffRow [] None) (TCon n OriginUnresolved)
+  let row = n => Forall [] [] [] [] (EffRow [] None) (TCon n OriginBuiltin)
   let rendered = s => ppPubScheme PubScheme { psScheme = s, psContext = [] }
   let rows =
     standaloneRows standaloneNames [("id", row "First"), ("id", row "Second")]
