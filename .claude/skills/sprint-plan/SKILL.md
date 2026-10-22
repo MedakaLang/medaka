@@ -34,6 +34,13 @@ This skill produces ONE artifact: `/var/tmp/medaka-sprints/<stage>/CONTRACT.md`
 - **Grep the other arcs/docs for your issue numbers** (`grep -rn '#<NNN>'
   docs/ .claude/`) — a one-directional citation once scoped a slice that was
   verbatim another arc's claimed work.
+- **Debt on the files the slices will edit is in the pool** (Val 2026-10-22:
+  existing debt is cleaned as we go). For each such file, read the open debt
+  items that name it: `gh issue list --label "S3: friction & debt" --state open
+  --search "<file>"` (the area ledgers, e.g. #4350 for `typecheck.mdk`, carry
+  lettered items). Fold the ones inside a slice's Surface into that slice's
+  Mission, or into one mechanical sub-slice, keeping the review at one. An
+  item no slice's Surface reaches stays parked, with no new issue.
 
 ## Step 2 — choose the SET: coherent, and sized for one review
 

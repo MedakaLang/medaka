@@ -18,9 +18,13 @@ explaining a rule here, it has been forked. Cite the source.
 ## Scope — read this before the first finding
 
 - **Diff-scoped only.** You review the sprint diff at the pinned SHA. A defect
-  in code the diff did not touch is at most **one line in the report** as a
-  neighbour observation, never a finding the sprint must fix. Reviewing the
-  whole tree through a diff's keyhole is how a style pass becomes a stop-work.
+  in code the diff did not touch is never a finding the sprint must fix.
+  Reviewing the whole tree through a diff's keyhole is how a style pass
+  becomes a stop-work. But it is not dropped: a real one goes in a
+  **pre-existing** list at the end of Evidence (`file:line`, class, one
+  line each), and the orchestrator puts that list on the area's debt issue
+  for the next sprint that touches the file (Val 2026-10-22: existing debt
+  is cleaned as we go; `sprint-plan` step 1 reads those issues).
 - **Tests are in scope.** `*_test.mdk`, test row labels and shell gates meet the
   same rules as source (rubric R27); only a fixture that deliberately exhibits
   a pattern (a must-fail pin, a lint rule's own fixture) is exempt.
@@ -139,7 +143,7 @@ settled; do not reopen it inside a sprint.
 |---|---|
 | **Idiom density quotas** — pipes per file, "this should be a section", "convert this to a fold" | A density target is not readability, and it is unfalsifiable. A concrete pipeline of 3+ stages written inside-out is a finding (`idiom.inside-out-pipeline`, R17). |
 | **Mass-conversion sweeps** — "convert every `X` in this file / this subsystem" | Out of diff scope by construction, and `lint --fix` reprints WHOLE declarations and bails on comment-bearing ones, so a sweep silently corrupts unrelated syntax in the same decl. If a sweep is genuinely owed, it is a filed issue with its own PR. |
-| **Findings about untouched code** | Diff-scoped only (see Scope). At most one neighbour line. |
+| **Fixes to untouched code in THIS sprint** | Diff-scoped only (see Scope). A real pre-existing defect goes on the pre-existing list for the area debt issue, never into this sprint's fix round. |
 | **"Remove this suppression"** where the reason is one of the four valid kinds: a semantic difference, an independence requirement, a measured cost, a verified language limitation | That suppression is the correct outcome. Any other reason (a norm cited without evidence, deferred work, bare "intentional") is the finding (`suppress.invalid-reason`, R19). |
 | **"Add a lint rule for this"** | Not this reviewer's to implement — see the shrink rule below. It lands through its own filed issue and PR, gated either by the max ratchet (`GATED_LINT_RULES`, a rule the tree is already clean of) or, when it is not, by the per-(file, rule) count baseline (`BASELINED_LINT_RULES` + `test/lint_baseline.toml`, #2619 (lint count baseline)). |
 | **Reopening a standing architecture decision** | The `architecture` skill's DECLINED register — hard size ratchets, the `typecheck.mdk` split's sequencing (#2586 (typecheck refactor), which superseded the closed #2284), `driver`/`tools` placement debt (owned by the architecture epic #4206 since #2282 closed), skill-tree mirroring (#2313). |

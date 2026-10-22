@@ -209,7 +209,11 @@ by serialization.
    bins: *fix-now* (wrongness introduced or exposed by this sprint —
    [W-QUIETER] applies: a path that returned nothing and now returns
    something is untested by construction), *file* (real but out of scope —
-   draft the issue, file it, verify by readback since `gh` writes lie),
+   draft the issue, file it, verify by readback since `gh` writes lie; a
+   real style finding on pre-existing code goes as a lettered `file:line`
+   item onto the area's debt issue labelled `S3: friction & debt`, e.g.
+   #4350 for `typecheck.mdk`, because the next `sprint-plan` that touches
+   that file carries it (Val 2026-10-22: debt is cleaned as we go)),
    *dismiss* (with one NOTES.md line saying why). Anything you'd argue with
    Val about goes to Val.
 3. **Fix round.** Dispatch fix packets (same implementer contract, small
