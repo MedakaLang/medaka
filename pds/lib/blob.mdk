@@ -22,7 +22,7 @@ import list.{lookup, reverse}
 import regex.{Regex, isFullMatch, mustCompile}
 import string.{contains}
 import bytes as B
-import bytes.{Bytes, fromU8Array}
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 
 -- | Content-address a blob's raw bytes with the raw codec (reuses
 -- `cidForRaw`; blobs are not a new CID kind).
@@ -77,6 +77,33 @@ validMimeShape : String -> Bool
 validMimeShape mimeType = isFullMatch mimeShapeRe mimeType
 
 -- ── admission: the one place size caps are enforced ─────────────────────────
+
+{- | The MIME type of an ISO base media file, read from its `ftyp` box, or
+   `None` for anything else.
+
+   A client that cannot name the type sends `*/*`: the video service does when
+   it hands back a transcoded video, and the official server then takes the
+   type from the bytes. Only the container the video service produces is
+   recognised, so any other body under `*/*` is still refused by `admitBlob`.
+
+   The four bytes before `ftyp` are the box size; any four stand in below.
+
+   > sniffMimeType (encodeUtf8 "____ftypmp42____")
+   Some "video/mp4"
+   > sniffMimeType (encodeUtf8 "____ftypqt  ____")
+   Some "video/quicktime"
+   > sniffMimeType (encodeUtf8 "not a video at all")
+   None -}
+export
+sniffMimeType : Bytes -> Option String
+sniffMimeType bytes =
+  if B.startsWith (encodeUtf8 "ftyp") (B.drop 4 bytes) then
+    if B.startsWith (encodeUtf8 "qt  ") (B.drop 8 bytes) then
+      Some "video/quicktime"
+    else
+      Some "video/mp4"
+  else
+    None
 
 {- | Admit a blob's bytes and declared MIME type against every pure blob
    policy: MIME shape, the per-blob size cap, and the per-account size cap
