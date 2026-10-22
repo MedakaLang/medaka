@@ -84,13 +84,22 @@
 --   (classes <origin> x4 <bool> x5)           `BuiltinClasses`, field order
 --   (pop <map> <map> (<name> ...))            rows, floor, collided spellings
 --   (sprow <ident> <name> <payload>)          one row: identity, owner
-import list.{mapAccumL}
+--
+-- The whole file: top-level nodes, the header first, then the sections in order.
+--   (medaka-interface <version> (sources ((<path> <hash>) ...)) (compiler <id>))
+--   (section (joins (<join> ...)) <interface>)   a join is a list of `atom` nodes
+--   (interface <field> x19)                   `PreludeInterface`, field order
+-- A section's joins are written in the order of their rendered text.  A header
+-- whose version is not `formatVersion`, a missing, truncated or extra node, or
+-- any component refusal is an `Err`, never a partial record.
+import list.{mapAccumL, sortOn}
 import map as IdMap
 import map.{Map}
 import support.ordmap.{OrdMap}
 import support.sexp_value.{
-  SExp(..), SexpError(..), expectAtom, atomInt, atomBool
+  SExp(..), SexpError(..), renderSExp, parseSExp, expectAtom, atomInt, atomBool
 }
+import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}
 import types.publish.{
   PubScheme(..), ZState(..), LiveCell(..), emptyZonk, zonkMono, zonkRow,
   zonkAuthority, zonkVecObl, zonkScheme, freezePub, liveCells
@@ -1237,3 +1246,226 @@ cDeclaredPrefixOfSExp = decPrefix "prefix"
 export
 builtinClassesOfSExp : SExp -> Result SexpError BuiltinClasses
 builtinClassesOfSExp = decClasses "classes"
+
+-- ── the whole file ──────────────────────────────────────────────────────────
+
+-- [isJoins] are the IO joins the section's interface is valid for.
+public export data InterfaceSection = InterfaceSection {
+  isJoins : List (List Atom),
+  isInterface : PreludeInterface,
+}
+
+public export data PreludeInterfaceFile = PreludeInterfaceFile {
+  ifKey : InterfaceKey,
+  ifSections : List InterfaceSection,
+}
+
+export
+formatVersion : Int
+formatVersion = 1
+
+export
+sectionsOfCache : List (List (List Atom), PreludeInterface) ->
+  List InterfaceSection
+sectionsOfCache = map (s => InterfaceSection {
+  isJoins = fst s,
+  isInterface = snd s,
+})
+
+export
+cacheOfSections : List InterfaceSection ->
+  List (List (List Atom), PreludeInterface)
+cacheOfSections = map (s => (s.isJoins, s.isInterface))
+
+pairAtoms : (String, String) -> SExp
+pairAtoms = pairSExp SAtom SAtom
+
+headerNode : InterfaceKey -> SExp
+headerNode key = tagged "medaka-interface" [
+  intNode formatVersion,
+  tagged "sources" [listSExp pairAtoms key.ikSources],
+  tagged "compiler" [SAtom key.ikCompiler],
+]
+
+joinNode : List Atom -> SExp
+joinNode = listSExp atomSExp
+
+sectionNode : InterfaceSection -> SExp
+sectionNode s = tagged "section" [
+  tagged "joins" [
+    listSExp joinNode (sortOn (j => renderSExp (joinNode j)) s.isJoins),
+  ],
+  interfaceNode s.isInterface,
+]
+
+-- A constructor call over every field, so a field added to the record is a
+-- build error here until it has an arm.
+interfaceNode : PreludeInterface -> SExp
+interfaceNode (PreludeInterface funNames dispatch ctors ctorPop recordPop classes funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual ctorEx anyEx externs tyvarNext effvarNext core standalone) = tagged
+  "interface"
+  [
+    ordMapSExp unitSExp funNames,
+    listSExp (pairSExp (pairSExp ifaceRefSExp SAtom) intNode) dispatch,
+    listSExp
+      (pairSExp
+        tabKeySExp
+        (tripleSExp dataVisSExp (listSExp SAtom) (listSExp variantSExp)))
+      ctors,
+    spellingPopSExp pubSchemeSExp ctorPop,
+    spellingPopSExp recordInfoSExp recordPop,
+    builtinClassesSExp classes,
+    listSExp (pairSExp SAtom (listSExp predicateSlotSExp)) funSlots,
+    listSExp (pairSExp pairAtoms (listSExp predicateSlotSExp)) funSlotsQual,
+    listSExp (pairSExp SAtom cDeclaredPrefixSExp) declared,
+    listSExp (pairSExp pairAtoms cDeclaredPrefixSExp) declaredQual,
+    listSExp (pairSExp SAtom (listSExp methodPredicateSlotSExp)) methodSlots,
+    listSExp
+      (pairSExp pairAtoms (listSExp methodPredicateSlotSExp))
+      methodSlotsQual,
+    intMapSExp unitSExp ctorEx,
+    boolNode anyEx,
+    ordMapSExp
+      (pairSExp surfaceTySExp (listSExp (pairSExp SAtom intNode)))
+      externs,
+    intNode tyvarNext,
+    intNode effvarNext,
+    listSExp (pairSExp SAtom pubSchemeSExp) core,
+    ordMapSExp unitSExp standalone,
+  ]
+
+export
+encodeInterface : PreludeInterfaceFile -> String
+encodeInterface f =
+  stringJoin
+      "\n"
+      (map renderSExp (headerNode f.ifKey :: map sectionNode f.ifSections))
+    ++ "\n"
+
+decPairAtoms : Reader (String, String)
+decPairAtoms = pairOfSExp expectAtom expectAtom
+
+decInterface : Reader PreludeInterface
+decInterface path (SList [SAtom "interface", n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15, n16, n17, n18, n19]) =
+  do
+    let p = at path "interface"
+    funNames <- ordMapOfSExp unitOfSExp (p 1) n1
+    dispatch <- listOfSExp
+      (pairOfSExp (pairOfSExp (nested ifaceRefOfSExp) expectAtom) atomInt)
+      (p 2)
+      n2
+    ctors <- listOfSExp
+      (pairOfSExp
+        (nested tabKeyOfSExp)
+        (tripleOfSExp
+          (nested dataVisOfSExp)
+          (listOfSExp expectAtom)
+          (listOfSExp (nested variantOfSExp))))
+      (p 3)
+      n3
+    ctorPop <- spellingPopOfSExp (nested pubSchemeOfSExp) (p 4) n4
+    recordPop <- spellingPopOfSExp (nested recordInfoOfSExp) (p 5) n5
+    classes <- decClasses (p 6) n6
+    funSlots <- listOfSExp
+      (pairOfSExp expectAtom (listOfSExp (nested predicateSlotOfSExp)))
+      (p 7)
+      n7
+    funSlotsQual <- listOfSExp
+      (pairOfSExp decPairAtoms (listOfSExp (nested predicateSlotOfSExp)))
+      (p 8)
+      n8
+    declared <- listOfSExp
+      (pairOfSExp expectAtom (nested cDeclaredPrefixOfSExp))
+      (p 9)
+      n9
+    declaredQual <- listOfSExp
+      (pairOfSExp decPairAtoms (nested cDeclaredPrefixOfSExp))
+      (p 10)
+      n10
+    methodSlots <- listOfSExp
+      (pairOfSExp expectAtom (listOfSExp (nested methodPredicateSlotOfSExp)))
+      (p 11)
+      n11
+    methodSlotsQual <- listOfSExp
+      (pairOfSExp decPairAtoms (listOfSExp (nested methodPredicateSlotOfSExp)))
+      (p 12)
+      n12
+    ctorEx <- intMapOfSExp unitOfSExp (p 13) n13
+    anyEx <- atomBool (p 14) n14
+    externs <- ordMapOfSExp
+      (pairOfSExp
+        (nested surfaceTyOfSExp)
+        (listOfSExp (pairOfSExp expectAtom atomInt)))
+      (p 15)
+      n15
+    tyvarNext <- atomInt (p 16) n16
+    effvarNext <- atomInt (p 17) n17
+    core <- listOfSExp
+      (pairOfSExp expectAtom (nested pubSchemeOfSExp))
+      (p 18)
+      n18
+    standalone <- ordMapOfSExp unitOfSExp (p 19) n19
+    Ok
+      (PreludeInterface
+        funNames
+        dispatch
+        ctors
+        ctorPop
+        recordPop
+        classes
+        funSlots
+        funSlotsQual
+        declared
+        declaredQual
+        methodSlots
+        methodSlotsQual
+        ctorEx
+        anyEx
+        externs
+        tyvarNext
+        effvarNext
+        core
+        standalone)
+decInterface path node = misfit path [("interface", 19)] node
+
+decJoins : Reader (List (List Atom))
+decJoins path (SList [SAtom "joins", js]) =
+  listOfSExp (listOfSExp (nested atomOfSExp)) (at path "joins" 1) js
+decJoins path node = misfit path [("joins", 1)] node
+
+decSection : Reader InterfaceSection
+decSection path (SList [SAtom "section", js, i]) = do
+  joins <- decJoins (at path "section" 1) js
+  value <- decInterface (at path "section" 2) i
+  Ok InterfaceSection { isJoins = joins, isInterface = value }
+decSection path node = misfit path [("section", 2)] node
+
+decHeader : Reader InterfaceKey
+decHeader path (SList [SAtom "medaka-interface", v, SList [SAtom "sources", srcs], SList [SAtom "compiler", c]]) =
+  do
+    version <- atomInt (at path "medaka-interface" 1) v
+    sources <- listOfSExp decPairAtoms (at path "sources" 1) srcs
+    compiler <- expectAtom (at path "compiler" 1) c
+    if version == formatVersion then
+      Ok InterfaceKey {
+        ikFormat = version,
+        ikSources = sources,
+        ikCompiler = compiler,
+      }
+    else
+      refuse
+        (at path "medaka-interface" 1)
+        v
+        "format version \{version}, this compiler reads \{formatVersion}"
+decHeader path node = misfit path [("medaka-interface", 3)] node
+
+-- The text is read as the items of one list, since a parse reads one node.
+export
+decodeInterface : String -> Result SexpError PreludeInterfaceFile
+decodeInterface text = do
+  top <- parseSExp ("(" ++ text ++ ")")
+  match top
+    SList (header :: sections) => do
+      key <- decHeader "header" header
+      secs <- decList decSection "file" (SList sections)
+      Ok PreludeInterfaceFile { ifKey = key, ifSections = secs }
+    _ => refuse "file" top "expected a header node"

@@ -7,7 +7,7 @@ import test.{
   Expectation, expectEqual, expectEach, expectAll, expectAtLeast, labelFail,
   fail
 }
-import list.{sort, indexed}
+import list.{sort, indexed, take, drop}
 import map as M
 import string as S
 import frontend.ast.{
@@ -36,9 +36,13 @@ import types.interface_sexp.{
   recordInfoSExp, recordInfoOfSExp, predicateSlotSExp, predicateSlotOfSExp,
   methodPredicateSlotSExp, methodPredicateSlotOfSExp, cDeclaredPrefixSExp,
   cDeclaredPrefixOfSExp, builtinClassesSExp, builtinClassesOfSExp,
-  spellingPopSExp, spellingPopOfSExp
+  spellingPopSExp, spellingPopOfSExp, atomSExp, PreludeInterfaceFile(..),
+  InterfaceSection(..), formatVersion, sectionsOfCache, cacheOfSections,
+  encodeInterface, decodeInterface
 }
-import types.prelude_interface.{PreludeInterface(..), currentPreludeInterface}
+import types.prelude_interface.{
+  PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
+}
 import types.publish.{
   PubScheme(..), TcReport(..), PartialAnalysis(..), LiveCell(..), VarKind(..),
   ppPubScheme, liveCells
@@ -49,7 +53,7 @@ import types.registry.{
 import types.repr.{
   Mono(..), Tyvar(..), Scheme(..), IfaceRef(..), ppMonosShared, ppTy
 }
-import types.effect_rows.{EffRow(..), Effvar(..), atomBuiltin}
+import types.effect_rows.{EffRow(..), Effvar(..), Atom, atomBuiltin}
 import types.effect_authority.{Authority(..)}
 import types.effect_domain.{Param(..)}
 import types.tc_types.{
@@ -1526,3 +1530,167 @@ test "a malformed component is refused at its path" =
         (refusal (listOfSExp (nested tabKeyOfSExp) "keys" (SList [atom "x"]))),
     ),
   ]
+
+-- ── the whole file ──────────────────────────────────────────────────────────
+
+ioUnit : Atom
+ioUnit = atomBuiltin "IO" PUnit
+
+ioSet : Atom
+ioSet = atomBuiltin "IO" (PSet (Some ["a b", "c"]))
+
+fileKey : InterfaceKey
+fileKey = InterfaceKey {
+  ikFormat = formatVersion,
+  ikSources = [("core.mdk", "ab12"), ("a b.mdk", "cd34")],
+  ikCompiler = "medaka 0 (sha x)",
+}
+
+fileOf : List (List (List Atom), PreludeInterface) -> PreludeInterfaceFile
+fileOf cache = PreludeInterfaceFile {
+  ifKey = fileKey,
+  ifSections = sectionsOfCache cache,
+}
+
+joinText : List Atom -> String
+joinText j = renderSExp (listSExp atomSExp j)
+
+-- A section as the codec-independent view reads it: its joins, its rows and
+-- the constructor population.
+sectionView : InterfaceSection -> List String
+sectionView s =
+  map joinText s.isJoins
+    ++ map (row => "\{fst row} : \{pubView (snd row)}") s.isInterface.piCore
+    ++ popView pubView s.isInterface.piCtorPop
+
+cacheView : List (List (List Atom), PreludeInterface) -> List String
+cacheView cache =
+  flatMap (s => map joinText (fst s) ++ ["tyvars \{(snd s).piTyvarNext}"]) cache
+
+headerOnly : String
+headerOnly = encodeInterface (fileOf [])
+
+withSection : String -> String
+withSection field = "\{headerOnly}(section (joins ()) (interface \{field}))\n"
+
+failureOf : String -> Option (String, String)
+failureOf text = refusal (decodeInterface text)
+
+-- [text] with the sixteenth field of its first section replaced by a word.
+corrupted : String -> String
+corrupted text = match parseSExp ("(" ++ text ++ ")")
+  Ok (SList (header :: (SList [s, js, SList (i :: fields)]) :: rest)) =>
+    let bad = take 15 fields ++ [atom "zz"] ++ drop 16 fields
+    let first = SList [s, js, SList (i :: bad)]
+    stringJoin "\n" (map renderSExp (header :: first :: rest))
+  _ => text
+
+test "a malformed file is refused" = match preludeInterface
+  Err e => fail e
+  Ok pi =>
+    let good = encodeInterface (fileOf [([[ioUnit]], pi)])
+    expectEach [
+      (
+        "empty text",
+        expectEqual
+          (Some ("file", "a list: expected a header node"))
+          (failureOf ""),
+      ),
+      (
+        "a later version",
+        expectEqual
+          (Some (
+            "header/medaka-interface.1",
+            "2: format version 2, this compiler reads 1",
+          ))
+          (failureOf "(medaka-interface 2 (sources ()) (compiler c))\n"),
+      ),
+      (
+        "truncated in the header",
+        expectEqual
+          (Some ("", "unbalanced open paren"))
+          (failureOf "(medaka-interface 1 (sources ("),
+      ),
+      (
+        "a header alone is a file with no section",
+        expectEqual
+          (Some ("", "unbalanced open paren"))
+          (failureOf "(medaka-interface 1 (sources ())"),
+      ),
+      (
+        "trailing text",
+        expectEqual
+          (Some ("file/1", "x: unknown head; expected one of section"))
+          (failureOf (good ++ "x")),
+      ),
+      (
+        "a trailing node",
+        expectEqual
+          (Some ("file/1", "extra: unknown head; expected one of section"))
+          (failureOf (good ++ "(extra)")),
+      ),
+      (
+        "a closing paren too many",
+        expectEqual
+          (Some ("", "trailing text after the first node"))
+          (failureOf (good ++ ")")),
+      ),
+      (
+        "a section cut short",
+        expectEqual
+          (Some ("", "unbalanced open paren"))
+          (failureOf (S.take 200 good)),
+      ),
+      (
+        "a word where the section should be",
+        expectEqual
+          (Some ("file/0", "section: expected 2 field(s)"))
+          (failureOf (headerOnly ++ "section")),
+      ),
+      (
+        "a field of the wrong shape",
+        expectEqual
+          (Some ("file/0/section.2/interface.16", "expected an integer"))
+          (failureOf (corrupted good)),
+      ),
+      (
+        "too few fields",
+        expectEqual
+          (Some ("file/0/section.2", "interface: expected 19 field(s)"))
+          (failureOf (withSection "x")),
+      ),
+    ]
+
+test "the prelude's file round-trips with its key, joins and every row" =
+  match preludeInterface
+    Err e => fail e
+    Ok pi =>
+      let cache = [([[ioUnit]], pi), ([[ioSet, ioUnit], []], pi)]
+      let file = fileOf cache
+      let text = encodeInterface file
+      match decodeInterface text
+        Err e => fail "decode refused at \{e.sePath}: \{e.seWhat}"
+        Ok back => expectAll [
+          labelFail "two encodes" (expectEqual text (encodeInterface file)),
+          labelFail "re-encode" (expectEqual text (encodeInterface back)),
+          labelFail
+            "joins sorted"
+            (expectEqual
+              text
+              (encodeInterface
+                (fileOf [
+                  ([[ioUnit]], pi),
+                  ([[], [ioSet, ioUnit]], pi),
+                ]))),
+          labelFail "key" (expectEqual None (keysMatch fileKey back.ifKey)),
+          labelFail
+            "sections"
+            (expectEqual
+              (map sectionView file.ifSections)
+              (map sectionView back.ifSections)),
+          labelFail
+            "cache inverse"
+            (expectEqual
+              (cacheView cache)
+              (cacheView (cacheOfSections back.ifSections))),
+        ]
