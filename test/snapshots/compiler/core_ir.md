@@ -1,5 +1,5 @@
 # META
-source_lines=699
+source_lines=704
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -65,7 +65,6 @@ import frontend.ast.{
   noBinderId,
 }
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
-import types.publish.{EntryOutcome}
 import support.util.{reverseL}
 
 -- ── expressions ────────────────────────────────────────────────────────────
@@ -412,7 +411,7 @@ noImplSym = ImplSym "" "" ""
 -- impl/default entries, the method-context table and the declaration facts.
 -- Slice-1 programs carry an empty impl list.
 public export data CProgram =
-  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int)) DeclFacts
+  CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int)) DeclFacts
 
 -- The declaration facts a dictionary built at a site is held to
 -- (`core_validate.validateDispatchEvidence`): each instance's `requires` count,
@@ -438,15 +437,21 @@ public export data MethodResultFact = MethodResultFact {
   returnsHead : Bool,
   callbackPositions : List Int,
   valueArity : Int,
+} deriving (Eq, Debug)
+
+-- The entry properties physical emitters need. Lowering projects these from the
+-- typechecker's published outcome, so Core does not depend on its representation.
+public export data EntryFact = EntryFact {
+  entryMainIsUnit : Bool,
+  entryMainIsFloat : Bool,
 }
-  deriving (Eq, Debug)
 
 public export data DeclFacts = DeclFacts {
   factRequires : List (String, Int),
   factSupers : List (String, Int),
   factBinders : List BinderRow,
   factMethodResults : List MethodResultFact,
-  factEntryOutcome : Option EntryOutcome,
+  factEntryOutcome : Option EntryFact,
 }
 
 export
@@ -704,7 +709,6 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" false) (mem "Route" true) (mem "BinderId" true) (mem "noDeclLoc" false) (mem "noBinderId" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "EntryOutcome" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "MethodEvidence" () ((variant "MethodEvidence" (ConNamed (field "meIface" (TyCon "String")) (field "meArity" (TyCon "Int")) (field "meDispatch" (TyCon "Route")) (field "mePrereqs" (TyApp (TyCon "List") (TyCon "Route"))) (field "meContext" (TyApp (TyCon "List") (TyCon "Route")))))) ())
@@ -761,7 +765,8 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DData Public "MethodResultFact" () ((variant "MethodResultFact" (ConNamed (field "iface" (TyCon "String")) (field "method" (TyCon "String")) (field "returnsHead" (TyCon "Bool")) (field "callbackPositions" (TyApp (TyCon "List") (TyCon "Int"))) (field "valueArity" (TyCon "Int"))))) ())
 (DImpl true "Eq" ((TyCon "MethodResultFact")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) (PRec "MethodResultFact" ((rf "iface" (PVar "__b0")) (rf "method" (PVar "__b1")) (rf "returnsHead" (PVar "__b2")) (rf "callbackPositions" (PVar "__b3")) (rf "valueArity" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "eq") (EVar "__a4")) (EVar "__b4"))))))))
 (DImpl true "Debug" ((TyCon "MethodResultFact")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MethodResultFact {")) (ELit (LString " iface = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", method = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", returnsHead = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString ", callbackPositions = "))) (EApp (EVar "debug") (EVar "__a3"))) (ELit (LString ", valueArity = "))) (EApp (EVar "debug") (EVar "__a4"))) (ELit (LString " }"))))))))
-(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "factMethodResults" (TyApp (TyCon "List") (TyCon "MethodResultFact"))) (field "factEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome")))))) ())
+(DData Public "EntryFact" () ((variant "EntryFact" (ConNamed (field "entryMainIsUnit" (TyCon "Bool")) (field "entryMainIsFloat" (TyCon "Bool"))))) ())
+(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "factMethodResults" (TyApp (TyCon "List") (TyCon "MethodResultFact"))) (field "factEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact")))))) ())
 (DTypeSig true "noDeclFacts" (TyCon "DeclFacts"))
 (DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")))))
 (DTypeAlias true "BinderVisit" () (TyFun (TyCon "BinderSite") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))
@@ -857,7 +862,6 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" false) (mem "Route" true) (mem "BinderId" true) (mem "noDeclLoc" false) (mem "noBinderId" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "EntryOutcome" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "MethodEvidence" () ((variant "MethodEvidence" (ConNamed (field "meIface" (TyCon "String")) (field "meArity" (TyCon "Int")) (field "meDispatch" (TyCon "Route")) (field "mePrereqs" (TyApp (TyCon "List") (TyCon "Route"))) (field "meContext" (TyApp (TyCon "List") (TyCon "Route")))))) ())
@@ -914,7 +918,8 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DData Public "MethodResultFact" () ((variant "MethodResultFact" (ConNamed (field "iface" (TyCon "String")) (field "method" (TyCon "String")) (field "returnsHead" (TyCon "Bool")) (field "callbackPositions" (TyApp (TyCon "List") (TyCon "Int"))) (field "valueArity" (TyCon "Int"))))) ())
 (DImpl true "Eq" ((TyCon "MethodResultFact")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) (PRec "MethodResultFact" ((rf "iface" (PVar "__b0")) (rf "method" (PVar "__b1")) (rf "returnsHead" (PVar "__b2")) (rf "callbackPositions" (PVar "__b3")) (rf "valueArity" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EMethodRef "eq") (EVar "__a4")) (EVar "__b4"))))))))
 (DImpl true "Debug" ((TyCon "MethodResultFact")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MethodResultFact {")) (ELit (LString " iface = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", method = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", returnsHead = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString ", callbackPositions = "))) (EApp (EMethodRef "debug") (EVar "__a3"))) (ELit (LString ", valueArity = "))) (EApp (EMethodRef "debug") (EVar "__a4"))) (ELit (LString " }"))))))))
-(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "factMethodResults" (TyApp (TyCon "List") (TyCon "MethodResultFact"))) (field "factEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryOutcome")))))) ())
+(DData Public "EntryFact" () ((variant "EntryFact" (ConNamed (field "entryMainIsUnit" (TyCon "Bool")) (field "entryMainIsFloat" (TyCon "Bool"))))) ())
+(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "factMethodResults" (TyApp (TyCon "List") (TyCon "MethodResultFact"))) (field "factEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact")))))) ())
 (DTypeSig true "noDeclFacts" (TyCon "DeclFacts"))
 (DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")))))
 (DTypeAlias true "BinderVisit" () (TyFun (TyCon "BinderSite") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))

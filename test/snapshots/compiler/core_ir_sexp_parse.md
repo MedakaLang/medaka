@@ -1,5 +1,5 @@
 # META
-source_lines=633
+source_lines=622
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -15,7 +15,6 @@ stages=DESUGAR,MARK
 import frontend.ast.{
   noBinderId,
   BinderId(..),
-  EvId(..),
   Lit(..),
   Pat(..),
   RecPatField(..),
@@ -38,6 +37,7 @@ import ir.core_ir.{
   ImplSym(..),
   CProgram(..),
   DeclFacts(..),
+  EntryFact(..),
   MethodResultFact(..),
   noDeclFacts,
   CallMode(..),
@@ -50,7 +50,6 @@ import ir.core_ir.{
   withBinderRows,
 }
 import types.runtime_types.{BinderRow(..), RuntimeType, runtimeTypeFromName}
-import types.publish.{EntryOutcome(..)}
 import map as BM
 import support.util.{reverseL}
 
@@ -593,20 +592,10 @@ toMethodResult (SList ((SAtom "mr") :: [iface, method, returnsHead, SList positi
 toMethodResult other =
   panic ("core_ir_sexp_parse: bad method result fact: " ++ sexprToStr other)
 
-toEntryOutcome : SExp -> EntryOutcome
-toEntryOutcome (SList ((SAtom "entry") :: [unit, float, async, payload, autoPrint])) = EntryOutcome {
-  eoMainIsUnit = toBool unit,
-  eoMainIsFloat = toBool float,
-  eoMainIsAsync = toBool async,
-  eoMainAsyncPayloadIsUnit = toBool payload,
-  eoAutoPrint = match autoPrint
-    SAtom "none" => None
-    SList ((SAtom "ev") :: [mid, ordinal]) =>
-      Some (EvId (toStr mid) (toInt ordinal))
-    other =>
-      panic
-        ("core_ir_sexp_parse: bad entry auto-print evidence: "
-          ++ sexprToStr other),
+toEntryOutcome : SExp -> EntryFact
+toEntryOutcome (SList ((SAtom "entry") :: [unit, float])) = EntryFact {
+  entryMainIsUnit = toBool unit,
+  entryMainIsFloat = toBool float,
 }
 toEntryOutcome other =
   panic ("core_ir_sexp_parse: bad entry outcome: " ++ sexprToStr other)
@@ -636,10 +625,9 @@ joinSexps [] = ""
 joinSexps [x] = sexprToStr x
 joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "EvId" true) (mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "mapProgramBinders" false) (mem "withBinderRows" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "mapProgramBinders" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" false) (mem "runtimeTypeFromName" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "EntryOutcome" true))))
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "SToken" () ((variant "TOpen" (ConPos)) (variant "TClose" (ConPos)) (variant "TAtom" (ConPos (TyCon "String")))) ())
@@ -864,8 +852,8 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DTypeSig false "toMethodResult" (TyFun (TyCon "SExp") (TyCon "MethodResultFact")))
 (DFunDef false "toMethodResult" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "mr"))) (PList (PVar "iface") (PVar "method") (PVar "returnsHead") (PCon "SList" (PVar "positions")) (PVar "arity"))))) (ERecordCreate "MethodResultFact" ((fa "iface" (EApp (EVar "toStr") (EVar "iface"))) (fa "method" (EApp (EVar "toStr") (EVar "method"))) (fa "returnsHead" (EApp (EVar "toBool") (EVar "returnsHead"))) (fa "callbackPositions" (EApp (EApp (EVar "map") (EVar "toInt")) (EVar "positions"))) (fa "valueArity" (EApp (EVar "toInt") (EVar "arity"))))))
 (DFunDef false "toMethodResult" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad method result fact: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
-(DTypeSig false "toEntryOutcome" (TyFun (TyCon "SExp") (TyCon "EntryOutcome")))
-(DFunDef false "toEntryOutcome" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "entry"))) (PList (PVar "unit") (PVar "float") (PVar "async") (PVar "payload") (PVar "autoPrint"))))) (ERecordCreate "EntryOutcome" ((fa "eoMainIsUnit" (EApp (EVar "toBool") (EVar "unit"))) (fa "eoMainIsFloat" (EApp (EVar "toBool") (EVar "float"))) (fa "eoMainIsAsync" (EApp (EVar "toBool") (EVar "async"))) (fa "eoMainAsyncPayloadIsUnit" (EApp (EVar "toBool") (EVar "payload"))) (fa "eoAutoPrint" (EMatch (EVar "autoPrint") (arm (PCon "SAtom" (PLit (LString "none"))) () (EVar "None")) (arm (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "ev"))) (PList (PVar "mid") (PVar "ordinal")))) () (EApp (EVar "Some") (EApp (EApp (EVar "EvId") (EApp (EVar "toStr") (EVar "mid"))) (EApp (EVar "toInt") (EVar "ordinal"))))) (arm (PVar "other") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad entry auto-print evidence: ")) (EApp (EVar "sexprToStr") (EVar "other"))))))))))
+(DTypeSig false "toEntryOutcome" (TyFun (TyCon "SExp") (TyCon "EntryFact")))
+(DFunDef false "toEntryOutcome" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "entry"))) (PList (PVar "unit") (PVar "float"))))) (ERecordCreate "EntryFact" ((fa "entryMainIsUnit" (EApp (EVar "toBool") (EVar "unit"))) (fa "entryMainIsFloat" (EApp (EVar "toBool") (EVar "float"))))))
 (DFunDef false "toEntryOutcome" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad entry outcome: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toFactPair" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "toFactPair" ((PVar "tag") (PAs "row" (PCon "SList" (PCons (PCon "SAtom" (PVar "t")) (PList (PVar "key") (PVar "n")))))) (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (ETuple (EApp (EVar "toStr") (EVar "key")) (EApp (EVar "toInt") (EVar "n"))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad declaration fact: ")) (EApp (EVar "sexprToStr") (EVar "row"))))))
@@ -881,10 +869,9 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "joinSexps" ((PList (PVar "x"))) (EApp (EVar "sexprToStr") (EVar "x")))
 (DFunDef false "joinSexps" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "sexprToStr") (EVar "x")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinSexps") (EVar "rest")))) (ELit (LString ""))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "EvId" true) (mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "mapProgramBinders" false) (mem "withBinderRows" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "mapProgramBinders" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" false) (mem "runtimeTypeFromName" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "EntryOutcome" true))))
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "SToken" () ((variant "TOpen" (ConPos)) (variant "TClose" (ConPos)) (variant "TAtom" (ConPos (TyCon "String")))) ())
@@ -1109,8 +1096,8 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DTypeSig false "toMethodResult" (TyFun (TyCon "SExp") (TyCon "MethodResultFact")))
 (DFunDef false "toMethodResult" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "mr"))) (PList (PVar "iface") (PVar "method") (PVar "returnsHead") (PCon "SList" (PVar "positions")) (PVar "arity"))))) (ERecordCreate "MethodResultFact" ((fa "iface" (EApp (EVar "toStr") (EVar "iface"))) (fa "method" (EApp (EVar "toStr") (EVar "method"))) (fa "returnsHead" (EApp (EVar "toBool") (EVar "returnsHead"))) (fa "callbackPositions" (EApp (EApp (EMethodRef "map") (EVar "toInt")) (EVar "positions"))) (fa "valueArity" (EApp (EVar "toInt") (EVar "arity"))))))
 (DFunDef false "toMethodResult" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad method result fact: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
-(DTypeSig false "toEntryOutcome" (TyFun (TyCon "SExp") (TyCon "EntryOutcome")))
-(DFunDef false "toEntryOutcome" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "entry"))) (PList (PVar "unit") (PVar "float") (PVar "async") (PVar "payload") (PVar "autoPrint"))))) (ERecordCreate "EntryOutcome" ((fa "eoMainIsUnit" (EApp (EVar "toBool") (EVar "unit"))) (fa "eoMainIsFloat" (EApp (EVar "toBool") (EVar "float"))) (fa "eoMainIsAsync" (EApp (EVar "toBool") (EVar "async"))) (fa "eoMainAsyncPayloadIsUnit" (EApp (EVar "toBool") (EVar "payload"))) (fa "eoAutoPrint" (EMatch (EVar "autoPrint") (arm (PCon "SAtom" (PLit (LString "none"))) () (EVar "None")) (arm (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "ev"))) (PList (PVar "mid") (PVar "ordinal")))) () (EApp (EVar "Some") (EApp (EApp (EVar "EvId") (EApp (EVar "toStr") (EVar "mid"))) (EApp (EVar "toInt") (EVar "ordinal"))))) (arm (PVar "other") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad entry auto-print evidence: ")) (EApp (EVar "sexprToStr") (EVar "other"))))))))))
+(DTypeSig false "toEntryOutcome" (TyFun (TyCon "SExp") (TyCon "EntryFact")))
+(DFunDef false "toEntryOutcome" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "entry"))) (PList (PVar "unit") (PVar "float"))))) (ERecordCreate "EntryFact" ((fa "entryMainIsUnit" (EApp (EVar "toBool") (EVar "unit"))) (fa "entryMainIsFloat" (EApp (EVar "toBool") (EVar "float"))))))
 (DFunDef false "toEntryOutcome" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad entry outcome: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toFactPair" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "toFactPair" ((PVar "tag") (PAs "row" (PCon "SList" (PCons (PCon "SAtom" (PVar "t")) (PList (PVar "key") (PVar "n")))))) (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (ETuple (EApp (EVar "toStr") (EVar "key")) (EApp (EVar "toInt") (EVar "n"))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad declaration fact: ")) (EApp (EVar "sexprToStr") (EVar "row"))))))

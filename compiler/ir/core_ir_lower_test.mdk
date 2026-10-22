@@ -9,7 +9,7 @@ import frontend.parser.{parse}
 import ir.core_ir_lower.{
   noInlineFnNames, methodResultFacts, lowerProgramEmitWith
 }
-import ir.core_ir.{CProgram(..), MethodResultFact(..)}
+import ir.core_ir.{CProgram(..), EntryFact(..), MethodResultFact(..)}
 import frontend.ast.{Decl(..), TyConOrigin(..)}
 import types.annotate.{annotateProgram}
 import types.program_facts.{ProgramFacts(..), emptyFacts}
@@ -112,7 +112,7 @@ test "same-spelled interfaces retain distinct qualified result facts" =
     ]
     (methodResultFacts (left ++ right))
 
-test "lowering copies the selected entry outcome without inspecting the program" =
+test "lowering projects the selected entry outcome without inspecting the program" =
   let selected = EntryOutcome {
     eoMainIsUnit = True,
     eoMainIsFloat = True,
@@ -126,10 +126,7 @@ test "lowering copies the selected entry outcome without inspecting the program"
     CProgram _ _ _ _ _ facts => facts.factEntryOutcome
   match carried
     Some outcome => expectAll [
-      expectTrue outcome.eoMainIsUnit,
-      expectTrue outcome.eoMainIsFloat,
-      expectTrue outcome.eoMainIsAsync,
-      expectFalse outcome.eoMainAsyncPayloadIsUnit,
-      expectFalse (isSome outcome.eoAutoPrint),
+      expectTrue outcome.entryMainIsUnit,
+      expectTrue outcome.entryMainIsFloat,
     ]
     None => fail "lowering dropped its entry outcome"

@@ -74,6 +74,7 @@ import ir.core_ir.{
   noImplSym,
   CProgram(..),
   DeclFacts(..),
+  EntryFact(..),
   MethodResultFact(..),
   noDeclFacts,
   CallMode(..),
@@ -1087,8 +1088,14 @@ emitDeclFacts facts decls =
     factSupers = map (w => (w, ifaceSuperCount w table)) words,
     factBinders = [],
     factMethodResults = methodResultFacts decls,
-    factEntryOutcome = facts.pfEntryOutcome,
+    factEntryOutcome = entryFact facts,
   }
+
+entryFact : ProgramFacts -> Option EntryFact
+entryFact facts =
+  map
+    (outcome => EntryFact outcome.eoMainIsUnit outcome.eoMainIsFloat)
+    facts.pfEntryOutcome
 
 withDeclFacts : DeclFacts -> CProgram -> CProgram
 withDeclFacts facts (CProgram groups ctorArs ctorTypes impls mctx _) =
@@ -1206,7 +1213,7 @@ finishLowering lowering table prog =
 -- each constructor's field count, each impl entry's value arity by method and
 -- route word (`entryArityKey`), and each method's least entry value arity.
 public export data ArityEnv =
-  | ArityEnv (OrdMap Int) (OrdMap Int) (OrdMap Int) (OrdMap Int)
+  ArityEnv (OrdMap Int) (OrdMap Int) (OrdMap Int) (OrdMap Int)
 
 -- The local binders in scope: `Some k` for a let-group function whose clauses
 -- take k parameters or a `let` of a k-parameter lambda, `None` for any other

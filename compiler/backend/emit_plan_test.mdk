@@ -48,9 +48,9 @@ import ir.core_ir.{
   mkApp,
   noDeclFacts,
   MethodResultFact(..),
+  EntryFact(..),
   synthBind,
 }
-import types.publish.{EntryOutcome(..)}
 import support.ordmap.{omLookup}
 import backend.emit_plan.{
   EmitPlan(..),
@@ -130,12 +130,9 @@ test "the plan carries the target it was built with" = expectAll [
 
 entryOutcomeProgram : CProgram
 entryOutcomeProgram =
-  let outcome = EntryOutcome {
-    eoMainIsUnit = False,
-    eoMainIsFloat = True,
-    eoMainIsAsync = False,
-    eoMainAsyncPayloadIsUnit = True,
-    eoAutoPrint = None,
+  let outcome = EntryFact {
+    entryMainIsUnit = False,
+    entryMainIsFloat = True,
   }
   CProgram [] [] [] [] [] { noDeclFacts | factEntryOutcome = Some outcome }
 
@@ -143,11 +140,8 @@ planOutcomeExpectation : Backend -> Expectation
 planOutcomeExpectation target =
   match (buildEmitPlan target entryOutcomeProgram).entryOutcome
     Some outcome => expectAll [
-      expectFalse outcome.eoMainIsUnit,
-      expectTrue outcome.eoMainIsFloat,
-      expectFalse outcome.eoMainIsAsync,
-      expectTrue outcome.eoMainAsyncPayloadIsUnit,
-      expectFalse (isSome outcome.eoAutoPrint),
+      expectFalse outcome.entryMainIsUnit,
+      expectTrue outcome.entryMainIsFloat,
     ]
     None => fail "the plan dropped its entry outcome"
 
