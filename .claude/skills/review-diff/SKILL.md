@@ -15,22 +15,31 @@ shape. It is the first, cheap pass: `style-review` (end of sprint) and
 ## Run it
 
 ```sh
+export REVIEW_BENCH_CACHE=/var/tmp/medaka-review-cache   # shared across worktrees
 R="python3 -I scripts/review_bench/review.py"
 $R --dry-run                     # units, token and cost estimate; asks nothing
 $R                               # $(git merge-base origin/main HEAD)..HEAD
 $R --rev A..B --max-usd 0.50     # any range; `--rev <sha>` is that commit alone
-$R --json > findings.json        # records for diff-level benchmarking
+$R --json > findings.json 2> review.log   # records for diff-level benchmarking; progress in the log
 ```
 
 It reviews committed code at B only and warns on stderr if a reviewed file is
-dirty. Answers are cached under `scripts/review_bench/.cache/`, so a rerun is
-free. The README section "Reviewing a live diff" says how units are cut and
-scoped.
+dirty. Answers and evidence are cached by content; with `REVIEW_BENCH_CACHE`
+set, every worktree shares one cache and a rerun is free (unset, the cache is
+`scripts/review_bench/.cache/` in the tree the script runs from, so a fresh
+worktree starts cold). Progress goes to stderr as it happens: one line per batch
+of units and one per confirmed finding. A run with no stderr line for several
+minutes is stuck; a run with lines is working, however long it takes. The README
+section "Reviewing a live diff" says how units are cut and scoped.
 
 ## Moved declarations are skipped
 
 By default a touched declaration is dropped when the base commit holds a same-named one (this file or another) with the same text after removing a visibility prefix, whitespace and comment wrapping, 🚨/⚠️/🔒 sigils and case, and the head holds no more copies of that text than the base did: a pure move is not a change, a copy (original kept) is not skipped. Dropped ones are listed (`--json`: `skipped_units`, reason `moved-unchanged`) and `--dry-run` counts without them.
 `--keep-moved` reviews them anyway. A rename or a one-token edit is never skipped. Tests: `python3 -I scripts/review_bench/review_test.py`.
+
+## Pre-existing comments are dropped
+
+A declaration that moved or gained a parameter is reviewed in full, and every old comment in it sits on a "changed" line. So a `comment.*` finding (bar `comment.stale`, since an old comment goes stale when the code under it changes) whose quote is text the base held in a file the diff touched is dropped and listed under "Dropped as pre-existing" (`--json`: `preexisting_dropped`). The ledger can cite that list instead of dismissing each one by hand; one sweep sprint dismissed 197 of 214 findings that way. `--keep-preexisting` reviews them. Measured on the dev split as the `preexisting` arm of `diffbench.py` (`scripts/review_bench/RESULTS-preexisting-2026-10-22.md`).
 
 ## What it sees
 

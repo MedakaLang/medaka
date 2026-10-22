@@ -118,6 +118,21 @@ $R --rev A..B [--json] [--max-usd 1.00] [--jobs 4]
   battery quote overlaps; one argued only from evidence blocks is marked and
   placed at the unit's first changed line. On `e5a3d0380` this halved the
   confirm spend and dropped no finding judged real.
+- **Pre-existing comments** (`review.BaseText`): a `comment.*` finding, bar
+  `comment.stale`, whose quote is text the base held in a file the diff
+  changed, deleted or renamed away from (normalized as the moved-declaration
+  skip normalizes: comment markers, sigils, case and whitespace removed) is
+  dropped before confirm, or after it when only the confirm quote is old, and
+  listed under "Dropped as pre-existing". A moved or re-indented declaration
+  puts its old comments on changed lines, and one sweep sprint's ledger
+  dismissed 197 of 214 findings by hand for exactly this reason. Quotes under
+  16 normalized characters are not checked. `--keep-preexisting` disables it;
+  the `preexisting` arm of `diffbench.py` measures it.
+- **Progress:** each batch and each confirmed finding print to stderr as they
+  land, so redirect stderr to a log and tail it rather than wait for stdout.
+- **Cache:** answers and evidence are keyed by content, under
+  `scripts/review_bench/.cache/` by default. `REVIEW_BENCH_CACHE=<dir>` points
+  every module at one shared directory, so a fresh worktree does not start cold.
 - **Budget:** `--max-usd` is checked before each batch of `2 * --jobs` units,
   so a run can pass it by one batch.
 - **Output:** findings ranked by battery times confirm confidence (the rubric
@@ -185,8 +200,9 @@ $D report --split dev --out /tmp/diffs.md
   labelled commits and clean units.
 - **Arms:** `baseline` (the default review), `g2` (`--scope strict`),
   `g2-exempt` (`--scope strict-exempt`), `g1` (`--twin-notes`), `fixed` (`g1`
-  and `g2`). The scope arms ask nothing new: a stricter scope confirms a subset
-  of the classes. Every arm but `baseline` runs on the units whose evidence
+  and `g2`), `preexisting` (the pre-existing-comment drop, review.py's default
+  since 2026-10-21). The scope and pre-existing arms ask nothing new: a stricter
+  filter confirms a subset of the classes. Every arm but `baseline` runs on the units whose evidence
   without twin notes is what `baseline` asked with (a few generators depend on
   the process's string-hash order), and `report` compares arms on the units
   every listed run reviewed.

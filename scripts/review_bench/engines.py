@@ -17,7 +17,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-CACHE = HERE / ".cache"
+# Answers and evidence are keyed by content, so one cache serves every worktree;
+# REVIEW_BENCH_CACHE names a shared one (a fresh worktree otherwise starts cold).
+CACHE = Path(os.environ["REVIEW_BENCH_CACHE"]).expanduser() if os.environ.get("REVIEW_BENCH_CACHE") else HERE / ".cache"
+# evidence.py keys its cache by a hash of its own source, so the shared location is set
+# from here rather than by editing that file (an edit there invalidates every entry).
+import evidence as _EV  # noqa: E402
+_EV.CACHE = CACHE / "evidence"
 
 CLAUDE_MODELS = {"haiku": "claude-haiku-5-5", "opus": "claude-opus-5-5"}
 CHARS_PER_TOKEN = 4.0  # for token estimates from characters

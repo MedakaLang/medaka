@@ -60,10 +60,11 @@ CLEAN_UNITS = 8  # sampled per clean commit
 CLEAN_COMMITS = 30  # per split
 # The commits whose live reviews exposed the two gaps the fixed arm addresses.
 EXPOSED = ("3f3e63a12", "e5a3d0380")
-# arm: (twin notes, scope, merge adjacent declarations)
-ARMS = {"baseline": (False, "diff", True), "g2": (False, "strict", True),
-        "g2-exempt": (False, "strict-exempt", True), "g1": (True, "diff", True), "fixed": (True, "strict", True),
-        "onedecl": (False, "diff", False)}
+# arm: (twin notes, scope, merge adjacent declarations, drop pre-existing comments)
+ARMS = {"baseline": (False, "diff", True, False), "g2": (False, "strict", True, False),
+        "g2-exempt": (False, "strict-exempt", True, False), "g1": (True, "diff", True, False),
+        "fixed": (True, "strict", True, False), "onedecl": (False, "diff", False, False),
+        "preexisting": (False, "diff", True, True)}
 # $6.00 for the first pass (g1, g2), $2.00 for the onedecl pass, then $7.00 for the
 # one test-split pass (baseline and its audit) over the $7.8951 those two spent.
 BUDGET_USD = 14.8951
@@ -404,7 +405,7 @@ def cmd_run(a) -> int:
     fx = I.load(None)
     plan = build_plan(fx)
     rub, _known, fx, classes = RV.setup()
-    twin, scope_name, merge = ARMS[a.arm]
+    twin, scope_name, merge, pre = ARMS[a.arm]
     if not merge:
         return run_pieces(a, plan, fx, rub, classes, scope_name)
     units = make_units(plan, a.split, fx, twin, a.jobs)
@@ -442,13 +443,15 @@ def cmd_run(a) -> int:
     left = min(a.max_usd, BUDGET_USD - spent())
     if left <= 0:
         sys.exit(f"diffbench: budget ${BUDGET_USD:.2f} spent")
+    parents: dict[str, str] = {}
+    base_text = RV.BaseText(lambda u: (parents.setdefault(u["commit"], parent(u["commit"])), u["commit"]))
     res = RV.review_units(units, rub, fx, classes, jobs=a.jobs, timeout=a.timeout, max_usd=left,
-                          scope_fn=RV.SCOPES[scope_name])
+                          scope_fn=RV.SCOPES[scope_name], preexisting=base_text if pre else None)
     log_spend(f"run {a.split} {a.arm}", res["spend"])
     _save(f"run-{a.split}-{a.arm}.json", {
         "units": [unit_record(u) for u in res["reviewed"]], "unreviewed": len(res["unreviewed"]),
         "per_unit": res["per_unit"], "spend": res["spend"], "errors": res["errors"],
-        "comparable": comparable})
+        "comparable": comparable, "preexisting": res["preexisting"]})
     print(f"{a.split}/{a.arm}: {len(res['reviewed'])} units reviewed, {len(res['unreviewed'])} not (budget), "
           f"{len(res['findings'])} findings, new spend ${res['spend']:.4f}, {res['errors']} errors; "
           f"total spent ${spent():.4f}", file=sys.stderr)
@@ -707,7 +710,7 @@ def report(split: str, arms: list[str]) -> str:
         dc = [d for p in pu for d in p["dropped_confirm"]]
         top = Counter(d["class"] for d in db + dc).most_common(5)
         out.append(f"| {arm} | {len(db)} | {len(dc)} | " + ", ".join(f"`{c}` {n}" for c, n in top) + " |")
-    for strict, loose in (("g2", "baseline"), ("fixed", "g1"), ("onedecl", "baseline")):
+    for strict, loose in (("g2", "baseline"), ("fixed", "g1"), ("onedecl", "baseline"), ("preexisting", "baseline")):
         if strict in sc and loose in sc:
             out += ["", f"`{strict}` against `{loose}`: " + scope_diff(sc[loose], sc[strict])]
     out += ["", "### Spend", ""]

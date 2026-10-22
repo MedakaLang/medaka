@@ -36,7 +36,11 @@ explaining a rule here, it has been forked. Cite the source.
   ledger**: every finding it raised, marked kept or dismissed. Each dismissal
   names the rubric exception, the DECLINED row, or "misread". Dismissals are
   the reviewer's measured false positives. The `style-rule` skill turns them
-  into fixture controls.
+  into fixture controls. Comments the tool itself dropped as pre-existing
+  (its "Dropped as pre-existing" section) are not findings and get one
+  ledger line with the count, not a line each; a ledger that is mostly
+  "pre-existing, dismissed" means the tool's filter missed something, so
+  report that instead.
 
 ## The checklist — each section, its single source
 
