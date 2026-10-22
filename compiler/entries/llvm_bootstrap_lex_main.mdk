@@ -38,8 +38,6 @@ import types.tc_types.{DriveInputs(..)}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmitWith,
-  returnsSelfTable,
-  selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
   externArities,
@@ -75,8 +73,6 @@ runEmit inputs runtimeDecls coreDecls modules =
   let input =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
-      (returnsSelfTable allDecls)
-      (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       (externArities runtimeDecls)

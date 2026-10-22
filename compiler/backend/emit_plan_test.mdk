@@ -46,6 +46,7 @@ import ir.core_ir.{
   CTree(..),
   mkApp,
   noDeclFacts,
+  MethodResultFact(..),
   synthBind,
 }
 import support.ordmap.{omLookup}
@@ -54,6 +55,7 @@ import backend.emit_plan.{
   JsImport(..),
   ReachUnits(..),
   buildEmitPlan,
+  lookupMethodResult,
   buildEmitPlanReached,
   isTrmcFn,
   isTrmcImpl,
@@ -1074,3 +1076,28 @@ test "a wasm plan imports each reached js binding once, and only those" = expect
       "an extern with no js binding imports nothing"
       (expectEqual ([], []) (jsPlanOf [val "main" (call "cNeg" [int 1])])),
   ]
+
+test "method result plan index preserves qualified interface identity on both backends" =
+  let left = MethodResultFact "left::Shared" "pick" True [1] 2
+  let right = MethodResultFact "right::Shared" "pick" False [] 1
+  let cp =
+    CProgram [] [] [] [] [] { noDeclFacts | factMethodResults = [left, right] }
+  expectAll
+    (map
+      (backend =>
+        let plan = buildEmitPlan backend cp
+        expectAll [
+          expectEqual
+            (Some left)
+            (lookupMethodResult plan.methodResults "left::Shared" "pick"),
+          expectEqual
+            (Some right)
+            (lookupMethodResult plan.methodResults "right::Shared" "pick"),
+          expectEqual
+            None
+            (lookupMethodResult plan.methodResults "Shared" "pick"),
+          expectEqual
+            None
+            (lookupMethodResult plan.methodResults "left::Shared" "missing"),
+        ])
+      [LlvmBackend, WasmBackend])

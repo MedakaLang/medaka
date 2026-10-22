@@ -42,8 +42,6 @@ import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmitWith,
   lowerProgramEmitPinnedWith,
-  returnsSelfTable,
-  selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
   externArities,
@@ -158,8 +156,6 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
   let base =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
-      (returnsSelfTable allDecls)
-      (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       (externArities runtimeDecls)

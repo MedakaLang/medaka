@@ -33,6 +33,7 @@ import ir.core_ir.{
   ImplSym(..),
   CProgram(..),
   DeclFacts(..),
+  MethodResultFact(..),
   noDeclFacts,
   CallMode(..),
   CallSite(..),
@@ -555,9 +556,27 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
   factBinders = [],
+  factMethodResults = [],
+}
+toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results])) = DeclFacts {
+  factRequires = map (toFactPair "rq") reqs,
+  factSupers = map (toFactPair "sp") sups,
+  factBinders = [],
+  factMethodResults = map toMethodResult results,
 }
 toDeclFacts other =
   panic ("core_ir_sexp_parse: bad declaration facts: " ++ sexprToStr other)
+
+toMethodResult : SExp -> MethodResultFact
+toMethodResult (SList ((SAtom "mr") :: [iface, method, returnsHead, SList positions, arity])) = MethodResultFact {
+  iface = toStr iface,
+  method = toStr method,
+  returnsHead = toBool returnsHead,
+  callbackPositions = map toInt positions,
+  valueArity = toInt arity,
+}
+toMethodResult other =
+  panic ("core_ir_sexp_parse: bad method result fact: " ++ sexprToStr other)
 
 toFactPair : String -> SExp -> (String, Int)
 toFactPair tag (row@(SList ((SAtom t) :: [key, n]))) =
