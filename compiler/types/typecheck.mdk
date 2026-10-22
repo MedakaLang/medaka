@@ -9751,6 +9751,22 @@ envAtIfSome loc env = envAt loc env
 -- a module binding `main` is elaborated; reset at the top of elaborateModules so a
 -- prior run can't leak.  Type-level only → no emitted IR changes → fixpoint-safe.
 
+export
+mainTypeIsAsync : DriveOutputs -> Bool
+mainTypeIsAsync outputs = outputs.doEntryOutcome.eoMainIsAsync
+
+export
+mainAsyncPayloadIsUnit : DriveOutputs -> Bool
+mainAsyncPayloadIsUnit outputs = outputs.doEntryOutcome.eoMainAsyncPayloadIsUnit
+
+export
+mainTypeIsUnit : DriveOutputs -> Bool
+mainTypeIsUnit outputs = outputs.doEntryOutcome.eoMainIsUnit
+
+export
+mainTypeIsFloat : DriveOutputs -> Bool
+mainTypeIsFloat outputs = outputs.doEntryOutcome.eoMainIsFloat
+
 -- The stdlib `async` module's `Async` head by origin; a same-named user type is
 -- an ordinary value main.
 mainIsAsyncNow : GraphCtx -> Unit -> Bool
