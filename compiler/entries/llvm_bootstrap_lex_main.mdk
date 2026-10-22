@@ -22,7 +22,9 @@
 --
 --   medaka run compiler/entries/llvm_bootstrap_lex_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
 
-import frontend.ast.{Decl}
+import backend.extern_catalog.{runtimeDomain}
+import backend.emit_target.{Backend(..)}
+import frontend.ast.{externDecls, Decl}
 import types.typecheck.{
   elaborateModulesWithReport,
   constrainedSigNames,
@@ -45,7 +47,7 @@ import ir.core_ir_lower.{
 }
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{factsOfElabWith}
 import entries.entry_support.{driveModules}
@@ -72,6 +74,7 @@ runEmit inputs runtimeDecls coreDecls modules =
       ++ constrainedSigNames allDecls
   let input =
     makeEmitInput
+      (runtimeDomain (externDecls runtimeDecls))
       (returnsSelfTable allDecls)
       (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
@@ -83,7 +86,6 @@ runEmit inputs runtimeDecls coreDecls modules =
       []
       []
       ""
-      (declaredRecordFieldOrders allDecls)
       (validateFfiExternTypeNames
         (checkedFfiExternTypeNamesModules outputs modules2))
   let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls

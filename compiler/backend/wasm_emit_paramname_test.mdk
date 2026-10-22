@@ -10,6 +10,8 @@
 -- lint-disable-file rule-duplicate-body
 -- `watOf` is kept local so each sibling test file reads alone.
 
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_target.{Backend(..)}
 import test.{expectAll, expectFalse, expectTrue, labelFail}
 import string.{contains, lines, startsWith}
 import list.{reverse}
@@ -25,7 +27,6 @@ import ir.core_ir_lower.{
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
 
 -- the emitted WAT of `src`, as the modules entry would print it for that program
 watOf : String -> String
@@ -33,11 +34,10 @@ watOf src =
   let decls = grantWholeDomain (desugar (parse src))
   let input =
     makeWasmEmitInputFull
-      []
+      PreludeFreeRuntime
       (ctorFieldTypeNames decls)
       False
       False
-      (declaredRecordFieldOrders decls)
       []
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (text, _) = emitProgramRecord input (buildEmitPlan WasmBackend cp) cp

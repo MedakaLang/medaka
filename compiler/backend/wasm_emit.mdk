@@ -183,6 +183,7 @@
 -- `emitExpr` returns a flat list of instruction lines.  In ref-mode the value left
 -- on the stack is always `(ref eq)`; in scalar-mode it is i32.
 
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{
   noBinderId,
   BinderId(..),
@@ -226,32 +227,15 @@ import ir.core_ir.{
 import list.{replicate, take, drop}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import backend.extern_catalog.{
+  RuntimeExternDomain,
   WasmFamily(..),
   WasmUse(..),
   isWasmExternFamily,
   wasmFamily,
 }
 import backend.core_validate.{
-  Backend(..),
-  findingBinding,
-  isUnprovidedOn,
-  renderExternFinding,
-  renderExternRefusal,
-  renderRecordRefusal,
-  renderCallRefusal,
-  renderTailRefusal,
-  validateCalls,
-  validateImplSymbols,
-  validateImplSymbolInjectivity,
-  validateDictTags,
-  validateMethodContexts,
-  validateDispatchEvidence,
-  validateTails,
-  validateRecords,
-  validateBinderStamps,
-  renderBinderRefusal,
-  unrefusedExternMessage,
-  validateExterns,
+  findingBinding, isUnprovidedOn, renderExternFinding, renderExternRefusal,
+  unrefusedExternMessage, validateForEmission, coreDefectMessage
 }
 import support.ordmap.{
   OrdMap,
@@ -325,7 +309,6 @@ import backend.emit_plan.{
   TrmcVerdicts,
   isTrmcFn,
   isTrmcImpl,
-  checkPlanBackend,
 }
 import backend.emit_support.{
   bindEagerReach,
@@ -563,11 +546,10 @@ freshWasmEmit mode = WasmEmit {
   w7Used = Ref omEmpty,
 }
 
--- Declaration-derived semantic input. Raw lists retain table order where a full
--- table is required; indexes preserve lookupAssoc's first-match result.  The
--- last field is the `stdlib/runtime.mdk` extern names (`withRuntimeExternsW`).
+-- Declaration-derived facts are indexed once for each emission. The last field
+-- is the complete loaded runtime declaration domain.
 data WasmEmitInputData =
-  | WasmEmitInputData (List (String, List String)) (OrdMap (List Int)) Bool (OrdMap (List (String, String), (List String, String))) Bool (List String)
+  | WasmEmitInputData (OrdMap (List Int)) Bool (OrdMap (List (String, String), (List String, String))) Bool RuntimeExternDomain
 
 export type WasmEmitInput = WasmEmitInputData
 
@@ -575,19 +557,12 @@ export type WasmEmitInput = WasmEmitInputData
 -- declaration list to project, so the FFI extern index is legitimately empty.  Every driver that lowers real decls uses
 -- `makeWasmEmitInputFull` instead.
 export
-makeWasmEmitInput : List (String, (String, String, Int)) ->
+makeWasmEmitInput : RuntimeExternDomain ->
   List (String, List String) ->
   Bool ->
-  List (String, List String) ->
   WasmEmitInput
-makeWasmEmitInput methodIfaces ctorFieldTypes mainIsFloat recordFieldOrders =
-  makeWasmEmitInputFull
-    methodIfaces
-    ctorFieldTypes
-    mainIsFloat
-    False
-    recordFieldOrders
-    []
+makeWasmEmitInput domain ctorFieldTypes mainIsFloat =
+  makeWasmEmitInputFull domain ctorFieldTypes mainIsFloat False []
 
 -- The full input: an index of USER-declared FFI extern names (name ->
 -- (host bindings, (paramTypeHeads, retTypeHead))), every host's, so a reference
@@ -596,40 +571,30 @@ makeWasmEmitInput methodIfaces ctorFieldTypes mainIsFloat recordFieldOrders =
 -- so the single-file harnesses that never declare a user FFI extern keep its
 -- shorter arity.
 export
-makeWasmEmitInputFull : List (String, (String, String, Int)) ->
+makeWasmEmitInputFull : RuntimeExternDomain ->
   List (String, List String) ->
   Bool ->
   Bool ->
-  List (String, List String) ->
   List (String, (List (String, String), (List String, String))) ->
   WasmEmitInput
-makeWasmEmitInputFull _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternRows =
+makeWasmEmitInputFull domain ctorFieldTypes mainIsFloat mainIsUnit ffiExternRows =
   WasmEmitInputData
-    ctorFieldTypes
     (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty)
     mainIsFloat
     (omFromPairs (reverseL ffiExternRows) omEmpty)
     mainIsUnit
-    []
+    domain
 
--- The input with the extern names the entry declared from `stdlib/runtime.mdk`.
--- The extern check (`core_validate.validateExterns`) refuses any of them that
--- has no catalog row; an input built without them checks none.
-export
-withRuntimeExternsW : List String -> WasmEmitInput -> WasmEmitInput
-withRuntimeExternsW names (WasmEmitInputData c d e f g _) =
-  WasmEmitInputData c d e f g names
-
-inputRuntimeExternsW : WasmEmitInput -> List String
-inputRuntimeExternsW (WasmEmitInputData _ _ _ _ _ names) = names
+inputRuntimeExternsW : WasmEmitInput -> RuntimeExternDomain
+inputRuntimeExternsW (WasmEmitInputData _ _ _ _ names) = names
 
 inputMainIsFloat : WasmEmitInput -> Bool
-inputMainIsFloat (WasmEmitInputData _ _ isFloat _ _ _) = isFloat
+inputMainIsFloat (WasmEmitInputData _ isFloat _ _ _) = isFloat
 
 -- The typechecker's verdict that `main` is Unit; False when the entry has no
 -- typechecked program to ask, leaving the structural `mainBodyIsUnit` guess.
 inputMainIsUnit : WasmEmitInput -> Bool
-inputMainIsUnit (WasmEmitInputData _ _ _ _ isUnit _) = isUnit
+inputMainIsUnit (WasmEmitInputData _ _ _ isUnit _) = isUnit
 
 -- ── program info threaded through the ref-mode emitter ───────────────────────
 -- WasmProgramIndex owns the declaration-derived function, value, constructor,
@@ -841,7 +806,7 @@ narrowByIfaceW iface entries =
 -- runtime extern families, as `DemandScope` resolves a name.
 ffiBindsOfW : Prog -> String -> Option (List (String, String))
 ffiBindsOfW prog name = match progInput prog
-  WasmEmitInputData _ _ _ ffiIndex _ _ => map fst (omLookup name ffiIndex)
+  WasmEmitInputData _ _ ffiIndex _ _ => map fst (omLookup name ffiIndex)
 
 isFfiExternW : Prog -> String -> Bool
 isFfiExternW prog name = isSome (ffiBindsOfW prog name)
@@ -1348,10 +1313,9 @@ floatFieldIndices (_ :: rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData _ ctorFloatIndex _ _ _ _ =>
-    match omLookup ctor ctorFloatIndex
-      Some idxs => containsInt idx idxs
-      None => False
+  WasmEmitInputData ctorFloatIndex _ _ _ _ => match omLookup ctor ctorFloatIndex
+    Some idxs => containsInt idx idxs
+    None => False
 
 containsInt : Int -> List Int -> Bool
 -- Intentional cross-file duplicate of eval.mdk's private helper. The interpreter
@@ -1526,39 +1490,26 @@ emitProgramWith emit input plan cp =
     WGapRecord => ()
   text
 
--- Every free reference to a runtime extern wasm does not lower, refused before
--- any text is emitted: one panic naming each in strict mode, one gap event per
--- extern in record mode.  The emitter's own fallthrough for such a name then
--- records nothing (`unprovidedExternW`).
-refuseUnprovidedExternsW : WasmEmit -> WasmEmitInput -> CProgram -> Unit
-refuseUnprovidedExternsW emit input cp =
-  let _ = validateImplSymbolInjectivity cp
-  let _ = validateDictTags WasmBackend cp
-  let _ = match validateRecords cp
-    [] => ()
-    bad => panic ("internal error: " ++ renderRecordRefusal bad)
-  let _ = match validateBinderStamps cp
-    [] => ()
-    bad => panic ("internal error: " ++ renderBinderRefusal bad)
-  let badCalls =
-    validateCalls cp
-      ++ validateImplSymbols cp
-      ++ validateMethodContexts cp
-      ++ validateDispatchEvidence cp
-  let _ = match badCalls
-    [] => ()
-    bad => panic ("internal error: " ++ renderCallRefusal bad)
-  let _ = match validateTails cp
-    [] => ()
-    bad => panic ("internal error: " ++ renderTailRefusal bad)
-  match validateExterns WasmBackend (inputRuntimeExternsW input) cp
-    [] => ()
-    findings => match emit.gapMode
-      WGapStrict => panic (renderExternRefusal findings)
-      WGapRecord =>
-        forEachU
-          (f => noteGapAtW emit (findingBinding f) (renderExternFinding f))
-          findings
+-- Strict and record modes share one semantic gateway; only target gaps may
+-- become record events instead of a refusal.
+refuseUnprovidedExternsW : WasmEmit ->
+  WasmEmitInput ->
+  EmitPlan ->
+  CProgram ->
+  Unit
+refuseUnprovidedExternsW emit input plan cp =
+  let validation =
+    validateForEmission WasmBackend (inputRuntimeExternsW input) plan cp
+  match validation.defects
+    bad :: _ => panic (coreDefectMessage bad)
+    [] => match validation.externFindings
+      [] => ()
+      findings => match emit.gapMode
+        WGapStrict => panic (renderExternRefusal findings)
+        WGapRecord =>
+          forEachU
+            (f => noteGapAtW emit (findingBinding f) (renderExternFinding f))
+            findings
 
 emitProgramCore : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
 emitProgramCore emit input plan cp =
@@ -1566,8 +1517,7 @@ emitProgramCore emit input plan cp =
 
 emitUniqueProgram : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
 emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _ facts)) =
-  let _ = checkPlanBackend WasmBackend plan
-  let _ = refuseUnprovidedExternsW emit input cp
+  let _ = refuseUnprovidedExternsW emit input plan cp
   let _ = setRef emit.useStr (programUsesStr groups)
   -- the plan's demand only turns cells ON; `emit` is born with every cell off
   -- (freshWasmEmit).
@@ -1771,11 +1721,11 @@ emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String
 emitProgramGaps input plan cp0 =
   let (CProgram groups ctorArs ctorTypes impls mctx facts) = uniqueBinders cp0
   let emit = freshWasmEmit WGapRecord
-  let _ = checkPlanBackend WasmBackend plan
   let _ =
     refuseUnprovidedExternsW
       emit
       input
+      plan
       (CProgram groups ctorArs ctorTypes impls mctx facts)
   let _ = setRef emit.useStr (programUsesStr groups)
   let _ = seedDemandW emit plan.wasmDemand

@@ -16,6 +16,8 @@
 -- swaps the final consumer (emit LLVM instead of ceval) — the Axis-1 discipline
 -- (Core IR is backend-neutral; backends are sibling consumers) in miniature.
 
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
@@ -28,7 +30,6 @@ import ir.core_ir_lower.{
 }
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
 
 export
 oracleMain : Unit -> <IO> Unit
@@ -54,6 +55,7 @@ emitTarget decls =
   putStr
     (emitProgram
       (makeEmitInput
+        PreludeFreeRuntime
         []
         []
         []
@@ -65,7 +67,6 @@ emitTarget decls =
         []
         []
         ""
-        (declaredRecordFieldOrders decls)
         -- #2074: this spike driver is PRELUDE- AND RUNTIME-FREE (it parses one
         -- scalar file and nothing else), so it holds no `stdlib/runtime.mdk`
         -- catalog to subtract the builtin-name exemption against.  An empty FFI

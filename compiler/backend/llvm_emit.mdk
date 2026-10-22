@@ -169,6 +169,7 @@
 --            cp_count is cached either way, so stringLength is O(1).
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{
   hostRows,
   isWildPat,
@@ -245,29 +246,13 @@ import support.util.{
   u64HalvesHex,
 }
 import backend.llvm_preamble.{preambleLines}
-import backend.extern_catalog.{LlvmFamily(..), llvmFamily, isLlvmExternFamily}
+import backend.extern_catalog.{
+  LlvmFamily(..), llvmFamily, isLlvmExternFamily, RuntimeExternDomain
+}
 import backend.core_validate.{
-  Backend(..),
-  ExternFinding,
-  findingBinding,
-  isUnprovidedOn,
-  renderExternFinding,
-  renderExternRefusal,
-  renderRecordRefusal,
-  renderCallRefusal,
-  renderTailRefusal,
-  renderBinderRefusal,
-  validateBinderStamps,
-  validateImplSymbolInjectivity,
-  validateDictTags,
-  validateCalls,
-  validateImplSymbols,
-  validateMethodContexts,
-  validateDispatchEvidence,
-  validateTails,
-  validateRecords,
-  unrefusedExternMessage,
-  validateExterns,
+  ExternFinding, findingBinding, isUnprovidedOn, renderExternFinding,
+  renderExternRefusal, unrefusedExternMessage, validateForEmission,
+  coreDefectMessage
 }
 import support.ordmap.{
   OrdMap,
@@ -320,7 +305,6 @@ import backend.emit_plan.{
   TrmcVerdicts,
   isTrmcFn,
   isTrmcImpl,
-  checkPlanBackend,
 }
 import backend.emit_support.{
   bindEagerReach,
@@ -790,7 +774,6 @@ data LTy =
 data EmitInputData = EmitInputData {
   returnsSelf : List ((String, String), Bool),
   selfFnParams : List ((String, String), List Int),
-  methodIfaces : List (String, (String, Int)),
   ctorFieldIndex : OrdMap (List String),
   -- each `stdlib/runtime.mdk` extern's declared arity
   -- (`ir.core_ir_lower.externArities`), the parameter count of its first-class
@@ -802,7 +785,6 @@ data EmitInputData = EmitInputData {
   -- (C symbol, (declared param type-head names, declared return type-head name)).
   -- This is the ONLY table that answers "is this name a foreign call?".
   ffiExternIndex : OrdMap (String, (List String, String)),
-  recordFieldOrders : List (String, List String),
   mainIsUnit : Bool,
   mainIsFloat : Bool,
   emitHalf : Int,
@@ -816,8 +798,8 @@ data EmitInputData = EmitInputData {
   -- the method names two or more interfaces declare (by declaration word), whose
   -- dispatchers therefore carry the interface in their symbol (`dispMethodWord`)
   sharedMethodNames : OrdMap Unit,
-  -- the `stdlib/runtime.mdk` extern names (`withRuntimeExterns`)
-  runtimeExterns : List String,
+  -- the complete loaded runtime declaration domain
+  runtimeExterns : RuntimeExternDomain,
   -- the top-level functions `@noinline` marks (`withNoInlineFns`)
   noInlineFns : OrdMap Unit,
 }
@@ -826,11 +808,9 @@ data EmitInputData = EmitInputData {
 -- once, and this boundary builds the first-match indexes exactly once per emission.
 export type EmitInput = EmitInputData
 
--- `recordFieldOrders` is LAST on purpose: every other list-shaped parameter here is
--- `List (String, List String)` too, so appending it where its neighbour is a String
--- means a mis-ordered call site is a TYPE error rather than a silently swapped table.
 export
-makeEmitInput : List ((String, String), Bool) ->
+makeEmitInput : RuntimeExternDomain ->
+  List ((String, String), Bool) ->
   List ((String, String), List Int) ->
   List (String, (String, String, Int)) ->
   List (String, List String) ->
@@ -841,13 +821,11 @@ makeEmitInput : List ((String, String), Bool) ->
   List String ->
   List (String, String, String) ->
   String ->
-  List (String, List String) ->
   List (String, (List (String, String), (List String, String))) ->
   EmitInput
-makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes externArities mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName recordFieldOrders ffiExternTypes = EmitInputData {
+makeEmitInput domain returnsSelf selfFnParams methodIfaces ctorFieldTypes externArities mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName ffiExternTypes = EmitInputData {
   returnsSelf = returnsSelf,
   selfFnParams = selfFnParams,
-  methodIfaces = map bareIfaceArityRow methodIfaces,
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   externArityIndex = omFromPairs (reverseL externArities) omEmpty,
   ffiExternIndex = omFromPairs (reverseL (hostRows "c" ffiExternTypes)) omEmpty,
@@ -857,18 +835,10 @@ makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes externArities
   preludeBinds = preludeBinds,
   preludeImplIndex = preludeImplIndexOf preludeImpls omEmpty,
   srcName = srcName,
-  recordFieldOrders = recordFieldOrders,
   sharedMethodNames = sharedMethodNamesOf methodIfaces omEmpty omEmpty,
-  runtimeExterns = [],
+  runtimeExterns = domain,
   noInlineFns = omEmpty,
 }
-
--- The input with the extern names the entry declared from `stdlib/runtime.mdk`.
--- The extern check (`core_validate.validateExterns`) refuses any of them that
--- has no catalog row; an input built without them checks none.
-export
-withRuntimeExterns : List String -> EmitInput -> EmitInput
-withRuntimeExterns names input = { input | runtimeExterns = names }
 
 -- The input with the top-level functions a `@noinline` attribute marks, by bind
 -- name (`ir.core_ir_lower.noInlineFnNames`).
@@ -910,10 +880,6 @@ preludeImplIndexOf [] acc = acc
 preludeImplIndexOf ((method, key, symTag) :: rest) acc =
   let byKey = optionOr omEmpty (omLookup method acc)
   preludeImplIndexOf rest (omInsert method (omInsert key symTag byKey) acc)
-
--- the bare projection of a `methodIfaceTable` row, `(method, (ifaceName, arity))`
-bareIfaceArityRow : (String, (String, String, Int)) -> (String, (String, Int))
-bareIfaceArityRow (m, (ifaceName, _, arity)) = (m, (ifaceName, arity))
 
 -- A define whose body is emitted in tail position: its emitted symbol (`mdk_…`),
 -- how many words it takes after its closure word, and whether it takes its own
@@ -14669,8 +14635,7 @@ emitProgramWithStats : EmitInput ->
   CProgram ->
   (String, List (String, Int))
 emitProgramWithStats input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts)) =
-  let _ = checkPlanBackend LlvmBackend plan
-  let _ = unprovidedExterns Strict input cp
+  let _ = unprovidedExterns Strict input plan cp
   let cfg = programEmitConfig Strict input plan groups
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
   let stats = tableStats e
@@ -14854,8 +14819,7 @@ emitProgramMode : GapMode ->
 emitProgramMode gapMode input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts)) =
   -- Each half's run checks the whole program it received, so a refused extern
   -- is refused by the half that reaches it, before that half emits anything.
-  let _ = checkPlanBackend LlvmBackend plan
-  let found = unprovidedExterns gapMode input cp
+  let found = unprovidedExterns gapMode input plan cp
   -- issue #118: the two halves are emitted by INDEPENDENT emitter runs, so they
   -- get disjoint gensym ranges or their lifted defines collide — see
   -- programHalfIdBase.  Mode 0 keeps starting at 0, so its IR is unchanged.
@@ -14869,67 +14833,22 @@ emitProgramMode gapMode input plan (cp@(CProgram groups ctorArs ctorTypes implEn
   let text = runStrictEmission e input plan groups implEntries
   (text, reverseL !e.gapLog)
 
--- Every free reference to a runtime extern llvm does not lower
--- (`core_validate.validateExterns`).  Strict mode refuses them here, before any
--- emitter state is built; record mode returns them for `noteUnprovidedExterns`.
-unprovidedExterns : GapMode -> EmitInput -> CProgram -> List ExternFinding
-unprovidedExterns Strict input cp =
-  let _ = refuseCollidingImpls cp
-  let _ = refuseUnstampedRecords cp
-  let _ = refuseUnstampedBinders cp
-  let _ = refuseUnstampedCalls cp
-  let _ = refuseUnflaggedTails cp
-  match validateExterns LlvmBackend input.runtimeExterns cp
-    [] => []
-    found => panic (renderExternRefusal found)
-unprovidedExterns Record input cp =
-  let _ = refuseCollidingImpls cp
-  let _ = refuseUnstampedRecords cp
-  let _ = refuseUnstampedBinders cp
-  let _ = refuseUnstampedCalls cp
-  let _ = refuseUnflaggedTails cp
-  validateExterns LlvmBackend input.runtimeExterns cp
-
--- Two distinct impls under one emitted symbol, or one dict-witness tag, are refused
--- with the user-actionable text of `core_validate`, in strict and record mode alike.
-refuseCollidingImpls : CProgram -> Unit
-refuseCollidingImpls cp =
-  let _ = validateImplSymbolInjectivity cp
-  validateDictTags LlvmBackend cp
-
--- A record node without its declared field ordinal is an internal error: the
--- emitter keeps no field-order table to answer for it.
-refuseUnstampedRecords : CProgram -> Unit
-refuseUnstampedRecords cp = match validateRecords cp
-  [] => ()
-  bad => panic ("internal error: " ++ renderRecordRefusal bad)
-
--- A binder with no stamped type is an internal error: every static type this
--- emitter gives a parameter, a match binder or a function's result is a stamp.
-refuseUnstampedBinders : CProgram -> Unit
-refuseUnstampedBinders cp = match validateBinderStamps cp
-  [] => ()
-  bad => panic ("internal error: " ++ renderBinderRefusal bad)
-
--- An application whose mode its head's defined arity contradicts is an internal
--- error: the lowering's stamp and the validator read one helper.
-refuseUnstampedCalls : CProgram -> Unit
-refuseUnstampedCalls cp =
-  let bad =
-    validateCalls cp
-      ++ validateImplSymbols cp
-      ++ validateMethodContexts cp
-      ++ validateDispatchEvidence cp
-  match bad
-    [] => ()
-    _ => panic ("internal error: " ++ renderCallRefusal bad)
-
--- An application whose tail flag disagrees with its position is an internal
--- error: the lowering's flag pass and the validator state the rules separately.
-refuseUnflaggedTails : CProgram -> Unit
-refuseUnflaggedTails cp = match validateTails cp
-  [] => ()
-  bad => panic ("internal error: " ++ renderTailRefusal bad)
+-- Policy is applied only after the shared validation gateway has classified
+-- fatal defects separately from recordable target gaps.
+unprovidedExterns : GapMode ->
+  EmitInput ->
+  EmitPlan ->
+  CProgram ->
+  List ExternFinding
+unprovidedExterns mode input plan cp =
+  let validation = validateForEmission LlvmBackend input.runtimeExterns plan cp
+  match validation.defects
+    bad :: _ => panic (coreDefectMessage bad)
+    [] => match mode
+      Record => validation.externFindings
+      Strict => match validation.externFindings
+        [] => []
+        found => panic (renderExternRefusal found)
 
 -- Record mode's one gap event per refused extern.  The emitter's own
 -- fallthrough for such a name then records nothing (`unprovidedExtern`).
@@ -15251,9 +15170,9 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
     trmc = plan.trmc,
     dispGroups = None,
   }
-  let _ = checkPlanBackend LlvmBackend plan
+  let found = unprovidedExterns Record input plan cp
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
-  let _ = noteUnprovidedExterns e (unprovidedExterns Record input cp)
+  let _ = noteUnprovidedExterns e found
   let _ = emitPreamble e
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries

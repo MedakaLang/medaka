@@ -26,6 +26,9 @@
 -- The keys ELABORATION itself uses are the author's spellings under that order, so
 -- this argument covers the emitted program and not elaboration's own tables.
 
+import frontend.ast.{externDecls}
+import backend.extern_catalog.{runtimeDomain}
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{Decl(..)}
 import types.typecheck.{
   mainTypeIsUnit,
@@ -48,20 +51,18 @@ import ir.core_ir_lower.{
   noInlineFnNames,
 }
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import backend.llvm_emit.{
   emitProgram,
   emitProgramWithStats,
   makeEmitInput,
   preludeImplSymbols,
-  withRuntimeExterns,
   withNoInlineFns,
 }
 import ir.dce.{dceFilter}
 import driver.main_autoprint.{mainIsWrapped}
 import entries.entry_support.{
   driveEmitLocated,
-  runtimeExternNames,
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
@@ -155,23 +156,21 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
   let (preludeBinds, preludeImpls) =
     if half == 2 then preludeSymsOf facts coreD else ([], [])
   let base =
-    withRuntimeExterns
-      (runtimeExternNames runtimeDecls)
-      (makeEmitInput
-        (returnsSelfTable allDecls)
-        (selfFnParamTable allDecls)
-        (methodIfaceTable allDecls)
-        (ctorFieldTypeNames allDecls)
-        (externArities runtimeDecls)
-        (mainTypeIsUnit outputs || wrapped)
-        (mainTypeIsFloat outputs && not wrapped)
-        half
-        preludeBinds
-        preludeImpls
-        (srcNameFromArgs (args ()))
-        (declaredRecordFieldOrders allDecls)
-        (validateFfiExternTypeNames
-          (checkedFfiExternTypeNamesModules outputs modules2)))
+    makeEmitInput
+      (runtimeDomain (externDecls runtimeDecls))
+      (returnsSelfTable allDecls)
+      (selfFnParamTable allDecls)
+      (methodIfaceTable allDecls)
+      (ctorFieldTypeNames allDecls)
+      (externArities runtimeDecls)
+      (mainTypeIsUnit outputs || wrapped)
+      (mainTypeIsFloat outputs && not wrapped)
+      half
+      preludeBinds
+      preludeImpls
+      (srcNameFromArgs (args ()))
+      (validateFfiExternTypeNames
+        (checkedFfiExternTypeNamesModules outputs modules2))
   let input = withNoInlineFns (noInlineFnNames allDecls) base
   let statsOn = statsEnabled ()
   let cp = lowerProgramEmitPinnedWith facts preludeImpls allDecls

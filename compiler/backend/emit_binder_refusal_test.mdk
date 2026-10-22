@@ -1,11 +1,13 @@
 -- Each emitter refuses a program with a binder its binder table has no row for,
--- before it emits anything: `llvm_emit.refuseUnstampedBinders` and the binder
--- check in `wasm_emit.refuseUnprovidedExternsW`.  The refusal is a panic, which
+-- before it emits anything, through `core_validate.validateForEmission`.
+-- The refusal is a panic, which
 -- no test observes in its own process, so each case runs this file's probe test
 -- in a child `medaka test` with `MEDAKA_BINDER_REFUSAL_PROBE` naming the backend,
 -- and grades the child's exit and output.  In an ordinary run the probe passes
 -- without emitting.
 
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_target.{Backend(..)}
 import test.{
   Expectation, expectAll, expectEqual, expectNotEqual, labelFail, pass
 }
@@ -23,7 +25,7 @@ import ir.core_ir.{
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import backend.core_validate.{validateBinderStamps}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import backend.llvm_emit.{emitProgram as llvmEmit, makeEmitInput}
 import backend.wasm_emit.{emitProgram as wasmEmit, makeWasmEmitInputFull}
 
@@ -75,14 +77,14 @@ program paramRow =
 llvmText : CProgram -> String
 llvmText cp =
   llvmEmit
-    (makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] [])
+    (makeEmitInput PreludeFreeRuntime [] [] [] [] [] False False 0 [] [] "" [])
     (buildEmitPlan LlvmBackend cp)
     cp
 
 wasmText : CProgram -> String
 wasmText cp =
   wasmEmit
-    (makeWasmEmitInputFull [] [] False False [] [])
+    (makeWasmEmitInputFull PreludeFreeRuntime [] False False [])
     (buildEmitPlan WasmBackend cp)
     cp
 

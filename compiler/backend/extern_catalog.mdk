@@ -10,6 +10,19 @@
 -- backend selects its emitter from its own column alone, and no backend's
 -- grouping is visible in another backend's column.
 
+import frontend.ast.{ExternDecl}
+
+-- A loaded runtime with no declarations is still a loaded runtime. Only the
+-- explicit prelude-free case states that no runtime source was loaded.
+-- lint-disable-next-line rule-clone-type
+public export data RuntimeExternDomain =
+  | LoadedRuntimeExterns (List ExternDecl)
+  | PreludeFreeRuntime
+
+export
+runtimeDomain : List ExternDecl -> RuntimeExternDomain
+runtimeDomain = LoadedRuntimeExterns
+
 import support.ordmap.{OrdMap, omEmpty, omFromPairs, omLookup}
 
 -- Why a backend does not lower an extern.  Each kind carries its category name

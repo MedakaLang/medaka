@@ -25,7 +25,10 @@
 -- resolves every route, and the lowered program pulls in NOTHING but scalar/ADT/
 -- dispatch nodes the emitter can lower.
 
+import backend.extern_catalog.{RuntimeExternDomain(..), runtimeDomain}
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{
+  externDecls,
   noBinderId,
   Decl,
   Lit(..),
@@ -76,7 +79,6 @@ import backend.wasm_emit.{
 }
 import entries.entry_support.{driveRuntime}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
 
 -- Every emission here builds its own plan from the program it emits.
 emitProgram : WasmEmitInput -> CProgram -> String
@@ -154,11 +156,10 @@ typedInput : List Decl -> List Decl -> List Decl -> WasmEmitInput
 typedInput runtimeDecls preludeDecls userDecls =
   let mangled = typedElaborated runtimeDecls preludeDecls userDecls
   makeWasmEmitInputFull
-    (methodIfaceTable mangled)
+    (runtimeDomain (externDecls runtimeDecls))
     (ctorFieldTypeNames mangled)
     False
     False
-    (declaredRecordFieldOrders mangled)
     []
 
 -- A hand-built program, its applications stamped and tail-flagged and its
@@ -206,43 +207,22 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         -- discrimination below vacuous.
         let pMangled = typedElaborated runtimeDecls [] pDecls
         let uMangled = typedElaborated runtimeDecls [] uDecls
-        let pMethods = methodIfaceTable pMangled
         let pCtors = ctorFieldTypeNames pMangled
-        let pRecords = declaredRecordFieldOrders pMangled
         let pInput =
-          makeWasmEmitInputFull pMethods pCtors False False pRecords []
+          makeWasmEmitInputFull
+            (runtimeDomain (externDecls runtimeDecls))
+            pCtors
+            False
+            False
+            []
         let p1 = emitProgram pInput pProgram
-        -- these four deliberately pair P's REAL program with a MISMATCHED
-        -- (U-derived or dummy) table -- never a real compile combination, so
-        -- routed through the unchecked emit (see emitProgramUnchecked's doc).
-        let methodWat =
-          emitProgramUnchecked
-            (makeWasmEmitInputFull
-              (methodIfaceTable uMangled)
-              pCtors
-              False
-              False
-              pRecords
-              [])
-            pProgram
         let ctorWat =
           emitProgramUnchecked
             (makeWasmEmitInputFull
-              pMethods
+              (runtimeDomain (externDecls runtimeDecls))
               (ctorFieldTypeNames uMangled)
               False
               False
-              pRecords
-              [])
-            pProgram
-        let recordWat =
-          emitProgramUnchecked
-            (makeWasmEmitInputFull
-              pMethods
-              pCtors
-              False
-              False
-              (declaredRecordFieldOrders uMangled)
               [])
             pProgram
         let mainDecls = desugar (parse "data Dummy = Dummy\n\nmain = 1\n")
@@ -257,21 +237,18 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let mainWat =
           emitProgramUnchecked
             (makeWasmEmitInputFull
-              []
+              (runtimeDomain (externDecls runtimeDecls))
               (ctorFieldTypeNames mainMangled)
               True
               False
-              (declaredRecordFieldOrders mainMangled)
               [])
             mainProgram
         let pLast = emitProgram pInput pProgram
         let _ = putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
-        let _ =
-          putStrLn (if p1 /= methodWat then "P_NE_METHOD" else "P_EQ_METHOD")
         let _ = putStrLn (if p1 /= ctorWat then "P_NE_CTOR" else "P_EQ_CTOR")
         let _ =
           putStrLn (if mainBase /= mainWat then "P_NE_MAIN" else "P_EQ_MAIN")
-        putStrLn (if p1 /= recordWat then "P_NE_RECORD" else "P_EQ_RECORD")
+        ()
 
 -- X-W.H2a: the selected Wasm physical indexes must belong to one private Prog, not
 -- module state. P and U deliberately reuse names while changing every selected index
@@ -309,10 +286,9 @@ reemitStateFallbackInput runtimeDecls decls =
   -- namespace the paired `typedProgram` emits into.
   let mangled = typedElaborated runtimeDecls [] decls
   makeWasmEmitInput
-    (methodIfaceTable mangled)
+    (runtimeDomain (externDecls runtimeDecls))
     (ctorFieldTypeNames mangled)
     False
-    []
 
 reemitStateP : String
 reemitStateP =
@@ -338,7 +314,7 @@ reemitTrmcState _ =
     (emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17))
 
 trmcStateInput : WasmEmitInput
-trmcStateInput = makeWasmEmitInput [] [] False []
+trmcStateInput = makeWasmEmitInput PreludeFreeRuntime [] False
 
 trmcStateLoc : Loc
 trmcStateLoc = Loc "<trmc-state>" 1 1 1 1
@@ -437,7 +413,8 @@ reemitLambdaState _ =
     (emitProgram lambdaStateInput (lambdaStateProgram 17))
 
 lambdaStateInput : WasmEmitInput
-lambdaStateInput = makeWasmEmitInput [] [("Pair", ["Int", "Int"])] False []
+lambdaStateInput =
+  makeWasmEmitInput PreludeFreeRuntime [("Pair", ["Int", "Int"])] False
 
 lambdaStateLoc : Loc
 lambdaStateLoc = Loc "<lambda-state>" 1 1 1 1
@@ -546,13 +523,9 @@ reemitFeatureState _ =
 featureStateInput : WasmEmitInput
 featureStateInput =
   makeWasmEmitInput
-    []
+    PreludeFreeRuntime
     [("FeatureRecord", ["Int", "Int"]), ("FeatureVariant", ["Int", "Int"])]
     False
-    [
-      ("FeatureRecord", ["left", "right"]),
-      ("FeatureVariant", ["left", "right"]),
-    ]
 
 featureStateLoc : Loc
 featureStateLoc = Loc "<feature-state>" 1 1 1 1
@@ -639,7 +612,7 @@ featureStateProgram =
 -- string-bearing feature route, so it proves the hash-string runtime conjunction
 -- is not widened by base hash use.
 featureHashIntOnlyInput : WasmEmitInput
-featureHashIntOnlyInput = makeWasmEmitInput [] [] False []
+featureHashIntOnlyInput = makeWasmEmitInput PreludeFreeRuntime [] False
 
 featureHashIntOnlyProgram : CProgram
 featureHashIntOnlyProgram =
@@ -660,7 +633,7 @@ featureHashIntOnlyProgram =
 -- record U is the nearest miss: Float + hashInt retain shared prerequisites but
 -- deliberately omit hashFloat. Census repeats P and adds exactly one attributed gap.
 featureHashFloatInput : WasmEmitInput
-featureHashFloatInput = makeWasmEmitInput [] [] False []
+featureHashFloatInput = makeWasmEmitInput PreludeFreeRuntime [] False
 
 featureHashFloatProgram : CProgram
 featureHashFloatProgram =
@@ -734,7 +707,7 @@ reemitCharFromCodeState _ =
     (emitProgram charFromCodeStateInput charFromCodeStateProgram)
 
 charFromCodeStateInput : WasmEmitInput
-charFromCodeStateInput = makeWasmEmitInput [] [] False []
+charFromCodeStateInput = makeWasmEmitInput PreludeFreeRuntime [] False
 
 charFromCodeStateProgram : CProgram
 charFromCodeStateProgram =
@@ -883,7 +856,7 @@ reemitLeafRuntimeRow name p u gapBind gapMissing =
   printCapture ("LEAF_" ++ name ++ "_P2") (emitProgram leafRuntimeInput p)
 
 leafRuntimeInput : WasmEmitInput
-leafRuntimeInput = makeWasmEmitInput [] [] False []
+leafRuntimeInput = makeWasmEmitInput PreludeFreeRuntime [] False
 
 leafRuntimeLoc : Loc
 leafRuntimeLoc = Loc "<leaf-runtime-state>" 1 1 1 1
@@ -1178,7 +1151,7 @@ featureStateCensusProgram =
     []
 
 trapStateInput : WasmEmitInput
-trapStateInput = makeWasmEmitInput [] [] False []
+trapStateInput = makeWasmEmitInput PreludeFreeRuntime [] False
 
 trapStateProgram : CProgram
 trapStateProgram =
@@ -1249,7 +1222,7 @@ reemitRefTrapState _ =
   printCapture "REF_TRAP_P2" (emitProgram refTrapStateInput refTrapStateProgram)
 
 refTrapStateInput : WasmEmitInput
-refTrapStateInput = makeWasmEmitInput [] [] False []
+refTrapStateInput = makeWasmEmitInput PreludeFreeRuntime [] False
 
 refTrapCtorArities : List (String, Int)
 refTrapCtorArities = [("TrapToken", 0)]
@@ -1295,7 +1268,7 @@ refTrapStateAbortProgram =
     []
 
 implSelfInput : WasmEmitInput
-implSelfInput = makeWasmEmitInput [("walk", ("Loop", "Loop", 2))] [] False []
+implSelfInput = makeWasmEmitInput PreludeFreeRuntime [] False
 
 implSelfLoc : Loc
 implSelfLoc = Loc "<impl-self-state>" 1 1 1 1
@@ -1429,23 +1402,13 @@ defaultStateLoc = Loc "<default-state>" 1 1 1 1
 -- inputs coinciding is a property of THIS probe, not a duplicate to consolidate.
 defaultStateInputP : WasmEmitInput
 -- lint-disable-next-line rule-duplicate-body
-defaultStateInputP =
-  makeWasmEmitInput
-    [("synthDefault", ("DefaultFace", "DefaultFace", 1))]
-    []
-    False
-    []
+defaultStateInputP = makeWasmEmitInput PreludeFreeRuntime [] False
 
 -- The P/U pair is deliberately parallel (prelude half vs untyped half); the two
 -- inputs coinciding is a property of THIS probe, not a duplicate to consolidate.
 defaultStateInputU : WasmEmitInput
 -- lint-disable-next-line rule-duplicate-body
-defaultStateInputU =
-  makeWasmEmitInput
-    [("synthDefault", ("DefaultFace", "DefaultFace", 1))]
-    []
-    False
-    []
+defaultStateInputU = makeWasmEmitInput PreludeFreeRuntime [] False
 
 defaultStateCall : String -> CExpr
 defaultStateCall tag = mkApp (CMethod
@@ -1538,7 +1501,7 @@ bindingLoc : Loc
 bindingLoc = Loc "<current-binding>" 1 1 1 1
 
 bindingInput : WasmEmitInput
-bindingInput = makeWasmEmitInput [] [] False []
+bindingInput = makeWasmEmitInput PreludeFreeRuntime [] False
 
 bindingMain : CBind
 bindingMain = synthBind "main" [CClause [] (CLit (LInt 0))]
@@ -1686,7 +1649,7 @@ printEventLines (event :: rest) =
   printEventLines rest
 
 gapStateInput : WasmEmitInput
-gapStateInput = makeWasmEmitInput [] [] False []
+gapStateInput = makeWasmEmitInput PreludeFreeRuntime [] False
 
 gapStateProgram : CProgram
 gapStateProgram =

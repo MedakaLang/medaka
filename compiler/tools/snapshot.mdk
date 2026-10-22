@@ -136,7 +136,9 @@
 -- render (a diagnostic that just *disappeared*) is equally unblessable.  That direction
 -- matters — it is the one where a stage silently stops reporting an error.
 
-import frontend.ast.{Decl(..), ExternDecl(..)}
+import backend.extern_catalog.{runtimeDomain}
+import backend.emit_target.{Backend(..)}
+import frontend.ast.{externDecls, Decl(..), ExternDecl(..)}
 import frontend.lexer.{
   tokenize,
   tokenToString,
@@ -194,7 +196,7 @@ import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{emptyFacts, factsOfElabWith}
 import eval.eval.{evalOneOutputFacts, funNamesOf, dropShadowedExp, noMainMsg}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 -- A member alias gives the Wasm emitter a distinct local name, so BOTH backends are driven from ONE process
 -- over ONE lowered CProgram.  (This is what retired `tools/snap_wasm.mdk`, a re-export
@@ -651,6 +653,7 @@ llvmOf : DriveOutputs -> List Decl -> List Decl -> CProgram -> String
 llvmOf outputs runtimeDecls allDecls cp =
   let input =
     makeEmitInput
+      (runtimeDomain (externDecls runtimeDecls))
       (returnsSelfTable allDecls)
       (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
@@ -662,7 +665,6 @@ llvmOf outputs runtimeDecls allDecls cp =
       []
       []
       ""
-      (declaredRecordFieldOrders allDecls)
       (ffiExternTypeNames runtimeDecls allDecls)
   let (text, gaps) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
   withGaps ";" text gaps
@@ -671,11 +673,10 @@ wasmOf : DriveOutputs -> List Decl -> List Decl -> CProgram -> String
 wasmOf outputs runtimeDecls allDecls cp =
   let input =
     makeWasmEmitInputFull
-      (methodIfaceTable allDecls)
+      (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
       False
       (mainTypeIsUnit outputs)
-      (declaredRecordFieldOrders allDecls)
       []
   let (text, gaps) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   withGaps ";;" text gaps

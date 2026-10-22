@@ -1,5 +1,5 @@
 # META
-source_lines=485
+source_lines=484
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/target_check.mdk — does a program fit a target profile?
@@ -11,6 +11,7 @@ stages=DESUGAR,MARK
 -- declaration.  And every built-in the program reaches must be provided by the
 -- profile's column of the extern catalog, else it is a `T-TARGET-NOT-PROVIDED`
 -- diagnostic located at the binding that names it.
+import backend.emit_target.{Backend(..), profileColumn}
 import frontend.ast.{
   Decl(..),
   ExternBind(..),
@@ -22,9 +23,7 @@ import frontend.ast.{
   letBindName,
 }
 import frontend.marker.{declRefs}
-import backend.core_validate.{
-  Backend(..), profileColumn, unprovidedOn, isUnprovidedOn
-}
+import backend.core_validate.{unprovidedOn, isUnprovidedOn}
 import backend.extern_catalog.{GapKind(..), gapKindName}
 import types.target_profile.{
   TargetProfile,
@@ -488,9 +487,10 @@ firstOr : String -> List String -> String
 firstOr d [] = d
 firstOr _ (x :: _) = x
 # DESUGAR
+(DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true) (mem "profileColumn" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternBind" true) (mem "ExternDecl" true) (mem "LetBind" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "externBindings" false) (mem "letBindName" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
-(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "profileColumn" false) (mem "unprovidedOn" false) (mem "isUnprovidedOn" false))))
+(DUse false (UseGroup ("backend" "core_validate") ((mem "unprovidedOn" false) (mem "isUnprovidedOn" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "GapKind" true) (mem "gapKindName" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "buildable" false) (mem "lookupProfile" false) (mem "profileName" false) (mem "profileNames" false) (mem "profileGrants" false) (mem "profileBindingHost" false) (mem "isGatedLabel" false) (mem "reachesLabel" false) (mem "runProfile" false))))
 (DUse false (UseGroup ("ir" "dce") ((mem "ReachRoots" true) (mem "reachedExternChains" false) (mem "reachedExternRoutes" false))))
@@ -613,9 +613,10 @@ firstOr _ (x :: _) = x
 (DFunDef false "firstOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "firstOr" (PWild (PCons (PVar "x") PWild)) (EVar "x"))
 # MARK
+(DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true) (mem "profileColumn" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternBind" true) (mem "ExternDecl" true) (mem "LetBind" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "externBindings" false) (mem "letBindName" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
-(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "profileColumn" false) (mem "unprovidedOn" false) (mem "isUnprovidedOn" false))))
+(DUse false (UseGroup ("backend" "core_validate") ((mem "unprovidedOn" false) (mem "isUnprovidedOn" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "GapKind" true) (mem "gapKindName" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "buildable" false) (mem "lookupProfile" false) (mem "profileName" false) (mem "profileNames" false) (mem "profileGrants" false) (mem "profileBindingHost" false) (mem "isGatedLabel" false) (mem "reachesLabel" false) (mem "runProfile" false))))
 (DUse false (UseGroup ("ir" "dce") ((mem "ReachRoots" true) (mem "reachedExternChains" false) (mem "reachedExternRoutes" false))))

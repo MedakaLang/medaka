@@ -190,7 +190,8 @@ scattered places, moved rather than reinvented:
 
 The two emit-input records converge into this one over time; the four facts
 `WasmEmitInput` lacks relative to `EmitInput` (`returnsSelf`, `selfFnParams`,
-`methodConstraintIfaces`, `mainIsUnit`) are the first to move. This unit has no
+`methodConstraintIfaces`) are the first to move. `mainIsUnit` already belongs
+to `WasmEmitInput`. This unit has no
 upstream dependency and is landable now. `wasmReachFilter`'s post-lower pruning
 is landed as the plan's wasm-only field `wasmOnlyReach` (`buildEmitPlanReached`,
 used by the two wasm modules entries). Native does not share it: whole mode emits

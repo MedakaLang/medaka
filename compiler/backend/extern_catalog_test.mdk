@@ -16,6 +16,7 @@
 -- `--native` (the default): reading the live files needs `readFile`, which
 -- the interpreter's test capability list excludes.
 
+import backend.emit_target.{Backend(..)}
 import test.{
   Expectation,
   expectAll,
@@ -38,6 +39,7 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
 }
 import backend.extern_catalog.{
+  RuntimeExternDomain(..),
   ExternRow,
   WasmFamily(..),
   WasmUse(..),
@@ -53,7 +55,7 @@ import backend.extern_catalog.{
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import eval.eval.{externBindings, ioExternBindings}
 import set as S
 
@@ -289,11 +291,10 @@ emitWat src =
   let decls = grantWholeDomain (desugar (parse src))
   let input =
     makeWasmEmitInputFull
-      []
+      PreludeFreeRuntime
       (ctorFieldTypeNames decls)
       False
       False
-      (declaredRecordFieldOrders decls)
       []
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   emitProgramRecord input (buildEmitPlan WasmBackend cp) cp

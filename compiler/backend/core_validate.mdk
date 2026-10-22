@@ -113,8 +113,10 @@ import frontend.ast.{
   Pat(..), Route(..), Decl(..), ExternDecl(..), Ty(..), Lit(..), BinderId(..)
 }
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
-import types.target_profile as TP
+import backend.emit_target.{Backend(..), backendName}
+import backend.emit_plan.{EmitPlan}
 import backend.extern_catalog.{
+  RuntimeExternDomain(..),
   Disposition(..),
   GapKind(..),
   catalogRow,
@@ -134,29 +136,75 @@ import support.ordmap.{
 import types.private_mangle.{dictTag, hashName}
 import support.util.{dedupBy, isNonEmptyL, joinWith, listLen, reverseL}
 
--- A column of the extern catalog: the two emitters, and the interpreter that
--- `medaka run` evaluates with.
-public export data Backend = LlvmBackend | WasmBackend | EvalBackend
-
-export
-backendName : Backend -> String
-backendName LlvmBackend = "llvm"
-backendName WasmBackend = "wasm"
-backendName EvalBackend = "eval"
-
--- The column a profile's programs run on.
-export
-profileColumn : TargetProfile -> Backend
-profileColumn p = match TP.profileBackend p
-  TP.BackendLlvm => LlvmBackend
-  TP.BackendWasmgc => WasmBackend
-  TP.BackendEval => EvalBackend
-
 -- A free reference to a runtime extern the backend does not lower: the extern,
 -- the backend, the row's gap kind and reason, and the top-level binding the
 -- first reference sits in.
 public export data ExternFinding =
   | ExternFinding String Backend GapKind String String
+
+-- Defects are fatal in every emission mode; target extern findings may instead
+-- be recorded. The first failing validation family keeps its original order.
+public export data CoreDefect = CoreDefect String
+
+public export data EmissionValidation = EmissionValidation {
+  defects : List CoreDefect,
+  externFindings : List ExternFinding,
+}
+
+export
+coreDefectMessage : CoreDefect -> String
+coreDefectMessage (CoreDefect message) = message
+
+export
+validateForEmission : Backend ->
+  RuntimeExternDomain ->
+  EmitPlan ->
+  CProgram ->
+  EmissionValidation
+validateForEmission backend domain plan cp =
+  match emissionDefects backend plan cp
+    [] =>
+      let names = match domain
+        PreludeFreeRuntime => []
+        LoadedRuntimeExterns decls => map (d => d.edName) decls
+      match missingCatalogRows names
+        [] => EmissionValidation {
+          defects = [],
+          externFindings = validateExterns backend [] cp,
+        }
+        missing => EmissionValidation {
+          defects = [CoreDefect (missingRowsMessage missing)],
+          externFindings = [],
+        }
+    bad => EmissionValidation { defects = bad, externFindings = [] }
+
+emissionDefects : Backend -> EmitPlan -> CProgram -> List CoreDefect
+emissionDefects backend plan cp =
+  if backendName plan.target /= backendName backend then
+    [
+      CoreDefect
+        "internal error: emit plan was built for the \{backendName plan.target} backend but the \{backendName backend} emitter received it",
+    ]
+  else match implSymbolCollision cp
+    Some message => [CoreDefect message]
+    None => match dictTagCollision backend cp
+      Some message => [CoreDefect message]
+      None => firstShapeDefect [
+        () => validateRecords cp,
+        () => validateBinderStamps cp,
+        () =>
+          validateCalls cp
+            ++ validateImplSymbols cp
+            ++ validateMethodContexts cp
+            ++ validateDispatchEvidence cp,
+        () => validateTails cp,
+      ]
+
+firstShapeDefect : List (Unit -> List String) -> List CoreDefect
+firstShapeDefect [] = []
+firstShapeDefect (check :: rest) = match check ()
+  [] => firstShapeDefect rest
+  bad => [CoreDefect ("internal error: " ++ joinWith "\n" bad)]
 
 export
 findingExtern : ExternFinding -> String

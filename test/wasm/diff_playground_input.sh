@@ -74,6 +74,16 @@ EOF
 printf '%s\n' 42 > "$WORK/expected"
 if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-int-control.wat" 2>"$WORK/modules-int-control.emit.err"; then check_wat modules-int-control "$WORK/modules-int-control.wat"; else bad "Int-control modules emitter failed"; cat "$WORK/modules-int-control.emit.err"; fi
 if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-int-control.wat" 2>"$WORK/playground-int-control.emit.err"; then check_wat playground-int-control "$WORK/playground-int-control.wat"; else bad "Int-control playground compiler failed"; cat "$WORK/playground-int-control.emit.err"; fi
+cp "$RUNTIME" "$WORK/runtime-missing-row.mdk"
+printf '\nextern zzPlaygroundMissingRow : Int\n' >> "$WORK/runtime-missing-row.mdk"
+checks=$((checks + 1))
+if "$ROOT/medaka" build --allow-internal "$ROOT/compiler/entries/playground_main.mdk" -o "$WORK/playground-main" >"$WORK/playground-main.build.out" 2>"$WORK/playground-main.build.err"; then
+  "$WORK/playground-main" compile "$WORK/runtime-missing-row.mdk" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/playground-missing-row.out" 2>"$WORK/playground-missing-row.err" && bad "playground accepted a runtime extern missing from the catalog"
+  grep -qF "runtime extern 'zzPlaygroundMissingRow' has no row" "$WORK/playground-missing-row.err" || bad "playground missing-row refusal was not named"
+  [ ! -s "$WORK/playground-missing-row.out" ] || bad "playground missing-row refusal wrote a WAT marker"
+else
+  bad "playground compiler entry failed to build"
+fi
 # A Unit main is the one program shape with NO output: nothing in the user's code
 # forces the $str rep, so the string types are gated off while the prelude's
 # `impl Monoid String where empty = ""` is still emitted naming $u8arr.  The

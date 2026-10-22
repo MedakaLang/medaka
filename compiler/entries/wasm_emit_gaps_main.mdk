@@ -30,7 +30,9 @@
 -- to lowerProgramEmitWith (loader, mangle, elaborateModules, dceFilter) is identical to
 -- the LLVM modules driver.
 
-import frontend.ast.{Decl}
+import backend.extern_catalog.{runtimeDomain}
+import backend.emit_target.{Backend(..)}
+import frontend.ast.{externDecls, Decl}
 import types.typecheck.{
   elaborateModules,
   constrainedSigNames,
@@ -48,7 +50,7 @@ import types.program_facts.{factsOfElabWith}
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInputFull}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import entries.entry_support.{driveModules}
 
 main : <IO> Unit
@@ -76,11 +78,10 @@ runEmit inputs runtimeDecls coreDecls modules =
       ++ constrainedSigNames allDecls
   let input =
     makeWasmEmitInputFull
-      (methodIfaceTable allDecls)
+      (runtimeDomain (externDecls runtimeDecls))
       []
       False
       False
-      (declaredRecordFieldOrders allDecls)
       []
   let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
   let gaps = emitProgramGaps input (buildEmitPlan WasmBackend cp) cp

@@ -18,7 +18,9 @@
 -- `core_ir_lower` resolves the record by a bare-label first-match guess (the
 -- wrong-slot behaviour issue #38 closed).  Elaborate, mangle, then key every
 -- table off the mangled decls — the order `entry_support.runEmitWith` runs.
-import frontend.ast.{Decl, Lit(..), BinderId(..), noDeclLoc}
+import backend.extern_catalog.{RuntimeExternDomain(..), runtimeDomain}
+import backend.emit_target.{Backend(..)}
+import frontend.ast.{externDecls, Decl, Lit(..), BinderId(..), noDeclLoc}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{
@@ -47,7 +49,7 @@ import ir.core_ir.{
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
+
 import entries.entry_support.{driveRuntime, failWith}
 import support.util.{contains}
 
@@ -91,7 +93,8 @@ emitIsolation runtimePath pPath pPlusUPath =
 -- `main` is stamped, as every lowered binder is, so the emitter reaches the node.
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
-  let input = makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] []
+  let input =
+    makeEmitInput PreludeFreeRuntime [] [] [] [] [] False False 0 [] [] "" []
   let mainId = BinderId "" 0
   let cp =
     CProgram
@@ -142,6 +145,7 @@ runEmit runtimeDecls preludeDecls userDecls =
   let mangled = coreD ++ flatMap snd modules2
   let input =
     makeEmitInput
+      (runtimeDomain (externDecls runtimeDecls))
       (returnsSelfTable mangled)
       (selfFnParamTable mangled)
       (methodIfaceTable mangled)
@@ -153,7 +157,6 @@ runEmit runtimeDecls preludeDecls userDecls =
       []
       []
       ""
-      (declaredRecordFieldOrders mangled)
       (validateFfiExternTypeNames (checkedFfiExternTypeNames mangled))
   let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) mangled
   emitProgram input (buildEmitPlan LlvmBackend cp) cp
