@@ -17,6 +17,7 @@
 -- consumer differs (WasmGC instead of LLVM) — the Axis-1 discipline (Core IR is
 -- backend-neutral; backends are sibling consumers) in miniature.
 
+import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
@@ -47,6 +48,7 @@ withTarget targetPath = match readFile targetPath
     let annotated = annotateProgram decls
     let input =
       makeWasmEmitInputFull
+        PreludeFreeRuntime
         []
         (ctorFieldTypeNames decls)
         False

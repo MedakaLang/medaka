@@ -73,14 +73,12 @@ import backend.wasm_emit.{
   emitProgramGaps,
   emitProgramRecord as wasmRecord,
   makeWasmEmitInputFull,
-  withRuntimeExternsW,
 }
 import backend.llvm_emit.{
   emitProgram as llvmStrict,
   emitProgramRecord as llvmRecord,
   emitProgramGaps as llvmCensus,
   makeEmitInput,
-  withRuntimeExterns,
 }
 import backend.emit_plan.{buildEmitPlan}
 
@@ -189,6 +187,7 @@ test "(e) record mode logs one event per refused extern, and no unbound-variable
   let decls = grantWholeDomain (desugar (parse recordSrc))
   let input =
     makeWasmEmitInputFull
+      PreludeFreeRuntime
       []
       (ctorFieldTypeNames decls)
       False
@@ -239,6 +238,7 @@ llvmRecordEvents =
   let decls = grantWholeDomain (desugar (parse assertSnapshotSrc))
   let input =
     makeEmitInput
+      PreludeFreeRuntime
       []
       []
       []
@@ -384,6 +384,7 @@ ffiNoJsEvents checked =
     [("ffiAddInts", ([("c", "ffiAddInts")], (["Int", "Int"], "Int")))]
   let input =
     makeWasmEmitInputFull
+      PreludeFreeRuntime
       []
       (ctorFieldTypeNames decls)
       False
@@ -1884,12 +1885,8 @@ emissionText route victim =
       runtimeDomain (externDecls (parse "extern zzEmissionMissingRow : Int"))
     else
       PreludeFreeRuntime
-  let li =
-    withRuntimeExterns
-      domain
-      (makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] [])
-  let wi =
-    withRuntimeExternsW domain (makeWasmEmitInputFull [] [] False False [] [])
+  let li = makeEmitInput domain [] [] [] [] [] False False 0 [] [] "" [] []
+  let wi = makeWasmEmitInputFull domain [] [] False False [] []
   match route
     "llvm-strict" => llvmStrict li plan cp
     "llvm-record" => fst (llvmRecord li plan cp)
@@ -2036,8 +2033,9 @@ test "gateway valid controls return module text and unavailable externs stay rec
   let cp = emissionVictim "not-provided"
   let lp = buildEmitPlan LlvmBackend cp
   let wp = buildEmitPlan WasmBackend cp
-  let li = makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] []
-  let wi = makeWasmEmitInputFull [] [] False False [] []
+  let li =
+    makeEmitInput PreludeFreeRuntime [] [] [] [] [] False False 0 [] [] "" [] []
+  let wi = makeWasmEmitInputFull PreludeFreeRuntime [] [] False False [] []
   let (_, le) = llvmRecord li lp cp
   let (_, we) = wasmRecord wi wp cp
   expectEach [

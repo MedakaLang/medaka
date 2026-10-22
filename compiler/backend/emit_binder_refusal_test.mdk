@@ -6,6 +6,7 @@
 -- and grades the child's exit and output.  In an ordinary run the probe passes
 -- without emitting.
 
+import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import test.{
   Expectation, expectAll, expectEqual, expectNotEqual, labelFail, pass
@@ -76,14 +77,28 @@ program paramRow =
 llvmText : CProgram -> String
 llvmText cp =
   llvmEmit
-    (makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] [])
+    (makeEmitInput
+      PreludeFreeRuntime
+      []
+      []
+      []
+      []
+      []
+      False
+      False
+      0
+      []
+      []
+      ""
+      []
+      [])
     (buildEmitPlan LlvmBackend cp)
     cp
 
 wasmText : CProgram -> String
 wasmText cp =
   wasmEmit
-    (makeWasmEmitInputFull [] [] False False [] [])
+    (makeWasmEmitInputFull PreludeFreeRuntime [] [] False False [] [])
     (buildEmitPlan WasmBackend cp)
     cp
 

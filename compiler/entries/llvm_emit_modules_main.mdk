@@ -57,7 +57,6 @@ import backend.llvm_emit.{
   emitProgramWithStats,
   makeEmitInput,
   preludeImplSymbols,
-  withRuntimeExterns,
   withNoInlineFns,
 }
 import ir.dce.{dceFilter}
@@ -157,23 +156,22 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
   let (preludeBinds, preludeImpls) =
     if half == 2 then preludeSymsOf facts coreD else ([], [])
   let base =
-    withRuntimeExterns
+    makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
-      (makeEmitInput
-        (returnsSelfTable allDecls)
-        (selfFnParamTable allDecls)
-        (methodIfaceTable allDecls)
-        (ctorFieldTypeNames allDecls)
-        (externArities runtimeDecls)
-        (mainTypeIsUnit outputs || wrapped)
-        (mainTypeIsFloat outputs && not wrapped)
-        half
-        preludeBinds
-        preludeImpls
-        (srcNameFromArgs (args ()))
-        (declaredRecordFieldOrders allDecls)
-        (validateFfiExternTypeNames
-          (checkedFfiExternTypeNamesModules outputs modules2)))
+      (returnsSelfTable allDecls)
+      (selfFnParamTable allDecls)
+      (methodIfaceTable allDecls)
+      (ctorFieldTypeNames allDecls)
+      (externArities runtimeDecls)
+      (mainTypeIsUnit outputs || wrapped)
+      (mainTypeIsFloat outputs && not wrapped)
+      half
+      preludeBinds
+      preludeImpls
+      (srcNameFromArgs (args ()))
+      (declaredRecordFieldOrders allDecls)
+      (validateFfiExternTypeNames
+        (checkedFfiExternTypeNamesModules outputs modules2))
   let input = withNoInlineFns (noInlineFnNames allDecls) base
   let statsOn = statsEnabled ()
   let cp = lowerProgramEmitPinnedWith facts preludeImpls allDecls

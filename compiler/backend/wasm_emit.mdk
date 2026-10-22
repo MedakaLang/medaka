@@ -227,7 +227,7 @@ import ir.core_ir.{
 import list.{replicate, take, drop}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import backend.extern_catalog.{
-  RuntimeExternDomain(..),
+  RuntimeExternDomain,
   WasmFamily(..),
   WasmUse(..),
   isWasmExternFamily,
@@ -548,7 +548,7 @@ freshWasmEmit mode = WasmEmit {
 
 -- Declaration-derived semantic input. Raw lists retain table order where a full
 -- table is required; indexes preserve lookupAssoc's first-match result.  The
--- last field is the loaded runtime declaration domain (`withRuntimeExternsW`).
+-- last field is the complete loaded runtime declaration domain.
 data WasmEmitInputData =
   | WasmEmitInputData (List (String, List String)) (OrdMap (List Int)) Bool (OrdMap (List (String, String), (List String, String))) Bool RuntimeExternDomain
 
@@ -558,13 +558,15 @@ export type WasmEmitInput = WasmEmitInputData
 -- declaration list to project, so the FFI extern index is legitimately empty.  Every driver that lowers real decls uses
 -- `makeWasmEmitInputFull` instead.
 export
-makeWasmEmitInput : List (String, (String, String, Int)) ->
+makeWasmEmitInput : RuntimeExternDomain ->
+  List (String, (String, String, Int)) ->
   List (String, List String) ->
   Bool ->
   List (String, List String) ->
   WasmEmitInput
-makeWasmEmitInput methodIfaces ctorFieldTypes mainIsFloat recordFieldOrders =
+makeWasmEmitInput domain methodIfaces ctorFieldTypes mainIsFloat recordFieldOrders =
   makeWasmEmitInputFull
+    domain
     methodIfaces
     ctorFieldTypes
     mainIsFloat
@@ -579,28 +581,22 @@ makeWasmEmitInput methodIfaces ctorFieldTypes mainIsFloat recordFieldOrders =
 -- so the single-file harnesses that never declare a user FFI extern keep its
 -- shorter arity.
 export
-makeWasmEmitInputFull : List (String, (String, String, Int)) ->
+makeWasmEmitInputFull : RuntimeExternDomain ->
+  List (String, (String, String, Int)) ->
   List (String, List String) ->
   Bool ->
   Bool ->
   List (String, List String) ->
   List (String, (List (String, String), (List String, String))) ->
   WasmEmitInput
-makeWasmEmitInputFull _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternRows =
+makeWasmEmitInputFull domain _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternRows =
   WasmEmitInputData
     ctorFieldTypes
     (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty)
     mainIsFloat
     (omFromPairs (reverseL ffiExternRows) omEmpty)
     mainIsUnit
-    PreludeFreeRuntime
-
--- Installs the loaded runtime domain; the gateway checks every declaration
--- for a catalog row, including declarations the program never references.
-export
-withRuntimeExternsW : RuntimeExternDomain -> WasmEmitInput -> WasmEmitInput
-withRuntimeExternsW names (WasmEmitInputData c d e f g _) =
-  WasmEmitInputData c d e f g names
+    domain
 
 inputRuntimeExternsW : WasmEmitInput -> RuntimeExternDomain
 inputRuntimeExternsW (WasmEmitInputData _ _ _ _ _ names) = names

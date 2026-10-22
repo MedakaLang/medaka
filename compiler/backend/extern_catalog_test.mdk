@@ -39,6 +39,7 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
 }
 import backend.extern_catalog.{
+  RuntimeExternDomain(..),
   ExternRow,
   WasmFamily(..),
   WasmUse(..),
@@ -290,6 +291,7 @@ emitWat src =
   let decls = grantWholeDomain (desugar (parse src))
   let input =
     makeWasmEmitInputFull
+      PreludeFreeRuntime
       []
       (ctorFieldTypeNames decls)
       False

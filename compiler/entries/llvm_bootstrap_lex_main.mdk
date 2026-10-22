@@ -22,8 +22,9 @@
 --
 --   medaka run compiler/entries/llvm_bootstrap_lex_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
 
+import backend.extern_catalog.{runtimeDomain}
 import backend.emit_target.{Backend(..)}
-import frontend.ast.{Decl}
+import frontend.ast.{externDecls, Decl}
 import types.typecheck.{
   elaborateModulesWithReport,
   constrainedSigNames,
@@ -73,6 +74,7 @@ runEmit inputs runtimeDecls coreDecls modules =
       ++ constrainedSigNames allDecls
   let input =
     makeEmitInput
+      (runtimeDomain (externDecls runtimeDecls))
       (returnsSelfTable allDecls)
       (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)

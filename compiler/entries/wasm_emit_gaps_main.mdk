@@ -30,8 +30,9 @@
 -- to lowerProgramEmitWith (loader, mangle, elaborateModules, dceFilter) is identical to
 -- the LLVM modules driver.
 
+import backend.extern_catalog.{runtimeDomain}
 import backend.emit_target.{Backend(..)}
-import frontend.ast.{Decl}
+import frontend.ast.{externDecls, Decl}
 import types.typecheck.{
   elaborateModules,
   constrainedSigNames,
@@ -77,6 +78,7 @@ runEmit inputs runtimeDecls coreDecls modules =
       ++ constrainedSigNames allDecls
   let input =
     makeWasmEmitInputFull
+      (runtimeDomain (externDecls runtimeDecls))
       (methodIfaceTable allDecls)
       []
       False

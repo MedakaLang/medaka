@@ -155,7 +155,6 @@ import ir.dce.{dceFilter}
 import backend.wasm_emit.{
   emitProgram,
   makeWasmEmitInputFull,
-  withRuntimeExternsW,
 }
 import backend.emit_plan.{buildEmitPlanReached}
 
@@ -717,15 +716,14 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
     validateFfiExternTypeNames
       (checkedFfiExternTypeNamesModules outputs modules2)
   let input =
-    withRuntimeExternsW
+    makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))
-      (makeWasmEmitInputFull
-        (methodIfaceTable allDecls)
-        (ctorFieldTypeNames allDecls)
-        (mainTypeIsFloat outputs && not wrapped)
-        (mainTypeIsUnit outputs || wrapped)
-        (declaredRecordFieldOrders allDecls)
-        ffiRows)
+      (methodIfaceTable allDecls)
+      (ctorFieldTypeNames allDecls)
+      (mainTypeIsFloat outputs && not wrapped)
+      (mainTypeIsUnit outputs || wrapped)
+      (declaredRecordFieldOrders allDecls)
+      ffiRows
   -- Mirrors wasm_emit_modules_main.emitTail: bind the lowered
   -- program, then drop the impl bodies (and the plain bindings only they
   -- reached) that no dispatchable method name in this program can reach.  Without

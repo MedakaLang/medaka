@@ -16,6 +16,7 @@
 -- swaps the final consumer (emit LLVM instead of ceval) — the Axis-1 discipline
 -- (Core IR is backend-neutral; backends are sibling consumers) in miniature.
 
+import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
@@ -54,6 +55,7 @@ emitTarget decls =
   putStr
     (emitProgram
       (makeEmitInput
+        PreludeFreeRuntime
         []
         []
         []

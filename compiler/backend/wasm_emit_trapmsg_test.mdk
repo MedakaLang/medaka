@@ -11,6 +11,7 @@
 -- lint-disable-file rule-duplicate-body
 -- `watOf` is also the sibling strseg test's helper, kept local so each test file reads alone.
 
+import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import test.{Expectation, expectAll, expectAtLeast, expectEqual, labelFail}
 import string.{fromChars, lines, stripPrefix, toInt}
@@ -33,6 +34,7 @@ watOf src =
   let decls = grantWholeDomain (desugar (parse src))
   let input =
     makeWasmEmitInputFull
+      PreludeFreeRuntime
       []
       (ctorFieldTypeNames decls)
       False

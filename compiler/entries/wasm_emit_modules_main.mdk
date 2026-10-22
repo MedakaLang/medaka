@@ -53,7 +53,6 @@ import driver.main_autoprint.{mainIsWrapped}
 import backend.wasm_emit.{
   emitProgram,
   makeWasmEmitInputFull,
-  withRuntimeExternsW,
 }
 import backend.emit_plan.{buildEmitPlanReached}
 import entries.entry_support.{
@@ -99,15 +98,14 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
     validateFfiExternTypeNames
       (checkedFfiExternTypeNamesModules outputs modules2)
   let input =
-    withRuntimeExternsW
+    makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))
-      (makeWasmEmitInputFull
-        (methodIfaceTable allDecls)
-        (ctorFieldTypeNames allDecls)
-        (mainTypeIsFloat outputs && not wrapped)
-        (mainTypeIsUnit outputs || wrapped)
-        (declaredRecordFieldOrders allDecls)
-        ffiRows)
+      (methodIfaceTable allDecls)
+      (ctorFieldTypeNames allDecls)
+      (mainTypeIsFloat outputs && not wrapped)
+      (mainTypeIsUnit outputs || wrapped)
+      (declaredRecordFieldOrders allDecls)
+      ffiRows
   let lowered = lowerProgramEmitWith facts allDecls
   let (plan, reached) = buildEmitPlanReached ffiRows lowered
   -- MEDAKA_STATS reporting hook: the counts come from the plan, so the ratio is the

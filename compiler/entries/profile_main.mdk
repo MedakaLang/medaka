@@ -33,8 +33,9 @@
 -- compiler/entries/profile_modules_main.mdk (which times the full
 -- multi-module loader path).
 
+import backend.extern_catalog.{runtimeDomain}
 import backend.emit_target.{Backend(..)}
-import frontend.ast.{Decl}
+import frontend.ast.{externDecls, Decl}
 import ir.core_ir.{CProgram}
 import frontend.parser.{parse, parseWithPositions}
 import tools.lint.{lintProgram, allRules, emptyStdlibIndex}
@@ -300,6 +301,7 @@ runStaged on targetPath rsrc csrc tsrc =
   -- the declaration guards accepted.
   let input =
     makeEmitInput
+      (runtimeDomain (externDecls rDecls))
       (returnsSelfTable elaborated)
       (selfFnParamTable elaborated)
       (methodIfaceTable elaborated)
@@ -501,6 +503,7 @@ wasmStage _ False _ _ _ _ _ = ()
 wasmStage on True outputs runtimeDecls live cprog declsOp =
   let input =
     makeWasmEmitInputFull
+      (runtimeDomain (externDecls runtimeDecls))
       (methodIfaceTable live)
       (ctorFieldTypeNames live)
       (mainTypeIsFloat outputs)
