@@ -95,7 +95,8 @@
 import list.{mapAccumL, sortOn}
 import map as IdMap
 import map.{Map}
-import support.ordmap.{OrdMap}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import support.util.{dedupBy}
 import support.sexp_value.{
   SExp(..), SexpError(..), renderSExp, parseSExp, expectAtom, atomInt, atomBool
 }
@@ -1277,6 +1278,37 @@ cacheOfSections : List InterfaceSection ->
   List (List (List Atom), PreludeInterface)
 cacheOfSections = map (s => (s.isJoins, s.isInterface))
 
+-- One section per distinct interface text.  [drives] pairs a join with the
+-- interface a drive under it produced; the sections come in order of first
+-- appearance, each listing its joins sorted as the encoder writes them, once.
+export
+mergeSections : List (List Atom, PreludeInterface) -> List InterfaceSection
+mergeSections drives =
+  let keyed = map (d => (renderSExp (interfaceNode (snd d)), d)) drives
+  let joinsByText = fold addJoin omEmpty keyed
+  map
+    (k => InterfaceSection {
+      isJoins = sortedJoins (lookupOr [] (fst k) joinsByText),
+      isInterface = snd (snd k),
+    })
+    (dedupBy fst keyed)
+
+addJoin : OrdMap (List (List Atom)) ->
+  (String, (List Atom, PreludeInterface)) ->
+  OrdMap (List (List Atom))
+addJoin acc (text, (join, _)) = omInsert text (join :: lookupOr [] text acc) acc
+
+lookupOr : a -> String -> OrdMap a -> a
+lookupOr fallback key m = match omLookup key m
+  Some v => v
+  None => fallback
+
+sortedJoins : List (List Atom) -> List (List Atom)
+sortedJoins joins = dedupBy joinText (sortOn joinText joins)
+
+joinText : List Atom -> String
+joinText j = renderSExp (joinNode j)
+
 pairAtoms : (String, String) -> SExp
 pairAtoms = pairSExp SAtom SAtom
 
@@ -1292,9 +1324,7 @@ joinNode = listSExp atomSExp
 
 sectionNode : InterfaceSection -> SExp
 sectionNode s = tagged "section" [
-  tagged "joins" [
-    listSExp joinNode (sortOn (j => renderSExp (joinNode j)) s.isJoins),
-  ],
+  tagged "joins" [listSExp joinNode (sortOn joinText s.isJoins)],
   interfaceNode s.isInterface,
 ]
 
