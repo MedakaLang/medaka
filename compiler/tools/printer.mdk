@@ -1878,7 +1878,10 @@ armBodyDoc body = match stripLocE body
 
 -- The body is printed once, without claiming its comments.  A body that breaks
 -- over lines (a magic-comma list) keeps its own layout, and `where` follows its
--- last line; any other body is forced flat onto the arm line.
+-- last line; any other body is forced flat onto the arm line.  A broken body
+-- whose last line sits inside a block it opens (`endsInLayoutBlock`) is
+-- parenthesized: `where` on that line would join the inner block's last arm or
+-- statement instead of the arm.
 multiWhereArmDoc : List LetBind -> Expr -> Doc
 multiWhereArmDoc binds inner =
   let bodyD = noClaimDoc (_ => printExprBody inner)
@@ -1887,10 +1890,12 @@ multiWhereArmDoc binds inner =
       let trailDoc =
         concatD (map (c => LineComment (pcText c)) (popTrailingAt en ec))
       let headD =
-        if docHasHardline bodyD then
-          Cat (text " => ") bodyD
-        else
+        if not (docHasHardline bodyD) then
           text (" => " ++ renderFlat bodyD)
+        else if endsInLayoutBlock inner then
+          Cat (text " => (") (Cat bodyD (text ")"))
+        else
+          Cat (text " => ") bodyD
       Cat
         headD
         (Cat (text " where") (Cat trailDoc (Nest 2 (letGroupClauses binds))))
@@ -1907,6 +1912,26 @@ nestedArmDoc binds inner =
             (e => soloDoc e (_ => printExprBody e))
             binds
             inner))))
+
+-- Does the expression's printed last line belong to a layout block it opens (a
+-- `match` arm, a `do` or block statement)?  Follows the form that prints last
+-- without brackets of its own: a lambda's body, an `if`'s final branch, a
+-- `let … in` body, the annotated expression, the right side of `:=`.
+endsInLayoutBlock : Expr -> Bool
+endsInLayoutBlock e = match stripLocE e
+  EMatch _ _ => True
+  EDo _ _ => True
+  EBlock _ => True
+  EGuards _ => True
+  ELam _ body => endsInLayoutBlock body
+  EIf _ t els =>
+    if isUnitLit els then endsInLayoutBlock t else endsInLayoutBlock els
+  ELet _ _ _ _ body => endsInLayoutBlock body
+  ELetGroup _ body => endsInLayoutBlock body
+  EAnnot body _ => endsInLayoutBlock body
+  EHeadAnnot body _ => endsInLayoutBlock body
+  EBinOp ":=" _ r _ => endsInLayoutBlock r
+  _ => False
 
 isMultiBindGroup : List LetBind -> Bool
 isMultiBindGroup (_ :: _ :: _) = True
@@ -2308,7 +2333,10 @@ fieldTyDoc (Field fn ft) = Cat (text fn) (Cat (text " : ") (printType ft))
 --   }
 -- Header on line 0, field i on line i+1, `}` last — output lines align 1:1
 -- with the source field lines, so `medaka fmt` can re-attach each field's
--- trailing comment by line index.  Falls back to `printDecl` for any other shape.
+-- trailing comment by line index.  The deriving clause sits on the `}` line,
+-- or, when `derivesOwnLine` (a comment comes between the brace and `deriving`),
+-- on its own line below it so the comment keeps its place.  Falls back to
+-- `printDecl` for any other shape.
 export
 printNamedFieldData : DataVis ->
   String ->
@@ -2317,8 +2345,9 @@ printNamedFieldData : DataVis ->
   List Variant ->
   List (List (String, KindAnn)) ->
   List DeriveRef ->
+  Bool ->
   Doc
-printNamedFieldData vis n params kinds [Variant cname (ConNamed fields nameOmitted)] [binders] derives =
+printNamedFieldData vis n params kinds [Variant cname (ConNamed fields nameOmitted)] [binders] derives derivesOwnLine =
   let eqPart =
     if nameOmitted then
       text " = {"
@@ -2333,8 +2362,13 @@ printNamedFieldData vis n params kinds [Variant cname (ConNamed fields nameOmitt
         (concatD
           (map (f => Cat Hardline (Cat (fieldTyDoc f) (text ","))) fields)))
       (Cat Hardline (text "}"))
-  Cat (visPrefix vis) (Cat head (Cat body (derivesInline derives)))
-printNamedFieldData vis n params kinds variants binders derives =
+  let derivesD =
+    if derivesOwnLine && isNonEmptyL derives then
+      indentBlock (printDerives derives)
+    else
+      derivesInline derives
+  Cat (visPrefix vis) (Cat head (Cat body derivesD))
+printNamedFieldData vis n params kinds variants binders derives _ =
   printDecl (dDataUnresolved vis n params kinds variants binders derives)
 
 tyParamsDoc : List String -> List (Option KindAnn) -> Doc

@@ -285,15 +285,49 @@ isSingleNamedFieldData (DData { dataCtors = [Variant _ (ConNamed _ _)] }) = True
 isSingleNamedFieldData _ = False
 
 -- Render a single-variant named-field data decl one-field-per-line, consuming
--- its one variant line (to keep vlines aligned).
-renderNamedFieldMulti : FmtState -> Decl -> (String, FmtState)
-renderNamedFieldMulti (FmtState pieces cs vlines cursor started placed) (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataCtorBinders = binders, dataDerives = derives }) =
+-- its one variant line (to keep vlines aligned).  `derivesOwnLine` puts the
+-- deriving clause below the closing brace (`commentAfterFields`).
+renderNamedFieldMulti : FmtState -> Decl -> Bool -> (String, FmtState)
+renderNamedFieldMulti (FmtState pieces cs vlines cursor started placed) (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataCtorBinders = binders, dataDerives = derives }) derivesOwnLine =
   match takeNVariantLines vlines 1
     (vlinesRest, _) => (
-      render (printNamedFieldData vis n params kinds variants binders derives),
+      render
+        (printNamedFieldData
+          vis
+          n
+          params
+          kinds
+          variants
+          binders
+          derives
+          derivesOwnLine),
       FmtState pieces cs vlinesRest cursor started placed,
     )
-renderNamedFieldMulti st decl = declDoc st decl
+renderNamedFieldMulti st decl _ = declDoc st decl
+
+-- Does an interior comment come after the last field, on the closing brace's
+-- line or between it and `deriving`?  The splice (`classifyIdxs`) puts the
+-- header on output line 0 and field i on line i + 1, so the brace is line
+-- `nFields + 1`.  Such a comment needs `deriving` on a line of its own: on the
+-- brace's line, a standalone comment would have no output line left to precede
+-- and a trailing one would become the decl's trailing comment, and either way
+-- the next run would no longer see an interior comment and would print the
+-- record on one line.
+commentAfterFields : Array String -> Int -> Decl -> List Comment -> Bool
+commentAfterFields srcLines headerLine decl interior =
+  let nFields = namedFieldCount decl
+  isNonEmptyL
+    (filterList
+      (t => classifiedIdx t > nFields)
+      (classifyIdxs headerLine srcLines 0 interior))
+
+classifiedIdx : (Comment, Int, CKind) -> Int
+classifiedIdx (_, idx, _) = idx
+
+namedFieldCount : Decl -> Int
+namedFieldCount (DData { dataCtors = [Variant _ (ConNamed fields _)] }) =
+  listLen fields
+namedFieldCount _ = 0
 
 -- Splice interior comments into a rendered record decl by output-line index
 -- (header on line 0, field i on line i+1): a STANDALONE comment renders as its
@@ -578,12 +612,20 @@ stepDataDecl (FmtState pieces2 cs1 vlines1 cursor1 started1 placed1) srcLines de
   -- source header (`data X =` / `  | X { ...`) originates on the variant's
   -- line, so that is the splice's base line.
   let headerLine = if nfMulti then variantLine else line
+  let strictInterior = filterList (isStrictInterior line endLine) cs1
+  let derivesOwnLine =
+    nfMulti && commentAfterFields srcLines headerLine decl strictInterior
   -- A decl-trailing comment is taken out BEFORE the variant bucketing, so a
   -- one-line `data` keeps its comment on its own line.
   match takeTrailing cs1 endLine
     (trailing, csNoTrail) =>
       let st2 = FmtState pieces2 csNoTrail vlines1 cursor1 started1 placed1
-      match if nfMulti then renderNamedFieldMulti st2 decl else declDoc st2 decl
+      let rendered =
+        if nfMulti then
+          renderNamedFieldMulti st2 decl derivesOwnLine
+        else
+          declDoc st2 decl
+      match rendered
         (declStr0, FmtState pieces3 cs3 vlines3 _cursor3 _started3 placed3) =>
           let interior =
             if nfMulti then
