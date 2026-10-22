@@ -1,5 +1,5 @@
 # META
-source_lines=3466
+source_lines=3467
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -3097,7 +3097,8 @@ public export data ModuleSeed = ModuleSeed {
 -- the playground on each keystroke all pay it again for the same two decl lists.
 -- So the diagnostics arm caches the core pass's result as a value
 -- (`PreludeInterface`, types/prelude_interface.mdk) keyed by the prelude trees'
--- identity, which a caller hands down EXPLICITLY as the desugar cache's generation
+-- identity plus the section chosen by the drive's IO join; the identity a caller
+-- hands down EXPLICITLY as the desugar cache's generation
 -- pair (`desugaredPreludeKey`, frontend/desugar_cache.mdk; the K-suffixed entry
 -- points below).  An unkeyed call (`None`) never hits and never stores: the AST
 -- carries mutable Refs and no equality, so identity cannot be recovered from the

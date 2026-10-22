@@ -5935,14 +5935,14 @@ firstModuleSeed _ =
       []
   (omKeys ctx.mcCells.matchOracle.value.ctorArity, matchWarningsNow ctx)
 
--- Core is checked from an empty oracle, not one built from its own decls, so its
--- record holds a spurious non-exhaustive warning for every match on a prelude type,
--- exhaustive or not (5 on the real prelude, one here).  Seeding from core's record
--- carried them into the first module; the blank record past the core pass carries
--- none, which is intended: they are not findings about any user module, and no
--- production caller drives zero user modules to read them.  Same on the keyed miss
--- and on the hit after it.
-test "checkModulesK seeds its first module with an empty oracle and no warning" =
+-- The record this drive hands its first module holds an empty oracle and no
+-- match warnings, on the keyed miss and on the hit after it.  The oracle was
+-- already empty at base; this row does not drive `cmCheckWorker`.  Core is
+-- checked from an empty oracle, so its own record holds a spurious
+-- non-exhaustive warning for every match on a prelude type; the blank record past
+-- the core pass carries none, which is intended: they are not findings about any
+-- user module.
+test "a zero-user-module record carries an empty oracle and no match warnings" =
   let miss = firstModuleSeed ()
   let hit = firstModuleSeed ()
   let empty = (omKeys (buildOracle []).ctorArity, False)

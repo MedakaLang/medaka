@@ -10746,8 +10746,8 @@ currentScopeStore gctx _ = gctx.graphRun.scopeStore
 -- module component comes from the module's record, which `checkBodyImpl` mints once per
 -- module before any body of it is inferred; the ordinal is this run's counter.
 -- `evCounter` is graph-global, and `graphLineageRun` carries it across every new
--- lineage (a chain-memo hit rewinds it to its snapshot's), so the ordinal alone is what makes an id unique — the module half does
--- not scope it, and `evDictRoutesIn` indexes on the ordinal without consulting it.
+-- lineage (a chain-memo hit rewinds it to its snapshot's), so the ordinal alone
+-- is what makes an id unique; the module half does not scope it, and `evDictRoutesIn` indexes on the ordinal without consulting it.
 -- The module half is a tripwire for that lookup (see `EvId` in `frontend/ast.mdk`):
 -- do not make ordinals per-module in the belief that the pair still separates them.
 --

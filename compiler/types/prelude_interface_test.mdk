@@ -6,19 +6,25 @@
 -- `Bool`, `PubScheme`, `RecordInfo` and the frozen slot, prefix and
 -- population forms, none of which names an `EvId` or `Ident` ordinal.
 import test.{expectEqual, expectNone, expectAll, expectEach}
+import list.{zip}
 import map as M
-import support.ordmap.{omEmpty, omInsert, omKeys}
+import support.ordmap.{omEmpty, omInsert, omKeys, omLookup}
 import types.effect_domain.{Param(..)}
 import types.effect_rows.{EffRow(..), Atom, atomBuiltin}
 import types.prelude_interface.{
   PreludeInterface(..), GraphRunSeed(..), freezeInterface, thawInterface,
-  seedPreludeInterface, preludeCacheHit, currentPreludeInterface,
-  InterfaceKey(..), interfaceKeyOf, keysMatch
+  standaloneRows, seedPreludeInterface, preludeCacheHit,
+  currentPreludeInterface, InterfaceKey(..), interfaceKeyOf, keysMatch
 }
 import types.publish.{PubScheme(..), liveCells, ppPubScheme, freezeRows}
 import types.registry.{spFromFloor, spFloor}
-import types.repr.{Mono(..), Tyvar(..), Scheme(..)}
-import types.tc_types.{GraphCtx(..), CrossRun(..), GraphRun(..)}
+import types.repr.{Mono(..), Tyvar(..), Scheme(..), VecObl(..), IfaceRef(..)}
+import frontend.ast.{TyConOrigin(..)}
+import types.tc_types.{
+  GraphCtx(..), CrossRun(..), GraphRun(..), BuiltinClasses(..),
+  PredicateSlot(..), MethodPredicateSlot(..), CDeclaredPrefix(..),
+  RecordInfo(..)
+}
 import types.typecheck.{defaultDriveInputs, checkModulesChainReportForGraph}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
@@ -56,8 +62,21 @@ identityPub =
     psContext = [],
   }
 
+-- A row that carries an obligation context, so a dropped or zeroed context
+-- changes the rendering.
+obligedPub : PubScheme
+obligedPub = { identityPub |
+  psContext = [
+    VecObl {
+      voIface = IfaceRef { irName = "Eq", irOrigin = OriginUnresolved },
+      voIds = [7],
+      voArgs = [],
+    },
+  ],
+}
+
 coreRows : List (String, PubScheme)
-coreRows = [("id", identityPub), ("also", identityPub)]
+coreRows = [("id", identityPub), ("also", obligedPub)]
 
 standaloneNames : M.Map String Unit
 standaloneNames = omInsert "id" () omEmpty
@@ -87,18 +106,75 @@ sampleInterface _ =
     coreRows
     standaloneNames
 
--- What two interfaces must agree on to count as equal: every scheme rendered
--- with its context, the id counters and the standalone names.
+-- What two interfaces must agree on to count as equal: every field of the
+-- record.  Schemes render with their context; a field whose type has no
+-- renderer renders as its names, ids and counts.
 renderInterface : PreludeInterface -> List String
 renderInterface pi =
   map (row => "\{fst row} : \{ppPubScheme (snd row)}") pi.piCore
     ++ map (row => "ctor \{fst row} : \{ppPubScheme (snd row)}") (ctorRows pi)
     ++ [
+      "funNames \{omKeys pi.piFunNames}",
+      "dispatch \{map renderDispatch pi.piMethodDispatchIdx}",
+      "dataCtors \{map renderDataCtor pi.piDataCtors}",
+      "records \{map renderRecord (M.entries (spFloor pi.piRecordPop))}",
+      "builtin \{renderBuiltin pi.piBuiltinClasses}",
+      "funSlots \{map renderSlots pi.piFunPredicateSlots}",
+      "funSlotsQual \{map renderSlotsQual pi.piFunPredicateSlotsQual}",
+      "declared \{map renderDeclared pi.piFunConstraintDeclared}",
+      "declaredQual \{map renderDeclaredQual pi.piFunConstraintDeclaredQual}",
+      "methodSlots \{map renderMethodSlots pi.piMethodPredicateSlots}",
+      "methodSlotsQual \{map renderMethodSlotsQual pi.piMethodPredicateSlotsQual}",
+      "ctorExistentials \{map fst (M.entries pi.piCtorExistentials)}",
+      "anyExistentials \{pi.piAnyExistentials}",
+      "externs \{omKeys pi.piExternNames}",
       "tyvar \{pi.piTyvarNext}",
       "effvar \{pi.piEffvarNext}",
-      "any \{pi.piAnyExistentials}",
       "standalone \{omKeys pi.piStandaloneNames}",
     ]
+
+renderDispatch : ((IfaceRef, String), Int) -> String
+renderDispatch ((iface, name), idx) = "\{iface.irName}.\{name}@\{idx}"
+
+renderDataCtor : (a, (b, List String, List c)) -> String
+renderDataCtor (_, (_, names, variants)) = "\{names}/\{length variants}"
+
+renderRecord : (String, RecordInfo) -> String
+renderRecord (name, RecordInfo ids authIds _ fields index) =
+  "\{name} \{ids} \{authIds} \{map fst fields} \{map fst (M.entries index)}"
+
+renderBuiltin : BuiltinClasses -> String
+renderBuiltin b =
+  "\{b.bcNumPresent} \{b.bcEqPresent} \{b.bcOrdPresent} \{b.bcSemigroupPresent} \{b.bcPreludeSeeded}"
+
+renderSlot : PredicateSlot -> String
+renderSlot s = "\{s.psIface.irName}\{s.psBoundIds}"
+
+renderSlots : (String, List PredicateSlot) -> String
+renderSlots (k, slots) = "\{k} \{map renderSlot slots}"
+
+renderSlotsQual : ((String, String), List PredicateSlot) -> String
+renderSlotsQual ((m, k), slots) = "\{m}.\{k} \{map renderSlot slots}"
+
+renderDeclaredPrefix : CDeclaredPrefix -> String
+renderDeclaredPrefix CDPUnknown = "?"
+renderDeclaredPrefix (CDPLen n) = "\{n}"
+
+renderDeclared : (String, CDeclaredPrefix) -> String
+renderDeclared (k, d) = "\{k} \{renderDeclaredPrefix d}"
+
+renderDeclaredQual : ((String, String), CDeclaredPrefix) -> String
+renderDeclaredQual ((m, k), d) = "\{m}.\{k} \{renderDeclaredPrefix d}"
+
+renderMethodSlot : MethodPredicateSlot -> String
+renderMethodSlot m = "\{renderSlot m.mpsPredicate}\{m.mpsPositions}"
+
+renderMethodSlots : (String, List MethodPredicateSlot) -> String
+renderMethodSlots (k, slots) = "\{k} \{map renderMethodSlot slots}"
+
+renderMethodSlotsQual : ((String, String), List MethodPredicateSlot) -> String
+renderMethodSlotsQual ((m, k), slots) =
+  "\{m}.\{k} \{map renderMethodSlot slots}"
 
 ctorRows : PreludeInterface -> List (String, PubScheme)
 ctorRows pi = M.entries (spFloor pi.piCtorPop)
@@ -119,8 +195,14 @@ roundTrip pi =
     pi.piExternNames
     (freezeRows
       (map
-        (row => (fst row, PubScheme { psScheme = snd row, psContext = [] }))
-        bindings.mbSchemes))
+        (pair => (
+          fst (fst pair),
+          PubScheme {
+            psScheme = snd (fst pair),
+            psContext = (snd (snd pair)).psContext,
+          },
+        ))
+        (zip bindings.mbSchemes core)))
     pi.piStandaloneNames
 
 test "freeze after thaw after freeze renders equal" =
@@ -128,11 +210,24 @@ test "freeze after thaw after freeze renders equal" =
   expectEqual (renderInterface pi) (renderInterface (roundTrip pi))
 
 test "a thawed interface holds no live cell" =
-  let pi = roundTrip (sampleInterface ())
+  let pi = sampleInterface ()
+  let (bindings, _, _, _) = thawInterface (graphOf ()) pi
   expectAll
     (map
       (row => expectEqual [] (liveCells (fst row) (snd row)))
-      (pi.piCore ++ ctorRows pi))
+      (map
+          (row => (fst row, PubScheme { psScheme = snd row, psContext = [] }))
+          bindings.mbSchemes
+        ++ ctorRows (roundTrip pi)))
+
+test "standalone rows keep the first published row per name" =
+  let row = n => Forall [] [] [] [] (EffRow [] None) (TCon n OriginUnresolved)
+  let rendered = s => ppPubScheme PubScheme { psScheme = s, psContext = [] }
+  let rows =
+    standaloneRows standaloneNames [("id", row "First"), ("id", row "Second")]
+  expectEqual
+    (Some (rendered (row "First")))
+    (map rendered (omLookup "id" rows))
 
 test "thaw rebuilds the standalone schemes from the named rows" =
   let (bindings, _, _, _) = thawInterface (graphOf ()) (sampleInterface ())

@@ -18,11 +18,11 @@
 -- (`InterfaceKey`) names what an on-disk copy was built from; the caller
 -- hashes the source texts and supplies the compiler identity.
 import frontend.ast.{Ty, TabKey, DataVis, Variant}
-import list.{mapAccumL}
+import list.{mapAccumL, zip}
 import map as M
 import map.{Map(..), entries}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromPairs}
-import support.util.{joinWith}
+import support.util.{joinWith, reverseL, isNonEmptyL}
 import types.effect_rows.{Atom, atomKey, renderAtom}
 import types.publish.{
   PubScheme(..), freezePub, freezeRows, emptyZonk, zonkMono, ZState
@@ -95,12 +95,8 @@ zonkRecord (RecordInfo ids authIds result fields index) =
     ids
     authIds
     result1
-    (zipNames (map fst fields) fieldMonos)
-    (M.fromList (zipNames (map fst (entries index)) indexMonos))
-
-zipNames : List String -> List Mono -> List (String, Mono)
-zipNames (n :: ns) (m :: ms) = (n, m) :: zipNames ns ms
-zipNames _ _ = []
+    (zip (map fst fields) fieldMonos)
+    (M.fromList (zip (map fst (entries index)) indexMonos))
 
 export
 freezeScheme : Scheme -> PubScheme
@@ -147,29 +143,29 @@ freezeInterface cross run externs core standalone = PreludeInterface {
   piStandaloneNames = standalone,
 }
 
--- The last published row per standalone name: a name in `globalS` that a
--- top-level definition shadows resolves to the definition, which is published
--- after it.
+-- The first published row per standalone name, as the drive's own
+-- `omFromPairs (reverseL topSchemes)` keeps it: inserting the reversed rows
+-- lets the earliest one win.
+export
 standaloneRows : OrdMap Unit -> List (String, Scheme) -> OrdMap Scheme
 standaloneRows names rows =
-  omFromPairs (filter (row => omHasKey (fst row) names) rows) omEmpty
+  omFromPairs (reverseL (filter (row => omHasKey (fst row) names) rows)) omEmpty
 
 -- Core's own obligation contexts by bare name, the rows that carry any.
-hasObligations : List VecObl -> Bool
-hasObligations [] = False
-hasObligations _ = True
-
 contextsOf : List (String, PubScheme) -> OrdMap (List VecObl)
 contextsOf rows =
   omFromPairs
     (filter
-      (row => hasObligations (snd row))
+      (row => isNonEmptyL (snd row))
       (map (row => (fst row, (snd row).psContext)) rows))
     omEmpty
 
--- The graph's detached state from [pi]: fresh `Ref`s over fresh cells, so
--- nothing this drive writes reaches the interface or another drive.  [_ctx] is
--- the record the state will join; none of its fields is read.
+-- The graph's detached state from [pi]: fresh `Ref`s over the interface's
+-- values, with fresh cells for the schemes, slots and records.
+-- `coreSchemeObligationsRef` holds the cached interface's own `VecObl` cells,
+-- shared by every drive; readers substitute the quantified ids of those
+-- obligations rather than unify into their cells.  [_ctx] is the record the
+-- state will join; none of its fields is read.
 export
 thawInterface : GraphCtx ->
   PreludeInterface ->
@@ -218,7 +214,6 @@ public export data PreludeCacheEntry = PreludeCacheEntry {
   pceSections : List (List (List Atom), PreludeInterface),
 }
 
-export
 preludeCacheRef : Ref (Option PreludeCacheEntry)
 preludeCacheRef = Ref None
 
