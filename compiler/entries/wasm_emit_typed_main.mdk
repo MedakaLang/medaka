@@ -949,7 +949,7 @@ leafValueCmpP = leafRuntimeProgram [
         "=="
         (CLit (LString "value-cmp"))
         (CLit (LString "value-cmp"))
-        "String"
+        ""
         noDeclLoc),
   ],
   synthBind "leafValueCmpLt" [
@@ -959,7 +959,7 @@ leafValueCmpP = leafRuntimeProgram [
         "<"
         (CLit (LString "value-cmp-a"))
         (CLit (LString "value-cmp-b"))
-        "String"
+        ""
         noDeclLoc),
   ],
 ]
