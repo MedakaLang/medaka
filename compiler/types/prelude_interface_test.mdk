@@ -1,0 +1,191 @@
+-- Tests for the prelude interface value: freeze and thaw over a hand-built
+-- core pass result, the key comparison, and the one-entry process cache.
+--
+-- No field of `PreludeInterface` has a type that carries a lineage id or a
+-- binder ordinal: its types are `List`, `OrdMap`, `Map Int Unit`, `Int`,
+-- `Bool`, `PubScheme`, `RecordInfo` and the frozen slot, prefix and
+-- population forms, none of which names an `EvId` or `Ident` ordinal.
+import test.{expectEqual, expectNone, expectAll, expectEach}
+import map as M
+import support.ordmap.{omEmpty, omInsert, omKeys}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{EffRow(..), Atom, atomBuiltin}
+import types.prelude_interface.{
+  PreludeInterface(..), GraphRunSeed(..), freezeInterface, thawInterface,
+  seedPreludeInterface, preludeCacheHit, currentPreludeInterface,
+  InterfaceKey(..), interfaceKeyOf, keysMatch
+}
+import types.publish.{PubScheme(..), liveCells, ppPubScheme, freezeRows}
+import types.registry.{spFromFloor, spFloor}
+import types.repr.{Mono(..), Tyvar(..), Scheme(..)}
+import types.tc_types.{GraphCtx(..), CrossRun(..), GraphRun(..)}
+import types.typecheck.{defaultDriveInputs, checkModulesChainReportForGraph}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse, parseLocated}
+
+-- ── a small core pass result ────────────────────────────────────────────────
+
+-- The graph record a drive of one tiny module over a tiny prelude ends in: real
+-- cross-run and graph-run records, which typecheck does not export a mint for.
+graphOf : Unit -> GraphCtx
+graphOf _ =
+  let (_, gctx) =
+    checkModulesChainReportForGraph
+      defaultDriveInputs
+      False
+      None
+      ""
+      [None]
+      []
+      (desugar (parse "data Option a = None | Some a"))
+      [("m", desugar (parseLocated "export data Q = Q Int"))]
+  gctx
+
+identityPub : PubScheme
+identityPub =
+  let cell = Ref (Unbound 7 1)
+  PubScheme {
+    psScheme =
+      Forall
+        [7]
+        []
+        []
+        []
+        (EffRow [] None)
+        (TFun (TVar cell) (EffRow [] None) (TVar cell)),
+    psContext = [],
+  }
+
+coreRows : List (String, PubScheme)
+coreRows = [("id", identityPub), ("also", identityPub)]
+
+standaloneNames : M.Map String Unit
+standaloneNames = omInsert "id" () omEmpty
+
+-- A graph record whose cross-run universes and graph run carry the values the
+-- core pass would have left, for `freezeInterface` to read.
+primedCtx : Unit -> GraphCtx
+primedCtx _ =
+  let g = graphOf ()
+  g.crossRun.universeCtorPop :=
+    spFromFloor (omInsert "Foo" (thawed identityPub) omEmpty)
+  g.graphRun.tyvarCounter := 41
+  g.graphRun.effvarCounter := 5
+  g.graphRun.anyExistentialsRef := True
+  g
+
+thawed : PubScheme -> Scheme
+thawed p = p.psScheme
+
+sampleInterface : Unit -> PreludeInterface
+sampleInterface _ =
+  let g = primedCtx ()
+  freezeInterface
+    g.crossRun
+    g.graphRun
+    g.builtinExternNamesRef.value
+    coreRows
+    standaloneNames
+
+-- What two interfaces must agree on to count as equal: every scheme rendered
+-- with its context, the id counters and the standalone names.
+renderInterface : PreludeInterface -> List String
+renderInterface pi =
+  map (row => "\{fst row} : \{ppPubScheme (snd row)}") pi.piCore
+    ++ map (row => "ctor \{fst row} : \{ppPubScheme (snd row)}") (ctorRows pi)
+    ++ [
+      "tyvar \{pi.piTyvarNext}",
+      "effvar \{pi.piEffvarNext}",
+      "any \{pi.piAnyExistentials}",
+      "standalone \{omKeys pi.piStandaloneNames}",
+    ]
+
+ctorRows : PreludeInterface -> List (String, PubScheme)
+ctorRows pi = M.entries (spFloor pi.piCtorPop)
+
+-- freeze, thaw into a fresh graph run, freeze again
+roundTrip : PreludeInterface -> PreludeInterface
+roundTrip pi =
+  let g = graphOf ()
+  let (bindings, core, cross, seed) = thawInterface g pi
+  let run = (graphOf ()).graphRun
+  run.tyvarCounter := seed.grsTyvarNext
+  run.effvarCounter := seed.grsEffvarNext
+  run.anyExistentialsRef := seed.grsAnyExistentials
+  run.ctorExistentialsRef := seed.grsCtorExistentials
+  freezeInterface
+    cross
+    run
+    pi.piExternNames
+    (freezeRows
+      (map
+        (row => (fst row, PubScheme { psScheme = snd row, psContext = [] }))
+        bindings.mbSchemes))
+    pi.piStandaloneNames
+
+test "freeze after thaw after freeze renders equal" =
+  let pi = sampleInterface ()
+  expectEqual (renderInterface pi) (renderInterface (roundTrip pi))
+
+test "a thawed interface holds no live cell" =
+  let pi = roundTrip (sampleInterface ())
+  expectAll
+    (map
+      (row => expectEqual [] (liveCells (fst row) (snd row)))
+      (pi.piCore ++ ctorRows pi))
+
+test "thaw rebuilds the standalone schemes from the named rows" =
+  let (bindings, _, _, _) = thawInterface (graphOf ()) (sampleInterface ())
+  expectEqual ["id"] (omKeys bindings.mbStandaloneSchemes)
+
+-- ── the key ─────────────────────────────────────────────────────────────────
+
+keyA : InterfaceKey
+keyA = interfaceKeyOf 1 [("core.mdk", "aa11"), ("list.mdk", "bb22")] "c1"
+
+test "interface keys name the first differing component" =
+  let edited =
+    interfaceKeyOf 1 [("core.mdk", "aa12"), ("list.mdk", "bb22")] "c1"
+  expectEach [
+    (
+      "equal",
+      expectNone (keysMatch keyA (interfaceKeyOf 1 keyA.ikSources "c1")),
+    ),
+    ("one source byte", expectEqual (Some "sources") (keysMatch keyA edited)),
+    (
+      "compiler",
+      expectEqual
+        (Some "compiler")
+        (keysMatch keyA (interfaceKeyOf 1 keyA.ikSources "c2")),
+    ),
+    (
+      "format",
+      expectEqual
+        (Some "format")
+        (keysMatch keyA (interfaceKeyOf 2 keyA.ikSources "c1")),
+    ),
+  ]
+
+-- ── the cache ───────────────────────────────────────────────────────────────
+
+ioNet : List Atom
+ioNet = [atomBuiltin "Net" (PPrefix (Some "a"))]
+
+ioFs : List Atom
+ioFs = [atomBuiltin "Fs" (PPath None)]
+
+tyvarsAt : (Int, Int) -> List Atom -> Option Int
+tyvarsAt generation join =
+  map (pi => pi.piTyvarNext) (preludeCacheHit generation join)
+
+test "a listed join hits its section; an unlisted join and another generation miss" =
+  let pi = sampleInterface ()
+  let other = { pi | piTyvarNext = 99 }
+  let _ = seedPreludeInterface (3, 4) [([[]], pi), ([ioNet], other)]
+  expectAll [
+    expectEqual (Some 41) (tyvarsAt (3, 4) []),
+    expectEqual (Some 99) (tyvarsAt (3, 4) ioNet),
+    expectNone (tyvarsAt (3, 4) ioFs),
+    expectNone (tyvarsAt (3, 5) []),
+    expectEqual 2 (length (currentPreludeInterface ())),
+  ]

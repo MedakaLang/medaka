@@ -159,7 +159,7 @@ import support.ordmap.{
 }
 import support.util.{lenKey, listLen, joinWith, filterList, contains}
 import types.route_key.{typeTagOf}
-import map.{Map(..), entries, get, set, has, delete, size}
+import map.{Map(..), entries, get, set, has, delete, size, mapWithKey}
 
 -- ── identKey ─────────────────────────────────────────────────────────────
 
@@ -714,6 +714,20 @@ spFloor (SpellingPop _ floor _) = floor
 export
 spCollided : SpellingPop a -> List String
 spCollided (SpellingPop _ _ collided) = collided
+
+-- The population with [f] applied to every payload, identities, owners and
+-- collisions kept.  The one way to rebuild a population over another payload
+-- type, since the constructor is private.
+export
+spMap : (a -> b) -> SpellingPop a -> SpellingPop b
+spMap f (SpellingPop rows floor collided) =
+  SpellingPop
+    (mapWithKey (_ cands => map (row => spMapRow f row) cands) rows)
+    (mapWithKey (_ payload => f payload) floor)
+    collided
+
+spMapRow : (a -> b) -> (Ident, String, a) -> (Ident, String, b)
+spMapRow f (ident, owner, payload) = (ident, owner, f payload)
 
 export
 spCandsOf : String -> SpellingPop a -> List (Ident, String, a)

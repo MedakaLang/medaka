@@ -385,6 +385,11 @@ test "arch_boundaries: types.tc_types closure matches its golden" =
     "closure.types.tc_types.golden"
     (closureOf (buildGraph loadModules) "types.tc_types")
 
+test "arch_boundaries: types.prelude_interface closure matches its golden" =
+  pin
+    "closure.types.prelude_interface.golden"
+    (closureOf (buildGraph loadModules) "types.prelude_interface")
+
 test "arch_boundaries: ir.core_ir closure matches its golden" =
   pin
     "closure.ir.core_ir.golden"
