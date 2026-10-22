@@ -1,0 +1,8 @@
+f : Int -> Int
+f n = match n
+  0 => k 1 where
+    k x = j x + 1
+    j x = x + 4
+  1 => m 2 where
+    m x = x * 2
+  _ => 2

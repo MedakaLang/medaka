@@ -1,0 +1,38 @@
+lam : Option Int -> Int -> Int
+lam x = match x
+  Some y => (z => match z
+    0 => a y
+    _ => b) where
+    a i = i + 1
+    b = 7
+  None => z => z
+
+cond : Option Int -> Int
+cond x = match x
+  Some y => (if y > 0 then
+    a
+  else match y
+    0 => b
+    _ => a) where
+    a = 1
+    b = 2
+  None => 0
+
+letin : Option Int -> Int
+letin x = match x
+  Some y => (let z = y + 1 in
+    match z
+      1 => a
+      _ => b) where
+    a = 1
+    b = 2
+  None => 0
+
+fwd : Option Int -> Int
+fwd x = match x
+  Some y => (match y
+    0 => a 5
+    _ => b 6) where
+    a i = b i + 1
+    b i = i * 2
+  None => 0

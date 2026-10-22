@@ -1,0 +1,6 @@
+public export data Pointer = Pointer {
+  x : Float,
+  y : Float,
+  inside : Bool,
+  down : Bool,
+} deriving (Eq, Debug)

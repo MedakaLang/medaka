@@ -1,0 +1,15 @@
+g : Int -> Int
+g x = match x
+  3 => 1
+  n => a n + b -- body
+    where
+      a i = i
+      b = 2
+
+h : Int -> Int
+h x = match x
+  3 => 1
+  n => a n + 1 -- single binding
+    where
+      a i = i
+  _ => 2

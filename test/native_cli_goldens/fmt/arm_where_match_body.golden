@@ -1,0 +1,7 @@
+f x = match x
+  Some y => (match y
+    0 => a
+    _ => b) where
+    a = 1
+    b = 2
+  None => 0

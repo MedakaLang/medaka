@@ -329,7 +329,7 @@ it:
 
 ```medaka
 main =
-  let slot = Ref (() => ()) : Ref (Unit -> <Stdout> Unit)
+  let slot : Ref (Unit -> <Stdout> Unit) = Ref (() => ())
   slot := () => putStrLn "allowed"
   let f = !slot
   f ()

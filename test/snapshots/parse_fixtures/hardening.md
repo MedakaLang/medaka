@@ -46,7 +46,7 @@ deepUpdate p = { p | a = { p.a | b = { p.a.b | c = 9 } } }
 (DFunDef false "nestedUpdate" ((PVar "p")) (ERecordUpdate (EVar "p") ((fa "address" (ERecordUpdate (EFieldAccess (EVar "p") "address") ((fa "city" (ELit (LString "Boston")))))))))
 (DFunDef false "deepUpdate" ((PVar "p")) (ERecordUpdate (EVar "p") ((fa "a" (ERecordUpdate (EFieldAccess (EVar "p") "a") ((fa "b" (ERecordUpdate (EFieldAccess (EFieldAccess (EVar "p") "a") "b") ((fa "c" (ELit (LInt 9))))))))))))
 # PRINTER
-annotatedLet x = let y = x + 1 : Int in y * 2
+annotatedLet x = let y : Int = x + 1 in y * 2
 recLet n = go n
   where
     go = k => go k

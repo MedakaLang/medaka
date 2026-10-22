@@ -1,0 +1,4 @@
+export data Simulation model =
+  | Simulation (Ref model) (Ref Bool) (Frame -> model -> model) (Frame -> model -> Picture)
+
+export data Wrap = Wrap Int

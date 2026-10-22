@@ -1,0 +1,13 @@
+a : Int -> Bool
+a n =
+  if (do
+    let z = n
+    z > 0) then
+    True
+  else
+    False
+
+b : Int -> Int
+b n = match n
+  k if (x => x > 0) => 1
+  _ => 0
