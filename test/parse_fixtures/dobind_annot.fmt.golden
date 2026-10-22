@@ -2,6 +2,6 @@
 -- (via the shadowing annotated let) enforces its declared type
 compute = do
   x <- fetch
-  let x = x : Int
+  let x : Int = x
   y <- other
   wrap (x + y)

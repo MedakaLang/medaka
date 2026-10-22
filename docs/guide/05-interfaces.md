@@ -128,8 +128,7 @@ data Expense = {
   payee : String,
   amount : Float,
   category : Category,
-}
-  deriving (Debug)
+} deriving (Debug)
 
 impl Display Category where
   display Food = "food"

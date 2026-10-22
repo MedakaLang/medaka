@@ -1,0 +1,25 @@
+f : Int -> String
+f n =
+  let s = """
+    p \{n}
+    q
+    """
+  s
+
+g : Int -> String
+g n =
+  let t = "plain \{n}" ++ """
+    -- not a comment "here"
+    r \{n + 1}
+    """
+  t
+
+h : Int -> String
+h n =
+  let u =
+    -- note "q"
+
+    """
+    u \{n}
+    """
+  u

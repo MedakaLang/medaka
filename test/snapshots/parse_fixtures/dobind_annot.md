@@ -14,7 +14,7 @@ compute =
 # PRINTER
 compute = do
   x <- fetch
-  let x = x : Int
+  let x : Int = x
   y <- other
   wrap (x + y)
 # DESUGAR

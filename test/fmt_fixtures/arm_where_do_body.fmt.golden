@@ -1,0 +1,7 @@
+g x = match x
+  Some y => (do
+    println a
+    println b) where
+    a = "1"
+    b = "2"
+  None => println "none"

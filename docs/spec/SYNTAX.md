@@ -194,7 +194,7 @@ neq p q = p /= q
 f : (Eq a, Ord b) => a -> b -> Bool  -- multiple constraints
 f p q = True
 p1 = 5 : Int  -- annotation in expression position
-p2 = let y = 5 : Int in y + 1  -- annotated let
+p2 = let y : Int = 5 in y + 1  -- annotated let
 ```
 
 Effect rows in signatures (see Effects):

@@ -1,0 +1,6 @@
+main =
+  let h : a -> List a = y => [y]
+  println (debug (h 1))
+
+f : Int -> Int -> Int
+f x = let g : Int -> Int = y => y + x in g 1

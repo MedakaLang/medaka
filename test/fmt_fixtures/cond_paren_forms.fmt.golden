@@ -1,0 +1,12 @@
+f : Int -> Int
+f x = if (let y = x in y > 1) then 1 else 2
+
+h : Int -> Int
+h x = match x
+  n if (if n > 1 then True else False) => 1
+  _ => 2
+
+g : Int -> Bool
+g x
+  | (x > 1 : Bool) = True
+g _ = False

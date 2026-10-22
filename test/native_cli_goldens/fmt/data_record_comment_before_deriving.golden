@@ -1,0 +1,6 @@
+public export data Cfg3 a = Cfg3 {
+  x : a,
+  y : a,
+}
+  -- comment before deriving
+  deriving (Eq)
