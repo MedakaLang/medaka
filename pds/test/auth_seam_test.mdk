@@ -538,13 +538,14 @@ samePolicy : AuthPolicy -> AuthPolicy -> Bool
 samePolicy PublicRoute PublicRoute = True
 samePolicy AuthenticatedRoute AuthenticatedRoute = True
 samePolicy RefreshRoute RefreshRoute = True
+samePolicy AccessOrServiceRoute AccessOrServiceRoute = True
 samePolicy _ _ = False
 
 {- | The whole route set, read out of the registry rather than restated from
    the diff. A route registered later shows up in exactly one of these three
    lists, so neither an unclassified new write nor a wrongly closed read can
    land without moving one of them. -}
-test "exactly the four record writes, uploadBlob, updateHandle, getSession, getServiceAuth and the two preferences routes are access-gated" = expectEqual
+test "exactly the four record writes, updateHandle, getSession, getServiceAuth and the two preferences routes are access-gated" = expectEqual
   (nsidsWith AuthenticatedRoute)
   [
     "app.bsky.actor.getPreferences",
@@ -554,7 +555,6 @@ test "exactly the four record writes, uploadBlob, updateHandle, getSession, getS
     "com.atproto.repo.createRecord",
     "com.atproto.repo.deleteRecord",
     "com.atproto.repo.putRecord",
-    "com.atproto.repo.uploadBlob",
     "com.atproto.server.getServiceAuth",
     "com.atproto.server.getSession",
   ]
@@ -588,6 +588,9 @@ test "refreshSession and deleteSession take the refresh token" = expectEqual
     "com.atproto.server.deleteSession",
     "com.atproto.server.refreshSession",
   ]
+
+test "uploadBlob alone takes an access token or a service credential" =
+  expectEqual (nsidsWith AccessOrServiceRoute) ["com.atproto.repo.uploadBlob"]
 
 realPost : String ->
   String ->

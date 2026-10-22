@@ -31,10 +31,11 @@
    successor `Store` at all — `uploadBlob` lives there for exactly that
    reason, not because it is a repository write.
 
-   Every registration carries its own `AuthPolicy`: the five writes,
+   Every registration carries its own `AuthPolicy`: the four record writes,
    `updateHandle`, `getSession`, `getServiceAuth`, and both preference routes
-   are
-   `AuthenticatedRoute`, the reads are `PublicRoute`,
+   are `AuthenticatedRoute`, `uploadBlob` is `AccessOrServiceRoute` (an
+   access token, or a service credential for that route), the reads are
+   `PublicRoute`,
    `refreshSession`/`deleteSession` are `RefreshRoute`,
    `createSession` is `PublicRoute` (it is the login that issues the tokens the
    other session routes require), and the two well-knowns are public by
@@ -1050,7 +1051,7 @@ finishWrite store (Ok (repo, output)) =
    mdk`'s `admitBlob` — the ONE place size/MIME admission happens — then
    record the admitted bytes and declared MIME type in the Store's blob half.
    No request field names an account; this server hosts exactly one, and the
-   auth layer has already required a session before this handler ever runs. -}
+   auth layer has already required a credential before this handler ever runs. -}
 applyUploadBlob : Store -> MediaType -> Bytes -> Result Response (Store, Json)
 applyUploadBlob store media bytes = do
   let mimeType = "\{mediaTypeType media}/\{mediaTypeSubtype media}"
@@ -1148,7 +1149,7 @@ recordEndpoints = do
   put <- procedureEndpoint putRecordNsid JsonInput AuthenticatedRoute
   remove <- procedureEndpoint deleteRecordNsid JsonInput AuthenticatedRoute
   batch <- procedureEndpoint applyWritesNsid JsonInput AuthenticatedRoute
-  upload <- procedureEndpoint uploadBlobNsid RawInput AuthenticatedRoute
+  upload <- procedureEndpoint uploadBlobNsid RawInput AccessOrServiceRoute
   Ok [create, put, remove, batch, upload]
 
 -- | A configured record-write server for one account.
