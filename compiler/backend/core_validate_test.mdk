@@ -76,6 +76,7 @@ import backend.wasm_emit.{
 }
 import backend.llvm_emit.{
   emitProgram as llvmStrict,
+  emitProgramWithStats as llvmStats,
   emitProgramRecord as llvmRecord,
   emitProgramGaps as llvmCensus,
   makeEmitInput,
@@ -84,7 +85,7 @@ import backend.emit_plan.{buildEmitPlan}
 
 import types.target_profile.{lookupProfile}
 import test_process.{underRoot, boundedVerbSeconds}
-import string.{contains, split}
+import string.{contains, split, stripPrefix}
 
 lowered : String -> CProgram
 lowered src =
@@ -1852,9 +1853,41 @@ emissionNeedle _ = "internal error: emit plan was built for"
 
 emissionRoutes : List String
 emissionRoutes = [
-  "llvm-strict", "llvm-record", "llvm-census", "wasm-strict", "wasm-record",
-  "wasm-census", "wasm-unchecked"
+  "llvm-stats", "llvm-strict", "llvm-record", "llvm-census", "wasm-strict",
+  "wasm-unchecked", "wasm-record", "wasm-census"
 ]
+
+publicRendererNames : List Decl -> List String
+publicRendererNames [] = []
+publicRendererNames ((DTypeSig True name _ _) :: rest) =
+  match stripPrefix "emitProgram" name
+    Some _ => name :: publicRendererNames rest
+    None => publicRendererNames rest
+publicRendererNames ((DAttrib _ decl) :: rest) =
+  publicRendererNames (decl :: rest)
+publicRendererNames (_ :: rest) = publicRendererNames rest
+
+rendererRoute : String -> String
+rendererRoute "llvm-stats" = "llvm/emitProgramWithStats"
+rendererRoute "llvm-strict" = "llvm/emitProgram"
+rendererRoute "llvm-record" = "llvm/emitProgramRecord"
+rendererRoute "llvm-census" = "llvm/emitProgramGaps"
+rendererRoute "wasm-strict" = "wasm/emitProgram"
+rendererRoute "wasm-record" = "wasm/emitProgramRecord"
+rendererRoute "wasm-census" = "wasm/emitProgramGaps"
+rendererRoute _ = "wasm/emitProgramUnchecked"
+
+publicRendererRoutes : String -> <IO, FileRead> Result String (List String)
+publicRendererRoutes emitter = do
+  src <- readFile (underRoot "compiler/backend/\{emitter}_emit.mdk")
+  Ok (map (name => "\{emitter}/\{name}") (publicRendererNames (parse src)))
+
+test "the emission gateway matrix covers every public renderer derived from both emitters" =
+  match (publicRendererRoutes "llvm", publicRendererRoutes "wasm")
+    (Ok llvm, Ok wasm) =>
+      expectEqual (llvm ++ wasm) (map rendererRoute emissionRoutes)
+    (Err e, _) => fail e
+    (_, Err e) => fail e
 
 emissionText : String -> String -> String
 emissionText route victim =
@@ -1870,6 +1903,7 @@ emissionText route victim =
   let li = makeEmitInput domain [] [] [] [] [] False False 0 [] [] "" []
   let wi = makeWasmEmitInputFull domain [] False False []
   match route
+    "llvm-stats" => fst (llvmStats li plan cp)
     "llvm-strict" => llvmStrict li plan cp
     "llvm-record" => fst (llvmRecord li plan cp)
     "llvm-census" => joinNl (llvmCensus li plan cp)
