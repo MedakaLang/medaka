@@ -687,7 +687,8 @@ we may take** — it produces a token a conforming appview rejects.
 to read from an appview; nothing in 0.1.0 receives a service-auth token from a peer, so
 the verifying side of the contract (DID-document key resolution, the rotation retry)
 stays out until something needs it. Recording it in the corpus is not a commitment to
-build it.
+build it. Video upload is the first thing that needs it; the proposal is
+[`ATPROTO-PDS-VIDEO-DESIGN.md`](ATPROTO-PDS-VIDEO-DESIGN.md).
 
 **Which routes this is even for.** Derived, not assumed
 (`pds/test/vectors/pds_route_registration_corpus.txt`): the official PDS serves 67 XRPC
