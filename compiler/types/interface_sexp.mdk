@@ -1,0 +1,600 @@
+-- The scheme-level interface codec: every type a published scheme is built
+-- from, written as an `SExp` and read back.  Names travel with their identity:
+-- a type constructor, effect label and interface carry their defining module.
+-- A `Mono` holds type aliases already expanded, so an alias is written
+-- expanded, as the renderer prints it.  A variable is written by its kind, its
+-- id and every other field of its cell (level, and for an authority variable
+-- its domain, pattern flag and source binder name).
+--
+-- Every encoder zonks its argument first (`types.publish`), so a `Link`, an
+-- `ALink` and a row-tail `ELink` are followed exactly as a freeze follows them,
+-- and the text is the value a thaw would hold.  What a frozen row holds, per
+-- effect-variable constructor: `EUnbound` and `EJoin` anywhere; `ELink` only as
+-- a join member, carrying the labelled row it shares; `ESummary` never, since
+-- an open summary withholds the checked program.  `bindingSExp` panics, naming
+-- the row, when the validator `liveCells` finds a link or an open summary in a
+-- row that should be frozen.
+--
+-- Decoding mints fresh cells, one per (kind, id) within one value, memoized in
+-- a `ZState` the way a freeze memoizes them, so a scheme and its context share
+-- their variables.  A repeated id must be written exactly as its first
+-- occurrence; anything else, a wrong field count or an unknown head is an
+-- `Err` naming the path of the node.
+--
+-- Grammar, one line per node.  `<id>` and `<lvl>` are integer atoms, `<name>`
+-- and `<str>` atoms, `<bool>` is `true` or `false`, `<x> ...` a list of `<x>`:
+--   (binding <name> <pub>)                    a published row
+--   (pub <scheme> (<obl> ...))                `PubScheme`
+--   (forall (<id> ...) (<id> ...) (<id> ...) (<residual> ...) <row> <mono>)
+--   (residual <auth> <auth> <bool>)           lower, upper, exact
+--   (obl <iface> (<id> ...) (<mono> ...))     `VecObl`
+--   (iface <name> <origin>)                   `IfaceRef`
+--   unresolved | builtin | (module <name>)    `TyConOrigin`
+--   (tv <id> <lvl>)                           an unbound type variable
+--   (con <name> <origin>) | (rigid <name>)    type heads
+--   (app <mono> <mono>)                       application
+--   (fun <mono> <row> <mono>)                 arrow
+--   (eff <row>) | (qual <mono> <auth>) | (auth <auth>)
+--   (row (<atom> ...) <tail>)                 `<tail>`: `closed` or an `<effvar>`
+--   (ev <id> <lvl>)                           an unbound effect variable
+--   (ej <id> <lvl> (<effvar> ...))            a join of effect variables
+--   (el <id> <row>)                           a linked join member
+--   (atom <label> <auth>) | (label <name> <origin>)
+--   (const <param>) | (ajoin (<auth> ...)) | (aproduct ((<name> <auth>) ...))
+--   (av <id> <lvl> <param> <bool> <opt>)      domain top, pattern flag, binder
+--   unit | (prefix <opt>) | (path <opt>)      `Param`
+--   (set none) | (set (<str> ...)) | (product ((<name> <param>) ...))
+--   none | (some <str>)                       an optional string
+import map as IdMap
+import support.sexp_value.{
+  SExp(..), SexpError(..), expectAtom, atomInt, atomBool
+}
+import types.publish.{
+  PubScheme(..), ZState(..), LiveCell(..), emptyZonk, zonkMono, zonkRow,
+  zonkAuthority, zonkVecObl, zonkScheme, freezePub, liveCells
+}
+import types.repr.{
+  Mono(..), Tyvar(..), Scheme(..), AuthResidual(..), VecObl(..), IfaceRef(..)
+}
+import types.effect_rows.{EffRow(..), Effvar(..), Atom(..), EffLabel(..)}
+import types.effect_authority.{Authority(..), Authvar(..)}
+import types.effect_domain.{Param(..)}
+import frontend.ast.{TyConOrigin(..)}
+
+-- ── writing ─────────────────────────────────────────────────────────────────
+
+tagged : String -> List SExp -> SExp
+tagged head fields = SList (SAtom head :: fields)
+
+intNode : Int -> SExp
+intNode n = SAtom (intToString n)
+
+boolNode : Bool -> SExp
+boolNode b = SAtom (if b then "true" else "false")
+
+idsNode : List Int -> SExp
+idsNode ids = SList (map intNode ids)
+
+optNode : Option String -> SExp
+optNode None = SAtom "none"
+optNode (Some s) = tagged "some" [SAtom s]
+
+originNode : TyConOrigin -> SExp
+originNode OriginUnresolved = SAtom "unresolved"
+originNode OriginBuiltin = SAtom "builtin"
+originNode (OriginModule m) = tagged "module" [SAtom m]
+
+paramNode : Param -> SExp
+paramNode PUnit = SAtom "unit"
+paramNode (PPrefix s) = tagged "prefix" [optNode s]
+paramNode (PPath s) = tagged "path" [optNode s]
+paramNode (PSet None) = tagged "set" [SAtom "none"]
+paramNode (PSet (Some members)) = tagged "set" [SList (map SAtom members)]
+paramNode (PProduct axes) = tagged "product" [
+  SList (map (axis => SList [SAtom (fst axis), paramNode (snd axis)]) axes),
+]
+
+-- The printers below read zonked values only; a link reaching one is a zonk
+-- that did not run.
+unzonked : String -> a
+unzonked what = panic "interface_sexp: \{what} reached the printer unzonked"
+
+authNode : Authority -> SExp
+authNode (AConst p) = tagged "const" [paramNode p]
+authNode (AVar cell) = match !cell
+  AUnbound id lvl top pat name => tagged "av" [
+    intNode id,
+    intNode lvl,
+    paramNode top,
+    boolNode pat,
+    optNode name,
+  ]
+  ALink id _ _ => unzonked "the linked authority variable \{id}"
+authNode (AJoin members) = tagged "ajoin" [SList (map authNode members)]
+authNode (AProduct axes) = tagged "aproduct" [
+  SList (map (axis => SList [SAtom (fst axis), authNode (snd axis)]) axes),
+]
+
+labelNode : EffLabel -> SExp
+labelNode (EffLabel name origin) =
+  tagged "label" [SAtom name, originNode origin]
+
+atomNode : Atom -> SExp
+atomNode (Atom label auth) = tagged "atom" [labelNode label, authNode auth]
+
+rowNode : EffRow -> SExp
+rowNode (EffRow atoms tail) =
+  tagged "row" [SList (map atomNode atoms), tailNode tail]
+
+tailNode : Option (Ref Effvar) -> SExp
+tailNode None = SAtom "closed"
+tailNode (Some cell) = effvarNode cell
+
+effvarNode : Ref Effvar -> SExp
+effvarNode cell = match !cell
+  EUnbound id lvl => tagged "ev" [intNode id, intNode lvl]
+  EJoin id lvl members =>
+    tagged "ej" [intNode id, intNode lvl, SList (map effvarNode members)]
+  ELink id row => tagged "el" [intNode id, rowNode row]
+  ESummary id _ _ =>
+    panic
+      "interface_sexp: effect summary \{id} is open; a frozen row holds none"
+
+monoNode : Mono -> SExp
+monoNode (TVar cell) = match !cell
+  Unbound id lvl => tagged "tv" [intNode id, intNode lvl]
+  Link _ => unzonked "a linked type variable"
+monoNode (TCon name origin) = tagged "con" [SAtom name, originNode origin]
+monoNode (TRigid name) = tagged "rigid" [SAtom name]
+monoNode (TApp f a) = tagged "app" [monoNode f, monoNode a]
+monoNode (TFun a row b) = tagged "fun" [monoNode a, rowNode row, monoNode b]
+monoNode (TEff row) = tagged "eff" [rowNode row]
+monoNode (TQual m auth) = tagged "qual" [monoNode m, authNode auth]
+monoNode (TAuth auth) = tagged "auth" [authNode auth]
+
+residualNode : AuthResidual -> SExp
+residualNode (AuthResidual { arLower = lo, arUpper = hi, arExact = exact }) =
+  tagged "residual" [authNode lo, authNode hi, boolNode exact]
+
+ifaceNode : IfaceRef -> SExp
+ifaceNode iface = tagged "iface" [SAtom iface.irName, originNode iface.irOrigin]
+
+oblNode : VecObl -> SExp
+oblNode (VecObl { voIface = iface, voIds = ids, voArgs = args }) =
+  tagged "obl" [ifaceNode iface, idsNode ids, SList (map monoNode args)]
+
+schemeNode : Scheme -> SExp
+schemeNode (Forall ids effIds authIds residuals row t) = tagged "forall" [
+  idsNode ids,
+  idsNode effIds,
+  idsNode authIds,
+  SList (map residualNode residuals),
+  rowNode row,
+  monoNode t,
+]
+
+pubNode : PubScheme -> SExp
+pubNode p =
+  tagged "pub" [schemeNode p.psScheme, SList (map oblNode p.psContext)]
+
+export
+monoSExp : Mono -> SExp
+monoSExp m = monoNode (snd (zonkMono emptyZonk m))
+
+export
+schemeSExp : Scheme -> SExp
+schemeSExp s = schemeNode (snd (zonkScheme emptyZonk s))
+
+export
+effRowSExp : EffRow -> SExp
+effRowSExp row = rowNode (snd (zonkRow emptyZonk row))
+
+export
+atomSExp : Atom -> SExp
+atomSExp (Atom label auth) =
+  atomNode (Atom label (snd (zonkAuthority emptyZonk auth)))
+
+export
+effLabelSExp : EffLabel -> SExp
+effLabelSExp = labelNode
+
+export
+authoritySExp : Authority -> SExp
+authoritySExp auth = authNode (snd (zonkAuthority emptyZonk auth))
+
+export
+paramSExp : Param -> SExp
+paramSExp = paramNode
+
+export
+authResidualSExp : AuthResidual -> SExp
+authResidualSExp r =
+  let (z1, lo) = zonkAuthority emptyZonk r.arLower
+  let (_, hi) = zonkAuthority z1 r.arUpper
+  residualNode { r | arLower = lo, arUpper = hi }
+
+export
+vecOblSExp : VecObl -> SExp
+vecOblSExp o = oblNode (snd (zonkVecObl emptyZonk o))
+
+export
+pubSchemeSExp : PubScheme -> SExp
+pubSchemeSExp p = pubNode (freezePub p.psScheme p.psContext)
+
+export
+ifaceRefSExp : IfaceRef -> SExp
+ifaceRefSExp = ifaceNode
+
+export
+tyConOriginSExp : TyConOrigin -> SExp
+tyConOriginSExp = originNode
+
+-- A weak variable (`FreeMeta`) is a legal frozen inhabitant; a link or an open
+-- summary in a published row is a bug in whatever froze it.
+notFrozen : LiveCell -> Bool
+notFrozen (LinkCell _ _ _) = True
+notFrozen (OpenSummary _ _) = True
+notFrozen _ = False
+
+export
+bindingSExp : String -> PubScheme -> SExp
+bindingSExp name p = match filter notFrozen (liveCells name p)
+  [] => tagged "binding" [SAtom name, pubSchemeSExp p]
+  faults => panic "interface row \{name} is not frozen: \{debug faults}"
+
+-- ── reading ─────────────────────────────────────────────────────────────────
+
+type Dec a = Result SexpError (ZState, a)
+
+headOf : SExp -> String
+headOf (SAtom s) = s
+headOf (SList ((SAtom h) :: _)) = h
+headOf (SList _) = "a list"
+
+refuse : String -> SExp -> String -> Result SexpError a
+refuse path node what = Err SexpError {
+  seOffset = 0,
+  sePath = path,
+  seWhat = "\{headOf node}: \{what}",
+}
+
+-- [heads] pairs each head a position admits with its field count.
+misfit : String -> List (String, Int) -> SExp -> Result SexpError a
+misfit path heads node = match find (h => fst h == headOf node) heads
+  Some (_, n) => refuse path node "expected \{n} field(s)"
+  None =>
+    refuse
+      path
+      node
+      "unknown head; expected one of \{stringJoin ", " (map fst heads)}"
+
+at : String -> String -> Int -> String
+at path head i = "\{path}/\{head}.\{i}"
+
+stateless : (String -> SExp -> Result SexpError a) ->
+  ZState ->
+  String ->
+  SExp ->
+  Dec a
+stateless f z path node = map (v => (z, v)) (f path node)
+
+decEach : (ZState -> String -> SExp -> Dec a) ->
+  ZState ->
+  String ->
+  SExp ->
+  Dec (List a)
+decEach f z path (SList items) = decItems f z path 0 items
+decEach _ _ path node = refuse path node "expected a list"
+
+decItems : (ZState -> String -> SExp -> Dec a) ->
+  ZState ->
+  String ->
+  Int ->
+  List SExp ->
+  Dec (List a)
+decItems _ z _ _ [] = Ok (z, [])
+decItems f z path i (x :: rest) = do
+  (z1, y) <- f z "\{path}/\{i}" x
+  (z2, ys) <- decItems f z1 path (i + 1) rest
+  Ok (z2, y :: ys)
+
+decList : (String -> SExp -> Result SexpError a) ->
+  String ->
+  SExp ->
+  Result SexpError (List a)
+decList f path node = map snd (decEach (stateless f) emptyZonk path node)
+
+-- A repeated id must be written as its first occurrence was.
+same : String -> SExp -> SExp -> a -> Result SexpError a
+same path node first v =
+  if node == first then
+    Ok v
+  else
+    refuse path node "this id was written differently before"
+
+decOpt : String -> SExp -> Result SexpError (Option String)
+decOpt _ (SAtom "none") = Ok None
+decOpt path (SList [SAtom "some", s]) =
+  map Some (expectAtom (at path "some" 1) s)
+decOpt path node = misfit path [("none", 0), ("some", 1)] node
+
+decOrigin : String -> SExp -> Result SexpError TyConOrigin
+decOrigin _ (SAtom "unresolved") = Ok OriginUnresolved
+decOrigin _ (SAtom "builtin") = Ok OriginBuiltin
+decOrigin path (SList [SAtom "module", m]) =
+  map OriginModule (expectAtom (at path "module" 1) m)
+decOrigin path node =
+  misfit path [("unresolved", 0), ("builtin", 0), ("module", 1)] node
+
+paramHeads : List (String, Int)
+paramHeads =
+  [("unit", 0), ("prefix", 1), ("path", 1), ("set", 1), ("product", 1)]
+
+decParam : String -> SExp -> Result SexpError Param
+decParam _ (SAtom "unit") = Ok PUnit
+decParam path (SList [SAtom "prefix", s]) =
+  map PPrefix (decOpt (at path "prefix" 1) s)
+decParam path (SList [SAtom "path", s]) =
+  map PPath (decOpt (at path "path" 1) s)
+decParam _ (SList [SAtom "set", SAtom "none"]) = Ok (PSet None)
+decParam path (SList [SAtom "set", members]) =
+  map (ms => PSet (Some ms)) (decList expectAtom (at path "set" 1) members)
+decParam path (SList [SAtom "product", axes]) =
+  map PProduct (decList decParamAxis (at path "product" 1) axes)
+decParam path node = misfit path paramHeads node
+
+decParamAxis : String -> SExp -> Result SexpError (String, Param)
+decParamAxis path (SList [n, p]) = do
+  name <- expectAtom "\{path}/0" n
+  param <- decParam "\{path}/1" p
+  Ok (name, param)
+decParamAxis path node = refuse path node "expected an axis (NAME PARAM)"
+
+authHeads : List (String, Int)
+authHeads = [("const", 1), ("av", 5), ("ajoin", 1), ("aproduct", 1)]
+
+decAuth : ZState -> String -> SExp -> Dec Authority
+decAuth z path (SList [SAtom "const", p]) =
+  map (q => (z, AConst q)) (decParam (at path "const" 1) p)
+decAuth z path (node@(SList [SAtom "av", i, l, top, pat, name])) = do
+  id <- atomInt (at path "av" 1) i
+  lvl <- atomInt (at path "av" 2) l
+  domain <- decParam (at path "av" 3) top
+  patterned <- atomBool (at path "av" 4) pat
+  binder <- decOpt (at path "av" 5) name
+  match IdMap.get id z.zAuths
+    Some c => same path node (authNode (AVar c)) (z, AVar c)
+    None =>
+      let c = Ref (AUnbound id lvl domain patterned binder)
+      Ok ({ z | zAuths = IdMap.set id c z.zAuths }, AVar c)
+decAuth z path (SList [SAtom "ajoin", members]) =
+  map
+    (r => (fst r, AJoin (snd r)))
+    (decEach decAuth z (at path "ajoin" 1) members)
+decAuth z path (SList [SAtom "aproduct", axes]) =
+  map
+    (r => (fst r, AProduct (snd r)))
+    (decEach decAuthAxis z (at path "aproduct" 1) axes)
+decAuth _ path node = misfit path authHeads node
+
+decAuthAxis : ZState -> String -> SExp -> Dec (String, Authority)
+decAuthAxis z path (SList [n, a]) = do
+  name <- expectAtom "\{path}/0" n
+  (z1, auth) <- decAuth z "\{path}/1" a
+  Ok (z1, (name, auth))
+decAuthAxis _ path node = refuse path node "expected an axis (NAME AUTH)"
+
+decLabel : String -> SExp -> Result SexpError EffLabel
+decLabel path (SList [SAtom "label", n, o]) = do
+  name <- expectAtom (at path "label" 1) n
+  origin <- decOrigin (at path "label" 2) o
+  Ok (EffLabel name origin)
+decLabel path node = misfit path [("label", 2)] node
+
+decAtom : ZState -> String -> SExp -> Dec Atom
+decAtom z path (SList [SAtom "atom", l, a]) = do
+  label <- decLabel (at path "atom" 1) l
+  (z1, auth) <- decAuth z (at path "atom" 2) a
+  Ok (z1, Atom label auth)
+decAtom _ path node = misfit path [("atom", 2)] node
+
+decRow : ZState -> String -> SExp -> Dec EffRow
+decRow z path (SList [SAtom "row", atoms, tail]) = do
+  (z1, atoms1) <- decEach decAtom z (at path "row" 1) atoms
+  (z2, tail1) <- decTail z1 (at path "row" 2) tail
+  Ok (z2, EffRow atoms1 tail1)
+decRow _ path node = misfit path [("row", 2)] node
+
+decTail : ZState -> String -> SExp -> Dec (Option (Ref Effvar))
+decTail z _ (SAtom "closed") = Ok (z, None)
+decTail z path node =
+  map (r => (fst r, Some (snd r))) (decEffvar False z path node)
+
+-- One cell per effect id: a repeated id must repeat its first node, and only
+-- the first is decoded.
+memoEff : ZState ->
+  String ->
+  SExp ->
+  Int ->
+  (ZState -> Dec Effvar) ->
+  Dec (Ref Effvar)
+memoEff z path node id build = match IdMap.get id z.zEffs
+  Some c => same path node (effvarNode c) (z, c)
+  None => do
+    (z1, v) <- build z
+    let c = Ref v
+    Ok ({ z1 | zEffs = IdMap.set id c z1.zEffs }, c)
+
+effvarHeads : List (String, Int)
+effvarHeads = [("closed", 0), ("ev", 2), ("ej", 3), ("el", 2)]
+
+-- [member] is True in a join's member list, the one place a link may stand.
+decEffvar : Bool -> ZState -> String -> SExp -> Dec (Ref Effvar)
+decEffvar _ z path (node@(SList [SAtom "ev", i, l])) = do
+  id <- atomInt (at path "ev" 1) i
+  lvl <- atomInt (at path "ev" 2) l
+  memoEff z path node id (z0 => Ok (z0, EUnbound id lvl))
+decEffvar _ z path (node@(SList [SAtom "ej", i, l, members])) = do
+  id <- atomInt (at path "ej" 1) i
+  lvl <- atomInt (at path "ej" 2) l
+  memoEff z path node id (z0 =>
+    map
+      (r => (fst r, EJoin id lvl (snd r)))
+      (decEach (decEffvar True) z0 (at path "ej" 3) members))
+decEffvar True z path (node@(SList [SAtom "el", i, row])) = do
+  id <- atomInt (at path "el" 1) i
+  memoEff z path node id (z0 =>
+    map (r => (fst r, ELink id (snd r))) (decRow z0 (at path "el" 2) row))
+decEffvar False _ path (node@(SList [SAtom "el", _, _])) =
+  refuse path node "a row tail is never a link"
+decEffvar _ _ path node = misfit path effvarHeads node
+
+monoHeads : List (String, Int)
+monoHeads = [
+  ("tv", 2),
+  ("con", 2),
+  ("rigid", 1),
+  ("app", 2),
+  ("fun", 3),
+  ("eff", 1),
+  ("qual", 2),
+  ("auth", 1),
+]
+
+decMono : ZState -> String -> SExp -> Dec Mono
+decMono z path (node@(SList [SAtom "tv", i, l])) = do
+  id <- atomInt (at path "tv" 1) i
+  lvl <- atomInt (at path "tv" 2) l
+  match IdMap.get id z.zTys
+    Some c => same path node (monoNode (TVar c)) (z, TVar c)
+    None =>
+      let c = Ref (Unbound id lvl)
+      Ok ({ z | zTys = IdMap.set id c z.zTys }, TVar c)
+decMono z path (SList [SAtom "con", n, o]) = do
+  name <- expectAtom (at path "con" 1) n
+  origin <- decOrigin (at path "con" 2) o
+  Ok (z, TCon name origin)
+decMono z path (SList [SAtom "rigid", n]) =
+  map (name => (z, TRigid name)) (expectAtom (at path "rigid" 1) n)
+decMono z path (SList [SAtom "app", f, a]) = do
+  (z1, f1) <- decMono z (at path "app" 1) f
+  (z2, a1) <- decMono z1 (at path "app" 2) a
+  Ok (z2, TApp f1 a1)
+decMono z path (SList [SAtom "fun", a, row, b]) = do
+  (z1, a1) <- decMono z (at path "fun" 1) a
+  (z2, row1) <- decRow z1 (at path "fun" 2) row
+  (z3, b1) <- decMono z2 (at path "fun" 3) b
+  Ok (z3, TFun a1 row1 b1)
+decMono z path (SList [SAtom "eff", row]) =
+  map (r => (fst r, TEff (snd r))) (decRow z (at path "eff" 1) row)
+decMono z path (SList [SAtom "qual", m, a]) = do
+  (z1, m1) <- decMono z (at path "qual" 1) m
+  (z2, a1) <- decAuth z1 (at path "qual" 2) a
+  Ok (z2, TQual m1 a1)
+decMono z path (SList [SAtom "auth", a]) =
+  map (r => (fst r, TAuth (snd r))) (decAuth z (at path "auth" 1) a)
+decMono _ path node = misfit path monoHeads node
+
+decResidual : ZState -> String -> SExp -> Dec AuthResidual
+decResidual z path (SList [SAtom "residual", lo, hi, ex]) = do
+  (z1, lower) <- decAuth z (at path "residual" 1) lo
+  (z2, upper) <- decAuth z1 (at path "residual" 2) hi
+  exact <- atomBool (at path "residual" 3) ex
+  Ok (z2, AuthResidual { arLower = lower, arUpper = upper, arExact = exact })
+decResidual _ path node = misfit path [("residual", 3)] node
+
+decIface : String -> SExp -> Result SexpError IfaceRef
+decIface path (SList [SAtom "iface", n, o]) = do
+  name <- expectAtom (at path "iface" 1) n
+  origin <- decOrigin (at path "iface" 2) o
+  Ok IfaceRef { irName = name, irOrigin = origin }
+decIface path node = misfit path [("iface", 2)] node
+
+decObl : ZState -> String -> SExp -> Dec VecObl
+decObl z path (SList [SAtom "obl", i, ids, args]) = do
+  iface <- decIface (at path "obl" 1) i
+  ids1 <- decList atomInt (at path "obl" 2) ids
+  (z1, args1) <- decEach decMono z (at path "obl" 3) args
+  Ok (z1, VecObl { voIface = iface, voIds = ids1, voArgs = args1 })
+decObl _ path node = misfit path [("obl", 3)] node
+
+decScheme : ZState -> String -> SExp -> Dec Scheme
+decScheme z path (SList [SAtom "forall", ids, effIds, authIds, rs, row, t]) = do
+  ids1 <- decList atomInt (at path "forall" 1) ids
+  effIds1 <- decList atomInt (at path "forall" 2) effIds
+  authIds1 <- decList atomInt (at path "forall" 3) authIds
+  (z1, rs1) <- decEach decResidual z (at path "forall" 4) rs
+  (z2, row1) <- decRow z1 (at path "forall" 5) row
+  (z3, t1) <- decMono z2 (at path "forall" 6) t
+  Ok (z3, Forall ids1 effIds1 authIds1 rs1 row1 t1)
+decScheme _ path node = misfit path [("forall", 6)] node
+
+decPub : ZState -> String -> SExp -> Dec PubScheme
+decPub z path (SList [SAtom "pub", s, ctx]) = do
+  (z1, scheme) <- decScheme z (at path "pub" 1) s
+  (z2, obls) <- decEach decObl z1 (at path "pub" 2) ctx
+  Ok (z2, PubScheme { psScheme = scheme, psContext = obls })
+decPub _ path node = misfit path [("pub", 2)] node
+
+-- A whole value from its root node, its cells minted fresh.
+rooted : (ZState -> String -> SExp -> Dec a) ->
+  String ->
+  SExp ->
+  Result SexpError a
+rooted dec root node = map snd (dec emptyZonk root node)
+
+export
+monoOfSExp : SExp -> Result SexpError Mono
+monoOfSExp = rooted decMono "mono"
+
+export
+schemeOfSExp : SExp -> Result SexpError Scheme
+schemeOfSExp = rooted decScheme "scheme"
+
+export
+effRowOfSExp : SExp -> Result SexpError EffRow
+effRowOfSExp = rooted decRow "row"
+
+export
+atomOfSExp : SExp -> Result SexpError Atom
+atomOfSExp = rooted decAtom "atom"
+
+export
+effLabelOfSExp : SExp -> Result SexpError EffLabel
+effLabelOfSExp = decLabel "label"
+
+export
+authorityOfSExp : SExp -> Result SexpError Authority
+authorityOfSExp = rooted decAuth "authority"
+
+export
+paramOfSExp : SExp -> Result SexpError Param
+paramOfSExp = decParam "param"
+
+export
+authResidualOfSExp : SExp -> Result SexpError AuthResidual
+authResidualOfSExp = rooted decResidual "residual"
+
+export
+vecOblOfSExp : SExp -> Result SexpError VecObl
+vecOblOfSExp = rooted decObl "obl"
+
+export
+pubSchemeOfSExp : SExp -> Result SexpError PubScheme
+pubSchemeOfSExp = rooted decPub "pub"
+
+export
+ifaceRefOfSExp : SExp -> Result SexpError IfaceRef
+ifaceRefOfSExp = decIface "iface"
+
+export
+tyConOriginOfSExp : SExp -> Result SexpError TyConOrigin
+tyConOriginOfSExp = decOrigin "origin"
+
+export
+bindingOfSExp : SExp -> Result SexpError (String, PubScheme)
+bindingOfSExp (SList [SAtom "binding", n, p]) = do
+  name <- expectAtom (at "binding" "binding" 1) n
+  (_, pub) <- decPub emptyZonk (at "binding" "binding" 2) p
+  Ok (name, pub)
+bindingOfSExp node = misfit "binding" [("binding", 2)] node
