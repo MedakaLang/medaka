@@ -1,0 +1,281 @@
+-- The prelude interface as a value, and the one process cache that holds it.
+--
+-- A `PreludeInterface` is what a drive needs from the prelude's core pass to
+-- continue as if it had run that pass: the accumulated cross-module universes,
+-- the predicate slots, the declared prefixes, the extern catalog, the id
+-- counters and the published rows.  It is admissible only if every field is a
+-- pure function of the module's declarations: no `Decl`, no `Ref`, no live
+-- `Scheme` (a `PubScheme` after `freezePub` is the admitted form, and a thaw
+-- never hands frozen cells to inference but instantiates fresh ones from
+-- them), and no read of process-global state.  The mark sets are therefore not
+-- a field (they hold `Decl`s), and neither are the rows computed once from the
+-- whole graph, which `graphPreamble` recomputes per drive.  No field type
+-- carries a lineage id or a binder ordinal.
+--
+-- `freezeInterface` reads each `Ref` once; `thawInterface` mints fresh ones.
+-- The cache (`preludeCacheRef`) keeps one entry: the interface sections of one
+-- compiler generation, each valid for the IO joins it lists.  A key
+-- (`InterfaceKey`) names what an on-disk copy was built from; the caller
+-- hashes the source texts and supplies the compiler identity.
+import frontend.ast.{Ty, TabKey, DataVis, Variant}
+import list.{mapAccumL, zip}
+import map as M
+import map.{Map(..), entries}
+import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromPairs}
+import support.util.{joinWith, reverseL, isNonEmptyL}
+import types.effect_rows.{Atom, atomKey, renderAtom}
+import types.publish.{
+  PubScheme(..), freezePub, freezeRows, emptyZonk, zonkMono, ZState
+}
+import types.registry.{SpellingPop, spMap}
+import types.repr.{Mono, Scheme, IfaceRef, VecObl}
+import types.tc_types.{
+  GraphCtx(..), CrossRun(..), GraphRun(..), BuiltinClasses, PredicateSlot(..),
+  PredicateSlotArgs(..), MethodPredicateSlot(..), CDeclaredPrefix,
+  RecordInfo(..), ModuleBindings(..)
+}
+
+-- ── the interface value ─────────────────────────────────────────────────────
+
+public export data PreludeInterface = PreludeInterface {
+  piFunNames : OrdMap Unit,
+  piMethodDispatchIdx : List ((IfaceRef, String), Int),
+  piDataCtors : List (TabKey, (DataVis, List String, List Variant)),
+  piCtorPop : SpellingPop PubScheme,
+  piRecordPop : SpellingPop RecordInfo,
+  piBuiltinClasses : BuiltinClasses,
+  piFunPredicateSlots : List (String, List PredicateSlot),
+  piFunPredicateSlotsQual : List ((String, String), List PredicateSlot),
+  piFunConstraintDeclared : List (String, CDeclaredPrefix),
+  piFunConstraintDeclaredQual : List ((String, String), CDeclaredPrefix),
+  piMethodPredicateSlots : List (String, List MethodPredicateSlot),
+  piMethodPredicateSlotsQual : List ((String, String), List MethodPredicateSlot),
+  piCtorExistentials : Map Int Unit,
+  piAnyExistentials : Bool,
+  piExternNames : OrdMap (Ty, List (String, Int)),
+  piTyvarNext : Int,
+  piEffvarNext : Int,
+  piCore : List (String, PubScheme),
+  piStandaloneNames : OrdMap Unit,
+}
+
+-- The four `GraphRun` values a cache hit restores.
+public export data GraphRunSeed = GraphRunSeed {
+  grsCtorExistentials : Map Int Unit,
+  grsAnyExistentials : Bool,
+  grsTyvarNext : Int,
+  grsEffvarNext : Int,
+}
+
+-- ── freeze and thaw ─────────────────────────────────────────────────────────
+
+-- Every mono of a value rebuilt over fresh cells, one cell per id.  Frozen and
+-- thawed values both come out of this, so neither shares a cell with its source.
+zonkMonoList : ZState -> List Mono -> (ZState, List Mono)
+zonkMonoList = mapAccumL zonkMono
+
+zonkSlot : PredicateSlot -> PredicateSlot
+zonkSlot (PredicateSlot { psIface = iface, psArgs = (PSArgsKnown args), psBoundIds = ids }) = PredicateSlot {
+  psIface = iface,
+  psArgs = PSArgsKnown (snd (zonkMonoList emptyZonk args)),
+  psBoundIds = ids,
+}
+zonkSlot slot = slot
+
+zonkMethodSlot : MethodPredicateSlot -> MethodPredicateSlot
+zonkMethodSlot (MethodPredicateSlot { mpsPredicate = p, mpsPositions = ps }) =
+  MethodPredicateSlot { mpsPredicate = zonkSlot p, mpsPositions = ps }
+
+zonkRecord : RecordInfo -> RecordInfo
+zonkRecord (RecordInfo ids authIds result fields index) =
+  let (z1, result1) = zonkMono emptyZonk result
+  let (z2, fieldMonos) = zonkMonoList z1 (map snd fields)
+  let (_, indexMonos) = zonkMonoList z2 (map snd (entries index))
+  RecordInfo
+    ids
+    authIds
+    result1
+    (zip (map fst fields) fieldMonos)
+    (M.fromList (zip (map fst (entries index)) indexMonos))
+
+export
+freezeScheme : Scheme -> PubScheme
+freezeScheme s = freezePub s []
+
+export
+thawScheme : PubScheme -> Scheme
+thawScheme p = (freezePub p.psScheme p.psContext).psScheme
+
+mapSlots : (a -> a) -> List (k, List a) -> List (k, List a)
+mapSlots f = map (row => (fst row, map f (snd row)))
+
+export
+freezeInterface : CrossRun ->
+  GraphRun ->
+  OrdMap (Ty, List (String, Int)) ->
+  List (String, PubScheme) ->
+  OrdMap Unit ->
+  PreludeInterface
+freezeInterface cross run externs core standalone = PreludeInterface {
+  piFunNames = cross.universeFunNamesRef.value,
+  piMethodDispatchIdx = cross.universeMethodDispatchIdxByIdRef.value,
+  piDataCtors = cross.universeDataCtors.value,
+  piCtorPop = spMap freezeScheme cross.universeCtorPop.value,
+  piRecordPop = spMap zonkRecord cross.universeRecordPop.value,
+  piBuiltinClasses = cross.builtinClassesRef.value,
+  piFunPredicateSlots =
+    mapSlots zonkSlot cross.crossModuleFunPredicateSlotsRef.value,
+  piFunPredicateSlotsQual =
+    mapSlots zonkSlot cross.crossModuleFunPredicateSlotsQualRef.value,
+  piFunConstraintDeclared = cross.crossModuleFunConstraintDeclaredRef.value,
+  piFunConstraintDeclaredQual =
+    cross.crossModuleFunConstraintDeclaredQualRef.value,
+  piMethodPredicateSlots =
+    mapSlots zonkMethodSlot cross.crossModuleMethodPredicateSlotsRef.value,
+  piMethodPredicateSlotsQual =
+    mapSlots zonkMethodSlot cross.crossModuleMethodPredicateSlotsQualRef.value,
+  piCtorExistentials = run.ctorExistentialsRef.value,
+  piAnyExistentials = run.anyExistentialsRef.value,
+  piExternNames = externs,
+  piTyvarNext = run.tyvarCounter.value,
+  piEffvarNext = run.effvarCounter.value,
+  piCore = freezeRows core,
+  piStandaloneNames = standalone,
+}
+
+-- The first published row per standalone name, as the drive's own
+-- `omFromPairs (reverseL topSchemes)` keeps it: inserting the reversed rows
+-- lets the earliest one win.
+export
+standaloneRows : OrdMap Unit -> List (String, Scheme) -> OrdMap Scheme
+standaloneRows names rows =
+  omFromPairs (reverseL (filter (row => omHasKey (fst row) names) rows)) omEmpty
+
+-- Core's own obligation contexts by bare name, the rows that carry any.
+contextsOf : List (String, PubScheme) -> OrdMap (List VecObl)
+contextsOf rows =
+  omFromPairs
+    (filter
+      (row => isNonEmptyL (snd row))
+      (map (row => (fst row, (snd row).psContext)) rows))
+    omEmpty
+
+-- The graph's detached state from [pi]: fresh `Ref`s over the interface's
+-- values, with fresh cells for the schemes, slots and records.
+-- `coreSchemeObligationsRef` holds the cached interface's own `VecObl` cells,
+-- shared by every drive; readers substitute the quantified ids of those
+-- obligations rather than unify into their cells.  [_ctx] is the record the
+-- state will join; none of its fields is read.
+export
+thawInterface : GraphCtx ->
+  PreludeInterface ->
+  (ModuleBindings, List (String, PubScheme), CrossRun, GraphRunSeed)
+thawInterface _ctx pi =
+  let live = map (row => (fst row, thawScheme (snd row))) pi.piCore
+  let bindings = ModuleBindings {
+    mbSchemes = live,
+    mbStandaloneSchemes = standaloneRows pi.piStandaloneNames live,
+  }
+  let cross = CrossRun {
+    universeFunNamesRef = Ref pi.piFunNames,
+    universeMethodDispatchIdxByIdRef = Ref pi.piMethodDispatchIdx,
+    universeDataCtors = Ref pi.piDataCtors,
+    universeCtorPop = Ref (spMap thawScheme pi.piCtorPop),
+    universeRecordPop = Ref (spMap zonkRecord pi.piRecordPop),
+    builtinClassesRef = Ref pi.piBuiltinClasses,
+    crossModuleFunPredicateSlotsRef =
+      Ref (mapSlots zonkSlot pi.piFunPredicateSlots),
+    crossModuleFunPredicateSlotsQualRef =
+      Ref (mapSlots zonkSlot pi.piFunPredicateSlotsQual),
+    crossModuleFunConstraintDeclaredRef = Ref pi.piFunConstraintDeclared,
+    crossModuleFunConstraintDeclaredQualRef =
+      Ref pi.piFunConstraintDeclaredQual,
+    crossModuleMethodPredicateSlotsRef =
+      Ref (mapSlots zonkMethodSlot pi.piMethodPredicateSlots),
+    crossModuleMethodPredicateSlotsQualRef =
+      Ref (mapSlots zonkMethodSlot pi.piMethodPredicateSlotsQual),
+    coreSchemeObligationsRef = Ref (contextsOf pi.piCore),
+    crossModuleSchemeOblsQualRef = Ref [],
+  }
+  let seed = GraphRunSeed {
+    grsCtorExistentials = pi.piCtorExistentials,
+    grsAnyExistentials = pi.piAnyExistentials,
+    grsTyvarNext = pi.piTyvarNext,
+    grsEffvarNext = pi.piEffvarNext,
+  }
+  (bindings, pi.piCore, cross, seed)
+
+-- ── the process cache ───────────────────────────────────────────────────────
+
+-- [pceSections] pairs each interface with the IO joins it was built under; a
+-- drive under any other join, or another generation, misses.
+public export data PreludeCacheEntry = PreludeCacheEntry {
+  pceGeneration : (Int, Int),
+  pceSections : List (List (List Atom), PreludeInterface),
+}
+
+preludeCacheRef : Ref (Option PreludeCacheEntry)
+preludeCacheRef = Ref None
+
+export
+seedPreludeInterface : (Int, Int) ->
+  List (List (List Atom), PreludeInterface) ->
+  Unit
+seedPreludeInterface generation sections =
+  preludeCacheRef := Some PreludeCacheEntry {
+    pceGeneration = generation,
+    pceSections = sections,
+  }
+
+-- Atoms carry no `Eq`; the identity key and the rendered authority together
+-- name an atom of a normalized join.
+joinKey : List Atom -> String
+joinKey atoms = joinWith "," (map (a => "\{atomKey a} \{renderAtom a}") atoms)
+
+export
+preludeCacheHit : (Int, Int) -> List Atom -> Option PreludeInterface
+preludeCacheHit generation join = match !preludeCacheRef
+  None => None
+  Some entry =>
+    if entry.pceGeneration == generation then
+      map
+        snd
+        (find
+          (section => any (j => joinKey j == joinKey join) (fst section))
+          entry.pceSections)
+    else
+      None
+
+export
+currentPreludeInterface : Unit -> List (List (List Atom), PreludeInterface)
+currentPreludeInterface _ = match !preludeCacheRef
+  None => []
+  Some entry => entry.pceSections
+
+-- ── the key an on-disk copy is validated against ────────────────────────────
+
+-- [ikSources] is `(path, hash)` per source file, the hash being the SHA-256 of
+-- the file's bytes; [ikCompiler] names the compiler that built the copy.  The
+-- IO join is not part of the key: the sections of one copy are selected by it.
+public export data InterfaceKey = InterfaceKey {
+  ikFormat : Int,
+  ikSources : List (String, String),
+  ikCompiler : String,
+}
+
+export
+interfaceKeyOf : Int -> List (String, String) -> String -> InterfaceKey
+interfaceKeyOf format sources compiler = InterfaceKey {
+  ikFormat = format,
+  ikSources = sources,
+  ikCompiler = compiler,
+}
+
+-- The first component that differs, or `None` when the keys agree.
+export
+keysMatch : InterfaceKey -> InterfaceKey -> Option String
+keysMatch a b
+  | a.ikFormat /= b.ikFormat = Some "format"
+  | a.ikSources /= b.ikSources = Some "sources"
+  | a.ikCompiler /= b.ikCompiler = Some "compiler"
+  | otherwise = None

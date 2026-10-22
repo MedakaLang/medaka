@@ -468,7 +468,6 @@ import types.tc_types.{
   ModuleBindings(..),
   ExportBinding(..),
   ModuleSeed(..),
-  CoreCheckMemo(..),
   PreludePreamble(..),
   GraphOut(..),
   ChainStep(..),
@@ -731,6 +730,13 @@ import types.runtime_types.{
   runtimeTypeOf,
 }
 import types.program_facts.{ProgramFacts, factsOfElab}
+import types.prelude_interface.{
+  PreludeInterface,
+  freezeInterface,
+  thawInterface,
+  seedPreludeInterface,
+  preludeCacheHit,
+}
 
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
 -- ONE program-global identity, NOT the identity of whichever module wrote it,
@@ -8285,9 +8291,9 @@ initialGraphCtx ctors run = GraphCtx {
 }
 
 -- The process's interners (see `Interners`): the lineage objects and the extern
--- catalog of the graph record a drive continues from.  The drive's mint, a memo hit's
--- restored record and `markModules`' record each write it, so the next mint continues
--- from the last of them.  Before any drive they are a fresh record's.
+-- catalog of the graph record a drive continues from.  The drive's mint, the record
+-- past the core pass, a chain-memo hit's restored record and `markModules`' record
+-- each write it, so the next mint continues from the last of them.  Before any drive they are a fresh record's.
 interners : Ref Interners
 interners = Ref (internersOf (initialGraphCtx builtinCtors (freshGraphRun ())))
 
@@ -10736,12 +10742,12 @@ currentScopeStore gctx _ = gctx.graphRun.scopeStore
 -- module component comes from the module's record, which `checkBodyImpl` mints once per
 -- module before any body of it is inferred; the ordinal is this run's counter.
 -- `evCounter` is graph-global, and `graphLineageRun` carries it across every new
--- lineage (a memo hit rewinds it to its snapshot's), so the ordinal alone is what makes an id unique — the module half does
--- not scope it, and `evDictRoutesIn` indexes on the ordinal without consulting it.
+-- lineage (a chain-memo hit rewinds it to its snapshot's), so the ordinal alone
+-- is what makes an id unique; the module half does not scope it, and `evDictRoutesIn` indexes on the ordinal without consulting it.
 -- The module half is a tripwire for that lookup (see `EvId` in `frontend/ast.mdk`):
 -- do not make ordinals per-module in the belief that the pair still separates them.
 --
--- Both halves ride `GraphRun`, so the two memo layers rewind the counter and the goal
+-- Both halves ride `GraphRun`, so the chain memo rewinds the counter and the goal
 -- channel TOGETHER (`copyGraphRun`): a hit can hand back an ordinal an abandoned
 -- branch already minted, but never two live goals sharing one id, because the goals
 -- that consumed those ordinals were dropped with the channel.
@@ -10756,7 +10762,7 @@ freshEvId mctx _ =
 -- most recently minted or restored).  The evidence ORDINAL continues from that run's counter, so an
 -- id minted from here does not repeat one the previous drive's tree holds, and a
 -- stray read of such an id fails loudly instead of answering for another node.  It
--- is not monotone across a memo hit (core or chain): the hit installs a copy of its
+-- is not monotone across a chain-memo hit: the hit installs a copy of its
 -- snapshot's run, whose counter is the snapshot's, so the next ordinals rewind to it (the
 -- rewind `freshEvId` states).  What is indexed by ordinal is not carried: `evBase`
 -- moves up to the counter and `evCells` starts empty, so a long-lived process's
@@ -10801,7 +10807,7 @@ graphLineageRun marked lineage =
     siteCells = kept.siteCells,
   }
 
--- A detached copy for the two memo layers, like `copyCrossRun`: every cell re-minted
+-- A detached copy for the chain memo, like `copyCrossRun`: every cell re-minted
 -- over the same value, so neither side's later writes reach the other.
 copyGraphRun : GraphRun -> GraphRun
 copyGraphRun g = GraphRun {
@@ -53536,19 +53542,6 @@ collectModules _ base [] = base
 collectModules collect base ((mid, extra) :: older) =
   fold (acc (m, x) => collect False m x acc) (collect True mid extra base) older
 
-coreCheckMemoRef : Ref (Option CoreCheckMemo)
-coreCheckMemoRef = Ref None
-
-coreCheckMemoHit : GraphCtx -> Option (Int, Int) -> Option CoreCheckMemo
-coreCheckMemoHit gctx None = None
-coreCheckMemoHit gctx (Some key) = match !coreCheckMemoRef
-  None => None
-  Some m =>
-    if m.ccmKey == (key, gctx.config.value.tcIoJoinProfile) then
-      Some m
-    else
-      None
-
 -- A detached copy: every field re-minted as a fresh Ref over the same (immutable)
 -- value, so neither side's later writes reach the other.  The constructor keeps
 -- this complete — a new CrossRun field cannot be left out of the copy.
@@ -53601,74 +53594,80 @@ restoreGraphCtx cur cross run externs = GraphCtx { cur |
   builtinExternNamesRef = Ref externs,
 }
 
--- The core pass proper, memoized.  Runs `checkModuleFull` over core and snapshots
--- `coreSchemeObligationsRef` on a miss; on a hit it restores core's module record
--- in the graph record to continue from (`restoreGraphCtx` of [prev]'s: copies of the
--- two sub-records and the one graph field the core pass (checkBodyImpl and what it
--- calls) writes, the extern-name map), so a hit leaves the record exactly where a
--- miss would; on a miss the record is [prev]'s, written in place.  Beside the
--- bindings inference reads, it returns the prelude's published rows, frozen once after
--- the drain closed core; a hit returns the stored frozen copy, and the module record to
--- continue from, whose `mcGraph` is the graph record: core's, or on a hit the
--- snapshot's resumed from [prev], the record current before the pass.
+-- The core pass, through the prelude interface (`types/prelude_interface.mdk`).
+-- Under the caller's prelude key a hit is the cached interface whose section lists
+-- this drive's IO join.  A miss checks core, drains it, freezes the result, caches
+-- it when keyed, and continues from that frozen value as a hit does, so the record
+-- past core is one shape however the drive came by it: core's evidence, binder rows,
+-- scope frames and goals stay in the run core was checked in, and its schemes reach
+-- inference as fresh cells.  [marked] is the drive's `diMarked`: a run whose cells
+-- were minted before the drive, which the miss's continuation keeps as the mint did.
+-- Returns the bindings inference reads, the prelude's published rows and the module
+-- record to continue from, whose `mcGraph` is the graph record.
 checkCoreMemoized : ModuleCtx ->
+  Option GraphRun ->
   Option (Int, Int) ->
   List Decl ->
   List (String, Scheme) ->
   (ModuleBindings, List (String, PubScheme), ModuleCtx)
-checkCoreMemoized prev key coreDecls runtimeSeed =
-  match coreCheckMemoHit prev.mcGraph key
-    Some m =>
-      let restored =
-        restoreGraphCtx
-          prev.mcGraph
-          m.ccmCrossRun
-          m.ccmGraphRun
-          m.ccmBuiltinExternNames
-      (
-        m.ccmCoreSchemes,
-        m.ccmCorePub,
-        resumeModuleCtx restored prev m.ccmModule,
-      )
+checkCoreMemoized prev marked key coreDecls runtimeSeed =
+  let gctx = prev.mcGraph
+  let join = gctx.config.value.tcIoJoin
+  let cached = match key
+    Some k => preludeCacheHit k join
+    None => None
+  match cached
+    Some pi => continueFromInterface gctx gctx.graphRun pi
     None =>
-      -- #2705: core is marked inside the pass, on the miss, with the unsplit set
-      -- (`moduleMarkCtx`'s core arm) — so its cells are minted into the graph the
-      -- snapshot below records, never into one a hit would replace.
+      -- #2705: core is marked inside the pass, with the unsplit set
+      -- (`moduleMarkCtx`'s core arm), in the run the continuation below leaves.
       let (coreSchemes, _, coreCtx) =
         checkModuleFull prev runtimeSeed [] coreDecls
-      -- #2705: drain core's stamping context BEFORE the snapshot below, so a hit
-      -- restores a graph whose queue is empty and core is solved once per process
-      -- rather than once per analyze.  This treats core as closed at its own end —
-      -- the closure the memo already assumes by snapshotting core's solution here.
-      -- The prelude has no diagnostics list for a hole to land in.
+      -- #2705: drain core's stamping context before the freeze, so core is solved
+      -- once per process rather than once per analyze.  This treats core as closed
+      -- at its own end.  The prelude has no diagnostics list for a hole to land in.
       let _ = match checkGraphFinish coreCtx
         [] => ()
         f :: _ => panic "evidence hole in the prelude: \{tcMsg f.dfDiag}"
-      -- #673: snapshot core's OWN obligations NOW — `coreCtx.mcCells.schemeObligationsRef` holds core's
-      -- bindings.  This is the source-exact store a
-      -- plain-EVar use of a PRELUDE constrained fn (`println`) reads in instantiateVarTracked, so
-      -- its Display obligation lands on the located check path instead of being dropped.
-      -- #837: coreSchemeObligationsRef is NAME-keyed (declaredCrossModuleObls reads it by
-      -- bare cross-module name).
-      let coreContexts = coreOwnContexts coreCtx
-      prev.mcGraph.crossRun.coreSchemeObligationsRef := coreContexts
-      let corePub = freezeRows (publishCore coreContexts coreSchemes.mbSchemes)
+      -- #673/#837: the published rows carry core's own obligations, keyed by bare
+      -- name; the thaw derives `coreSchemeObligationsRef` from them.
+      let pi =
+        freezeInterface
+          gctx.crossRun
+          gctx.graphRun
+          gctx.builtinExternNamesRef.value
+          (publishCore (coreOwnContexts coreCtx) coreSchemes.mbSchemes)
+          (omMapValues (_ => ()) coreSchemes.mbStandaloneSchemes)
       let _ = match key
+        Some k => seedPreludeInterface k [([join], pi)]
         None => ()
-        Some k =>
-          -- The stored module record's graph is the memo's own snapshot, never this
-          -- drive's record, which the memo would otherwise keep alive.
-          let snap = snapshotGraphCtx coreCtx.mcGraph
-          coreCheckMemoRef := Some CoreCheckMemo {
-            ccmKey = (k, prev.mcGraph.config.value.tcIoJoinProfile),
-            ccmCoreSchemes = coreSchemes,
-            ccmCorePub = corePub,
-            ccmCrossRun = snap.crossRun,
-            ccmGraphRun = snap.graphRun,
-            ccmBuiltinExternNames = snap.builtinExternNamesRef.value,
-            ccmModule = carryModuleCtx snap coreCtx,
-          }
-      (coreSchemes, corePub, coreCtx)
+      continueFromInterface
+        gctx
+        (graphLineageRun marked (internersOf gctx).lineage)
+        pi
+
+-- The record a drive continues from past the core pass: [gctx] with [pi] thawed
+-- into it.  [run] is a graph run core was not checked in; it takes the interface's
+-- id counters and existential cells and nothing else of core's.  Core's module
+-- record is not carried: the diagnostics worker seeds each module from its own
+-- decls (`seedCheckRun`), and `cmCheckWorker` seeds its first module from this
+-- blank record, an empty oracle (the one core was checked from) and no warning.
+continueFromInterface : GraphCtx ->
+  GraphRun ->
+  PreludeInterface ->
+  (ModuleBindings, List (String, PubScheme), ModuleCtx)
+continueFromInterface gctx run pi =
+  let (bindings, corePub, cross, seed) = thawInterface gctx pi
+  run.tyvarCounter := seed.grsTyvarNext
+  run.effvarCounter := seed.grsEffvarNext
+  run.ctorExistentialsRef := seed.grsCtorExistentials
+  run.anyExistentialsRef := seed.grsAnyExistentials
+  let restored = GraphCtx { gctx |
+    crossRun = cross,
+    graphRun = run,
+    builtinExternNamesRef = Ref pi.piExternNames,
+  }
+  (bindings, corePub, initialModuleCtx restored)
 
 preludePreambleMemoRef : Ref (Option (((Int, Int), String), PreludePreamble))
 preludePreambleMemoRef = Ref None
@@ -53862,11 +53861,11 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- reads.
   let _ = setDictEligible gctx (moduleUserFnNames modules)
   gctx.promotionHarvestRef := []
-  -- The core pass.  The diags arm memoizes it under the caller's prelude key (see
-  -- `checkCoreMemoized`, which also drains core's stamping context so a hit
-  -- restores an empty queue).  The tree arm cannot: it needs core's MARKED decls
-  -- back for `dictPassModulesIfEnabled`, and a memo may hold no `Decl` (see
-  -- `PreludePreamble`), so it runs the pass outright and drains only at graph end.
+  -- The core pass.  The diags arm continues from the prelude interface, cached
+  -- under the caller's prelude key (see `checkCoreMemoized`, which drains core's
+  -- stamping context before it freezes).  The tree arm cannot: it needs core's
+  -- MARKED decls back for `dictPassModulesIfEnabled`, and an interface holds no
+  -- `Decl`, so it runs the pass outright and drains only at graph end.
   -- The prelude's published rows come back here only when this pass closed core
   -- (the diags arm); the tree arm publishes them after its graph-end drain.  Both
   -- arms return core's own contexts as a value.  The tree arm's snapshot is never
@@ -53874,9 +53873,14 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   let (coreSchemes, corePub, coreContexts, coreTree, coreCtx) = match sel
     GOutDiags =>
       let (bindings, published, coreCtx) =
-        checkCoreMemoized initial preludeKey coreDecls runtimeSeed
-      -- The graph record the drive continues from: a hit's restored one, or the
-      -- minted one.  Nothing holds `initial` past this point.
+        checkCoreMemoized
+          initial
+          inputs.diMarked
+          preludeKey
+          coreDecls
+          runtimeSeed
+      -- The graph record the drive continues from, with the interface thawed into
+      -- it.  Nothing holds `initial` past this point.
       interners := internersOf coreCtx.mcGraph
       (
         bindings,
@@ -54012,12 +54016,12 @@ checkModules inputs runtimeDecls coreDecls0 modules0 =
 
 -- Keyed form of `checkModules`.  `preludeKey` is the desugar-cache generation pair
 -- identifying `runtimeDecls`/`coreDecls0`; passing it lets `checkCoreMemoized` hit
--- the process-wide core memo instead of re-typechecking AND re-solving the whole
--- prelude on every call.  `None` reproduces the unkeyed behavior exactly.
+-- the process-wide prelude interface instead of re-typechecking AND re-solving the
+-- whole prelude on every call.  `None` reproduces the unkeyed behavior exactly.
 --
 -- #2719 (a1): the LSP hover/completion driver (`projectEntrySchemes`) used the
--- unkeyed `checkModules`, so `coreCheckMemoHit None` never hit and every hover paid
--- a cold prelude check-and-solve.  Storing a memo entry from HERE cannot poison a
+-- unkeyed `checkModules`, so an unkeyed lookup never hit and every hover paid
+-- a cold prelude check-and-solve.  Caching the interface from HERE cannot poison a
 -- later analyze: the miss arm computes the identical thing either way
 -- (`checkModuleFull` over core, then `checkGraphFinish`), and this driver's own
 -- worker (`cmCheckWorker`) queues no stamping context, so no drain interacts.
@@ -54475,21 +54479,13 @@ methodReturnChainStats (step :: rest) =
 
 -- Family-specific structural retention, not a heap-size proxy: live request
 -- carriers, immutable closed summaries, and retained chain steps reachable from
--- the two memos that snapshot GraphRun.
+-- the chain memo, the one cache that snapshots a GraphRun (the prelude interface
+-- holds no goal).
 export
 methodReturnMemoRetentionStats : Unit -> (Int, Int, Int)
-methodReturnMemoRetentionStats _ =
-  let (coreCarriers, coreSummaries) = match coreCheckMemoRef.value
-    None => (0, 0)
-    Some memo => methodReturnMemoGraphStats memo.ccmGraphRun
-  let (chainCarriers, chainSummaries, steps) = match moduleChainMemoRef.value
-    None => (0, 0, 0)
-    Some memo => methodReturnChainStats memo.chSteps
-  (
-    coreCarriers + chainCarriers,
-    coreSummaries + chainSummaries,
-    steps,
-  )
+methodReturnMemoRetentionStats _ = match moduleChainMemoRef.value
+  None => (0, 0, 0)
+  Some memo => methodReturnChainStats memo.chSteps
 
 -- How many steps the last keyed chain drive replayed instead of re-checking.
 export
@@ -54509,18 +54505,15 @@ methodReturnMemoCurrentViews gctx =
       gctx.graphRun.goals.value
   live ++ gctx.graphRun.memoMethodReturns.value
 
--- Test-only lifecycle observation: model session teardown by clearing the two
--- GraphRun-owning memos, observe the family counters at their floor, then restore
+-- Test-only lifecycle observation: model session teardown by clearing the
+-- GraphRun-owning memo, observe the family counters at their floor, then restore
 -- the session so the sibling suite remains order-independent.
 export
 methodReturnMemoTeardownStats : Unit -> (Int, Int, Int)
 methodReturnMemoTeardownStats _ =
-  let savedCore = coreCheckMemoRef.value
   let savedChain = moduleChainMemoRef.value
-  coreCheckMemoRef := None
   moduleChainMemoRef := None
   let floor = methodReturnMemoRetentionStats ()
-  coreCheckMemoRef := savedCore
   moduleChainMemoRef := savedChain
   floor
 
@@ -55068,9 +55061,9 @@ frozenInvocationView (InvocationView ctors pols kinds) =
 -- only the SUFFIX's trees from the memo's prefix-state restore is a separate unit
 -- and is NOT done here.
 --
--- `preludeKey` is the desugar-cache generation pair for the core-check memo (see
+-- `preludeKey` is the desugar-cache generation pair for the prelude interface (see
 -- `checkCoreMemoized`); the tree arm ignores it, because it needs core's marked
--- decls back and a memo may hold no `Decl`.  `valueMain` is the caller's
+-- decls back and an interface holds no `Decl`.  `valueMain` is the caller's
 -- value-main candidate and `executes` names the `async` driver of a caller that
 -- runs the trees, `None` for one that does not (`autoPrintWanted`).
 driveGraphK : DriveInputs ->
@@ -55534,8 +55527,8 @@ checkModulesEntryFullK inputs preludeKey runtimeDecls coreDecls modules =
 -- re-checking or re-unification against `coreSchemes` happens here: the
 -- prelude list is carried out for LOOKUP only, alongside (never merged with)
 -- the module's own entry for the same bare name.
--- `preludeKey`: the prelude key for the core-check memo (see `checkCoreMemoized`);
--- `None` = unkeyed, no memo.
+-- `preludeKey`: the prelude key for the prelude interface (see `checkCoreMemoized`);
+-- `None` = unkeyed, no cache.
 export
 checkModulesEntryFullSplitK : DriveInputs ->
   Bool ->
@@ -55730,7 +55723,7 @@ checkOneSchemeFull : DriveInputs ->
 checkOneSchemeFull inputs runtimeDecls coreDecls prog =
   checkOneSchemeFullK inputs None runtimeDecls coreDecls prog
 
--- `checkOneSchemeFull` with the prelude key for the core-check memo (see
+-- `checkOneSchemeFull` with the prelude key for the prelude interface (see
 -- `checkCoreMemoized`): pass `Some (desugaredPreludeKey runtimeSrc,
 -- desugaredPreludeKey coreSrc)` when `runtimeDecls`/`coreDecls` are exactly what
 -- `desugaredPrelude` returned for those sources; `None` otherwise.
@@ -55785,7 +55778,7 @@ checkOneDiagsGraph inputs runtimeDecls coreDecls prog =
   let (_, _, errs, warns) = entrySplit report
   ((errs, warns), gctx)
 
--- `checkOneDiags` with the prelude key for the core-check memo — same contract as
+-- `checkOneDiags` with the prelude key for the prelude interface — same contract as
 -- `checkOneSchemeFullK` — and the caller's value-main candidate (`autoPrintWanted`).
 export
 checkOneDiagsK : DriveInputs ->
@@ -55860,7 +55853,7 @@ checkOneToLinesWithRuntime inputs runtimeDecls coreProg userProg = checkModulesE
   coreProg
   [("__user__", userProg)]
 
--- `checkOneToLinesWithRuntime` with the prelude key for the core-check memo (see
+-- `checkOneToLinesWithRuntime` with the prelude key for the prelude interface (see
 -- `checkCoreMemoized`): same contract as `checkOneSchemeFullK`.  Same render as
 -- `checkModulesEntryReport`, over the keyed driver.
 export
@@ -57479,7 +57472,8 @@ stampNoting stamp resolve o =
 -- The per-module context is REPLAYED, not re-derived (see `StampCtx`), and restored
 -- afterwards so `dictPassModulesIfEnabled` — which runs next — sees the state the
 -- last module left, exactly as it does today.
--- #2705: the drain at a memo's snapshot point (`checkCoreMemoized`, `chainGo`) and
+-- #2705: the drain at the core pass's freeze and a chain step's snapshot
+-- (`checkCoreMemoized`, `chainGo`) and
 -- at the keyed chain's graph end.  Nothing is published: a check driver has no
 -- reader of the evidence table.
 --

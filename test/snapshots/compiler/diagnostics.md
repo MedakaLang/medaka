@@ -1040,7 +1040,7 @@ analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard =
   let desugared = desugar raw
   let runtimeP = desugaredPrelude runtimeSrc
   let coreP = desugaredPrelude coreSrc
-  -- the identity of those two trees, for the typechecker's core-check memo
+  -- the identity of those two trees, for the typechecker's prelude interface cache
   -- (`checkCoreMemoized`, types/typecheck.mdk): the prelude is typechecked once
   -- per process, not once per call.
   let preludeKey =
@@ -1967,7 +1967,7 @@ projectEntryAnalysisOr kept cacheRef parseCacheRef read entry roots runtimeSrc c
   let runtimeP = preludeDesugared runtimeSrc
   let coreP = preludeDesugared coreSrc
   -- #2719 (a1): the SAME prelude key `analyzeProject` mints, so hover/completion
-  -- shares the process-wide core-check memo instead of re-typechecking and
+  -- shares the process-wide prelude interface instead of re-typechecking and
   -- re-solving runtime + core on every request.
   let preludeKey =
     Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)

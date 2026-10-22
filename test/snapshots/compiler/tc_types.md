@@ -1,5 +1,5 @@
 # META
-source_lines=3497
+source_lines=3467
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -3091,48 +3091,19 @@ public export data ModuleSeed = ModuleSeed {
 -- inferred type is pinned by the selfproc LEG A golden, and widening its result to
 -- carry the stamped decls back out is the one change that would make that golden's
 -- move non-additive.
--- ── core-check memo ──────────────────────────────────────────────────────────
+-- ── the core pass's cache key ────────────────────────────────────────────────
 -- The prelude (runtime + core) is typechecked at the head of EVERY driver entry
 -- (`checkModulesPreambleK` below): `medaka check`, the LSP on each didChange, and
 -- the playground on each keystroke all pay it again for the same two decl lists.
--- Measured natively, a warm single-file analyze is ~52ms of which ~50ms is this
--- pass.  So the core pass is memoized — keyed by the prelude trees' identity,
--- which a caller hands down EXPLICITLY as the desugar cache's generation pair
--- (`desugaredPreludeKey`, frontend/desugar_cache.mdk; the K-suffixed entry
--- points below).  An unkeyed call (`None`) never hits and never stores: the
--- AST carries mutable Refs and no equality, so identity cannot be recovered
--- from the decls themselves, and a caller that hands in a MODIFIED prelude
--- (`autoPrintPinCore`) must not be able to hit by accident.  A hit RESTORES
--- what the pass produced instead of recomputing it:
---   * `coreSchemes` (the return value);
---   * `GraphCtx.crossRun` — the core pass fills the universe accumulators and, right
---     after it, `coreSchemeObligationsRef`; a hit returns a record carrying a
---     DETACHED copy of the snapshot (fresh Refs, `copyCrossRun`) so the user
---     modules that follow mutate the copy and the memo stays what the miss left;
---   * the one graph field the core pass writes, `builtinExternNamesRef`
---     (`ccmBuiltinExternNames`);
---   * core's module record: the `ModuleCtx` a hit installs carries the module
---     fields core left (`carryModuleCtx`), above all the match oracle and warnings
---     that a module checked without a `CheckRunSeed` copies from it.  Its run
---     fields are fresh, as a miss leaves them for the next module's mint.
--- Everything user-dependent that the preamble installs BEFORE the core pass
--- (effect domains, abstract record types, and the user modules' contribution to
--- the graph indexes and to `declEnvs` -- the PRELUDE's contribution to those two
--- is itself memoized now, see `PreludePreamble`) is still derived on every call;
--- the memo covers exactly the `checkModuleFull` of core
--- and the one line after it.
--- One entry only (the prelude does not change under a process); a different
--- prelude simply misses and replaces it.
-public export data CoreCheckMemo = CoreCheckMemo {
-  ccmKey : ((Int, Int), String),
-  ccmCoreSchemes : ModuleBindings,
-  -- The prelude's published rows, frozen once when the entry is stored.
-  ccmCorePub : List (String, PubScheme),
-  ccmCrossRun : CrossRun,
-  ccmGraphRun : GraphRun,
-  ccmBuiltinExternNames : OrdMap (Ty, List (String, Int)),
-  ccmModule : ModuleCtx,
-}
+-- So the diagnostics arm caches the core pass's result as a value
+-- (`PreludeInterface`, types/prelude_interface.mdk) keyed by the prelude trees'
+-- identity plus the section chosen by the drive's IO join; the identity a caller
+-- hands down EXPLICITLY as the desugar cache's generation
+-- pair (`desugaredPreludeKey`, frontend/desugar_cache.mdk; the K-suffixed entry
+-- points below).  An unkeyed call (`None`) never hits and never stores: the AST
+-- carries mutable Refs and no equality, so identity cannot be recovered from the
+-- decls themselves, and a caller that hands in a MODIFIED prelude
+-- (`autoPrintPinCore`) must not be able to hit by accident.
 
 -- ── prelude-preamble memo ────────────────────────────────────────────────────
 -- The whole-graph derivations below run on every analyze, and on an LSP keystroke
@@ -3178,13 +3149,13 @@ public export data PreludePreamble = PreludePreamble {
 }
 
 -- `preludeKey`: the desugar-cache generation pair identifying `runtimeDecls` /
--- `coreDecls` (see the core-check memo above); `None` = unkeyed, no memo.
+-- `coreDecls` (see the core pass's cache key above); `None` = unkeyed, no cache.
 -- What a graph drive is asked to PRODUCE.  It is one driver either way
 -- (`driveGraphK`): the same preamble, the same per-module worker, the same
 -- graph-end drain.  The selection names the three points where the two output
 -- contracts genuinely part company — the promotion-eligible seed, the core pass
--- (the tree arm needs core's marked decls back, so it cannot use the core-check
--- memo), and whether the marked trees are dict-passed and published.
+-- (the tree arm needs core's marked decls back, so it cannot continue from the
+-- prelude interface), and whether the marked trees are dict-passed and published.
 --   * `GOutDiags` — per-module diagnostics and schemes.  What `check`, the LSP,
 --     the playground, MCP and `medaka test`'s gate consume.
 --   * `GOutTrees` — the same diagnostics PLUS the elaborated, dict-passed trees,
@@ -3201,8 +3172,7 @@ public export data GraphOut = GOutDiags | GOutTrees
 -- miss would have left behind at that point: the fold's `depEnv`/`accData`/
 -- `accAll`, the results collected so far, one `GraphCtx` snapshot (`snapshotGraphCtx`:
 -- DETACHED copies of the `crossRun` and `graphRun` sub-records and the extern-name
--- map; a hit reads only those three) and the module record the core-check memo also
--- restores.
+-- map; a hit reads only those three) and the module's own record.
 -- Keys come from the caller: a chain key (which prelude generations, which entry
 -- and roots) and one `Option String` per module (mid + path + the EXACT source
 -- the loader parsed — `loadedSourceOf`); a `None` step is never recorded and ends
@@ -3688,7 +3658,6 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "ModuleBindings" () ((variant "ModuleBindings" (ConNamed (field "mbSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "mbStandaloneSchemes" (TyApp (TyCon "OrdMap") (TyCon "Scheme")))))) ())
 (DData Public "ExportBinding" () ((variant "ExportBinding" (ConNamed (field "xbScheme" (TyCon "Scheme")) (field "xbStandalone" (TyApp (TyCon "Option") (TyCon "Scheme"))) (field "xbExtern" (TyCon "Bool"))))) ())
 (DData Public "ModuleSeed" () ((variant "ModuleSeed" (ConNamed (field "msSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "msImportedValues" (TyApp (TyCon "OrdMap") (TyCon "Scheme"))) (field "msImportedNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "msImportedExterns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
-(DData Public "CoreCheckMemo" () ((variant "CoreCheckMemo" (ConNamed (field "ccmKey" (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (field "ccmCoreSchemes" (TyCon "ModuleBindings")) (field "ccmCorePub" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "ccmCrossRun" (TyCon "CrossRun")) (field "ccmGraphRun" (TyCon "GraphRun")) (field "ccmBuiltinExternNames" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "ccmModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "PreludePreamble" () ((variant "PreludePreamble" (ConNamed (field "ppEnvAcc" (TyCon "DeclEnvAcc")) (field "ppMangledFunDefs" (TyCon "Bool")) (field "ppMarkFacts" (TyCon "PreludeMarkFacts"))))) ())
 (DData Public "GraphOut" () ((variant "GOutDiags" (ConPos)) (variant "GOutTrees" (ConPos))) ())
 (DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCtx" (TyCon "GraphCtx")) (field "csModule" (TyCon "ModuleCtx"))))) ())
@@ -3893,7 +3862,6 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "ModuleBindings" () ((variant "ModuleBindings" (ConNamed (field "mbSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "mbStandaloneSchemes" (TyApp (TyCon "OrdMap") (TyCon "Scheme")))))) ())
 (DData Public "ExportBinding" () ((variant "ExportBinding" (ConNamed (field "xbScheme" (TyCon "Scheme")) (field "xbStandalone" (TyApp (TyCon "Option") (TyCon "Scheme"))) (field "xbExtern" (TyCon "Bool"))))) ())
 (DData Public "ModuleSeed" () ((variant "ModuleSeed" (ConNamed (field "msSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "msImportedValues" (TyApp (TyCon "OrdMap") (TyCon "Scheme"))) (field "msImportedNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "msImportedExterns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
-(DData Public "CoreCheckMemo" () ((variant "CoreCheckMemo" (ConNamed (field "ccmKey" (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (field "ccmCoreSchemes" (TyCon "ModuleBindings")) (field "ccmCorePub" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "ccmCrossRun" (TyCon "CrossRun")) (field "ccmGraphRun" (TyCon "GraphRun")) (field "ccmBuiltinExternNames" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "ccmModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "PreludePreamble" () ((variant "PreludePreamble" (ConNamed (field "ppEnvAcc" (TyCon "DeclEnvAcc")) (field "ppMangledFunDefs" (TyCon "Bool")) (field "ppMarkFacts" (TyCon "PreludeMarkFacts"))))) ())
 (DData Public "GraphOut" () ((variant "GOutDiags" (ConPos)) (variant "GOutTrees" (ConPos))) ())
 (DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCtx" (TyCon "GraphCtx")) (field "csModule" (TyCon "ModuleCtx"))))) ())

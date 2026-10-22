@@ -1,5 +1,5 @@
 # META
-source_lines=1662
+source_lines=1676
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -163,7 +163,7 @@ import support.ordmap.{
 }
 import support.util.{lenKey, listLen, joinWith, filterList, contains}
 import types.route_key.{typeTagOf}
-import map.{Map(..), entries, get, set, has, delete, size}
+import map.{Map(..), entries, get, set, has, delete, size, mapWithKey}
 
 -- ── identKey ─────────────────────────────────────────────────────────────
 
@@ -718,6 +718,20 @@ spFloor (SpellingPop _ floor _) = floor
 export
 spCollided : SpellingPop a -> List String
 spCollided (SpellingPop _ _ collided) = collided
+
+-- The population with [f] applied to every payload, identities, owners and
+-- collisions kept.  The one way to rebuild a population over another payload
+-- type, since the constructor is private.
+export
+spMap : (a -> b) -> SpellingPop a -> SpellingPop b
+spMap f (SpellingPop rows floor collided) =
+  SpellingPop
+    (mapWithKey (_ cands => map (row => spMapRow f row) cands) rows)
+    (mapWithKey (_ payload => f payload) floor)
+    collided
+
+spMapRow : (a -> b) -> (Ident, String, a) -> (Ident, String, b)
+spMapRow f (ident, owner, payload) = (ident, owner, f payload)
 
 export
 spCandsOf : String -> SpellingPop a -> List (Ident, String, a)
@@ -1669,7 +1683,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false) (mem "contains" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false))))
-(DUse false (UseGroup ("map") ((mem "Map" true) (mem "entries" false) (mem "get" false) (mem "set" false) (mem "has" false) (mem "delete" false) (mem "size" false))))
+(DUse false (UseGroup ("map") ((mem "Map" true) (mem "entries" false) (mem "get" false) (mem "set" false) (mem "has" false) (mem "delete" false) (mem "size" false) (mem "mapWithKey" false))))
 (DTypeSig false "nsTag" (TyFun (TyCon "Ns") (TyCon "String")))
 (DFunDef false "nsTag" ((PCon "NsType")) (ELit (LString "type")))
 (DFunDef false "nsTag" ((PCon "NsIface")) (ELit (LString "iface")))
@@ -1815,6 +1829,10 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "spFloor" ((PCon "SpellingPop" PWild (PVar "floor") PWild)) (EVar "floor"))
 (DTypeSig true "spCollided" (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "spCollided" ((PCon "SpellingPop" PWild PWild (PVar "collided"))) (EVar "collided"))
+(DTypeSig true "spMap" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "SpellingPop") (TyVar "b")))))
+(DFunDef false "spMap" ((PVar "f") (PCon "SpellingPop" (PVar "rows") (PVar "floor") (PVar "collided"))) (EApp (EApp (EApp (EVar "SpellingPop") (EApp (EApp (EVar "mapWithKey") (ELam (PWild (PVar "cands")) (EApp (EApp (EVar "map") (ELam ((PVar "row")) (EApp (EApp (EVar "spMapRow") (EVar "f")) (EVar "row")))) (EVar "cands")))) (EVar "rows"))) (EApp (EApp (EVar "mapWithKey") (ELam (PWild (PVar "payload")) (EApp (EVar "f") (EVar "payload")))) (EVar "floor"))) (EVar "collided")))
+(DTypeSig false "spMapRow" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a")) (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "b")))))
+(DFunDef false "spMapRow" ((PVar "f") (PTuple (PVar "ident") (PVar "owner") (PVar "payload"))) (ETuple (EVar "ident") (EVar "owner") (EApp (EVar "f") (EVar "payload"))))
 (DTypeSig true "spCandsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a"))))))
 (DFunDef false "spCandsOf" ((PVar "spelling") (PVar "pop")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "spelling")) (EApp (EVar "spRows") (EVar "pop")))))
 (DTypeSig true "spLookupIdent" (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))))
@@ -1950,7 +1968,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false) (mem "contains" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false))))
-(DUse false (UseGroup ("map") ((mem "Map" true) (mem "entries" false) (mem "get" false) (mem "set" false) (mem "has" false) (mem "delete" false) (mem "size" false))))
+(DUse false (UseGroup ("map") ((mem "Map" true) (mem "entries" false) (mem "get" false) (mem "set" false) (mem "has" false) (mem "delete" false) (mem "size" false) (mem "mapWithKey" false))))
 (DTypeSig false "nsTag" (TyFun (TyCon "Ns") (TyCon "String")))
 (DFunDef false "nsTag" ((PCon "NsType")) (ELit (LString "type")))
 (DFunDef false "nsTag" ((PCon "NsIface")) (ELit (LString "iface")))
@@ -2096,6 +2114,10 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "spFloor" ((PCon "SpellingPop" PWild (PVar "floor") PWild)) (EVar "floor"))
 (DTypeSig true "spCollided" (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "spCollided" ((PCon "SpellingPop" PWild PWild (PVar "collided"))) (EVar "collided"))
+(DTypeSig true "spMap" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "SpellingPop") (TyVar "b")))))
+(DFunDef false "spMap" ((PVar "f") (PCon "SpellingPop" (PVar "rows") (PVar "floor") (PVar "collided"))) (EApp (EApp (EApp (EVar "SpellingPop") (EApp (EApp (EVar "mapWithKey") (ELam (PWild (PVar "cands")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (EApp (EApp (EVar "spMapRow") (EVar "f")) (EVar "row")))) (EVar "cands")))) (EVar "rows"))) (EApp (EApp (EVar "mapWithKey") (ELam (PWild (PVar "payload")) (EApp (EVar "f") (EVar "payload")))) (EVar "floor"))) (EVar "collided")))
+(DTypeSig false "spMapRow" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a")) (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "b")))))
+(DFunDef false "spMapRow" ((PVar "f") (PTuple (PVar "ident") (PVar "owner") (PVar "payload"))) (ETuple (EVar "ident") (EVar "owner") (EApp (EVar "f") (EVar "payload"))))
 (DTypeSig true "spCandsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a"))))))
 (DFunDef false "spCandsOf" ((PVar "spelling") (PVar "pop")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "spelling")) (EApp (EVar "spRows") (EVar "pop")))))
 (DTypeSig true "spLookupIdent" (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))))
