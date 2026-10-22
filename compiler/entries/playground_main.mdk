@@ -718,11 +718,9 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
   let input =
     makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))
-      (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       (mainTypeIsFloat outputs && not wrapped)
       (mainTypeIsUnit outputs || wrapped)
-      (declaredRecordFieldOrders allDecls)
       ffiRows
   -- Mirrors wasm_emit_modules_main.emitTail: bind the lowered
   -- program, then drop the impl bodies (and the plain bindings only they

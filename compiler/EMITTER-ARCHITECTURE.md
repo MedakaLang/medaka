@@ -144,19 +144,20 @@ backend input beside `CProgram`.
 X-N.H replaced the LLVM install surface with immutable `llvm_emit.EmitInput`.
 Every LLVM product/probe constructs it from the declaration-derived method,
 constraint, constructor, signature, main-kind, split-half, prelude-symbol, source,
-and record-order facts that route already produced. `emitProgram`, record mode,
+facts that route already produced. `emitProgram`, record mode,
 and the gap census require that value; one fresh per-emission `Emit` context owns
 the remaining physical state.
 
 ### 3.2 Wasm semantic input
 
 X-W.H1 is complete: `wasm_emit.makeWasmEmitInput` builds one immutable
-`WasmEmitInput` from method-interface metadata, declaration signatures,
-constructor field types, the main-Float hint, and record field orders. Both
+`WasmEmitInput` from constructor field types, main-kind hints, user FFI
+declarations, and the runtime extern domain. Both
 `emitProgram` and `emitProgramGaps` receive it explicitly; `Prog` carries it to
 the semantic readers. Product and probe entries retain their previous populated
 or omitted values rather than being equalized. Declaration-order first-match
-indexes are built once in the input.
+indexes are built once in the input; raw constructor rows are discarded after
+the live float-field index is built.
 
 The old Wasm install hooks and the shared `emit_support` method-metadata Refs are
 gone. X-W.H2b.1 moved gap mode, event logging, and binding attribution into a
@@ -197,10 +198,9 @@ Wasm builds a parallel `Prog` value plus a per-emission `WasmEmit` context
 holding its indexes and feature flags. Neither backend has module-level state
 left; `Emit` carries 42 `Ref` fields and `WasmEmit` 54 (derive:
 `sed -n '/^data EmitData/,/^}/p' compiler/backend/llvm_emit.mdk | grep -c ': Ref '`
-and the `WasmEmit` peer). The two records are disjoint: `WasmEmitInput` is a
-13-field positional constructor carrying four fewer semantic facts than
-`EmitInput` (`returnsSelf`, `selfFnParams`, `methodConstraintIfaces`,
-`mainIsUnit`), so the two backends do not receive the same semantic program.
+and the `WasmEmit` peer). The two records are disjoint and carry only the facts their backend reads. LLVM
+retains shared method-name classification; Wasm retains its constructor float
+index, main-kind hints, FFI index, and runtime extern domain.
 
 These indexes improve asymptotic behavior when they are caches of authoritative
 data. They become semantic authorities when the underlying fact was absent from

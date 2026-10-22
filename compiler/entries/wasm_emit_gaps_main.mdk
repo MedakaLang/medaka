@@ -79,11 +79,9 @@ runEmit inputs runtimeDecls coreDecls modules =
   let input =
     makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))
-      (methodIfaceTable allDecls)
       []
       False
       False
-      (declaredRecordFieldOrders allDecls)
       []
   let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
   let gaps = emitProgramGaps input (buildEmitPlan WasmBackend cp) cp

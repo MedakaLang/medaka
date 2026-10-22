@@ -86,7 +86,6 @@ runEmit inputs runtimeDecls coreDecls modules =
       []
       []
       ""
-      (declaredRecordFieldOrders allDecls)
       (validateFfiExternTypeNames
         (checkedFfiExternTypeNamesModules outputs modules2))
   let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls

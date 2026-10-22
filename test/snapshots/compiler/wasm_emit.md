@@ -1,5 +1,5 @@
 # META
-source_lines=12237
+source_lines=12223
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -550,11 +550,10 @@ freshWasmEmit mode = WasmEmit {
   w7Used = Ref omEmpty,
 }
 
--- Declaration-derived semantic input. Raw lists retain table order where a full
--- table is required; indexes preserve lookupAssoc's first-match result.  The
--- last field is the complete loaded runtime declaration domain.
+-- Declaration-derived facts are indexed once for each emission. The last field
+-- is the complete loaded runtime declaration domain.
 data WasmEmitInputData =
-  | WasmEmitInputData (List (String, List String)) (OrdMap (List Int)) Bool (OrdMap (List (String, String), (List String, String))) Bool RuntimeExternDomain
+  | WasmEmitInputData (OrdMap (List Int)) Bool (OrdMap (List (String, String), (List String, String))) Bool RuntimeExternDomain
 
 export type WasmEmitInput = WasmEmitInputData
 
@@ -563,20 +562,11 @@ export type WasmEmitInput = WasmEmitInputData
 -- `makeWasmEmitInputFull` instead.
 export
 makeWasmEmitInput : RuntimeExternDomain ->
-  List (String, (String, String, Int)) ->
   List (String, List String) ->
   Bool ->
-  List (String, List String) ->
   WasmEmitInput
-makeWasmEmitInput domain methodIfaces ctorFieldTypes mainIsFloat recordFieldOrders =
-  makeWasmEmitInputFull
-    domain
-    methodIfaces
-    ctorFieldTypes
-    mainIsFloat
-    False
-    recordFieldOrders
-    []
+makeWasmEmitInput domain ctorFieldTypes mainIsFloat =
+  makeWasmEmitInputFull domain ctorFieldTypes mainIsFloat False []
 
 -- The full input: an index of USER-declared FFI extern names (name ->
 -- (host bindings, (paramTypeHeads, retTypeHead))), every host's, so a reference
@@ -586,16 +576,13 @@ makeWasmEmitInput domain methodIfaces ctorFieldTypes mainIsFloat recordFieldOrde
 -- shorter arity.
 export
 makeWasmEmitInputFull : RuntimeExternDomain ->
-  List (String, (String, String, Int)) ->
   List (String, List String) ->
   Bool ->
   Bool ->
-  List (String, List String) ->
   List (String, (List (String, String), (List String, String))) ->
   WasmEmitInput
-makeWasmEmitInputFull domain _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternRows =
+makeWasmEmitInputFull domain ctorFieldTypes mainIsFloat mainIsUnit ffiExternRows =
   WasmEmitInputData
-    ctorFieldTypes
     (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty)
     mainIsFloat
     (omFromPairs (reverseL ffiExternRows) omEmpty)
@@ -603,15 +590,15 @@ makeWasmEmitInputFull domain _ ctorFieldTypes mainIsFloat mainIsUnit recordField
     domain
 
 inputRuntimeExternsW : WasmEmitInput -> RuntimeExternDomain
-inputRuntimeExternsW (WasmEmitInputData _ _ _ _ _ names) = names
+inputRuntimeExternsW (WasmEmitInputData _ _ _ _ names) = names
 
 inputMainIsFloat : WasmEmitInput -> Bool
-inputMainIsFloat (WasmEmitInputData _ _ isFloat _ _ _) = isFloat
+inputMainIsFloat (WasmEmitInputData _ isFloat _ _ _) = isFloat
 
 -- The typechecker's verdict that `main` is Unit; False when the entry has no
 -- typechecked program to ask, leaving the structural `mainBodyIsUnit` guess.
 inputMainIsUnit : WasmEmitInput -> Bool
-inputMainIsUnit (WasmEmitInputData _ _ _ _ isUnit _) = isUnit
+inputMainIsUnit (WasmEmitInputData _ _ _ isUnit _) = isUnit
 
 -- ── program info threaded through the ref-mode emitter ───────────────────────
 -- WasmProgramIndex owns the declaration-derived function, value, constructor,
@@ -823,7 +810,7 @@ narrowByIfaceW iface entries =
 -- runtime extern families, as `DemandScope` resolves a name.
 ffiBindsOfW : Prog -> String -> Option (List (String, String))
 ffiBindsOfW prog name = match progInput prog
-  WasmEmitInputData _ _ _ ffiIndex _ _ => map fst (omLookup name ffiIndex)
+  WasmEmitInputData _ _ ffiIndex _ _ => map fst (omLookup name ffiIndex)
 
 isFfiExternW : Prog -> String -> Bool
 isFfiExternW prog name = isSome (ffiBindsOfW prog name)
@@ -1330,10 +1317,9 @@ floatFieldIndices (_ :: rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData _ ctorFloatIndex _ _ _ _ =>
-    match omLookup ctor ctorFloatIndex
-      Some idxs => containsInt idx idxs
-      None => False
+  WasmEmitInputData ctorFloatIndex _ _ _ _ => match omLookup ctor ctorFloatIndex
+    Some idxs => containsInt idx idxs
+    None => False
 
 containsInt : Int -> List Int -> Bool
 -- Intentional cross-file duplicate of eval.mdk's private helper. The interpreter
@@ -12262,18 +12248,18 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DData Private "WasmEmit" () ((variant "WasmEmit" (ConNamed (field "gapMode" (TyCon "WGapMode")) (field "gapLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "curGapBind" (TyApp (TyCon "Ref") (TyCon "String"))) (field "stringSegments" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))) (field "nextStringSegmentId" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "strSegIds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "nextLambdaId" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "liftedDefinitions" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))))) (field "liftedDefinitionNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "constClosIdx" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "constClosCells" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "nextConstClosId" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "functionReferences" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "functionReferenceNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "trapImportNeeded" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "trapIntNeeded" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "siteFiles" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "siteFileNums" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "siteRtUsed" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "siteNonexhUsed" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "trapMsgIds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "trapMsgFns" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "intRtUsed" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "useEPut" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useDivGuard" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useRng" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useHash" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useFloatHash" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useFloatRng" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useFileBytes" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrCodec" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useByteBlock" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueCmp" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useCharFromCode" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useCharClass" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStr" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useList" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useArray" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useRefBox" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrLeaf" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useFloat" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useU64" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useI64" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrSearch" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueAdd" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueSub" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueMul" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueDiv" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueMod" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueCmpNum" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrToInt" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrReverse" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrJoin" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "tupleArities" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "wDispGroups" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "DispGroup")))) (field "wJsImports" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "JsImport")))) (field "w7Used" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
 (DTypeSig false "freshWasmEmit" (TyFun (TyCon "WGapMode") (TyCon "WasmEmit")))
 (DFunDef false "freshWasmEmit" ((PVar "mode")) (ERecordCreate "WasmEmit" ((fa "gapMode" (EVar "mode")) (fa "gapLog" (EApp (EVar "Ref") (EListLit))) (fa "curGapBind" (EApp (EVar "Ref") (ELit (LString "?")))) (fa "stringSegments" (EApp (EVar "Ref") (EListLit))) (fa "nextStringSegmentId" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "strSegIds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "nextLambdaId" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "liftedDefinitions" (EApp (EVar "Ref") (EListLit))) (fa "liftedDefinitionNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "constClosIdx" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "constClosCells" (EApp (EVar "Ref") (EListLit))) (fa "nextConstClosId" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "functionReferences" (EApp (EVar "Ref") (EListLit))) (fa "functionReferenceNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "trapImportNeeded" (EApp (EVar "Ref") (EVar "False"))) (fa "trapIntNeeded" (EApp (EVar "Ref") (EVar "False"))) (fa "siteFiles" (EApp (EVar "Ref") (EListLit))) (fa "siteFileNums" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "siteRtUsed" (EApp (EVar "Ref") (EVar "False"))) (fa "siteNonexhUsed" (EApp (EVar "Ref") (EVar "False"))) (fa "trapMsgIds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "trapMsgFns" (EApp (EVar "Ref") (EListLit))) (fa "intRtUsed" (EApp (EVar "Ref") (EListLit))) (fa "useEPut" (EApp (EVar "Ref") (EVar "False"))) (fa "useDivGuard" (EApp (EVar "Ref") (EVar "False"))) (fa "useRng" (EApp (EVar "Ref") (EVar "False"))) (fa "useHash" (EApp (EVar "Ref") (EVar "False"))) (fa "useFloatHash" (EApp (EVar "Ref") (EVar "False"))) (fa "useFloatRng" (EApp (EVar "Ref") (EVar "False"))) (fa "useFileBytes" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrCodec" (EApp (EVar "Ref") (EVar "False"))) (fa "useByteBlock" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueCmp" (EApp (EVar "Ref") (EVar "False"))) (fa "useCharFromCode" (EApp (EVar "Ref") (EVar "False"))) (fa "useCharClass" (EApp (EVar "Ref") (EVar "False"))) (fa "useStr" (EApp (EVar "Ref") (EVar "False"))) (fa "useList" (EApp (EVar "Ref") (EVar "False"))) (fa "useArray" (EApp (EVar "Ref") (EVar "False"))) (fa "useRefBox" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrLeaf" (EApp (EVar "Ref") (EVar "False"))) (fa "useFloat" (EApp (EVar "Ref") (EVar "False"))) (fa "useU64" (EApp (EVar "Ref") (EVar "False"))) (fa "useI64" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrSearch" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueAdd" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueSub" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueMul" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueDiv" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueMod" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueCmpNum" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrToInt" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrReverse" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrJoin" (EApp (EVar "Ref") (EVar "False"))) (fa "tupleArities" (EApp (EVar "Ref") (EListLit))) (fa "wDispGroups" (EApp (EVar "Ref") (EListLit))) (fa "wJsImports" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "w7Used" (EApp (EVar "Ref") (EVar "omEmpty"))))))
-(DData Private "WasmEmitInputData" () ((variant "WasmEmitInputData" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyCon "Bool") (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyCon "Bool") (TyCon "RuntimeExternDomain")))) ())
+(DData Private "WasmEmitInputData" () ((variant "WasmEmitInputData" (ConPos (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyCon "Bool") (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyCon "Bool") (TyCon "RuntimeExternDomain")))) ())
 (DTypeAlias true "WasmEmitInput" () (TyCon "WasmEmitInputData"))
-(DTypeSig true "makeWasmEmitInput" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "WasmEmitInput")))))))
-(DFunDef false "makeWasmEmitInput" ((PVar "domain") (PVar "methodIfaces") (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "recordFieldOrders")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmEmitInputFull") (EVar "domain")) (EVar "methodIfaces")) (EVar "ctorFieldTypes")) (EVar "mainIsFloat")) (EVar "False")) (EVar "recordFieldOrders")) (EListLit)))
-(DTypeSig true "makeWasmEmitInputFull" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyCon "WasmEmitInput")))))))))
-(DFunDef false "makeWasmEmitInputFull" ((PVar "domain") PWild (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "mainIsUnit") (PVar "recordFieldOrders") (PVar "ffiExternRows")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "WasmEmitInputData") (EVar "ctorFieldTypes")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "ctorToFloatIdxs")) (EVar "ctorFieldTypes")))) (EVar "omEmpty"))) (EVar "mainIsFloat")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ffiExternRows"))) (EVar "omEmpty"))) (EVar "mainIsUnit")) (EVar "domain")))
+(DTypeSig true "makeWasmEmitInput" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyCon "WasmEmitInput")))))
+(DFunDef false "makeWasmEmitInput" ((PVar "domain") (PVar "ctorFieldTypes") (PVar "mainIsFloat")) (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmEmitInputFull") (EVar "domain")) (EVar "ctorFieldTypes")) (EVar "mainIsFloat")) (EVar "False")) (EListLit)))
+(DTypeSig true "makeWasmEmitInputFull" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyCon "WasmEmitInput")))))))
+(DFunDef false "makeWasmEmitInputFull" ((PVar "domain") (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "mainIsUnit") (PVar "ffiExternRows")) (EApp (EApp (EApp (EApp (EApp (EVar "WasmEmitInputData") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "ctorToFloatIdxs")) (EVar "ctorFieldTypes")))) (EVar "omEmpty"))) (EVar "mainIsFloat")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ffiExternRows"))) (EVar "omEmpty"))) (EVar "mainIsUnit")) (EVar "domain")))
 (DTypeSig false "inputRuntimeExternsW" (TyFun (TyCon "WasmEmitInput") (TyCon "RuntimeExternDomain")))
-(DFunDef false "inputRuntimeExternsW" ((PCon "WasmEmitInputData" PWild PWild PWild PWild PWild (PVar "names"))) (EVar "names"))
+(DFunDef false "inputRuntimeExternsW" ((PCon "WasmEmitInputData" PWild PWild PWild PWild (PVar "names"))) (EVar "names"))
 (DTypeSig false "inputMainIsFloat" (TyFun (TyCon "WasmEmitInput") (TyCon "Bool")))
-(DFunDef false "inputMainIsFloat" ((PCon "WasmEmitInputData" PWild PWild (PVar "isFloat") PWild PWild PWild)) (EVar "isFloat"))
+(DFunDef false "inputMainIsFloat" ((PCon "WasmEmitInputData" PWild (PVar "isFloat") PWild PWild PWild)) (EVar "isFloat"))
 (DTypeSig false "inputMainIsUnit" (TyFun (TyCon "WasmEmitInput") (TyCon "Bool")))
-(DFunDef false "inputMainIsUnit" ((PCon "WasmEmitInputData" PWild PWild PWild PWild (PVar "isUnit") PWild)) (EVar "isUnit"))
+(DFunDef false "inputMainIsUnit" ((PCon "WasmEmitInputData" PWild PWild PWild (PVar "isUnit") PWild)) (EVar "isUnit"))
 (DData Private "WasmFnImplIndex" () ((variant "WasmFnImplIndex" (ConNamed (field "fnNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "valNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "arities" (TyCon "ArityEnv")) (field "implBuckets" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))) (field "lazyGlobals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "superCounts" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "trmc" (TyCon "TrmcVerdicts"))))) ())
 (DData Private "WasmRecordValueIndex" () ((variant "WasmRecordValueIndex" (ConNamed (field "fnValues" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DData Private "WasmCtorIndex" () ((variant "WasmCtorIndex" (ConNamed (field "arities" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "types" (TyApp (TyCon "OrdMap") (TyCon "String"))) (field "ordinals" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "typeCtors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
@@ -12355,7 +12341,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "narrowByIfaceW" ((PLit (LString "")) (PVar "entries")) (EVar "entries"))
 (DFunDef false "narrowByIfaceW" ((PVar "iface") (PVar "entries")) (EApp (EApp (EVar "filterList") (ELam ((PVar "ent")) (EBinOp "==" (EApp (EVar "implEntryIfaceWordW") (EVar "ent")) (EVar "iface")))) (EVar "entries")))
 (DTypeSig false "ffiBindsOfW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "ffiBindsOfW" ((PVar "prog") (PVar "name")) (EMatch (EApp (EVar "progInput") (EVar "prog")) (arm (PCon "WasmEmitInputData" PWild PWild PWild (PVar "ffiIndex") PWild PWild) () (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "ffiIndex"))))))
+(DFunDef false "ffiBindsOfW" ((PVar "prog") (PVar "name")) (EMatch (EApp (EVar "progInput") (EVar "prog")) (arm (PCon "WasmEmitInputData" PWild PWild (PVar "ffiIndex") PWild PWild) () (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "ffiIndex"))))))
 (DTypeSig false "isFfiExternW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isFfiExternW" ((PVar "prog") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "ffiBindsOfW") (EVar "prog")) (EVar "name"))))
 (DTypeSig false "jsImportForW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "JsImport")))))
@@ -12445,7 +12431,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "floatFieldIndices" ((PCons (PLit (LString "Float")) (PVar "rest")) (PVar "i")) (EBinOp "::" (EVar "i") (EApp (EApp (EVar "floatFieldIndices") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DFunDef false "floatFieldIndices" ((PCons PWild (PVar "rest")) (PVar "i")) (EApp (EApp (EVar "floatFieldIndices") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))
 (DTypeSig false "isFloatCtorField" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "isFloatCtorField" ((PVar "prog") (PVar "ctor") (PVar "idx")) (EMatch (EApp (EVar "progInput") (EVar "prog")) (arm (PCon "WasmEmitInputData" PWild (PVar "ctorFloatIndex") PWild PWild PWild PWild) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "ctor")) (EVar "ctorFloatIndex")) (arm (PCon "Some" (PVar "idxs")) () (EApp (EApp (EVar "containsInt") (EVar "idx")) (EVar "idxs"))) (arm (PCon "None") () (EVar "False"))))))
+(DFunDef false "isFloatCtorField" ((PVar "prog") (PVar "ctor") (PVar "idx")) (EMatch (EApp (EVar "progInput") (EVar "prog")) (arm (PCon "WasmEmitInputData" (PVar "ctorFloatIndex") PWild PWild PWild PWild) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "ctor")) (EVar "ctorFloatIndex")) (arm (PCon "Some" (PVar "idxs")) () (EApp (EApp (EVar "containsInt") (EVar "idx")) (EVar "idxs"))) (arm (PCon "None") () (EVar "False"))))))
 (DTypeSig false "containsInt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
 (DFunDef false "containsInt" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsInt" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "containsInt") (EVar "x")) (EVar "ys"))))
@@ -14607,18 +14593,18 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DData Private "WasmEmit" () ((variant "WasmEmit" (ConNamed (field "gapMode" (TyCon "WGapMode")) (field "gapLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "curGapBind" (TyApp (TyCon "Ref") (TyCon "String"))) (field "stringSegments" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))) (field "nextStringSegmentId" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "strSegIds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "nextLambdaId" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "liftedDefinitions" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))))) (field "liftedDefinitionNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "constClosIdx" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "constClosCells" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "nextConstClosId" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "functionReferences" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "functionReferenceNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "trapImportNeeded" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "trapIntNeeded" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "siteFiles" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "siteFileNums" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "siteRtUsed" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "siteNonexhUsed" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "trapMsgIds" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "trapMsgFns" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "intRtUsed" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "useEPut" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useDivGuard" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useRng" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useHash" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useFloatHash" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useFloatRng" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useFileBytes" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrCodec" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useByteBlock" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueCmp" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useCharFromCode" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useCharClass" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStr" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useList" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useArray" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useRefBox" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrLeaf" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useFloat" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useU64" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useI64" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrSearch" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueAdd" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueSub" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueMul" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueDiv" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueMod" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useValueCmpNum" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrToInt" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrReverse" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "useStrJoin" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "tupleArities" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "wDispGroups" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "DispGroup")))) (field "wJsImports" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "JsImport")))) (field "w7Used" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
 (DTypeSig false "freshWasmEmit" (TyFun (TyCon "WGapMode") (TyCon "WasmEmit")))
 (DFunDef false "freshWasmEmit" ((PVar "mode")) (ERecordCreate "WasmEmit" ((fa "gapMode" (EVar "mode")) (fa "gapLog" (EApp (EVar "Ref") (EListLit))) (fa "curGapBind" (EApp (EVar "Ref") (ELit (LString "?")))) (fa "stringSegments" (EApp (EVar "Ref") (EListLit))) (fa "nextStringSegmentId" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "strSegIds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "nextLambdaId" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "liftedDefinitions" (EApp (EVar "Ref") (EListLit))) (fa "liftedDefinitionNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "constClosIdx" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "constClosCells" (EApp (EVar "Ref") (EListLit))) (fa "nextConstClosId" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "functionReferences" (EApp (EVar "Ref") (EListLit))) (fa "functionReferenceNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "trapImportNeeded" (EApp (EVar "Ref") (EVar "False"))) (fa "trapIntNeeded" (EApp (EVar "Ref") (EVar "False"))) (fa "siteFiles" (EApp (EVar "Ref") (EListLit))) (fa "siteFileNums" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "siteRtUsed" (EApp (EVar "Ref") (EVar "False"))) (fa "siteNonexhUsed" (EApp (EVar "Ref") (EVar "False"))) (fa "trapMsgIds" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "trapMsgFns" (EApp (EVar "Ref") (EListLit))) (fa "intRtUsed" (EApp (EVar "Ref") (EListLit))) (fa "useEPut" (EApp (EVar "Ref") (EVar "False"))) (fa "useDivGuard" (EApp (EVar "Ref") (EVar "False"))) (fa "useRng" (EApp (EVar "Ref") (EVar "False"))) (fa "useHash" (EApp (EVar "Ref") (EVar "False"))) (fa "useFloatHash" (EApp (EVar "Ref") (EVar "False"))) (fa "useFloatRng" (EApp (EVar "Ref") (EVar "False"))) (fa "useFileBytes" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrCodec" (EApp (EVar "Ref") (EVar "False"))) (fa "useByteBlock" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueCmp" (EApp (EVar "Ref") (EVar "False"))) (fa "useCharFromCode" (EApp (EVar "Ref") (EVar "False"))) (fa "useCharClass" (EApp (EVar "Ref") (EVar "False"))) (fa "useStr" (EApp (EVar "Ref") (EVar "False"))) (fa "useList" (EApp (EVar "Ref") (EVar "False"))) (fa "useArray" (EApp (EVar "Ref") (EVar "False"))) (fa "useRefBox" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrLeaf" (EApp (EVar "Ref") (EVar "False"))) (fa "useFloat" (EApp (EVar "Ref") (EVar "False"))) (fa "useU64" (EApp (EVar "Ref") (EVar "False"))) (fa "useI64" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrSearch" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueAdd" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueSub" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueMul" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueDiv" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueMod" (EApp (EVar "Ref") (EVar "False"))) (fa "useValueCmpNum" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrToInt" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrReverse" (EApp (EVar "Ref") (EVar "False"))) (fa "useStrJoin" (EApp (EVar "Ref") (EVar "False"))) (fa "tupleArities" (EApp (EVar "Ref") (EListLit))) (fa "wDispGroups" (EApp (EVar "Ref") (EListLit))) (fa "wJsImports" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "w7Used" (EApp (EVar "Ref") (EVar "omEmpty"))))))
-(DData Private "WasmEmitInputData" () ((variant "WasmEmitInputData" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyCon "Bool") (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyCon "Bool") (TyCon "RuntimeExternDomain")))) ())
+(DData Private "WasmEmitInputData" () ((variant "WasmEmitInputData" (ConPos (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyCon "Bool") (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyCon "Bool") (TyCon "RuntimeExternDomain")))) ())
 (DTypeAlias true "WasmEmitInput" () (TyCon "WasmEmitInputData"))
-(DTypeSig true "makeWasmEmitInput" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "WasmEmitInput")))))))
-(DFunDef false "makeWasmEmitInput" ((PVar "domain") (PVar "methodIfaces") (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "recordFieldOrders")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmEmitInputFull") (EVar "domain")) (EVar "methodIfaces")) (EVar "ctorFieldTypes")) (EVar "mainIsFloat")) (EVar "False")) (EVar "recordFieldOrders")) (EListLit)))
-(DTypeSig true "makeWasmEmitInputFull" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyCon "WasmEmitInput")))))))))
-(DFunDef false "makeWasmEmitInputFull" ((PVar "domain") PWild (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "mainIsUnit") (PVar "recordFieldOrders") (PVar "ffiExternRows")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "WasmEmitInputData") (EVar "ctorFieldTypes")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "ctorToFloatIdxs")) (EVar "ctorFieldTypes")))) (EVar "omEmpty"))) (EVar "mainIsFloat")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ffiExternRows"))) (EVar "omEmpty"))) (EVar "mainIsUnit")) (EVar "domain")))
+(DTypeSig true "makeWasmEmitInput" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyCon "WasmEmitInput")))))
+(DFunDef false "makeWasmEmitInput" ((PVar "domain") (PVar "ctorFieldTypes") (PVar "mainIsFloat")) (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmEmitInputFull") (EVar "domain")) (EVar "ctorFieldTypes")) (EVar "mainIsFloat")) (EVar "False")) (EListLit)))
+(DTypeSig true "makeWasmEmitInputFull" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyCon "WasmEmitInput")))))))
+(DFunDef false "makeWasmEmitInputFull" ((PVar "domain") (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "mainIsUnit") (PVar "ffiExternRows")) (EApp (EApp (EApp (EApp (EApp (EVar "WasmEmitInputData") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "ctorToFloatIdxs")) (EVar "ctorFieldTypes")))) (EVar "omEmpty"))) (EVar "mainIsFloat")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ffiExternRows"))) (EVar "omEmpty"))) (EVar "mainIsUnit")) (EVar "domain")))
 (DTypeSig false "inputRuntimeExternsW" (TyFun (TyCon "WasmEmitInput") (TyCon "RuntimeExternDomain")))
-(DFunDef false "inputRuntimeExternsW" ((PCon "WasmEmitInputData" PWild PWild PWild PWild PWild (PVar "names"))) (EVar "names"))
+(DFunDef false "inputRuntimeExternsW" ((PCon "WasmEmitInputData" PWild PWild PWild PWild (PVar "names"))) (EVar "names"))
 (DTypeSig false "inputMainIsFloat" (TyFun (TyCon "WasmEmitInput") (TyCon "Bool")))
-(DFunDef false "inputMainIsFloat" ((PCon "WasmEmitInputData" PWild PWild (PVar "isFloat") PWild PWild PWild)) (EVar "isFloat"))
+(DFunDef false "inputMainIsFloat" ((PCon "WasmEmitInputData" PWild (PVar "isFloat") PWild PWild PWild)) (EVar "isFloat"))
 (DTypeSig false "inputMainIsUnit" (TyFun (TyCon "WasmEmitInput") (TyCon "Bool")))
-(DFunDef false "inputMainIsUnit" ((PCon "WasmEmitInputData" PWild PWild PWild PWild (PVar "isUnit") PWild)) (EVar "isUnit"))
+(DFunDef false "inputMainIsUnit" ((PCon "WasmEmitInputData" PWild PWild PWild (PVar "isUnit") PWild)) (EVar "isUnit"))
 (DData Private "WasmFnImplIndex" () ((variant "WasmFnImplIndex" (ConNamed (field "fnNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "valNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "arities" (TyCon "ArityEnv")) (field "implBuckets" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))) (field "lazyGlobals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "superCounts" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "trmc" (TyCon "TrmcVerdicts"))))) ())
 (DData Private "WasmRecordValueIndex" () ((variant "WasmRecordValueIndex" (ConNamed (field "fnValues" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DData Private "WasmCtorIndex" () ((variant "WasmCtorIndex" (ConNamed (field "arities" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "types" (TyApp (TyCon "OrdMap") (TyCon "String"))) (field "ordinals" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "typeCtors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
@@ -14700,7 +14686,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "narrowByIfaceW" ((PLit (LString "")) (PVar "entries")) (EVar "entries"))
 (DFunDef false "narrowByIfaceW" ((PVar "iface") (PVar "entries")) (EApp (EApp (EVar "filterList") (ELam ((PVar "ent")) (EBinOp "==" (EApp (EVar "implEntryIfaceWordW") (EVar "ent")) (EVar "iface")))) (EVar "entries")))
 (DTypeSig false "ffiBindsOfW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "ffiBindsOfW" ((PVar "prog") (PVar "name")) (EMatch (EApp (EVar "progInput") (EVar "prog")) (arm (PCon "WasmEmitInputData" PWild PWild PWild (PVar "ffiIndex") PWild PWild) () (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "ffiIndex"))))))
+(DFunDef false "ffiBindsOfW" ((PVar "prog") (PVar "name")) (EMatch (EApp (EVar "progInput") (EVar "prog")) (arm (PCon "WasmEmitInputData" PWild PWild (PVar "ffiIndex") PWild PWild) () (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "ffiIndex"))))))
 (DTypeSig false "isFfiExternW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isFfiExternW" ((PVar "prog") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "ffiBindsOfW") (EVar "prog")) (EVar "name"))))
 (DTypeSig false "jsImportForW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "JsImport")))))
@@ -14790,7 +14776,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "floatFieldIndices" ((PCons (PLit (LString "Float")) (PVar "rest")) (PVar "i")) (EBinOp "::" (EVar "i") (EApp (EApp (EVar "floatFieldIndices") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DFunDef false "floatFieldIndices" ((PCons PWild (PVar "rest")) (PVar "i")) (EApp (EApp (EVar "floatFieldIndices") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))
 (DTypeSig false "isFloatCtorField" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "isFloatCtorField" ((PVar "prog") (PVar "ctor") (PVar "idx")) (EMatch (EApp (EVar "progInput") (EVar "prog")) (arm (PCon "WasmEmitInputData" PWild (PVar "ctorFloatIndex") PWild PWild PWild PWild) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "ctor")) (EVar "ctorFloatIndex")) (arm (PCon "Some" (PVar "idxs")) () (EApp (EApp (EVar "containsInt") (EVar "idx")) (EVar "idxs"))) (arm (PCon "None") () (EVar "False"))))))
+(DFunDef false "isFloatCtorField" ((PVar "prog") (PVar "ctor") (PVar "idx")) (EMatch (EApp (EVar "progInput") (EVar "prog")) (arm (PCon "WasmEmitInputData" (PVar "ctorFloatIndex") PWild PWild PWild PWild) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "ctor")) (EVar "ctorFloatIndex")) (arm (PCon "Some" (PVar "idxs")) () (EApp (EApp (EVar "containsInt") (EVar "idx")) (EVar "idxs"))) (arm (PCon "None") () (EVar "False"))))))
 (DTypeSig false "containsInt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
 (DFunDef false "containsInt" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsInt" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "containsInt") (EVar "x")) (EVar "ys"))))

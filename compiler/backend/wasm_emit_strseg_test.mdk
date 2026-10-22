@@ -35,11 +35,9 @@ watOf src =
   let input =
     makeWasmEmitInputFull
       PreludeFreeRuntime
-      []
       (ctorFieldTypeNames decls)
       False
       False
-      (declaredRecordFieldOrders decls)
       []
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (text, _) = emitProgramRecord input (buildEmitPlan WasmBackend cp) cp

@@ -665,7 +665,6 @@ llvmOf outputs runtimeDecls allDecls cp =
       []
       []
       ""
-      (declaredRecordFieldOrders allDecls)
       (ffiExternTypeNames runtimeDecls allDecls)
   let (text, gaps) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
   withGaps ";" text gaps
@@ -675,11 +674,9 @@ wasmOf outputs runtimeDecls allDecls cp =
   let input =
     makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))
-      (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       False
       (mainTypeIsUnit outputs)
-      (declaredRecordFieldOrders allDecls)
       []
   let (text, gaps) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   withGaps ";;" text gaps

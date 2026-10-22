@@ -49,11 +49,9 @@ withTarget targetPath = match readFile targetPath
     let input =
       makeWasmEmitInputFull
         PreludeFreeRuntime
-        []
         (ctorFieldTypeNames decls)
         False
         False
-        (declaredRecordFieldOrders decls)
         []
     -- No typechecker ran, so the lowering stamps every binder `RTValue`; the
     -- signatures the source declares restate what they type.

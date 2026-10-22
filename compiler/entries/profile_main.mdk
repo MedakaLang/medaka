@@ -313,7 +313,6 @@ runStaged on targetPath rsrc csrc tsrc =
       []
       []
       targetPath
-      (declaredRecordFieldOrders elaborated)
       (validateFfiExternTypeNames (checkedFfiExternTypeNames elaborated))
   let tEl1 = now ()
   let _ =
@@ -504,11 +503,9 @@ wasmStage on True outputs runtimeDecls live cprog declsOp =
   let input =
     makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))
-      (methodIfaceTable live)
       (ctorFieldTypeNames live)
       (mainTypeIsFloat outputs)
       (mainTypeIsUnit outputs)
-      (declaredRecordFieldOrders live)
       []
   let tWe0 = now ()
   let aWe0 = allocSnap ()

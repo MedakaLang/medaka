@@ -546,11 +546,10 @@ freshWasmEmit mode = WasmEmit {
   w7Used = Ref omEmpty,
 }
 
--- Declaration-derived semantic input. Raw lists retain table order where a full
--- table is required; indexes preserve lookupAssoc's first-match result.  The
--- last field is the complete loaded runtime declaration domain.
+-- Declaration-derived facts are indexed once for each emission. The last field
+-- is the complete loaded runtime declaration domain.
 data WasmEmitInputData =
-  | WasmEmitInputData (List (String, List String)) (OrdMap (List Int)) Bool (OrdMap (List (String, String), (List String, String))) Bool RuntimeExternDomain
+  | WasmEmitInputData (OrdMap (List Int)) Bool (OrdMap (List (String, String), (List String, String))) Bool RuntimeExternDomain
 
 export type WasmEmitInput = WasmEmitInputData
 
@@ -559,20 +558,11 @@ export type WasmEmitInput = WasmEmitInputData
 -- `makeWasmEmitInputFull` instead.
 export
 makeWasmEmitInput : RuntimeExternDomain ->
-  List (String, (String, String, Int)) ->
   List (String, List String) ->
   Bool ->
-  List (String, List String) ->
   WasmEmitInput
-makeWasmEmitInput domain methodIfaces ctorFieldTypes mainIsFloat recordFieldOrders =
-  makeWasmEmitInputFull
-    domain
-    methodIfaces
-    ctorFieldTypes
-    mainIsFloat
-    False
-    recordFieldOrders
-    []
+makeWasmEmitInput domain ctorFieldTypes mainIsFloat =
+  makeWasmEmitInputFull domain ctorFieldTypes mainIsFloat False []
 
 -- The full input: an index of USER-declared FFI extern names (name ->
 -- (host bindings, (paramTypeHeads, retTypeHead))), every host's, so a reference
@@ -582,16 +572,13 @@ makeWasmEmitInput domain methodIfaces ctorFieldTypes mainIsFloat recordFieldOrde
 -- shorter arity.
 export
 makeWasmEmitInputFull : RuntimeExternDomain ->
-  List (String, (String, String, Int)) ->
   List (String, List String) ->
   Bool ->
   Bool ->
-  List (String, List String) ->
   List (String, (List (String, String), (List String, String))) ->
   WasmEmitInput
-makeWasmEmitInputFull domain _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternRows =
+makeWasmEmitInputFull domain ctorFieldTypes mainIsFloat mainIsUnit ffiExternRows =
   WasmEmitInputData
-    ctorFieldTypes
     (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty)
     mainIsFloat
     (omFromPairs (reverseL ffiExternRows) omEmpty)
@@ -599,15 +586,15 @@ makeWasmEmitInputFull domain _ ctorFieldTypes mainIsFloat mainIsUnit recordField
     domain
 
 inputRuntimeExternsW : WasmEmitInput -> RuntimeExternDomain
-inputRuntimeExternsW (WasmEmitInputData _ _ _ _ _ names) = names
+inputRuntimeExternsW (WasmEmitInputData _ _ _ _ names) = names
 
 inputMainIsFloat : WasmEmitInput -> Bool
-inputMainIsFloat (WasmEmitInputData _ _ isFloat _ _ _) = isFloat
+inputMainIsFloat (WasmEmitInputData _ isFloat _ _ _) = isFloat
 
 -- The typechecker's verdict that `main` is Unit; False when the entry has no
 -- typechecked program to ask, leaving the structural `mainBodyIsUnit` guess.
 inputMainIsUnit : WasmEmitInput -> Bool
-inputMainIsUnit (WasmEmitInputData _ _ _ _ isUnit _) = isUnit
+inputMainIsUnit (WasmEmitInputData _ _ _ isUnit _) = isUnit
 
 -- ── program info threaded through the ref-mode emitter ───────────────────────
 -- WasmProgramIndex owns the declaration-derived function, value, constructor,
@@ -819,7 +806,7 @@ narrowByIfaceW iface entries =
 -- runtime extern families, as `DemandScope` resolves a name.
 ffiBindsOfW : Prog -> String -> Option (List (String, String))
 ffiBindsOfW prog name = match progInput prog
-  WasmEmitInputData _ _ _ ffiIndex _ _ => map fst (omLookup name ffiIndex)
+  WasmEmitInputData _ _ ffiIndex _ _ => map fst (omLookup name ffiIndex)
 
 isFfiExternW : Prog -> String -> Bool
 isFfiExternW prog name = isSome (ffiBindsOfW prog name)
@@ -1326,10 +1313,9 @@ floatFieldIndices (_ :: rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData _ ctorFloatIndex _ _ _ _ =>
-    match omLookup ctor ctorFloatIndex
-      Some idxs => containsInt idx idxs
-      None => False
+  WasmEmitInputData ctorFloatIndex _ _ _ _ => match omLookup ctor ctorFloatIndex
+    Some idxs => containsInt idx idxs
+    None => False
 
 containsInt : Int -> List Int -> Bool
 -- Intentional cross-file duplicate of eval.mdk's private helper. The interpreter

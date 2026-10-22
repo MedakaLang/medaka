@@ -77,28 +77,14 @@ program paramRow =
 llvmText : CProgram -> String
 llvmText cp =
   llvmEmit
-    (makeEmitInput
-      PreludeFreeRuntime
-      []
-      []
-      []
-      []
-      []
-      False
-      False
-      0
-      []
-      []
-      ""
-      []
-      [])
+    (makeEmitInput PreludeFreeRuntime [] [] [] [] [] False False 0 [] [] "" [])
     (buildEmitPlan LlvmBackend cp)
     cp
 
 wasmText : CProgram -> String
 wasmText cp =
   wasmEmit
-    (makeWasmEmitInputFull PreludeFreeRuntime [] [] False False [] [])
+    (makeWasmEmitInputFull PreludeFreeRuntime [] False False [])
     (buildEmitPlan WasmBackend cp)
     cp
 

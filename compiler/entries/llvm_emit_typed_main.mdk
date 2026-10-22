@@ -94,7 +94,7 @@ emitIsolation runtimePath pPath pPlusUPath =
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
   let input =
-    makeEmitInput PreludeFreeRuntime [] [] [] [] [] False False 0 [] [] "" [] []
+    makeEmitInput PreludeFreeRuntime [] [] [] [] [] False False 0 [] [] "" []
   let mainId = BinderId "" 0
   let cp =
     CProgram
@@ -157,7 +157,6 @@ runEmit runtimeDecls preludeDecls userDecls =
       []
       []
       ""
-      (declaredRecordFieldOrders mangled)
       (validateFfiExternTypeNames (checkedFfiExternTypeNames mangled))
   let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) mangled
   emitProgram input (buildEmitPlan LlvmBackend cp) cp
