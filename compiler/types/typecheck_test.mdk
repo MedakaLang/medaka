@@ -78,6 +78,8 @@ import types.tc_types.{
   DriveInputs(..),
   DriveOutputs(..),
   GraphCtx(..),
+  ModuleCells(..),
+  ModuleCtx(..),
   TraceSink(..),
 }
 import types.publish.{TcReport(..), CheckedProgram(..)}
@@ -98,6 +100,7 @@ import types.typecheck.{
   checkModulesDiagsChainGraph,
   checkModulesEntryFullReportK,
   checkModulesEntryReport,
+  checkModulesPartialLast,
   checkOneDiags,
   checkOneDiagsGraph,
   checkOneSchemeFullK,
@@ -114,6 +117,7 @@ import types.typecheck.{
   finishNumericPredicateTrace,
   isLiveSpan,
   markModules,
+  matchWarningsNow,
   methodReturnResolutionMutationProbe,
   methodReturnMemoCurrentViews,
   methodReturnMemoFenceMutationProbe,
@@ -130,7 +134,8 @@ import types.typecheck.{
 }
 import types.target_profile.{selectProfile}
 import types.route_key.{EvIndex(..), evIndexOf}
-import support.ordmap.{omEmpty, omFromNames}
+import support.ordmap.{omEmpty, omFromNames, omKeys}
+import frontend.exhaust.{buildOracle}
 import support.util.{
   contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
   splitOnChar, startsWith
@@ -3107,6 +3112,9 @@ test "module-chain cache hits restore bounded scopes across failing suffixes" =
   let afterConflict = runCachedObserved "entry = 0\n"
   let afterConflictHit = runCachedObserved "entry = 0\n"
   let runs = [cold, hit, afterFailed, afterConflict, afterConflictHit]
+  -- Four frames on every run, all the drive's own: a core miss continues from the
+  -- frozen prelude interface as a hit does, so core's frame is never left in the
+  -- run either way.
   expectEach [
     (
       "cold traces the prefix's scalar assumption",
@@ -3131,9 +3139,7 @@ test "module-chain cache hits restore bounded scopes across failing suffixes" =
     ),
     (
       "every run leaves the same frame count",
-      expectEqual
-        (map (_ => cold.rvFrameCount) runs)
-        (map (view => view.rvFrameCount) runs),
+      expectEqual (map (_ => 4) runs) (map (view => view.rvFrameCount) runs),
     ),
     (
       "both failing entries report errors",
@@ -5904,3 +5910,40 @@ test "checkModules completes over modules markModules marked first" =
         []
         core2
         mods2))
+
+-- A prelude with a data declaration and an exhaustive match of it.
+seedCoreDecls : Unit -> List Decl
+seedCoreDecls _ =
+  desugar
+    (parseLocated
+      (joinNl [
+        "public export data Shape = Circle | Square", "area : Shape -> Int",
+        "area s = match s", "  Circle => 1", "  Square => 2"
+      ]))
+
+-- The record `checkModulesK`'s fold hands its first user module, whose oracle and
+-- warnings `cmCheckWorker` seeds that module with (`checkRunResidue`).  With no
+-- user module, `checkModulesPartialLast` (the same preamble and fold) returns it.
+firstModuleSeed : Unit -> (List String, Bool)
+firstModuleSeed _ =
+  let (_, ctx) =
+    checkModulesPartialLast
+      defaultDriveInputs
+      (Some (4366, 4367))
+      []
+      (seedCoreDecls ())
+      []
+  (omKeys ctx.mcCells.matchOracle.value.ctorArity, matchWarningsNow ctx)
+
+-- Core is checked from an empty oracle, not one built from its own decls, so its
+-- record holds a spurious non-exhaustive warning for every match on a prelude type,
+-- exhaustive or not (5 on the real prelude, one here).  Seeding from core's record
+-- carried them into the first module; the blank record past the core pass carries
+-- none, which is intended: they are not findings about any user module, and no
+-- production caller drives zero user modules to read them.  Same on the keyed miss
+-- and on the hit after it.
+test "checkModulesK seeds its first module with an empty oracle and no warning" =
+  let miss = firstModuleSeed ()
+  let hit = firstModuleSeed ()
+  let empty = (omKeys (buildOracle []).ctorArity, False)
+  expectEqual [empty, empty] [miss, hit]
