@@ -207,6 +207,7 @@ import lib.server_core.{
   identifiesAccount,
   makeServer,
   refreshAudience,
+  serverDid,
   serviceAuthUnavailableResponse,
   withHandleUpdateCharge,
 }
@@ -2138,7 +2139,7 @@ accountDidDocument account publicKey =
 didWebDocument : Account -> Json
 didWebDocument account = jObject [
   ("@context", jArray [JString "https://www.w3.org/ns/did/v1"]),
-  ("id", JString "did:web:\{accountHostname account}"),
+  ("id", JString (serverDid account)),
   (
     "service",
     jArray [
@@ -2178,7 +2179,7 @@ didWebDocument account = jObject [
    before a repository exists and must keep doing so. -}
 wellKnownDidJson : Account -> Store -> Json
 wellKnownDidJson account store =
-  if accountDid account /= "did:web:\{accountHostname account}" then
+  if accountDid account /= serverDid account then
     didWebDocument account
   else match storeRepo store
     Some repo => accountDidDocument account (repoPublicKey repo)
