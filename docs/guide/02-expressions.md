@@ -152,7 +152,7 @@ pairWithFloat = ("abc", 1.23)
 
 annotatedInExpression = 5 : Int
 
-list = let nums = [1, 2, 3] : List Int in if True then nums else []
+list = let nums : List Int = [1, 2, 3] in if True then nums else []
 ```
 
 A lowercase name in a signature is a type variable. It stands for any type, and the

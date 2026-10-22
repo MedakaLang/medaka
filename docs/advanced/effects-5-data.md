@@ -132,7 +132,7 @@ impl Display (Handle p) where
 
 main =
   println (Handle "cfg/app.toml")
-  let h = Handle "anything" : Handle *
+  let h : Handle * = Handle "anything"
   println h
 ```
 
