@@ -41,7 +41,7 @@ import lib.credential.{
 import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.websocket.{handshakeAccept}
 import u8 as U8
-import string.{splitAt, toInt, toLower, trim}
+import string.{join, splitAt, toInt, toLower, trim}
 import lib.atsyntax.{validateDid, validateHandle}
 import lib.jwt.{
   Claims(..),
@@ -75,12 +75,20 @@ import lib.proxy.{
   relayedRequestHeaders,
 }
 import lib.query_params as QueryParams
+import lib.repo.{repoPublicKey}
+import lib.service_jwt_verify.{
+  ServiceJwtExpectation(..),
+  ServiceJwtRefusal(..),
+  carriesMethodClaim,
+  verifyServiceJwt,
+}
 import lib.store.{
   Store,
   sessionFingerprint,
   storeAccessActive,
   storeCredential,
   storeRefreshActive,
+  storeRepo,
   storeServerSecret,
 }
 import lib.xrpc.{
@@ -90,6 +98,7 @@ import lib.xrpc.{
   XrpcCall(..),
   requestNsid,
   routeRequest,
+  serviceAuthRouteNsids,
   subscriptionRoute,
   xrpcErrorResponse,
   xrpcFailureResponse,
@@ -132,8 +141,19 @@ public export data RequestContext = RequestContext {
    before dispatch. The fingerprint is there because the session routes act on
    the caller's OWN session — rotating it, closing it — and a fingerprint is
    how a session is named; the bearer token itself is deliberately not handed
-   on, so no handler can echo, log, or re-present it. -}
-public export data AuthOutcome = Unauthenticated | Authenticated String Bytes
+   on, so no handler can echo, log, or re-present it.
+
+   `ServiceAuthenticated` carries the account DID a verified inbound
+   service-auth token was issued by (`lib.service_jwt_verify`), and nothing
+   else: such a token names no session, so it has no fingerprint, and a route
+   that acts on the caller's session cannot be satisfied by one. The seam
+   produces it only on a route registered `AccessOrServiceRoute`, for a token
+   whose `lxm` is that route; every handler that matches on an outcome names
+   it explicitly. -}
+public export data AuthOutcome =
+  | Unauthenticated
+  | Authenticated String Bytes
+  | ServiceAuthenticated String
 
 {- | An endpoint-agnostic pure handler with an explicit successor Store,
    receiving the request context and the auth outcome the seam already
@@ -232,13 +252,18 @@ serverAccount (Server account _ _) = account
 
    The four refusal classes are distinct because the answers they owe a client
    are: no token means log in, an expired one means refresh, and neither
-   reveals anything the caller did not already send. -}
+   reveals anything the caller did not already send.
+
+   `GoodCredential` is an open session's access or refresh token: the subject
+   DID and the session's fingerprint. `ServiceCredential` is a verified inbound
+   service-auth token: the account DID alone, since it names no session. -}
 data Credential =
   | NoCredential
   | MalformedCredential
   | ExpiredCredential
   | InvalidCredential
   | GoodCredential String Bytes
+  | ServiceCredential String
 
 -- What the `Authorization` header carried, before any verification.
 data Presented = NoHeader | NotBearer | Bearer String
@@ -328,25 +353,90 @@ verifiedCredential account policy context store token =
           else
             InvalidCredential
 
+{- | Verify a presented service-auth token as a credential for the route
+   `method`, against the account's own repository key: the key
+   `accountDidDocument` publishes, and so the key the official verifier would
+   have resolved for the account DID. The token must be issued by the account
+   DID, addressed to this server's own DID, and limited to `method`.
+
+   A `Store` with no repository has no key to check against, so every service
+   token presented to it is refused. -}
+serviceCredential : Account ->
+  String ->
+  RequestContext ->
+  Store ->
+  String ->
+  Credential
+serviceCredential account method context store token = match storeRepo store
+  None => InvalidCredential
+  Some repo =>
+    let expected = ServiceJwtExpectation {
+      issuerKey = repoPublicKey repo,
+      issuer = accountDid account,
+      audience = serverDid account,
+      method = method,
+      nowSeconds = context.nowSeconds,
+    }
+    match verifyServiceJwt expected token
+      Ok claims => ServiceCredential claims.iss
+      Err ServiceJwtExpired => ExpiredCredential
+      Err _ => InvalidCredential
+
+{- | What the request's `Authorization` header resolves to on a route
+   registered under `policy`.
+
+   `routeNsid` is the registry's spelling of the routed method, or `None` where
+   the caller resolves under a fixed policy that names no route. A bearer token
+   is read as a service credential only on an `AccessOrServiceRoute` with a
+   routed method, and only when its payload carries an `lxm` (the official
+   dispatch's own test); every other token, on every route, is a session
+   token. -}
 resolveCredential : Account ->
   AuthPolicy ->
+  Option String ->
   RequestContext ->
   Store ->
   Request ->
   Credential
-resolveCredential account policy context store request =
+resolveCredential account policy routeNsid context store request =
   match presentedHeader (requestHeaders request) 0 None
     NoHeader => NoCredential
     NotBearer => MalformedCredential
-    Bearer token => verifiedCredential account policy context store token
+    Bearer token => match (policy, routeNsid)
+      (AccessOrServiceRoute, Some method) =>
+        if carriesMethodClaim token then
+          serviceCredential account method context store token
+        else
+          verifiedCredential account policy context store token
+      _ => verifiedCredential account policy context store token
 
+{- | The outcome a PUBLIC route's handler is handed. A public route never
+   resolves a service credential, and a handler is handed
+   `ServiceAuthenticated` only by `handleRouted`'s `AccessOrServiceRoute` arm,
+   so a service credential here is answered as no credential at all. -}
 outcomeOf : Credential -> AuthOutcome
 outcomeOf (GoodCredential did fingerprint) = Authenticated did fingerprint
-outcomeOf _ = Unauthenticated
+outcomeOf (ServiceCredential _) = Unauthenticated
+outcomeOf NoCredential = Unauthenticated
+outcomeOf MalformedCredential = Unauthenticated
+outcomeOf ExpiredCredential = Unauthenticated
+outcomeOf InvalidCredential = Unauthenticated
 
-{- | The refusal a gated route owes an unresolved credential. The error codes
-   are atproto's own `ResponseTypeNames` spellings, the same source every other
-   failure class in `lib.xrpc` draws its code from. -}
+invalidTokenResponse : Response
+invalidTokenResponse =
+  xrpcErrorResponse
+    401
+    "Unauthorized"
+    "InvalidToken"
+    "Token could not be verified"
+
+{- | The refusal a gated route owes a credential it does not admit. The error
+   codes are atproto's own `ResponseTypeNames` spellings, the same source every
+   other failure class in `lib.xrpc` draws its code from.
+
+   A service credential reaching here is one presented where no service
+   credential is admitted, and it is refused as an invalid token. A good
+   session credential never reaches here: every caller admits it first. -}
 refusalFor : Credential -> Response
 refusalFor NoCredential =
   xrpcErrorResponse
@@ -356,12 +446,10 @@ refusalFor NoCredential =
     "Authentication Required"
 refusalFor ExpiredCredential =
   xrpcErrorResponse 401 "Unauthorized" "ExpiredToken" "Token has expired"
-refusalFor _ =
-  xrpcErrorResponse
-    401
-    "Unauthorized"
-    "InvalidToken"
-    "Token could not be verified"
+refusalFor MalformedCredential = invalidTokenResponse
+refusalFor InvalidCredential = invalidTokenResponse
+refusalFor (ServiceCredential _) = invalidTokenResponse
+refusalFor (GoodCredential _ _) = invalidTokenResponse
 
 -- ── routing one framed request ──────────────────────────────────────────────
 
@@ -493,13 +581,27 @@ handleRouted (Server account registry handler) context store request =
   match routeRequest registry request
     RouteFailure failed => (store, xrpcFailureResponse failed)
     RouteCall auth call =>
-      let credential = resolveCredential account auth context store request
+      let credential =
+        resolveCredential account auth (callNsid call) context store request
       match (auth, credential)
         (PublicRoute, resolved) =>
           handler context (outcomeOf resolved) store call
         (_, GoodCredential did fingerprint) =>
           handler context (Authenticated did fingerprint) store call
+        (AccessOrServiceRoute, ServiceCredential did) =>
+          handler context (ServiceAuthenticated did) store call
         (_, refused) => (store, refusalFor refused)
+
+-- The registry's spelling of the method a call was routed to, or `None` for
+-- the two route classes that have no NSID.
+callNsid : XrpcCall -> Option String
+callNsid (QueryCall nsid _) = Some nsid
+callNsid (ProcedureNoInputCall nsid _) = Some nsid
+callNsid (ProcedureJsonCall nsid _ _) = Some nsid
+callNsid (ProcedureTextCall nsid _ _ _) = Some nsid
+callNsid (ProcedureRawCall nsid _ _ _) = Some nsid
+callNsid (WellKnownCall _) = None
+callNsid HealthCall = None
 
 -- ── the subscription upgrade seam ───────────────────────────────────────────
 
@@ -704,7 +806,7 @@ classifyUpgrade (Server account registry _) context store request =
     None => NotAnUpgrade
     Some (nsid, params, auth) => match (
       auth,
-      resolveCredential account auth context store request,
+      resolveCredential account auth (Some nsid) context store request,
     )
       (PublicRoute, _) => admitHandshake request nsid params
       (_, GoodCredential _ _) => admitHandshake request nsid params
@@ -886,7 +988,7 @@ proxyCredentialRefusal : Account ->
   Request ->
   Option Response
 proxyCredentialRefusal account context store request =
-  match resolveCredential account AuthenticatedRoute context store request
+  match resolveCredential account AuthenticatedRoute None context store request
     GoodCredential _ _ => None
     refused => Some (refusalFor refused)
 
@@ -995,13 +1097,13 @@ getServiceAuthNsid = "com.atproto.server.getServiceAuth"
    It exists for the reason `ProxyDecision` does, pointed the other way. There
    the signature travels outward on a call this server makes; here the client
    asked for the credential itself and keeps it. Either way the account's repo
-   key lives only in the shell (`pds/shell/egress.mdk`), so a `Handler` —
+   key lives only in the shell (`pds/shell/service_signer.mdk`), so a `Handler` —
    which returns a complete `Response` and is handed no key — cannot answer
    this route at all, and the decision has to be taken before dispatch.
 
    Every DECISION is taken here: whether the caller holds a credential of this
-   account's own, whether the `aud` it asked for is one this server was
-   configured to mint for, whether the `lxm` it named is one no credential may
+   account's own, whether the `aud` it asked for is this server's own DID or
+   one this server was configured to mint for, whether the `lxm` it named is one no credential may
    carry, and how far out the credential may expire. The shell signs the claim
    set and chooses none of it — and a refusal carries no `ServiceAuthRequest`,
    so along that path there is nothing for it to sign. -}
@@ -1025,17 +1127,12 @@ badExpirationRefusal : String -> Response
 badExpirationRefusal message =
   xrpcErrorResponse 400 "Bad Request" "BadExpiration" message
 
-{- | What a deployment holding no signing key answers this route.
+{- | What a caller that reaches `handle` for this nsid is answered.
 
-   A server started with no configured audience (`--appview-did` absent) holds
-   no `Egress` and therefore no account key in the shell, so it cannot mint
-   anything. 501 and not 400: the request is not wrong, and not 500 either,
-   because nothing failed — this deployment does not offer the route, which is
-   a thing an operator chose and a client can act on.
-
-   The same answer covers a caller that reaches `handle` for this nsid: the
-   pure core holds no key on any deployment, so the statement is true there
-   too. -}
+   The pure core holds no key, so it cannot mint anything: the credential is
+   signed by the server shell, which holds the account key, before `handle`
+   is reached. 501 and not 400: the request is not wrong, and not 500 either,
+   because nothing failed — only a direct caller of `handle` lands here. -}
 export
 serviceAuthUnavailableResponse : Response
 serviceAuthUnavailableResponse =
@@ -1043,7 +1140,13 @@ serviceAuthUnavailableResponse =
     501
     "Not Implemented"
     "NotImplemented"
-    "This server has no signing key configured for \{getServiceAuthNsid}"
+    "\{getServiceAuthNsid} is not minted by this handler; the server shell signs the credential"
+
+-- | This server's own DID: the audience the official client names when it asks
+-- for a credential to present to this PDS itself.
+export
+serverDid : Account -> String
+serverDid account = "did:web:\{accountHostname account}"
 
 -- | A client's `aud` that does not name a DID at all.
 serviceAuthAudienceNotADidMessage : String
@@ -1088,22 +1191,57 @@ requiredParam name params = match QueryParams.soleParam name params
 
    `aud` is the value an attacker wants to choose: a credential bearing this
    account's identity, minted for a service of their naming, is the confused
-   deputy handed to the client directly. So it is graded against the SET this
-   operator configured — `lib.proxy`'s own table, asked with `appviewRouteFor`,
-   the same lookup and the same stripped-fragment form the proxy seam uses —
-   and a server carrying no table at all mints for nobody.
+   deputy handed to the client directly. So it is graded against two sets.
+   This server's own DID is admitted for exactly the methods the registry
+   marks as taking a service token (`serviceAuthRouteNsids`): the credential is
+   then spendable only on this server, for a route that accepts it, and the
+   method is mandatory so it can never be a blanket one. Any other DID is
+   graded against the SET this operator configured — `lib.proxy`'s own table,
+   asked with `appviewRouteFor`, the same lookup and the same stripped-fragment
+   form the proxy seam uses — and a server carrying no table mints for no
+   other audience.
 
-   The `None`-table arm answers the 501 rather than the foreign-audience 400:
-   such a deployment refuses every `aud` for one reason, and telling a client
-   that the DID it named is not configured would invite it to try others. -}
-admitServiceAudience : Option AppviewTable -> String -> Result Response Unit
-admitServiceAudience table raw = match proxyServiceDid raw
+   The own-DID comparison is exact and case-sensitive, as DID comparison is
+   everywhere in `lib.proxy`. The claim's `lxm` is the registry's spelling so a
+   case variant cannot yield a token the verifier would refuse.
+
+   `Ok (Some lxm)` is this server's own DID with that registry-spelled method;
+   `Ok None` is a configured audience, whose `lxm` is graded separately. -}
+admitServiceAudience : Account ->
+  Registry ->
+  Option AppviewTable ->
+  String ->
+  Result Response (Option String) ->
+  Result Response (Option String)
+admitServiceAudience account registry table raw lxm = match proxyServiceDid raw
   None => Err (serviceAuthRefusal serviceAuthAudienceNotADidMessage)
-  Some bare => match table
-    None => Err serviceAuthUnavailableResponse
-    Some configured => match appviewRouteFor configured bare
+  Some bare =>
+    if bare == serverDid account then
+      admitOwnMethod registry lxm
+    else match table
       None => Err (serviceAuthRefusal serviceAuthForeignAudienceMessage)
-      Some _ => Ok ()
+      Some configured => match appviewRouteFor configured bare
+        None => Err (serviceAuthRefusal serviceAuthForeignAudienceMessage)
+        Some _ => Ok None
+
+admitOwnMethod : Registry ->
+  Result Response (Option String) ->
+  Result Response (Option String)
+admitOwnMethod _ (Err response) = Err response
+admitOwnMethod _ (Ok None) =
+  Err
+    (serviceAuthRefusal
+      "a credential for this server itself must name the method it is for")
+admitOwnMethod registry (Ok (Some lxm)) = match validateNsid lxm
+  Err cause =>
+    Err (serviceAuthRefusal "service auth lxm: \{nsidMethodErrorMessage cause}")
+  Ok () => match find (sameNsidIdentity lxm) (serviceAuthRouteNsids registry)
+    Some canonical => Ok (Some canonical)
+    None =>
+      let allowed = join ", " (serviceAuthRouteNsids registry)
+      Err
+        (serviceAuthRefusal
+          "a credential for this server itself cannot be requested for \{lxm}; it is minted for: \{allowed}")
 
 {- | The method half: a credential may not name one of the account-management
    methods (`lib.proxy`'s `protectedMethods`), whether or not this server
@@ -1177,27 +1315,35 @@ gradeServiceExpiry context lxm at =
 {- | The claim set this request earns, or the refusal it is owed.
 
    `iss` is the ACCOUNT's DID, because the key that signs is the account's own
-   repo key. `aud` is the client's own text, fragment included — `lib.jwt`
-   strips it at mint, and the stripped form is what `admitServiceAudience`
-   compared — so a client that asked for a service OF a configured audience
-   gets a credential naming that audience. `jti` is this request's own nonce,
+   repo key. `aud` is the client's own text for a configured audience,
+   fragment included — `lib.jwt` strips it at mint, and the stripped form is
+   what `admitServiceAudience` compared — so a client that asked for a service
+   OF a configured audience gets a credential naming that audience; for this
+   server's own DID it is the bare `serverDid`. `jti` is this request's own nonce,
    and `exp` is the resolved instant rather than the client's string. -}
 serviceAuthClaims : Account ->
+  Registry ->
   RequestContext ->
   Option AppviewTable ->
   List QueryParam ->
   Result Response ServiceAuthRequest
-serviceAuthClaims account context table params = do
+serviceAuthClaims account registry context table params = do
   audience <- requiredParam "aud" params
-  () <- admitServiceAudience table audience
-  method <- mapErr
-    (message => serviceAuthRefusal message)
-    (QueryParams.soleParam "lxm" params)
-  () <- admitServiceMethod method
+  let lxmParam =
+    mapErr
+      (message => serviceAuthRefusal message)
+      (QueryParams.soleParam "lxm" params)
+  admitted <- admitServiceAudience account registry table audience lxmParam
+  (claimAudience, method) <- match admitted
+    Some canonical => Ok (serverDid account, Some canonical)
+    None => do
+      requested <- lxmParam
+      () <- admitServiceMethod requested
+      Ok (audience, requested)
   expiry <- admitServiceExpiry context method params
   Ok ServiceAuthRequest {
     iss = accountDid account,
-    aud = audience,
+    aud = claimAudience,
     lxm = method,
     jti = Hex.encode context.nonce,
     iat = context.nowSeconds,
@@ -1237,11 +1383,12 @@ classifyServiceAuth (Server account registry _) context table store request =
           else match (resolveCredential
             account
             AuthenticatedRoute
+            None
             context
             store
             request)
             GoodCredential _ _ =>
-              match serviceAuthClaims account context table params
+              match serviceAuthClaims account registry context table params
                 Err response => ServiceAuthRefused response
                 Ok claims => ServiceAuthMinted claims
             refused => ServiceAuthRefused (refusalFor refused)

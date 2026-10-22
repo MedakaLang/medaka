@@ -1129,7 +1129,94 @@ runServiceAuthCells corpus =
         "400"
         "BadExpiration"
         "cannot request a token with an expiration more than an hour in the future")
+  let ownDid = "did:web:\{accountHostText}"
+  let uploadBlob = "com.atproto.repo.uploadBlob"
+  let ownRefusedMessage =
+    nsid =>
+      "a credential for this server itself cannot be requested for \{nsid}; it is minted for: \{uploadBlob}"
+  let ownUploadBlob =
+    serviceAuthCell
+      "service-auth-own-did-upload-blob"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget
+          "aud=\{ownDid}&lxm=\{uploadBlob}&exp=\{intToString (defaultExpiry + 1740)}"))
+      (mintedLine ownDid uploadBlob (defaultExpiry + 1740))
+  let ownFragment =
+    serviceAuthCell
+      "service-auth-own-did-fragment"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{ownDid}%23atproto_pds&lxm=\{uploadBlob}"))
+      (mintedLine ownDid uploadBlob defaultExpiry)
+  let ownMethodless =
+    serviceAuthCell
+      "service-auth-own-did-methodless"
+      configuredAudiences
+      (proxyRequestNoHeader (serviceAuthTarget "aud=\{ownDid}"))
+      (invalidRequestLine
+        "a credential for this server itself must name the method it is for")
+  let ownCreateRecord =
+    serviceAuthCell
+      "service-auth-own-did-create-record"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{ownDid}&lxm=com.atproto.repo.createRecord"))
+      (invalidRequestLine (ownRefusedMessage "com.atproto.repo.createRecord"))
+  let ownForwardable =
+    serviceAuthCell
+      "service-auth-own-did-forwardable"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{ownDid}&lxm=app.bsky.feed.getTimeline"))
+      (invalidRequestLine (ownRefusedMessage "app.bsky.feed.getTimeline"))
+  let ownNoTable =
+    serviceAuthCell
+      "service-auth-own-did-no-table"
+      None
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{ownDid}&lxm=\{uploadBlob}"))
+      (mintedLine ownDid uploadBlob defaultExpiry)
+  let ownAuthorityCase =
+    serviceAuthCell
+      "service-auth-own-did-lxm-authority-case"
+      None
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{ownDid}&lxm=COM.ATPROTO.REPO.uploadBlob"))
+      (mintedLine ownDid uploadBlob defaultExpiry)
+  let ownNameCase =
+    serviceAuthCell
+      "service-auth-own-did-lxm-name-case"
+      None
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{ownDid}&lxm=com.atproto.repo.uploadblob"))
+      (invalidRequestLine (ownRefusedMessage "com.atproto.repo.uploadblob"))
+  let foreignNoTable =
+    serviceAuthCell
+      "service-auth-foreign-audience-no-table"
+      None
+      (proxyRequestNoHeader (serviceAuthTarget "aud=\{foreignServiceDid}"))
+      (invalidRequestLine
+        "aud names a service this server does not mint credentials for")
+  let ownHostUppercased =
+    serviceAuthCell
+      "service-auth-own-did-host-uppercased"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=did:web:PDS.EXAMPLE&lxm=\{uploadBlob}"))
+      (invalidRequestLine
+        "aud names a service this server does not mint credentials for")
   mintedWithLxm
+    + ownUploadBlob
+    + ownFragment
+    + ownMethodless
+    + ownCreateRecord
+    + ownForwardable
+    + ownNoTable
+    + ownAuthorityCase
+    + ownNameCase
+    + foreignNoTable
+    + ownHostUppercased
     + mintedNoLxm
     + foreignAudience
     + protectedMethod
@@ -1368,8 +1455,8 @@ runCells corpus =
       + originOnly404
   let () =
     println
-      "cells: \{intToString cells}/64 repository-free routes, proxy dispositions and service-auth mints"
-  if cells == 64 then
+      "cells: \{intToString cells}/74 repository-free routes, proxy dispositions and service-auth mints"
+  if cells == 74 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

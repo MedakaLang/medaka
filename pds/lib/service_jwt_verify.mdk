@@ -1,0 +1,266 @@
+{- | Verify one inbound ES256K service-auth JWT against this server's own
+     account key, for one route, at one instant.
+
+     Pure: no I/O, no DID resolution, no replay state. This server hosts one
+     account and holds its key, so the issuer's key is an input and not a
+     lookup, and a token from any other issuer is refused rather than resolved.
+     Every input is public (the token, the key, the two DIDs, the method, the
+     instant), so this module sits outside the constant-time perimeter the
+     signing path keeps, and it names nothing that can sign: it imports
+     `lib.sign`'s public-key and verification names only, and `lib.sign` itself
+     is also the module that defines the signers.
+
+     The checks run in the order the official verifier (`@atproto/xrpc-server`
+     `verifyJwt`) runs them: the header's `typ`, the payload's shape, `exp`,
+     `aud`, `lxm`, `iss`, and the signature last, with the `alg` check beside
+     it. The algorithm is pinned here and only ever compared: a token's `alg`
+     selects nothing.
+
+     Where this verifier refuses a token the official one accepts, it is on
+     purpose, and each case is one a token relayed verbatim from a real client
+     never takes:
+
+     - `iss` must be the account DID exactly, so a `#fragment` on it is
+       refused: there is one account, and its DID has no fragment.
+     - The signature must be the canonical 64-byte low-S `r || s`, base64url
+       encoded. A high-S twin, a DER encoding, and a character outside the
+       base64url alphabet are refused. Trailing `=` padding is accepted, as the
+       official decoder accepts it.
+     - A claim this verifier reads may appear once. `JSON.parse` keeps the last
+       of two same-named members, so a repeated claim is a token two readers
+       can read differently, and it is refused instead.
+     - `exp` must be an integer. The official verifier accepts any number.
+
+     The other direction also exists: header and payload go through
+     `stdlib/json`, whose number and string scans are lenient, so a leading-zero
+     number or a raw control character inside a string parses here and does not
+     in `JSON.parse`. A token with either still needs a valid signature by the
+     account's own key, so the leniency admits nothing a holder of that key
+     could not sign anyway.
+
+     Graded against the official verifier's own verdicts in
+     `pds/test/vectors/pds_service_auth_inbound_corpus.txt`
+     (`pds/test/service_jwt_verify_test.mdk`). -}
+
+import bytes.{encodeUtf8}
+import crypto.sha256.{sha256}
+import json.{Json(..)}
+import lib.jws.{b64uDecode, compactSegments, decodeSegmentJson}
+import lib.sign.{PublicKey, signatureFromCompact, verifyDigest}
+
+{- | What a token presented to one route must match.
+
+     `issuerKey` is the account's own repository key, `issuer` the account DID,
+     `audience` this server's own DID, `method` the registry's spelling of the
+     route's NSID, and `nowSeconds` the instant, in seconds since the Unix
+     epoch. The two DIDs are named fields because they are adjacent strings
+     that may differ, and swapping them would still type-check. -}
+public export data ServiceJwtExpectation = ServiceJwtExpectation {
+  issuerKey : PublicKey,
+  issuer : String,
+  audience : String,
+  method : String,
+  nowSeconds : Int,
+}
+
+-- | The claims a verified token carried.
+public export data ServiceJwtClaims = ServiceJwtClaims {
+  iss : String,
+  aud : String,
+  lxm : String,
+  exp : Int,
+}
+  deriving (Eq, Debug)
+
+{- | Why a token was refused, one constructor per refusal class.
+
+     `ServiceJwtMalformed` covers the token's framing: the segment count, the
+     base64url, the JSON, and a header or payload that is not an object.
+     `ServiceJwtBadClaims` names a claim that is missing, of the wrong type, or
+     repeated. `ServiceJwtMissingMethod` is an absent or empty `lxm`. -}
+public export data ServiceJwtRefusal =
+  | ServiceJwtMalformed
+  | ServiceJwtBadType String
+  | ServiceJwtBadClaims String
+  | ServiceJwtExpired
+  | ServiceJwtWrongAudience
+  | ServiceJwtMissingMethod
+  | ServiceJwtWrongMethod
+  | ServiceJwtWrongIssuer
+  | ServiceJwtBadAlg String
+  | ServiceJwtBadSignature
+  deriving (Eq, Debug)
+
+-- The `typ` values of the token classes a service credential must not be
+-- mistaken for: an OAuth access token, a refresh token, and a DPoP proof.
+refusedTypes : List String
+refusedTypes = ["at+jwt", "refresh+jwt", "dpop+jwt"]
+
+-- The value of the last member named `name`, which is the one `JSON.parse`
+-- keeps, or `None` when there is none.
+lastMember : String -> Array (String, Json) -> Option Json
+lastMember name members =
+  fold
+    (found (key, value) => if key == name then Some value else found)
+    None
+    members
+
+-- The members of a segment that decodes to a JSON object.
+objectSegment : String -> Result ServiceJwtRefusal (Array (String, Json))
+objectSegment segment = match decodeSegmentJson segment
+  Ok (JObject members) => Ok members
+  _ => Err ServiceJwtMalformed
+
+-- JavaScript truthiness of a JSON value: what the official verifier's
+-- `if (payload.lxm)` and `if (payload.nonce)` test.
+truthy : Json -> Bool
+truthy JNull = False
+truthy (JBool b) = b
+truthy (JInt n) = n /= 0
+truthy (JFloat f) = f /= 0.0
+truthy (JString s) = s /= ""
+truthy (JArray _) = True
+truthy (JObject _) = True
+
+-- A payload claim: absent, or present exactly once.
+soleClaim : String ->
+  Array (String, Json) ->
+  Result ServiceJwtRefusal (Option Json)
+soleClaim name members =
+  let named =
+    fold
+      (found (key, value) => if key == name then value :: found else found)
+      []
+      members
+  match named
+    [] => Ok None
+    [value] => Ok (Some value)
+    _ => Err (ServiceJwtBadClaims name)
+
+stringClaim : String -> Array (String, Json) -> Result ServiceJwtRefusal String
+stringClaim name members = do
+  claim <- soleClaim name members
+  match claim
+    Some (JString text) => Ok text
+    _ => Err (ServiceJwtBadClaims name)
+
+expiryClaim : Array (String, Json) -> Result ServiceJwtRefusal Int
+expiryClaim members = do
+  claim <- soleClaim "exp" members
+  match claim
+    Some (JInt at) => Ok at
+    _ => Err (ServiceJwtBadClaims "exp")
+
+-- `lxm` as the official shape check leaves it: a truthy value that is not a
+-- string is malformed, and a falsy one names no method at all.
+methodClaim : Array (String, Json) -> Result ServiceJwtRefusal (Option String)
+methodClaim members = do
+  claim <- soleClaim "lxm" members
+  match claim
+    Some (JString text) => Ok (if text == "" then None else Some text)
+    Some value =>
+      if truthy value then Err (ServiceJwtBadClaims "lxm") else Ok None
+    None => Ok None
+
+-- `nonce` is not read, but a truthy one that is not a string is malformed to
+-- the official verifier, so it is here.
+admitNonce : Array (String, Json) -> Result ServiceJwtRefusal Unit
+admitNonce members = do
+  claim <- soleClaim "nonce" members
+  match claim
+    Some (JString _) => Ok ()
+    Some value =>
+      if truthy value then Err (ServiceJwtBadClaims "nonce") else Ok ()
+    None => Ok ()
+
+admitType : Array (String, Json) -> Result ServiceJwtRefusal Unit
+admitType header = match lastMember "typ" header
+  Some (JString typ) =>
+    if elem typ refusedTypes then Err (ServiceJwtBadType typ) else Ok ()
+  _ => Ok ()
+
+admitAlg : Array (String, Json) -> Result ServiceJwtRefusal Unit
+admitAlg header = match lastMember "alg" header
+  Some (JString "ES256K") => Ok ()
+  Some (JString other) => Err (ServiceJwtBadAlg other)
+  _ => Err (ServiceJwtBadAlg "")
+
+-- `now > exp` is expired and `now == exp` is not, as the official verifier
+-- has it.
+admitExpiry : Int -> Int -> Result ServiceJwtRefusal Unit
+admitExpiry now at = if now > at then Err ServiceJwtExpired else Ok ()
+
+admitMethod : String -> Option String -> Result ServiceJwtRefusal String
+admitMethod _ None = Err ServiceJwtMissingMethod
+admitMethod expected (Some named) =
+  if named == expected then Ok named else Err ServiceJwtWrongMethod
+
+-- The ES256K signature over `signingInput`, checked against `key`.
+admitSignature : PublicKey -> String -> String -> Result ServiceJwtRefusal Unit
+admitSignature key signingInput sigSeg = match b64uDecode sigSeg
+  Err _ => Err ServiceJwtBadSignature
+  Ok compact => match signatureFromCompact compact
+    Err _ => Err ServiceJwtBadSignature
+    Ok signature =>
+      if verifyDigest key (sha256 (encodeUtf8 signingInput)) signature then
+        Ok ()
+      else
+        Err ServiceJwtBadSignature
+
+verifySegments : ServiceJwtExpectation ->
+  String ->
+  String ->
+  String ->
+  Result ServiceJwtRefusal ServiceJwtClaims
+verifySegments expected headerSeg claimsSeg sigSeg = do
+  header <- objectSegment headerSeg
+  _ <- admitType header
+  members <- objectSegment claimsSeg
+  iss <- stringClaim "iss" members
+  aud <- stringClaim "aud" members
+  at <- expiryClaim members
+  named <- methodClaim members
+  _ <- admitNonce members
+  _ <- admitExpiry expected.nowSeconds at
+  _ <- if aud == expected.audience then Ok () else Err ServiceJwtWrongAudience
+  lxm <- admitMethod expected.method named
+  _ <- if iss == expected.issuer then Ok () else Err ServiceJwtWrongIssuer
+  _ <- admitAlg header
+  _ <- admitSignature expected.issuerKey "\{headerSeg}.\{claimsSeg}" sigSeg
+  Ok ServiceJwtClaims { iss = iss, aud = aud, lxm = lxm, exp = at }
+
+{- | The claims of `token` when it is a service credential this route accepts
+     from this account at this instant, or why it is not one. -}
+export
+verifyServiceJwt : ServiceJwtExpectation ->
+  String ->
+  Result ServiceJwtRefusal ServiceJwtClaims
+verifyServiceJwt expected token = match compactSegments token
+  Some (headerSeg, claimsSeg, sigSeg) =>
+    verifySegments expected headerSeg claimsSeg sigSeg
+  None => Err ServiceJwtMalformed
+
+{- | Whether `token` asks to be read as a service credential: its payload
+     decodes to a JSON object whose `lxm` member is present and not `null`. It
+     verifies nothing.
+
+     This is the official dispatch's own test (`jose.decodeJwt(token).lxm !=
+     null`), so an empty `lxm` counts, and a session token, which carries no
+     `lxm`, does not.
+
+     > carriesMethodClaim "e30.eyJseG0iOiIifQ.c2ln"
+     True
+     > carriesMethodClaim "e30.eyJseG0iOm51bGx9.c2ln"
+     False
+     > carriesMethodClaim "e30.e30.c2ln"
+     False -}
+export
+carriesMethodClaim : String -> Bool
+carriesMethodClaim token = match compactSegments token
+  Some (_, claimsSeg, _) => match decodeSegmentJson claimsSeg
+    Ok (JObject members) => match lastMember "lxm" members
+      Some JNull => False
+      Some _ => True
+      None => False
+    _ => False
+  None => False

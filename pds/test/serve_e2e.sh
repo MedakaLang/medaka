@@ -657,6 +657,77 @@ grep -Eq '^serve: event log recovery: (settled|promoted|discarded)$' \
 grep -Fqx 'serve: session-token secret: secrets/token.hex' "$WORK/serve1.out" \
   || fail '7b: startup did not name secrets/token.hex as the session-token secret'
 
+# 7c. A CREDENTIAL FOR THIS SERVER ITSELF, on a server with no appview. It holds
+#    the account key all the same, so `getServiceAuth` for its own DID and the
+#    one method that route takes (the official client's video upload) answers a
+#    credential whose own bytes name that audience and method. A foreign
+#    audience on the same server is refused 400, where it was once a 501.
+OWN_DID_AUD="did:web:$HOSTNAME"
+OWN_NSID='com.atproto.repo.uploadBlob'
+OWN_OUT=$(client service-auth-own "$PORT1" "$TOKEN" "$OWN_DID_AUD%23atproto_pds" "$OWN_NSID") \
+  || fail 'case 7c: getServiceAuth for the server'"'"'s own DID yielded no credential'
+OWN_TOKEN=${OWN_OUT##*token=}
+case "$OWN_TOKEN" in
+  *.*.*) ;;
+  *) fail 'case 7c: what came back is not a compact JWS' ;;
+esac
+OWN_PAYLOAD=$(printf %s "$OWN_TOKEN" | cut -d. -f2 | tr '_-' '/+')
+while [ $((${#OWN_PAYLOAD} % 4)) -ne 0 ]; do OWN_PAYLOAD="$OWN_PAYLOAD="; done
+OWN_CLAIMS=$(printf %s "$OWN_PAYLOAD" | base64 -d)
+case "$OWN_CLAIMS" in
+  *"\"aud\":\"$OWN_DID_AUD\""*) ;;
+  *) fail "case 7c: the credential does not name the bare server DID: $OWN_CLAIMS" ;;
+esac
+case "$OWN_CLAIMS" in
+  *"\"lxm\":\"$OWN_NSID\""*) ;;
+  *) fail "case 7c: the credential does not name $OWN_NSID: $OWN_CLAIMS" ;;
+esac
+client cors-get 'own-did-foreign-audience' "$PORT1" "$TOKEN" \
+  '/xrpc/com.atproto.server.getServiceAuth?aud=did:web:other.example&lxm=com.atproto.repo.uploadBlob' 400 \
+  || fail 'case 7c: a foreign audience on a no-appview server was not refused 400'
+if grep -F -q "$OWN_TOKEN" "$WORK/serve1.err" "$WORK/serve1.out"; then
+  fail 'case 7c: the minted credential appears in the server'"'"'s own output'
+fi
+
+# 7d. THE OFFICIAL VIDEO SERVICE'S JOURNEY, end to end over the real socket. The
+#    session holder mints a 30-minute credential for this server's own DID and
+#    `com.atproto.repo.uploadBlob`; the video service presents ONLY that
+#    credential to upload a 5,242,000-byte `video/mp4` (just under the 5 MiB
+#    blob cap); the bytes come back identical from `getBlob`; the session token
+#    then posts the record that embeds the blob; and the same credential is
+#    refused on any other route.
+VIDEO_BYTES=5242000
+VIDEO_FILE="$WORK/video.mp4"
+head -c "$VIDEO_BYTES" /dev/zero | tr '\0' 'x' > "$VIDEO_FILE"
+[ "$(wc -c < "$VIDEO_FILE" | tr -d ' ')" = "$VIDEO_BYTES" ] \
+  || fail 'case 7d: could not generate the video body'
+VIDEO_EXP=$(( $(date +%s) + 1800 ))
+VIDEO_OUT=$(client service-auth-own "$PORT1" "$TOKEN" "did:web:$HOSTNAME" "$OWN_NSID" "$VIDEO_EXP") \
+  || fail "case 7d step 1: getServiceAuth(exp=now+1800) yielded no credential: $VIDEO_OUT"
+VIDEO_SVC_TOKEN=${VIDEO_OUT##*token=}
+case "$VIDEO_SVC_TOKEN" in
+  *.*.*) ;;
+  *) fail "case 7d step 1: what came back is not a compact JWS: $VIDEO_OUT" ;;
+esac
+VIDEO_UP=$(client upload-blob-file "$PORT1" "$VIDEO_SVC_TOKEN" video/mp4 "$VIDEO_FILE") \
+  || fail "case 7d step 2: uploadBlob with the service credential: $VIDEO_UP"
+VIDEO_CID=${VIDEO_UP##*cid=}
+[ -n "$VIDEO_CID" ] || fail "case 7d step 2: no CID in: $VIDEO_UP"
+client get-blob-file "$PORT1" "$DID" "$VIDEO_CID" video/mp4 "$VIDEO_FILE" \
+  || fail 'case 7d step 3: getBlob did not return the uploaded bytes'
+cmp -s "$VIDEO_FILE" "$VIDEO_FILE.got" \
+  || fail 'case 7d step 3: getBlob bytes differ from the upload under cmp'
+printf '%s' "{\"repo\":\"$DID\",\"collection\":\"app.bsky.feed.post\",\"record\":{\"\$type\":\"app.bsky.feed.post\",\"text\":\"video\",\"createdAt\":\"2026-09-02T00:00:00.000Z\",\"embed\":{\"\$type\":\"app.bsky.embed.video\",\"video\":{\"\$type\":\"blob\",\"ref\":{\"\$link\":\"$VIDEO_CID\"},\"mimeType\":\"video/mp4\",\"size\":$VIDEO_BYTES}}}}" \
+  > "$WORK/video_post.json"
+client post-json "$PORT1" "$TOKEN" /xrpc/com.atproto.repo.createRecord "$WORK/video_post.json" 200 '"uri"' \
+  || fail 'case 7d step 4: the session token could not post the video record'
+client post-json "$PORT1" "$VIDEO_SVC_TOKEN" /xrpc/com.atproto.repo.createRecord "$WORK/video_post.json" 401 InvalidToken \
+  || fail 'case 7d step 5: the service credential was not refused 401 InvalidToken on createRecord'
+if grep -F -q "$VIDEO_SVC_TOKEN" "$WORK/serve1.err" "$WORK/serve1.out"; then
+  fail 'case 7d: the video service credential appears in the server'"'"'s own output'
+fi
+rm -f "$VIDEO_FILE" "$VIDEO_FILE.got"
+
 # 8. a connection that says nothing at all is closed by the server rather
 #    than held. It is closed on the HEADER budget, not on idleTimeout: a peer
 #    that has sent no bytes has not terminated a header section, and that is

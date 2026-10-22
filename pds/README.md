@@ -470,7 +470,7 @@ that can return a successor `Store`), `com.atproto.sync.getBlob`, and
 
 | Route | Answer | Refusals |
 |---|---|---|
-| `com.atproto.repo.uploadBlob` | `{blob}` (a blob-ref: CID, MIME type, size) | admission failure (oversize, per `admitBlob`) |
+| `com.atproto.repo.uploadBlob` (access token, or a service credential whose `lxm` is this method; route class `AccessOrServiceRoute`) | `{blob}` (a blob-ref: CID, MIME type, size) | admission failure (oversize, per `admitBlob`) |
 | `com.atproto.sync.getBlob` | the raw bytes, with the declared MIME `content-type` | `BlobNotFound` when absent |
 | `com.atproto.sync.listBlobs` | `{cids, cursor?}` | `since` is refused, not ignored, the same policy `getRepo` uses |
 
@@ -478,8 +478,12 @@ that can return a successor `Store`), `com.atproto.sync.getBlob`, and
 blob's CID (`cidForRaw`), and enforces `maxBlobBytes` (5 MiB) per blob and
 `maxAccountBlobBytes` (100 MiB) per account before any byte reaches storage.
 Blobs are independent of the repository half — `getBlob`/`listBlobs` answer on
-an unconfigured server too, and `uploadBlob` needs only a session, not a
-repository.
+an unconfigured server too, and `uploadBlob` needs only a credential: an access
+token (which needs no repository), or a service credential whose `lxm` is
+`com.atproto.repo.uploadBlob` (the `AccessOrServiceRoute` class in `pds/lib/xrpc.mdk`;
+the inbound check is `pds/lib/service_jwt_verify.mdk`). A service credential is
+checked against the repository's own signing key, so on a store with no
+repository it is refused 401 `InvalidToken`.
 
 `pds/test/blob_handlers_main.mdk`
 grades the three routes end to end against an EXTERNAL answer key: it uploads
@@ -1079,6 +1083,28 @@ The extractor refuses if the image's `@atproto/pds`, `@atproto/xrpc-server`, or
 `@atproto/crypto` version differs from the one its rows were derived at, so a
 newer image cannot silently answer a different question.
 
+#### Service-auth inbound answer key
+
+`pds/test/vectors/pds_service_auth_inbound_corpus.txt` is the answer key for the
+inbound direction: JWTs, each labelled with the verdict of the pinned image's own
+`@atproto/xrpc-server` `verifyJwt`, so a native verifier is graded against fixed
+data from outside our code. One command, Node only, run from the repository root:
+
+```sh
+docker run --rm --entrypoint node \
+  -v "$PWD/pds/tools:/medaka-tools:ro" \
+  -v "$PWD/pds/test/vectors:/medaka-out" \
+  ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12 \
+  /medaka-tools/extract_pds_service_auth_inbound.mjs /medaka-out
+```
+
+The only argument is the output directory. Tokens use a fixed jti and a fixed
+public test keypair and are signed deterministically, so re-running must
+reproduce the file byte-for-byte (`pds/test/vector_provenance_test.mdk` checks
+the digest). `pds/tools/extract_pds_service_auth_inbound.mjs` also reads
+`MEDAKA_IMAGE_STORE` to point at a copy of the image's pnpm store when Docker is
+unavailable; only the run inside the pinned image produces the committed file.
+
 #### Service-auth interop
 
 `pds/lib/jwt.mdk`'s `mintServiceToken` is the other half of that answer key: it
@@ -1103,10 +1129,12 @@ npm ci --ignore-scripts --prefix "$WORK"
 node pds/tools/check_pds_service_jwt.mjs "$WORK/node_modules" "$WORK/manifest.txt" 1700000030
 ```
 
-Six rows: four accepts (with and without `lxm`, each at the default sixty-second
-window and at a ten-minute window the request asked for) and two rejects (a
-token offered under the wrong `did:key`, and one minted for a different
-audience), so one run shows both polarities. The trailing argument is the
+Eight rows: five accepts (with and without `lxm`, each at the default sixty-second
+window and at a ten-minute window the request asked for, plus the thirty-minute
+`uploadBlob` credential this server mints for its own DID) and three rejects (a
+token offered under the wrong `did:key`, one minted for a different audience,
+and the own-DID credential offered under a method it does not name), so one run
+shows both polarities. The trailing argument is the
 instant `exp` is checked against; `1700000030` is inside every row's window, the
 narrowest of which is the sixty seconds of the manifest's pinned `iat`. A row
 may state the exact `exp - iat` it expects as a seventh field, and one that

@@ -31,10 +31,11 @@
    successor `Store` at all — `uploadBlob` lives there for exactly that
    reason, not because it is a repository write.
 
-   Every registration carries its own `AuthPolicy`: the five writes,
+   Every registration carries its own `AuthPolicy`: the four record writes,
    `updateHandle`, `getSession`, `getServiceAuth`, and both preference routes
-   are
-   `AuthenticatedRoute`, the reads are `PublicRoute`,
+   are `AuthenticatedRoute`, `uploadBlob` is `AccessOrServiceRoute` (an
+   access token, or a service credential for that route), the reads are
+   `PublicRoute`,
    `refreshSession`/`deleteSession` are `RefreshRoute`,
    `createSession` is `PublicRoute` (it is the login that issues the tokens the
    other session routes require), and the two well-knowns are public by
@@ -206,6 +207,7 @@ import lib.server_core.{
   identifiesAccount,
   makeServer,
   refreshAudience,
+  serverDid,
   serviceAuthUnavailableResponse,
   withHandleUpdateCharge,
 }
@@ -1050,7 +1052,10 @@ finishWrite store (Ok (repo, output)) =
    mdk`'s `admitBlob` — the ONE place size/MIME admission happens — then
    record the admitted bytes and declared MIME type in the Store's blob half.
    No request field names an account; this server hosts exactly one, and the
-   auth layer has already required a session before this handler ever runs. -}
+   auth layer has already required a credential before this handler ever runs:
+   the route is `AccessOrServiceRoute`, so that credential is either an open
+   session's access token or a service-auth token the account signed for this
+   method, and the handler treats the two alike. -}
 applyUploadBlob : Store -> MediaType -> Bytes -> Result Response (Store, Json)
 applyUploadBlob store media bytes = do
   let mimeType = "\{mediaTypeType media}/\{mediaTypeSubtype media}"
@@ -1148,7 +1153,7 @@ recordEndpoints = do
   put <- procedureEndpoint putRecordNsid JsonInput AuthenticatedRoute
   remove <- procedureEndpoint deleteRecordNsid JsonInput AuthenticatedRoute
   batch <- procedureEndpoint applyWritesNsid JsonInput AuthenticatedRoute
-  upload <- procedureEndpoint uploadBlobNsid RawInput AuthenticatedRoute
+  upload <- procedureEndpoint uploadBlobNsid RawInput AccessOrServiceRoute
   Ok [create, put, remove, batch, upload]
 
 -- | A configured record-write server for one account.
@@ -2048,8 +2053,9 @@ updateHandleOutcome account requested =
     Err (invalidRequest "DID is not properly configured for handle")
 
 -- | The identity procedure, or `None` for a call this half does not own. It
--- is `AuthenticatedRoute`, so its `Unauthenticated` arm answers 401 for a
--- direct caller of this function, as the session routes do.
+-- is `AuthenticatedRoute`, so its `Unauthenticated` and `ServiceAuthenticated`
+-- arms answer 401 for a direct caller of this function, as the session routes
+-- do.
 identityHandled : Account ->
   AuthOutcome ->
   Store ->
@@ -2058,6 +2064,8 @@ identityHandled : Account ->
 identityHandled account outcome store (ProcedureJsonCall nsid _ body)
   | nsid == updateHandleNsid = match outcome
     Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    ServiceAuthenticated _ =>
       Some (store, authenticationRequired "Authentication Required")
     Authenticated did _ =>
       Some (store, collapseResponse (applyUpdateHandle account did body))
@@ -2131,7 +2139,7 @@ accountDidDocument account publicKey =
 didWebDocument : Account -> Json
 didWebDocument account = jObject [
   ("@context", jArray [JString "https://www.w3.org/ns/did/v1"]),
-  ("id", JString "did:web:\{accountHostname account}"),
+  ("id", JString (serverDid account)),
   (
     "service",
     jArray [
@@ -2171,7 +2179,7 @@ didWebDocument account = jObject [
    before a repository exists and must keep doing so. -}
 wellKnownDidJson : Account -> Store -> Json
 wellKnownDidJson account store =
-  if accountDid account /= "did:web:\{accountHostname account}" then
+  if accountDid account /= serverDid account then
     didWebDocument account
   else match storeRepo store
     Some repo => accountDidDocument account (repoPublicKey repo)
@@ -2437,7 +2445,8 @@ finishSession _ (Ok (next, output)) = (next, jsonOkResponse output)
    `refreshSession`, `deleteSession`, `getSession` and `getServiceAuth` are
    reachable only with an `Authenticated` outcome (they are
    `RefreshRoute`/`AuthenticatedRoute`, which the seam refuses
-   unauthenticated), so their `Unauthenticated` arms are unreachable through
+   unauthenticated and refuses a service credential), so their
+   `Unauthenticated` and `ServiceAuthenticated` arms are unreachable through
    `handle`; they answer 401 rather than panicking or reporting an account
    identity, because a direct caller of this function is not the seam and must
    not be told a different story than a request would be.
@@ -2463,10 +2472,14 @@ sessionHandled account context outcome store (ProcedureNoInputCall nsid _)
   | nsid == refreshSessionNsid = match outcome
     Unauthenticated =>
       Some (store, authenticationRequired "Authentication Required")
+    ServiceAuthenticated _ =>
+      Some (store, authenticationRequired "Authentication Required")
     Authenticated _ presented =>
       Some (applyRefreshSession account context presented store)
   | nsid == deleteSessionNsid = match outcome
     Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    ServiceAuthenticated _ =>
       Some (store, authenticationRequired "Authentication Required")
     Authenticated _ presented =>
       Some (finishSession store (applyDeleteSession context presented store))
@@ -2475,9 +2488,13 @@ sessionHandled account _ outcome store (QueryCall nsid _)
   | nsid == getSessionNsid = match outcome
     Unauthenticated =>
       Some (store, authenticationRequired "Authentication Required")
+    ServiceAuthenticated _ =>
+      Some (store, authenticationRequired "Authentication Required")
     Authenticated _ _ => Some (store, jsonOkResponse (applyGetSession account))
   | nsid == getServiceAuthNsid = match outcome
     Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    ServiceAuthenticated _ =>
       Some (store, authenticationRequired "Authentication Required")
     Authenticated _ _ => Some (store, serviceAuthUnavailableResponse)
   | otherwise = None
@@ -2653,12 +2670,16 @@ preferencesHandled outcome store (QueryCall nsid _)
   | nsid == getPreferencesNsid = match outcome
     Unauthenticated =>
       Some (store, authenticationRequired "Authentication Required")
+    ServiceAuthenticated _ =>
+      Some (store, authenticationRequired "Authentication Required")
     Authenticated _ _ =>
       Some (store, jsonOkResponse (applyGetPreferences store))
   | otherwise = None
 preferencesHandled outcome store (ProcedureJsonCall nsid _ body)
   | nsid == putPreferencesNsid = match outcome
     Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    ServiceAuthenticated _ =>
       Some (store, authenticationRequired "Authentication Required")
     Authenticated _ _ =>
       Some (finishPreferences store (applyPutPreferences store body))

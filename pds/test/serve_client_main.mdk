@@ -1971,6 +1971,39 @@ runServiceAuth port token audience nsid stubPort =
             else
               report "SERVICEAUTH" True "token=\{minted}"
 
+{- | Ask a server for a credential naming the SERVER ITSELF, and print it.
+
+   The server under test holds no appview, so its only route to a signature is
+   the one a credential for its own DID takes. The token is printed on the PASS
+   line for the gate to decode: the audience and method it carries are read
+   from the credential's own bytes by the shell, not asserted here.
+
+   `expParam` is empty for the default lifetime, or `&exp=<unix seconds>`. -}
+runOwnServiceAuth : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Net> Unit
+runOwnServiceAuth port token audience nsid expParam =
+  let path =
+    xrpcPath
+      "com.atproto.server.getServiceAuth?aud=\{audience}&lxm=\{nsid}\{expParam}"
+  let conn = mustConnect port
+  let () = mustSend conn (getRequestWith token path)
+  let result = readResponse conn empty
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report "OWNSERVICEAUTH" False message
+    Ok (status, body, _) =>
+      if status /= 200 then
+        report
+          "OWNSERVICEAUTH"
+          False
+          "want status 200, got \{intToString status}: \{textOrHex body}"
+      else
+        report "OWNSERVICEAUTH" True "token=\{stringField "token" body}"
+
 {- | The proxied-read class, driven over ONE connection.
 
    One connection for the reason the repo-export case uses one: the connections
@@ -2207,7 +2240,7 @@ runKdfFloodOwnerLockout port attackerXff identifier wrongPassword count ownerXff
 
 usage : String
 usage =
-  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-update-handle|update-handle|rl-repo|rl-proxy|rl-malformed|kdf-yield|kdf-flood|kdf-flood-xff|login-race> ..."
+  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|service-auth-own|upload-blob-file|get-blob-file|post-json|rl-conn|rl-req|rl-write|rl-session|rl-update-handle|update-handle|rl-repo|rl-proxy|rl-malformed|kdf-yield|kdf-flood|kdf-flood-xff|login-race> ..."
 
 main : <Clock, Env, IO, Kdf, Net> Unit
 main = match args ()
@@ -2253,6 +2286,12 @@ main = match args ()
     runResume (mustPort port) did collection rkey text
   ["upload-blob", port, token, mimeType, text] =>
     runUploadBlob (mustPort port) token mimeType text
+  ["upload-blob-file", port, token, mimeType, file] =>
+    runUploadBlobFile (mustPort port) token mimeType file
+  ["get-blob-file", port, did, cid, mimeType, file] =>
+    runGetBlobFile (mustPort port) did cid mimeType file
+  ["post-json", port, token, path, file, want, marker] =>
+    runPostJson (mustPort port) token path file (mustStatus want) marker
   ["get-blob", port, did, cid, mimeType, text] =>
     runGetBlob (mustPort port) did cid mimeType text
   ["get-blob-not-live", port, did, cid] =>
@@ -2310,6 +2349,10 @@ main = match args ()
     runPreflight (mustPort port) path named (mustStatus want) wantAllowed
   ["cors-get", label, port, token, path, want] =>
     runCorsGet label (mustPort port) token path (mustStatus want)
+  ["service-auth-own", port, token, audience, nsid] =>
+    runOwnServiceAuth (mustPort port) token audience nsid ""
+  ["service-auth-own", port, token, audience, nsid, exp] =>
+    runOwnServiceAuth (mustPort port) token audience nsid "&exp=\{exp}"
   ["service-auth", port, token, audience, nsid, stubPort] =>
     runServiceAuth (mustPort port) token audience nsid (mustPort stubPort)
   ["proxy-write", port, token, service, path, body, want, marker, field] =>
@@ -2552,6 +2595,80 @@ runGetBlob port did cid mimeType text =
         "GETBLOB"
         (status == 200 && mediaType == mimeType && bodyText == text)
         "status \{intToString status}, type '\{mediaType}' (wanted '\{mimeType}'), \{intToString (B.length body)} byte(s)"
+  ignoreResult (close conn)
+
+-- | The whole of a file as bytes; a missing or unreadable file stops the
+-- client, because every caller names a file the gate just wrote.
+mustReadFile : String -> <IO> Bytes
+mustReadFile file = match readFileBytes file
+  Err message => panic "serve_client: cannot read \{file}: \{message}"
+  Ok octets => B.fromArrayAssumeByteDomain octets
+
+{- | Upload the bytes of `file` under `mimeType` and print the CID.
+
+   The body comes from a file, not from argv, so a multi-megabyte blob never
+   appears in a process listing; `token` is whatever bearer the caller wants
+   `uploadBlob` to judge, a session token or a service credential. The PASS
+   line carries `cid=<cid>` for the gate to read. -}
+runUploadBlobFile : Int -> String -> String -> String -> <IO, Net> Unit
+runUploadBlobFile port token mimeType file =
+  let body = mustReadFile file
+  let conn = mustConnect port
+  let () = mustSend conn (rawPostRequest token uploadBlobPath mimeType body)
+  let () = match readResponse conn empty
+    Err message => report "UPLOADBLOBFILE" False message
+    Ok (200, respBody, _) =>
+      report
+        "UPLOADBLOBFILE"
+        True
+        "sent \{intToString (B.length body)} bytes cid=\{blobRefCidText respBody}"
+    Ok (status, respBody, _) =>
+      report
+        "UPLOADBLOBFILE"
+        False
+        "uploadBlob answered \{intToString status} (wanted 200): \{textOrHex respBody}"
+  ignoreResult (close conn)
+
+{- | Fetch a blob and require the bytes of `file`, byte for byte, under
+   `mimeType`. The fetched bytes are also left at `<file>.got` for the gate to
+   `cmp`, so equality is witnessed by two independent comparisons. -}
+runGetBlobFile : Int -> String -> String -> String -> String -> <IO, Net> Unit
+runGetBlobFile port did cid mimeType file =
+  let wanted = mustReadFile file
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest (getBlobPath did cid))
+  let () = match readTypedResponse conn empty
+    Err message => report "GETBLOBFILE" False message
+    Ok (status, mediaType, body, _) =>
+      let _ = writeFileBytes "\{file}.got" (B.toArray body)
+      report
+        "GETBLOBFILE"
+        (status == 200 && mediaType == mimeType && body == wanted)
+        "status \{intToString status}, type '\{mediaType}' (wanted '\{mimeType}'), \{intToString (B.length body)} bytes read back, \{intToString (B.length wanted)} sent"
+  ignoreResult (close conn)
+
+{- | POST the JSON text in `file` to `path` with `token` and require status
+   `want`; a non-empty `marker` must also occur in the response body, which is
+   how a refusal is graded by its error name and not by its status alone. -}
+runPostJson : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  <IO, Net> Unit
+runPostJson port token path file want marker =
+  let body = textOrHex (mustReadFile file)
+  let conn = mustConnect port
+  let () = mustSend conn (postRequest token path body)
+  let () = match readResponse conn empty
+    Err message => report "POSTJSON" False message
+    Ok (status, respBody, _) =>
+      let text = textOrHex respBody
+      report
+        "POSTJSON"
+        (status == want && contains marker text)
+        "status \{intToString status} (wanted \{intToString want}), body (wanted to contain '\{marker}'): \{text}"
   ignoreResult (close conn)
 
 {- | Fetch a blob back and grade that `getBlob` refuses to serve it as a live

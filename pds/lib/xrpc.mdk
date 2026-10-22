@@ -63,8 +63,19 @@ data EndpointKind =
    The two token classes carry different audiences, so a route has to say
    which one it accepts and `lib.server_core`'s seam verifies against that
    one alone — an access token presented to a refresh route is refused, and a
-   refresh token presented to any other gated route is refused. -}
-public export data AuthPolicy = PublicRoute | AuthenticatedRoute | RefreshRoute
+   refresh token presented to any other gated route is refused.
+
+   `AccessOrServiceRoute` is a FOURTH class rather than a flag on the second:
+   it names the routes that take an access token or a service credential whose
+   `lxm` is the route. Keeping it a class makes the registry the single
+   producer of "which routes may take a service token" (`serviceAuthRouteNsids`),
+   and every route not so registered refuses a service credential by default.
+   For a bearer token it behaves exactly like `AuthenticatedRoute`. -}
+public export data AuthPolicy =
+  | PublicRoute
+  | AuthenticatedRoute
+  | RefreshRoute
+  | AccessOrServiceRoute
 
 -- Constructors stay private so every entry has passed shared NSID admission.
 export data Endpoint = Endpoint String EndpointKind AuthPolicy
@@ -195,6 +206,17 @@ makeRegistry endpoints = do
 export
 registryEndpoints : Registry -> List Endpoint
 registryEndpoints (Registry endpoints) = endpoints
+
+{- | The NSID of every endpoint registered `AccessOrServiceRoute`, in registry
+   order. -}
+export
+serviceAuthRouteNsids : Registry -> List String
+serviceAuthRouteNsids (Registry endpoints) =
+  endpoints
+    |> filter (endpoint => match endpointAuth endpoint
+      AccessOrServiceRoute => True
+      _ => False)
+    |> map endpointNsid
 
 findEndpoint : String -> List Endpoint -> Option Endpoint
 findEndpoint _ [] = None

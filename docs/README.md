@@ -89,6 +89,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`ATPROTO-PDS-CONSTANT-TIME.md`](design/ATPROTO-PDS-CONSTANT-TIME.md) | atproto PDS field/scalar constant-time reduction contract | implemented and landed for #1724 |
 | [`ATPROTO-PDS-DESIGN.md`](design/ATPROTO-PDS-DESIGN.md) | A self-hosted atproto PDS in Medaka | ACTIVE |
 | [`ATPROTO-PDS-SIGNING-CONTRACT.md`](design/ATPROTO-PDS-SIGNING-CONTRACT.md) | atproto PDS native signing and public-key contract | accepted implementation contract for #1700, prerequisite #1877 |
+| [`ATPROTO-PDS-VIDEO-DESIGN.md`](design/ATPROTO-PDS-VIDEO-DESIGN.md) | atproto PDS: accepting video uploads | implemented for slices 1, 2 and 4 of sprint `pds-video-upload` |
 | [`BYTES-DESIGN.md`](design/BYTES-DESIGN.md) | Bytes — a packed byte string for Medaka | B1, B2 and B3 have all shipped |
 | [`CAPABILITY-EFFECTS.md`](design/CAPABILITY-EFFECTS.md) | Capability-safe effects — Medaka's headline direction | PARTIAL |
 | [`CAPABILITY-PLATFORM.md`](design/CAPABILITY-PLATFORM.md) | The capability platform — runtime/product architecture | OPEN |
