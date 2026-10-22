@@ -272,8 +272,8 @@ The interface value is `PreludeInterface` (`compiler/types/prelude_interface.mdk
 
 Settled readers of the state the interface restores (one sentence each; the rows are the test named in parentheses):
 - `cpEvidence` (`drivenEvidence`): a cold drive publishes the evidence a warm drive publishes, with no core rows in it (`publish_test.mdk`, "P -> Q -> P").
-- `cpBinders`: on the diagnostics arm it is the same on a miss and on a hit (R:H7).
+- `cpBinders`: on the diagnostics arm it is the same on a miss and on a hit.
 - `GraphRun.scopeStore` (read by `scopeFrameStats`): core leaves no scope frame in the drive's run on either path, so the frame count is 4 on every run (`typecheck_test.mdk`, "every run leaves the same frame count").
 - `ChainStep.csCtx` (the chain memo's steps): every step carries one shape of core state, whether core was checked or thawed.
 - `methodReturnMemoRetentionStats` and `methodReturnMemoTeardownStats`: the core contribution is `(0, 0)` by construction, because a frozen value holds no goals.
-- The first module of `checkModulesK`: its seed is an empty oracle with no warnings; core's record no longer carries the spurious empty-oracle warnings (R:H6, `typecheck_test.mdk`, "checkModulesK seeds its first module").
+- The first module of `checkModulesK`: its seed is an empty oracle with no warnings; core's record no longer carries the spurious empty-oracle warnings (`typecheck_test.mdk`, "checkModulesK seeds its first module").
