@@ -275,6 +275,31 @@ test "uploadBlob with a malformed MIME type is refused with the XRPC envelope, n
       (postRaw accessToken uploadBlobNsid "image/p!ng" uploadedBytes)
   expectEqual (outcome response) "400 Bad Request InvalidRequest"
 
+-- # uploadBlob under `*/*`
+
+mp4Bytes : Bytes
+mp4Bytes = encodeUtf8 "____ftypmp42____video"
+
+uploadWildcard : Bytes -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> Bytes
+uploadWildcard body =
+  let (_, response) =
+    send
+      (contextAt testInstant 3)
+      sessionStore
+      (postRaw accessToken uploadBlobNsid "*/*" body)
+  response
+
+test "uploadBlob under */* takes video/mp4 from an mp4 body's ftyp box" =
+  let response = uploadWildcard mp4Bytes
+  expectEqual
+    (outcome response ++ " " ++ blobStringField "mimeType" response)
+    "200 OK video/mp4"
+
+test "uploadBlob under */* refuses a body it cannot recognise" =
+  expectEqual
+    (outcome (uploadWildcard uploadedBytes))
+    "400 Bad Request InvalidRequest"
+
 -- # getBlob
 
 test "getBlob on a just-uploaded blob returns the exact bytes" =
