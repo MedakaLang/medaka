@@ -154,8 +154,9 @@ journalctl -u caddy -o cat --since "<start of the test>" \
 
 A video above 5 MiB is refused until #4371 lands, so use a short clip well under it. The
 transcript cell for B3v stays **empty**, marked "not yet run", until the real-client run
-has been done; nothing in this document says it has passed. No `video.bsky.app` audience is
-configured; whether one is needed stays pending that capture.
+has been done; nothing in this document says it has passed. The first attempt (2026-10-22)
+failed at `getServiceAuth?aud=did:web:video.bsky.app&lxm=app.bsky.video.getUploadLimits`
+with 400; that audience is now minted for that one method, and the run is to be repeated.
 
 > **B9's original prediction was wrong, and that is recorded rather than
 > quietly corrected.** This row read *"`POST … deleteSession` → 200"* until a
