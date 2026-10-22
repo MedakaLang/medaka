@@ -1,0 +1,68 @@
+-- The checked main-shape facts published at the end of a typecheck drive.
+
+import frontend.ast.{EvId, TyConOrigin(..)}
+import types.repr.{Mono(..), Scheme(..), normalize}
+import types.tc_types.{GraphCtx(..), ModuleCtx(..)}
+import types.publish.{EntryOutcome(..)}
+
+-- The head node of a left-spine type application.
+mainHead : Mono -> Mono
+mainHead t = match normalize t
+  TApp a _ => mainHead a
+  TQual a _ => mainHead a
+  other => other
+
+-- The stdlib `async` module's `Async` head by origin; a same-named user type is
+-- an ordinary value main.
+export
+mainIsAsyncNow : GraphCtx -> Unit -> Bool
+mainIsAsyncNow gctx _ = match gctx.mainSchemeRef.value
+  Some (Forall _ _ _ _ _ t) => match mainHead t
+    TCon "Async" (OriginModule "async") => True
+    _ => False
+  None => False
+
+-- The entry driver takes `Async e Unit`; other payloads are diagnosed before its
+-- rewrite rather than by driver unification.
+export
+mainAsyncPayloadIsUnitNow : GraphCtx -> Unit -> Bool
+mainAsyncPayloadIsUnitNow gctx _ = match gctx.mainSchemeRef.value
+  Some (Forall _ _ _ _ _ t) => match normalize t
+    TApp _ payload => match normalize payload
+      TCon "Unit" _ => True
+      _ => False
+    _ => False
+  None => False
+
+-- Unit-shaped includes an unconstrained result variable, which cannot produce a
+-- printable value. A constrained variable remains ambiguous, so the caller
+-- supplies whether the `main` binding has recorded obligations.
+export
+mainIsUnitNow : GraphCtx -> Bool -> Unit -> Bool
+mainIsUnitNow gctx hasObligations _ = match gctx.mainSchemeRef.value
+  Some (Forall _ _ _ _ _ t) => match normalize t
+    TCon "Unit" _ => True
+    TVar _ => not hasObligations
+    _ => False
+  None => False
+
+-- The checked Float result survives a polymorphic HOF whose erased body shape
+-- cannot tell an emitter which scalar formatter to use.
+mainIsFloatNow : GraphCtx -> Unit -> Bool
+mainIsFloatNow gctx _ = match gctx.mainSchemeRef.value
+  Some (Forall _ _ _ _ _ t) => match normalize t
+    TCon "Float" _ => True
+    _ => False
+  None => False
+
+-- The drive's answers to the post-drive questions, read after the drain and the
+-- auto-print verdict, when the graph's main scheme and obligation answer are final.
+export
+entryOutcomeNow : ModuleCtx -> Bool -> Option EvId -> EntryOutcome
+entryOutcomeNow mctx hasObligations autoPrint = EntryOutcome {
+  eoMainIsUnit = mainIsUnitNow mctx.mcGraph hasObligations (),
+  eoMainIsFloat = mainIsFloatNow mctx.mcGraph (),
+  eoMainIsAsync = mainIsAsyncNow mctx.mcGraph (),
+  eoMainAsyncPayloadIsUnit = mainAsyncPayloadIsUnitNow mctx.mcGraph (),
+  eoAutoPrint = autoPrint,
+}
