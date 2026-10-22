@@ -3,7 +3,7 @@
 -- `withNoInlineFns`.  A name it misses is a helper LLVM may inline away, which is
 -- invisible until a check that disassembles that helper finds no symbol.
 
-import test.{expectEqual}
+import test.{expectAll, expectEqual, expectFalse, expectTrue, fail}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
 import ir.core_ir_lower.{
@@ -124,13 +124,12 @@ test "lowering copies the selected entry outcome without inspecting the program"
     lowerProgramEmitWith { emptyFacts | pfEntryOutcome = Some selected } []
   let carried = match lowered
     CProgram _ _ _ _ _ facts => facts.factEntryOutcome
-  let view = match carried
-    Some outcome => (
-      outcome.eoMainIsUnit,
-      outcome.eoMainIsFloat,
-      outcome.eoMainIsAsync,
-      outcome.eoMainAsyncPayloadIsUnit,
-      isSome outcome.eoAutoPrint,
-    )
-    None => (False, False, False, True, True)
-  expectEqual (True, True, True, False, False) view
+  match carried
+    Some outcome => expectAll [
+      expectTrue outcome.eoMainIsUnit,
+      expectTrue outcome.eoMainIsFloat,
+      expectTrue outcome.eoMainIsAsync,
+      expectFalse outcome.eoMainAsyncPayloadIsUnit,
+      expectFalse (isSome outcome.eoAutoPrint),
+    ]
+    None => fail "lowering dropped its entry outcome"

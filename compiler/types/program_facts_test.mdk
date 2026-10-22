@@ -2,7 +2,7 @@
 -- `factsNow` outside a bracket panics, and no verb observes a panic in-process, so
 -- the restore after a bracket stands in for that arm.
 
-import test.{expectEqual, expectAll, expectTrue, expectFalse}
+import test.{Expectation, expectEqual, expectAll, expectTrue, expectFalse, fail}
 import frontend.ast.{Decl, EvId(..), EvVal(..), EvEntry(..), Route(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
@@ -124,20 +124,20 @@ outcomeFacts =
     None => emptyFacts
   (checked, factsOfElabWith table elab)
 
-entryOutcomeView : ProgramFacts -> (Bool, Bool, Bool, Bool, Bool)
-entryOutcomeView facts = match facts.pfEntryOutcome
-  Some outcome => (
-    outcome.eoMainIsUnit,
-    outcome.eoMainIsFloat,
-    outcome.eoMainIsAsync,
-    outcome.eoMainAsyncPayloadIsUnit,
-    isSome outcome.eoAutoPrint,
-  )
-  None => (True, True, True, True, False)
+entryOutcomeExpectation : ProgramFacts -> Expectation
+entryOutcomeExpectation facts = match facts.pfEntryOutcome
+  Some outcome => expectAll [
+    expectFalse outcome.eoMainIsUnit,
+    expectFalse outcome.eoMainIsFloat,
+    expectFalse outcome.eoMainIsAsync,
+    expectFalse outcome.eoMainAsyncPayloadIsUnit,
+    expectTrue (isSome outcome.eoAutoPrint),
+  ]
+  None => fail "facts dropped their entry outcome"
 
 test "checked and elaborated facts preserve the selected entry outcome" =
   let (checked, elaborated) = outcomeFacts
   expectAll [
-    expectEqual (False, False, False, False, True) (entryOutcomeView checked),
-    expectEqual (entryOutcomeView checked) (entryOutcomeView elaborated),
+    entryOutcomeExpectation checked,
+    entryOutcomeExpectation elaborated,
   ]

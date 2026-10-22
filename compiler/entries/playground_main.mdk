@@ -114,6 +114,7 @@ import driver.diagnostics.{
 }
 import driver.main_autoprint.{
   executedTrees,
+  factsForExecutedTrees,
   asyncMainShapeError,
 }
 import types.target_profile.{selectedProfile, lookupProfile}
@@ -701,6 +702,7 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
   -- elaborated trees are mangled.
   let (coreE, modulesE) = executed
   let (coreD, modulesM, evTableM) = mangleUnitsEv evTable coreE modulesE
+  let facts = factsForExecutedTrees (factsOfElabWith evTableM elab) modulesE
   let modules2 = stampModulePaths paths modulesM
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
@@ -720,7 +722,7 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
   -- program, then drop the impl bodies (and the plain bindings only they
   -- reached) that no dispatchable method name in this program can reach.  Without
   -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
-  let lowered = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
+  let lowered = lowerProgramEmitWith facts allDecls
   let (plan, reached) = buildEmitPlanReached ffiRows lowered
   let wat = emitProgram input plan reached
   let _ = emitWatMarker warnTriples

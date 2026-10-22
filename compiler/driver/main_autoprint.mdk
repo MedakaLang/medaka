@@ -39,6 +39,7 @@ import frontend.ast.{
 }
 import types.private_mangle.{mangledName}
 import types.publish.{TcReport(..), CheckedProgram(..), EntryOutcome(..)}
+import types.program_facts.{ProgramFacts(..)}
 
 -- The loader hands modules dependency-first, so the ENTRY module is last.
 entryPair : List (String, List Decl) -> Option (String, List Decl)
@@ -241,6 +242,26 @@ mainIsWrapped : List (String, List Decl) -> Bool
 mainIsWrapped modules = match entryPair modules
   Some (_, decls) => wrappedMainIn decls
   None => False
+
+-- A backend lowers the trees after the driver rewrites their entry.  Keep its
+-- entry fact in step with those trees: either driver wrapper has a Unit result,
+-- and has already consumed any auto-print evidence.
+export
+factsForExecutedTrees : ProgramFacts -> List (String, List Decl) -> ProgramFacts
+factsForExecutedTrees facts modules =
+  if mainIsWrapped modules then
+    { facts | pfEntryOutcome = map executedEntryOutcome facts.pfEntryOutcome }
+  else
+    facts
+
+executedEntryOutcome : EntryOutcome -> EntryOutcome
+executedEntryOutcome outcome = { outcome |
+  eoMainIsUnit = True,
+  eoMainIsFloat = False,
+  eoMainIsAsync = False,
+  eoMainAsyncPayloadIsUnit = False,
+  eoAutoPrint = None,
+}
 
 wrappedMainIn : List Decl -> Bool
 wrappedMainIn [] = False

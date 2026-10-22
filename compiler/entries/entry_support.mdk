@@ -76,6 +76,7 @@ import driver.main_autoprint.{
   valueMainCandidate,
   executedTrees,
   executedFromReport,
+  factsForExecutedTrees,
   asyncMainShapeError,
 }
 
@@ -699,7 +700,9 @@ emitElaborated outputs asyncDriver emitTail runtimeDecls coreDecls modules repor
               mangleUnitsEv checked.cpEvidence coreW modulesW
             emitTail
               outputs
-              (factsOfChecked { checked | cpEvidence = table })
+              (factsForExecutedTrees
+                (factsOfChecked { checked | cpEvidence = table })
+                modulesW)
               runtimeDecls
               coreD
               modules2

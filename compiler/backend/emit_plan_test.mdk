@@ -139,26 +139,24 @@ entryOutcomeProgram =
   }
   CProgram [] [] [] [] [] { noDeclFacts | factEntryOutcome = Some outcome }
 
-planOutcomeView : Backend -> (Bool, Bool, Bool, Bool, Bool)
-planOutcomeView target =
+planOutcomeExpectation : Backend -> Expectation
+planOutcomeExpectation target =
   match (buildEmitPlan target entryOutcomeProgram).entryOutcome
-    Some outcome => (
-      outcome.eoMainIsUnit,
-      outcome.eoMainIsFloat,
-      outcome.eoMainIsAsync,
-      outcome.eoMainAsyncPayloadIsUnit,
-      isSome outcome.eoAutoPrint,
-    )
-    None => (True, False, True, False, True)
+    Some outcome => expectAll [
+      expectFalse outcome.eoMainIsUnit,
+      expectTrue outcome.eoMainIsFloat,
+      expectFalse outcome.eoMainIsAsync,
+      expectTrue outcome.eoMainAsyncPayloadIsUnit,
+      expectFalse (isSome outcome.eoAutoPrint),
+    ]
+    None => fail "the plan dropped its entry outcome"
 
 test "LLVM and Wasm plans preserve the entry outcome" =
   expectEach
     (map
       (named => (
         fst named,
-        expectEqual
-          (False, True, False, True, False)
-          (planOutcomeView (snd named)),
+        planOutcomeExpectation (snd named),
       ))
       [("LLVM", LlvmBackend), ("Wasm", WasmBackend)])
 

@@ -1,5 +1,5 @@
 # META
-source_lines=373
+source_lines=394
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -43,6 +43,7 @@ import frontend.ast.{
 }
 import types.private_mangle.{mangledName}
 import types.publish.{TcReport(..), CheckedProgram(..), EntryOutcome(..)}
+import types.program_facts.{ProgramFacts(..)}
 
 -- The loader hands modules dependency-first, so the ENTRY module is last.
 entryPair : List (String, List Decl) -> Option (String, List Decl)
@@ -246,6 +247,26 @@ mainIsWrapped modules = match entryPair modules
   Some (_, decls) => wrappedMainIn decls
   None => False
 
+-- A backend lowers the trees after the driver rewrites their entry.  Keep its
+-- entry fact in step with those trees: either driver wrapper has a Unit result,
+-- and has already consumed any auto-print evidence.
+export
+factsForExecutedTrees : ProgramFacts -> List (String, List Decl) -> ProgramFacts
+factsForExecutedTrees facts modules =
+  if mainIsWrapped modules then
+    { facts | pfEntryOutcome = map executedEntryOutcome facts.pfEntryOutcome }
+  else
+    facts
+
+executedEntryOutcome : EntryOutcome -> EntryOutcome
+executedEntryOutcome outcome = { outcome |
+  eoMainIsUnit = True,
+  eoMainIsFloat = False,
+  eoMainIsAsync = False,
+  eoMainAsyncPayloadIsUnit = False,
+  eoAutoPrint = None,
+}
+
 wrappedMainIn : List Decl -> Bool
 wrappedMainIn [] = False
 wrappedMainIn ((DAttrib _ d) :: rest) = wrappedMainIn (d :: rest)
@@ -379,6 +400,7 @@ asyncPinImport =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "EvId" false) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true) (mem "EntryOutcome" true))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -421,6 +443,10 @@ asyncPinImport =
 (DFunDef false "noChecked" () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no checked program to run"))))
 (DTypeSig true "mainIsWrapped" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
 (DFunDef false "mainIsWrapped" ((PVar "modules")) (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EApp (EVar "wrappedMainIn") (EVar "decls"))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig true "factsForExecutedTrees" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ProgramFacts"))))
+(DFunDef false "factsForExecutedTrees" ((PVar "facts") (PVar "modules")) (EIf (EApp (EVar "mainIsWrapped") (EVar "modules")) (ERecordUpdate (EVar "facts") ((fa "pfEntryOutcome" (EApp (EApp (EVar "map") (EVar "executedEntryOutcome")) (EFieldAccess (EVar "facts") "pfEntryOutcome"))))) (EVar "facts")))
+(DTypeSig false "executedEntryOutcome" (TyFun (TyCon "EntryOutcome") (TyCon "EntryOutcome")))
+(DFunDef false "executedEntryOutcome" ((PVar "outcome")) (ERecordUpdate (EVar "outcome") ((fa "eoMainIsUnit" (EVar "True")) (fa "eoMainIsFloat" (EVar "False")) (fa "eoMainIsAsync" (EVar "False")) (fa "eoMainAsyncPayloadIsUnit" (EVar "False")) (fa "eoAutoPrint" (EVar "None")))))
 (DTypeSig false "wrappedMainIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "wrappedMainIn" ((PList)) (EVar "False"))
 (DFunDef false "wrappedMainIn" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "wrappedMainIn") (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -471,6 +497,7 @@ asyncPinImport =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "EvId" false) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true) (mem "EntryOutcome" true))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" true))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -513,6 +540,10 @@ asyncPinImport =
 (DFunDef false "noChecked" () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no checked program to run"))))
 (DTypeSig true "mainIsWrapped" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
 (DFunDef false "mainIsWrapped" ((PVar "modules")) (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EApp (EVar "wrappedMainIn") (EVar "decls"))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig true "factsForExecutedTrees" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ProgramFacts"))))
+(DFunDef false "factsForExecutedTrees" ((PVar "facts") (PVar "modules")) (EIf (EApp (EVar "mainIsWrapped") (EVar "modules")) (ERecordUpdate (EVar "facts") ((fa "pfEntryOutcome" (EApp (EApp (EMethodRef "map") (EVar "executedEntryOutcome")) (EFieldAccess (EVar "facts") "pfEntryOutcome"))))) (EVar "facts")))
+(DTypeSig false "executedEntryOutcome" (TyFun (TyCon "EntryOutcome") (TyCon "EntryOutcome")))
+(DFunDef false "executedEntryOutcome" ((PVar "outcome")) (ERecordUpdate (EVar "outcome") ((fa "eoMainIsUnit" (EVar "True")) (fa "eoMainIsFloat" (EVar "False")) (fa "eoMainIsAsync" (EVar "False")) (fa "eoMainAsyncPayloadIsUnit" (EVar "False")) (fa "eoAutoPrint" (EVar "None")))))
 (DTypeSig false "wrappedMainIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "wrappedMainIn" ((PList)) (EVar "False"))
 (DFunDef false "wrappedMainIn" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "wrappedMainIn") (EBinOp "::" (EVar "d") (EVar "rest"))))
