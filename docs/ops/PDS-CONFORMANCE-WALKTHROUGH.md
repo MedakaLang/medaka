@@ -133,12 +133,29 @@ on the one before.
 | **B1** | Log in with the handle and password | Session established, timeline opens (it will be empty) | `POST /xrpc/com.atproto.server.createSession` → 200, then `GET /xrpc/app.bsky.actor.getPreferences` → 200. The second one is served **locally** and is the sharpest single check that the preferences store (A2 of the plan) is live. |
 | **B2** | Post a text-only post | The post appears in your profile | `POST /xrpc/com.atproto.repo.createRecord` → 200, collection `app.bsky.feed.post` |
 | **B3** | Post with an image attached | The image renders in the post | `POST /xrpc/com.atproto.repo.uploadBlob` → 200, then `createRecord` → 200. The blob ceiling is 5,242,880 bytes (`maxBlobBytes`, `pds/lib/resource_limits.mdk`) and Caddy's `request_body max_size` is set to the same number — **use an image well under it**; an image at the boundary tests two limits at once and tells you nothing about either. |
+| **B3v** | Post with a short video attached | The video renders | `GET /xrpc/com.atproto.server.getServiceAuth` → 200 (from the phone), then `POST /xrpc/com.atproto.repo.uploadBlob` → 200 from the **video service's** address, not the phone's, then `createRecord` → 200. The PDS access log drops query strings, so `aud` and `lxm` are visible only in `journalctl -u caddy`; capture them with the command below. |
 | **B4** | Follow the second account | Follow state shows in the app | `POST /xrpc/com.atproto.repo.createRecord` → 200, collection `app.bsky.graph.follow` |
 | **B5** | Reply to a post from the second account | Reply threads correctly under the parent | `createRecord` → 200, collection `app.bsky.feed.post`. Reaching the parent post at all requires a **proxied read** to have succeeded first — if the thread will not load, the failure is the proxy, not the write. |
 | **B6** | Open notifications | The second account's follow and any reply appear | `GET /xrpc/app.bsky.notification.listNotifications` → 200, **proxied**. Not in the local registry, so a 400 here means the audience set or the egress proxy, and a 404 means the method axis refused it. |
 | **B7** | Send a DM to the second account | Message sends and shows as delivered | A `chat.bsky.convo.*` route → 200, **proxied to the chat audience**. Needs the second `--proxy-audience` row; see §5. |
 | **B8** | Receive the second account's reply DM | Message arrives | Same namespace, same audience |
 | **B9** | Log out | Session ends, app returns to the login screen | **Nothing.** Measured 2026-09-17: the official app's sign-out drops its tokens client-side and never calls `com.atproto.server.deleteSession` — zero calls across the life of the deployment. Expect **no** new access-log line. A line here would mean the app changed, which is worth knowing |
+
+**B3v capture.** Run this on the PDS box, with `--since` set to the start of the test,
+and paste the output into the transcript; it contains query strings, status codes and the
+client's user agent, and no tokens:
+
+```sh
+journalctl -u caddy -o cat --since "<start of the test>" \
+  | jq -c 'select(.request.uri? // "" | test("getServiceAuth|uploadBlob|app\\.bsky\\.video"))
+           | {t: (.ts|floor|todate), status, method: .request.method,
+              uri: .request.uri, ua: (.request.headers["User-Agent"][0]? // "-")}'
+```
+
+A video above 5 MiB is refused until #4371 lands, so use a short clip well under it. The
+transcript cell for B3v stays **empty**, marked "not yet run", until the real-client run
+has been done; nothing in this document says it has passed. No `video.bsky.app` audience is
+configured; whether one is needed stays pending that capture.
 
 > **B9's original prediction was wrong, and that is recorded rather than
 > quietly corrected.** This row read *"`POST … deleteSession` → 200"* until a
@@ -174,9 +191,6 @@ expect C2 to fail too and fix A3 rather than investigating here.
 Write these in the transcript as **OUT**, with the reason, so the next reader
 does not re-derive them.
 
-- **Video posting.** A3 of the launch plan names the video service as one of
-  the reasons `getServiceAuth` exists, but no issue tracks video upload end to
-  end and nothing in this tree has exercised it. Out of this walkthrough.
 - **Changing the handle.** `com.atproto.identity.updateHandle` (criterion A7,
   #2939) accepts only the handle the account already has, and re-announces it.
   Any other handle is refused "DID is not properly configured for handle",

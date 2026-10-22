@@ -470,7 +470,7 @@ that can return a successor `Store`), `com.atproto.sync.getBlob`, and
 
 | Route | Answer | Refusals |
 |---|---|---|
-| `com.atproto.repo.uploadBlob` | `{blob}` (a blob-ref: CID, MIME type, size) | admission failure (oversize, per `admitBlob`) |
+| `com.atproto.repo.uploadBlob` (access token, or a service credential whose `lxm` is this method; route class `AccessOrServiceRoute`) | `{blob}` (a blob-ref: CID, MIME type, size) | admission failure (oversize, per `admitBlob`) |
 | `com.atproto.sync.getBlob` | the raw bytes, with the declared MIME `content-type` | `BlobNotFound` when absent |
 | `com.atproto.sync.listBlobs` | `{cids, cursor?}` | `since` is refused, not ignored, the same policy `getRepo` uses |
 
@@ -478,8 +478,10 @@ that can return a successor `Store`), `com.atproto.sync.getBlob`, and
 blob's CID (`cidForRaw`), and enforces `maxBlobBytes` (5 MiB) per blob and
 `maxAccountBlobBytes` (100 MiB) per account before any byte reaches storage.
 Blobs are independent of the repository half — `getBlob`/`listBlobs` answer on
-an unconfigured server too, and `uploadBlob` needs only a session, not a
-repository.
+an unconfigured server too, and `uploadBlob` needs only a credential, not a
+repository: an access token, or a service credential whose `lxm` is
+`com.atproto.repo.uploadBlob` (the `AccessOrServiceRoute` class in `pds/lib/xrpc.mdk`;
+the inbound check is `pds/lib/service_jwt_verify.mdk`).
 
 `pds/test/blob_handlers_main.mdk`
 grades the three routes end to end against an EXTERNAL answer key: it uploads
