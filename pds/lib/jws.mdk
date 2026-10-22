@@ -1,0 +1,82 @@
+{- | JWS compact serialization (RFC 7515 §7.1): the three-segment split, unpadded
+     base64url both ways, and a segment decoded to JSON.
+
+     No key and no algorithm live here. A caller that verifies a token decides
+     what the header's `alg` means and checks the signature itself; this module
+     only takes a token apart and reads its pieces. Its imports are the standard
+     library alone, so a module that decodes a token does not reach the signing
+     path of whatever module defines the token's format. -}
+
+import base64.{decodeUrlSafe, encodeUrlSafe}
+import bytes.{Bytes, decodeUtf8, encodeUtf8}
+import json.{Json, Json(..), jObject, parse}
+import string.{split, stripSuffix}
+
+-- RFC 7515 §2 requires base64url with the trailing `=` omitted, while
+-- `base64.encodeUrlSafe`/`decodeUrlSafe` are RFC 4648 §5 and keep the
+-- padding, `decodeUrlSafe` rejecting any length that is not a multiple of
+-- four. These two adapt between the conventions.
+stripPadding : String -> String
+stripPadding s = match stripSuffix "=" s
+  Some shorter => stripPadding shorter
+  None => s
+
+-- These two share `base64.encode`/`decode`'s signature but not their
+-- alphabet or their padding convention, which is the whole reason they
+-- exist; rule-stdlib-reimpl compares declared signatures only, so it flags
+-- both — disabled for this file rather than delegated away.
+-- lint-disable-file rule-stdlib-reimpl
+{- | The unpadded base64url encoding of `bytes` (RFC 7515 §2).
+
+     > b64uEncode (encodeUtf8 "hi")
+     "aGk"
+     > b64uEncode (encodeUtf8 "h")
+     "aA" -}
+export
+b64uEncode : Bytes -> String
+b64uEncode bytes = stripPadding (encodeUrlSafe bytes)
+
+{- | The bytes of an unpadded base64url segment, or why it is not one. A
+     length that cannot be a valid unpadded segment is refused before decoding.
+
+     > map decodeUtf8 (b64uDecode "aGk")
+     Ok (Some "hi")
+     > b64uDecode "e"
+     Err "jwt: segment length is not a valid unpadded base64url length" -}
+export
+b64uDecode : String -> Result String Bytes
+b64uDecode s = match stringLength s % 4
+  0 => decodeUrlSafe s
+  2 => decodeUrlSafe "\{s}=="
+  3 => decodeUrlSafe "\{s}="
+  _ => Err "jwt: segment length is not a valid unpadded base64url length"
+
+{- | A token split into its header, claims and signature segments (RFC 7515
+     §7.1), or `None` when it does not have exactly three `.`-separated parts.
+     Empty segments are kept as empty strings.
+
+     > compactSegments "a.b.c"
+     Some ("a", "b", "c")
+     > compactSegments "a.b"
+     None
+     > compactSegments "a..c"
+     Some ("a", "", "c") -}
+export
+compactSegments : String -> Option (String, String, String)
+compactSegments token = match split "." token
+  [headerSeg, claimsSeg, sigSeg] => Some (headerSeg, claimsSeg, sigSeg)
+  _ => None
+
+{- | A base64url segment decoded to its JSON value.
+
+     > decodeSegmentJson "eyJhbGciOiJIUzI1NiJ9" == Ok (jObject [("alg", JString "HS256")])
+     True
+     > decodeSegmentJson "e"
+     Err "jwt: segment length is not a valid unpadded base64url length" -}
+export
+decodeSegmentJson : String -> Result String Json
+decodeSegmentJson segment = match b64uDecode segment
+  Err e => Err e
+  Ok bytes => match decodeUtf8 bytes
+    None => Err "jwt: segment is not UTF-8"
+    Some text => parse text
