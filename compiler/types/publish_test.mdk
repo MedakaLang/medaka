@@ -23,7 +23,8 @@ import types.effect_authority.{Authority(..), Authvar(..), authvarId}
 import types.publish.{
   PubScheme(..), VarKind(..), LiveCell(..), emptyZonk, zonkMono, zonkScheme,
   freezePub, liveCells, atGraphEnd, graphReport, ppPubScheme, TcReport(..),
-  CheckedProgram(..), PartialAnalysis(..), ModDiags, TcDiag(..), noEntryTables
+  CheckedProgram(..), EntryOutcome(..), PartialAnalysis(..), ModDiags,
+  TcDiag(..), noEntryTables, noEntryOutcome
 }
 import types.disposition.{
   MethodDisposition(..), emptyDispositionTable, dispositionRows, dispositionKey,
@@ -906,9 +907,18 @@ test "a drive's outputs answer for its own main and its own effect domains" =
   let outputs = outputsOf "o" outputsSrc
   let rejected = outputsOf "q" "bad : Int\nbad = \"x\"\n"
   expectEach [
-    ("an Int main is not Unit", expectFalse outputs.doMainIsUnit),
-    ("an Int main is not Float", expectFalse outputs.doMainIsFloat),
-    ("an Int main is not Async", expectFalse outputs.doMainIsAsync),
+    (
+      "an Int main is not Unit",
+      expectFalse outputs.doEntryOutcome.eoMainIsUnit,
+    ),
+    (
+      "an Int main is not Float",
+      expectFalse outputs.doEntryOutcome.eoMainIsFloat,
+    ),
+    (
+      "an Int main is not Async",
+      expectFalse outputs.doEntryOutcome.eoMainIsAsync,
+    ),
     ("a clean program armed nothing", expectFalse outputs.doHadTypeErrors),
     (
       "a rejected program armed the sticky flag",
@@ -917,6 +927,90 @@ test "a drive's outputs answer for its own main and its own effect domains" =
     (
       "the builtin domains are registered",
       expectGreaterThan 0 (length outputs.doEffectDomains),
+    ),
+  ]
+
+entryOutcomePrelude : List Decl
+entryOutcomePrelude =
+  desugar
+    (parse
+      (joinNl [
+        "interface Display a where",
+        "  display : a -> String",
+        "impl Display String where",
+        "  display s = s",
+        "impl Display Int where",
+        "  display _ = \"int\"",
+        "impl Display Float where",
+        "  display _ = \"float\"",
+        "println : Display a => a -> Unit",
+        "println x = let _ = display x in ()",
+      ]))
+
+publishedEntryOutcome : String -> Option String -> EntryOutcome
+publishedEntryOutcome src executes =
+  let (_, report, _) = elaborateModulesWithReport
+    defaultDriveInputs
+    True
+    executes
+    []
+    entryOutcomePrelude
+    [("entry", desugar (parseLocated src))]
+  match report.trChecked
+    Some checked => checked.cpEntryOutcome
+    None => noEntryOutcome
+
+test "the checked outcome distinguishes Unit and value main" =
+  let unit = publishedEntryOutcome "main = ()" (Some "runMain")
+  let value = publishedEntryOutcome "main = 1" (Some "runMain")
+  expectEach [
+    ("Unit main", expectTrue unit.eoMainIsUnit),
+    ("Unit main has no print evidence", expectFalse (isSome unit.eoAutoPrint)),
+    ("value main", expectFalse value.eoMainIsUnit),
+    ("value main has print evidence", expectTrue (isSome value.eoAutoPrint)),
+  ]
+
+test "a user display method does not capture the prelude print obligation" =
+  let outcome =
+    publishedEntryOutcome
+      (joinNl [
+        "interface UserDisplay a where",
+        "  display : a -> String",
+        "impl UserDisplay Int where",
+        "  display _ = \"user\"",
+        "main = 1",
+      ])
+      (Some "runMain")
+  expectEach [
+    ("value main", expectFalse outcome.eoMainIsUnit),
+    ("prelude evidence", expectTrue (isSome outcome.eoAutoPrint)),
+  ]
+
+test "only an executing drive publishes auto-print evidence" =
+  let manifest = publishedEntryOutcome "main = 1" None
+  let executing = publishedEntryOutcome "main = 1" (Some "runMain")
+  expectEach [
+    ("manifest still knows the result kind", expectFalse manifest.eoMainIsUnit),
+    ("manifest carries no evidence", expectFalse (isSome manifest.eoAutoPrint)),
+    ("execution carries evidence", expectTrue (isSome executing.eoAutoPrint)),
+  ]
+
+test "entry outcomes are isolated across value, Unit, value drives" =
+  let first = publishedEntryOutcome "main = 1" (Some "runMain")
+  let middle = publishedEntryOutcome "main = ()" (Some "runMain")
+  let last = publishedEntryOutcome "main = 2" (Some "runMain")
+  expectEach [
+    (
+      "result kinds",
+      expectEqual
+        [False, True, False]
+        [first.eoMainIsUnit, middle.eoMainIsUnit, last.eoMainIsUnit],
+    ),
+    (
+      "print evidence",
+      expectEqual
+        [True, False, True]
+        (map (o => isSome o.eoAutoPrint) [first, middle, last]),
     ),
   ]
 

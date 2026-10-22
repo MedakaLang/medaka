@@ -384,7 +384,7 @@ analyzeProgramReport inputs valueMain executes rtD coreD modsD =
   let preludeSchemes = pubSchemes preludePub
   let ops = lastInvocationOps outputs
   let autoPrintCall =
-    if shouldAutoPrintMain outputs coreD modsD then
+    if shouldAutoPrintMain outputs.doEntryOutcome coreD modsD then
       lookupAssoc "println" preludeSchemes
     else
       None

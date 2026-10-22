@@ -272,6 +272,7 @@ test "two occurrences of one binder id stay one binder" =
         factMethodResults = [MethodResultFact "left::I" "m" True [1] 2],
         factRequires = [],
         factSupers = [],
+        factEntryOutcome = None,
         factBinders = [
           BinderRow {
             brId = shared,

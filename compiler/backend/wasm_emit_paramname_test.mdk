@@ -33,12 +33,7 @@ watOf : String -> String
 watOf src =
   let decls = grantWholeDomain (desugar (parse src))
   let input =
-    makeWasmEmitInputFull
-      PreludeFreeRuntime
-      (ctorFieldTypeNames decls)
-      False
-      False
-      []
+    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (text, _) = emitProgramRecord input (buildEmitPlan WasmBackend cp) cp
   text

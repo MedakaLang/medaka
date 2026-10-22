@@ -4,6 +4,7 @@
 
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{Lit(..), Pat(..), hostRows}
+import types.publish.{EntryOutcome(..)}
 import ir.core_ir.{
   CProgram(..),
   MethodResultFact(..),
@@ -78,6 +79,7 @@ import backend.trmc_analysis.{
 -- three are empty on an LLVM plan.
 public export data EmitPlan = EmitPlan {
   target : Backend,
+  entryOutcome : Option EntryOutcome,
   methodResults : OrdMap (OrdMap MethodResultFact),
   wasmOnlyReach : Option ReachUnits,
   lazyGlobals : List String,
@@ -183,6 +185,7 @@ planOver target reach ffiRows (CProgram groups ctorArs _ impls _ facts) =
     EvalBackend => (noDemand, [], [])
   EmitPlan {
     target = target,
+    entryOutcome = facts.factEntryOutcome,
     methodResults = indexMethodResults facts.factMethodResults,
     wasmOnlyReach = reach,
     lazyGlobals = lazyGlobalNames groups,
@@ -199,6 +202,18 @@ planOver target reach ffiRows (CProgram groups ctorArs _ impls _ facts) =
     hostKeys = keys,
     jsImports = js,
   }
+
+export
+planEntryMainIsUnit : EmitPlan -> Bool
+planEntryMainIsUnit plan = match plan.entryOutcome
+  Some outcome => outcome.eoMainIsUnit
+  None => False
+
+export
+planEntryMainIsFloat : EmitPlan -> Bool
+planEntryMainIsFloat plan = match plan.entryOutcome
+  Some outcome => outcome.eoMainIsFloat
+  None => False
 
 -- The two-level index preserves qualified interface identity without joining
 -- names. First declaration wins, matching declaration-table lookup order.

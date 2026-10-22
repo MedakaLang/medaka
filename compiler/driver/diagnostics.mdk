@@ -1344,7 +1344,6 @@ undrivenReport = TcReport {
   trResidual = [],
   trChecked = None,
   trEvidenceFaults = [],
-  trAutoPrint = None,
 }
 
 -- resolve over runtime + core (prelude) + target

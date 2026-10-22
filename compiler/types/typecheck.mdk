@@ -475,6 +475,7 @@ import types.tc_types.{
   ChainMemo(..),
   GraphDrive(..),
   ElabResult,
+  ElabFacts(..),
   MarkCtx(..),
   SpellCtx(..),
   BareLocals(..),
@@ -536,7 +537,8 @@ import types.publish.{
   freezeRows,
   freezeModDiags,
   freezeNewest,
-  graphReport,
+  EntryOutcome(..),
+  graphReportWithOutcome,
   ppPubScheme,
 }
 import types.registry.{
@@ -9752,14 +9754,8 @@ envAtIfSome loc env = envAt loc env
 -- a module binding `main` is elaborated; reset at the top of elaborateModules so a
 -- prior run can't leak.  Type-level only → no emitted IR changes → fixpoint-safe.
 
--- Stage 2 query: did the last-elaborated `main` infer to an `Async`-headed type?
--- The head must be the stdlib `async` module's `Async`, by origin — a user type
--- that happens to be named `Async` is an ordinary value main.
-export
-mainTypeIsAsync : DriveOutputs -> Bool
-mainTypeIsAsync o = o.doMainIsAsync
-
--- `mainTypeIsAsync` of the live graph, for the drive's own auto-print judgment.
+-- The stdlib `async` module's `Async` head by origin; a same-named user type is
+-- an ordinary value main.
 mainIsAsyncNow : GraphCtx -> Unit -> Bool
 mainIsAsyncNow gctx _ = match gctx.mainSchemeRef.value
   Some (Forall _ _ _ _ _ t) => match headMonoNode t
@@ -9767,15 +9763,8 @@ mainIsAsyncNow gctx _ = match gctx.mainSchemeRef.value
     _ => False
   None => False
 
--- Stage 2 query: is the `Async` main's payload `Unit`?  The entry driver
--- (`runAsyncMain`) takes `Async e Unit`, so any other payload
--- is rejected with a diagnostic before the rewrite rather than by the driver's
--- unification failure.
-export
-mainAsyncPayloadIsUnit : DriveOutputs -> Bool
-mainAsyncPayloadIsUnit o = o.doMainAsyncPayloadIsUnit
-
--- `mainAsyncPayloadIsUnit` of the live graph.
+-- The entry driver takes `Async e Unit`; other payloads are diagnosed before its
+-- rewrite rather than by driver unification.
 mainAsyncPayloadIsUnitNow : GraphCtx -> Unit -> Bool
 mainAsyncPayloadIsUnitNow gctx _ = match gctx.mainSchemeRef.value
   Some (Forall _ _ _ _ _ t) => match normalize t
@@ -9785,27 +9774,9 @@ mainAsyncPayloadIsUnitNow gctx _ = match gctx.mainSchemeRef.value
     _ => False
   None => False
 
--- Stage 3 query: is the last-elaborated `main` Unit-shaped, i.e. is there no
--- value for a driver to print?  True when its type (effects stripped at each
--- arrow) resolves to `Unit`, or is a type variable no interface constrains: a
--- `main` of type `a` for every `a` (`main = panic "boom"`) never produces a
--- value, and printing one would need a `Display` impl that no type selects.  A
--- CONSTRAINED variable (`main = empty`, `Monoid a => a`) is not Unit-shaped:
--- its ambiguity is a real error, reported by the auto-print obligation
--- (`autoPrintWanted`).
--- A `Scheme` carries no context, so the variable case reads the obligation
--- side-channel `ownContext` reads the `=>` from, keyed the same way; it
--- answers for the module last checked, the entry module on the paths that ask
--- about `main`'s shape.
--- Used by the emitters to suppress the auto-print of Unit-returning mains even
--- when no explicit `main : <IO> Unit` annotation is present — e.g.
--- `main = applyEff f 42` where `applyEff : (a -> <IO> b) -> a -> <IO> b` and
--- `f : Int -> <IO> Unit` — and by the auto-print wrap (driver/main_autoprint.mdk).
-export
-mainTypeIsUnit : DriveOutputs -> Bool
-mainTypeIsUnit o = o.doMainIsUnit
-
--- `mainTypeIsUnit` of the live graph and the last module checked.
+-- Unit-shaped includes an unconstrained result variable, which cannot produce a
+-- printable value. A constrained variable remains ambiguous; its obligations
+-- live in the same per-binding side channel read here.
 mainIsUnitNow : ModuleCtx -> Unit -> Bool
 mainIsUnitNow mctx _ = match mctx.mcGraph.mainSchemeRef.value
   Some (Forall _ _ _ _ _ t) => match normalize t
@@ -9818,15 +9789,8 @@ mainIsUnitNow mctx _ = match mctx.mcGraph.mainSchemeRef.value
     _ => False
   None => False
 
--- Stage 4 query: did the last-elaborated `main` infer to a bare Float return type?
--- Used by the LLVM/WasmGC emitters to render a bare Float value main correctly
--- even when a structural guess at `main`'s result can't see through a polymorphic
--- HOF's return type (e.g. `main = fold (acc x => acc + x) 0.0 [1.0, 2.0, 3.0]`).
-export
-mainTypeIsFloat : DriveOutputs -> Bool
-mainTypeIsFloat o = o.doMainIsFloat
-
--- `mainTypeIsFloat` of the live graph.
+-- The checked Float result survives a polymorphic HOF whose erased body shape
+-- cannot tell an emitter which scalar formatter to use.
 mainIsFloatNow : GraphCtx -> Unit -> Bool
 mainIsFloatNow gctx _ = match gctx.mainSchemeRef.value
   Some (Forall _ _ _ _ _ t) => match normalize t
@@ -32659,7 +32623,7 @@ rowRouteKey (ImplRow _ _ ir tys _ _ _) =
 -- side of this table now carries the same `HeadKey` the IMPL side (`keyEntryOf`
 -- via `headTyconTy`) does, and the two can be compared as identities instead of
 -- as spellings.  Extensionally unchanged: the two projections had identical
--- arms (see `monoHeadCon`'s obituary above `mainTypeIsAsync`).
+-- arms (see `monoHeadCon`'s obituary above `mainIsAsyncNow`).
 goalHeadCon : List Mono -> Option HeadKey
 goalHeadCon (g :: _) = headTyconMono g
 goalHeadCon [] = None
@@ -54375,7 +54339,7 @@ graphModuleWorker sel prev mid seed accData accAll prog =
 -- producer, but `checkJsonFile`'s multi-module arm (driver/diagnostics.mdk) had NONE:
 -- `analyzeProject` → `typecheckPassFull` → here, and nothing on that chain wrote it.
 -- Both directions of that hole are pinned:
---   * fresh process — the ref is `None`, `mainTypeIsUnit ()` answers False on `None`,
+--   * fresh process — the ref is `None`, `mainIsUnitNow` answers False on `None`,
 --     so W-MAIN-SHAPE FIRED on a clean Unit main (false positive on every
 --     `check --json` / MCP `medaka_check` of a multi-module project);
 --   * long-lived process (`medaka mcp`, `medaka lsp`) — the ref held whatever an
@@ -54761,7 +54725,7 @@ checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKe
   -- #2705: the graph-end drain for what the steps did not already drain (the entry
   -- module, and any module after the last recorded step) — see `chainGo`.
   let findings = checkGraphFinish lastCtx
-  let (wanted, _) =
+  let (wanted, autoPrint) =
     autoPrintWanted
       lastCtx
       valueMain
@@ -54781,8 +54745,10 @@ checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKe
   -- Built for the report, not installed: no lowering reads a check drive's table.
   let dispositions =
     buildDispositions lastCtx.mcGraph lastCtx.mcGraph.declEnvsRef.value
+  let outcome = entryOutcomeNow lastCtx autoPrint
   let report =
-    graphReport
+    graphReportWithOutcome
+      outcome
       perMod
       (publishedCore coreClosed coreContexts coreSchemes)
       []
@@ -54791,7 +54757,7 @@ checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKe
       lastCtx.mcGraph.graphRun.binderRows.value
       None
       entryTables
-  ((report, driveOutputsNow lastCtx), lastCtx.mcGraph)
+  ((report, driveOutputsNow lastCtx outcome), lastCtx.mcGraph)
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `driveGraphK GOutDiags`'s `foldModules` exactly:
@@ -55026,12 +54992,18 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
 -- drain, the tree arm's dictionary pass and the sticky rollback).  The invocation
 -- view's schemes are re-minted copies, so no cell inference writes is reachable from
 -- the result.  [mctx] is the record the drive ends in.
-driveOutputsNow : ModuleCtx -> DriveOutputs
-driveOutputsNow mctx = DriveOutputs {
-  doMainIsUnit = mainIsUnitNow mctx (),
-  doMainIsFloat = mainIsFloatNow mctx.mcGraph (),
-  doMainIsAsync = mainIsAsyncNow mctx.mcGraph (),
-  doMainAsyncPayloadIsUnit = mainAsyncPayloadIsUnitNow mctx.mcGraph (),
+entryOutcomeNow : ModuleCtx -> Option EvId -> EntryOutcome
+entryOutcomeNow mctx autoPrint = EntryOutcome {
+  eoMainIsUnit = mainIsUnitNow mctx (),
+  eoMainIsFloat = mainIsFloatNow mctx.mcGraph (),
+  eoMainIsAsync = mainIsAsyncNow mctx.mcGraph (),
+  eoMainAsyncPayloadIsUnit = mainAsyncPayloadIsUnitNow mctx.mcGraph (),
+  eoAutoPrint = autoPrint,
+}
+
+driveOutputsNow : ModuleCtx -> EntryOutcome -> DriveOutputs
+driveOutputsNow mctx outcome = DriveOutputs {
+  doEntryOutcome = outcome,
   doHadTypeErrors = typeErrorsArmed mctx.mcGraph (),
   doHadMatchWarnings = matchWarningsNow mctx,
   doInvocationView = frozenInvocationView mctx.mcCells.invocationViewRef.value,
@@ -55146,6 +55118,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       perModRaw
       coreDecls
       modules
+  let outcome = entryOutcomeNow lastCtx autoPrint
   -- The graph is closed: the drain, its defaulting and the auto-print verdict
   -- have run, so the published rows are frozen now, once.
   let perMod =
@@ -55171,7 +55144,8 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       gdDispositions = dispositions,
       gdBinders = lastCtx.mcGraph.graphRun.binderRows.value,
       gdReport =
-        graphReport
+        graphReportWithOutcome
+          outcome
           perMod
           corePub
           []
@@ -55181,7 +55155,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
           None
           entryTables,
       gdGraph = lastCtx.mcGraph,
-      gdOutputs = driveOutputsNow lastCtx,
+      gdOutputs = driveOutputsNow lastCtx outcome,
     }
     GOutTrees =>
       -- The set `dictPass` prepends dict params for: the bare set plus every
@@ -55217,11 +55191,19 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
         gdEvTable = evidence,
         gdDispositions = dispositions,
         gdBinders = lastCtx.mcGraph.graphRun.binderRows.value,
-        gdReport = { graphReport perMod corePub residual (_ => evidence) dispositions lastCtx.mcGraph.graphRun.binderRows.value (Some (coreD, modulesOut)) entryTables |
-          trAutoPrint = autoPrint,
-        },
+        gdReport =
+          graphReportWithOutcome
+            outcome
+            perMod
+            corePub
+            residual
+            (_ => evidence)
+            dispositions
+            lastCtx.mcGraph.graphRun.binderRows.value
+            (Some (coreD, modulesOut))
+            entryTables,
         gdGraph = lastCtx.mcGraph,
-        gdOutputs = driveOutputsNow lastCtx,
+        gdOutputs = driveOutputsNow lastCtx outcome,
       }
 
 -- The prelude's published rows: the core pass's own when that pass closed core
@@ -56041,7 +56023,7 @@ elaborateModulesWithSchemes inputs valueMain runtimeDecls coreDecls0 modulesIn =
 
 -- `elaborateModulesWithSchemes` returning its drive's whole report and outputs
 -- beside the elaboration.  `executes` names the `async` driver of a caller that runs or
--- emits the trees: its report then carries the auto-print evidence (`trAutoPrint`).
+-- emits the trees: its checked program then carries the auto-print evidence.
 export
 elaborateModulesWithReport : DriveInputs ->
   Bool ->
@@ -56088,7 +56070,10 @@ elaborateModulesWithReportGraph inputs valueMain executes runtimeDecls coreDecls
         g.gdResidual,
         g.gdEvTable,
         g.gdDispositions,
-        g.gdBinders,
+        ElabFacts {
+          efBinders = g.gdBinders,
+          efEntryOutcome = g.gdOutputs.doEntryOutcome,
+        },
       ),
       g.gdReport,
       g.gdOutputs,

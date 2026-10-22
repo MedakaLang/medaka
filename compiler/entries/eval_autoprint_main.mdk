@@ -16,8 +16,7 @@
 
 import frontend.ast.{Decl}
 import types.typecheck.{elaborateModulesWithReport}
-import types.tc_types.{DriveInputs(..)}
-import types.publish.{TcReport(..)}
+import types.tc_types.{DriveInputs(..), DriveOutputs(..)}
 import types.program_facts.{factsOfElab}
 import eval.eval.{evalModulesOutputFacts}
 import driver.main_autoprint.{valueMainCandidate, executedTrees}
@@ -47,8 +46,7 @@ runElab inputs runtimeDecls coreDecls modules =
   let (coreE, modulesE, _, _, _, _, _) = elab
   let executed =
     executedTrees
-      outputs
-      report.trAutoPrint
+      outputs.doEntryOutcome
       "runAsyncMain"
       (coreDecls, modules)
       (coreE, modulesE)

@@ -46,8 +46,6 @@ import types.typecheck.{
   defaultDriveInputs,
   checkOneToLinesWithRuntime,
   elaborateModulesWithReport,
-  mainTypeIsUnit,
-  mainTypeIsFloat,
   checkedFfiExternTypeNames,
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
@@ -303,8 +301,6 @@ runStaged on targetPath rsrc csrc tsrc =
       (methodIfaceTable elaborated)
       (ctorFieldTypeNames elaborated)
       (externArities rDecls)
-      (mainTypeIsUnit outputs)
-      (mainTypeIsFloat outputs)
       0
       []
       []
@@ -500,8 +496,6 @@ wasmStage on True outputs runtimeDecls live cprog declsOp =
     makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames live)
-      (mainTypeIsFloat outputs)
-      (mainTypeIsUnit outputs)
       []
   let tWe0 = now ()
   let aWe0 = allocSnap ()

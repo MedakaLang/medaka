@@ -10,8 +10,8 @@ import frontend.ast.{EvTable}
 import types.route_key.{EvIndex, evIndexOf}
 import types.disposition.{DispositionTable}
 import types.runtime_types.{BinderTypeTable}
-import types.publish.{CheckedProgram(..)}
-import types.tc_types.{ElabResult}
+import types.publish.{CheckedProgram(..), EntryOutcome}
+import types.tc_types.{ElabResult, ElabFacts(..)}
 
 -- `Option` fields are `None` for a program that was never typechecked, so an
 -- untyped lowering reads absence.
@@ -19,6 +19,7 @@ public export data ProgramFacts = ProgramFacts {
   pfEvidence : EvIndex,
   pfDispositions : Option DispositionTable,
   pfBinders : Option BinderTypeTable,
+  pfEntryOutcome : Option EntryOutcome,
 }
 
 -- No evidence, no dispositions, no binders: untyped lowering and eval.
@@ -28,6 +29,7 @@ emptyFacts = ProgramFacts {
   pfEvidence = evIndexOf [],
   pfDispositions = None,
   pfBinders = None,
+  pfEntryOutcome = None,
 }
 
 export
@@ -36,6 +38,7 @@ factsOfChecked c = ProgramFacts {
   pfEvidence = evIndexOf c.cpEvidence,
   pfDispositions = Some c.cpDispositions,
   pfBinders = Some c.cpBinders,
+  pfEntryOutcome = Some c.cpEntryOutcome,
 }
 
 -- The facts of one elaboration, as it returned them: before `mangleUnitsEv`
@@ -48,10 +51,11 @@ factsOfElab (elab@(_, _, _, _, table, _, _)) = factsOfElabWith table elab
 -- [elab]'s facts with [table] as its evidence.
 export
 factsOfElabWith : EvTable -> ElabResult -> ProgramFacts
-factsOfElabWith table (_, _, _, _, _, dispositions, binders) = ProgramFacts {
+factsOfElabWith table (_, _, _, _, _, dispositions, facts) = ProgramFacts {
   pfEvidence = evIndexOf table,
   pfDispositions = Some dispositions,
-  pfBinders = Some binders,
+  pfBinders = Some facts.efBinders,
+  pfEntryOutcome = Some facts.efEntryOutcome,
 }
 
 currentFacts : Ref (Option ProgramFacts)

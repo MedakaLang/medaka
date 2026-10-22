@@ -12,7 +12,8 @@ import ir.core_ir_lower.{
 import ir.core_ir.{CProgram(..), MethodResultFact(..)}
 import frontend.ast.{Decl(..), TyConOrigin(..)}
 import types.annotate.{annotateProgram}
-import types.program_facts.{emptyFacts}
+import types.program_facts.{ProgramFacts(..), emptyFacts}
+import types.publish.{EntryOutcome(..)}
 import support.util.{joinNl}
 
 marked : String -> List String
@@ -110,3 +111,26 @@ test "same-spelled interfaces retain distinct qualified result facts" =
       MethodResultFact "right::Shared" "pick" False [] 1,
     ]
     (methodResultFacts (left ++ right))
+
+test "lowering copies the selected entry outcome without inspecting the program" =
+  let selected = EntryOutcome {
+    eoMainIsUnit = True,
+    eoMainIsFloat = True,
+    eoMainIsAsync = True,
+    eoMainAsyncPayloadIsUnit = False,
+    eoAutoPrint = None,
+  }
+  let lowered =
+    lowerProgramEmitWith { emptyFacts | pfEntryOutcome = Some selected } []
+  let carried = match lowered
+    CProgram _ _ _ _ _ facts => facts.factEntryOutcome
+  let view = match carried
+    Some outcome => (
+      outcome.eoMainIsUnit,
+      outcome.eoMainIsFloat,
+      outcome.eoMainIsAsync,
+      outcome.eoMainAsyncPayloadIsUnit,
+      isSome outcome.eoAutoPrint,
+    )
+    None => (False, False, False, True, True)
+  expectEqual (True, True, True, False, False) view

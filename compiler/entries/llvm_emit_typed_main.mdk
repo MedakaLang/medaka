@@ -26,8 +26,6 @@ import frontend.desugar.{desugar}
 import types.typecheck.{
   defaultDriveInputs,
   elaborateModulesWithReport,
-  mainTypeIsUnit,
-  mainTypeIsFloat,
   checkedFfiExternTypeNames,
 }
 import types.private_mangle.{mangleUnitsEv}
@@ -91,8 +89,7 @@ emitIsolation runtimePath pPath pPlusUPath =
 -- `main` is stamped, as every lowered binder is, so the emitter reaches the node.
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
-  let input =
-    makeEmitInput PreludeFreeRuntime [] [] [] False False 0 [] [] "" []
+  let input = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
   let mainId = BinderId "" 0
   let cp =
     CProgram
@@ -105,6 +102,7 @@ emitGapIsolation =
         factMethodResults = [],
         factRequires = [],
         factSupers = [],
+        factEntryOutcome = None,
         factBinders = [
           BinderRow {
             brId = mainId,
@@ -148,8 +146,6 @@ runEmit runtimeDecls preludeDecls userDecls =
       (methodIfaceTable mangled)
       (ctorFieldTypeNames mangled)
       (externArities runtimeDecls)
-      (mainTypeIsUnit outputs)
-      (mainTypeIsFloat outputs)
       0
       []
       []

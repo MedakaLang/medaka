@@ -30,8 +30,6 @@ import types.typecheck.{
   constrainedSigNames,
   preludeReturnPosDictNames,
   preludeArgPosDictNames,
-  mainTypeIsUnit,
-  mainTypeIsFloat,
   checkedFfiExternTypeNamesModules,
 }
 import types.tc_types.{DriveInputs(..)}
@@ -76,8 +74,6 @@ runEmit inputs runtimeDecls coreDecls modules =
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       (externArities runtimeDecls)
-      (mainTypeIsUnit outputs)
-      (mainTypeIsFloat outputs)
       0
       []
       []

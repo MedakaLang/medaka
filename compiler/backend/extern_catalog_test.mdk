@@ -290,12 +290,7 @@ emitWat : String -> (String, List String)
 emitWat src =
   let decls = grantWholeDomain (desugar (parse src))
   let input =
-    makeWasmEmitInputFull
-      PreludeFreeRuntime
-      (ctorFieldTypeNames decls)
-      False
-      False
-      []
+    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   emitProgramRecord input (buildEmitPlan WasmBackend cp) cp
 
