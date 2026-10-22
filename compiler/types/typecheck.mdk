@@ -540,6 +540,12 @@ import types.publish.{
   graphReportWithOutcome,
   ppPubScheme,
 }
+import types.entry_outcome.{
+  entryOutcomeNow,
+  mainIsAsyncNow,
+  mainAsyncPayloadIsUnitNow,
+  mainIsUnitNow,
+}
 import types.registry.{
   RegKey,
   Registry,
@@ -9773,49 +9779,14 @@ export
 mainTypeIsFloat : DriveOutputs -> Bool
 mainTypeIsFloat outputs = outputs.doEntryOutcome.eoMainIsFloat
 
--- The stdlib `async` module's `Async` head by origin; a same-named user type is
--- an ordinary value main.
-mainIsAsyncNow : GraphCtx -> Unit -> Bool
-mainIsAsyncNow gctx _ = match gctx.mainSchemeRef.value
-  Some (Forall _ _ _ _ _ t) => match headMonoNode t
-    TCon "Async" (OriginModule "async") => True
+-- Whether the `main` binding recorded obligations remains inference-private; the
+-- publication module receives its Boolean answer rather than this side table.
+mainHasObligations : ModuleCtx -> Bool
+mainHasObligations mctx =
+  let id = optionOr 0 (omLookup "main" mctx.mcCells.schemeDefIdsRef.value)
+  match lookupSchemeObls "main" id mctx.mcCells.schemeObligationsRef.value
+    Some (_ :: _) => True
     _ => False
-  None => False
-
--- The entry driver takes `Async e Unit`; other payloads are diagnosed before its
--- rewrite rather than by driver unification.
-mainAsyncPayloadIsUnitNow : GraphCtx -> Unit -> Bool
-mainAsyncPayloadIsUnitNow gctx _ = match gctx.mainSchemeRef.value
-  Some (Forall _ _ _ _ _ t) => match normalize t
-    TApp _ payload => match normalize payload
-      TCon "Unit" _ => True
-      _ => False
-    _ => False
-  None => False
-
--- Unit-shaped includes an unconstrained result variable, which cannot produce a
--- printable value. A constrained variable remains ambiguous; its obligations
--- live in the same per-binding side channel read here.
-mainIsUnitNow : ModuleCtx -> Unit -> Bool
-mainIsUnitNow mctx _ = match mctx.mcGraph.mainSchemeRef.value
-  Some (Forall _ _ _ _ _ t) => match normalize t
-    TCon "Unit" _ => True
-    TVar _ =>
-      let id = optionOr 0 (omLookup "main" mctx.mcCells.schemeDefIdsRef.value)
-      match lookupSchemeObls "main" id mctx.mcCells.schemeObligationsRef.value
-        Some (_ :: _) => False
-        _ => True
-    _ => False
-  None => False
-
--- The checked Float result survives a polymorphic HOF whose erased body shape
--- cannot tell an emitter which scalar formatter to use.
-mainIsFloatNow : GraphCtx -> Unit -> Bool
-mainIsFloatNow gctx _ = match gctx.mainSchemeRef.value
-  Some (Forall _ _ _ _ _ t) => match normalize t
-    TCon "Float" _ => True
-    _ => False
-  None => False
 
 -- ── non-exhaustive-match warning accumulator (the type-aware `check_match`) ──
 -- `inferMatch` pushes a warning here for every `match` whose non-guarded arms
@@ -54738,7 +54709,7 @@ checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKe
   -- Built for the report, not installed: no lowering reads a check drive's table.
   let dispositions =
     buildDispositions lastCtx.mcGraph lastCtx.mcGraph.declEnvsRef.value
-  let outcome = entryOutcomeNow lastCtx autoPrint
+  let outcome = entryOutcomeNow lastCtx (mainHasObligations lastCtx) autoPrint
   let report =
     graphReportWithOutcome
       outcome
@@ -54981,19 +54952,6 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
     -- test/run_check_agreement_fixtures/p0_17_missing_impl_method.mdk.
     restRows
 
--- The drive's answers to the post-drive questions, read once at its end (after the
--- drain, the tree arm's dictionary pass and the sticky rollback).  The invocation
--- view's schemes are re-minted copies, so no cell inference writes is reachable from
--- the result.  [mctx] is the record the drive ends in.
-entryOutcomeNow : ModuleCtx -> Option EvId -> EntryOutcome
-entryOutcomeNow mctx autoPrint = EntryOutcome {
-  eoMainIsUnit = mainIsUnitNow mctx (),
-  eoMainIsFloat = mainIsFloatNow mctx.mcGraph (),
-  eoMainIsAsync = mainIsAsyncNow mctx.mcGraph (),
-  eoMainAsyncPayloadIsUnit = mainAsyncPayloadIsUnitNow mctx.mcGraph (),
-  eoAutoPrint = autoPrint,
-}
-
 driveOutputsNow : ModuleCtx -> EntryOutcome -> DriveOutputs
 driveOutputsNow mctx outcome = DriveOutputs {
   doEntryOutcome = outcome,
@@ -55111,7 +55069,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       perModRaw
       coreDecls
       modules
-  let outcome = entryOutcomeNow lastCtx autoPrint
+  let outcome = entryOutcomeNow lastCtx (mainHasObligations lastCtx) autoPrint
   -- The graph is closed: the drain, its defaulting and the auto-print verdict
   -- have run, so the published rows are frozen now, once.
   let perMod =
@@ -55274,7 +55232,7 @@ autoPrintWanted mctx True executes findings perMod coreDecls modules =
     printlnIface decls,
   )
     (Some scheme, Some (mid, entry), Some iface) =>
-      if mainIsUnitNow mctx () then
+      if mainIsUnitNow mctx.mcGraph (mainHasObligations mctx) () then
         ([], None)
       else if mainIsAsyncNow mctx.mcGraph () then
         (asyncDriverFindings mctx executes mid entry scheme perMod, None)

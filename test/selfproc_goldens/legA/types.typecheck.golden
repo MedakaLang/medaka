@@ -1067,7 +1067,6 @@ enteredGoalKey : ReqWalk -> String
 entryCovers : KeyEntry -> KeyEntry -> Bool
 entryCoversAllOthers : KeyEntry -> List KeyEntry -> Bool
 entryHeadMatches : Ty -> List Ty -> List Mono -> Bool
-entryOutcomeNow : ModuleCtx -> Option EvId -> EntryOutcome
 entryOwnSchemes : List (String, List (String, a)) -> List (String, a)
 entryReportFromDiags : List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> String
 entrySplit : TcReport -> (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
@@ -2017,11 +2016,8 @@ lowerRowLevels : Int -> EffRow -> Unit
 lowerToCurrent : ModuleCtx -> Mono -> Unit
 lowerTyvarLevel : Int -> Mono -> Unit
 mainAsyncPayloadIsUnit : DriveOutputs -> Bool
-mainAsyncPayloadIsUnitNow : GraphCtx -> Unit -> Bool
 mainBodySpan : List Decl -> Option Loc
-mainIsAsyncNow : GraphCtx -> Unit -> Bool
-mainIsFloatNow : GraphCtx -> Unit -> Bool
-mainIsUnitNow : ModuleCtx -> Unit -> Bool
+mainHasObligations : ModuleCtx -> Bool
 mainTypeIsAsync : DriveOutputs -> Bool
 mainTypeIsFloat : DriveOutputs -> Bool
 mainTypeIsUnit : DriveOutputs -> Bool
