@@ -1,0 +1,120 @@
+import support.sexp_value.{
+  SExp(..),
+  SexpError(..),
+  renderSExp,
+  parseSExp,
+  atomInt,
+  atomBool,
+  expectList,
+  expectAtom,
+}
+import list.{reverse}
+import test.{expectAll, expectEqual, expectErr, expectOk}
+
+-- One atom per escape class.
+classAtoms : List String
+classAtoms = [
+  "",
+  "a b",
+  "(",
+  ")",
+  "\"",
+  "\\",
+  "x\ny",
+  "x\ty",
+  ";",
+  "café λ",
+  "plain",
+]
+
+tree : List String -> SExp
+tree atoms = SList [
+  SList (map SAtom atoms),
+  SAtom "k",
+  SList [],
+  SList [SList (map SAtom (reverse atoms))],
+]
+
+failure : String -> Result SexpError SExp -> (Int, String)
+failure _ (Err (SexpError { seOffset, seWhat })) = (seOffset, seWhat)
+failure label (Ok _) = (-1, label ++ ": parsed")
+
+prop "render then parse round-trips generated atoms" (atoms : List String) =
+  parseSExp (renderSExp (tree atoms)) == Ok (tree atoms)
+
+prop "render is deterministic" (atoms : List String) =
+  renderSExp (tree atoms) == renderSExp (tree atoms)
+
+test "every escape class round-trips and renders deterministically" =
+  expectAll
+    (map
+        (a => expectAll [
+          expectEqual (Ok (SAtom a)) (parseSExp (renderSExp (SAtom a))),
+          expectEqual (renderSExp (SAtom a)) (renderSExp (SAtom a)),
+        ])
+        classAtoms
+      ++ [
+        expectEqual
+          (Ok (tree classAtoms))
+          (parseSExp (renderSExp (tree classAtoms))),
+      ])
+
+test "canonical spelling" = expectAll [
+  expectEqual
+    "(a \"b c\" \"\" (d))"
+    (renderSExp (SList [SAtom "a", SAtom "b c", SAtom "", SList [SAtom "d"]])),
+  expectEqual "()" (renderSExp (SList [])),
+  expectEqual "\"a\\\\b\\\"\\n\\t\"" (renderSExp (SAtom "a\\b\"\n\t")),
+  expectEqual (Ok (SList [SAtom "a", SAtom "b"])) (parseSExp "  ( a\n b )  "),
+]
+
+test "the reader fails closed with the offset of the problem" = expectAll [
+  expectEqual (0, "empty input") (failure "empty" (parseSExp "")),
+  expectEqual (3, "empty input") (failure "blank" (parseSExp "   ")),
+  expectEqual
+    (0, "unbalanced open paren")
+    (failure "open" (parseSExp "(a (b)")),
+  expectEqual (0, "unbalanced close paren") (failure "close" (parseSExp ")")),
+  expectEqual
+    (4, "trailing text after the first node")
+    (failure "trailing" (parseSExp "(a) b")),
+  expectEqual
+    (3, "trailing text after the first node")
+    (failure "stray" (parseSExp "(a))")),
+  expectEqual
+    (3, "unterminated string")
+    (failure "string" (parseSExp "(a \"bc)")),
+  expectEqual (5, "bad escape") (failure "escape" (parseSExp "(a \"b\\qc\")")),
+  expectEqual
+    (3, "unterminated string")
+    (failure "dangling" (parseSExp "(a \"b\\")),
+  expectEqual
+    (3, "unexpected character outside a quoted atom")
+    (failure "semi" (parseSExp "(a ;b)")),
+  expectEqual
+    (0, "unexpected character outside a quoted atom")
+    (failure "slash" (parseSExp "\\a")),
+  expectEqual
+    (2, "unexpected character inside a bare atom")
+    (failure "quote" (parseSExp "(a\"b\")")),
+]
+
+test "node helpers accept the right shape and name the path on failure" = expectAll
+  [
+    expectEqual (Ok 42) (atomInt "n" (SAtom "42")),
+    expectEqual (Ok True) (atomBool "b" (SAtom "true")),
+    expectEqual (Ok False) (atomBool "b" (SAtom "false")),
+    expectEqual (Ok "x") (expectAtom "a" (SAtom "x")),
+    expectEqual (Ok [SAtom "x"]) (expectList 1 "l" (SList [SAtom "x"])),
+    expectErr (atomInt "n" (SAtom "4x")),
+    expectErr (atomInt "n" (SList [])),
+    expectErr (atomBool "b" (SAtom "yes")),
+    expectErr (expectAtom "a" (SList [])),
+    expectErr (expectList 2 "l" (SList [SAtom "x"])),
+    expectErr (expectList 0 "l" (SAtom "x")),
+    expectEqual "n.field" (pathOf (atomInt "n.field" (SAtom "zz"))),
+  ]
+
+pathOf : Result SexpError a -> String
+pathOf (Err (SexpError { sePath })) = sePath
+pathOf (Ok _) = ""
