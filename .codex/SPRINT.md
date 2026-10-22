@@ -211,8 +211,12 @@ only means its JavaScript finished: if the enclosed result still has a process
 exit code; report nonzero as a failure. Do not end a worker turn with a command
 still active.
 
-For CI, prefer the existing `scripts/pr.sh watch` process over repeated model
-turns issuing individual status queries. Apply the same command-wait pattern.
+For CI, wait with `scripts/pr.sh watch --number N` (until green) or
+`scripts/pr.sh land --number N` (arm auto-merge, until merged). Never use
+repeated model turns issuing individual status queries, or a hand-written poll
+loop. Each exits on the first actionable event (red check, conflict, queue
+failure, moved head) with a `verdict:` line and a distinct exit code; see
+`docs/ops/PR-HELPER.md`. Apply the same command-wait pattern.
 Measurements and a manual reproduction recipe live in
 [the workflow dossier](../.claude/dossier/workflow.md#w-codex-waits).
 

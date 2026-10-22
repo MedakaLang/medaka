@@ -50,7 +50,9 @@ instead.
 1. Read `CONTRACT.md`. Create the sprint branch from `main`'s tip and push it:
    `git push origin <main-tip-sha>:refs/heads/sprint/<stage>`. Open the draft
    PR early (`scripts/pr.sh` helpers; body = the contract's §1/§3) so CI's
-   narrowed `pull_request` run gives ambient signal on every push.
+   narrowed `pull_request` run gives ambient signal on every push. When you
+   want that signal, wait with `sh scripts/pr.sh watch --number N` in the
+   background, never a hand-rolled poll.
 2. Copy the contract's expected-red block (if any) to `EXPECTED-RED.md`.
    Before ever diagnosing a red gate: `gh issue list --label known-red` — it
    is usually not your break.
@@ -237,15 +239,14 @@ by serialization.
    judgment call; do it yourself when it needs neither.
 4. **Land.** `medaka fmt --write` + `medaka lint` clean on touched files;
    `make preflight` if the diff touches blast-radius paths, else let CI
-   answer. Mark the PR ready, `gh pr merge --auto --merge`. The merge queue
-   runs the full gate suite — it is the correctness authority, not your
-   local runs. Verify by state, never exit code: poll
-   `isInMergeQueue`/`state` until `MERGED` — auto-merge arming can lapse
-   silently, so recheck until terminal. A PR whose own PR-checks are still running is
-   `OPEN` with `isInMergeQueue` false until they pass: that is waiting, not a lapse.
-   Count "left the queue" only after you have seen it queued; then read the
-   `merge_group` run's failing gate (`gh run list --event merge_group`) before retrying,
-   and check `known-red` / open flake issues first.
+   answer. Mark the PR ready (`gh pr ready N`), then start
+   `sh scripts/pr.sh land --number N` as one background Bash call. Do not
+   write your own poll. The merge queue runs the full gate suite. It is the
+   correctness authority, not your local runs. `land` arms auto-merge and
+   re-arms a lapse. It exits on the first RED / CONFLICT / QUEUE_FAILED /
+   HEAD_MOVED, and on MERGED only once the head is proven on `main`. Act on its
+   `verdict:` line. On QUEUE_FAILED, check `known-red` / open flake issues
+   before touching code, then re-run `land`.
 5. **Wrap.** Close/update the tracking issue (what landed, what was filed,
    SHAs). Dispatch `sprint-retro` (lightweight — half a page, deletion bias).
    Update STATUS.md to terminal states. Reap worktrees and background
