@@ -9,6 +9,27 @@ record. The raw commands remain documented in AGENTS.md because the failure expl
 matters; the helper just makes the verified-correct sequence one command instead of a
 hand-rebuilt ritual.
 
+## [W-PR-WAIT] One waiter, not a poll per incident
+
+Through 2026-10, waiting on a PR was taught as a set of hand-built `Monitor`/until-loop recipes.
+Each recipe was patched after the incident it missed:
+- "alarm on the first fail, not all-terminal" (#630)
+- "a merge watcher must also watch CI-red-while-OPEN"
+- "`gh pr checks` exits nonzero on pending, so `|| continue` swallows red"
+- "a conflicting PR reports no checks, which reads as pending"
+- "a two-call state read fakes a bounce" (#1393)
+- "a dequeue can be a real queue failure or a spontaneous lapse; read the merge_group run"
+
+Agents sometimes used `pr.sh watch`, which then watched only check-runs until all were
+terminal. They sometimes rebuilt a recipe from memory, and each rebuild dropped a different
+clause.
+
+`pr.sh watch|land` (2026-10-22) folds every clause into one loop over one GraphQL read, with a
+distinct exit code per event. The rule is now "use the waiter", not "remember six clauses". A
+recipe that is not written down cannot be half-remembered. The PreToolUse hook
+`.claude/hooks/pr-wait-guard.py` denies a Bash/Monitor command that loops, sleeps or `--watch`es
+over a PR-state read. One-shot reads pass, and `PR_WAIT_OK=1` is the escape hatch.
+
 ## [W-REQUIRED-CHECKS] Deriving required checks
 
 The `…/branches/main/protection…` endpoint 404s with `"Branch not protected"`, which reads

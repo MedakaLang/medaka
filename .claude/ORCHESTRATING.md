@@ -44,7 +44,7 @@ git checkout -b <topic>          # never commit on main
 # ... work, verify ...
 git push -u origin <topic>
 gh pr create --fill
-gh pr merge --auto --merge       # enqueues; the merge queue does the rest
+sh scripts/pr.sh land --number N # arms auto-merge, waits until merged and on main
 ```
 
 > ### 🚨 ONCE A PR IS ENQUEUED, TREAT ITS BRANCH AS FROZEN — a later push can miss its own merge.
@@ -251,56 +251,42 @@ failed"**). So `preflight.sh` **ends by printing what it did not run**, and must
 
 ### The orchestrator OWNS red CI — watch it, don't wait to be told
 
-**Arm a persistent background `Monitor` on CI as soon as you push** (poll `gh run list --limit 15
---json databaseId,status,conclusion,headBranch`; emit a line for every newly-terminal run and list the
-failed jobs). A CI failure nobody watches is a slower version of no CI. ⚠️ **Emit on every terminal
-state, not just failures** — a monitor that greps only for red is *silent* through a cancel, a
-timeout, or a crashloop, and silence is indistinguishable from "still running." Seed the seen-set with
-already-completed runs at arm time.
-
-#### ⚠️ Build the monitor so it CANNOT lie silently — verify it emits BEFORE trusting it
-
-A monitor that returns empty forever looks identical to "still green." Every broken monitor this
-session failed the same way: it queried something that returned nothing, and nothing = no event = false
-calm. Before you rely on a watcher, **run its exact query once by hand and confirm it returns rows.**
-
-- **`gh pr checks <n> --json …` DOES NOT EXIST in this repo's `gh`** — `gh pr checks` has no `--json`
-  flag (that is `gh pr view --json statusCheckRollup`). The `--json` form errors to stderr and prints
-  nothing to stdout, so a monitor built on it spams "no checks yet" forever and never sees green. Parse
-  **plain `gh pr checks <n>`** output instead (tab-separated `name<TAB>state<TAB>…`); a
-  separator-agnostic `grep -qw pending` over the whole block is robust.
-- **Guard on EMPTY output, not exit code.** `gh pr checks` exits non-zero on pending/fail while still
-  printing the table; `... || true` keeps the table. `if [ -z "$out" ]; then wait; fi` — never treat an
-  empty result as a terminal state.
-- **For "tell me ONCE when X finishes" (a PR's CI, a build), prefer a `Bash run_in_background`
-  until-loop over a `Monitor`.** It fires a single completion notification when the condition is true
-  and exits — no per-poll spam, no auto-stop for being too chatty. Reserve `Monitor` for
-  one-event-per-occurrence streams.
-- **A merge watcher must also watch CI-red-while-OPEN.** Polling only for `MERGED`/`CLOSED` is blind to
-  a queue-bounce (the PR goes back to OPEN with a failed `merge_group` run) — that looks identical to
-  "still queued." Bound the wait (e.g. ~30 iterations) so it can't hang forever, and re-check on exit.
-
-#### 🚨 A CONFLICTED PR GETS **ZERO** CI RUNS, AND EMPTY LOOKS EXACTLY LIKE PENDING
-
-`ci.yml` is `pull_request`-triggered (`.github/workflows/ci.yml:113`), so a run checks out
-**`refs/pull/N/merge`**. GitHub cannot materialize that ref while the branch conflicts with `main`,
-so the workflow never has anything to check out and **no run is ever queued** — not pending, not
-failed, *absent*. Every surface agrees and all read as "still queuing": `gh pr checks` says `no
-checks reported`, `gh run list --branch` returns `[]`, `gh pr view --json statusCheckRollup` has
-length 0.
-
-An agent waited ~30 minutes and reported *"looks like GitHub-side queuing"* — the honest read of
-that evidence, and wrong. The discriminators:
+**Waiting on a PR is `scripts/pr.sh watch` or `scripts/pr.sh land`, started as ONE background Bash
+call (`run_in_background: true`) the moment you push.** You are re-invoked when it exits. Never a
+hand-rolled `Monitor`, until-loop, `gh pr checks --watch`, or `sleep`+`gh pr view`: every one of those
+this repo has written watched one signal and was silent through the others. The Claude Code hook
+`.claude/hooks/pr-wait-guard.py` denies them (a one-shot read passes; `PR_WAIT_OK=1` is the escape hatch).
 
 ```sh
-gh pr view N --json mergeStateStatus --jq .mergeStateStatus   # DIRTY == conflicts
-git ls-remote origin 'refs/pull/N/*'   # only .../head, NO .../merge  <- the direct proof
+sh scripts/pr.sh watch --number N   # until every required check is green on the current head
+sh scripts/pr.sh land  --number N   # arm auto-merge, until MERGED and the head is on main
 ```
 
-After the branch merges `origin/main`, the merge ref appears and the run starts immediately.
-Generalizes: **no signal is not a state on the green→pending→red axis.** When a watcher returns
-nothing, ask what would make the thing *unable to report* before concluding it has nothing to
-report.
+Each poll is one GraphQL read of the whole PR, so nothing is sampled at different instants. It exits
+on the **first** actionable event, not when everything is terminal. It prints one `verdict:` line
+and `next:` steps (`docs/ops/PR-HELPER.md` has the table):
+
+| exit | verdict | what it caught |
+|---|---|---|
+| 0 | GREEN / MERGED | `land` also proves ancestry against main (the #1213 race) |
+| 1 | RED | a **required** check failed while others still run; `cancelled` is flagged as infra |
+| 2 | CONFLICT | `DIRTY`/`CONFLICTING` on two reads in a row, even mid-run (a conflicted PR runs no CI) |
+| 3 | QUEUE_FAILED | left the queue while OPEN and its own `merge_group` run failed (full suite) |
+| 4 | HEAD_MOVED | a push landed; the verdict so far was for the old head |
+| 5 / 6 | CLOSED / STUCK | draft, no checks ever registered, required check never reported, re-arm budget spent |
+| 7 / 9 | TIMEOUT / ERROR | nothing is lost; re-run |
+
+A dequeue whose run did **not** fail is a lapse, and `land` re-arms it (at most 3 times). A green
+PR that is armed but not queued after three polls is re-armed too. Required checks come from the
+ruleset, so a `needs:`-gated shard that has no check-run yet still blocks GREEN.
+
+**A subagent** cannot use a background waiter, because the notification goes to its dispatcher. It
+runs the waiter in the foreground with `--timeout 540` and re-runs it on exit 7. Most subagents
+should not wait on CI at all: *"Push and report. I watch CI, not you."*
+
+`--required a,b` overrides the ruleset set. A **conflicting PR gets zero CI runs** (no
+`refs/pull/N/merge` ref), and `mergeable` can read `UNKNOWN` for a while. If `watch` says STUCK "no
+checks registered", the local merge is the ground truth (`git merge origin/main`), not GitHub's cache.
 
 When CI goes red, **act, don't just report**:
 
@@ -315,24 +301,20 @@ When CI goes red, **act, don't just report**:
 4. **Record known-red ONLY with a ledger entry that detects an accidental fix.** Never a bare skip: a
    skip-list cannot notice when the bug is fixed, so it rots (this is how `test/ported/` died).
 
-### ⏰ Arm a 20-minute heartbeat — insurance against a monitor that silently stopped firing
+### ⏰ Arm a 20-minute heartbeat — insurance against a waiter that silently stopped
 
-Every watcher above can die quietly. A `Monitor` that stops emitting, a completion notification that
-never fires, a queue-bounce that reads as "still queued" — **a watcher returning nothing looks
-identical to "still green,"** and a stuck orchestrator burns hours doing nothing while believing it
+A background task can die, and a stuck orchestrator burns hours doing nothing while believing it
 is waiting on progress. The heartbeat is the backstop: **arm a recurring job (`CronCreate`, ~every 20
 minutes) whose whole purpose is to re-derive live state from scratch and catch the case where you are
-blocked with nothing actually running.** It is not a substitute for the per-PR monitors — it is the
-thing that notices when *they* failed.
+blocked with nothing actually running.**
 
 The fire-and-check list, every tick:
 
 1. **Your PRs.** `gh pr list --state open --author @me` (⚠️ this is *authorship*, not *ownership* —
-   track the PR numbers you actually opened, since the identity is shared across sessions). For each:
-   plain `gh pr checks <n> || true` (**never** `--json` — no such flag here; guard on EMPTY output, not
-   exit code). Green + reviews in ⇒ enqueue. Red ⇒ diagnose from `gh run view <id> --log-failed`.
-   ⚠️ **A queue-bounced PR is back to OPEN with a failed `merge_group` run and looks exactly like "still
-   queued" — check for it explicitly** (`gh run list --event merge_group`).
+   track the PR numbers you actually opened, since the identity is shared across sessions). Every one
+   you own must have a live `pr.sh watch`/`land` background task; if one has none, start one. For a
+   one-shot reading of where a PR stands, run `sh scripts/pr.sh watch --number N --timeout 0`.
+   It reports a real verdict if there is one, otherwise TIMEOUT with the current state.
 2. **In-flight subagents.** Any still running? A long-silent one: inspect its worktree **read-only**
    (`git -C <wt> log --oneline -3`, `status --short`) — never build or `cp` in another tree.
    ⚠️ **Low load on the box is NOT a stall signal, and `find` will lie to you.** A quiet box just means
@@ -1429,7 +1411,7 @@ Build/seed mechanics live in `AGENTS.md`; what is orchestrator-specific:
   on names containing spaces ("gates (tools)") silently dropped two RED shards and printed
   CI-DONE; the truth needed `gh pr checks N --json name,bucket` + jq (alarm on any
   `bucket=="fail"`, terminal on none pending). Re-derive: compare both forms on any run with a
-  failed shard.
+  failed shard. (Superseded: wait with `scripts/pr.sh watch`, which reads GraphQL fields, not text.)
 - **fmt BEFORE capture/bless, always.** A `fmt --write` after oracle builds / snapshot blessing
   re-stamps the source mtime: oracles read as stale (FORCE rebuild) and the snapshot SOURCE
   section moves (re-bless). fmt itself is no-op-clean on formatted files (verified: mtime
@@ -1979,7 +1961,8 @@ visibility, one did not), so a correctly-shaped question was asked of a wrongly-
 
 ### ⚠️ A two-call state check FAKES a merge-queue bounce
 
-My watcher reported `#1393 BOUNCED`. It had merged. The loop read PR `state` and `isInMergeQueue`
+(Superseded for waiting: `scripts/pr.sh land` reads every field in one query. The lesson stands
+for any other two-field predicate.) My watcher reported `#1393 BOUNCED`. It had merged. The loop read PR `state` and `isInMergeQueue`
 in **two separate calls**, and the merge completed between them — a bounce and a merge both drive
 `isInMergeQueue` to `false` and differ *only* by `state`. On seeing `queued=false` after having
 been queued, **re-read `state` and decide on the fresh value**; then confirm any terminal verdict
@@ -2316,20 +2299,11 @@ For "tell me when X finishes", write a condition on an **artifact**, not on a pr
   states; a process-absence test is the negative form and is what lets a self-match lie.
 - if you genuinely need `pgrep`, **bracket the pattern** (above) or filter the waiter out.
 
-**And when watching a MERGE QUEUE, watch `isInMergeQueue` + `mergeStateStatus` — NOT `state`.**
-A **dequeued** PR stays `state: OPEN`, which is byte-identical to healthy waiting; measured
-this session, a PR was bounced as `DIRTY`/`CONFLICTING` and a `state`-only watcher saw nothing
-happen at all. Read all three together (`--json` does not expose `isInMergeQueue`; see the
-merge-queue bullets in `AGENTS.md`):
-
-```sh
-gh api graphql -f query='{repository(owner:"MedakaLang",name:"medaka"){pullRequest(number:N){isInMergeQueue mergeStateStatus state}}}' \
-  --jq '.data.repository.pullRequest'
-```
-
-⚠️ `mergeStateStatus` reads `UNKNOWN` on an already-merged PR, so it is a signal about a LIVE
-PR only — don't build a completion test on it. For "did it land", `scripts/pr.sh complete`
-(which proves the head SHA is on `main`) remains the answer.
+**And a MERGE QUEUE is watched with `scripts/pr.sh land`, never a `state` loop.** A
+**dequeued** PR stays `state: OPEN`, which is byte-identical to healthy waiting; a PR was bounced
+as `DIRTY`/`CONFLICTING` and a `state`-only watcher saw nothing happen at all. `land` reads
+`state`, `isInMergeQueue`, `mergeStateStatus` and the checks in one query. It classifies a
+dequeue by the PR's own `merge_group` run, and proves the head is on `main` once merged.
 
 ---
 

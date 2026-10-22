@@ -152,7 +152,9 @@ stop/pause/correction instructions override the packet's refusal policy.
 Run finite shell commands in the foreground with a suitable `timeout` in
 seconds. Pi's `bash` returns completion and exit status, not Codex process or
 cell handles. Do not background builds or CI watchers and then poll in model
-turns; use a bounded foreground command and wait for its actual exit. Redirect
+turns; use a bounded foreground command and wait for its actual exit. For a
+PR, that command is `timeout 600 sh scripts/pr.sh watch --number N
+--timeout 540` (or `land`), re-run on exit 7, never a hand-written poll. Redirect
 `medaka build` output to a log, preserve its exit code, then read the log; do
 not pipe it into `tail`. If a command is denied, report the blocker, not a
 weaker source-only substitute. Never claim an unrun check passed.

@@ -75,10 +75,15 @@ Imports: `import map.{Map, get}` · `import map.*` · `import map as M` (then `M
 approvals; checks are the gate.
 ```sh
 git checkout -b <topic>; git push -u origin <topic>; gh pr create --fill
-gh pr merge --auto --merge           # enqueues into the merge queue
+sh scripts/pr.sh watch --number N    # wait: until required CI is green on the head
+sh scripts/pr.sh land --number N     # arm auto-merge; wait until merged AND on main
 ```
-🛠️ **[W-PR-HELPER]** Prefer `scripts/pr.sh` (`body`/`watch`/`enqueue`/`complete`), see
-`docs/ops/PR-HELPER.md`.
+🚨 **[W-PR-WAIT]** Waiting on a PR is ONLY `pr.sh watch|land`, as one background Bash call
+(subagent: foreground `--timeout 540`, re-run on exit 7). Never hand-roll a `Monitor`, loop,
+`sleep`+`gh`, or `gh pr checks --watch`: each one missed a red check, a mid-run conflict or a
+queue bounce. They exit on the FIRST event with a `verdict:` line: 0 GREEN/MERGED, 1 RED,
+2 CONFLICT, 3 QUEUE_FAILED, 4 HEAD_MOVED, 5 CLOSED, 6 STUCK, 7 TIMEOUT, 8 NOT_ON_MAIN.
+🛠️ **[W-PR-HELPER]** Also `body`/`receipt`/`complete`; see `docs/ops/PR-HELPER.md`.
 - **[W-ARCH-TRAILERS]** Commit-message trailers (not PR-body lines) opt out of the architecture
   ratchet: `Arch-Growth-Override:`, `Arch-Pin-Raise:`, `Hooks-Field:`. See `test/arch_ratchet.sh`.
 
@@ -110,11 +115,9 @@ gh pr merge --auto --merge           # enqueues into the merge queue
   unmapped path widens every PR to the full suite.
 - **[W-SOUNDNESS]** `soundness` is required because `make medaka` does not gate on type errors.
 - **[W-MERGE-QUEUE]** The queue tests your PR on top of `main` plus everything ahead of it.
-  You don't need to keep your branch up to date. ⚠️ **[W-MERGE-EXIT-CODE]** Exit codes and
-  `autoMergeRequest` carry no signal; read `isInMergeQueue`:
-  ```sh
-  gh api graphql -f query='{repository(owner:"MedakaLang",name:"medaka"){pullRequest(number:N){isInMergeQueue state}}}' --jq '.data.repository.pullRequest'
-  ```
+  You don't need to keep your branch up to date. ⚠️ **[W-MERGE-EXIT-CODE]** `gh pr merge`'s
+  exit code and `autoMergeRequest` carry no signal, and arming can lapse silently; `pr.sh land`
+  reads `isInMergeQueue` and re-arms.
 - 🚨 **[W-GH-WRITE-VERIFY]** A `gh` write can succeed while writing nothing; read it back.
   `-f body=@file` writes the literal text `@file`, so use `-F`. `gh issue edit --body-file`
   **replaces** the whole body, so to append, read the body, concatenate, then write. A

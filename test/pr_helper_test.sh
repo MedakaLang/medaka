@@ -215,48 +215,103 @@ fi
 # watch
 # ---------------------------------------------------------------------------
 
-# All green single snapshot -> one line per transition + summary, exit 0.
-snap="gateA	completed	success
-gateB	completed	success"
-MOCK_CHECKRUNS="$snap" run_contains "watch all green ok" 0 "all 2 checks done, all succeeded" \
-  watch --number 7 --interval 1 --timeout 2 --repo MedakaLang/medaka
+# The waiter's mock serves one post-jq snapshot per poll from $MOCK_SNAPS
+# (snapshots separated by `--`). PR_SH_SLEEP=0 makes each poll instant while
+# --interval 1 still counts polls toward --timeout and the grace windows.
+export PR_SH_SLEEP=0
+W="--interval 1 --timeout 30 --repo MedakaLang/medaka"
 
-# A failure -> nonzero, names the failing check.
-snap="gateA	completed	success
-gateB	completed	failure"
-MOCK_CHECKRUNS="$snap" run_contains "watch failure fails" 1 "gateB: FAILED" \
-  watch --number 7 --interval 1 --timeout 2 --repo MedakaLang/medaka
+# prrow STATE MERGEABLE MERGESTATE HEAD INQUEUE QUEUESTATE ARMED [DRAFT]
+prrow() {
+  printf 'pr\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "${8:-false}" "$2" "$3" "$4" \
+    "$5" "$6" "${6:+2026-10-22T00:00:00Z}" "$7"
+}
+# ck NAME STATUS CONCLUSION [ISREQUIRED]
+ck() { printf 'check\t%s\t%s\t%s\t%s\t555\n' "$1" "$2" "$3" "${4:-true}"; }
+open_row() { prrow OPEN MERGEABLE BLOCKED h1 false '' ''; }
 
-# Genuine transitions across polls: queued -> in_progress -> completed. Each
-# mock pop consumes one snapshot, so a single run exercises the multi-poll path
-# and must print exactly one line per transition plus a final summary, all green.
-printf 'gateA\tqueued\t\ngateA\tin_progress\t\ngateA\tcompleted\tsuccess\n' >"$WORK/q"
-set +e
-tout="$(MOCK_CHECKRUNS_QUEUE="$WORK/q" "$PR" watch --number 7 --interval 1 --timeout 3 --repo MedakaLang/medaka 2>&1)"
-trc=$?
-set -e
-if [ "$trc" -eq 0 ] && printf '%s' "$tout" | grep -qF "check gateA: queued" \
-   && printf '%s' "$tout" | grep -qF "check gateA: in_progress" \
-   && printf '%s' "$tout" | grep -qF "check gateA: completed (success)" \
-   && printf '%s' "$tout" | grep -qF "all 1 checks done, all succeeded"; then
+{ open_row; ck a COMPLETED SUCCESS; ck b COMPLETED SUCCESS; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch all required green" 0 "verdict: GREEN" \
+  watch --number 7 --required a,b $W
+
+# First fail wins: a required check that already failed is reported while
+# another is still running.
+{ open_row; ck a COMPLETED FAILURE; ck b IN_PROGRESS ''; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch reports first required failure" 1 "required check failed: a (failure)" \
+  watch --number 7 --required a,b $W
+
+# A required check with no check-run yet (a `needs:` job) blocks GREEN even
+# when everything visible is green; transitions print once each.
+{ open_row; ck a COMPLETED SUCCESS; echo --
+  open_row; ck a COMPLETED SUCCESS; ck c QUEUED ''; echo --
+  open_row; ck a COMPLETED SUCCESS; ck c COMPLETED SUCCESS; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch waits for a not-yet-created required check" 0 "all 2 required checks passed" \
+  watch --number 7 --required a,c $W
+for needle in "check c: queued" "check c: success"; do
+  if printf '%s' "$out" | grep -qF "$needle"; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1)); echo "FAIL: watch transitions missing '$needle'" >&2
+  fi
+done
+if [ "$(printf '%s\n' "$out" | grep -c '^check a:')" -eq 1 ]; then
   pass=$((pass + 1))
 else
-  fail=$((fail + 1)); echo "FAIL: watch multi-poll transitions" >&2
-  echo "  rc=$trc output:" >&2
-  printf '%s\n' "$tout" | sed 's/^/    /' >&2
+  fail=$((fail + 1)); echo "FAIL: watch reprinted an unchanged check" >&2
 fi
 
-# A non-completed pending state (e.g. "waiting") must NOT read as done: the
-# helper keeps polling and finally times out (exit 1) rather than claiming
-# success. Only `completed` is terminal.
-MOCK_CHECKRUNS="gateA	waiting	" run_contains \
-  "watch never reports success on pending (waiting) state" 1 "still running after" \
-  watch --number 7 --interval 1 --timeout 2 --repo MedakaLang/medaka
+# A conflict that appears mid-run ends the wait even though checks still run.
+{ open_row; ck a IN_PROGRESS ''; echo --
+  prrow OPEN CONFLICTING DIRTY h1 false '' ''; ck a IN_PROGRESS ''; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch reports a mid-run conflict" 2 "verdict: CONFLICT" \
+  watch --number 7 --required a $W
 
-# An empty check set (no runs registered yet) must not report success either.
-MOCK_CHECKRUNS="" run_contains \
-  "watch never reports success on empty check set" 1 "still running after" \
-  watch --number 7 --interval 1 --timeout 2 --repo MedakaLang/medaka
+# One CONFLICTING read alone is GitHub's stale mergeable cache, not a verdict.
+{ prrow OPEN CONFLICTING DIRTY h1 false '' ''; ck a IN_PROGRESS ''; echo --
+  open_row; ck a COMPLETED SUCCESS; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch ignores a single CONFLICTING read" 0 "verdict: GREEN" \
+  watch --number 7 --required a $W
+
+{ open_row; ck a IN_PROGRESS ''; echo --
+  prrow OPEN MERGEABLE BLOCKED h2 false '' ''; ck a QUEUED ''; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch reports a moved head" 4 "head is now h2" \
+  watch --number 7 --required a $W
+
+{ open_row; ck a COMPLETED CANCELLED; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch reads cancelled as infra, with a rerun hint" 1 "gh run rerun 555" \
+  watch --number 7 --required a $W
+
+# A failed non-required check is reported but does not block GREEN.
+{ open_row; ck a COMPLETED SUCCESS; ck adv COMPLETED FAILURE false; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch notes but does not fail on a non-required check" 0 "non-required check adv failed" \
+  watch --number 7 --required a $W
+
+{ open_row; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch reports a PR that never gets checks" 6 "no checks registered" \
+  watch --number 7 --required a --no-checks-grace 2 $W
+
+{ open_row; ck a IN_PROGRESS ''; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch times out without claiming success" 7 "verdict: TIMEOUT" \
+  watch --number 7 --required a --interval 1 --timeout 2 --repo MedakaLang/medaka
+
+{ prrow CLOSED MERGEABLE BLOCKED h1 false '' ''; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch reports a closed PR" 5 "verdict: CLOSED" \
+  watch --number 7 --required a $W
+
+rm -f "$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch gives up after repeated failed reads" 9 "verdict: ERROR" \
+  watch --number 7 --required a $W
+
+# Without --required the set comes from the active rulesets.
+{ open_row; ck a COMPLETED SUCCESS false; ck b COMPLETED SUCCESS false; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" MOCK_RULESET_IDS=1 MOCK_REQUIRED=a,b run_contains \
+  "watch reads the required set from rulesets" 0 "2 required checks" watch --number 7 $W
+# ...and with no readable ruleset, from each check's isRequired flag, which
+# alone may not certify GREEN while GitHub still reads BLOCKED.
+{ open_row; ck a COMPLETED SUCCESS; echo --
+  prrow OPEN MERGEABLE CLEAN h1 false '' ''; ck a COMPLETED SUCCESS; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "watch isRequired fallback waits for CLEAN" 0 "mergeState=CLEAN" \
+  watch --number 7 $W
 
 # ---------------------------------------------------------------------------
 # receipt
@@ -330,6 +385,106 @@ MOCK_STATE=MERGED MOCK_REPO_URL="" run_contains \
 # PR never merges -> nonzero.
 MOCK_STATE=OPEN run_contains "complete times out waiting for MERGED" 1 "did not reach MERGED" \
   complete --number 7 --sha "$C1" --interval 1 --timeout 2 --repo MedakaLang/medaka
+
+# ---------------------------------------------------------------------------
+# land (runs in the throwaway clone: a MERGED verdict checks real ancestry)
+# ---------------------------------------------------------------------------
+
+q_row() { prrow OPEN MERGEABLE CLEAN "$C1" true AWAITING_CHECKS ''; }
+green_row() { prrow OPEN MERGEABLE CLEAN "$C1" false '' "${1:-armed}"; }
+merged_row() { prrow MERGED UNKNOWN UNKNOWN "$C1" false '' ''; }
+
+: >"$MOCK_LOG"
+{ green_row; ck a COMPLETED SUCCESS; echo --
+  q_row; ck a COMPLETED SUCCESS; echo --
+  merged_row; ck a COMPLETED SUCCESS; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" MOCK_REPO_URL="$BARE" run_contains "land arms, queues, merges, verifies ancestry" 0 \
+  "is an ancestor of MedakaLang/medaka main" land --number 7 --required a $W
+if grep -q 'pr merge 7 --repo MedakaLang/medaka --auto --merge' "$MOCK_LOG"; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1)); echo "FAIL: land did not arm auto-merge" >&2
+fi
+
+{ prrow MERGED UNKNOWN UNKNOWN 0000000000000000000000000000000000000000 false '' ''; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" MOCK_REPO_URL="$BARE" run_contains "land reports a merged head missing from main" 8 \
+  "push-after-enqueue race" land --number 7 --required a $W
+
+# Out of the queue while OPEN, with a failed merge_group run: QUEUE_FAILED.
+{ green_row; ck a COMPLETED SUCCESS; echo --
+  q_row; ck a COMPLETED SUCCESS; echo --
+  green_row ''; ck a COMPLETED SUCCESS; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" MOCK_QUEUE_RUN="901	completed	failure" MOCK_JOBS="gates_3=failure" run_contains \
+  "land reports a failed merge-queue run" 3 "merge_group run 901 concluded failure: gates_3=failure" \
+  land --number 7 --required a $W
+
+# Out of the queue with a run still finishing: keep waiting, do not re-arm.
+{ green_row; ck a COMPLETED SUCCESS; echo --
+  q_row; ck a COMPLETED SUCCESS; echo --
+  green_row ''; ck a COMPLETED SUCCESS; echo --
+  prrow CLOSED MERGEABLE CLEAN "$C1" false '' ''; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" MOCK_QUEUE_RUN="902	in_progress	" run_contains \
+  "land waits on an unfinished merge-queue run" 5 "run 902 is still in_progress" \
+  land --number 7 --required a $W
+
+# Out of the queue with no failing run: a lapse; re-arm and keep going.
+: >"$MOCK_LOG"
+{ green_row; ck a COMPLETED SUCCESS; echo --
+  q_row; ck a COMPLETED SUCCESS; echo --
+  green_row ''; ck a COMPLETED SUCCESS; echo --
+  q_row; ck a COMPLETED SUCCESS; echo --
+  merged_row; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" MOCK_REPO_URL="$BARE" MOCK_QUEUE_RUN="903	completed	cancelled" run_contains \
+  "land re-arms after a lapse" 0 "re-arming (1/3)" land --number 7 --required a $W
+if [ "$(grep -c 'pr merge 7' "$MOCK_LOG")" -eq 2 ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1)); echo "FAIL: land did not re-arm exactly once after a lapse" >&2
+fi
+
+# Green and armed but never queued: re-arm after three idle polls, bounded.
+{ green_row; ck a COMPLETED SUCCESS; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "land gives up on a PR the queue never takes" 6 \
+  "never entered the queue after 3 re-arms" land --number 7 --required a $W
+
+{ prrow OPEN MERGEABLE DRAFT "$C1" false '' '' true; ck a COMPLETED SUCCESS; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "land refuses a draft" 6 "gh pr ready 7" \
+  land --number 7 --required a $W
+
+# A red PR check ends land too, before any queue logic.
+{ green_row; ck a COMPLETED FAILURE; } >"$WORK/s"
+MOCK_SNAPS="$WORK/s" run_contains "land reports red PR CI" 1 "verdict: RED" \
+  land --number 7 --required a $W
+
+# ---------------------------------------------------------------------------
+# .claude/hooks/pr-wait-guard.py — routes PR polls to watch/land
+# ---------------------------------------------------------------------------
+
+# guard <D|A> <tool> <command>: D = the hook must deny, A = it must allow.
+GUARD="$ROOT/.claude/hooks/pr-wait-guard.py"
+guard() {
+  want="$1"
+  got="$(python3 -c 'import json, sys; print(json.dumps({"tool_name": sys.argv[1], "tool_input": {"command": sys.argv[2]}}))' "$2" "$3" | python3 "$GUARD")"
+  case "$got" in *'"deny"'*) got=D ;; *) got=A ;; esac
+  if [ "$got" = "$want" ]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1)); echo "FAIL: pr-wait-guard want $want got $got: [$2] $3" >&2
+  fi
+}
+guard D Bash 'while true; do gh pr checks 12; sleep 30; done'
+guard D Bash 'until [ "$(gh pr view 12 --json state --jq .state)" = MERGED ]; do sleep 60; done'
+guard D Bash 'gh pr checks 12 --watch'
+guard D Bash 'for i in $(seq 30); do gh api graphql -f query="{...isInMergeQueue...}"; sleep 20; done'
+guard D Bash 'sleep 300; gh pr view 12 --json statusCheckRollup'
+guard D Monitor 'gh pr view 12 --json state,statusCheckRollup'
+guard A Bash 'gh pr view 12 --json state,mergeStateStatus'
+guard A Bash 'for n in 1 2 3; do gh pr view $n --json state; done'
+guard A Bash 'sh scripts/pr.sh watch --number 12'
+guard A Bash 'while read l; do echo $l; done < f'
+guard A Bash 'gh run watch 123456'
+guard A Bash 'PR_WAIT_OK=1 sh -c "while true; do gh pr view 1; sleep 5; done"'
+guard A Bash 'make medaka'
 
 # ---------------------------------------------------------------------------
 echo "pr_helper_test: $pass passed, $fail failed"
