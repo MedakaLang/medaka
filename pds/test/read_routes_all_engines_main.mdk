@@ -1206,6 +1206,37 @@ runServiceAuthCells corpus =
         (serviceAuthTarget "aud=did:web:PDS.EXAMPLE&lxm=\{uploadBlob}"))
       (invalidRequestLine
         "aud names a service this server does not mint credentials for")
+  let videoDid = "did:web:video.bsky.app"
+  let uploadLimits = "app.bsky.video.getUploadLimits"
+  let videoUploadLimits =
+    serviceAuthCell
+      "service-auth-video-upload-limits"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{videoDid}&lxm=\{uploadLimits}"))
+      (mintedLine videoDid uploadLimits defaultExpiry)
+  let videoNoTable =
+    serviceAuthCell
+      "service-auth-video-upload-limits-no-table"
+      None
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{videoDid}&lxm=\{uploadLimits}"))
+      (mintedLine videoDid uploadLimits defaultExpiry)
+  let videoMethodless =
+    serviceAuthCell
+      "service-auth-video-methodless"
+      None
+      (proxyRequestNoHeader (serviceAuthTarget "aud=\{videoDid}"))
+      (invalidRequestLine
+        "a credential for \{videoDid} must name the method it is for")
+  let videoOtherMethod =
+    serviceAuthCell
+      "service-auth-video-other-method"
+      None
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{videoDid}&lxm=\{uploadBlob}"))
+      (invalidRequestLine
+        "a credential for \{videoDid} cannot be requested for \{uploadBlob}; it is minted for: \{uploadLimits}")
   mintedWithLxm
     + ownUploadBlob
     + ownFragment
@@ -1217,6 +1248,10 @@ runServiceAuthCells corpus =
     + ownNameCase
     + foreignNoTable
     + ownHostUppercased
+    + videoUploadLimits
+    + videoNoTable
+    + videoMethodless
+    + videoOtherMethod
     + mintedNoLxm
     + foreignAudience
     + protectedMethod
@@ -1455,8 +1490,8 @@ runCells corpus =
       + originOnly404
   let () =
     println
-      "cells: \{intToString cells}/74 repository-free routes, proxy dispositions and service-auth mints"
-  if cells == 74 then
+      "cells: \{intToString cells}/78 repository-free routes, proxy dispositions and service-auth mints"
+  if cells == 78 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"
