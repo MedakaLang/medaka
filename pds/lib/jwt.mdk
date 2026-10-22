@@ -29,9 +29,11 @@
    `pds/test/vectors/pds_service_auth_shape_corpus.txt` records it byte-exact
    as the official implementation's own `createServiceJwt` emits it.
 
-   Service auth is minted here and never verified here: the party that checks
-   one is an off-box peer resolving the issuer's key from the network, so a
-   verifier on this side would only grade this module against itself.
+   Service auth is minted here and not verified here. The inbound verifier,
+   which checks a service token this server's own account signed and a peer
+   presents back to it, is `lib.service_jwt_verify`, and it shares no code
+   with this module: a verifier that reached the minter could grade the
+   minter only against itself.
 
    Minting is charged to `Mint`, indexed by the token class: an access token
    performs `<Mint "access">` and a refresh token `<Mint "refresh">`. The

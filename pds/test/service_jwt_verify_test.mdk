@@ -1,0 +1,594 @@
+{- | `lib.service_jwt_verify`, graded against the official verifier's own
+   verdicts.
+
+   The answer key is `pds/test/vectors/pds_service_auth_inbound_corpus.txt`,
+   read through the provenance ledger rather than by path, so a corpus whose
+   bytes drift from the ledgered digest fails here instead of grading against
+   whatever it now says. Every row is graded. Where ours rejects a token the
+   official verifier accepts, the row is one of the five narrowings named in
+   `licensedNarrowings`, each with its reason; there is no row the other way.
+
+   Beside the corpus: one case per refusal constructor, tokens built here to
+   pin the readings the corpus has no row for (repeated members, a truthy
+   `nonce`, a non-integer `exp`), the round trip through this server's own
+   minter and repository key, and the module's import set read off its own
+   source. -}
+
+import bytes.{Bytes, encodeUtf8}
+import hex.{decode}
+import list.{lookup, somes, sort}
+import string as S
+import test.{expectEach, expectEqual, expectNotEqual}
+import test.vector_ledger.{filesForConsumer}
+import test_process.{medakaRoot, underRoot}
+import lib.jws.{b64uEncode}
+import lib.jwt.{ServiceAuthRequest(..), es256kSignature, mintServiceToken}
+import lib.repo.{repoInitFromKeyBytes, repoPublicKey}
+import lib.server_core.{Account, accountDid, makeAccount, serverDid}
+import lib.service_jwt_verify.{
+  ServiceJwtClaims(..),
+  ServiceJwtExpectation(..),
+  ServiceJwtRefusal(..),
+  carriesMethodClaim,
+  verifyServiceJwt,
+}
+import lib.sign.{
+  PublicKey, SecretKey, Sign, publicKeyFromCompressed, secretKeyFromBytes
+}
+import lib.store.{Store, storeFromRepo, storeRepo}
+import lib.tid.{tidParse}
+
+-- ── the answer key ──────────────────────────────────────────────────────────
+
+-- One `case` line: the row's name, the official verdict, and the token.
+data Row = Row { name : String, official : String, token : String }
+
+-- The header lines and every `case` line, in file order.
+data Corpus = Corpus {
+  key : String,
+  issuer : String,
+  server : String,
+  method : String,
+  now : Int,
+  rows : List Row,
+}
+
+headerValue : String -> List String -> String
+headerValue field corpusLines =
+  match find (line => S.startsWith "\{field} " line) corpusLines
+    Some line => S.drop (S.length field + 1) line
+    None => panic "service_jwt_verify_test: corpus has no `\{field}` line"
+
+rowOf : String -> Option Row
+rowOf line = match S.words line
+  ["case", name, official, _, token] =>
+    Some Row { name = name, official = official, token = token }
+  _ => None
+
+parseCorpus : String -> Corpus
+parseCorpus text =
+  let corpusLines = S.lines text
+  Corpus {
+    key = headerValue "key" corpusLines,
+    issuer = headerValue "issuer" corpusLines,
+    server = headerValue "server" corpusLines,
+    method = headerValue "method" corpusLines,
+    now =
+      optionOrPanic
+        "service_jwt_verify_test: corpus `now` is not an integer"
+        (S.toInt (headerValue "now" corpusLines)),
+    rows = somes (map rowOf corpusLines),
+  }
+
+corpus : <FileRead, Exec, Env "MEDAKA_ROOT"> Corpus
+corpus = match filesForConsumer medakaRoot "S-verify-answer-key"
+  Ok [path] => match readFile (underRoot path)
+    Ok text => parseCorpus text
+    Err message => panic "service_jwt_verify_test: \{message}"
+  Ok paths =>
+    panic
+      "service_jwt_verify_test: expected one ledgered corpus, got \{debug paths}"
+  Err message => panic "service_jwt_verify_test: \{message}"
+
+corpusKey : <FileRead, Exec, Env "MEDAKA_ROOT"> PublicKey
+corpusKey =
+  let compressed =
+    resultOrPanic "service_jwt_verify_test: corpus key hex" (decode corpus.key)
+  resultOrPanic
+    "service_jwt_verify_test: corpus key"
+    (publicKeyFromCompressed compressed)
+
+corpusExpectation : <FileRead, Exec, Env "MEDAKA_ROOT"> ServiceJwtExpectation
+corpusExpectation = ServiceJwtExpectation {
+  issuerKey = corpusKey,
+  issuer = corpus.issuer,
+  audience = corpus.server,
+  method = corpus.method,
+  nowSeconds = corpus.now,
+}
+
+-- Our verdict on one token, under the corpus's own expectation.
+verifyCorpusToken : String ->
+  <FileRead, Exec, Env "MEDAKA_ROOT"> Result ServiceJwtRefusal ServiceJwtClaims
+verifyCorpusToken token = verifyServiceJwt corpusExpectation token
+
+verdictOf : Result ServiceJwtRefusal ServiceJwtClaims -> String
+verdictOf (Ok _) = "accept"
+verdictOf (Err _) = "reject"
+
+oursOn : Row -> <FileRead, Exec, Env "MEDAKA_ROOT"> String
+oursOn row = verdictOf (verifyCorpusToken row.token)
+
+rowNamed : String -> <FileRead, Exec, Env "MEDAKA_ROOT"> Row
+rowNamed wanted = match find (row => row.name == wanted) corpus.rows
+  Some row => row
+  None => panic "service_jwt_verify_test: corpus has no row `\{wanted}`"
+
+verifyRow : String ->
+  <FileRead, Exec, Env "MEDAKA_ROOT"> Result ServiceJwtRefusal ServiceJwtClaims
+verifyRow name = verifyCorpusToken (rowNamed name).token
+
+{- | The rows the official verifier accepts and ours refuses, each with the
+   reason the refusal is licensed (contract §4 F14). -}
+licensedNarrowings : List (String, String)
+licensedNarrowings = [
+  (
+    "aud_duplicate_key_last_wins",
+    "a repeated claim is refused: JSON.parse keeps the last member, a first-match reader the first",
+  ),
+  (
+    "b64_sig_bad",
+    "the signature is strict unpadded base64url; Node's decoder drops the stray character",
+  ),
+  (
+    "high_s_twin",
+    "lib.sign admits only the canonical low-S signature; the official verifier allows a malleable one",
+  ),
+  (
+    "iss_fragment",
+    "iss must be the account DID exactly; one account, whose DID has no fragment",
+  ),
+  (
+    "sig_der",
+    "the signature is the 64-byte r || s; a DER encoding is refused",
+  ),
+]
+
+-- What ours must answer on a row: the official verdict, except on a
+-- licensed narrowing, which ours refuses.
+requiredOn : Row -> String
+requiredOn row = match lookup row.name licensedNarrowings
+  Some _ => "reject"
+  None => row.official
+
+test "the answer key has its 39 rows" = expectEqual 39 (length corpus.rows)
+
+test "every corpus row gets the verdict it is owed" =
+  expectEqual
+    (map (row => (row.name, requiredOn row)) corpus.rows)
+    (map (row => (row.name, oursOn row)) corpus.rows)
+
+test "no row is accepted by ours and refused by the official verifier" =
+  expectEqual
+    []
+    (map
+      (row => row.name)
+      (filter
+        (row => oursOn row == "accept" && row.official == "reject")
+        corpus.rows))
+
+test "every row refused by ours and accepted by the official verifier is a licensed narrowing" =
+  expectEqual
+    (map fst licensedNarrowings)
+    (map
+        (row => row.name)
+        (filter
+          (row => oursOn row == "reject" && row.official == "accept")
+          corpus.rows)
+      |> sort)
+
+test "the genuine token and the one expiring at this very second are accepted" =
+  let claimsAt exp = Ok ServiceJwtClaims {
+    iss = corpus.issuer,
+    aud = corpus.server,
+    lxm = corpus.method,
+    exp = exp,
+  }
+  expectEach [
+    ("genuine", expectEqual (claimsAt 1700001800) (verifyRow "genuine")),
+    (
+      "exp_equals_now",
+      expectEqual (claimsAt corpus.now) (verifyRow "exp_equals_now"),
+    ),
+  ]
+
+test "each licensed narrowing is a refusal, for its reason" = expectEach [
+  (
+    "high_s_twin: lib.sign admits only a low-S signature",
+    expectEqual (Err ServiceJwtBadSignature) (verifyRow "high_s_twin"),
+  ),
+  (
+    "sig_der: the signature is the 64-byte r || s, not DER",
+    expectEqual (Err ServiceJwtBadSignature) (verifyRow "sig_der"),
+  ),
+  (
+    "b64_sig_bad: the signature segment is strict base64url",
+    expectEqual (Err ServiceJwtBadSignature) (verifyRow "b64_sig_bad"),
+  ),
+  (
+    "iss_fragment: iss must be the account DID exactly",
+    expectEqual (Err ServiceJwtWrongIssuer) (verifyRow "iss_fragment"),
+  ),
+  (
+    "aud_duplicate_key_last_wins: a repeated claim is refused",
+    expectEqual
+      (Err (ServiceJwtBadClaims "aud"))
+      (verifyRow "aud_duplicate_key_last_wins"),
+  ),
+]
+
+test "one corpus row for each refusal constructor" = expectEach [
+  (
+    "segments_2",
+    expectEqual (Err ServiceJwtMalformed) (verifyRow "segments_2"),
+  ),
+  (
+    "payload_array",
+    expectEqual (Err ServiceJwtMalformed) (verifyRow "payload_array"),
+  ),
+  (
+    "typ_at_jwt",
+    expectEqual (Err (ServiceJwtBadType "at+jwt")) (verifyRow "typ_at_jwt"),
+  ),
+  (
+    "exp_not_number",
+    expectEqual (Err (ServiceJwtBadClaims "exp")) (verifyRow "exp_not_number"),
+  ),
+  (
+    "lxm_not_string",
+    expectEqual (Err (ServiceJwtBadClaims "lxm")) (verifyRow "lxm_not_string"),
+  ),
+  ("exp_past", expectEqual (Err ServiceJwtExpired) (verifyRow "exp_past")),
+  (
+    "aud_wrong",
+    expectEqual (Err ServiceJwtWrongAudience) (verifyRow "aud_wrong"),
+  ),
+  (
+    "lxm_missing",
+    expectEqual (Err ServiceJwtMissingMethod) (verifyRow "lxm_missing"),
+  ),
+  (
+    "lxm_empty",
+    expectEqual (Err ServiceJwtMissingMethod) (verifyRow "lxm_empty"),
+  ),
+  (
+    "lxm_wrong",
+    expectEqual (Err ServiceJwtWrongMethod) (verifyRow "lxm_wrong"),
+  ),
+  (
+    "iss_other",
+    expectEqual (Err ServiceJwtWrongIssuer) (verifyRow "iss_other"),
+  ),
+  (
+    "alg_es256",
+    expectEqual (Err (ServiceJwtBadAlg "ES256")) (verifyRow "alg_es256"),
+  ),
+  (
+    "alg_missing",
+    expectEqual (Err (ServiceJwtBadAlg "")) (verifyRow "alg_missing"),
+  ),
+  (
+    "sig_bit_flipped",
+    expectEqual (Err ServiceJwtBadSignature) (verifyRow "sig_bit_flipped"),
+  ),
+]
+
+-- ── this server's own key ───────────────────────────────────────────────────
+
+ownDid : String
+ownDid = "did:plc:servicejwtverifytest"
+
+account : Account
+account =
+  resultOrPanic
+    "service_jwt_verify_test: account"
+    (makeAccount ownDid "verify.test" "pds.verify.test")
+
+testInstant : Int
+testInstant = 1700000000
+
+uploadBlobNsid : String
+uploadBlobNsid = "com.atproto.repo.uploadBlob"
+
+keyBytes : Bytes
+keyBytes =
+  resultOrPanic
+    "service_jwt_verify_test: key bytes"
+    (decode "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
+
+signingKey : SecretKey
+signingKey =
+  resultOrPanic
+    "service_jwt_verify_test: signing key"
+    (secretKeyFromBytes keyBytes)
+
+-- A store holding a repository signed by `signingKey`: the key the seam
+-- verifies a service token against is this repository's.
+repoStore : Store
+repoStore =
+  let rev =
+    resultOrPanic "service_jwt_verify_test: revision" (tidParse "3ke6kg3wk222b")
+  storeFromRepo
+    (resultOrPanic
+      "service_jwt_verify_test: repository"
+      (repoInitFromKeyBytes ownDid keyBytes rev))
+
+storeKey : PublicKey
+storeKey = match storeRepo repoStore
+  Some repo => repoPublicKey repo
+  None => panic "service_jwt_verify_test: the store has no repository"
+
+ownExpectation : Int -> <Sign "commit"> ServiceJwtExpectation
+ownExpectation now = ServiceJwtExpectation {
+  issuerKey = storeKey,
+  issuer = accountDid account,
+  audience = serverDid account,
+  method = uploadBlobNsid,
+  nowSeconds = now,
+}
+
+mintedToken : <Sign "service-auth"> String
+mintedToken =
+  resultOrPanic
+    "service_jwt_verify_test: mint"
+    (mintServiceToken signingKey ServiceAuthRequest {
+      iss = accountDid account,
+      aud = serverDid account,
+      lxm = Some uploadBlobNsid,
+      jti = "00112233445566778899aabbccddeeff",
+      iat = testInstant,
+      exp = None,
+    })
+
+test "a token this server mints for its own DID and uploadBlob verifies against the store's key" =
+  let expected = ownExpectation testInstant
+  let otherRoute = { expected | method = "com.atproto.repo.createRecord" }
+  let minted = ServiceJwtClaims {
+    iss = ownDid,
+    aud = "did:web:pds.verify.test",
+    lxm = uploadBlobNsid,
+    exp = testInstant + 60,
+  }
+  expectEach [
+    (
+      "at the instant it was minted",
+      expectEqual
+        (Ok minted)
+        (verifyServiceJwt (ownExpectation testInstant) mintedToken),
+    ),
+    (
+      "at the second it expires",
+      expectEqual
+        (Ok minted)
+        (verifyServiceJwt (ownExpectation (testInstant + 60)) mintedToken),
+    ),
+    (
+      "one second later",
+      expectEqual
+        (Err ServiceJwtExpired)
+        (verifyServiceJwt (ownExpectation (testInstant + 61)) mintedToken),
+    ),
+    (
+      "presented to another route",
+      expectEqual
+        (Err ServiceJwtWrongMethod)
+        (verifyServiceJwt otherRoute mintedToken),
+    ),
+  ]
+
+-- ── readings the corpus has no row for ──────────────────────────────────────
+
+-- A token over the given header and payload JSON text, signed with
+-- `signingKey`, so only the reading under test can refuse it.
+signedToken : String -> String -> <Sign "service-auth"> String
+signedToken headerText payloadText =
+  let signingInput =
+    "\{b64uEncode (encodeUtf8 headerText)}.\{b64uEncode (encodeUtf8 payloadText)}"
+  let signature =
+    resultOrPanic
+      "service_jwt_verify_test: sign"
+      (es256kSignature signingKey signingInput)
+  "\{signingInput}.\{signature}"
+
+standardHeader : String
+standardHeader = "{\"typ\":\"JWT\",\"alg\":\"ES256K\"}"
+
+-- The payload of a valid token for uploadBlob at `testInstant`, with `extra`
+-- spliced in after the standard members.
+payloadWith : String -> String
+payloadWith extra =
+  "{\"iat\":1700000000,\"iss\":\"did:plc:servicejwtverifytest\",\"aud\":\"did:web:pds.verify.test\",\"exp\":1700000060,\"lxm\":\"com.atproto.repo.uploadBlob\"\{extra}}"
+
+verifyOwn : String -> <Sign "commit"> Result ServiceJwtRefusal ServiceJwtClaims
+verifyOwn token = verifyServiceJwt (ownExpectation testInstant) token
+
+acceptedClaims : Result ServiceJwtRefusal ServiceJwtClaims
+acceptedClaims = Ok ServiceJwtClaims {
+  iss = ownDid,
+  aud = "did:web:pds.verify.test",
+  lxm = uploadBlobNsid,
+  exp = 1700000060,
+}
+
+test "a hand-built token in the minter's shape is accepted" =
+  expectEqual
+    acceptedClaims
+    (verifyOwn (signedToken standardHeader (payloadWith "")))
+
+test "a nonce is read as the official verifier reads it" = expectEach [
+  (
+    "a string nonce is accepted",
+    expectEqual
+      acceptedClaims
+      (verifyOwn (signedToken standardHeader (payloadWith ",\"nonce\":\"n\""))),
+  ),
+  (
+    "a falsy nonce is accepted",
+    expectEqual
+      acceptedClaims
+      (verifyOwn (signedToken standardHeader (payloadWith ",\"nonce\":false"))),
+  ),
+  (
+    "a truthy nonce that is not a string is malformed",
+    expectEqual
+      (Err (ServiceJwtBadClaims "nonce"))
+      (verifyOwn (signedToken standardHeader (payloadWith ",\"nonce\":7"))),
+  ),
+]
+
+test "a non-integer exp is refused, though the official verifier takes any number" =
+  expectEqual
+    (Err (ServiceJwtBadClaims "exp"))
+    (verifyOwn
+      (signedToken
+        standardHeader
+        "{\"iss\":\"did:plc:servicejwtverifytest\",\"aud\":\"did:web:pds.verify.test\",\"exp\":1700000060.5,\"lxm\":\"com.atproto.repo.uploadBlob\"}"))
+
+test "a repeated payload claim is refused" =
+  expectEqual
+    (Err (ServiceJwtBadClaims "iss"))
+    (verifyOwn
+      (signedToken
+        standardHeader
+        (payloadWith ",\"iss\":\"did:plc:servicejwtverifytest\"")))
+
+test "a header member is the last of its name, as JSON.parse keeps it" = expectEach
+  [
+    (
+      "an alg of none followed by ES256K is ES256K",
+      expectEqual
+        acceptedClaims
+        (verifyOwn
+          (signedToken
+            "{\"alg\":\"none\",\"alg\":\"ES256K\"}"
+            (payloadWith ""))),
+    ),
+    (
+      "an alg of ES256K followed by none is none",
+      expectEqual
+        (Err (ServiceJwtBadAlg "none"))
+        (verifyOwn
+          (signedToken
+            "{\"alg\":\"ES256K\",\"alg\":\"none\"}"
+            (payloadWith ""))),
+    ),
+    (
+      "a typ of JWT followed by at+jwt is at+jwt",
+      expectEqual
+        (Err (ServiceJwtBadType "at+jwt"))
+        (verifyOwn
+          (signedToken
+            "{\"typ\":\"JWT\",\"typ\":\"at+jwt\",\"alg\":\"ES256K\"}"
+            (payloadWith ""))),
+    ),
+  ]
+
+test "the dispatch peek is the official one: a present lxm that is not null" =
+  let peek payloadText =
+    (payloadText, carriesMethodClaim (signedToken standardHeader payloadText))
+  expectEqual
+    [
+      (payloadWith "", True),
+      ("{\"lxm\":\"\"}", True),
+      ("{\"lxm\":null}", False),
+      ("{\"sub\":\"x\"}", False),
+    ]
+    (map peek [
+      payloadWith "",
+      "{\"lxm\":\"\"}",
+      "{\"lxm\":null}",
+      "{\"sub\":\"x\"}",
+    ])
+
+-- ── the import set ──────────────────────────────────────────────────────────
+
+{- | The modules the verifier may import, and the names it may take from
+   `lib.sign`: the contract's Shape. Nothing that can sign, nothing from
+   `lib.jwt`, nothing from the seam, and no shell module. -}
+allowedImports : List String
+allowedImports =
+  ["lib.jws", "lib.sign", "crypto.sha256", "json", "bytes", "string"]
+
+allowedSignNames : List String
+allowedSignNames = ["PublicKey", "signatureFromCompact", "verifyDigest"]
+
+braceBalance : String -> Int
+braceBalance text =
+  fold
+    (depth c =>
+      if c == '{' then depth + 1 else if c == '}' then depth - 1 else depth)
+    0
+    (S.toChars text)
+
+-- One whole import clause from its first line, joined onto one line, and the
+-- lines after it.
+gatherClause : String -> List String -> (String, List String)
+gatherClause clause rest =
+  if braceBalance clause <= 0 then
+    (clause, rest)
+  else match rest
+    [] => (clause, [])
+    next :: more => gatherClause "\{clause} \{S.trim next}" more
+
+importClauses : List String -> List String
+importClauses [] = []
+importClauses (line :: rest) =
+  if S.startsWith "import " line then
+    let (clause, after) = gatherClause line rest
+    clause :: importClauses after
+  else
+    importClauses rest
+
+{- | A clause as its module and the names it takes, or `None` when it is not
+   the selective form `import m.{a, b}`, which is the only form the verifier
+   may use: a bare, aliased or wildcard import takes names nobody listed. -}
+selectiveImport : String -> Option (String, List String)
+selectiveImport clause = match S.indexOf ".{" clause
+  None => None
+  Some at =>
+    let target = S.drop 7 (S.take at clause)
+    let inner = S.drop (at + 2) clause
+    match S.indexOf "}" inner
+      None => None
+      Some close =>
+        let names =
+          filter (/= "") (map S.trim (S.split "," (S.take close inner)))
+        Some (target, names)
+
+verifierImports : <FileRead, Env "MEDAKA_ROOT"> List String
+verifierImports = match readFile (underRoot "pds/lib/service_jwt_verify.mdk")
+  Ok text => importClauses (S.lines text)
+  Err message => panic "service_jwt_verify_test: \{message}"
+
+test "the verifier imports only the modules its contract allows, selectively" =
+  let disallowed clause = match selectiveImport clause
+    None => True
+    Some (target, _) => not (elem target allowedImports)
+  expectEach [
+    ("the source's imports were read", expectNotEqual [] verifierImports),
+    (
+      "no clause outside the allowlist",
+      expectEqual [] (filter disallowed verifierImports),
+    ),
+  ]
+
+test "the verifier takes from lib.sign the public key and the verifier, nothing that signs" =
+  let signNames =
+    match (find
+      (clause => S.startsWith "import lib.sign." clause)
+      verifierImports)
+      None => []
+      Some clause => match selectiveImport clause
+        Some (_, names) => names
+        None => ["<not a selective import>"]
+  expectEqual allowedSignNames (sort signNames)

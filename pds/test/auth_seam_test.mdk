@@ -20,7 +20,12 @@
    The 401 on the real registry is also the proof of ORDER: an unauthenticated
    `createRecord` against an unconfigured store answers `AuthenticationRequired`
    and not the `RepoNotFound` the handler would have produced, so the check
-   demonstrably ran first. -}
+   demonstrably ran first.
+
+   The service-credential cells drive the real registry too: every gated
+   route is presented a valid service token minted for that route, and only
+   the routes registered `AccessOrServiceRoute` may answer anything but
+   `401 InvalidToken`. -}
 
 import bytes as B
 import bytes.{Bytes, decodeUtf8, encodeUtf8, fromU8Array}
@@ -29,40 +34,57 @@ import http.{
   Header,
   makeHeader,
   makeResponse,
+  parseRequest,
+  Request,
   Response,
   responseBody,
   responseStatus,
+  serializeResponse,
 }
-import json.{Json(..), get, parse}
-import list.{sort}
+import hex.{decode}
+import json.{Json(..), get, jObject, parse, stringify}
+import list.{lookup, sort}
 import test.{expectEach, expectEqual, expectNotEqual}
 import lib.handlers.{pdsRegistry, pdsServer, serverLinksEmpty}
+import lib.hmac_sha256.{hmacSha256FixedKey}
+import lib.jws.{b64uEncode}
 import lib.jwt.{
   Mint,
+  ServiceAuthRequest(..),
   SessionKey,
   mintAccessToken,
   mintRefreshToken,
+  mintServiceToken,
   sessionKeyFromBytes,
 }
+import lib.proxy.{AppviewTable, makeAppviewRoute, makeAppviewTable}
+import lib.repo.{repoInitFromKeyBytes}
 import lib.server_core.{
   Account,
   AuthOutcome(..),
   Handler,
+  ProxyDecision(..),
   RequestContext(..),
   Server,
+  ServiceAuthDecision(..),
   accessAudience,
+  classifyProxy,
+  classifyServiceAuth,
   handleBytes,
   makeAccount,
   makeServer,
   refreshAudience,
+  serverDid,
 }
 import lib.store.{
   Store,
   sessionFingerprint,
   storeEmpty,
   storeSessionOpen,
+  storeWithRepo,
   storeWithServerSecret,
 }
+import lib.tid.{tidParse}
 import lib.xrpc.{
   AuthPolicy(..),
   Endpoint,
@@ -70,14 +92,16 @@ import lib.xrpc.{
   Registry,
   XrpcCall(..),
   endpointAuth,
+  endpointInput,
   endpointNsid,
   makeRegistry,
   procedureEndpoint,
   queryEndpoint,
   registryEndpoints,
+  serviceAuthRouteNsids,
 }
 import test.response_support.{bodyText}
-import lib.sign.{Sign}
+import lib.sign.{SecretKey, Sign, secretKeyFromBytes}
 
 -- ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -167,6 +191,8 @@ textHeader =
 syntheticHandler : Handler <>
 syntheticHandler _ Unauthenticated store _ = (store, mustResponse "anonymous")
 syntheticHandler _ (Authenticated did _) store _ = (store, mustResponse did)
+syntheticHandler _ (ServiceAuthenticated did) store _ =
+  (store, mustResponse "service \{did}")
 
 syntheticServer : Server <>
 syntheticServer = makeServer account syntheticRegistry syntheticHandler
@@ -703,3 +729,279 @@ test "a GET to the health probe declaring a body is refused 400" =
       (realWire
         (healthRequest "GET" "Transfer-Encoding: chunked\r\n" "0\r\n\r\n")))
     "400 the health probe does not accept request body framing"
+
+-- ── service credentials ─────────────────────────────────────────────────────
+
+uploadBlobNsid : String
+uploadBlobNsid = "com.atproto.repo.uploadBlob"
+
+serviceKeyBytes : Bytes
+serviceKeyBytes =
+  resultOrPanic
+    "auth_seam_test: service key bytes"
+    (decode "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
+
+-- The account's repository key: what a service token is signed with, and what
+-- the seam verifies one against.
+serviceKey : SecretKey
+serviceKey =
+  resultOrPanic
+    "auth_seam_test: service key"
+    (secretKeyFromBytes serviceKeyBytes)
+
+{- | An HS256 access token for the account, minted the way `lib.jwt` mints
+   one but carrying an `lxm` claim, which `lib.jwt` never mints. Its session
+   is open in `serviceStore`, so the claim is the only thing about it that is
+   not a good session credential. -}
+lxmSessionToken : String
+lxmSessionToken =
+  let headerSeg = b64uEncode (encodeUtf8 "{\"alg\":\"HS256\",\"typ\":\"JWT\"}")
+  let claims = jObject [
+    ("sub", JString accountDidText),
+    ("aud", JString accountHostText),
+    ("jti", JString "lxm"),
+    ("iat", JInt (testInstant - 60)),
+    ("nbf", JInt (testInstant - 60)),
+    ("exp", JInt (testInstant + 3600)),
+    ("lxm", JString uploadBlobNsid),
+  ]
+  let claimsSeg = b64uEncode (encodeUtf8 (stringify claims))
+  let signingInput = "\{headerSeg}.\{claimsSeg}"
+  let mac = hmacSha256FixedKey testSecret (encodeUtf8 signingInput)
+  "\{signingInput}.\{b64uEncode mac}"
+
+-- `configuredStore` with the account's repository, so a service token has a
+-- key to verify against, and with `lxmSessionToken`'s session open.
+serviceStore : Store
+serviceStore =
+  let rev =
+    resultOrPanic "auth_seam_test: initial revision" (tidParse "3ke6kg3wk222b")
+  let repo =
+    resultOrPanic
+      "auth_seam_test: repository"
+      (repoInitFromKeyBytes accountDidText serviceKeyBytes rev)
+  storeSessionOpen
+    (sessionFingerprint lxmSessionToken)
+    (sessionFingerprint "auth_seam_test-lxm-refresh")
+    (testInstant + 3600)
+    (storeWithRepo repo configuredStore)
+
+-- A valid service token for the account, addressed to this server and
+-- limited to `nsid`.
+serviceTokenFor : String -> <Sign "service-auth"> String
+serviceTokenFor nsid =
+  resultOrPanic
+    "auth_seam_test: service token"
+    (mintServiceToken serviceKey ServiceAuthRequest {
+      iss = accountDidText,
+      aud = serverDid account,
+      lxm = Some nsid,
+      jti = "00112233445566778899aabbccddeeff",
+      iat = testInstant,
+      exp = None,
+    })
+
+-- A raw-body POST, the shape `uploadBlob` takes.
+postRawRequest : String -> String -> Bytes
+postRawRequest auth nsid =
+  encodeUtf8
+    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}Content-Type: video/mp4\r\nContent-Length: 3\r\n\r\nmp4"
+
+-- A text-body POST.
+postTextRequest : String -> String -> Bytes
+postTextRequest auth nsid =
+  encodeUtf8
+    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}Content-Type: text/plain\r\nContent-Length: 4\r\n\r\ntext"
+
+{- | A request carrying `auth` that the router admits to `endpoint`, so the
+   answer is the seam's and not a routing refusal: a GET for a query, and for
+   a procedure a POST with the body its input policy takes. -}
+admittedRequest : String -> Endpoint -> Bytes
+admittedRequest auth endpoint =
+  let nsid = endpointNsid endpoint
+  match endpointInput endpoint
+    None => getRequest auth "/xrpc/\{nsid}"
+    Some JsonInput => postRequest auth nsid
+    Some NoInput => postNoInputRequest auth nsid
+    Some RawInput => postRawRequest auth nsid
+    Some TextInput => postTextRequest auth nsid
+
+serviceWire : Bytes -> <Mint {"access", "refresh"}, Sign "commit"> Bytes
+serviceWire bytes =
+  let (_, response) = handleBytes pdsServerValue testContext serviceStore bytes
+  response
+
+-- Every gated route in the real registry, by NSID.
+gatedEndpoints : List Endpoint
+gatedEndpoints =
+  filter
+    (endpoint => not (samePolicy (endpointAuth endpoint) PublicRoute))
+    (registryEndpoints realRegistry)
+
+{- | Every gated route, presented a valid service token whose `lxm` is that
+   route's own NSID, and what it answered. -}
+serviceSweep : <Mint {"access", "refresh"}, Sign {"commit", "service-auth"}> List (String, String)
+serviceSweep =
+  map
+    (endpoint =>
+      let nsid = endpointNsid endpoint
+      let token = serviceTokenFor nsid
+      (nsid, refusal (serviceWire (admittedRequest (bearer token) endpoint))))
+    gatedEndpoints
+
+-- The swept routes that answered something other than `401 InvalidToken`.
+sweptPastTheSeam : <Mint {"access", "refresh"}, Sign {"commit", "service-auth"}> List String
+sweptPastTheSeam =
+  map fst (filter ((_, answer) => answer /= "401 InvalidToken") serviceSweep)
+
+{- | The sweep's verdict is written down, not derived from the registry: a
+   route re-registered `AccessOrServiceRoute` passes the seam with its own
+   service token and fails the first cell, whatever `serviceAuthRouteNsids`
+   then says. -}
+test "a service token for its own route passes the seam on uploadBlob alone" = expectEach
+  [
+    (
+      "the routes that did not answer 401 InvalidToken",
+      expectEqual [uploadBlobNsid] sweptPastTheSeam,
+    ),
+    (
+      "they are the registry's service-auth routes",
+      expectEqual (serviceAuthRouteNsids realRegistry) sweptPastTheSeam,
+    ),
+    (
+      "every other gated route was swept and refused",
+      expectEqual
+        (sort (nsidsWith AuthenticatedRoute ++ nsidsWith RefreshRoute))
+        (sort
+          (map
+            fst
+            (filter
+              ((_, answer) => answer == "401 InvalidToken")
+              serviceSweep))),
+    ),
+  ]
+
+test "uploadBlob runs its handler for a service token" =
+  expectEqual (Some "200 <no-error-field>") (lookup uploadBlobNsid serviceSweep)
+
+test "a service token cannot reach getSession, refreshSession or deleteSession" =
+  let sessionRoutes = [
+    "com.atproto.server.deleteSession",
+    "com.atproto.server.getSession",
+    "com.atproto.server.refreshSession",
+  ]
+  expectEqual
+    (map (nsid => (nsid, "401 InvalidToken")) sessionRoutes)
+    (sort (filter ((nsid, _) => elem nsid sessionRoutes) serviceSweep))
+
+test "a session token still works on uploadBlob" =
+  expectEqual
+    "200 <no-error-field>"
+    (refusal (serviceWire (postRawRequest (bearer goodToken) uploadBlobNsid)))
+
+test "an HS256 access token carrying an lxm claim is refused on uploadBlob" = expectEach
+  [
+    (
+      "control: it is an open session's access token on getSession",
+      expectEqual
+        "200 <no-error-field>"
+        (refusal
+          (serviceWire
+            (getRequest
+              (bearer lxmSessionToken)
+              "/xrpc/com.atproto.server.getSession"))),
+    ),
+    (
+      "on uploadBlob it is read as a service token, and is not one",
+      expectEqual
+        "401 InvalidToken"
+        (refusal
+          (serviceWire
+            (postRawRequest (bearer lxmSessionToken) uploadBlobNsid))),
+    ),
+  ]
+
+-- A request parsed for a classifier, which takes a `Request` and not bytes.
+parsedRequest : Bytes -> Request
+parsedRequest bytes =
+  resultOrPanic "auth_seam_test: request setup failed" (parseRequest bytes)
+
+responseRefusal : Response -> String
+responseRefusal response = refusal (serializeResponse response)
+
+mintOutcome : ServiceAuthDecision -> String
+mintOutcome NotServiceAuth = "not-service-auth"
+mintOutcome (ServiceAuthRefused response) = responseRefusal response
+mintOutcome (ServiceAuthMinted claims) = "minted lxm=\{debug claims.lxm}"
+
+-- `getServiceAuth` for this server's own DID and `uploadBlob`, carrying `auth`.
+mintWith : String -> <Mint {"access", "refresh"}, Sign "commit"> String
+mintWith auth =
+  let target =
+    "/xrpc/com.atproto.server.getServiceAuth?aud=\{serverDid account}&lxm=\{uploadBlobNsid}"
+  mintOutcome
+    (classifyServiceAuth
+      pdsServerValue
+      testContext
+      None
+      serviceStore
+      (parsedRequest (getRequest auth target)))
+
+test "a service token cannot mint a service token" = expectEach [
+  (
+    "control: a session token mints",
+    expectEqual
+      "minted lxm=Some \"com.atproto.repo.uploadBlob\""
+      (mintWith (bearer goodToken)),
+  ),
+  (
+    "a service token for getServiceAuth itself",
+    expectEqual
+      "401 InvalidToken"
+      (mintWith (bearer (serviceTokenFor "com.atproto.server.getServiceAuth"))),
+  ),
+]
+
+appviewTable : Option AppviewTable
+appviewTable =
+  let route =
+    resultOrPanic
+      "auth_seam_test: appview route setup failed"
+      (makeAppviewRoute "did:web:api.bsky.app" 2584)
+  Some
+    (resultOrPanic
+      "auth_seam_test: appview table setup failed"
+      (makeAppviewTable route []))
+
+proxyOutcome : ProxyDecision -> String
+proxyOutcome NotProxied = "not-proxied"
+proxyOutcome (ProxyRefused response) = responseRefusal response
+proxyOutcome (ProxyAdmitted admission) = "admitted \{admission.nsid}"
+
+timelineNsid : String
+timelineNsid = "app.bsky.feed.getTimeline"
+
+-- A proxied `getTimeline` naming the configured appview, carrying `auth`.
+proxyWith : String -> <Mint {"access", "refresh"}, Sign "commit"> String
+proxyWith auth =
+  let headers = "\{auth}atproto-proxy: did:web:api.bsky.app#bsky_appview\r\n"
+  proxyOutcome
+    (classifyProxy
+      pdsServerValue
+      testContext
+      appviewTable
+      serviceStore
+      (parsedRequest (getRequest headers "/xrpc/\{timelineNsid}")))
+
+test "a service token cannot be proxied" = expectEach [
+  (
+    "control: a session token is proxied",
+    expectEqual "admitted \{timelineNsid}" (proxyWith (bearer goodToken)),
+  ),
+  (
+    "a service token for the proxied method",
+    expectEqual
+      "401 InvalidToken"
+      (proxyWith (bearer (serviceTokenFor timelineNsid))),
+  ),
+]

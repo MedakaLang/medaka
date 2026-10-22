@@ -100,7 +100,10 @@ suites =
       ("jwt_test", (32, NativeSpeed)),
       ("credential_test", (20, NativeSpeed)),
       ("session_routes_test", (49, NativeCapability)),
-      ("auth_seam_test", (36, NativeCapability)),
+      ("auth_seam_test", (44, NativeCapability)),
+      -- reads its answer key and the verifier's own source with `readFile`,
+      -- and builds a repository through `buildCommit`
+      ("service_jwt_verify_test", (16, NativeCapability)),
       ("blob_routes_test", (15, NativeCapability)),
       -- the native arm fails `allocBytes` scaling in "a decision's allocation
       -- cost does not scale 100x with other active identities", so this row
@@ -276,9 +279,11 @@ libSuites = [
   ("lib", "field", 2),
   ("lib", "handlers", 3),
   ("lib", "httpclient", 1),
+  ("lib", "jws", 9),
   ("lib", "multiformats", 15),
   ("lib", "resource_limits", 1),
   ("lib", "scalar", 4),
+  ("lib", "service_jwt_verify", 3),
   ("shell", "blobfile", 1),
 ]
 
@@ -332,6 +337,7 @@ libExempt = [
   ("persist", "0 assertions"),
   ("rows", "0 assertions"),
   ("server", "0 assertions"),
+  ("service_signer", "0 assertions"),
   ("subscribe", "0 assertions"),
 ]
 
@@ -382,6 +388,9 @@ test "pds/lib/handlers.mdk executed >= 3 assertions" =
 test "pds/lib/httpclient.mdk executed >= 1 assertions" =
   libFloorExpectation "lib" "httpclient"
 
+test "pds/lib/jws.mdk executed >= 9 assertions" =
+  libFloorExpectation "lib" "jws"
+
 test "pds/lib/multiformats.mdk executed >= 15 assertions" =
   libFloorExpectation "lib" "multiformats"
 
@@ -390,6 +399,9 @@ test "pds/lib/resource_limits.mdk executed >= 1 assertions" =
 
 test "pds/lib/scalar.mdk executed >= 4 assertions" =
   libFloorExpectation "lib" "scalar"
+
+test "pds/lib/service_jwt_verify.mdk executed >= 3 assertions" =
+  libFloorExpectation "lib" "service_jwt_verify"
 
 test "pds/shell/blobfile.mdk executed >= 1 assertions" =
   libFloorExpectation "shell" "blobfile"
@@ -577,8 +589,11 @@ test "pds/test/credential_test.mdk executed >= 20 assertions" =
 test "pds/test/session_routes_test.mdk executed >= 49 assertions" =
   floorExpectation "session_routes_test"
 
-test "pds/test/auth_seam_test.mdk executed >= 36 assertions" =
+test "pds/test/auth_seam_test.mdk executed >= 44 assertions" =
   floorExpectation "auth_seam_test"
+
+test "pds/test/service_jwt_verify_test.mdk executed >= 16 assertions" =
+  floorExpectation "service_jwt_verify_test"
 
 test "pds/test/blob_routes_test.mdk executed >= 15 assertions" =
   floorExpectation "blob_routes_test"
