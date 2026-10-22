@@ -913,3 +913,14 @@ extraction:    pds/tools/gen_lexicon_corpus.sh (gen_lexicon_corpus.mjs, run in t
 retrieved:     2026-09-28
 consumer:      S-lexicon-corpus (#3098 lexicon validation; generation record of gen_lexicon_corpus.sh, whose output pds/test/lexicon_corpus_test.mdk reads)
 notes:         records the image tag and digest, @atproto/pds version, node version and counts the other three lexicon_* files were generated with.
+
+[vector]
+file:          pds/test/vectors/pds_service_auth_inbound_corpus.txt
+local-sha256:  b4d851594697762247b8d910131d1c0655a7564b2daa91fe84c0851e62eae590
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/blob/main/packages/xrpc-server/src/auth.ts
+extraction:    docker run --rm --entrypoint node -v "$PWD/pds/tools:/medaka-tools:ro" -v "$PWD/pds/test/vectors:/medaka-out" ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12 /medaka-tools/extract_pds_service_auth_inbound.mjs /medaka-out — written procedure in pds/README.md, "Service-auth inbound answer key"; re-running must reproduce this file byte-for-byte
+retrieved:     2026-10-21
+consumer:      S-verify-answer-key (pds-video-upload inbound service-auth verifier answer key), read by S-verify-core through vector_ledger filesForConsumer
+notes:         each row is a JWT built by the extractor with a fixed jti and signed by the image's Secp256k1Keypair.sign (RFC 6979), then run through the image's own verifyJwt (@atproto/xrpc-server 0.12.3) with Date.now faked and a stub signing-key lookup; the verdict and error name are the image's. The extractor first mints one token with the real createServiceJwt and asserts the hand-built header/payload layout equals it. The keypair secret is a public test constant.

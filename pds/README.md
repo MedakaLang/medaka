@@ -1079,6 +1079,28 @@ The extractor refuses if the image's `@atproto/pds`, `@atproto/xrpc-server`, or
 `@atproto/crypto` version differs from the one its rows were derived at, so a
 newer image cannot silently answer a different question.
 
+#### Service-auth inbound answer key
+
+`pds/test/vectors/pds_service_auth_inbound_corpus.txt` is the answer key for the
+inbound direction: JWTs, each labelled with the verdict of the pinned image's own
+`@atproto/xrpc-server` `verifyJwt`, so a native verifier is graded against fixed
+data from outside our code. One command, Node only, run from the repository root:
+
+```sh
+docker run --rm --entrypoint node \
+  -v "$PWD/pds/tools:/medaka-tools:ro" \
+  -v "$PWD/pds/test/vectors:/medaka-out" \
+  ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12 \
+  /medaka-tools/extract_pds_service_auth_inbound.mjs /medaka-out
+```
+
+The only argument is the output directory. Tokens use a fixed jti and a fixed
+public test keypair and are signed deterministically, so re-running must
+reproduce the file byte-for-byte (`pds/test/vector_provenance_test.mdk` checks
+the digest). `pds/tools/extract_pds_service_auth_inbound.mjs` also reads
+`MEDAKA_IMAGE_STORE` to point at a copy of the image's pnpm store when Docker is
+unavailable; only the run inside the pinned image produces the committed file.
+
 #### Service-auth interop
 
 `pds/lib/jwt.mdk`'s `mintServiceToken` is the other half of that answer key: it
