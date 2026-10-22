@@ -91,6 +91,8 @@ import types.publish.{
   ModDiags,
   PubScheme(..),
   TcReport,
+  EntryOutcome,
+  noEntryOutcome,
 }
 import types.disposition.{
   DispositionTable,
@@ -991,10 +993,7 @@ public export data DriveInputs = DriveInputs {
 -- (`lastInvocationOps`) starts its own counter there, so its ids cannot collide with
 -- an id the drive's schemes hold.
 public export data DriveOutputs = DriveOutputs {
-  doMainIsUnit : Bool,
-  doMainIsFloat : Bool,
-  doMainIsAsync : Bool,
-  doMainAsyncPayloadIsUnit : Bool,
+  doEntryOutcome : EntryOutcome,
   doHadTypeErrors : Bool,
   doHadMatchWarnings : Bool,
   doInvocationView : InvocationView,
@@ -1011,10 +1010,7 @@ public export data DriveOutputs = DriveOutputs {
 export
 emptyDriveOutputs : Unit -> DriveOutputs
 emptyDriveOutputs _ = DriveOutputs {
-  doMainIsUnit = False,
-  doMainIsFloat = False,
-  doMainIsAsync = False,
-  doMainAsyncPayloadIsUnit = False,
+  doEntryOutcome = noEntryOutcome,
   doHadTypeErrors = False,
   doHadMatchWarnings = False,
   doInvocationView = InvocationView [] [] [],
@@ -3279,9 +3275,14 @@ public export data GraphDrive = GraphDrive {
 -- renames the trees, so a caller that lowers mangled trees lowers against the
 -- table that call returns.
 -- #1112 A-3: the sixth component is the whole-graph per-method DISPOSITION
--- TABLE (`compiler/types/disposition.mdk`).  The seventh is the BINDER-TYPE
--- table the elaboration produced.  `program_facts.factsOfElab` reads all three.
-export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable, BinderTypeTable)
+-- TABLE (`compiler/types/disposition.mdk`).  The seventh bundles the BINDER-TYPE
+-- table and selected entry outcome the elaboration produced.
+public export data ElabFacts = ElabFacts {
+  efBinders : BinderTypeTable,
+  efEntryOutcome : EntryOutcome,
+}
+
+export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable, ElabFacts)
 
 -- E4/E6: prePass a module rewriting ARG-position method occurrences to EMethodAt
 -- (argNames) AND `=>`-constrained-fn occurrences to EDictAt (dictNames); both

@@ -307,6 +307,8 @@ import backend.emit_plan.{
   TrmcVerdicts,
   isTrmcFn,
   isTrmcImpl,
+  planEntryMainIsUnit,
+  planEntryMainIsFloat,
 }
 import backend.emit_support.{
   bindEagerReach,
@@ -753,8 +755,6 @@ data EmitInputData = EmitInputData {
   -- (C symbol, (declared param type-head names, declared return type-head name)).
   -- This is the ONLY table that answers "is this name a foreign call?".
   ffiExternIndex : OrdMap (String, (List String, String)),
-  mainIsUnit : Bool,
-  mainIsFloat : Bool,
   emitHalf : Int,
   preludeBinds : List String,
   -- Exact prelude impl ownership, method -> canonical impl key -> the symbol tag
@@ -781,20 +781,16 @@ makeEmitInput : RuntimeExternDomain ->
   List (String, (String, String, Int)) ->
   List (String, List String) ->
   List (String, Int) ->
-  Bool ->
-  Bool ->
   Int ->
   List String ->
   List (String, String, String) ->
   String ->
   List (String, (List (String, String), (List String, String))) ->
   EmitInput
-makeEmitInput domain methodIfaces ctorFieldTypes externArities mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName ffiExternTypes = EmitInputData {
+makeEmitInput domain methodIfaces ctorFieldTypes externArities emitHalf preludeBinds preludeImpls srcName ffiExternTypes = EmitInputData {
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   externArityIndex = omFromPairs (reverseL externArities) omEmpty,
   ffiExternIndex = omFromPairs (reverseL (hostRows "c" ffiExternTypes)) omEmpty,
-  mainIsUnit = mainIsUnit,
-  mainIsFloat = mainIsFloat,
   emitHalf = emitHalf,
   preludeBinds = preludeBinds,
   preludeImplIndex = preludeImplIndexOf preludeImpls omEmpty,
@@ -14864,8 +14860,8 @@ emitProgramMain e plan groups =
   -- C4: if the typecheck Float hint is set, override the structural LTy so the
   -- print path uses the Float formatter even when emitExpr returns LTUnknown/LTInt
   -- (the type-erased result from a polymorphic HOF like `fold`).
-  let mty2 = if e.input.mainIsFloat then LTFloat else mainPrintTy e mty
-  let _ = if mainIsUnit e mty2 then () else emitPrint e mv mty2
+  let mty2 = if planEntryMainIsFloat plan then LTFloat else mainPrintTy e mty
+  let _ = if mainIsUnit plan e mty2 then () else emitPrint e mv mty2
   let _ = emit e "  ret i32 0"
   emit e "}"
 -- declare a module global per top-level value/`Ref` binding.
@@ -15012,9 +15008,9 @@ emitSrcWhere e = if e.input.srcName == "" then "" else " in " ++ e.input.srcName
 --    mains whose return type resolved to Unit through a polymorphic HOF.
 -- 2. `main`'s own stamp (RTUnit), annotated or inferred.
 -- 3. The body's emit-time LTy (LTUnit) — catches an untyped `main = putStrLn …`.
-mainIsUnit : Emit -> LTy -> Bool
-mainIsUnit e mty =
-  if e.input.mainIsUnit then
+mainIsUnit : EmitPlan -> Emit -> LTy -> Bool
+mainIsUnit plan e mty =
+  if planEntryMainIsUnit plan then
     True
   else match omLookup "main" e.globalTys
     Some LTUnit => True

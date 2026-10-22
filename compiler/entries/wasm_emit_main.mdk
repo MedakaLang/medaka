@@ -47,12 +47,7 @@ withTarget targetPath = match readFile targetPath
     -- program's impl entries are projections of one program.
     let annotated = annotateProgram decls
     let input =
-      makeWasmEmitInputFull
-        PreludeFreeRuntime
-        (ctorFieldTypeNames decls)
-        False
-        False
-        []
+      makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
     -- No typechecker ran, so the lowering stamps every binder `RTValue`; the
     -- signatures the source declares restate what they type.
     let cp =

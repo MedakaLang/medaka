@@ -32,7 +32,8 @@ import ir.core_ir.{
   CHead(..),
   programBinderIds,
 }
-import frontend.ast.{BinderId(..)}
+import frontend.ast.{BinderId(..), EvId(..)}
+import types.publish.{EntryOutcome(..)}
 import types.runtime_types.{BinderRow(..), binderOrdinal, runtimeTypeName}
 import map as BM
 import ir.sexp.{boolStr, node, slist, litSexp, patSexp}
@@ -355,9 +356,10 @@ tablesSexp rows facts None = match (
   facts.factRequires,
   facts.factSupers,
   facts.factMethodResults,
+  facts.factEntryOutcome,
 )
-  ([], [], [], []) => []
-  (_, [], [], []) => [slist (map methodContextPairSexp rows)]
+  ([], [], [], [], None) => []
+  (_, [], [], [], None) => [slist (map methodContextPairSexp rows)]
   _ => [slist (map methodContextPairSexp rows), declFactsSexp facts]
 
 declFactsSexp : DeclFacts -> String
@@ -368,10 +370,25 @@ declFactsSexp facts =
         slist (map (factPairSexp "rq") facts.factRequires),
         slist (map (factPairSexp "sp") facts.factSupers),
       ]
-      ++ (if isEmpty facts.factMethodResults then
+      ++ (if isEmpty facts.factMethodResults
+        && isNone facts.factEntryOutcome then
         []
       else
-        [slist (map methodResultSexp facts.factMethodResults)]))
+        [slist (map methodResultSexp facts.factMethodResults)])
+      ++ (match facts.factEntryOutcome
+        Some outcome => [entryOutcomeSexp outcome]
+        None => []))
+
+entryOutcomeSexp : EntryOutcome -> String
+entryOutcomeSexp outcome = node "entry" [
+  boolStr outcome.eoMainIsUnit,
+  boolStr outcome.eoMainIsFloat,
+  boolStr outcome.eoMainIsAsync,
+  boolStr outcome.eoMainAsyncPayloadIsUnit,
+  match outcome.eoAutoPrint
+    Some (EvId mid ordinal) => node "ev" [escStr mid, intToString ordinal]
+    None => "none",
+]
 
 methodResultSexp : MethodResultFact -> String
 methodResultSexp row = node "mr" [

@@ -1087,6 +1087,7 @@ emitDeclFacts facts decls =
     factSupers = map (w => (w, ifaceSuperCount w table)) words,
     factBinders = [],
     factMethodResults = methodResultFacts decls,
+    factEntryOutcome = facts.pfEntryOutcome,
   }
 
 withDeclFacts : DeclFacts -> CProgram -> CProgram

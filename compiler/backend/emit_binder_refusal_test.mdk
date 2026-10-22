@@ -70,6 +70,7 @@ program paramRow =
       factMethodResults = [],
       factRequires = [],
       factSupers = [],
+      factEntryOutcome = None,
       factBinders =
         [row "f" 1 RTValue (Some RTInt), row "main" 2 RTInt (Some RTInt)]
           ++ (if paramRow then [row "x" 3 RTInt None] else []),
@@ -78,14 +79,14 @@ program paramRow =
 llvmText : CProgram -> String
 llvmText cp =
   llvmEmit
-    (makeEmitInput PreludeFreeRuntime [] [] [] False False 0 [] [] "" [])
+    (makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" [])
     (buildEmitPlan LlvmBackend cp)
     cp
 
 wasmText : CProgram -> String
 wasmText cp =
   wasmEmit
-    (makeWasmEmitInputFull PreludeFreeRuntime [] False False [])
+    (makeWasmEmitInputFull PreludeFreeRuntime [] [])
     (buildEmitPlan WasmBackend cp)
     cp
 

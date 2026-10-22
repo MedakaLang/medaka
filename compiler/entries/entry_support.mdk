@@ -30,7 +30,7 @@ import driver.front_gate.{
 }
 export import support.util.{rootsOrDefault}
 import support.util.{splitLast, startsWith, joinNl}
-import types.tc_types.{ElabResult, DriveInputs(..), DriveOutputs}
+import types.tc_types.{ElabResult, DriveInputs(..), DriveOutputs(..)}
 import types.typecheck.{
   defaultDriveInputs,
   driveInputsFor,
@@ -687,11 +687,10 @@ emitElaborated : DriveOutputs ->
   TcReport ->
   <IO> Unit
 emitElaborated outputs asyncDriver emitTail runtimeDecls coreDecls modules report =
-  match asyncMainShapeError outputs modules
+  match asyncMainShapeError outputs.doEntryOutcome modules
     Some msg => failWith msg
     None =>
-      let executed =
-        executedFromReport outputs report asyncDriver (coreDecls, modules)
+      let executed = executedFromReport report asyncDriver (coreDecls, modules)
       match executed
         Err msg => failWith msg
         Ok (coreW, modulesW) => match report.trChecked

@@ -61,6 +61,7 @@ import frontend.ast.{
   noBinderId,
 }
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+import types.publish.{EntryOutcome}
 import support.util.{reverseL}
 
 -- ── expressions ────────────────────────────────────────────────────────────
@@ -441,6 +442,7 @@ public export data DeclFacts = DeclFacts {
   factSupers : List (String, Int),
   factBinders : List BinderRow,
   factMethodResults : List MethodResultFact,
+  factEntryOutcome : Option EntryOutcome,
 }
 
 export
@@ -450,6 +452,7 @@ noDeclFacts = DeclFacts {
   factSupers = [],
   factBinders = [],
   factMethodResults = [],
+  factEntryOutcome = None,
 }
 
 -- ── binder walk ──────────────────────────────────────────────────────────────
@@ -529,6 +532,7 @@ withBinderRows rows (CProgram groups ctorArs ctorTypes impls mctx facts) = CProg
     factSupers = facts.factSupers,
     factBinders = rows,
     factMethodResults = facts.factMethodResults,
+    factEntryOutcome = facts.factEntryOutcome,
   }
 
 -- Every binder id of [prog], in walk order.

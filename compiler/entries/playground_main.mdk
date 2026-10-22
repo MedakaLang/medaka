@@ -114,7 +114,6 @@ import driver.diagnostics.{
 }
 import driver.main_autoprint.{
   executedTrees,
-  mainIsWrapped,
   asyncMainShapeError,
 }
 import types.target_profile.{selectedProfile, lookupProfile}
@@ -136,11 +135,10 @@ import entries.entry_support.{
 }
 import support.util.{startsWith, splitOnChar, filterList}
 import types.publish.{PubScheme(..), ppPubScheme}
-import types.tc_types.{DriveOutputs, emptyDriveOutputs}
+import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
 import types.typecheck.{
   driveInputsFor, constrainedSigNames, preludeReturnPosDictNames,
-  preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
-  checkedFfiExternTypeNamesModules, checkOneSchemeFullK
+  preludeArgPosDictNames, checkedFfiExternTypeNamesModules, checkOneSchemeFullK
 }
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
@@ -518,8 +516,8 @@ mainShapeError decls = match findMainFunDef decls
 --
 -- 🚨 IT ALSO RAN A WHOLE `mangleUnits` + `elaborateModules` HERE AND DISCARDED THE
 -- RESULT.  That call was NOT dead — bound to `_`, but its SIDE EFFECT was
--- `mainSchemeRef`, the sole input to `mainTypeIsUnit`/`mainTypeIsAsync`/
--- `mainTypeIsFloat` and therefore to the `asyncMainShapeError` below.
+-- `mainSchemeRef`, the sole input to the entry outcome's Unit/Async/Float flags
+-- and therefore to the `asyncMainShapeError` below.
 -- What retired it is that `mainSchemeRef` acquired a SECOND, equally authoritative
 -- producer on BOTH arms that reach here, after this call site was written:
 --   * single module — `analyzeFrom` → `checkOneDiags` → `checkModulesEntryFullSplit`
@@ -561,7 +559,7 @@ doEmit outputs emit rsrc csrc tsrc entry paths mods warnTriples =
   let rt = desugaredPrelude rsrc
   let core = desugaredPrelude csrc
   let modules = map desugarPair mods
-  match asyncMainShapeError outputs modules
+  match asyncMainShapeError outputs.doEntryOutcome modules
     Some msg =>
       emitDiagnostics
         (cjAllToJson [
@@ -634,8 +632,7 @@ finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
         let (coreE, modulesE, _, _, _, _, _) = elab
         let executed =
           executedTrees
-            outputs
-            report.trAutoPrint
+            outputs.doEntryOutcome
             "runAsyncMain"
             (coreDecls, modules)
             (coreE, modulesE)
@@ -703,7 +700,6 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
   -- #2809: the program is elaborated as written (`finishClean`), then its
   -- elaborated trees are mangled.
   let (coreE, modulesE) = executed
-  let wrapped = mainIsWrapped modulesE
   let (coreD, modulesM, evTableM) = mangleUnitsEv evTable coreE modulesE
   let modules2 = stampModulePaths paths modulesM
   let allDecls0 = coreD ++ flatMap snd modules2
@@ -719,8 +715,6 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
     makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
-      (mainTypeIsFloat outputs && not wrapped)
-      (mainTypeIsUnit outputs || wrapped)
       ffiRows
   -- Mirrors wasm_emit_modules_main.emitTail: bind the lowered
   -- program, then drop the impl bodies (and the plain bindings only they

@@ -191,12 +191,7 @@ recordSrc =
 test "(e) record mode logs one event per refused extern, and no unbound-variable event" =
   let decls = grantWholeDomain (desugar (parse recordSrc))
   let input =
-    makeWasmEmitInputFull
-      PreludeFreeRuntime
-      (ctorFieldTypeNames decls)
-      False
-      False
-      []
+    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (_, events) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   let expected = map ("main\t" ++ _) (refusalLines WasmBackend recordSrc)
@@ -239,8 +234,7 @@ test "(f) llvm refuses assertSnapshot and lowers what wasm refuses" = expectEach
 llvmRecordEvents : Expectation
 llvmRecordEvents =
   let decls = grantWholeDomain (desugar (parse assertSnapshotSrc))
-  let input =
-    makeEmitInput PreludeFreeRuntime [] [] [] False False 0 [] [] "" []
+  let input = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (_, events) = llvmRecord input (buildEmitPlan LlvmBackend cp) cp
   expectEqual
@@ -372,12 +366,7 @@ ffiNoJsEvents checked =
   let ffiTypes =
     [("ffiAddInts", ([("c", "ffiAddInts")], (["Int", "Int"], "Int")))]
   let input =
-    makeWasmEmitInputFull
-      PreludeFreeRuntime
-      (ctorFieldTypeNames decls)
-      False
-      False
-      ffiTypes
+    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) ffiTypes
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   checkedTarget := checked
   let (_, events) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
@@ -1180,6 +1169,7 @@ evidenceProg body =
       factRequires = [("K", 0), ("S", 0)],
       factSupers = [("K", 0), ("S", 1)],
       factBinders = [],
+      factEntryOutcome = None,
     }
 
 evidenceOf : Route -> CExpr
@@ -1472,6 +1462,7 @@ dropBinderTable (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factBinders = [],
+    factEntryOutcome = facts.factEntryOutcome,
   }
 
 restampBinder : String -> RuntimeType -> CProgram -> CProgram
@@ -1485,6 +1476,7 @@ restampBinder name ty (CProgram groups ctors ctorTypes impls mctx facts) = CProg
     factMethodResults = facts.factMethodResults,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
+    factEntryOutcome = facts.factEntryOutcome,
     factBinders =
       map
         (row =>
@@ -1572,6 +1564,7 @@ intLetProg ty =
       factMethodResults = [],
       factRequires = [],
       factSupers = [],
+      factEntryOutcome = None,
       factBinders = [
         BinderRow {
           brId = bid,
@@ -1670,6 +1663,7 @@ editRows edit (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factBinders = edit facts.factBinders,
+    factEntryOutcome = facts.factEntryOutcome,
   }
 
 test "(ad) a function whose row is missing or gives no return type is refused" = expectEach
@@ -1909,8 +1903,8 @@ emissionText route victim =
       runtimeDomain (externDecls (parse "extern zzEmissionMissingRow : Int"))
     else
       PreludeFreeRuntime
-  let li = makeEmitInput domain [] [] [] False False 0 [] [] "" []
-  let wi = makeWasmEmitInputFull domain [] False False []
+  let li = makeEmitInput domain [] [] [] 0 [] [] "" []
+  let wi = makeWasmEmitInputFull domain [] []
   match route
     "llvm-stats" => fst (llvmStats li plan cp)
     "llvm-strict" => llvmStrict li plan cp
@@ -2058,8 +2052,8 @@ test "gateway valid controls return module text and unavailable externs stay rec
   let cp = emissionVictim "not-provided"
   let lp = buildEmitPlan LlvmBackend cp
   let wp = buildEmitPlan WasmBackend cp
-  let li = makeEmitInput PreludeFreeRuntime [] [] [] False False 0 [] [] "" []
-  let wi = makeWasmEmitInputFull PreludeFreeRuntime [] False False []
+  let li = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
+  let wi = makeWasmEmitInputFull PreludeFreeRuntime [] []
   let (_, le) = llvmRecord li lp cp
   let (_, we) = wasmRecord wi wp cp
   expectEach [
