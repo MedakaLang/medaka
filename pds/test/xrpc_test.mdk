@@ -16,6 +16,7 @@ import http.{
 import json.{stringify}
 import test.{expectEach, expectEqual, expectFalse, expectTrue, fail, pass}
 import lib.nsid.{validateNsid}
+import lib.handlers.{pdsRegistry}
 import lib.xrpc.{
   AuthPolicy(..),
   Endpoint,
@@ -30,6 +31,7 @@ import lib.xrpc.{
   procedureEndpoint,
   queryEndpoint,
   routeRequest,
+  serviceAuthRouteNsids,
   subscriptionEndpoint,
   xrpcFailureError,
   xrpcFailureMessage,
@@ -676,3 +678,20 @@ test "known subscription is 426 while its wrong method is 405" = expectEach [
         (noBodyRequest "POST" "/xrpc/com.atproto.sync.subscribeRepos")),
   ),
 ]
+
+test "the real registry names uploadBlob as the only service-credential route" = expectEqual
+  (serviceAuthRouteNsids
+    (resultOrPanic "xrpc_test: pdsRegistry setup failed" pdsRegistry))
+  ["com.atproto.repo.uploadBlob"]
+
+test "a registry with no AccessOrServiceRoute names no service-credential route" =
+  expectEqual
+    (serviceAuthRouteNsids
+      (resultOrPanic
+        "xrpc_test: registry setup failed"
+        (makeRegistry [
+          resultOrPanic
+            "xrpc_test: endpoint setup failed"
+            (queryEndpoint "com.example.q" AuthenticatedRoute),
+        ])))
+    []

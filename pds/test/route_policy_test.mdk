@@ -75,7 +75,7 @@ committedPolicies = [
   ),
   (
     "com.atproto.repo.uploadBlob",
-    RoutePolicy AuthenticatedRoute [WritesClass] (Some 5242880),
+    RoutePolicy AccessOrServiceRoute [WritesClass] (Some 5242880),
   ),
   (
     "com.atproto.server.createSession",
@@ -129,6 +129,7 @@ authName : AuthPolicy -> String
 authName PublicRoute = "public"
 authName AuthenticatedRoute = "authenticated"
 authName RefreshRoute = "refresh"
+authName AccessOrServiceRoute = "access-or-service"
 
 className : RateLimitClass -> String
 className ConnectionsClass = "connections"
