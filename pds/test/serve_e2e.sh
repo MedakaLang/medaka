@@ -689,6 +689,45 @@ if grep -F -q "$OWN_TOKEN" "$WORK/serve1.err" "$WORK/serve1.out"; then
   fail 'case 7c: the minted credential appears in the server'"'"'s own output'
 fi
 
+# 7d. THE OFFICIAL VIDEO SERVICE'S JOURNEY, end to end over the real socket. The
+#    session holder mints a 30-minute credential for this server's own DID and
+#    `com.atproto.repo.uploadBlob`; the video service presents ONLY that
+#    credential to upload a 5,242,000-byte `video/mp4` (just under the 5 MiB
+#    blob cap); the bytes come back identical from `getBlob`; the session token
+#    then posts the record that embeds the blob; and the same credential is
+#    refused on any other route.
+VIDEO_BYTES=5242000
+VIDEO_FILE="$WORK/video.mp4"
+head -c "$VIDEO_BYTES" /dev/zero | tr '\0' 'x' > "$VIDEO_FILE"
+[ "$(wc -c < "$VIDEO_FILE" | tr -d ' ')" = "$VIDEO_BYTES" ] \
+  || fail 'case 7d: could not generate the video body'
+VIDEO_EXP=$(( $(date +%s) + 1800 ))
+VIDEO_OUT=$(client service-auth-own "$PORT1" "$TOKEN" "did:web:$HOSTNAME" "$OWN_NSID" "$VIDEO_EXP") \
+  || fail "case 7d step 1: getServiceAuth(exp=now+1800) yielded no credential: $VIDEO_OUT"
+VIDEO_SVC_TOKEN=${VIDEO_OUT##*token=}
+case "$VIDEO_SVC_TOKEN" in
+  *.*.*) ;;
+  *) fail "case 7d step 1: what came back is not a compact JWS: $VIDEO_OUT" ;;
+esac
+VIDEO_UP=$(client upload-blob-file "$PORT1" "$VIDEO_SVC_TOKEN" video/mp4 "$VIDEO_FILE") \
+  || fail "case 7d step 2: uploadBlob with the service credential: $VIDEO_UP"
+VIDEO_CID=${VIDEO_UP##*cid=}
+[ -n "$VIDEO_CID" ] || fail "case 7d step 2: no CID in: $VIDEO_UP"
+client get-blob-file "$PORT1" "$DID" "$VIDEO_CID" video/mp4 "$VIDEO_FILE" \
+  || fail 'case 7d step 3: getBlob did not return the uploaded bytes'
+cmp -s "$VIDEO_FILE" "$VIDEO_FILE.got" \
+  || fail 'case 7d step 3: getBlob bytes differ from the upload under cmp'
+printf '%s' "{\"repo\":\"$DID\",\"collection\":\"app.bsky.feed.post\",\"record\":{\"\$type\":\"app.bsky.feed.post\",\"text\":\"video\",\"createdAt\":\"2026-09-02T00:00:00.000Z\",\"embed\":{\"\$type\":\"app.bsky.embed.video\",\"video\":{\"\$type\":\"blob\",\"ref\":{\"\$link\":\"$VIDEO_CID\"},\"mimeType\":\"video/mp4\",\"size\":$VIDEO_BYTES}}}}" \
+  > "$WORK/video_post.json"
+client post-json "$PORT1" "$TOKEN" /xrpc/com.atproto.repo.createRecord "$WORK/video_post.json" 200 '"uri"' \
+  || fail 'case 7d step 4: the session token could not post the video record'
+client post-json "$PORT1" "$VIDEO_SVC_TOKEN" /xrpc/com.atproto.repo.createRecord "$WORK/video_post.json" 401 InvalidToken \
+  || fail 'case 7d step 5: the service credential was not refused 401 InvalidToken on createRecord'
+if grep -F -q "$VIDEO_SVC_TOKEN" "$WORK/serve1.err" "$WORK/serve1.out"; then
+  fail 'case 7d: the video service credential appears in the server'"'"'s own output'
+fi
+rm -f "$VIDEO_FILE" "$VIDEO_FILE.got"
+
 # 8. a connection that says nothing at all is closed by the server rather
 #    than held. It is closed on the HEADER budget, not on idleTimeout: a peer
 #    that has sent no bytes has not terminated a header section, and that is
