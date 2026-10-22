@@ -26,6 +26,38 @@ if [ "$1" = api ] && printf '%s' "$*" | grep -q '{{.body}}'; then
   exit 0
 fi
 
+# --- watch/land: one whole-PR snapshot per poll (already post-jq TSV) ---
+# $MOCK_SNAPS is a file of snapshots separated by `--` lines; each call pops
+# one, and the last one repeats. Unset or empty means a failed read.
+if [ "$1" = api ] && printf '%s' "$*" | grep -q statusCheckRollup; then
+  f="${MOCK_SNAPS:-}"
+  [ -n "$f" ] && [ -s "$f" ] || exit 1
+  if grep -q '^--$' "$f"; then
+    sed '/^--$/q' "$f" | sed '/^--$/d'
+    sed '1,/^--$/d' "$f" >"$f.rest"
+    mv "$f.rest" "$f"
+  else
+    cat "$f"
+  fi
+  exit 0
+fi
+
+# --- watch/land: required contexts from rulesets ---
+if [ "$1" = api ] && printf '%s' "$*" | grep -q 'rulesets/'; then
+  [ -n "${MOCK_REQUIRED:-}" ] && printf '%s\n' "$MOCK_REQUIRED" | tr ',' '\n'
+  exit 0
+fi
+if [ "$1" = api ] && printf '%s' "$*" | grep -q 'rulesets'; then
+  [ -n "${MOCK_RULESET_IDS:-}" ] && printf '%s\n' "$MOCK_RULESET_IDS"
+  exit 0
+fi
+
+# --- land: this PR's latest merge_group run (ID STATUS CONCLUSION) ---
+if [ "$1" = api ] && printf '%s' "$*" | grep -q 'event=merge_group'; then
+  [ -n "${MOCK_QUEUE_RUN:-}" ] && printf '%s\n' "$MOCK_QUEUE_RUN"
+  exit 0
+fi
+
 # --- enqueue: GraphQL queue/state ---
 if [ "$1" = api ] && printf '%s' "$*" | grep -q graphql; then
   printf '%s\n' "${MOCK_GRAPHQL:-{\"isInMergeQueue\":true,\"state\":\"OPEN\"}}"

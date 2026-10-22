@@ -1,7 +1,7 @@
 # PR-HELPER.md — `scripts/pr.sh`, the verified PR lifecycle helper
 
-**Status:** IMPLEMENTED — issue #1414, PR 2026-08-08. Ships five independent
-subcommands (`body` / `watch` / `receipt` / `enqueue` / `complete`) that wrap the raw `gh`
+**Status:** IMPLEMENTED — issue #1414, PR 2026-08-08; `land` and the one-read waiter 2026-10-22. Ships independent
+subcommands (`watch` / `land` / `body` / `receipt` / `enqueue` / `complete`) that wrap the raw `gh`
 sequences behind AGENTS.md's standing rule — *read the state back, never the
 return code* — because `gh`'s write exit codes carry no signal for the shapes
 #1212 and #1213 record.
@@ -15,9 +15,10 @@ hand, and the underlying tools demonstrably lie about success:
   deprecation error while reporting success; routing around it with
   `gh api -X PATCH -f body=@file` writes the **literal string** `@file` because
   `-f` does not expand `@` (`-F` does). #1212.
-- **Concise check watch** — reprinting the whole check matrix every poll obscures
-  state changes and floods logs. And a **stale** check-run is indistinguishable
-  from a fresh one by name alone (#1213).
+- **One waiter for every PR event.** Hand-rolled watchers each saw one signal and
+  went silent through the rest: a failed check while a shard still ran, a
+  mid-run conflict, a queue bounce, a lapsed auto-merge. `watch`/`land` read them
+  all in one query and exit on the first.
 - **Compact CI receipt** — a green checkmark does not prove a narrowed PR shard
   executed its grading steps. The selected workflow run must match the intended
   head, and its job-step conclusions must remain visible to review.
@@ -37,17 +38,20 @@ body edit never requires running the whole lifecycle.
 POSIX sh; `gh` and `git` only. Runs on Linux and macOS.
 
 ```sh
+scripts/pr.sh watch     --number N [WAIT OPTIONS]   # until required CI is green
+scripts/pr.sh land      --number N [WAIT OPTIONS]   # arm auto-merge, until merged + on main
 scripts/pr.sh body      --number N [--issue] --file F        [--repo OWNER/REPO]
-scripts/pr.sh watch     --number N [--interval S] [--timeout S]
 scripts/pr.sh receipt   (--number N | --sha SHA) --run ID
 scripts/pr.sh enqueue   --number N [--interval S] [--timeout S]
 scripts/pr.sh complete  --number N --sha SHA  [--interval S] [--timeout S]
+
+WAIT OPTIONS: [--interval S] [--timeout S] [--no-checks-grace S] [--required a,b,...]
 ```
 
 - `--repo OWNER/REPO` (default: `$GH_REPO`, else your git `origin`).
 - Tests substitute a mock via `$GH` (default `gh`); they never touch a repo.
 
-## The five operations
+## The operations
 
 ### 1. `body` — verified body write
 
@@ -66,21 +70,72 @@ the sentence says the opposite ("this does not fix #508"), which has wrongly
 closed issues before (#583). The warning is advisory: the body is still written
 and the exit status is unchanged. Put each intended close on its own line.
 
-### 2. `watch` — concise check watching
+### 2. `watch` and `land` — the one PR waiter
 
-Polls check-runs for the PR's head commit and prints **one line per state
-transition** (`check <name>: queued` / `in_progress` / `completed (success)` /
-`FAILED (failure)`) plus a final summary — never the full unchanged matrix. The
-**exit status is derived from the checks' final conclusions**, not from the loop
-ending: any terminal `failure`/`cancelled`/`timed_out`/`action_required`/`stale`
-→ exit 1. Because a *stale* run carries no transition it stays silent unless it
-changes; to distinguish a fresh from a stale run, compare the check's `started_at`
-against the push time (#1213):
+**These are the only supported way to wait on a PR.** Every hand-rolled watcher this repo has
+written watched one signal and went silent through the rest:
+- a "no checks pending" loop sat through a required check that had already failed while a slower
+  shard ran
+- a `MERGED`/`CLOSED` loop read a queue bounce as "still queued"
+- a `gh pr checks || continue` loop swallowed the failing poll
+- a conflicting PR runs no CI at all, and its empty check list read as "pending" for 30 minutes
+- two separate reads of `state` and `isInMergeQueue` faked a bounce when the merge landed between
+  them
+
+The waiter reads all of these at once and exits on the first one that matters.
 
 ```sh
-gh api "repos/OWNER/REPO/commits/$SHA/check-runs" \
-  --jq '.check_runs[] | "\(.name) \(.conclusion) \(.started_at)"'
+scripts/pr.sh watch --number N   # until every required check is green on the current head
+scripts/pr.sh land  --number N   # arm auto-merge, until MERGED and the head is on main
 ```
+
+**How to run it.** In Claude Code, as **one background Bash call** (`run_in_background: true`).
+You are re-invoked when it exits, so there is nothing to poll. A subagent's background
+notifications go to its dispatcher, so a subagent runs it in the foreground with
+`--timeout 540` and re-runs it on exit 7. Codex and Pi follow their adapters' bounded-command
+pattern (`.codex/SPRINT.md`, `.pi/SPRINT.md`). `--timeout 0` gives a one-shot reading: a real
+verdict if there is one, otherwise TIMEOUT with the current state.
+
+**One read per poll.** Each poll is a single GraphQL query. It returns `state`, `isDraft`,
+`mergeable`, `mergeStateStatus`, `headRefOid`, `isInMergeQueue`, the queue entry,
+`autoMergeRequest`, and every check on the head commit with `isRequired`. The rollup belongs to
+the head commit, so a stale check-run from an earlier head cannot appear. Output is one line per
+change (`pr N: …`, `check NAME: …`), then a final `verdict:` line and `next:` hints.
+
+**Required set.** It is read from the repo's active rulesets once at start (`--required a,b`
+overrides it). A shard gated on `needs:` has no check-run until its upstream finishes. Without
+the list, "every required check I can see is green" could hold before the shards exist. If the
+rulesets cannot be read, it falls back to each check's `isRequired` flag and also requires
+GitHub's `mergeStateStatus` to read `CLEAN`. A failed **non-required** check is printed once
+and does not end the wait.
+
+| exit | verdict | fires when |
+|---|---|---|
+| 0 | `GREEN` | (`watch`) every required check completed `success`/`neutral`/`skipped` |
+| 0 | `MERGED` | (`land`) `state == MERGED` **and** the head is an ancestor of `main` (fetched from `--repo`, as `complete` does) |
+| 1 | `RED` | any required check completed with any other conclusion, **as soon as it does**. A `cancelled` one is flagged as infra, with the rerun-once hint |
+| 2 | `CONFLICT` | `mergeable == CONFLICTING` or `mergeStateStatus == DIRTY` on two reads in a row (one read can be GitHub's stale cache), checked every poll so a conflict that appears mid-run ends the wait |
+| 3 | `QUEUE_FAILED` | (`land`) the PR left the queue while OPEN and its own `merge_group` run concluded `failure`/`timed_out`/`startup_failure`; prints the failed jobs |
+| 4 | `HEAD_MOVED` | the head SHA changed; the verdict so far was for the old one |
+| 5 | `CLOSED` | closed without merging |
+| 6 | `STUCK` | a draft (`land`); no checks registered within `--no-checks-grace` (default 600s); every check finished but a required one never reported; or the re-arm budget is spent |
+| 7 | `TIMEOUT` | no verdict within `--timeout` (default 5400s for `watch`, 7200s for `land`) |
+| 8 | `NOT_ON_MAIN` | (`land`) merged, but the head is not on `main`: the #1213 push-after-enqueue race |
+| 9 | `ERROR` | ten consecutive failed reads, or bad arguments |
+
+**Queue handling in `land`.** It arms auto-merge with `gh pr merge --auto --merge` (exit code
+ignored), then follows the PR:
+- **Queued.** It records `mergeQueueEntry.enqueuedAt`.
+- **Out of the queue while OPEN.** It finds the PR's own run: `merge_group` runs on
+  `gh-readonly-queue/main/pr-N-…`, created since that enqueue. Never "the latest merge_group run".
+  - Still running: it waits.
+  - Failed: `QUEUE_FAILED`.
+  - Otherwise (cancelled, succeeded or absent): a **lapse**. It re-arms and keeps going.
+- **Green and armed, but not queued for three polls.** That is the "armed while BLOCKED never
+  enqueued" lapse, so it re-arms too.
+- **Budget.** Re-arms are capped at three, then `STUCK`.
+
+Do not arm a PR you still intend to review: the queue does not wait for a review.
 
 ### 3. `receipt` — compact exact-head CI evidence
 
@@ -148,9 +203,10 @@ here affects verification.
 
 ## Testing
 
-`sh test/pr_helper_test.sh` runs all five subcommands against the mock
+`sh test/pr_helper_test.sh` runs every subcommand against the mock
 (`test/fixtures/pr_mock_gh.sh`), verifying command construction from the mock's
 argv log and state interpretation from canned responses — including the tricky
 body, the `-F`-vs-`-f` distinction, GraphQL queue/state, and multi-poll check
-transitions — plus one throwaway local git repo for `complete`'s real ancestry
-logic. No external repository is touched. POSIX sh, Linux and macOS.
+transitions, and every `watch`/`land` verdict from scripted multi-poll PR
+snapshots. One throwaway local git repo backs the real ancestry logic of
+`complete` and `land`. No external repository is touched. POSIX sh, Linux and macOS.
