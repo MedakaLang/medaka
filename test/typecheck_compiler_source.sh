@@ -1370,8 +1370,8 @@ fi
 numeric_operator_required='  let _ = recordBinopGoals at.teDyn.dcModule op dref lt
 goalRequestOfKind mctx _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
 entailAssumVar mctx request m encl _ useScope (EKPredicateOp _ _ _) =
-entailInst sx name m encl useScope tag (EKPredicateOp _ _ predicate) =
-  (stampPredicateOpRouteVal sx encl useScope name m tag predicate, [])'
+entailInst sx name m encl useScope _ (EKPredicateOp _ _ predicate) =
+  (stampPredicateOpRouteVal sx encl useScope name m predicate, [])'
 printf '%s\n' "$numeric_operator_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: exact numeric operator predicate transport is missing: $required"

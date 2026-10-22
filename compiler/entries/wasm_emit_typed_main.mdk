@@ -47,6 +47,7 @@ import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir.{
   CProgram(..),
   EntryFact(..),
+  MethodResultFact(..),
   noDeclFacts,
   CBind(..),
   CClause(..),
@@ -176,6 +177,24 @@ cprogram groups ctorArs ctorTypes impls =
         (stampImplSymbols
           []
           (CProgram groups ctorArs ctorTypes impls [] noDeclFacts))))
+
+withMethodResultFacts : List MethodResultFact -> CProgram -> CProgram
+withMethodResultFacts methodResults (CProgram groups ctorArs ctorTypes impls mctx facts) = CProgram
+  groups
+  ctorArs
+  ctorTypes
+  impls
+  mctx
+  { facts | factMethodResults = methodResults }
+
+cprogramWithMethodResultFacts : List MethodResultFact ->
+  List CBind ->
+  List (String, Int) ->
+  List (String, String) ->
+  List CImplEntry ->
+  CProgram
+cprogramWithMethodResultFacts methodResults groups ctorArs ctorTypes impls =
+  withMethodResultFacts methodResults (cprogram groups ctorArs ctorTypes impls)
 
 typedProgram : List Decl -> List Decl -> List Decl -> CProgram
 typedProgram runtimeDecls preludeDecls userDecls =
@@ -1287,37 +1306,44 @@ implSelfProgram tag base depth =
       (CBinPrim "==" n (CLit (LInt 0)) "Int" noDeclLoc)
       (CLit (LInt base))
       recurse
-  cprogram
-    [synthBind "main" [CClause [] (CLit (LInt depth))]]
-    [(tag, 0)]
-    [(tag, tag)]
-    [
-      CImplEntry
-        "walk"
-        0
-        2
-        (CImplTagged
-          tag
-          tag
-          tag
-          noImplSym
-          [0]
-          [PVar "self" implSelfLoc noBinderId, PVar "n" implSelfLoc noBinderId]
-          body),
-    ]
+  withMethodResultFacts
+    [MethodResultFact tag "walk" False [] 2]
+    (cprogram
+      [synthBind "main" [CClause [] (CLit (LInt depth))]]
+      [(tag, 0)]
+      [(tag, tag)]
+      [
+        CImplEntry
+          "walk"
+          0
+          2
+          (CImplTagged
+            tag
+            tag
+            tag
+            noImplSym
+            [0]
+            [
+              PVar "self" implSelfLoc noBinderId,
+              PVar "n" implSelfLoc noBinderId,
+            ]
+            body),
+      ])
 
 implSelfCensusProgram : CProgram -> CProgram
-implSelfCensusProgram (CProgram groups ctorArs ctorTypes impls _ _) =
-  cprogram
-    (groups
-      ++ [
-        synthBind "implSelfIntentionalGap" [
-          CClause [] (CVar "missingImplSelfGap" AGlobal),
-        ],
-      ])
-    ctorArs
-    ctorTypes
-    impls
+implSelfCensusProgram (CProgram groups ctorArs ctorTypes impls _ facts) =
+  withMethodResultFacts
+    facts.factMethodResults
+    (cprogram
+      (groups
+        ++ [
+          synthBind "implSelfIntentionalGap" [
+            CClause [] (CVar "missingImplSelfGap" AGlobal),
+          ],
+        ])
+      ctorArs
+      ctorTypes
+      impls)
 
 -- X-W.H2b.1: strict, record, and census emissions each own a fresh gap
 -- lifecycle. The hand-built Core program deliberately reaches the same two
@@ -1417,7 +1443,8 @@ defaultStateCall tag = mkApp (CMethod
 
 defaultStateProgram : String -> Int -> CProgram
 defaultStateProgram tag bodyConstant =
-  cprogram
+  cprogramWithMethodResultFacts
+    [MethodResultFact "DefaultFace" "synthDefault" False [] 1]
     [
       synthBind "defaultRequestOne" [
         CClause [PVar "one" defaultStateLoc noBinderId] (defaultStateCall tag),
@@ -1455,7 +1482,8 @@ defaultStateProgramU = defaultStateProgram "UDefault" 29
 
 defaultStateCensusProgramU : CProgram
 defaultStateCensusProgramU =
-  cprogram
+  cprogramWithMethodResultFacts
+    [MethodResultFact "DefaultFace" "synthDefault" False [] 1]
     [
       synthBind "defaultRequestOne" [
         CClause
