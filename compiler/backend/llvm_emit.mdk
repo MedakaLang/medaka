@@ -203,6 +203,7 @@ import ir.core_ir.{
   CStmt(..),
   CProgram(..),
   DeclFacts,
+  MethodResultFact,
   noDeclFacts,
   CArm(..),
   CGuard(..),
@@ -302,6 +303,7 @@ import types.private_mangle.{hashName, injectiveIdent}
 import types.route_key.{numIntWord}
 import backend.emit_plan.{
   EmitPlan(..),
+  lookupMethodResult,
   TrmcVerdicts,
   isTrmcFn,
   isTrmcImpl,
@@ -504,50 +506,18 @@ noteGap e reason = noteGapAt e !e.curGapBind reason
 noteGapAt : Emit -> String -> String -> Unit
 noteGapAt e binding reason = e.gapLog := "\{binding}\t\{reason}" :: !e.gapLog
 
--- ── method-call RESULT-type inference (native backend) ──────────────────────
--- The (interface, method) -> returns-self table, computed by core_ir_lower's
--- `returnsSelfTable` and carried in EmitInput.  A method whose RESULT type mentions the
--- interface/self type variable (`map`/`ap`/`andThen`: f a -> … -> f b) returns
--- the CONTAINER; the emitter types its RKey-dispatched call result as the impl's
--- own type (`tagToLTy tag` → LTCon for List), so a downstream `++`/`::` on that
--- result picks list/string append instead of falling to the LTInt default.  This
--- closes EMITTER-GAPS #3's last residual (`ap@List` / `andThen@List`, whose `++`
--- operand is a CALL result like `map f xs` / the recursive `ap fs xs`, not a
--- param the static E2c typing could reach).
--- does interface method (iface, method) return the self/container type?
--- (False when absent — the conservative default keeps the pre-change behaviour.)
+-- The plan holds signature facts lowered once, before emitter construction.
 methodReturnsSelf : Emit -> String -> String -> Bool
 methodReturnsSelf e iface method =
-  lookupReturnsSelf iface method e.input.returnsSelf
+  match lookupMethodResult e.methodResults iface method
+    Some row => row.returnsHead
+    None => panic "llvm: missing validated method result fact"
 
-lookupReturnsSelf : String -> String -> List ((String, String), Bool) -> Bool
-lookupReturnsSelf _ _ [] = False
-lookupReturnsSelf iface method (((i, m), b) :: rest)
-  | i == iface && m == method = b
-  | otherwise = lookupReturnsSelf iface method rest
-
--- ── self-returning function-PARAM typing (native backend) ───────────────────
--- The (interface, method) -> [function-param positions returning self] table,
--- from core_ir_lower's `selfFnParamTable`.  When emitting an impl method's body,
--- the params at those positions are callbacks that yield the container (e.g.
--- `andThen : m a -> (a -> m b) -> m b`, param 1 = `a -> m b`).  Before emitting a
--- group body, `e.curSelfFnParams` is set to the NAMES of those params and
--- `e.curImplTag` to the impl's type-head tag; `emitIndirect` then types the
--- APPLICATION of such a param (`f x`) as `tagToLTy e.curImplTag` instead of the
--- LTInt indirect-call default.  This closes `andThen@List`, whose `++` LEFT
--- operand `f x` is an indirect call the method-call inference can't reach.
 selfFnParamPositions : Emit -> String -> String -> List Int
 selfFnParamPositions e iface method =
-  lookupSelfFnParams iface method e.input.selfFnParams
-
-lookupSelfFnParams : String ->
-  String ->
-  List ((String, String), List Int) ->
-  List Int
-lookupSelfFnParams _ _ [] = []
-lookupSelfFnParams iface method (((i, m), p) :: rest)
-  | i == iface && m == method = p
-  | otherwise = lookupSelfFnParams iface method rest
+  match lookupMethodResult e.methodResults iface method
+    Some row => row.callbackPositions
+    None => panic "llvm: missing validated method result fact"
 
 -- ── method → declared arity (native backend) ────────────────────────────────
 -- The declared arity of a method named by a bare head (a `CVar` naming an interface
@@ -772,8 +742,6 @@ data LTy =
 -- construct this immutable value for each program; LLVM never reads installed
 -- semantic state from a previous emission.
 data EmitInputData = EmitInputData {
-  returnsSelf : List ((String, String), Bool),
-  selfFnParams : List ((String, String), List Int),
   ctorFieldIndex : OrdMap (List String),
   -- each `stdlib/runtime.mdk` extern's declared arity
   -- (`ir.core_ir_lower.externArities`), the parameter count of its first-class
@@ -810,8 +778,6 @@ export type EmitInput = EmitInputData
 
 export
 makeEmitInput : RuntimeExternDomain ->
-  List ((String, String), Bool) ->
-  List ((String, String), List Int) ->
   List (String, (String, String, Int)) ->
   List (String, List String) ->
   List (String, Int) ->
@@ -823,9 +789,7 @@ makeEmitInput : RuntimeExternDomain ->
   String ->
   List (String, (List (String, String), (List String, String))) ->
   EmitInput
-makeEmitInput domain returnsSelf selfFnParams methodIfaces ctorFieldTypes externArities mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName ffiExternTypes = EmitInputData {
-  returnsSelf = returnsSelf,
-  selfFnParams = selfFnParams,
+makeEmitInput domain methodIfaces ctorFieldTypes externArities mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName ffiExternTypes = EmitInputData {
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   externArityIndex = omFromPairs (reverseL externArities) omEmpty,
   ffiExternIndex = omFromPairs (reverseL (hostRows "c" ffiExternTypes)) omEmpty,
@@ -894,6 +858,7 @@ data Emit = Emit {
   counter0 : Int,
   -- the plan's self-recursive TRMC verdict (`EmitPlan.trmc`)
   trmc : TrmcVerdicts,
+  methodResults : OrdMap (OrdMap MethodResultFact),
   -- the scope every lifted name minted right now is attributed to, and the value
   -- the `; mdk-module` marker carries: a module id (`frontend_lexer`), an impl
   -- group's own key (`impl:List_eq`), or `program`.
@@ -14567,6 +14532,7 @@ programEmitConfig gapMode input plan groups = EmitStateConfig {
   gapMode = gapMode,
   lazyNames = plan.lazyGlobals,
   trmc = plan.trmc,
+  methodResults = plan.methodResults,
   dispGroups = Some plan.dispGroups,
 }
 
@@ -14669,6 +14635,7 @@ data EmitStateConfig = EmitStateConfig {
   gapMode : GapMode,
   lazyNames : List String,
   trmc : TrmcVerdicts,
+  methodResults : OrdMap (OrdMap MethodResultFact),
   dispGroups : Option (List DispGroup),
 }
 
@@ -14730,6 +14697,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     input = input,
     counter0 = cfg.counter0,
     trmc = cfg.trmc,
+    methodResults = cfg.methodResults,
     curModule = Ref scopeProgram,
     counters = Ref omEmpty,
     buf = Ref [],
@@ -15168,6 +15136,7 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
     gapMode = Record,
     lazyNames = [],
     trmc = plan.trmc,
+    methodResults = plan.methodResults,
     dispGroups = None,
   }
   let found = unprovidedExterns Record input plan cp

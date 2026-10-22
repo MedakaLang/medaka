@@ -36,8 +36,6 @@ import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmitWith,
-  returnsSelfTable,
-  selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
   externArities,
@@ -94,7 +92,7 @@ emitIsolation runtimePath pPath pPlusUPath =
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
   let input =
-    makeEmitInput PreludeFreeRuntime [] [] [] [] [] False False 0 [] [] "" []
+    makeEmitInput PreludeFreeRuntime [] [] [] False False 0 [] [] "" []
   let mainId = BinderId "" 0
   let cp =
     CProgram
@@ -104,6 +102,7 @@ emitGapIsolation =
       []
       []
       DeclFacts {
+        factMethodResults = [],
         factRequires = [],
         factSupers = [],
         factBinders = [
@@ -146,8 +145,6 @@ runEmit runtimeDecls preludeDecls userDecls =
   let input =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
-      (returnsSelfTable mangled)
-      (selfFnParamTable mangled)
       (methodIfaceTable mangled)
       (ctorFieldTypeNames mangled)
       (externArities runtimeDecls)

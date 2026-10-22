@@ -6,7 +6,13 @@
 import test.{expectEqual}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
-import ir.core_ir_lower.{noInlineFnNames}
+import ir.core_ir_lower.{
+  noInlineFnNames, methodResultFacts, lowerProgramEmitWith
+}
+import ir.core_ir.{CProgram(..), MethodResultFact(..)}
+import frontend.ast.{Decl(..), TyConOrigin(..)}
+import types.annotate.{annotateProgram}
+import types.program_facts.{emptyFacts}
 import support.util.{joinNl}
 
 marked : String -> List String
@@ -54,3 +60,53 @@ test "other attributes and unattributed functions mark nothing" =
         "c : Int -> Int",
         "c x = x",
       ]))
+
+resultFacts : String -> List MethodResultFact
+resultFacts source =
+  match (lowerProgramEmitWith
+    emptyFacts
+    (annotateProgram (desugar (parse source))))
+    CProgram _ _ _ _ _ facts => facts.factMethodResults
+
+test "method results mention only the head interface parameter" =
+  expectEqual
+    [
+      MethodResultFact "Ix" "whole" True [] 1,
+      MethodResultFact "Ix" "element" False [] 1,
+    ]
+    (resultFacts
+      """
+interface Ix c v where
+  whole : c -> c
+  element : c -> v
+""")
+
+test "callback facts count value parameters and retain non-head results" =
+  expectEqual
+    [MethodResultFact "Chain" "step" True [1, 2] 3]
+    (resultFacts
+      """
+interface Chain c v where
+  step : Num n => c -> (v -> c) -> (c -> v) -> c
+""")
+
+qualifiedInterface : String -> Decl -> Decl
+qualifiedInterface origin (d@(DInterface { ... })) =
+  DInterface { d | ifaceOrigin = OriginModule origin }
+qualifiedInterface _ d = d
+
+test "same-spelled interfaces retain distinct qualified result facts" =
+  let left =
+    map
+      (qualifiedInterface "left")
+      (parse "interface Shared c where\n  pick : c -> c")
+  let right =
+    map
+      (qualifiedInterface "right")
+      (parse "interface Shared c where\n  pick : c -> Int")
+  expectEqual
+    [
+      MethodResultFact "left::Shared" "pick" True [] 1,
+      MethodResultFact "right::Shared" "pick" False [] 1,
+    ]
+    (methodResultFacts (left ++ right))

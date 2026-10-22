@@ -425,15 +425,32 @@ public export data CProgram =
 -- table is a snapshot, so the program is self-contained: a consumer never reads
 -- the typechecker's published table.  `core_validate.validateBinderStamps` refuses
 -- a binder with no row and a function with no return type.
+-- Signature facts use declaration identity; callback positions count only value
+-- parameters, before dictionary passing adds leading parameters.
+public export data MethodResultFact = MethodResultFact {
+  iface : String,
+  method : String,
+  returnsHead : Bool,
+  callbackPositions : List Int,
+  valueArity : Int,
+}
+  deriving (Eq, Debug)
+
 public export data DeclFacts = DeclFacts {
   factRequires : List (String, Int),
   factSupers : List (String, Int),
   factBinders : List BinderRow,
+  factMethodResults : List MethodResultFact,
 }
 
 export
 noDeclFacts : DeclFacts
-noDeclFacts = DeclFacts { factRequires = [], factSupers = [], factBinders = [] }
+noDeclFacts = DeclFacts {
+  factRequires = [],
+  factSupers = [],
+  factBinders = [],
+  factMethodResults = [],
+}
 
 -- ── binder walk ──────────────────────────────────────────────────────────────
 -- One traversal of every binder in a program, in a fixed order, with the id each
@@ -511,6 +528,7 @@ withBinderRows rows (CProgram groups ctorArs ctorTypes impls mctx facts) = CProg
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factBinders = rows,
+    factMethodResults = facts.factMethodResults,
   }
 
 -- Every binder id of [prog], in walk order.
