@@ -117,7 +117,7 @@ mutationTest = MutationTest {
   ],
 }
 
-test "read routes: 64 hand-authored cells, native == Wasm" = expectRow row
+test "read routes: 74 hand-authored cells, native == Wasm" = expectRow row
 
 test "read routes: each of 4 mutations turns the gate red with its own witness" =
   expectMutations mutationTest

@@ -149,7 +149,6 @@ import lib.server_core.{
   handleBytes,
   handleBytesAnnouncing,
   serverAccount,
-  serviceAuthUnavailableResponse,
 }
 import lib.store.{
   Store,
@@ -173,7 +172,8 @@ import lib.xrpc.{
 import net.{Connection, Listener, listen}
 import net_async as A
 import shell.blobfile.{blobFileCount, blobFileWrite}
-import shell.egress.{Egress, egressAppviews, egressCall, egressMintToken}
+import shell.egress.{Egress, egressAppviews, egressCall}
+import shell.service_signer.{ServiceSigner, signServiceAuth}
 import shell.eventlog.{
   eventLogDir,
   eventLogDiscardStaged,
@@ -1899,7 +1899,9 @@ readBufferLive (ReadBuffer b _) =
    per-connection fact this process can observe. The `Egress` is `None` unless
    `--appview-did` and `--egress-port` were both given, and `None` is what makes
    a server configured for no appview answer every `atproto-proxy` header the
-   way it did before there was an outbound path at all.
+   way it did before there was an outbound path at all. The `ServiceSigner`
+   is held whether or not there is an `Egress`: a credential for this server's
+   own DID needs the account key and no outbound path.
 
    One value rather than three parameters, for the reason `admissionClasses`
    states about its own arguments: these are threaded through eleven functions
@@ -1915,11 +1917,15 @@ readBufferLive (ReadBuffer b _) =
    outbound path charges it. The derivation census joins them on the same
    argument: only the login path charges it, and it already holds this. -}
 export data Serving =
-  | Serving TrustedProxy (Option Egress) ProxyCensus BufferCensus EgressCensus DerivationCensus (Ref Bool)
+  | Serving TrustedProxy (Option Egress) ProxyCensus BufferCensus EgressCensus DerivationCensus (Ref Bool) ServiceSigner
 
 export
-makeServing : TrustedProxy -> Option Egress -> Ref Int -> Serving
-makeServing trustedProxy egress inFlight =
+makeServing : TrustedProxy ->
+  Option Egress ->
+  ServiceSigner ->
+  Ref Int ->
+  Serving
+makeServing trustedProxy egress signer inFlight =
   Serving
     trustedProxy
     egress
@@ -1928,29 +1934,33 @@ makeServing trustedProxy egress inFlight =
     (newEgressCensus ())
     (DerivationCensus (Ref 0) (Ref Tip))
     (Ref False)
+    signer
 
 export
 servingStopping : Serving -> Ref Bool
-servingStopping (Serving _ _ _ _ _ _ stopping) = stopping
+servingStopping (Serving _ _ _ _ _ _ stopping _) = stopping
 
 export
 servingTrustedProxy : Serving -> TrustedProxy
-servingTrustedProxy (Serving trustedProxy _ _ _ _ _ _) = trustedProxy
+servingTrustedProxy (Serving trustedProxy _ _ _ _ _ _ _) = trustedProxy
+
+servingSigner : Serving -> ServiceSigner
+servingSigner (Serving _ _ _ _ _ _ _ signer) = signer
 
 servingEgress : Serving -> Option Egress
-servingEgress (Serving _ egress _ _ _ _ _) = egress
+servingEgress (Serving _ egress _ _ _ _ _ _) = egress
 
 servingProxyCensus : Serving -> ProxyCensus
-servingProxyCensus (Serving _ _ census _ _ _ _) = census
+servingProxyCensus (Serving _ _ census _ _ _ _ _) = census
 
 servingBufferCensus : Serving -> BufferCensus
-servingBufferCensus (Serving _ _ _ census _ _ _) = census
+servingBufferCensus (Serving _ _ _ census _ _ _ _) = census
 
 servingEgressCensus : Serving -> EgressCensus
-servingEgressCensus (Serving _ _ _ _ census _ _) = census
+servingEgressCensus (Serving _ _ _ _ census _ _ _) = census
 
 servingDerivationCensus : Serving -> DerivationCensus
-servingDerivationCensus (Serving _ _ _ _ _ census _) = census
+servingDerivationCensus (Serving _ _ _ _ _ census _ _) = census
 
 -- ── the stats line ──────────────────────────────────────────────────────────
 
@@ -3206,23 +3216,15 @@ settleLogin server serving storeRef parsed identity = defer
    `ServiceAuthRequest` is the pure classifier's own output and there is no
    other way to obtain one, so the issuer, the audience, the method and the
    expiry all arrive already decided. This function signs, and the key never
-   leaves `pds/shell/egress.mdk` — `egressMintToken` takes the claim set and
-   returns a signature.
+   leaves `pds/shell/service_signer.mdk` — `signServiceAuth` takes the claim
+   set and returns a signature.
 
-   `None` for the egress is unreachable: a `ServiceAuthMinted` decision is only
-   produced when an `AppviewTable` was supplied, and the only source of one is
-   a configured `Egress`. It answers the same 501 a deployment with no key
-   configured gets, rather than a panic, for the reason the proxy path's
-   unreachable `None` is a 502: a reachability argument is not a reason to add
-   a crash path to a function a client can reach over the network.
-
-   An `Err` from the mint is 500 and not 501: the key IS configured and the
-   signature did not come out, which is this server failing rather than this
-   server declining. -}
+   An `Err` from the mint is 500: the key IS configured and the signature did
+   not come out, which is this server failing rather than this server
+   declining. -}
 mintedTokenBytes : Serving -> ServiceAuthRequest -> <Sign "service-auth"> Bytes
-mintedTokenBytes serving claims = match servingEgress serving
-  None => serializeResponse (withAllowOrigin serviceAuthUnavailableResponse)
-  Some egress => match egressMintToken egress claims
+mintedTokenBytes serving claims =
+  match signServiceAuth (servingSigner serving) claims
     Err _ => serializeResponse (withAllowOrigin serviceAuthMintFailureResponse)
     Ok minted =>
       serializeResponse (withAllowOrigin (serviceAuthTokenResponse minted))

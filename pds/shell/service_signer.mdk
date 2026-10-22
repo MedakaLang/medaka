@@ -1,0 +1,26 @@
+{- | The one holder of the account key for service-auth signing.
+
+   The key enters through `makeServiceSigner` and leaves only as a signature
+   over a `ServiceAuthRequest`, which `lib.server_core` produces after grading
+   the audience, the method and the expiry. There is no accessor, so no other
+   module can sign anything with the key or render it. An `Err` carries
+   `lib.jwt`'s message and never the token or the key. -}
+
+import lib.jwt.{ServiceAuthRequest, mintServiceToken}
+import lib.sign.{SecretKey, Sign}
+
+export data ServiceSigner = ServiceSigner SecretKey
+
+export
+makeServiceSigner : SecretKey -> ServiceSigner
+makeServiceSigner key = ServiceSigner key
+
+{- | Sign one classifier-produced claim set and hand the credential back.
+
+   `Err` is reachable only when the RFC 6979 nonce schedule exhausts its retry
+   bound, which no input chooses and no caller can provoke. -}
+export
+signServiceAuth : ServiceSigner ->
+  ServiceAuthRequest ->
+  <Sign "service-auth"> Result String String
+signServiceAuth (ServiceSigner key) claims = mintServiceToken key claims

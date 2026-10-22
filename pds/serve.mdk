@@ -155,6 +155,7 @@ import shell.dirlock.{
   requireDataLock,
 }
 import shell.egress.{Egress, makeEgress}
+import shell.service_signer.{ServiceSigner, makeServiceSigner}
 import shell.eventlog.{
   EventLogRecovery(..),
   eventLogApplyRecovery,
@@ -362,8 +363,8 @@ egressPortOf flag text = match toInt text
    without the default pair is refused rather than promoted to the default: a
    header-absent read has to go somewhere, and choosing which of an operator's
    additional audiences receives it is not this program's choice to make. -}
-configureEgress : Args -> SecretKey -> Result String (Option Egress)
-configureEgress parsed signingKey = match (
+configureEgress : Args -> ServiceSigner -> Result String (Option Egress)
+configureEgress parsed signer = match (
   flagValue "--appview-did" parsed,
   flagValue "--egress-port" parsed,
   flagValues "--proxy-audience" parsed,
@@ -381,7 +382,7 @@ configureEgress parsed signingKey = match (
     first <- appviewRouteOf "--appview-did" did port
     rest <- extraAudiences extra
     appviews <- makeAppviewTable first rest
-    Ok (Some (makeEgress appviews signingKey))
+    Ok (Some (makeEgress appviews signer))
 
 appviewRouteOf : String -> String -> Int -> Result String AppviewRoute
 appviewRouteOf flag did port = match makeAppviewRoute did port
@@ -869,8 +870,9 @@ configure parsed = do
   -- Admitted here, beside the other supplied configuration and ahead of
   -- every generated secret: a run refused for a malformed appview DID must
   -- leave no session secret on disk for the next run to adopt (#2659 item 4).
-  egress <- configureEgress parsed secret
-  let serving = makeServing trustedProxy egress (Ref 0)
+  let signer = makeServiceSigner secret
+  egress <- configureEgress parsed signer
+  let serving = makeServing trustedProxy egress signer (Ref 0)
   relay <- configureRelay parsed
   () <- requireDir dir
   -- The single-writer lock, taken here: after the directory is known to be one

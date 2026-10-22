@@ -1971,6 +1971,31 @@ runServiceAuth port token audience nsid stubPort =
             else
               report "SERVICEAUTH" True "token=\{minted}"
 
+{- | Ask a server for a credential naming the SERVER ITSELF, and print it.
+
+   The server under test holds no appview, so its only route to a signature is
+   the one a credential for its own DID takes. The token is printed on the PASS
+   line for the gate to decode: the audience and method it carries are read
+   from the credential's own bytes by the shell, not asserted here. -}
+runOwnServiceAuth : Int -> String -> String -> String -> <IO, Net> Unit
+runOwnServiceAuth port token audience nsid =
+  let path =
+    xrpcPath "com.atproto.server.getServiceAuth?aud=\{audience}&lxm=\{nsid}"
+  let conn = mustConnect port
+  let () = mustSend conn (getRequestWith token path)
+  let result = readResponse conn empty
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report "OWNSERVICEAUTH" False message
+    Ok (status, body, _) =>
+      if status /= 200 then
+        report
+          "OWNSERVICEAUTH"
+          False
+          "want status 200, got \{intToString status}: \{textOrHex body}"
+      else
+        report "OWNSERVICEAUTH" True "token=\{stringField "token" body}"
+
 {- | The proxied-read class, driven over ONE connection.
 
    One connection for the reason the repo-export case uses one: the connections
@@ -2207,7 +2232,7 @@ runKdfFloodOwnerLockout port attackerXff identifier wrongPassword count ownerXff
 
 usage : String
 usage =
-  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-update-handle|update-handle|rl-repo|rl-proxy|rl-malformed|kdf-yield|kdf-flood|kdf-flood-xff|login-race> ..."
+  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|service-auth-own|rl-conn|rl-req|rl-write|rl-session|rl-update-handle|update-handle|rl-repo|rl-proxy|rl-malformed|kdf-yield|kdf-flood|kdf-flood-xff|login-race> ..."
 
 main : <Clock, Env, IO, Kdf, Net> Unit
 main = match args ()
@@ -2310,6 +2335,8 @@ main = match args ()
     runPreflight (mustPort port) path named (mustStatus want) wantAllowed
   ["cors-get", label, port, token, path, want] =>
     runCorsGet label (mustPort port) token path (mustStatus want)
+  ["service-auth-own", port, token, audience, nsid] =>
+    runOwnServiceAuth (mustPort port) token audience nsid
   ["service-auth", port, token, audience, nsid, stubPort] =>
     runServiceAuth (mustPort port) token audience nsid (mustPort stubPort)
   ["proxy-write", port, token, service, path, body, want, marker, field] =>

@@ -60,6 +60,18 @@ bareAudience = "did:web:appview.example"
 method : String
 method = "app.bsky.feed.getTimeline"
 
+-- This server's own DID, as the official client names it when it asks for a
+-- credential to upload a video, and the one method that credential is for.
+ownAudience : String
+ownAudience = "did:web:pds.example"
+
+uploadBlobMethod : String
+uploadBlobMethod = "com.atproto.repo.uploadBlob"
+
+-- The thirty minutes the official client asks that credential to last.
+ownLifetime : Int
+ownLifetime = 1800
+
 -- The corpus's own pinned instant, so the window the verifier is given is the
 -- same one the recorded wire shape was captured at.
 issuedAt : Int
@@ -94,8 +106,11 @@ mint key claims =
 -- lifetime — so the four rows below assert the default, unchanged, while
 -- `rowLasting` states its own figure and asserts that one instead.
 row : String -> String -> String -> String -> String -> String
-row name expectation didKey lxm minted =
-  "case \{name} \{expectation} \{didKey} \{bareAudience} \{lxm} \{minted}"
+row = rowFor bareAudience
+
+rowFor : String -> String -> String -> String -> String -> String -> String
+rowFor audience name expectation didKey lxm minted =
+  "case \{name} \{expectation} \{didKey} \{audience} \{lxm} \{minted}"
 
 -- One row that asked for its OWN window, with the seconds it asked for. The
 -- expectation is stated per row rather than fixed in the grader so that a mint
@@ -111,6 +126,14 @@ main =
   let signerDidKey = didKeyFromPublicKey (publicKeyForSecret signer)
   let otherDidKey = didKeyFromPublicKey (publicKeyForSecret other)
   let askedExpiry = Some (issuedAt + explicitLifetime)
+  let ownUpload =
+    mint
+      signer
+      (request
+        ownAudience
+        (Some uploadBlobMethod)
+        "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        (Some (issuedAt + ownLifetime)))
   let withLxm =
     mint
       signer
@@ -184,4 +207,9 @@ main =
           "-"
           expiryWithoutLxm
           explicitLifetime,
+        -- The credential this server mints for its own DID: accepted for the
+        -- one method it names, at the window the official client asks for, and
+        -- refused when the verifier is told to expect another method.
+        "\{rowFor ownAudience "own-did-upload-blob" "accept" signerDidKey uploadBlobMethod ownUpload} \{intToString ownLifetime}",
+        "\{rowFor ownAudience "own-did-other-lxm" "reject" signerDidKey method ownUpload} \{intToString ownLifetime}",
       ])

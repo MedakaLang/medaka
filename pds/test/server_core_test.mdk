@@ -42,6 +42,7 @@ import lib.server_core.{
   handleBytes,
   makeAccount,
   makeServer,
+  serverDid,
 }
 import lib.store.{
   Store,
@@ -194,6 +195,9 @@ test "an out-of-domain request array is refused at the door, not framed" = expec
     expectTrue (isNone (fromArray outOfDomainQuery)),
     expectTrue (isSome (fromArray (B.toArray fixedQueryPlain))),
   ]
+
+test "the server DID is did:web of the account hostname, not the account DID" =
+  expectEqual "did:web:pds.example" (serverDid account)
 
 test "Store starts empty and delegates verified immutable insertion" =
   let bytes = fromU8Array [|1, 2, 3|]
