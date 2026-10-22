@@ -1,0 +1,532 @@
+-- Tests for the scheme-level interface codec: every published row of every
+-- stdlib module, of a battery of synthetic signatures and of a residual-bearing
+-- module survives encode, render, parse and decode with its text, its rendering
+-- and its quantified ids intact; malformed text is refused with its path.
+import test.{
+  Expectation, expectEqual, expectEach, expectAll, expectAtLeast, labelFail,
+  fail
+}
+import list.{sort, indexed}
+import string as S
+import frontend.ast.{Decl, TyConOrigin(..)}
+import frontend.desugar.{desugar, desugarIn}
+import frontend.parser.{parse, parseLocated}
+import driver.loader.{
+  loadProgramFilesLocatedE, dropPathTriple, stdlibOwnership, loadErrorMessage
+}
+import support.sexp_value.{SExp(..), SexpError(..), renderSExp, parseSExp}
+import test_process.{underRoot, mdkModuleStem, testFileStem, withScratchDir}
+import types.interface_sexp.{
+  bindingSExp, bindingOfSExp, schemeSExp, schemeOfSExp, monoSExp, monoOfSExp,
+  effRowOfSExp, paramSExp, paramOfSExp, tyConOriginSExp, tyConOriginOfSExp
+}
+import types.publish.{
+  PubScheme(..), TcReport(..), PartialAnalysis(..), LiveCell(..), VarKind(..),
+  ppPubScheme, liveCells
+}
+import types.repr.{Mono(..), Tyvar(..), Scheme(..)}
+import types.effect_rows.{EffRow(..), Effvar(..), atomBuiltin}
+import types.effect_authority.{Authority(..)}
+import types.effect_domain.{Param(..)}
+import types.tc_types.{DriveInputs}
+import types.typecheck.{
+  checkModulesChainReportFor, checkModulesEntryFullReportK, defaultDriveInputs,
+  driveInputsFor, entrySplit
+}
+
+-- ── the law ─────────────────────────────────────────────────────────────────
+
+quantified : PubScheme -> (List Int, List Int, List Int)
+quantified (PubScheme { psScheme = (Forall ids effIds authIds _ _ _) }) =
+  (ids, effIds, authIds)
+
+-- A row encoded, rendered, parsed and decoded: the re-encoded text is the
+-- encoded text, and the rendering and the quantified ids are the original's.
+roundTrips : (String, PubScheme) -> Expectation
+roundTrips (name, p) =
+  let text = renderSExp (bindingSExp name p)
+  labelFail name (match map bindingOfSExp (parseSExp text)
+    Err e => fail "the encoded text does not parse: \{e.seWhat}"
+    Ok (Err e) => fail "decode refused at \{e.sePath}: \{e.seWhat}"
+    Ok (Ok (name2, back)) => expectAll [
+      labelFail "name" (expectEqual name name2),
+      labelFail "text" (expectEqual text (renderSExp (bindingSExp name back))),
+      labelFail "rendering" (expectEqual (ppPubScheme p) (ppPubScheme back)),
+      labelFail "quantified ids" (expectEqual (quantified p) (quantified back)),
+    ])
+
+-- ── the rows ────────────────────────────────────────────────────────────────
+
+-- The prelude as a drive reads it.
+prelude : <IO, FileRead> Result String (List Decl, List Decl)
+prelude = do
+  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+  csrc <- readFile (underRoot "stdlib/core.mdk")
+  Ok (desugar (parse rsrc), desugar (parse csrc))
+
+-- Every stdlib module but the prelude's two, as an import path.
+stdlibModules : <IO, FileRead> Result String (List String)
+stdlibModules = do
+  top <- listDir (underRoot "stdlib")
+  crypto <- listDir (underRoot "stdlib/crypto")
+  let ids = moduleIds "" top ++ moduleIds "crypto." crypto
+  Ok (sort (filter (m => m /= "core" && m /= "runtime") ids))
+
+moduleIds : String -> List String -> List String
+moduleIds prefix names =
+  map
+    (prefix ++ _)
+    (filterMap mdkModuleStem (filter (n => isNone (testFileStem n)) names))
+
+-- The published rows of a graph drive: each module's own rows, as
+-- `check --types` lists them, beside the prelude's.  A module that
+-- reported an error fails the load.
+publishedRows : TcReport -> Result String (List (String, PubScheme))
+publishedRows r = match filter hasErrors r.trDiagnostics
+  [] => Ok (r.trPartial.paCore ++ flatMap ownRows r.trDiagnostics)
+  bad => Err "modules with errors: \{map fst bad}"
+
+-- A module's rows, each named `<module>.<binding>`.
+ownRows : (String, (List (String, PubScheme), a, b)) -> List (String, PubScheme)
+ownRows (mid, (rows, _, _)) = map (row => ("\{mid}.\{fst row}", snd row)) rows
+
+hasErrors : (String, (a, List b, c)) -> Bool
+hasErrors (_, (_, [], _)) = False
+hasErrors _ = True
+
+-- A dotted path imported bare reads as an item of its first segment, so each
+-- module is imported under an alias of its own.
+importLine : (Int, String) -> String
+importLine (i, m) = "import \{m} as M\{i}"
+
+-- One drive over a graph whose entry, written into [dir], imports every stdlib
+-- module, so each module's rows are its own.
+stdlibRows : String ->
+  <IO, FileRead, FileWrite> Result String (List (String, PubScheme))
+stdlibRows dir = do
+  (runtimeDecls, coreDecls) <- prelude
+  mods <- stdlibModules
+  let entry = "\{dir}/all_stdlib.mdk"
+  _ <- writeFile entry (S.join "\n" (map importLine (indexed mods)) ++ "\n")
+  let roots = [dir, underRoot "stdlib"]
+  loaded <- mapErr
+    loadErrorMessage
+    (loadProgramFilesLocatedE (_ => None) entry roots)
+  let pairs = map dropPathTriple loaded
+  let (flat, owned) = stdlibOwnership entry roots (underRoot "stdlib") pairs
+  let (report, _) =
+    checkModulesChainReportFor
+      (driveInputsFor None flat owned)
+      False
+      None
+      ""
+      []
+      runtimeDecls
+      coreDecls
+      (map (p => (fst p, desugarIn (fst p) (snd p))) pairs)
+  graphRows <- publishedRows report
+  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+  runtimeRows <- flatRows (driveInputsFor None True []) rsrc
+  Ok (graphRows ++ map (row => ("runtime.\{fst row}", snd row)) runtimeRows)
+
+-- A flat file's rows, the way `check --types` drives one: the prelude's
+-- `runtime` has no rows of its own in a graph drive, so it is driven flat too.
+flatRows : DriveInputs ->
+  String ->
+  <IO, FileRead> Result String (List (String, PubScheme))
+flatRows inputs src = do
+  (runtimeDecls, coreDecls) <- prelude
+  let (report, _) = checkModulesEntryFullReportK
+    inputs
+    False
+    None
+    runtimeDecls
+    coreDecls
+    [("__user__", desugar (parseLocated src))]
+  match entrySplit report
+    (_, rows, [], _) => Ok rows
+    (_, _, errs, _) => Err "the file has \{length errs} type error(s)"
+
+-- Spike B's battery: user classes, binder domains, authority-indexed types,
+-- higher-kinded parameters, effect tails and joins, unsigned bindings.
+battery : String
+battery =
+  """
+  effect Store Prefix
+  effect Var Set
+  effect Http Product (Host : Prefix, Method : Set)
+  effect KV
+  extern load : (path : String) -> <FFI "c", Store path> Int
+  extern loadTwo : (src : String) -> (dst : String) -> <FFI "c", Store src, Store dst> Unit
+  extern getVar : (n : String) -> <FFI "c", Var n> String
+  extern httpGet : (host : String) -> (method : String) -> <FFI "c", Http Host=host Method=method> Int
+  extern kvGet : String -> <FFI "c", KV> Int
+  data Handle (p : Authority Store) = Handle (String @p)
+  data AnyHandle = AnyHandle (p : Authority Store) (Handle p)
+  data Dir (d : Authority Store*) = Dir (String @d)
+  data Conf (p : Authority Store) = Conf { path : String @p, retries : Int }
+  data Rec = Rec { rx : Int, ry : List String }
+  type Pair2 a = (a, a)
+  type Alias a = List (Option a)
+  data Wrap (f : Type -> Type) a = Wrap (f a)
+  interface Container f where
+    cmap : (a -> b) -> f a -> f b
+    cempty : f a
+  interface Sized f requires Container f where
+    csize : f a -> Int
+  data Box a = Box a
+  impl Container Box where
+    cmap f (Box a) = Box (f a)
+    cempty = panic "no"
+  impl Sized Box where
+    csize _ = 1
+
+  under : (dir : String @Store*) -> String -> <FFI "c*", Store dir> Int
+  under dir name = load (dir ++ name)
+  pathOf : (dir : String @Store) -> String @dir
+  pathOf dir = dir
+  joinPaths : (src : String @Store) -> (dst : String @Store) -> String @(src | dst)
+  joinPaths src dst = src
+  readIn : Dir d -> String -> <FFI "c*", Store d> Int
+  readIn (Dir root) name = load (root ++ "blocks/" ++ name)
+  cfg : Unit -> Handle "config/*"
+  cfg _ = Handle "config/app.toml"
+  anyAt : String -> Handle *
+  anyAt s = Handle s
+  readH : Handle p -> <FFI "c", Store p> Int
+  readH (Handle s) = load s
+  readAny : AnyHandle -> <FFI "c", Store> Int
+  readAny (AnyHandle h) = readH h
+  openH : (path : String) -> Handle path
+  openH path = Handle path
+  copyAll : (src : String) -> (dst : String) -> <FFI "c", Store src, Store dst> Unit
+  copyAll src dst = loadTwo src dst
+  literalStore : Unit -> <FFI "c", Store "cfg/*"> Int
+  literalStore _ = load "cfg/*"
+  effOpen : (a -> <e> b) -> a -> <e> b
+  effOpen f x = f x
+  effTwo : (a -> <e> b) -> (b -> <e2> c) -> a -> <e | e2> c
+  effTwo f g x = g (f x)
+  effKV : Unit -> <FFI "c", KV, IO> Int
+  effKV _ = kvGet "x"
+  jmap : (a -> <e2> b) -> Wrap f a -> Wrap f b
+  jmap _ w = panic "x"
+  hk : Container f => f a -> f a
+  hk x = x
+  hk2 : Sized f => f a -> Int
+  hk2 x = csize x
+  multiC : (Display a, Ord a, Eq b) => a -> b -> String
+  multiC a _ = display a
+  recGet : Rec -> Int
+  recGet r = r.rx
+  recMk : Int -> Rec
+  recMk i = Rec { rx = i, ry = [] }
+  aliasUse : Alias Int -> Pair2 Int
+  aliasUse _ = (1, 2)
+  confPath : Conf p -> String @p
+  confPath c = c.path
+  unsignedNum x = x + 1
+  unsignedEff x = println x
+  unsignedPoly x y = (y, x)
+  unsignedShow x = display x ++ "!"
+  unsignedHk f = cmap f
+  unsignedRes x = kvGet x
+  unsignedClosure = x => x
+  litInt = 42
+  litFloat = 3.5
+  unitFn : Unit -> Unit
+  unitFn u = u
+  fnArg : (Int -> Int) -> (Int -> <IO> Int) -> Int
+  fnArg f g = f 1
+  nestedFn : ((a -> b) -> c) -> c
+  nestedFn k = panic "x"
+  tupleRet : a -> (a, Int, String)
+  tupleRet a = (a, 1, "x")
+  """
+
+-- An unsigned binding whose inferred scheme keeps an open authority residual
+-- (`subIn : (a <= d) => ...`); neither the stdlib nor the battery holds one.
+residualModule : String
+residualModule =
+  """
+  effect Audit Prefix
+  data Dir (d : Authority Audit) = Dir (String @d)
+  sub : Dir d -> (p : String @d) -> Dir d
+  sub h _ = h
+  subIn h (Dir p) = sub h p
+  """
+
+test "every published stdlib row round-trips" = withScratchDir
+  (dir => match stdlibRows dir
+    Err e => fail e
+    Ok rows => expectAll [
+      labelFail "rows tested" (expectAtLeast 1500 (length rows)),
+      expectAll (map roundTrips rows),
+    ])
+
+test "every battery row round-trips" = match flatRows defaultDriveInputs battery
+  Err e => fail e
+  Ok rows => expectAll [
+    labelFail "rows tested" (expectEqual 43 (length rows)),
+    expectAll (map roundTrips rows),
+  ]
+
+test "a residual-bearing row round-trips with its residual" =
+  match flatRows defaultDriveInputs residualModule
+    Err e => fail e
+    Ok rows => expectAll [
+      labelFail
+        "the residual is rendered"
+        (expectEqual
+          [True]
+          (map
+            (row => S.contains "<=" (ppPubScheme (snd row)))
+            (filter (row => fst row == "subIn") rows))),
+      expectAll (map roundTrips rows),
+    ]
+
+-- ── decoding refuses ────────────────────────────────────────────────────────
+
+refusal : Result SexpError a -> Option (String, String)
+refusal (Err e) = Some (e.sePath, e.seWhat)
+refusal (Ok _) = None
+
+atom : String -> SExp
+atom = SAtom
+
+node : List String -> SExp
+node items = SList (map SAtom items)
+
+test "a wrong field count or an unknown head is refused at its path" =
+  let closed = SList [atom "row", SList [], atom "closed"]
+  expectEach [
+    (
+      "unknown mono head",
+      expectEqual
+        (Some (
+          "mono",
+          "tvar: unknown head; expected one of tv, con, rigid, app, fun, eff, qual, auth",
+        ))
+        (refusal (monoOfSExp (node ["tvar", "1", "0"]))),
+    ),
+    (
+      "tv with one field",
+      expectEqual
+        (Some ("mono", "tv: expected 2 field(s)"))
+        (refusal (monoOfSExp (node ["tv", "1"]))),
+    ),
+    (
+      "nested: an arrow's argument",
+      expectEqual
+        (Some ("mono/fun.1", "con: expected 2 field(s)"))
+        (refusal
+          (monoOfSExp
+            (SList [
+              atom "fun",
+              node ["con", "Int"],
+              closed,
+              node ["tv", "1", "0"],
+            ]))),
+    ),
+    (
+      "a non-integer id",
+      expectEqual
+        (Some ("mono/tv.1", "expected an integer"))
+        (refusal (monoOfSExp (node ["tv", "x", "0"]))),
+    ),
+    (
+      "a link as a row tail",
+      expectEqual
+        (Some ("row/row.2", "el: a row tail is never a link"))
+        (refusal
+          (effRowOfSExp
+            (SList [
+              atom "row",
+              SList [],
+              SList [atom "el", atom "3", closed],
+            ]))),
+    ),
+    (
+      "one id written two ways",
+      expectEqual
+        (Some ("mono/app.2", "tv: this id was written differently before"))
+        (refusal
+          (monoOfSExp
+            (SList [atom "app", node ["tv", "1", "0"], node ["tv", "1", "2"]]))),
+    ),
+    (
+      "an unknown origin",
+      expectEqual
+        (Some (
+          "origin",
+          "nowhere: unknown head; expected one of unresolved, builtin, module",
+        ))
+        (refusal (tyConOriginOfSExp (atom "nowhere"))),
+    ),
+    (
+      "a scheme missing its mono",
+      expectEqual
+        (Some ("scheme", "forall: expected 6 field(s)"))
+        (refusal
+          (schemeOfSExp
+            (SList [
+              atom "forall",
+              SList [],
+              SList [],
+              SList [],
+              SList [],
+              closed,
+            ]))),
+    ),
+  ]
+
+test "params and origins round-trip" =
+  let params = [
+    PUnit,
+    PPrefix None,
+    PPrefix (Some "a b"),
+    PPath (Some ""),
+    PSet None,
+    PSet (Some ["x", "y"]),
+    PProduct [("Host", PPrefix None), ("Method", PSet (Some []))],
+  ]
+  let origins = [OriginBuiltin, OriginModule "m", OriginModule "crypto.sha256"]
+  expectAll [
+    expectEqual
+      (map (p => Ok (paramSExp p)) params)
+      (map (p => map paramSExp (paramOfSExp (paramSExp p))) params),
+    expectEqual
+      (map (o => Ok (tyConOriginSExp o)) origins)
+      (map
+        (o => map tyConOriginSExp (tyConOriginOfSExp (tyConOriginSExp o)))
+        origins),
+    labelFail
+      "unresolved"
+      (expectEqual
+        (Ok (SAtom "unresolved"))
+        (map tyConOriginSExp (tyConOriginOfSExp (SAtom "unresolved")))),
+  ]
+
+-- ── sharing ─────────────────────────────────────────────────────────────────
+
+-- One id, two occurrences: decoding mints one cell for both.
+test "a variable written twice decodes to one cell" =
+  let cell = Ref (Unbound 4 1)
+  let pair = TFun (TVar cell) (EffRow [] None) (TVar cell)
+  match monoOfSExp (monoSExp pair)
+    Ok (TFun (TVar a) _ (TVar b)) =>
+      let _ = a := Unbound 9 1
+      expectEqual "(tv 9 1)" (renderSExp (monoSExp (TVar b)))
+    _ => fail "the arrow did not decode to an arrow of two variables"
+
+-- A linked type variable is followed: the text holds its target.
+test "a link is followed" =
+  let target = TCon "Int" OriginBuiltin
+  let linked = TVar (Ref (Link target))
+  expectEqual (renderSExp (monoSExp target)) (renderSExp (monoSExp linked))
+
+-- `bindingSExp` panics, naming the row, on what this validator reports for a
+-- linked scheme; the test framework cannot capture a panic, so the finding it
+-- panics on is pinned here.  The scheme encoder alone follows the link.
+test "a linked row is reported by name to the binding encoder" =
+  let row = PubScheme {
+    psScheme =
+      Forall
+        []
+        []
+        []
+        []
+        (EffRow [] None)
+        (TVar (Ref (Link (TCon "Int" OriginBuiltin)))),
+    psContext = [],
+  }
+  expectAll [
+    expectEqual [LinkCell "linkedRow" TyVarK None] (liveCells "linkedRow" row),
+    expectEqual
+      "(forall () () () () (row () closed) (con Int builtin))"
+      (renderSExp (schemeSExp row.psScheme)),
+  ]
+
+-- ── coverage ────────────────────────────────────────────────────────────────
+
+-- The node kinds no published row holds: a rigid head, a linked join member
+-- and a Product parameter.
+shapesRow : PubScheme
+shapesRow =
+  let member =
+    EffRow [atomBuiltin "Log" (PPrefix (Some "a"))] (Some (Ref (EUnbound 2 1)))
+  let join = Ref (EJoin 5 1 [Ref (ELink 3 member), Ref (EUnbound 4 1)])
+  let product = PProduct [("Host", PPrefix (Some "h")), ("Method", PSet None)]
+  PubScheme {
+    psScheme =
+      Forall
+        []
+        [2, 4]
+        []
+        []
+        (EffRow [] None)
+        (TFun (TRigid "r") (EffRow [] (Some join)) (TAuth (AConst product))),
+    psContext = [],
+  }
+
+test "the shapes no published row holds round-trip" =
+  roundTrips ("shapes", shapesRow)
+
+-- Every node kind the grammar names but `unresolved`, which no published row
+-- holds; the origin test above carries it.
+nodeHeads : List String
+nodeHeads = [
+  "(binding ",
+  "(pub ",
+  "(forall ",
+  "(residual ",
+  "(obl ",
+  "(iface ",
+  "(module ",
+  " builtin",
+  "(tv ",
+  "(con ",
+  "(rigid ",
+  "(app ",
+  "(fun ",
+  "(eff ",
+  "(qual ",
+  "(auth ",
+  "(row ",
+  " closed",
+  "(ev ",
+  "(ej ",
+  "(el ",
+  "(atom ",
+  "(label ",
+  "(const ",
+  "(ajoin ",
+  "(aproduct ",
+  "(av ",
+  " unit",
+  "(prefix ",
+  "(path ",
+  "(set ",
+  "(product ",
+  " none",
+  "(some ",
+]
+
+-- The rows the tests above round-trip.
+allRows : String ->
+  <IO, FileRead, FileWrite> Result String (List (String, PubScheme))
+allRows dir = do
+  stdlib <- stdlibRows dir
+  batteryRows <- flatRows defaultDriveInputs battery
+  residualRows <- flatRows defaultDriveInputs residualModule
+  Ok (stdlib ++ batteryRows ++ residualRows ++ [("shapes", shapesRow)])
+
+test "together the rows carry every node kind" = withScratchDir
+  (dir => match allRows dir
+    Err e => fail e
+    Ok rows =>
+      let text =
+        S.join
+          "\n"
+          (map (row => renderSExp (bindingSExp (fst row) (snd row))) rows)
+      expectEqual [] (filter (h => not (S.contains h text)) nodeHeads))
