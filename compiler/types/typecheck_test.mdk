@@ -63,7 +63,10 @@ import types.disposition.{
   dispositionRows,
   instIdMid,
 }
-import types.repr.{IfaceRef(..), Scheme(..), ppMono, ppScheme}
+import types.repr.{
+  IfaceRef(..), Mono(..), Scheme(..), Tyvar(..), ppMono, ppScheme
+}
+import types.runtime_ops.{arithmeticTag}
 import types.solver_contract.{SolverOutcome(..), Wanted(..)}
 import types.tc_types.{
   AssumptionTraceEntry(..),
@@ -1106,7 +1109,7 @@ test "primitive arithmetic retains the Int and Float scalar routes" =
     expectEqual
       [
         ("binding:floatValue", ["Float"], "scalar:Float", "", []),
-        ("binding:intValue", ["Int"], "none", "", []),
+        ("binding:intValue", ["Int"], "scalar:Int", "", []),
       ]
       (map
         (view => (
@@ -1118,6 +1121,35 @@ test "primitive arithmetic retains the Int and Float scalar routes" =
         ))
         arithmetic),
   ]
+
+test "arithmetic tags cover solved primitives and preserve a generic Num operand" =
+  let generic = TVar (Ref (Unbound 9001 0))
+  let linkedInt = TVar (Ref (Link (TCon "Int" OriginBuiltin)))
+  expectEqual
+    [
+      Some "Int",
+      Some "Float",
+      Some "U8",
+      Some "U16",
+      Some "U32",
+      Some "U64",
+      Some "I32",
+      Some "I64",
+      None,
+      Some "Int",
+    ]
+    (map arithmeticTag [
+      TCon "Int" OriginBuiltin,
+      TCon "Float" OriginBuiltin,
+      TCon "U8" OriginBuiltin,
+      TCon "U16" OriginBuiltin,
+      TCon "U32" OriginBuiltin,
+      TCon "U64" OriginBuiltin,
+      TCon "I32" OriginBuiltin,
+      TCon "I64" OriginBuiltin,
+      generic,
+      linkedInt,
+    ])
 
 test "arithmetic keeps missing Num and explicit result mismatches loud" = expectAll
   [

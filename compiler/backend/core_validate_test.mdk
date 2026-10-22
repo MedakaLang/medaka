@@ -69,7 +69,8 @@ import backend.core_validate.{
   missingCatalogRows, missingRowsMessage, renderExternFinding,
   renderExternRefusalUnder, validateCalls, validateDispatchEvidence,
   validateExterns, validateImplSymbols, implSymbolCollision, dictTagCollision,
-  validateMethodContexts, validateRecords, validateTails, validateBinderStamps
+  validateMethodContexts, validateRecords, validateTails, validateBinderStamps,
+  validateScalarOperators
 }
 import backend.wasm_emit.{
   emitProgram as wasmStrict,
@@ -408,6 +409,56 @@ unstamped body =
 
 zero : CExpr
 zero = CLit (LInt 0)
+
+scalarProgram : String -> String -> CProgram
+scalarProgram op tag = unstamped (CBinPrim op zero zero tag noDeclLoc)
+
+test "scalar binop validation accepts every published operator and tag shape" =
+  expectEach
+    (map
+      ((op, tag) => (
+        "\{op}@\{tag}",
+        expectEqual [] (validateScalarOperators (scalarProgram op tag)),
+      ))
+      [
+        ("+", "Int"),
+        ("/", "Float"),
+        ("%", "U8"),
+        ("*", "U16"),
+        ("-", "U32"),
+        ("+", "U64"),
+        ("/", "I32"),
+        ("%", "I64"),
+        ("==", "Int"),
+        ("<", "Char"),
+        (">=", "U64"),
+        ("/=", "I64"),
+        ("++", ""),
+      ])
+
+test "scalar binop validation rejects malformed operator and tag pairs" = expectEach
+  [
+    (
+      "an arithmetic tag on append",
+      expectEqual
+        ["scalar binop: operator `++` cannot carry scalar tag `Int` [in main]"]
+        (validateScalarOperators (scalarProgram "++" "Int")),
+    ),
+    (
+      "an unknown arithmetic tag",
+      expectEqual
+        [
+          "scalar binop: operator `+` cannot carry scalar tag `String` [in main]",
+        ]
+        (validateScalarOperators (scalarProgram "+" "String")),
+    ),
+    (
+      "an arithmetic-only tag on comparison",
+      expectEqual
+        ["scalar binop: operator `<` cannot carry scalar tag `Float` [in main]"]
+        (validateScalarOperators (scalarProgram "<" "Float")),
+    ),
+  ]
 
 test "(h) lowering stamps every record node, so a permuted program validates clean" = expectAll
   [

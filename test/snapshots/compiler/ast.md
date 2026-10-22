@@ -1,5 +1,5 @@
 # META
-source_lines=2767
+source_lines=2766
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1242,13 +1242,12 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 -- scalar instruction without re-deriving the operand LTy structurally — the
 -- emitter's LTInt is its default-for-unrecoverable, so an `icmp` keyed on LTy
 -- alone would compare boxed String/Float POINTERS as integers.  An ARITHMETIC
--- operand is stamped with its own head, `RScalar "Float"` or a fixed-width
--- `RScalar "U8"`/`"U16"`/`"U32"` (stampPredicateOpRouteVal, resolveArithSite;
+-- operand is stamped with its own primitive head, including `RScalar "Int"`,
+-- `RScalar "Float"`, and the fixed-width integer tags (resolveArithSite;
 -- SHARED-FLOAT-RESIDUAL-DESIGN §3(C)); a COMPARISON operand grounding to `Int` or
 -- a fixed-width head is stamped `RScalar "Int"`, the word compare
 -- (stampOpRouteVal).  Every other head, and every operand that stays polymorphic,
--- keeps RNone → the structural/dict path; an `Int` arithmetic operand stays RNone
--- too, since the Int primitive is the default.
+-- keeps RNone → the structural/dict path.
 public export data Route =
   | RNone
   | RKey String (List Route) (List Route)

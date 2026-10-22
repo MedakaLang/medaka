@@ -1423,8 +1423,8 @@ routeTag env (RProj r path) = match dictOfRoute env (RProj r path)
   VDict key _ _ => key
   _ => ""
 routeTag _ (RLocal _ _) = ""
--- RScalar tags an EBinOp with its grounded scalar type (Float arithmetic / Int
--- comparison) for the backend; it is never a typeclass dispatch route, so eval
+-- RScalar tags an EBinOp with its grounded scalar type (primitive arithmetic or
+-- an allowed comparison tag) for the backend; it is never a typeclass dispatch route, so eval
 -- never routes a method through it.
 routeTag _ (RScalar _) =
   panic "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"
@@ -1473,7 +1473,7 @@ dictOfRoute _ RNone =
 -- no-op dict.  (Pre-S1 this arm's comment claimed "RLocal never carries a dict"; that
 -- invariant was the S-1 bug and is now false — see ast.mdk's Route doc + S9.)
 dictOfRoute _ (RLocal _ _) = VDict "" [] []
--- RScalar is a scalar-type binop tag (Float arithmetic / Int comparison),
+-- RScalar is a scalar-type binop tag (primitive arithmetic / comparison),
 -- never a dict route.
 dictOfRoute _ (RScalar _) =
   panic "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"
@@ -1525,7 +1525,7 @@ methodAtNarrow env method v (RProj r path) =
 -- directly (lookupEnv) and never calls methodAtNarrow with RLocal.  This arm
 -- exists only to keep the match exhaustive; it returns the value unnarrowed.
 methodAtNarrow _ _ v (RLocal _ _) = (v, [])
--- RScalar is a scalar-type binop tag (Float arithmetic / Int comparison),
+-- RScalar is a scalar-type binop tag (primitive arithmetic / comparison),
 -- never a dispatch route.
 methodAtNarrow _ _ _ (RScalar _) =
   panic "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"
