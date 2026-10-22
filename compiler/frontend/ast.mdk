@@ -1881,6 +1881,13 @@ public export data ExternBind = ExternBind {
   ebLoc : Loc,
 }
 
+export
+externDecls : List Decl -> List ExternDecl
+externDecls [] = []
+externDecls ((DExtern d) :: rest) = d :: externDecls rest
+externDecls ((DAttrib _ d) :: rest) = externDecls (d :: rest)
+externDecls (_ :: rest) = externDecls rest
+
 -- The host bindings an extern declares: its `bind` clauses as written, or,
 -- with none, a `c` binding under its Medaka name.  A `js` binding is never
 -- implied.  The declaration rules, the target walls and both emitters read an

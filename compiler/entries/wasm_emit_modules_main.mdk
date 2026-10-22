@@ -29,6 +29,8 @@
 -- to lowerProgramEmitWith (loader, mangle, elaborateModules, dceFilter) is identical to
 -- the LLVM modules driver.
 
+import frontend.ast.{externDecls}
+import backend.extern_catalog.{runtimeDomain}
 import frontend.ast.{Decl(..)}
 import types.typecheck.{
   constrainedSigNames,
@@ -51,12 +53,10 @@ import driver.main_autoprint.{mainIsWrapped}
 import backend.wasm_emit.{
   emitProgram,
   makeWasmEmitInputFull,
-  withRuntimeExternsW,
 }
 import backend.emit_plan.{buildEmitPlanReached}
 import entries.entry_support.{
   driveEmitLocated,
-  runtimeExternNames,
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
@@ -98,15 +98,12 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
     validateFfiExternTypeNames
       (checkedFfiExternTypeNamesModules outputs modules2)
   let input =
-    withRuntimeExternsW
-      (runtimeExternNames runtimeDecls)
-      (makeWasmEmitInputFull
-        (methodIfaceTable allDecls)
-        (ctorFieldTypeNames allDecls)
-        (mainTypeIsFloat outputs && not wrapped)
-        (mainTypeIsUnit outputs || wrapped)
-        (declaredRecordFieldOrders allDecls)
-        ffiRows)
+    makeWasmEmitInputFull
+      (runtimeDomain (externDecls runtimeDecls))
+      (ctorFieldTypeNames allDecls)
+      (mainTypeIsFloat outputs && not wrapped)
+      (mainTypeIsUnit outputs || wrapped)
+      ffiRows
   let lowered = lowerProgramEmitWith facts allDecls
   let (plan, reached) = buildEmitPlanReached ffiRows lowered
   -- MEDAKA_STATS reporting hook: the counts come from the plan, so the ratio is the

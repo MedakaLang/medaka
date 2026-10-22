@@ -1,11 +1,12 @@
 # META
-source_lines=656
+source_lines=647
 stages=DESUGAR,MARK
 # SOURCE
 -- The per-emission plan: facts about the lowered program that both backends read
 -- and neither recomputes.  Built once, right after lowering, from the program an
 -- emitter is about to receive.
 
+import backend.emit_target.{Backend(..)}
 import frontend.ast.{Lit(..), Pat(..), hostRows}
 import ir.core_ir.{
   CProgram(..),
@@ -29,7 +30,7 @@ import backend.extern_catalog.{
   wasmTupleArities,
   wasmUses,
 }
-import backend.core_validate.{Backend(..), backendName}
+
 import support.ordmap.{
   OrdMap,
   omEmpty,
@@ -209,16 +210,6 @@ isTrmcFn v name = omHasKey name v.eligibleFns
 export
 isTrmcImpl : TrmcVerdicts -> String -> String -> Bool
 isTrmcImpl v method key = omHasKey (implGroupKey method key) v.eligibleImpls
-
--- Asserts that a plan was built for the calling emitter's own backend.
-export
-checkPlanBackend : Backend -> EmitPlan -> Unit
-checkPlanBackend expected plan =
-  if backendName plan.target == backendName expected then
-    ()
-  else
-    panic
-      "internal error: emit plan was built for the \{backendName plan.target} backend but the \{backendName expected} emitter received it"
 
 -- a function binding: it takes parameters, and it is not `main`
 isTopFn : CBind -> Bool
@@ -659,10 +650,10 @@ dSwitchHead acc HNil = noteUse acc UseList
 dSwitchHead acc (HTuple n) = noteArity acc n
 dSwitchHead acc _ = acc
 # DESUGAR
+(DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "hostRows" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmUse" true) (mem "fileBoundHostKeys" false) (mem "wasmHostKeys" false) (mem "wasmTupleArities" false) (mem "wasmUses" false))))
-(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "backendName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
@@ -685,8 +676,6 @@ dSwitchHead acc _ = acc
 (DFunDef false "isTrmcFn" ((PVar "v") (PVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "v") "eligibleFns")))
 (DTypeSig true "isTrmcImpl" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "isTrmcImpl" ((PVar "v") (PVar "method") (PVar "key")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implGroupKey") (EVar "method")) (EVar "key"))) (EFieldAccess (EVar "v") "eligibleImpls")))
-(DTypeSig true "checkPlanBackend" (TyFun (TyCon "Backend") (TyFun (TyCon "EmitPlan") (TyCon "Unit"))))
-(DFunDef false "checkPlanBackend" ((PVar "expected") (PVar "plan")) (EIf (EBinOp "==" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "expected"))) (ELit LUnit) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EVar "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "expected")))) (ELit (LString " emitter received it"))))))
 (DTypeSig false "isTopFn" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isTopFn" ((PCon "CBind" (PLit (LString "main")) PWild PWild PWild)) (EVar "False"))
 (DFunDef false "isTopFn" ((PCon "CBind" PWild (PCons (PCon "CClause" (PCons PWild PWild) PWild) PWild) PWild PWild)) (EVar "True"))
@@ -855,10 +844,10 @@ dSwitchHead acc _ = acc
 (DFunDef false "dSwitchHead" ((PVar "acc") (PCon "HTuple" (PVar "n"))) (EApp (EApp (EVar "noteArity") (EVar "acc")) (EVar "n")))
 (DFunDef false "dSwitchHead" ((PVar "acc") PWild) (EVar "acc"))
 # MARK
+(DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "hostRows" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmUse" true) (mem "fileBoundHostKeys" false) (mem "wasmHostKeys" false) (mem "wasmTupleArities" false) (mem "wasmUses" false))))
-(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "backendName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
@@ -881,8 +870,6 @@ dSwitchHead acc _ = acc
 (DFunDef false "isTrmcFn" ((PVar "v") (PVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "v") "eligibleFns")))
 (DTypeSig true "isTrmcImpl" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "isTrmcImpl" ((PVar "v") (PVar "method") (PVar "key")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implGroupKey") (EVar "method")) (EVar "key"))) (EFieldAccess (EVar "v") "eligibleImpls")))
-(DTypeSig true "checkPlanBackend" (TyFun (TyCon "Backend") (TyFun (TyCon "EmitPlan") (TyCon "Unit"))))
-(DFunDef false "checkPlanBackend" ((PVar "expected") (PVar "plan")) (EIf (EBinOp "==" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "expected"))) (ELit LUnit) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "expected")))) (ELit (LString " emitter received it"))))))
 (DTypeSig false "isTopFn" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isTopFn" ((PCon "CBind" (PLit (LString "main")) PWild PWild PWild)) (EVar "False"))
 (DFunDef false "isTopFn" ((PCon "CBind" PWild (PCons (PCon "CClause" (PCons PWild PWild) PWild) PWild) PWild PWild)) (EVar "True"))

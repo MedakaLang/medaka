@@ -1,5 +1,5 @@
 # META
-source_lines=1337
+source_lines=1385
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -117,8 +117,10 @@ import frontend.ast.{
   Pat(..), Route(..), Decl(..), ExternDecl(..), Ty(..), Lit(..), BinderId(..)
 }
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
-import types.target_profile as TP
+import backend.emit_target.{Backend(..), backendName}
+import backend.emit_plan.{EmitPlan}
 import backend.extern_catalog.{
+  RuntimeExternDomain(..),
   Disposition(..),
   GapKind(..),
   catalogRow,
@@ -138,29 +140,75 @@ import support.ordmap.{
 import types.private_mangle.{dictTag, hashName}
 import support.util.{dedupBy, isNonEmptyL, joinWith, listLen, reverseL}
 
--- A column of the extern catalog: the two emitters, and the interpreter that
--- `medaka run` evaluates with.
-public export data Backend = LlvmBackend | WasmBackend | EvalBackend
-
-export
-backendName : Backend -> String
-backendName LlvmBackend = "llvm"
-backendName WasmBackend = "wasm"
-backendName EvalBackend = "eval"
-
--- The column a profile's programs run on.
-export
-profileColumn : TargetProfile -> Backend
-profileColumn p = match TP.profileBackend p
-  TP.BackendLlvm => LlvmBackend
-  TP.BackendWasmgc => WasmBackend
-  TP.BackendEval => EvalBackend
-
 -- A free reference to a runtime extern the backend does not lower: the extern,
 -- the backend, the row's gap kind and reason, and the top-level binding the
 -- first reference sits in.
 public export data ExternFinding =
   | ExternFinding String Backend GapKind String String
+
+-- Defects are fatal in every emission mode; target extern findings may instead
+-- be recorded. The first failing validation family keeps its original order.
+public export data CoreDefect = CoreDefect String
+
+public export data EmissionValidation = EmissionValidation {
+  defects : List CoreDefect,
+  externFindings : List ExternFinding,
+}
+
+export
+coreDefectMessage : CoreDefect -> String
+coreDefectMessage (CoreDefect message) = message
+
+export
+validateForEmission : Backend ->
+  RuntimeExternDomain ->
+  EmitPlan ->
+  CProgram ->
+  EmissionValidation
+validateForEmission backend domain plan cp =
+  match emissionDefects backend plan cp
+    [] =>
+      let names = match domain
+        PreludeFreeRuntime => []
+        LoadedRuntimeExterns decls => map (d => d.edName) decls
+      match missingCatalogRows names
+        [] => EmissionValidation {
+          defects = [],
+          externFindings = validateExterns backend [] cp,
+        }
+        missing => EmissionValidation {
+          defects = [CoreDefect (missingRowsMessage missing)],
+          externFindings = [],
+        }
+    bad => EmissionValidation { defects = bad, externFindings = [] }
+
+emissionDefects : Backend -> EmitPlan -> CProgram -> List CoreDefect
+emissionDefects backend plan cp =
+  if backendName plan.target /= backendName backend then
+    [
+      CoreDefect
+        "internal error: emit plan was built for the \{backendName plan.target} backend but the \{backendName backend} emitter received it",
+    ]
+  else match implSymbolCollision cp
+    Some message => [CoreDefect message]
+    None => match dictTagCollision backend cp
+      Some message => [CoreDefect message]
+      None => firstShapeDefect [
+        () => validateRecords cp,
+        () => validateBinderStamps cp,
+        () =>
+          validateCalls cp
+            ++ validateImplSymbols cp
+            ++ validateMethodContexts cp
+            ++ validateDispatchEvidence cp,
+        () => validateTails cp,
+      ]
+
+firstShapeDefect : List (Unit -> List String) -> List CoreDefect
+firstShapeDefect [] = []
+firstShapeDefect (check :: rest) = match check ()
+  [] => firstShapeDefect rest
+  bad => [CoreDefect ("internal error: " ++ joinWith "\n" bad)]
 
 export
 findingExtern : ExternFinding -> String
@@ -1347,19 +1395,24 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
-(DUse false (UseAlias ("types" "target_profile") "TP"))
-(DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false) (mem "rowEval" false))))
+(DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true) (mem "backendName" false))))
+(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" false))))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" true) (mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false) (mem "rowEval" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "dedupBy" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false))))
-(DData Public "Backend" () ((variant "LlvmBackend" (ConPos)) (variant "WasmBackend" (ConPos)) (variant "EvalBackend" (ConPos))) ())
-(DTypeSig true "backendName" (TyFun (TyCon "Backend") (TyCon "String")))
-(DFunDef false "backendName" ((PCon "LlvmBackend")) (ELit (LString "llvm")))
-(DFunDef false "backendName" ((PCon "WasmBackend")) (ELit (LString "wasm")))
-(DFunDef false "backendName" ((PCon "EvalBackend")) (ELit (LString "eval")))
-(DTypeSig true "profileColumn" (TyFun (TyCon "TargetProfile") (TyCon "Backend")))
-(DFunDef false "profileColumn" ((PVar "p")) (EMatch (EApp (EVar "TP.profileBackend") (EVar "p")) (arm (PCon "TP.BackendLlvm") () (EVar "LlvmBackend")) (arm (PCon "TP.BackendWasmgc") () (EVar "WasmBackend")) (arm (PCon "TP.BackendEval") () (EVar "EvalBackend"))))
 (DData Public "ExternFinding" () ((variant "ExternFinding" (ConPos (TyCon "String") (TyCon "Backend") (TyCon "GapKind") (TyCon "String") (TyCon "String")))) ())
+(DData Public "CoreDefect" () ((variant "CoreDefect" (ConPos (TyCon "String")))) ())
+(DData Public "EmissionValidation" () ((variant "EmissionValidation" (ConNamed (field "defects" (TyApp (TyCon "List") (TyCon "CoreDefect"))) (field "externFindings" (TyApp (TyCon "List") (TyCon "ExternFinding")))))) ())
+(DTypeSig true "coreDefectMessage" (TyFun (TyCon "CoreDefect") (TyCon "String")))
+(DFunDef false "coreDefectMessage" ((PCon "CoreDefect" (PVar "message"))) (EVar "message"))
+(DTypeSig true "validateForEmission" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "EmissionValidation"))))))
+(DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
+(DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect"))))))
+(DFunDef false "emissionDefects" ((PVar "backend") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EVar "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateCalls") (EVar "cp")) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
+(DTypeSig false "firstShapeDefect" (TyFun (TyApp (TyCon "List") (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "CoreDefect"))))
+(DFunDef false "firstShapeDefect" ((PList)) (EListLit))
+(DFunDef false "firstShapeDefect" ((PCons (PVar "check") (PVar "rest"))) (EMatch (EApp (EVar "check") (ELit LUnit)) (arm (PList) () (EApp (EVar "firstShapeDefect") (EVar "rest"))) (arm (PVar "bad") () (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad"))))))))
 (DTypeSig true "findingExtern" (TyFun (TyCon "ExternFinding") (TyCon "String")))
 (DFunDef false "findingExtern" ((PCon "ExternFinding" (PVar "name") PWild PWild PWild PWild)) (EVar "name"))
 (DTypeSig true "findingBinding" (TyFun (TyCon "ExternFinding") (TyCon "String")))
@@ -1757,19 +1810,24 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
-(DUse false (UseAlias ("types" "target_profile") "TP"))
-(DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false) (mem "rowEval" false))))
+(DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true) (mem "backendName" false))))
+(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" false))))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" true) (mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false) (mem "rowEval" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "dedupBy" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false))))
-(DData Public "Backend" () ((variant "LlvmBackend" (ConPos)) (variant "WasmBackend" (ConPos)) (variant "EvalBackend" (ConPos))) ())
-(DTypeSig true "backendName" (TyFun (TyCon "Backend") (TyCon "String")))
-(DFunDef false "backendName" ((PCon "LlvmBackend")) (ELit (LString "llvm")))
-(DFunDef false "backendName" ((PCon "WasmBackend")) (ELit (LString "wasm")))
-(DFunDef false "backendName" ((PCon "EvalBackend")) (ELit (LString "eval")))
-(DTypeSig true "profileColumn" (TyFun (TyCon "TargetProfile") (TyCon "Backend")))
-(DFunDef false "profileColumn" ((PVar "p")) (EMatch (EApp (EVar "TP.profileBackend") (EVar "p")) (arm (PCon "TP.BackendLlvm") () (EVar "LlvmBackend")) (arm (PCon "TP.BackendWasmgc") () (EVar "WasmBackend")) (arm (PCon "TP.BackendEval") () (EVar "EvalBackend"))))
 (DData Public "ExternFinding" () ((variant "ExternFinding" (ConPos (TyCon "String") (TyCon "Backend") (TyCon "GapKind") (TyCon "String") (TyCon "String")))) ())
+(DData Public "CoreDefect" () ((variant "CoreDefect" (ConPos (TyCon "String")))) ())
+(DData Public "EmissionValidation" () ((variant "EmissionValidation" (ConNamed (field "defects" (TyApp (TyCon "List") (TyCon "CoreDefect"))) (field "externFindings" (TyApp (TyCon "List") (TyCon "ExternFinding")))))) ())
+(DTypeSig true "coreDefectMessage" (TyFun (TyCon "CoreDefect") (TyCon "String")))
+(DFunDef false "coreDefectMessage" ((PCon "CoreDefect" (PVar "message"))) (EVar "message"))
+(DTypeSig true "validateForEmission" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "EmissionValidation"))))))
+(DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
+(DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect"))))))
+(DFunDef false "emissionDefects" ((PVar "backend") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateCalls") (EVar "cp")) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
+(DTypeSig false "firstShapeDefect" (TyFun (TyApp (TyCon "List") (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "CoreDefect"))))
+(DFunDef false "firstShapeDefect" ((PList)) (EListLit))
+(DFunDef false "firstShapeDefect" ((PCons (PVar "check") (PVar "rest"))) (EMatch (EApp (EVar "check") (ELit LUnit)) (arm (PList) () (EApp (EVar "firstShapeDefect") (EVar "rest"))) (arm (PVar "bad") () (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad"))))))))
 (DTypeSig true "findingExtern" (TyFun (TyCon "ExternFinding") (TyCon "String")))
 (DFunDef false "findingExtern" ((PCon "ExternFinding" (PVar "name") PWild PWild PWild PWild)) (EVar "name"))
 (DTypeSig true "findingBinding" (TyFun (TyCon "ExternFinding") (TyCon "String")))

@@ -7,6 +7,7 @@
 -- declaration.  And every built-in the program reaches must be provided by the
 -- profile's column of the extern catalog, else it is a `T-TARGET-NOT-PROVIDED`
 -- diagnostic located at the binding that names it.
+import backend.emit_target.{Backend(..), profileColumn}
 import frontend.ast.{
   Decl(..),
   ExternBind(..),
@@ -18,9 +19,7 @@ import frontend.ast.{
   letBindName,
 }
 import frontend.marker.{declRefs}
-import backend.core_validate.{
-  Backend(..), profileColumn, unprovidedOn, isUnprovidedOn
-}
+import backend.core_validate.{unprovidedOn, isUnprovidedOn}
 import backend.extern_catalog.{GapKind(..), gapKindName}
 import types.target_profile.{
   TargetProfile,

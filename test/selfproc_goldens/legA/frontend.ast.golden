@@ -24,6 +24,7 @@ effSetSurface : (String -> String) -> List String -> String
 effectDeclUnstamped : Bool -> String -> Option String -> List (String, String) -> Option Loc -> Decl
 externBindings : ExternDecl -> List ExternBind
 externDataUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Decl
+externDecls : List Decl -> List ExternDecl
 externRowCons : Bool -> ExternDecl -> a -> List (String, (List (String, String), a)) -> List (String, (List (String, String), a))
 fieldName : Field -> String
 firstTyLoc : Ty -> Option Loc

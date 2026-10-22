@@ -72,6 +72,8 @@
 -- the thin cj* JSON shaping is reproduced (those live in medaka_cli.mdk, which is
 -- itself an entry and cannot be imported).
 
+import frontend.ast.{externDecls}
+import backend.extern_catalog.{runtimeDomain}
 import frontend.ast.{Decl(..), Loc(..), Pat, Expr(..)}
 import types.tc_types.{ElabResult}
 import frontend.parser.{
@@ -129,7 +131,6 @@ import support.char.{isIdentChar, isDigit}
 import entries.entry_support.{
   rootsOrDefault,
   desugarPair,
-  runtimeExternNames,
   stampModulePaths,
   failWith,
 }
@@ -154,7 +155,6 @@ import ir.dce.{dceFilter}
 import backend.wasm_emit.{
   emitProgram,
   makeWasmEmitInputFull,
-  withRuntimeExternsW,
 }
 import backend.emit_plan.{buildEmitPlanReached}
 
@@ -716,15 +716,12 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
     validateFfiExternTypeNames
       (checkedFfiExternTypeNamesModules outputs modules2)
   let input =
-    withRuntimeExternsW
-      (runtimeExternNames runtimeDecls)
-      (makeWasmEmitInputFull
-        (methodIfaceTable allDecls)
-        (ctorFieldTypeNames allDecls)
-        (mainTypeIsFloat outputs && not wrapped)
-        (mainTypeIsUnit outputs || wrapped)
-        (declaredRecordFieldOrders allDecls)
-        ffiRows)
+    makeWasmEmitInputFull
+      (runtimeDomain (externDecls runtimeDecls))
+      (ctorFieldTypeNames allDecls)
+      (mainTypeIsFloat outputs && not wrapped)
+      (mainTypeIsUnit outputs || wrapped)
+      ffiRows
   -- Mirrors wasm_emit_modules_main.emitTail: bind the lowered
   -- program, then drop the impl bodies (and the plain bindings only they
   -- reached) that no dispatchable method name in this program can reach.  Without
