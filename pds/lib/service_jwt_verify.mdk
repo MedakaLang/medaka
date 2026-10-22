@@ -6,7 +6,9 @@
      lookup, and a token from any other issuer is refused rather than resolved.
      Every input is public (the token, the key, the two DIDs, the method, the
      instant), so this module sits outside the constant-time perimeter the
-     signing path keeps, and it imports nothing that can sign.
+     signing path keeps, and it names nothing that can sign: it imports
+     `lib.sign`'s public-key and verification names only, and `lib.sign` itself
+     is also the module that defines the signers.
 
      The checks run in the order the official verifier (`@atproto/xrpc-server`
      `verifyJwt`) runs them: the header's `typ`, the payload's shape, `exp`,
@@ -20,13 +22,21 @@
 
      - `iss` must be the account DID exactly, so a `#fragment` on it is
        refused: there is one account, and its DID has no fragment.
-     - The signature must be the canonical 64-byte low-S `r || s` in strict
-       unpadded base64url. A high-S twin, a DER encoding, and a character
-       outside the base64url alphabet are refused.
+     - The signature must be the canonical 64-byte low-S `r || s`, base64url
+       encoded. A high-S twin, a DER encoding, and a character outside the
+       base64url alphabet are refused. Trailing `=` padding is accepted, as the
+       official decoder accepts it.
      - A claim this verifier reads may appear once. `JSON.parse` keeps the last
        of two same-named members, so a repeated claim is a token two readers
        can read differently, and it is refused instead.
      - `exp` must be an integer. The official verifier accepts any number.
+
+     The other direction also exists: header and payload go through
+     `stdlib/json`, whose number and string scans are lenient, so a leading-zero
+     number or a raw control character inside a string parses here and does not
+     in `JSON.parse`. A token with either still needs a valid signature by the
+     account's own key, so the leniency admits nothing a holder of that key
+     could not sign anyway.
 
      Graded against the official verifier's own verdicts in
      `pds/test/vectors/pds_service_auth_inbound_corpus.txt`

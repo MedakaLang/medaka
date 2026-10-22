@@ -135,9 +135,11 @@ It plugs in at the credential seam, not beside it:
   does not carry. That is held by the explicit handler arms and by the drive sweep in
   `pds/test/auth_seam_test.mdk`, not by the type checker: `AuthOutcome` match
   exhaustiveness is a compiler warning (`W-NONEXHAUSTIVE`), not an error.
-- `auth_seam_test.mdk:547` pins the access-gated route list; that pin gains one
-  column (which credential kinds the route accepts), and the test fails if a
-  route outside the allowlist accepts a service credential.
+- The allowlist is a fourth `AuthPolicy` class, `AccessOrServiceRoute`, which
+  `uploadBlob` is registered under; `serviceAuthRouteNsids` reads it from the
+  registry, so the mint side and the verify side share one list.
+  `pds/test/auth_seam_test.mdk` pins the four route lists, and its drive sweep
+  fails if a route outside the allowlist accepts a service credential.
 
 ### D3. A per-route body cap, decoupled from the framing constant
 

@@ -478,10 +478,12 @@ that can return a successor `Store`), `com.atproto.sync.getBlob`, and
 blob's CID (`cidForRaw`), and enforces `maxBlobBytes` (5 MiB) per blob and
 `maxAccountBlobBytes` (100 MiB) per account before any byte reaches storage.
 Blobs are independent of the repository half — `getBlob`/`listBlobs` answer on
-an unconfigured server too, and `uploadBlob` needs only a credential, not a
-repository: an access token, or a service credential whose `lxm` is
+an unconfigured server too, and `uploadBlob` needs only a credential: an access
+token (which needs no repository), or a service credential whose `lxm` is
 `com.atproto.repo.uploadBlob` (the `AccessOrServiceRoute` class in `pds/lib/xrpc.mdk`;
-the inbound check is `pds/lib/service_jwt_verify.mdk`).
+the inbound check is `pds/lib/service_jwt_verify.mdk`). A service credential is
+checked against the repository's own signing key, so on a store with no
+repository it is refused 401 `InvalidToken`.
 
 `pds/test/blob_handlers_main.mdk`
 grades the three routes end to end against an EXTERNAL answer key: it uploads
