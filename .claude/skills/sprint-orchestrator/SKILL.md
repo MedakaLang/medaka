@@ -184,12 +184,17 @@ by serialization.
    required CI check.
    Its brief carries the merge-base and the pinned SHA. Its first step is the
    **`review-diff`** skill's Haiku pass over exactly that range:
-   `python3 -I scripts/review_bench/review.py --rev <merge-base>..<SHA> --json`.
+   `REVIEW_BENCH_CACHE=/var/tmp/medaka-review-cache python3 -I scripts/review_bench/review.py --rev <merge-base>..<SHA> --json > findings.json 2> review.log`.
    It reads committed objects, so nothing gets checked out. Run `--dry-run`
    first and set `--max-usd` from its estimate, because a sprint diff can pass
    the $1 default. A sprint diff of about 70 units costs about $0.40 and takes
-   about 15 minutes. Its findings are leads that the style pass verifies
-   against the rubric. Its DECLINED register is what stops it demanding churn;
+   about 15 minutes on an idle box, longer on a loaded one; unit cutting alone
+   is minutes. The brief says: **tail the log, never kill a run that is still
+   printing batch lines** (one sprint killed two runs at 50 minutes and got
+   nothing). The shared cache path makes a rerun in any worktree free. Its
+   findings are leads that the style pass verifies against the rubric; the
+   comments it dropped as pre-existing are already listed in its output and
+   need no ledger line each. Its DECLINED register is what stops it demanding churn;
    if it returns a finding that register forbids, dismiss it with one NOTES.md
    line rather than dispatching a fix. Its brief restricts it to findings a
    `grep` can reproduce (copies, twins, comment register, unnamed tuples,

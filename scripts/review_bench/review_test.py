@@ -20,7 +20,7 @@ def sh(root: Path, *args: str) -> str:
     return r.stdout.strip()
 
 
-class MovedTest(unittest.TestCase):
+class RepoCase(unittest.TestCase):
     def repo(self, base: dict, head: dict) -> tuple[str, str]:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -48,6 +48,8 @@ class MovedTest(unittest.TestCase):
         self.addCleanup(restore)
         return shas[0], shas[1]
 
+
+class MovedTest(RepoCase):
     def specs(self, base: dict, head: dict, skip: bool = True):
         a, b = self.repo(base, head)
         dropped: list = []
@@ -92,6 +94,49 @@ class MovedTest(unittest.TestCase):
         head = "two x = x + 1\n\none x = x + 2\n"
         specs, _ = self.specs({"a.mdk": base}, {"a.mdk": head})
         self.assertEqual(["one"], [s[3] for s in specs])
+
+
+class PreexistingTest(RepoCase):
+    """BaseText: a comment finding whose quote the base already held in a touched file."""
+
+    COMMENT = "-- #156 S3a: ONE record for every pending dispatch-site shape.\n"
+    OLD = COMMENT + "export double : Int -> Int\ndouble n = n * 2\n"
+    # Moved to another file, re-wrapped, with one token of code changed: not skipped as
+    # moved-unchanged, so the old comment sits on changed lines.
+    NEW = "-- #156 S3a: ONE record for every\n-- pending dispatch-site shape.\nexport double : Int -> Int\ndouble n = n * 3\n"
+
+    def base_text(self, base: dict, head: dict) -> RV.BaseText:
+        a, b = self.repo(base, head)
+        return RV.BaseText(lambda _u: (a, b))
+
+    def test_moved_rewrapped_comment_is_preexisting(self):
+        pre = self.base_text({"a.mdk": self.OLD + "\nkeep x = x\n"}, {"a.mdk": "keep x = x\n", "b.mdk": self.NEW})
+        self.assertTrue(pre({}, "comment.provenance", "-- #156 S3a: ONE record for every\n-- pending dispatch-site shape."))
+
+    def test_new_comment_is_not_preexisting(self):
+        pre = self.base_text({"a.mdk": self.OLD}, {"a.mdk": "-- Phase 2 sprint 6c moved the cell here.\n" + self.OLD})
+        self.assertFalse(pre({}, "comment.provenance", "-- Phase 2 sprint 6c moved the cell here."))
+
+    def test_comment_stale_and_code_classes_are_never_preexisting(self):
+        pre = self.base_text({"a.mdk": self.OLD}, {"b.mdk": self.NEW})
+        self.assertFalse(pre({}, "comment.stale", self.COMMENT))
+        self.assertFalse(pre({}, "data.sentinel", "double n = n * 2"))
+
+    def test_short_quote_is_not_preexisting(self):
+        pre = self.base_text({"a.mdk": "-- todo\nexport double : Int -> Int\ndouble n = n * 2\n"},
+                             {"a.mdk": "-- todo\nexport double : Int -> Int\ndouble n = n * 3\n"})
+        self.assertFalse(pre({}, "comment.ephemeral", "-- todo"))
+
+    def test_only_touched_files_count(self):
+        # The comment exists at the base only in c.mdk, which the diff leaves alone: a copy
+        # into b.mdk is the diff's own comment.
+        pre = self.base_text({"c.mdk": self.OLD, "a.mdk": "keep x = x\n"},
+                             {"c.mdk": self.OLD, "a.mdk": "keep x = x + 1\n", "b.mdk": self.NEW})
+        self.assertFalse(pre({}, "comment.provenance", self.COMMENT))
+
+    def test_deleted_file_counts(self):
+        pre = self.base_text({"a.mdk": self.OLD}, {"b.mdk": self.NEW})
+        self.assertTrue(pre({}, "comment.provenance", self.COMMENT))
 
 
 if __name__ == "__main__":

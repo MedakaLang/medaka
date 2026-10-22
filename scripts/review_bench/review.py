@@ -12,9 +12,15 @@ block, at the diff's head commit; see README.md "Reviewing a live diff"):
   3. diff scope: a battery class goes on only if one of its findings quotes a
      line the diff added or changed (or quotes only evidence blocks); `--scope
      strict` asks for half the quoted lines (scope_strict);
-  4. for each such class, the per-class confirm prompt (bench.claude_request,
+  4. pre-existing comments: a `comment.*` finding (bar comment.stale) whose quote
+     is text the base held in a file the diff touched is dropped and listed
+     (BaseText; `--keep-preexisting` disables), because a moved or re-indented
+     declaration puts its old comments on "changed" lines;
+  5. for each class left, the per-class confirm prompt (bench.claude_request,
      2 dev shots, that class's evidence); a finding survives only if both flag it;
-  5. quote verification (bench.quote_verified), applied to both stages.
+  6. quote verification (bench.quote_verified), applied to both stages.
+Progress and each finding go to stderr as they land; the report goes to stdout at
+the end.
 The prompts are built by the functions the benchmark measured, never copied
 here, so the numbers in RESULTS-confirm-2026-10-18.md describe these prompts;
 the scoping is code and changes no prompt.
@@ -29,6 +35,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -265,6 +272,52 @@ def moved_unchanged(b: str, path: str, ch: set[int], base: dict, head: dict) -> 
     return left, dropped
 
 
+# A finding of these classes is about a comment's text, so a comment the base
+# already held, wherever it sat, is not this diff's. `comment.stale` stays in: an
+# old comment goes stale when the code under it changes.
+PREEXISTING_FAMILY = "comment."
+PREEXISTING_EXEMPT = ("comment.stale",)
+MIN_PREEXISTING_CHARS = 16  # a shorter normalized quote (`-- todo`) proves nothing either way
+
+
+def base_paths(a: str, b: str) -> list[str]:
+    """The .mdk paths at `a` that a..b changes, deletes or renames away from."""
+    out = []
+    for ln in git("diff", "--name-status", "-M", "--no-color", a, b).splitlines():
+        f = ln.split("\t")
+        if len(f) < 2 or f[0].startswith("A"):
+            continue
+        path = f[1]  # the path at a: a rename's old name, else the one name
+        if path.endswith(".mdk"):
+            out.append(path)
+    return out
+
+
+class BaseText:
+    """The base's text of the files a diff touched, normalized as normalize_decl
+    normalizes a moved declaration, so a quote can be looked up in it. `pair_of`
+    gives a unit's (base, head): diffbench reviews many commits in one run."""
+
+    def __init__(self, pair_of):
+        self.pair_of = pair_of
+        self._text: dict[tuple[str, str], str] = {}
+
+    def text(self, u: dict) -> str:
+        pair = self.pair_of(u)
+        if pair not in self._text:
+            a, b = pair
+            tree = EV.Tree(a)
+            self._text[pair] = "\n".join(normalize_decl(tree.text(p) or "") for p in base_paths(a, b))
+        return self._text[pair]
+
+    def __call__(self, u: dict, cls: str, quote: str) -> bool:
+        """The quote of a `comment.*` finding (bar `comment.stale`) is text the base held."""
+        if not cls.startswith(PREEXISTING_FAMILY) or cls in PREEXISTING_EXEMPT:
+            return False
+        q = normalize_decl(quote)
+        return len(q) >= MIN_PREEXISTING_CHARS and q in self.text(u)
+
+
 def unit_specs(a: str, b: str, files: list[str], merge: bool, skip_moved: bool = False,
                dropped: list | None = None) -> tuple[list[tuple], list[str]]:
     """[(path, lo, hi, anchor, excerpt, changed lines)] in file order, before any
@@ -419,23 +472,33 @@ class Shots:
             self.done |= new
 
 
-def review(units: list[dict], rub: dict, fx: list[dict], classes: list[str], a) -> dict:
+def progress(msg: str) -> None:
+    """One line on stderr as the run goes: a reader can tell a slow run from a hung one."""
+    print(f"review: {msg}", file=sys.stderr, flush=True)
+
+
+def review(units: list[dict], rub: dict, fx: list[dict], classes: list[str], a, preexisting=None) -> dict:
     return review_units(units, rub, fx, classes, jobs=a.jobs, timeout=a.timeout, max_usd=a.max_usd,
-                        scope_fn=SCOPES[a.scope])
+                        scope_fn=SCOPES[a.scope], preexisting=preexisting)
 
 
 def review_units(units: list[dict], rub: dict, fx: list[dict], classes: list[str], *, jobs: int, timeout: int,
-                 max_usd: float, scope_fn=SCOPES["diff"]) -> dict:
+                 max_usd: float, scope_fn=SCOPES["diff"], preexisting=None) -> dict:
     """The funnel over `units`. Besides the totals, `per_unit` records for each reviewed
     unit what its answers cost when first asked (cached or not), what that run asked
-    anew, its findings, and what the scope filter dropped at each stage."""
+    anew, its findings, and what the scope filter dropped at each stage. `preexisting`
+    (a BaseText) drops comment findings whose quote the base already held; `preexisting`
+    in the result lists them."""
     model = E.CLAUDE_MODELS["haiku"]
     shots = Shots(fx)
     spend = reused = 0.0
     asked = 0
     findings, out_of_scope, errors, done = [], 0, 0, 0
+    pre: list[dict] = []
     per_unit: dict[str, dict] = {}
     chunk = max(1, jobs) * 2
+    batches = (len(units) + chunk - 1) // chunk
+    t0 = time.perf_counter()
     for n0 in range(0, len(units), chunk):
         if spend >= max_usd:
             break
@@ -457,8 +520,10 @@ def review_units(units: list[dict], rub: dict, fx: list[dict], classes: list[str
                 reused += r["cost_usd"]
         # Scope the battery before confirming: run_battery keeps one finding per class,
         # so every verified finding is read back from its cached answer, and a class
-        # is confirmed only if one of them can survive the diff-scope filter.
+        # is confirmed only if one of them can survive the diff-scope filter and is
+        # not a comment the base already held.
         best: dict[tuple[str, str], dict] = {}
+        old: dict[tuple[str, str], tuple[int, str]] = {}
         for u in part:
             if not bat[u["_key"]]["flags"]:
                 continue
@@ -467,14 +532,26 @@ def review_units(units: list[dict], rub: dict, fx: list[dict], classes: list[str
                 k = (u["_key"], f["class"])
                 if f["class"] not in bat[u["_key"]]["flags"] or not B.quote_verified(u, f["evidence_quote"]):
                     continue
-                if (scope_fn(u, [f["evidence_quote"]], f["class"])
-                        and f["confidence"] > best.get(k, {}).get("confidence", -1)):
+                where = scope_fn(u, [f["evidence_quote"]], f["class"])
+                if where is None:
+                    continue
+                if preexisting is not None and preexisting(u, f["class"], f["evidence_quote"]):
+                    old.setdefault(k, (where[1], f["evidence_quote"]))
+                    continue
+                if f["confidence"] > best.get(k, {}).get("confidence", -1):
                     best[k] = f
             for c, f in sorted(bat[u["_key"]]["flags"].items()):
-                if (u["_key"], c) not in best:
-                    out_of_scope += 1
+                if (u["_key"], c) in best:
+                    continue
+                if (u["_key"], c) in old:
+                    line, q = old[(u["_key"], c)]
+                    pre.append({"file": u["file"], "line": line, "class": c, "quote": q, "stage": "battery"})
                     per_unit[u["_key"]]["dropped_battery"].append(
-                        {"class": c, "quote": f["evidence_quote"], "confidence": f["confidence"]})
+                        {"class": c, "quote": q, "confidence": f["confidence"], "reason": "pre-existing"})
+                    continue
+                out_of_scope += 1
+                per_unit[u["_key"]]["dropped_battery"].append(
+                    {"class": c, "quote": f["evidence_quote"], "confidence": f["confidence"]})
         pairs = [(u, c) for u in part for c in sorted(bat[u["_key"]]["flags"]) if (u["_key"], c) in best]
         shots.need({c for _, c in pairs})
         pool = {u["_key"]: BT.shot_pool(u, fx) for u in part}
@@ -507,17 +584,26 @@ def review_units(units: list[dict], rub: dict, fx: list[dict], classes: list[str
                                               "reason": rec.get("reason", "")})
                 continue
             kind, line, quote = where
+            if preexisting is not None and preexisting(u, c, quote):
+                pre.append({"file": u["file"], "line": line, "class": c, "quote": quote, "stage": "confirm"})
+                pu["dropped_confirm"].append({"class": c, "quote": quote, "battery_quote": bf["evidence_quote"],
+                                              "reason": "pre-existing"})
+                continue
             f = {"file": u["file"], "line": line, "class": c, "quote": quote,
                  "reason": rec.get("reason", ""), "confidence_battery": bf["confidence"],
                  "confidence_confirm": rec.get("confidence", 0.0), "anchor": u["anchor"],
                  "quote_from": kind}
             findings.append(f)
             pu["findings"].append(f)
+            progress(f"  [{c}] {u['file']}:{line}" + (f" `{u['anchor']}`" if u["anchor"] else ""))
         done += len(part)
+        progress(f"batch {n0 // chunk + 1}/{batches}: {done}/{len(units)} units, {len(findings)} finding(s), "
+                 f"{len(pre)} pre-existing comment(s) dropped, ${spend:.4f} new spend, "
+                 f"{time.perf_counter() - t0:.0f}s")
     findings.sort(key=lambda f: (-f["confidence_battery"] * f["confidence_confirm"], f["file"], f["line"]))
     return {"findings": findings, "reviewed": units[:done], "unreviewed": units[done:], "spend": spend,
             "reused": reused, "asked": asked, "out_of_scope": out_of_scope, "errors": errors,
-            "per_unit": per_unit}
+            "per_unit": per_unit, "preexisting": pre}
 
 
 # ---------------------------------------------------------------------------
@@ -548,6 +634,18 @@ def moved_lines(moved: list[dict]) -> list[str]:
         return []
     return [f"## Skipped declarations: unchanged from the base, moved ({len(moved)})"] \
         + [f"- `{m['name']}` in `{m['file']}`: {m['reason']}" for m in moved] + [""]
+
+
+def preexisting_lines(pre: list[dict]) -> list[str]:
+    if not pre:
+        return []
+    out = [f"## Dropped as pre-existing: comments the base already held ({len(pre)})",
+           "A `comment.*` finding whose quote is text the base had in a file this diff touched "
+           "(a moved or re-indented declaration). `--keep-preexisting` reviews them."]
+    for p in pre:
+        first = p["quote"].strip().split("\n")[0]
+        out.append(f"- [{p['class']}] `{p['file']}:{p['line']}` > {first[:90]}")
+    return out + [""]
 
 
 def markdown(rev: str, a: str, b: str, res: dict, skipped, other, notes, moved=()) -> str:
@@ -584,6 +682,7 @@ def markdown(rev: str, a: str, b: str, res: dict, skipped, other, notes, moved=(
         out += [unit_line(u) for u in res["unreviewed"]]
         out.append("")
     out += moved_lines(list(moved))
+    out += preexisting_lines(res.get("preexisting", []))
     out.append("## Skipped")
     out += skipped_lines(skipped, other, notes)
     out.append("")
@@ -591,7 +690,8 @@ def markdown(rev: str, a: str, b: str, res: dict, skipped, other, notes, moved=(
     out.append(f"${res['spend']:.4f} for {res['asked']} new Haiku call(s); cached answers reused "
                f"(${res['reused']:.4f} when first asked). {res['out_of_scope']} finding(s) dropped as "
                f"outside the diff's changed lines (battery flags not sent to confirm, and confirmed "
-               f"findings); {res['errors']} call error(s).")
+               f"findings); {len(res.get('preexisting', []))} comment finding(s) dropped as pre-existing; "
+               f"{res['errors']} call error(s).")
     out.append("")
     out.append(CLOSING)
     return "\n".join(out)
@@ -639,6 +739,9 @@ def main() -> int:
                     help="review declarations whose text is unchanged from the base bar a visibility prefix, "
                          "whitespace, comment sigils or case, even when moved; by default they are skipped "
                          "and listed")
+    ap.add_argument("--keep-preexisting", action="store_true",
+                    help="keep comment.* findings whose quote is text the base already held in a touched "
+                         "file; by default they are dropped and listed (comment.stale is always kept)")
     ap.add_argument("--twin-notes", action="store_true",
                     help="dup.* evidence also states suppressions and deliberate-copy comments on the excerpt's "
                          "file and its candidate twins (evidence.TWIN_NOTES; dev-measured only)")
@@ -657,11 +760,16 @@ def main() -> int:
                   f"at {head[:9]} is reviewed: " + ", ".join(d[3:] for d in dirty[:8]), file=sys.stderr)
     rub, _known, fx, classes = setup()
     moved: list[dict] = []
+    progress(f"{len(files)} .mdk file(s) in {rev}; cutting units and generating evidence (git-bound: "
+             f"a few minutes on a sprint-sized diff)")
+    t0 = time.perf_counter()
     units, notes = build_units(base, head, files, a.jobs, not a.one_decl, not a.keep_moved, moved)
+    progress(f"{len(units)} unit(s) in {time.perf_counter() - t0:.0f}s; {len(moved)} moved-unchanged skipped")
     if a.dry_run:
         print(dry_run(rev, base, head, units, rub, classes, skipped, other, notes, moved))
         return 0
-    res = review(units, rub, fx, classes, a)
+    pre = None if a.keep_preexisting else BaseText(lambda _u: (base, head))
+    res = review(units, rub, fx, classes, a, pre)
     if res["unreviewed"]:
         print(f"review: budget ${a.max_usd:.2f} reached; {len(res['unreviewed'])} unit(s) not reviewed",
               file=sys.stderr)
@@ -669,7 +777,7 @@ def main() -> int:
         print(json.dumps({"rev": rev, "base": base, "head": head, "findings": res["findings"],
                           "units_reviewed": len(res["reviewed"]), "units_unreviewed": len(res["unreviewed"]),
                           "skipped": [{"file": p, "reason": w} for p, w in skipped],
-                          "skipped_units": moved,
+                          "skipped_units": moved, "preexisting_dropped": res["preexisting"],
                           "spend_usd": round(res["spend"], 6), "out_of_scope_dropped": res["out_of_scope"],
                           "results": RESULTS_FILE}, indent=1))
     else:
