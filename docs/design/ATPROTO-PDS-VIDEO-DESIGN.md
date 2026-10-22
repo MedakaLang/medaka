@@ -1,8 +1,12 @@
 # atproto PDS: accepting video uploads
 
-**Status:** proposed design. Nothing in this document is implemented, and the
-decisions in §6 are Val's to make. It extends [`ATPROTO-PDS-DESIGN.md`](ATPROTO-PDS-DESIGN.md)
-§4.5 and lifts one of its stated non-goals ("no inbound verifier through 0.1.0").
+**Status:** implemented for slices 1, 2 and 4 of sprint `pds-video-upload` (tracking #4365,
+PR #4370): the own-DID mint, the inbound verifier, and the docs. Not built: the operator
+mint-only rows and flags of slice 1, including the opt-in `video.bsky.app` row (D1, held for
+the capture, Q3); D3 and Option B are follow-ups #4371 and #4372. Whether the video service
+accepts this end to end is UNVERIFIED until the real-client run. The decisions in §6 are
+Val's to make. It extends [`ATPROTO-PDS-DESIGN.md`](ATPROTO-PDS-DESIGN.md) §4.5 and lifts
+one of its stated non-goals ("no inbound verifier through 0.1.0").
 
 ## 1. The problem
 
@@ -78,7 +82,10 @@ proxied call, so it has no egress. Separate the two ideas:
 
 - **Own DID, built in.** `did:web:<account hostname>` is admitted without any
   flag, for exactly one method: `com.atproto.repo.uploadBlob`. Nothing is
-  configured, and the row cannot be turned into a confused-deputy hole because
+  configured. The signer is built from the account key before, and separately from, the
+  egress config (`pds/shell/service_signer.mdk`; `pds/serve.mdk` builds it before
+  `configureEgress`), which is why no `--appview-did` is needed. The row cannot be turned
+  into a confused-deputy hole because
   a token minted for this server is only spendable on this server.
 - **Operator rows, opt-in.** A new repeatable flag adds an audience with the set
   of methods it may be minted for and **no egress port** (for example
@@ -123,9 +130,11 @@ It plugs in at the credential seam, not beside it:
 - Only routes on an explicit allowlist (initially `com.atproto.repo.uploadBlob`
   alone) consult the service verifier, and only for a token that carries `lxm`.
   Every other gated route keeps the bearer-only path, and a service token
-  presented there is refused as `InvalidToken`, as upstream does. Because
-  session-only routes (logout, refresh, getSession) take a session fingerprint,
-  a service credential cannot satisfy them by construction, not by a check.
+  presented there is refused as `InvalidToken`, as upstream does. Session-only routes
+  (logout, refresh, getSession) take a session fingerprint, which a service credential
+  does not carry. That is held by the explicit handler arms and by the drive sweep in
+  `pds/test/auth_seam_test.mdk`, not by the type checker: `AuthOutcome` match
+  exhaustiveness is a compiler warning (`W-NONEXHAUSTIVE`), not an error.
 - `auth_seam_test.mdk:547` pins the access-gated route list; that pin gains one
   column (which credential kinds the route accepts), and the test fails if a
   route outside the allowlist accepts a service credential.
@@ -185,7 +194,7 @@ Video is the thing that needs them to diverge.
   otherwise.
 
 Either way, one existing gap gets worse and should be named in the sprint, not
-silently inherited: **nothing collects an unreferenced blob (#2572)**. A video
+silently inherited: **nothing collects an unreferenced blob (#3580)**. (#2572 is block-side GC, a different gap.) A video
 upload the user abandons leaves its transcoded file on disk and in memory until
 removed by hand, and a video is 10 to 100 times the size of an image.
 
@@ -271,7 +280,7 @@ resolved the first sprint is slices 1, 2 and 4.
    under 5 MiB so the headroom claim is exercised.
 4. **Docs and claims.** `pds/README.md` route table, `docs/ops/PDS-DEPLOY.md`,
    the claims page (the "no inbound verifier" statement is retired), the
-   conformance walkthrough with the real-client run, #2572 cross-reference.
+   conformance walkthrough with the real-client run, #3580 cross-reference.
 
 Slices 1 and 2 are the security-sensitive pair and should be reviewed together
 against the confused-deputy argument in §4.5.

@@ -378,6 +378,15 @@ fragment — a header may name a service OF it (`did:web:api.bsky.app#bsky_appvi
 and the fragment is stripped from the credential's `aud`, because a peer checks
 `aud` against its own DID.
 
+### This server's own DID needs no flag
+
+A credential for this server's own DID, `did:web:<--hostname>`, needs no flag and
+works without `--appview-did`. It is minted only for `com.atproto.repo.uploadBlob`, so a
+client can upload a video blob through this PDS. A video above 5 MiB is refused until
+#4371 lands (the body cap is still 5 MiB per blob). No `video.bsky.app` audience is
+configured: whether that service calls this PDS, and with what `aud`, is pending the
+real-client run.
+
 ### More than one service
 
 A header may name any service in a configured **set**, and each one gets its
