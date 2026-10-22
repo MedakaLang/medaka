@@ -81,6 +81,8 @@ import types.tc_types.{
   DriveInputs(..),
   DriveOutputs(..),
   GraphCtx(..),
+  ModuleCells(..),
+  ModuleCtx(..),
   TraceSink(..),
 }
 import types.publish.{TcReport(..), CheckedProgram(..)}
@@ -101,6 +103,7 @@ import types.typecheck.{
   checkModulesDiagsChainGraph,
   checkModulesEntryFullReportK,
   checkModulesEntryReport,
+  checkModulesPartialLast,
   checkOneDiags,
   checkOneDiagsGraph,
   checkOneSchemeFullK,
@@ -117,6 +120,7 @@ import types.typecheck.{
   finishNumericPredicateTrace,
   isLiveSpan,
   markModules,
+  matchWarningsNow,
   methodReturnResolutionMutationProbe,
   methodReturnMemoCurrentViews,
   methodReturnMemoFenceMutationProbe,
@@ -133,7 +137,8 @@ import types.typecheck.{
 }
 import types.target_profile.{selectProfile}
 import types.route_key.{EvIndex(..), evIndexOf}
-import support.ordmap.{omEmpty, omFromNames}
+import support.ordmap.{omEmpty, omFromNames, omKeys}
+import frontend.exhaust.{buildOracle}
 import support.util.{
   contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
   splitOnChar, startsWith
@@ -175,8 +180,7 @@ data NumericTraceView = NumericTraceView {
   ntvGiven : Bool,
   ntvForwarded : Bool,
   ntvPrerequisites : List String,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 numericRouteView : Route -> String
 numericRouteView RNone = "none"
@@ -1615,8 +1619,7 @@ data MethodWantedView = MethodWantedView {
   mwvArguments : List String,
   mwvDestinationShared : Bool,
   mwvScopeShared : Bool,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 data MethodOutcomeView =
   | MOVGiven EvidenceBinderId
@@ -2358,8 +2361,7 @@ test "ordinary return traces are fresh while cache hits replay no events" =
 data ReturnMemoRequestView = ReturnMemoRequestView {
   rmrvModules : List (String, List (String, String), List (String, String)),
   rmrvReturns : List MethodReturnMemoView,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 returnMemoModuleView : ModDiags ->
   (String, List (String, String), List (String, String))
@@ -2884,16 +2886,14 @@ data TraceView = TraceView {
   tvBinderOwner : String,
   tvSameScope : Bool,
   tvBinder : EvidenceBinderId,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 data RequestView = RequestView {
   rvTrace : List TraceView,
   rvErrors : Int,
   rvFrameCount : Int,
   rvFrameCapacity : Int,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 data ModuleTraceView = ModuleTraceView {
   mtvAssumptions : List TraceView,
@@ -2907,8 +2907,7 @@ data ContextView = ContextView {
   cvBinderModule : String,
   cvBinderOwner : String,
   cvSameScope : Bool,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 traceView : GraphCtx -> AssumptionTraceEntry -> TraceView
 traceView gctx entry =
@@ -3139,6 +3138,9 @@ test "module-chain cache hits restore bounded scopes across failing suffixes" =
   let afterConflict = runCachedObserved "entry = 0\n"
   let afterConflictHit = runCachedObserved "entry = 0\n"
   let runs = [cold, hit, afterFailed, afterConflict, afterConflictHit]
+  -- Four frames on every run, all the drive's own: a core miss continues from the
+  -- frozen prelude interface as a hit does, so core's frame is never left in the
+  -- run either way.
   expectEach [
     (
       "cold traces the prefix's scalar assumption",
@@ -3163,9 +3165,7 @@ test "module-chain cache hits restore bounded scopes across failing suffixes" =
     ),
     (
       "every run leaves the same frame count",
-      expectEqual
-        (map (_ => cold.rvFrameCount) runs)
-        (map (view => view.rvFrameCount) runs),
+      expectEqual (map (_ => 4) runs) (map (view => view.rvFrameCount) runs),
     ),
     (
       "both failing entries report errors",
@@ -5936,3 +5936,40 @@ test "checkModules completes over modules markModules marked first" =
         []
         core2
         mods2))
+
+-- A prelude with a data declaration and an exhaustive match of it.
+seedCoreDecls : Unit -> List Decl
+seedCoreDecls _ =
+  desugar
+    (parseLocated
+      (joinNl [
+        "public export data Shape = Circle | Square", "area : Shape -> Int",
+        "area s = match s", "  Circle => 1", "  Square => 2"
+      ]))
+
+-- The record `checkModulesK`'s fold hands its first user module, whose oracle and
+-- warnings `cmCheckWorker` seeds that module with (`checkRunResidue`).  With no
+-- user module, `checkModulesPartialLast` (the same preamble and fold) returns it.
+firstModuleSeed : Unit -> (List String, Bool)
+firstModuleSeed _ =
+  let (_, ctx) =
+    checkModulesPartialLast
+      defaultDriveInputs
+      (Some (4366, 4367))
+      []
+      (seedCoreDecls ())
+      []
+  (omKeys ctx.mcCells.matchOracle.value.ctorArity, matchWarningsNow ctx)
+
+-- The record this drive hands its first module holds an empty oracle and no
+-- match warnings, on the keyed miss and on the hit after it.  The oracle was
+-- already empty at base; this row does not drive `cmCheckWorker`.  Core is
+-- checked from an empty oracle, so its own record holds a spurious
+-- non-exhaustive warning for every match on a prelude type; the blank record past
+-- the core pass carries none, which is intended: they are not findings about any
+-- user module.
+test "a zero-user-module record carries an empty oracle and no match warnings" =
+  let miss = firstModuleSeed ()
+  let hit = firstModuleSeed ()
+  let empty = (omKeys (buildOracle []).ctorArity, False)
+  expectEqual [empty, empty] [miss, hit]

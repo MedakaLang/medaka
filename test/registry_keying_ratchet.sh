@@ -347,6 +347,10 @@ ALLOWLIST_EOF
 )
 
 cross_expected=$(printf '%s\n' "$cross_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
+# Fields minted by thawInterface (types.prelude_interface) as a record-literal field and never
+# assigned afterwards: check 2 requires an assignment for every other CrossRun field.
+cross_mint_only='coreSchemeObligationsRef'
+cross_write_expected=$(printf '%s\n' "$cross_expected" | LC_ALL=C grep -vxF "$cross_mint_only")
 driver_expected=$(printf '%s\n' "$driver_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
 graphctx_expected=$(printf '%s\n%s\n' "$driver_allowed" "$graphctx_container_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
 declenvs_expected=$(printf '%s\n' "$declenvs_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
@@ -496,11 +500,11 @@ if [ "$cross_write_n" -eq 0 ] || [ "$driver_write_n" -eq 0 ]; then
   exit 1
 fi
 
-if [ "$cross_write_actual" != "$cross_expected" ]; then
+if [ "$cross_write_actual" != "$cross_write_expected" ]; then
   rm -f "$crossrun_tmp" "$graphctx_tmp"
   echo "FAIL: the set of assigned CrossRun fields changed."
   echo "  allowed:"
-  printf '%s\n' "$cross_expected" | sed 's/^/    /'
+  printf '%s\n' "$cross_write_expected" | sed 's/^/    /'
   echo "  actual:"
   printf '%s\n' "$cross_write_actual" | sed 's/^/    /'
   echo "  REMEDY WHEN THIS FIRES: a CrossRun field lost its last writer, or a new"

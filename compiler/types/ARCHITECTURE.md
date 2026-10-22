@@ -14,6 +14,7 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 | `tc_types.mdk` | The typechecker's data declarations and state records (`ModuleCtx`, `GroupCtx`, `GraphCtx`, `GraphRun`, `CrossRun`, `DynCtx`, `SiteCtx`) | none |
 | `typecheck.mdk` | Hindley-Milner inference, constraint solving, dict-passing elaboration, coherence, the effect-row checker's wiring; described in `TYPECHECK-ARCHITECTURE.md` | `elaborateOne`, `grantWholeDomain` |
 | `publish.mdk` | The published shapes (`TcReport`, `CheckedProgram`, `PubScheme`, `TcDiag`, `ModDiags`), the deep zonk and freeze-by-copy over them, and the live-cell validator; imports no typechecker state | `freezePub`, `liveCells` |
+| `prelude_interface.mdk` | The prelude interface value (`PreludeInterface`: what a drive needs from the prelude's core pass), its process cache (`preludeCacheRef`, one entry per compiler generation), freeze and thaw, and the on-disk key (`InterfaceKey`) | `seedPreludeInterface`, `currentPreludeInterface`, `preludeCacheHit`, `freezeInterface`, `thawInterface`, `interfaceKeyOf` |
 | `evidence_coverage.mdk` | The evidence coverage validator: every minted site in a program's trees answered once, in the shape its reader accepts, and no ordinal published twice; a pure walk over `Decl`s and an `EvTable` | `evidenceFaults`, `EvidenceFault` |
 | `repr.mdk` | The type representation (`Mono`, union-find `Tyvar`, `Scheme`) and every renderer over it; reads no typechecker state cell | `normalize`, `ppMono` |
 | `registry.mdk` | Identity and registry substrate the per-table re-keying units build on | `identKey`, `tabKeys` |
@@ -41,9 +42,9 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 | `effect_policy.mdk` | Does an entry's invocation summary fit a policy | `policyRefusals`, `viaChain` |
 
 ## Cell lifetimes
-`CELL-LIFETIMES.md` lists every typechecker cell (the 4 module-level cells of `types.typecheck`: `interners` and the three memos, and the 196 fields of
+`CELL-LIFETIMES.md` lists every typechecker cell (the 3 module-level cells of `types.typecheck`: `interners` and the two memos, and the 196 fields of
 `ModuleCtx` 3 (`mcCells`, `mcGraph`, `mcLoc`), `ModuleCells` 91, `GroupCtx` 2, `GraphCtx` 19, `GraphRun` 30, `CrossRun` 14, `Interners` 2, `Lineage` 3, `TcConfig` 5, `DriveInputs` 6, `TraceSink` 8, `DynCtx` 10, `SiteCtx` 3) with its measured lifetime, target home and whether
-an interface load would have to fill it. Lifetimes (205 rows, the 200 in the first table and the 5 outside it): process 16, config 15, graph 65, module 83, group 3, run 23. `ModuleCtx.mcLoc` is a scoped value, not a cell: a construct hands its sub-walk an updated copy of the record, and the diagnostic location is the span of the innermost enclosing construct. Its "Interface fills" section names the producer and kind of each row playbook C1 restores.
+an interface load would have to fill it. Lifetimes (205 rows, the 199 in the first table and the 6 outside it): process 16, config 15, graph 65, module 83, group 3, run 23. The prelude interface cache (`preludeCacheRef`, `types.prelude_interface`) is one of the six outside rows; it is process-lifetime and reset never. `ModuleCtx.mcLoc` is a scoped value, not a cell: a construct hands its sub-walk an updated copy of the record, and the diagnostic location is the span of the innermost enclosing construct. Its "Interface fills" section names the producer and kind of each row playbook C1 restores.
 The per-module cell counts are in `test/arch_goldens/cells.golden`.
 
 ## Laws that bind it

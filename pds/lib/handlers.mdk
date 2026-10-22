@@ -144,6 +144,7 @@ import lib.blob.{
   blobRefSize,
   blobRefToJson,
   recordBlobRefs,
+  sniffMimeType,
 }
 import lib.blockstore.{blockStoreGet}
 import lib.car.{carEncode, carEncodeRootless}
@@ -1058,7 +1059,12 @@ finishWrite store (Ok (repo, output)) =
    method, and the handler treats the two alike. -}
 applyUploadBlob : Store -> MediaType -> Bytes -> Result Response (Store, Json)
 applyUploadBlob store media bytes = do
-  let mimeType = "\{mediaTypeType media}/\{mediaTypeSubtype media}"
+  let declared = "\{mediaTypeType media}/\{mediaTypeSubtype media}"
+  let mimeType =
+    if declared == "*/*" then
+      option declared (sniffed => sniffed) (sniffMimeType bytes)
+    else
+      declared
   let accountUsedBytes = storeBlobBytes store
   ref <- admitBlobRef (admitBlob accountUsedBytes mimeType bytes)
   next <- match storePutBlob (blobRefCid ref) mimeType bytes store
@@ -1529,7 +1535,7 @@ applyDescribeRepo account store params = do
    together because they are read from the same place (the CLI flags) and
    reported in the same response; nothing else in this module needs them. -}
 export data ServerLinks =
-  | ServerLinks (Option String) (Option String) (Option String)
+  ServerLinks (Option String) (Option String) (Option String)
 
 -- | No operator-configured links or contact — `describeServer` reports
 -- neither `links` nor `contact`.

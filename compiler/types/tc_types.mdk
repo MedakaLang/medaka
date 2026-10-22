@@ -128,7 +128,7 @@ public export data ObligationSite = ObligationSite {
 -- param tyvar ids, quantified authority ids (the head's `Authority` params
 -- and the constructor's existentials), result, fields, field index
 public export data RecordInfo =
-  | RecordInfo (List Int) (List Int) Mono (List (String, Mono)) (OrdMap Mono)
+  RecordInfo (List Int) (List Int) Mono (List (String, Mono)) (OrdMap Mono)
 
 -- Kind of a data-type parameter, inferred from usage: KRow iff the param name
 -- appears in a field's effect-tail position (`<e>`), else KType.  Drives
@@ -635,7 +635,7 @@ public export data InstRef = InstRef String Int Int
 -- with no construct around it, so a conflict is located at the impl's interface
 -- name.  A synthesized impl (a derived one) has none.
 public export data ImplRow =
-  | ImplRow Int InstRef IfaceRef (List Ty) (List Require) (List String) (Option Loc)
+  ImplRow Int InstRef IfaceRef (List Ty) (List Require) (List String) (Option Loc)
 
 -- The registry.  `ieRows` is the POPULATION in build order (ordinal order across
 -- modules, `implDeclsWithReqs` order within one); the rest are INDEXES over it.
@@ -831,7 +831,7 @@ public export data ImplAcc = ImplAcc {
 -- beside the raw Ty when checking an impl body; separating those lookups would let
 -- same-named interfaces disagree on which graded scope elaborates the method.
 public export data CeRow =
-  | CeRow RegKey Int IfaceRef (List String) (List (String, Ty, List (String, List Kind))) (List Super) (List (List Kind)) (List String) (Option Loc)
+  CeRow RegKey Int IfaceRef (List String) (List (String, Ty, List (String, List Kind))) (List Super) (List (List Kind)) (List String) (Option Loc)
 
 -- The registry.  `ceRows` is the population in build order (ordinal order
 -- across modules, declaration order within one); `ceByKey` is the single
@@ -1149,8 +1149,7 @@ public export data NumAnchorTestObservation = NumAnchorTestObservation {
   natoIface : String,
   natoSchemeBody : String,
   natoDeclaredType : String,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 public export data MethodRowTestObservation = MethodRowTestObservation {
   mrtoSchemeIds : List Int,
@@ -1176,8 +1175,7 @@ public export data MethodRowTestObservation = MethodRowTestObservation {
   mrtoAttributedParamIface : String,
   mrtoAttributedParamTyparams : List String,
   mrtoNumAnchors : List NumAnchorTestObservation,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 -- B-2.2-f (#1113): how many of a constrained callee's slots were PRESENT BEFORE
 -- `expandSupersPairs`' transitive super expansion APPENDED any.
@@ -1463,7 +1461,7 @@ public export data CrossRun = CrossRun {
 -- / realize_recursive_dict_apps (Phase 115/136).
 -- #2549 M2: the 5th field is this application's evidence id — see `pdaEv`.
 public export data RecDictApp =
-  | RecDictApp (Ref (List Route)) String String Mono ScopeId EvId
+  RecDictApp (Ref (List Route)) String String Mono ScopeId EvId
 
 -- The construct that demands a value join's alternatives agree.
 public export data JoinContext =
@@ -1564,8 +1562,7 @@ public export data MethodReturnMemoView = MethodReturnMemoView {
   mrmvOutcome : String,
   mrmvPrerequisites : List (String, List String),
   mrmvEvidence : String,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 -- #2095: the classification of one solved route, over every family `entail` and the
 -- return family answer — not a solver concept, a reading of the `Route` shape the
@@ -1847,7 +1844,7 @@ public export data Interners = Interners {
 -- function binder the declared parameter count its return type is read after,
 -- and whether the binder's function has a declared type signature.
 public export data PendingBinder =
-  | PendingBinder BinderId String Mono (Option Int) Bool
+  PendingBinder BinderId String Mono (Option Int) Bool
 
 -- What a rung declares it can soundly read out of the one environment.  This is the
 -- eligibility half of `GivenMatch`, and the only place the two interact.
@@ -2072,7 +2069,7 @@ public export data ModuleCells = ModuleCells {
 -- path is a value passed down one walk, never shared between walks.  The walk's
 -- `WalkMemo` is the one part every branch of the walk shares.
 public export data ReqWalk =
-  | ReqWalk (List (IfaceRef, List Mono, Int)) Int WalkMemo
+  ReqWalk (List (IfaceRef, List Mono, Int)) Int WalkMemo
 
 -- The goals one walk has already followed, so a goal its `requires` reach along
 -- many paths (`Tag (Wrap a) requires Tag a, Tag2 a` and its twin) is followed once
@@ -2140,7 +2137,7 @@ public export data ReqStep =
 -- imports.  Written once per module, right after its data environment is
 -- built; a drive's caller reads it through `DriveOutputs` (`lastInvocationOps`).
 public export data InvocationView =
-  | InvocationView (List Scheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
+  InvocationView (List Scheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
 
 -- The variables one signature binds: its row tails (and row-kinded type
 -- arguments) and its authority binders, each name to one fresh cell shared by
@@ -2506,7 +2503,7 @@ public export data ExistentialScope = ExistentialScope (List (Ref Authvar)) Int
 -- One record instantiation's substitution: its type params and its
 -- authorities, applied together to any field on demand.
 public export data RecordSubst =
-  | RecordSubst (List (Int, Mono)) (List (Int, Authority))
+  RecordSubst (List (Int, Mono)) (List (Int, Authority))
 
 -- One explicit description of a numeric-defaulting boundary.  Member and local-group
 -- boundaries carry the just-exited HM level used by BOTH defaulting and ambiguity
@@ -2580,7 +2577,7 @@ public export data ArmedGuard = ArmedGuard {
 -- The sixth field answers whether a use of a name that takes no dictionary
 -- needs a grant identity (`mintGrantOnly`).
 public export data ArgRw =
-  | ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String)) (String -> EvId -> Unit) (String -> Bool)
+  ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String)) (String -> EvId -> Unit) (String -> Bool)
 
 -- ══ S2-DECL (d): The choice, by cardinality of the admitted set (#2188) ═══════
 --
@@ -2733,7 +2730,7 @@ public export data MStep k g s = MVar k | MKids (List (g, s)) | MOk | MFail
 -- diagnostic against the span's OWN file, which today only the single-file
 -- `checkCoherence` path does.
 public export data CohScan =
-  | CohScan (Option (String, Option Loc)) (Option (String, Option Loc))
+  CohScan (Option (String, Option Loc)) (Option (String, Option Loc))
 
 -- #1559 A-3.7: Which sweep is running, threaded as a value instead of inferred from
 -- the shape of the module ids.  `cohSoftInScope` used to answer "am I the per-module
@@ -2784,7 +2781,7 @@ public export data CohSweep = CohSweepOwn | CohSweepGlobal
 -- may choose that short word or the impl's canonical key; eval and both emitters
 -- accept both aliases.  Re-keying this table by identity is still a separate change.
 public export data KeyEntry =
-  | KeyEntry (List String) (Option HeadKey) Ty String String (List Ty) (List Require) Int
+  KeyEntry (List String) (Option HeadKey) Ty String String (List Ty) (List Require) Int
 
 -- Caller-supplied policy for the UNDETERMINED arm of routeOf (the constraint var is
 -- pinned by NEITHER an argument nor the result).  KeepNone (the nested element-dict
@@ -2900,7 +2897,7 @@ public export data MethodGrantUse =
 -- declare.  They use `mregAppendK`, not `mregAddK`, because within one bucket
 -- the FORWARD declaration order is semantic (`findMatchingImplReqsU`).
 public export data ImplUniverse =
-  | ImplUniverse (MultiRegistry (List Ty, List Require)) (MultiRegistry (List Ty, List Require))
+  ImplUniverse (MultiRegistry (List Ty, List Require)) (MultiRegistry (List Ty, List Require))
 
 -- What an undetermined goal's counted candidates decide (DICT-SEMANTICS §3, §4.2
 -- OD3).  None leaves the goal no instance.  One is the instance.  So is one that
@@ -3083,48 +3080,19 @@ public export data ModuleSeed = ModuleSeed {
 -- inferred type is pinned by the selfproc LEG A golden, and widening its result to
 -- carry the stamped decls back out is the one change that would make that golden's
 -- move non-additive.
--- ── core-check memo ──────────────────────────────────────────────────────────
+-- ── the core pass's cache key ────────────────────────────────────────────────
 -- The prelude (runtime + core) is typechecked at the head of EVERY driver entry
 -- (`checkModulesPreambleK` below): `medaka check`, the LSP on each didChange, and
 -- the playground on each keystroke all pay it again for the same two decl lists.
--- Measured natively, a warm single-file analyze is ~52ms of which ~50ms is this
--- pass.  So the core pass is memoized — keyed by the prelude trees' identity,
--- which a caller hands down EXPLICITLY as the desugar cache's generation pair
--- (`desugaredPreludeKey`, frontend/desugar_cache.mdk; the K-suffixed entry
--- points below).  An unkeyed call (`None`) never hits and never stores: the
--- AST carries mutable Refs and no equality, so identity cannot be recovered
--- from the decls themselves, and a caller that hands in a MODIFIED prelude
--- (`autoPrintPinCore`) must not be able to hit by accident.  A hit RESTORES
--- what the pass produced instead of recomputing it:
---   * `coreSchemes` (the return value);
---   * `GraphCtx.crossRun` — the core pass fills the universe accumulators and, right
---     after it, `coreSchemeObligationsRef`; a hit returns a record carrying a
---     DETACHED copy of the snapshot (fresh Refs, `copyCrossRun`) so the user
---     modules that follow mutate the copy and the memo stays what the miss left;
---   * the one graph field the core pass writes, `builtinExternNamesRef`
---     (`ccmBuiltinExternNames`);
---   * core's module record: the `ModuleCtx` a hit installs carries the module
---     fields core left (`carryModuleCtx`), above all the match oracle and warnings
---     that a module checked without a `CheckRunSeed` copies from it.  Its run
---     fields are fresh, as a miss leaves them for the next module's mint.
--- Everything user-dependent that the preamble installs BEFORE the core pass
--- (effect domains, abstract record types, and the user modules' contribution to
--- the graph indexes and to `declEnvs` -- the PRELUDE's contribution to those two
--- is itself memoized now, see `PreludePreamble`) is still derived on every call;
--- the memo covers exactly the `checkModuleFull` of core
--- and the one line after it.
--- One entry only (the prelude does not change under a process); a different
--- prelude simply misses and replaces it.
-public export data CoreCheckMemo = CoreCheckMemo {
-  ccmKey : ((Int, Int), String),
-  ccmCoreSchemes : ModuleBindings,
-  -- The prelude's published rows, frozen once when the entry is stored.
-  ccmCorePub : List (String, PubScheme),
-  ccmCrossRun : CrossRun,
-  ccmGraphRun : GraphRun,
-  ccmBuiltinExternNames : OrdMap (Ty, List (String, Int)),
-  ccmModule : ModuleCtx,
-}
+-- So the diagnostics arm caches the core pass's result as a value
+-- (`PreludeInterface`, types/prelude_interface.mdk) keyed by the prelude trees'
+-- identity plus the section chosen by the drive's IO join; the identity a caller
+-- hands down EXPLICITLY as the desugar cache's generation
+-- pair (`desugaredPreludeKey`, frontend/desugar_cache.mdk; the K-suffixed entry
+-- points below).  An unkeyed call (`None`) never hits and never stores: the AST
+-- carries mutable Refs and no equality, so identity cannot be recovered from the
+-- decls themselves, and a caller that hands in a MODIFIED prelude
+-- (`autoPrintPinCore`) must not be able to hit by accident.
 
 -- ── prelude-preamble memo ────────────────────────────────────────────────────
 -- The whole-graph derivations below run on every analyze, and on an LSP keystroke
@@ -3170,13 +3138,13 @@ public export data PreludePreamble = PreludePreamble {
 }
 
 -- `preludeKey`: the desugar-cache generation pair identifying `runtimeDecls` /
--- `coreDecls` (see the core-check memo above); `None` = unkeyed, no memo.
+-- `coreDecls` (see the core pass's cache key above); `None` = unkeyed, no cache.
 -- What a graph drive is asked to PRODUCE.  It is one driver either way
 -- (`driveGraphK`): the same preamble, the same per-module worker, the same
 -- graph-end drain.  The selection names the three points where the two output
 -- contracts genuinely part company — the promotion-eligible seed, the core pass
--- (the tree arm needs core's marked decls back, so it cannot use the core-check
--- memo), and whether the marked trees are dict-passed and published.
+-- (the tree arm needs core's marked decls back, so it cannot continue from the
+-- prelude interface), and whether the marked trees are dict-passed and published.
 --   * `GOutDiags` — per-module diagnostics and schemes.  What `check`, the LSP,
 --     the playground, MCP and `medaka test`'s gate consume.
 --   * `GOutTrees` — the same diagnostics PLUS the elaborated, dict-passed trees,
@@ -3193,8 +3161,7 @@ public export data GraphOut = GOutDiags | GOutTrees
 -- miss would have left behind at that point: the fold's `depEnv`/`accData`/
 -- `accAll`, the results collected so far, one `GraphCtx` snapshot (`snapshotGraphCtx`:
 -- DETACHED copies of the `crossRun` and `graphRun` sub-records and the extern-name
--- map; a hit reads only those three) and the module record the core-check memo also
--- restores.
+-- map; a hit reads only those three) and the module's own record.
 -- Keys come from the caller: a chain key (which prelude generations, which entry
 -- and roots) and one `Option String` per module (mid + path + the EXACT source
 -- the loader parsed — `loadedSourceOf`); a `None` step is never recorded and ends
