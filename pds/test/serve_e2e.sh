@@ -657,6 +657,38 @@ grep -Eq '^serve: event log recovery: (settled|promoted|discarded)$' \
 grep -Fqx 'serve: session-token secret: secrets/token.hex' "$WORK/serve1.out" \
   || fail '7b: startup did not name secrets/token.hex as the session-token secret'
 
+# 7c. A CREDENTIAL FOR THIS SERVER ITSELF, on a server with no appview. It holds
+#    the account key all the same, so `getServiceAuth` for its own DID and the
+#    one method that route takes (the official client's video upload) answers a
+#    credential whose own bytes name that audience and method. A foreign
+#    audience on the same server is refused 400, where it was once a 501.
+OWN_DID_AUD="did:web:$HOSTNAME"
+OWN_NSID='com.atproto.repo.uploadBlob'
+OWN_OUT=$(client service-auth-own "$PORT1" "$TOKEN" "$OWN_DID_AUD%23atproto_pds" "$OWN_NSID") \
+  || fail 'case 7c: getServiceAuth for the server'"'"'s own DID yielded no credential'
+OWN_TOKEN=${OWN_OUT##*token=}
+case "$OWN_TOKEN" in
+  *.*.*) ;;
+  *) fail 'case 7c: what came back is not a compact JWS' ;;
+esac
+OWN_PAYLOAD=$(printf %s "$OWN_TOKEN" | cut -d. -f2 | tr '_-' '/+')
+while [ $((${#OWN_PAYLOAD} % 4)) -ne 0 ]; do OWN_PAYLOAD="$OWN_PAYLOAD="; done
+OWN_CLAIMS=$(printf %s "$OWN_PAYLOAD" | base64 -d)
+case "$OWN_CLAIMS" in
+  *"\"aud\":\"$OWN_DID_AUD\""*) ;;
+  *) fail "case 7c: the credential does not name the bare server DID: $OWN_CLAIMS" ;;
+esac
+case "$OWN_CLAIMS" in
+  *"\"lxm\":\"$OWN_NSID\""*) ;;
+  *) fail "case 7c: the credential does not name $OWN_NSID: $OWN_CLAIMS" ;;
+esac
+client cors-get 'own-did-foreign-audience' "$PORT1" "$TOKEN" \
+  '/xrpc/com.atproto.server.getServiceAuth?aud=did:web:other.example&lxm=com.atproto.repo.uploadBlob' 400 \
+  || fail 'case 7c: a foreign audience on a no-appview server was not refused 400'
+if grep -F -q "$OWN_TOKEN" "$WORK/serve1.err" "$WORK/serve1.out"; then
+  fail 'case 7c: the minted credential appears in the server'"'"'s own output'
+fi
+
 # 8. a connection that says nothing at all is closed by the server rather
 #    than held. It is closed on the HEADER budget, not on idleTimeout: a peer
 #    that has sent no bytes has not terminated a header section, and that is

@@ -1125,10 +1125,12 @@ npm ci --ignore-scripts --prefix "$WORK"
 node pds/tools/check_pds_service_jwt.mjs "$WORK/node_modules" "$WORK/manifest.txt" 1700000030
 ```
 
-Six rows: four accepts (with and without `lxm`, each at the default sixty-second
-window and at a ten-minute window the request asked for) and two rejects (a
-token offered under the wrong `did:key`, and one minted for a different
-audience), so one run shows both polarities. The trailing argument is the
+Eight rows: five accepts (with and without `lxm`, each at the default sixty-second
+window and at a ten-minute window the request asked for, plus the thirty-minute
+`uploadBlob` credential this server mints for its own DID) and three rejects (a
+token offered under the wrong `did:key`, one minted for a different audience,
+and the own-DID credential offered under a method it does not name), so one run
+shows both polarities. The trailing argument is the
 instant `exp` is checked against; `1700000030` is inside every row's window, the
 narrowest of which is the sixty seconds of the manifest's pinned `iat`. A row
 may state the exact `exp - iat` it expects as a seventh field, and one that

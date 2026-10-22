@@ -41,7 +41,7 @@ import lib.credential.{
 import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.websocket.{handshakeAccept}
 import u8 as U8
-import string.{splitAt, toInt, toLower, trim}
+import string.{join, splitAt, toInt, toLower, trim}
 import lib.atsyntax.{validateDid, validateHandle}
 import lib.jwt.{
   Claims(..),
@@ -90,6 +90,7 @@ import lib.xrpc.{
   XrpcCall(..),
   requestNsid,
   routeRequest,
+  serviceAuthRouteNsids,
   subscriptionRoute,
   xrpcErrorResponse,
   xrpcFailureResponse,
@@ -995,13 +996,13 @@ getServiceAuthNsid = "com.atproto.server.getServiceAuth"
    It exists for the reason `ProxyDecision` does, pointed the other way. There
    the signature travels outward on a call this server makes; here the client
    asked for the credential itself and keeps it. Either way the account's repo
-   key lives only in the shell (`pds/shell/egress.mdk`), so a `Handler` —
+   key lives only in the shell (`pds/shell/service_signer.mdk`), so a `Handler` —
    which returns a complete `Response` and is handed no key — cannot answer
    this route at all, and the decision has to be taken before dispatch.
 
    Every DECISION is taken here: whether the caller holds a credential of this
-   account's own, whether the `aud` it asked for is one this server was
-   configured to mint for, whether the `lxm` it named is one no credential may
+   account's own, whether the `aud` it asked for is this server's own DID or
+   one this server was configured to mint for, whether the `lxm` it named is one no credential may
    carry, and how far out the credential may expire. The shell signs the claim
    set and chooses none of it — and a refusal carries no `ServiceAuthRequest`,
    so along that path there is nothing for it to sign. -}
@@ -1025,17 +1026,11 @@ badExpirationRefusal : String -> Response
 badExpirationRefusal message =
   xrpcErrorResponse 400 "Bad Request" "BadExpiration" message
 
-{- | What a deployment holding no signing key answers this route.
+{- | What a caller that reaches `handle` for this nsid is answered.
 
-   A server started with no configured audience (`--appview-did` absent) holds
-   no `Egress` and therefore no account key in the shell, so it cannot mint
-   anything. 501 and not 400: the request is not wrong, and not 500 either,
-   because nothing failed — this deployment does not offer the route, which is
-   a thing an operator chose and a client can act on.
-
-   The same answer covers a caller that reaches `handle` for this nsid: the
-   pure core holds no key on any deployment, so the statement is true there
-   too. -}
+   The pure core holds no key on any deployment, so it cannot mint anything.
+   501 and not 400: the request is not wrong, and not 500 either, because
+   nothing failed — the signing lives in the shell, outside this path. -}
 export
 serviceAuthUnavailableResponse : Response
 serviceAuthUnavailableResponse =
@@ -1044,6 +1039,12 @@ serviceAuthUnavailableResponse =
     "Not Implemented"
     "NotImplemented"
     "This server has no signing key configured for \{getServiceAuthNsid}"
+
+-- | This server's own DID: the audience the official client names when it asks
+-- for a credential to present to this PDS itself.
+export
+serverDid : Account -> String
+serverDid account = "did:web:\{accountHostname account}"
 
 -- | A client's `aud` that does not name a DID at all.
 serviceAuthAudienceNotADidMessage : String
@@ -1088,22 +1089,57 @@ requiredParam name params = match QueryParams.soleParam name params
 
    `aud` is the value an attacker wants to choose: a credential bearing this
    account's identity, minted for a service of their naming, is the confused
-   deputy handed to the client directly. So it is graded against the SET this
-   operator configured — `lib.proxy`'s own table, asked with `appviewRouteFor`,
-   the same lookup and the same stripped-fragment form the proxy seam uses —
-   and a server carrying no table at all mints for nobody.
+   deputy handed to the client directly. So it is graded against two sets.
+   This server's own DID is admitted for exactly the methods the registry
+   marks as taking a service token (`serviceAuthRouteNsids`): the credential is
+   then spendable only on this server, for a route that accepts it, and the
+   method is mandatory so it can never be a blanket one. Any other DID is
+   graded against the SET this operator configured — `lib.proxy`'s own table,
+   asked with `appviewRouteFor`, the same lookup and the same stripped-fragment
+   form the proxy seam uses — and a server carrying no table mints for no
+   other audience.
 
-   The `None`-table arm answers the 501 rather than the foreign-audience 400:
-   such a deployment refuses every `aud` for one reason, and telling a client
-   that the DID it named is not configured would invite it to try others. -}
-admitServiceAudience : Option AppviewTable -> String -> Result Response Unit
-admitServiceAudience table raw = match proxyServiceDid raw
+   The own-DID comparison is exact and case-sensitive, as DID comparison is
+   everywhere in `lib.proxy`. The claim's `lxm` is the registry's spelling so a
+   case variant cannot yield a token the verifier would refuse.
+
+   `Ok (Some lxm)` is this server's own DID with that registry-spelled method;
+   `Ok None` is a configured audience, whose `lxm` is graded separately. -}
+admitServiceAudience : Account ->
+  Registry ->
+  Option AppviewTable ->
+  String ->
+  Result Response (Option String) ->
+  Result Response (Option String)
+admitServiceAudience account registry table raw lxm = match proxyServiceDid raw
   None => Err (serviceAuthRefusal serviceAuthAudienceNotADidMessage)
-  Some bare => match table
-    None => Err serviceAuthUnavailableResponse
-    Some configured => match appviewRouteFor configured bare
+  Some bare =>
+    if bare == serverDid account then
+      admitOwnMethod registry lxm
+    else match table
       None => Err (serviceAuthRefusal serviceAuthForeignAudienceMessage)
-      Some _ => Ok ()
+      Some configured => match appviewRouteFor configured bare
+        None => Err (serviceAuthRefusal serviceAuthForeignAudienceMessage)
+        Some _ => Ok None
+
+admitOwnMethod : Registry ->
+  Result Response (Option String) ->
+  Result Response (Option String)
+admitOwnMethod _ (Err response) = Err response
+admitOwnMethod _ (Ok None) =
+  Err
+    (serviceAuthRefusal
+      "a credential for this server itself must name the method it is for")
+admitOwnMethod registry (Ok (Some lxm)) = match validateNsid lxm
+  Err cause =>
+    Err (serviceAuthRefusal "service auth lxm: \{nsidMethodErrorMessage cause}")
+  Ok () => match find (sameNsidIdentity lxm) (serviceAuthRouteNsids registry)
+    Some canonical => Ok (Some canonical)
+    None =>
+      let allowed = join ", " (serviceAuthRouteNsids registry)
+      Err
+        (serviceAuthRefusal
+          "a credential for this server itself cannot be requested for \{lxm}; it is minted for: \{allowed}")
 
 {- | The method half: a credential may not name one of the account-management
    methods (`lib.proxy`'s `protectedMethods`), whether or not this server
@@ -1177,27 +1213,35 @@ gradeServiceExpiry context lxm at =
 {- | The claim set this request earns, or the refusal it is owed.
 
    `iss` is the ACCOUNT's DID, because the key that signs is the account's own
-   repo key. `aud` is the client's own text, fragment included — `lib.jwt`
-   strips it at mint, and the stripped form is what `admitServiceAudience`
-   compared — so a client that asked for a service OF a configured audience
-   gets a credential naming that audience. `jti` is this request's own nonce,
+   repo key. `aud` is the client's own text for a configured audience,
+   fragment included — `lib.jwt` strips it at mint, and the stripped form is
+   what `admitServiceAudience` compared — so a client that asked for a service
+   OF a configured audience gets a credential naming that audience; for this
+   server's own DID it is the bare `serverDid`. `jti` is this request's own nonce,
    and `exp` is the resolved instant rather than the client's string. -}
 serviceAuthClaims : Account ->
+  Registry ->
   RequestContext ->
   Option AppviewTable ->
   List QueryParam ->
   Result Response ServiceAuthRequest
-serviceAuthClaims account context table params = do
+serviceAuthClaims account registry context table params = do
   audience <- requiredParam "aud" params
-  () <- admitServiceAudience table audience
-  method <- mapErr
-    (message => serviceAuthRefusal message)
-    (QueryParams.soleParam "lxm" params)
-  () <- admitServiceMethod method
+  let lxmParam =
+    mapErr
+      (message => serviceAuthRefusal message)
+      (QueryParams.soleParam "lxm" params)
+  admitted <- admitServiceAudience account registry table audience lxmParam
+  (claimAudience, method) <- match admitted
+    Some canonical => Ok (serverDid account, Some canonical)
+    None => do
+      requested <- lxmParam
+      () <- admitServiceMethod requested
+      Ok (audience, requested)
   expiry <- admitServiceExpiry context method params
   Ok ServiceAuthRequest {
     iss = accountDid account,
-    aud = audience,
+    aud = claimAudience,
     lxm = method,
     jti = Hex.encode context.nonce,
     iat = context.nowSeconds,
@@ -1241,7 +1285,7 @@ classifyServiceAuth (Server account registry _) context table store request =
             store
             request)
             GoodCredential _ _ =>
-              match serviceAuthClaims account context table params
+              match serviceAuthClaims account registry context table params
                 Err response => ServiceAuthRefused response
                 Ok claims => ServiceAuthMinted claims
             refused => ServiceAuthRefused (refusalFor refused)
