@@ -10,9 +10,11 @@ describe these prompts, labels and samples; rerun them rather than quote them.
 ## Why
 
 The filter answers a live-review failure, not a benchmark one. The end-of-sprint
-style pass over a parameter-threading sweep (arch Phase 2, sprint 4: 235 units)
-dismissed **197 of 214** review-diff findings by hand as "pure move from
-typecheck.mdk (text present at merge base)"; sprint 6e kept 9 and dismissed 96.
+style pass over one arch Phase 2 sprint (the one that moved declarations from
+`typecheck.mdk` into `tc_types.mdk`; its ledger survives in the orchestrator's
+scratchpad, its exact range does not) dismissed **197 of 214** review-diff
+findings by hand as "pure move from typecheck.mdk (text present at merge
+base)"; sprint 6e kept 9 and dismissed 96.
 A moved or re-indented declaration is reviewed in full, and every old comment in
 it sits on a changed line, so the scope filter lets it through. The move skip
 (`moved-unchanged`) does not fire, because the declaration gained a parameter.
@@ -64,10 +66,61 @@ ordinary commits, where moves are rare. The benchmark holds no sweep commit, so
 the sweep case, where the hand ledger dismissed 92% of findings, is measured
 live below, not here.
 
-## Live sweep run
+## Live sweep runs
 
-See the section appended after the run over
-`31f730fa4..720dfa654` (arch Phase 2 sprint 4, the 197-of-214 ledger).
+The benchmark has no sweep commit, so the filter was run live, at HEAD's prompts,
+over two arch Phase 2 stage-6 sprint ranges. These are single runs with no
+labels; the reader's check is the two lists in each run's JSON.
+
+**Sprint 4, `31f730fa4..720dfa654`** (the `ModuleCtx` cell table; 5 files, 139
+units, $0.51, 18 min of funnel after 9 min of unit cutting):
+
+| | count |
+|---|---:|
+| findings reported | 29 |
+| of which `comment.*` | 10 |
+| dropped as pre-existing | 31 |
+
+The 31 dropped are all provenance, history, shout and measurement lines of
+`typecheck.mdk` and `tc_types.mdk` declarations the sweep re-wrapped (`#156 S3a`,
+`#1375 item 2`, `RULED 2026-08-10`, `stored at IR line 1693`). The 10 comment
+findings kept name the sprint's own work (`freshModuleCtx` no longer re-seeds,
+`#2547 unit 3`, the G1 sticky mirror), so they are the diff's to answer. The
+other 19 findings are 12 `dup.in-diff`, 2 `dup.existing`, 2
+`idiom.let-underscore-unit` (the pattern #4349 files), 1 `dead.code`, 1
+`shape.do-cascade` and 1 `test.gap`.
+
+**Stage-6 range `8c292fa33..40df5a2a4`** (the orchestrator's other dry run; 235
+units, $0.91, 33 min of funnel after 15 min of unit cutting):
+
+| | count |
+|---|---:|
+| findings reported | 143 |
+| of which `comment.*` | 5 |
+| dropped as pre-existing | 10 |
+
+139 of the 143 findings are in `typecheck.mdk`: `dup.in-diff` 40, `dead.code`
+15, `data.bool-blind` 15, `idiom.let-underscore-unit` 14,
+`shape.threaded-invariants` 14, `test.gap` 11, `dup.existing` 9,
+`data.param-clump` 8, the rest smaller. Only 15 comment-class findings reached
+the diff-scope filter at all, and the drop took 10 of them. The 5 kept are
+`#866`, `#411` and `P0-19 d4b` provenance tags on lines whose code the sweep
+also changed, so the quote is not base text: a reader's call, and the kind of
+line a hand ledger dismisses in seconds.
+
+This is not a re-score of the 197-of-214 ledger: that run's prompts (rubric
+before R50 and R51, earlier fixtures) are gone, and at today's prompts the same
+kind of range draws few comment findings in the first place. What the two live
+runs show is the filter's behaviour on sweep diffs: it drops only `comment.*`
+quotes the base held, it leaves comments that name the sprint's own work, and
+on a range where the battery does raise old comments (sprint 4) it removes
+three of every four.
+
+**Time.** Both runs passed Val's 20-minute budget for the pass: 27 and 48
+minutes of wall at `--jobs 4` on the shared box, of which unit cutting (evidence
+generation, git-bound) was 9 and 15 minutes. Streaming makes the time visible;
+it does not shorten it. The leads left are the evidence generators (about 4 s
+of CPU per unit) and the battery-then-confirm barrier per batch of 8 units.
 
 ## Cost and time
 
