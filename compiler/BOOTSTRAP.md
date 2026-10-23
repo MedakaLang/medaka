@@ -826,3 +826,10 @@ file never survives a build. It is skipped when the output is not `$ROOT/medaka`
 resolves a different stdlib root. CI does not ship the file in the build-once artifact: the
 `binary: artifact` arm of `.github/actions/setup-medaka/action.yml` re-runs `interface write` and
 `interface verify` after the download.
+
+`interface write` also writes `stdlib/core.mdke` beside `core.mdki`: core elaborated once, the
+dict-passed trees the tree arm (`run`, the emitter child, `medaka test`'s eval drives) continues from
+instead of re-elaborating core. It has the same key components as `core.mdki` and its own format tag
+and digest; every `make medaka` path and CI's `setup-medaka` regenerate it, `.gitignore` excludes it,
+and `scripts/make_dist.sh` ships it with the rest of `stdlib/`. `interface verify` is `fresh` only
+when both files are.

@@ -453,9 +453,8 @@ inlang-frontend-resolve-test:
 inlang-frontend-parser-test:
 	./medaka test compiler/frontend/parser_test.mdk
 
-## compiler/frontend/ast_codec.mdk is outside every entry's import closure
-## until the prelude file reads it ([W-MODULE-BLIND]); its sibling is the only
-## thing that typechecks and runs it.
+## compiler/frontend/ast_codec.mdk is imported only by types.prelude_elab; this
+## step runs its own sibling test by name.
 inlang-frontend-ast-codec-test:
 	./medaka test compiler/frontend/ast_codec_test.mdk
 
