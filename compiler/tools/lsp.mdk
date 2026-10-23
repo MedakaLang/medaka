@@ -113,7 +113,7 @@ import frontend.ast.{
 -- hover, completion and inlay to answer from (`Kept`).
 
 public export data Docs =
-  | Docs (List (String, String)) (List String) (List (String, Kept))
+  Docs (List (String, String)) (List String) (List (String, Kept))
 
 -- What the last publish of a buffer kept, with the buffer source it analyzed.
 -- A single-document publish keeps the env its drive gave.  A project publish

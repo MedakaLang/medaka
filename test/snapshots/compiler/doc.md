@@ -1332,7 +1332,7 @@ runDoc runtimeSrc coreSrc src filename roots =
 -- build pages; `medaka_cli.mdk`'s library-mode driver still reads it only
 -- through `mdName` + `renderModulePage`/`renderIndex`/`libraryInventoryJson`.
 public export data ModuleDoc =
-  | ModuleDoc String String (List DocEntry) (List String)
+  ModuleDoc String String (List DocEntry) (List String)
 
 export
 mdName : ModuleDoc -> String

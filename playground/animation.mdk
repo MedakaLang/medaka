@@ -12,8 +12,7 @@ public export data Pointer = Pointer {
   y : Float,
   inside : Bool,
   down : Bool,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | An immutable snapshot for one delivered frame.
 
@@ -25,12 +24,11 @@ public export data Frame = Frame {
   width : Float,
   height : Float,
   pointer : Pointer,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | A retained model with pure update and view functions. -}
 export data Simulation model =
-  | Simulation (Ref model) (Ref Bool) (Frame -> model -> model) (Frame -> model -> Picture)
+  Simulation (Ref model) (Ref Bool) (Frame -> model -> model) (Frame -> model -> Picture)
 
 readFrame : Unit -> <FFI "js/canvas"> Frame
 readFrame _ =

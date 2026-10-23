@@ -17,8 +17,7 @@ public export data Color = Color {
   green : Float,
   blue : Float,
   alpha : Float,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | A stroked line, filled circle, or filled polygon.
 
@@ -36,5 +35,4 @@ public export data Shape =
 public export data Picture = Picture {
   background : Color,
   shapes : List Shape,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)

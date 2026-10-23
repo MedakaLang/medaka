@@ -78,6 +78,6 @@ test "one update then view uses the delivered delta once" =
 
 test "simulation construction makes no host call or eager callback" =
   let calls = Ref 0
-  let _app =
-    simulation 10.0 (countedUpdate calls) (countedView calls) : Simulation Float
+  let _app : Simulation Float =
+    simulation 10.0 (countedUpdate calls) (countedView calls)
   expectEqual 0 !calls

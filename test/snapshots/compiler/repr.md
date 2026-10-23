@@ -208,7 +208,7 @@ public export data Tyvar =
 -- substitution. Strict locals, constructors and functions have an empty
 -- forcing row; lazy top-level initializers retain their evaluation row.
 public export data Scheme =
-  | Forall (List Int) (List Int) (List Int) (List AuthResidual) EffRow Mono
+  Forall (List Int) (List Int) (List Int) (List AuthResidual) EffRow Mono
 
 -- An obligation `arLower ⊑ arUpper` a generalized binding keeps between its
 -- own quantified authorities and constants (EFFECTS-SEMANTICS §6, `C ⇒ τ`).

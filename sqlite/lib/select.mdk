@@ -173,8 +173,7 @@ public export data Join = Join {
   kind : JoinKind,
   alias : Option String,
   on : SqlExpr,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 -- | A whole SELECT — the single query ADT.  One `Select`, one executor
 --   (`runPipeline`), running the real SQL evaluation order:
@@ -239,8 +238,7 @@ public export data Select = Select {
   distinct : Bool,
   columns : List SqlExpr,
   columnAliases : List (Option String),
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 -- | A SQL set operator combining two `selectCore`s.  `OpUnionAll` concatenates
 --   (duplicates kept); `OpUnion` concatenates then dedups; `OpIntersect` keeps
@@ -263,7 +261,7 @@ public export data SetOp =
 --   both uniformly.  Positional (not a record) to keep its `orderBy`/`limit`/
 --   `offset` slots from colliding with `Select`'s same-named record fields.
 public export data Compound =
-  | Compound Select (List (SetOp, Select)) (List (SqlExpr, Bool)) (Option Int) (Option Int)
+  Compound Select (List (SetOp, Select)) (List (SqlExpr, Bool)) (Option Int) (Option Int)
   deriving (Eq, Debug)
 
 -- | The canonical SQL keyword for a set operator (`UNION ALL` is two words).

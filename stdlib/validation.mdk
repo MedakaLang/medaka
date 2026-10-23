@@ -171,6 +171,6 @@ prop "Semigroup Validation accumulates both failures" (x : Int) (y : Int) =
 -- LAW: a `Failure` on either side survives -- `append` never upgrades a
 -- failure to a success.
 prop "Semigroup Validation never discards a failure" (n : Int) (p : Bool) =
-  let ok = Success [n] : Validation (List Int) (List Int)
+  let ok : Validation (List Int) (List Int) = Success [n]
   append (Failure [n]) ok == Failure [n]
     && append ok (Failure [n]) == Failure [n]

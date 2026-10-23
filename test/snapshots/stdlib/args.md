@@ -1,5 +1,5 @@
 # META
-source_lines=646
+source_lines=643
 stages=DESUGAR,MARK
 # SOURCE
 {- | A command-line argument parser.
@@ -90,8 +90,7 @@ public export data FlagSpec = FlagSpec {
   arity : Arity,
   summary : String,
   visibility : Visibility,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | A command's whole argument vocabulary.
 
@@ -106,8 +105,7 @@ public export data ArgSpec = ArgSpec {
   trailing : Trailing,
   unknown : Unknown,
   strictDash : Bool,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | The result of a successful parse.
 
@@ -119,8 +117,7 @@ public export data Args = Args {
   given : List (String, Option String),
   positionals : List String,
   rest : List String,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 -- # Building a specification
 

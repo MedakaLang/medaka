@@ -80,7 +80,7 @@ import tools.prop_runner.{PropResult, PropRequest}
 -- results, and one result list per test pinned as an expected native error,
 -- in the order those tests were given.
 public export data NativeArmResults =
-  | NativeArmResults RunResult (List PropResult) (List ExResult) (List (List ExResult))
+  NativeArmResults RunResult (List PropResult) (List ExResult) (List (List ExResult))
 
 -- The native property runner a caller's property phase reaches with its final
 -- requests: the target and its source, the plan modules, the requests.  The

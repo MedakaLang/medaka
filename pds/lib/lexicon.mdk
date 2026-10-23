@@ -95,8 +95,7 @@ public export data LexString = LexString {
   maxGraphemes : Option Int,
   format : Option LexFormat,
   defaultValue : Option String,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | A field's type. `LexInteger` carries its `minimum`, `LexBlob` its
    `accept` list and `maxSize`, `LexArray` its item type and `maxLength`, and
@@ -116,7 +115,7 @@ public export data LexType =
 
 -- | An object: its required property names, then every property in order.
 public export data LexShape =
-  | LexShape (List String) (List (String, LexType))
+  LexShape (List String) (List (String, LexType))
   deriving (Eq, Debug)
 
 -- | What a record key must be: `any`, `nsid`, `tid` or `literal:<value>`.

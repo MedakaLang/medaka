@@ -35,8 +35,7 @@ public export data TestPin = Pin {
   pinCases : Option Int,
   pinDetail : Option String,
   pinExpected : Option TestExpectedFailure,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 export type PinIndex = OrdMap TestPin
 

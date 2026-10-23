@@ -166,7 +166,7 @@ public export data Xform =
 public export data Order = Straight | Swapped deriving (Eq, Debug)
 
 public export data ShadowCase =
-  | ShadowCase Topology Arity ShadowUse Xform Order
+  ShadowCase Topology Arity ShadowUse Xform Order
   deriving (Eq, Debug)
 
 -- An importer shadow is decided by S2's importer arm and S4 only, so the

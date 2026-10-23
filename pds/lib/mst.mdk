@@ -1236,7 +1236,7 @@ rootItems (Mst _ _ _ node) = [DiffSubtree (nodeLayer node) node]
    a CID `before` did not give it, the keys only `before` holds, and the nodes
    the walk opened on the `after` side and on the `before` side. -}
 data DiffWalk =
-  | DiffWalk (List (Bytes, Cid, Option Cid)) (List (Bytes, Cid)) (List MstNode) (List MstNode)
+  DiffWalk (List (Bytes, Cid, Option Cid)) (List (Bytes, Cid)) (List MstNode) (List MstNode)
 
 diffStart : DiffWalk
 diffStart = DiffWalk [] [] [] []

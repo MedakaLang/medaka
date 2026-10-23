@@ -1,5 +1,5 @@
 # META
-source_lines=2391
+source_lines=2390
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -2144,8 +2144,7 @@ public export data Rep =
 public export data RField = RField {
   fld_name : String,
   fld_rep : Rep,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | Types with a structural representation.
 
@@ -2276,20 +2275,20 @@ listInRange xs = length xs <= 10 && all inIntRange xs
 -- length bound, and must not be the degenerate always-empty generator — that
 -- last clause is why 50 draws are taken rather than one.
 prop "Arbitrary (List a) delegates, bounds length, and is not degenerate" (n : Int) =
-  let draws = drawN 50 : List (List Int)
+  let draws : List (List Int) = drawN 50
   all listInRange draws && any (xs => length xs > 0) draws
 
 -- LAW: `Arbitrary (Option a)` must produce BOTH constructors — a generator
 -- that only ever yielded `None` would satisfy every payload law vacuously —
 -- and its `Some` payload must come from the element instance.
 prop "Arbitrary (Option a) draws both constructors and delegates" (n : Int) =
-  let draws = drawN 50 : List (Option Int)
+  let draws : List (Option Int) = drawN 50
   all optInRange draws && any isSome draws && any (o => not (isSome o)) draws
 
 -- LAW: `shrink` must return strictly smaller values.  `None` is the only
 -- `Option` smaller than a `Some`, and nothing is smaller than `None`.
 prop "Arbitrary (Option a) shrinks Some to None and None no further" (x : Int) =
-  let none = None : Option Int
+  let none : Option Int = None
   eq (shrink (Some x)) [none] && eq (shrink none) []
 
 -- LAW: derived `Eq`/`Debug` on `Rep`/`RField` are structural and must agree —

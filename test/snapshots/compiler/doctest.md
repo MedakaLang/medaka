@@ -65,7 +65,7 @@ public export data ExResult =
   | Errored String  -- message
 
 public export data RunResult =
-  | RunResult Int Int Int Int (List (Example, ExResult))
+  RunResult Int Int Int Int (List (Example, ExResult))
 -- total passed failed errors details
 
 export

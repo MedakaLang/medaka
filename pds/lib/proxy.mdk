@@ -511,7 +511,7 @@ proxyUpstreamFailureResponse =
    own voice. The body is relayed whole — it is the answer — and is already
    bounded by `lib.httpclient`'s own response ceilings. -}
 public export data UpstreamAnswer =
-  | UpstreamAnswer Int String (Option Bytes) (List (String, Bytes)) Bytes
+  UpstreamAnswer Int String (Option Bytes) (List (String, Bytes)) Bytes
 
 {- | The answer fields a forward relays back, and the only ones.
 
