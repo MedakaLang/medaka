@@ -1,0 +1,553 @@
+-- Property rows for the interface file codec: a truncated file is refused
+-- rather than half-read, no flipped byte decodes to a different file (the
+-- header digest sees the ones the source hashes cannot), a header under another
+-- version is refused for its version before its shape, an interface holding a
+-- live link is reported by row, the real prelude's text carries its version,
+-- a thaw and re-freeze changes nothing, the file's sections are built from
+-- per-join drives (`mergeSections`), the text does not depend on the user's
+-- program, and the real prelude stays under its size bound.
+import test.{
+  Expectation, expectTrue, expectEqual, expectAll, expectAtLeast, expectAtMost,
+  labelFail, fail, pass
+}
+import list.{zip, indexed, drop, sort}
+import string as S
+import frontend.ast.{Decl, EffParamTy(..), TyConOrigin(..)}
+import frontend.desugar.{desugar, desugarIn}
+import frontend.parser.{parse, parseLocated}
+import support.ordmap.{omEmpty}
+import test_process.{underRoot}
+import types.effect_rows.{Atom, renderAtom}
+import types.interface_sexp_test.{prelude, fileKey}
+import types.interface_sexp.{
+  PreludeInterfaceFile(..), InterfaceSection(..), formatVersion,
+  encodeInterface, decodeInterface, mergeSections, cacheOfSections,
+  interfaceFaults
+}
+import types.prelude_interface.{
+  PreludeInterface(..), InterfaceKey(..), freezeInterface, thawInterface,
+  seedPreludeInterface, preludeCacheHit, currentPreludeInterface
+}
+import types.repr.{Scheme(..), Mono(..), Tyvar(..)}
+import types.effect_rows.{EffRow(..)}
+import types.publish.{
+  PubScheme(..), LiveCell(..), VarKind(..), liveCells, freezeRows
+}
+import types.tc_types.{GraphCtx(..)}
+import types.typecheck.{
+  checkModulesChainReportFor, checkModulesChainReportForGraph,
+  defaultDriveInputs
+}
+
+-- ── drives ──────────────────────────────────────────────────────────────────
+
+-- A one-extern runtime and a core whose unsigned `viaStdin` takes its row from
+-- the IO join: with an empty join it also carries `Stdin`.
+syntheticSrc : (String, String)
+syntheticSrc = (
+  "extern readLine : Unit -> <Stdin> String\n",
+  stringJoin "\n" [
+    "data Option a = None | Some a",
+    "idf x = x",
+    "withIo : (Unit -> <IO | e> String) -> <IO | e> String",
+    "withIo f = f ()",
+    "viaStdin = withIo (_ => readLine ())",
+    "",
+  ],
+)
+
+syntheticPrelude : (List Decl, List Decl)
+syntheticPrelude =
+  (desugar (parse (fst syntheticSrc)), desugar (parse (snd syntheticSrc)))
+
+noGrants : List (String, EffParamTy)
+noGrants = []
+
+stdinOnly : List (String, EffParamTy)
+stdinOnly = [("Stdin", EPTop)]
+
+allGrants : List (String, EffParamTy)
+allGrants = defaultDriveInputs.diIoJoinGrants
+
+-- A drive under a prelude key no earlier drive used misses, checks core and
+-- leaves its interface as the cache's one section, valid for the drive's join.
+driveUnder : Int ->
+  List (String, EffParamTy) ->
+  (List Decl, List Decl) ->
+  String ->
+  List (List Atom, PreludeInterface)
+driveUnder n grants (runtimeDecls, coreDecls) userSrc =
+  let inputs = { defaultDriveInputs | diIoJoinGrants = grants }
+  let _ = checkModulesChainReportFor inputs False (Some (
+    6401,
+    n,
+  )) "" [] runtimeDecls coreDecls [
+    ("m", desugarIn "m" (parseLocated userSrc)),
+  ]
+  flatMap (s => map (j => (j, snd s)) (fst s)) (currentPreludeInterface ())
+
+realDrive : Int ->
+  List (String, EffParamTy) ->
+  String ->
+  <IO, FileRead> Result String (List (List Atom, PreludeInterface))
+realDrive n grants userSrc = do
+  pre <- prelude
+  Ok (driveUnder n grants pre userSrc)
+
+oneInterface : List (List Atom, PreludeInterface) ->
+  Result String PreludeInterface
+oneInterface [(_, pi)] = Ok pi
+oneInterface drives = Err "expected one drive, got \{length drives}"
+
+fileOfDrives : List (List Atom, PreludeInterface) -> PreludeInterfaceFile
+fileOfDrives drives = PreludeInterfaceFile {
+  ifKey = fileKey,
+  ifSections = mergeSections drives,
+}
+
+smallText : String
+smallText =
+  encodeInterface
+    (fileOfDrives (driveUnder 1 allGrants syntheticPrelude "x = 1"))
+
+-- ── 1. truncation ───────────────────────────────────────────────────────────
+
+-- The prefix lengths that end a node: after each closing paren, and after
+-- each atom (the next character is a space, a paren or the line end).
+nodeEnds : String -> List Int
+nodeEnds text =
+  let chars = toList (S.toChars text)
+  filterMap
+    (row => match row
+      (j, (c, next)) =>
+        if c == ')'
+          || not (c == '(' || c == ' ' || c == '\n')
+            && (next == ' ' || next == ')' || next == '\n') then
+          Some (j + 1)
+        else
+          None)
+    (indexed (zip chars (drop 1 chars)))
+
+-- The prefix lengths that end in the middle of a header token.
+tokenMiddles : String -> List Int
+tokenMiddles text =
+  flatMap
+    (tok => match S.indexOf tok text
+      Some i => [i + S.length tok / 2]
+      None => [])
+    ["medaka-interface", "sources", "compiler", "section", "joins", "interface"]
+
+decodes : String -> Bool
+decodes text = match decodeInterface text
+  Ok _ => True
+  Err _ => False
+
+-- The header counts the sections, so a cut that falls after any complete node
+-- but before the end of the text is refused.  Only the missing final newline
+-- decodes, and it loses nothing.
+test "a truncated file is refused unless only the final newline is missing" =
+  let n = S.length smallText
+  let cuts =
+    filter
+      (i => i < n - 1)
+      (nodeEnds smallText ++ tokenMiddles smallText ++ [0, 1])
+  expectAll [
+    labelFail
+      "node ends tried"
+      (expectAtLeast 100 (length (nodeEnds smallText))),
+    labelFail
+      "prefixes that decode"
+      (expectEqual [] (filter (i => decodes (S.take i smallText)) cuts)),
+    labelFail
+      "the missing newline loses nothing"
+      (expectEqual
+        (Some smallText)
+        (map
+          encodeInterface
+          (fromResult (decodeInterface (S.take (n - 1) smallText))))),
+  ]
+
+-- ── 2. byte flips ───────────────────────────────────────────────────────────
+
+-- The character with one byte changed: a paren to its mate, a lower-case
+-- letter to upper case, a digit to the next one, anything else to a tilde.
+flipped : String -> String
+flipped "(" = ")"
+flipped ")" = "("
+flipped c = match S.toInt c
+  Some d => intToString ((d + 1) % 10)
+  None => if S.toUpper c /= c then S.toUpper c else "~"
+
+flipAt : Int -> String -> String
+flipAt i text =
+  S.take i text ++ flipped (S.take 1 (S.drop i text)) ++ S.drop (i + 1) text
+
+-- The ten places a flip is tried at: [marker] found in the text, plus [offset].
+flipSites : List (String, String, Int)
+flipSites = [
+  ("first paren", "(medaka-interface", 0),
+  ("header word", "medaka-interface", 3),
+  ("version digit", "medaka-interface ", 17),
+  ("a source path", "core.mdk", 1),
+  ("a source hash", "ab12", 2),
+  ("a quote", "\"a b.mdk", 0),
+  ("section word", "(section", 3),
+  ("joins paren", "(joins", 0),
+  ("interface paren", "(interface", 0),
+  ("a type variable id", "(tv ", 4),
+]
+
+-- How a flip at [i] reads: refused, accepted as a different file, or accepted
+-- as the same text (a flip of a trailing newline or of space between tokens).
+flipOutcomeAt : String -> Int -> String
+flipOutcomeAt text i = match decodeInterface (flipAt i text)
+  Err _ => "Err"
+  Ok f => if encodeInterface f == text then "Ok identical" else "Ok different"
+
+siteOffset : String -> (String, String, Int) -> Option Int
+siteOffset text (_, marker, offset) = map (+ offset) (S.indexOf marker text)
+
+count : String -> List String -> Int
+count outcome outcomes = length (filter (== outcome) outcomes)
+
+-- Every position of the small file, and the ten fixed places.
+tinyOutcomes : List String
+tinyOutcomes = map (flipOutcomeAt tinyText) [0..=S.length tinyText - 1]
+
+siteOutcomes : List String
+siteOutcomes =
+  flatMap
+    (site => match siteOffset smallText site
+      Some i => [flipOutcomeAt smallText i]
+      None => ["site absent"])
+    flipSites
+
+-- The sources' hashes cover no byte of a section, so it is the digest that
+-- refuses a flip there.
+test "no flipped byte decodes to a different file" = expectAll [
+  labelFail "positions tried" (expectAtLeast 1000 (length tinyOutcomes)),
+  labelFail
+    "flips that change what the file says"
+    (expectEqual 0 (count "Ok different" tinyOutcomes)),
+  labelFail
+    "most flips are refused"
+    (expectAtLeast (length tinyOutcomes / 2) (count "Err" tinyOutcomes)),
+  labelFail
+    "the ten fixed sites are refused"
+    (expectEqual (map (_ => "Err") flipSites) siteOutcomes),
+]
+
+-- A header under another version, whatever its shape, is refused for its version.
+test "a header of another version is refused for its version, not its shape" =
+  match decodeInterface "(medaka-interface 2 (sources ()))\n"
+    Ok _ => fail "a later version decoded"
+    Err e => expectAll [
+      labelFail "message" (expectTrue (S.contains "format version 2" e.seWhat)),
+      labelFail "path" (expectEqual "header/medaka-interface.1" e.sePath),
+    ]
+
+-- ── the real prelude's text ─────────────────────────────────────────────────
+
+realText : Int -> <IO, FileRead> Result String String
+realText n = do
+  drives <- realDrive n allGrants "x = 1"
+  Ok (encodeInterface (fileOfDrives drives))
+
+-- ── 3. version ──────────────────────────────────────────────────────────────
+
+test "the real prelude's text under a later version is refused naming it" =
+  match realText 11
+    Err e => fail e
+    Ok text =>
+      let later = "(medaka-interface \{formatVersion + 1}" ++ S.drop 19 text
+      match decodeInterface later
+        Ok _ => fail "a later version decoded"
+        Err e => expectAll [
+          labelFail
+            "message"
+            (expectTrue
+              (S.contains "format version \{formatVersion + 1}" e.seWhat)),
+          labelFail "path" (expectEqual "header/medaka-interface.1" e.sePath),
+        ]
+
+-- ── 4. thaw and freeze ──────────────────────────────────────────────────────
+
+graphOf : Unit -> GraphCtx
+graphOf _ =
+  snd
+    (checkModulesChainReportForGraph
+      defaultDriveInputs
+      False
+      None
+      ""
+      [None]
+      []
+      (desugar (parse "data Option a = None | Some a"))
+      [("m", desugar (parseLocated "x = 1"))])
+
+-- Thawed into a fresh graph run and frozen again.  The published rows are
+-- re-frozen from the live schemes, paired with the contexts the thaw returned.
+refrozen : PreludeInterface -> PreludeInterface
+refrozen pi =
+  let (bindings, core, cross, seed) = thawInterface (graphOf ()) pi
+  let run = (graphOf ()).graphRun
+  run.tyvarCounter := seed.grsTyvarNext
+  run.effvarCounter := seed.grsEffvarNext
+  run.anyExistentialsRef := seed.grsAnyExistentials
+  run.ctorExistentialsRef := seed.grsCtorExistentials
+  freezeInterface
+    cross
+    run
+    pi.piExternNames
+    (freezeRows
+      (map
+        (pair => (
+          fst (fst pair),
+          PubScheme {
+            psScheme = snd (fst pair),
+            psContext = (snd (snd pair)).psContext,
+          },
+        ))
+        (zip bindings.mbSchemes core)))
+    pi.piStandaloneNames
+
+textOfInterface : PreludeInterface -> String
+textOfInterface pi =
+  let section = InterfaceSection { isJoins = [], isInterface = pi }
+  encodeInterface PreludeInterfaceFile {
+    ifKey = fileKey,
+    ifSections = [section],
+  }
+
+-- The live cells left in the schemes a thaw hands to inference.
+thawedLive : PreludeInterface -> List LiveCell
+thawedLive pi =
+  let (bindings, _, _, _) = thawInterface (graphOf ()) pi
+  flatMap (row => liveCells (fst row) (pubOf (snd row))) bindings.mbSchemes
+
+pubOf : Scheme -> PubScheme
+pubOf s = PubScheme { psScheme = s, psContext = [] }
+
+sectionLaws : InterfaceSection -> Expectation
+sectionLaws s = expectAll [
+  labelFail
+    "re-frozen text"
+    (expectEqual
+      (textOfInterface s.isInterface)
+      (textOfInterface (refrozen s.isInterface))),
+  labelFail "live cells" (expectEqual [] (thawedLive s.isInterface)),
+]
+
+test "a decoded prelude interface re-freezes to itself and thaws to no live cell" =
+  match realText 12
+    Err e => fail e
+    Ok text => match decodeInterface text
+      Err e => fail "decode refused at \{e.sePath}: \{e.seWhat}"
+      Ok back => expectAll (map sectionLaws back.ifSections)
+
+-- ── 5. sections from per-join drives ────────────────────────────────────────
+
+joinView : List Atom -> String
+joinView j = stringJoin "," (map renderAtom j)
+
+-- Each section's joins, sorted, beside whether the section is [pi]'s.
+sectionJoins : InterfaceSection -> List String
+sectionJoins s = sort (map joinView s.isJoins)
+
+drivesView : List (List Atom, PreludeInterface) -> List String
+drivesView drives = sort (map (d => joinView (fst d)) drives)
+
+-- Every drive's join, looked up in the cache seeded from [drives]' sections,
+-- finds an interface that reads as the drive's own.  The cache is left as the
+-- last drive left it.
+hitsAgree : Int -> List (List Atom, PreludeInterface) -> Expectation
+hitsAgree n drives =
+  let key = (6401, n)
+  let saved = currentPreludeInterface ()
+  let _ = seedPreludeInterface key (cacheOfSections (mergeSections drives))
+  let hits = map (d => map textOfInterface (preludeCacheHit key (fst d))) drives
+  let _ = seedPreludeInterface key saved
+  expectEqual (map (d => Some (textOfInterface (snd d))) drives) hits
+
+test "an interface that depends on the IO join gets a section per distinct text" =
+  let wide = driveUnder 21 allGrants syntheticPrelude "x = 1"
+  let none = driveUnder 22 noGrants syntheticPrelude "x = 1"
+  let narrow = driveUnder 23 stdinOnly syntheticPrelude "x = 1"
+  let drives = wide ++ none ++ narrow
+  let sections = mergeSections drives
+  expectAll [
+    labelFail "section count" (expectEqual 2 (length sections)),
+    labelFail
+      "joins sharing a text share a section"
+      (expectEqual
+        [drivesView (wide ++ narrow), drivesView none]
+        (map sectionJoins sections)),
+    labelFail
+      "texts differ"
+      (expectEqual
+        [
+          textOfInterface (snd (firstDrive wide)),
+          textOfInterface (snd (firstDrive none)),
+        ]
+        (map (s => textOfInterface s.isInterface) sections)),
+    labelFail "lookup by join" (hitsAgree 23 drives),
+  ]
+
+firstDrive : List (a, b) -> (a, b)
+firstDrive (x :: _) = x
+firstDrive [] = panic "empty drive list"
+
+test "the real prelude gets one section for two joins and the cache selects it" =
+  match (realDrive 31 allGrants "x = 1", realDrive 32 noGrants "x = 1")
+    (Ok a, Ok b) =>
+      let drives = a ++ b
+      expectAll [
+        labelFail
+          "one section, both joins"
+          (expectEqual
+            [drivesView drives]
+            (map sectionJoins (mergeSections drives))),
+        labelFail "lookup by join" (hitsAgree 32 drives),
+      ]
+    (Err e, _) => fail e
+    (_, Err e) => fail e
+
+-- ── 6. the user's graph ─────────────────────────────────────────────────────
+
+ownDecls : String
+ownDecls = stringJoin "\n" [
+  "effect Ping",
+  "interface Shape a where",
+  "  area : a -> Int",
+  "data Box = Box Int",
+  "impl Shape Box where",
+  "  area (Box n) = n",
+  "ping : Unit -> <Ping> Unit",
+  "ping _ = ()",
+  "",
+]
+
+coreText : Int -> String -> <IO, FileRead> Result String String
+coreText n userSrc = do
+  drives <- realDrive n allGrants userSrc
+  pi <- oneInterface drives
+  Ok (textOfInterface pi)
+
+test "the encoded core interface does not depend on the program driven with it" =
+  match (
+    coreText 51 "x = 1",
+    coreText 52 "y = 2 + 3\nz = y",
+    coreText 53 ownDecls,
+  )
+    (Ok a, Ok b, Ok c) => expectAll [
+      labelFail "another small program" (expectEqual a b),
+      labelFail "own effect, interface and impl" (expectEqual a c),
+    ]
+    (Err e, _, _) => fail e
+    (_, Err e, _) => fail e
+    (_, _, Err e) => fail e
+
+-- ── 7. size ─────────────────────────────────────────────────────────────────
+
+test "the encoded real prelude is under 512 KB" = match realText 61
+  Err e => fail e
+  Ok text => expectAtMost 524288 (S.byteLength text)
+
+-- ── 8. the format ───────────────────────────────────────────────────────────
+
+-- A core with one data type, one interface with one impl, and three
+-- bindings; the extern is there so the runtime half is not empty.
+tinyPrelude : (List Decl, List Decl)
+tinyPrelude = (
+  desugar (parse "extern readLine : Unit -> <Stdin> String\n"),
+  desugar
+    (parse
+      (stringJoin "\n" [
+        "data Option a = None | Some a",
+        "interface Sized a where",
+        "  size : a -> Int",
+        "impl Sized (Option a) where",
+        "  size None = 0",
+        "  size (Some _) = 1",
+        "idf x = x",
+        "sizeOf : Option a -> Int",
+        "sizeOf o = size o",
+        "withIo : (Unit -> <IO | e> String) -> <IO | e> String",
+        "withIo f = f ()",
+        "",
+      ])),
+)
+
+-- The extern catalog is process-wide and not part of what the golden pins, so
+-- the sections are encoded with an empty one.
+withoutExterns : InterfaceSection -> InterfaceSection
+withoutExterns s = InterfaceSection {
+  isJoins = s.isJoins,
+  isInterface = { s.isInterface | piExternNames = omEmpty },
+}
+
+-- Two joins that give the same text, so the one section lists both.
+tinyText : String
+tinyText = encodeInterface PreludeInterfaceFile {
+  ifKey = InterfaceKey {
+    ikFormat = formatVersion,
+    ikSources = [("core.mdk", "ab12")],
+    ikCompiler = "medaka 0 (sha x)",
+  },
+  ifSections =
+    map
+      withoutExterns
+      (mergeSections
+        (driveUnder 71 allGrants tinyPrelude "x = 1"
+          ++ driveUnder 72 stdinOnly tinyPrelude "x = 1")),
+}
+
+tinyFixture : String
+tinyFixture = underRoot "test/arch_goldens/interface_tiny.mdki"
+
+-- INTERFACE_FIXTURE_WRITE=1 rewrites the golden instead of comparing.
+test "the tiny interface file matches its fixture and round-trips" =
+  match getEnv "INTERFACE_FIXTURE_WRITE"
+    Some "1" => match writeFile tinyFixture tinyText
+      Ok _ => pass
+      Err e => fail "could not write \{tinyFixture}: \{e}"
+    _ => match readFile tinyFixture
+      Err e => fail "no fixture \{tinyFixture}: \{e}"
+      Ok golden => expectAll [
+        labelFail "encoding equals the fixture" (expectEqual golden tinyText),
+        labelFail
+          "one section, two joins"
+          (expectEqual
+            (Some [2])
+            (map
+              (f => map (s => length s.isJoins) f.ifSections)
+              (fromResult (decodeInterface golden)))),
+        labelFail
+          "decode then encode returns the fixture"
+          (expectEqual
+            (Some golden)
+            (map encodeInterface (fromResult (decodeInterface golden)))),
+      ]
+
+-- ── 9. a live link ──────────────────────────────────────────────────────────
+
+-- `encodeInterface` panics, naming the row, on the faults this reports; the
+-- test framework cannot capture a panic, so the faults are pinned here.
+test "an interface holding a linked core row is reported by row name" =
+  match oneInterface (driveUnder 81 allGrants syntheticPrelude "x = 1")
+    Err e => fail e
+    Ok pi =>
+      let row = PubScheme {
+        psScheme =
+          Forall
+            []
+            []
+            []
+            []
+            (EffRow [] None)
+            (TVar (Ref (Link (TCon "Int" OriginBuiltin)))),
+        psContext = [],
+      }
+      expectEqual
+        [LinkCell "linkedRow" TyVarK None]
+        (interfaceFaults { pi | piCore = [("linkedRow", row)] })

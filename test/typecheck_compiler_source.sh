@@ -304,11 +304,15 @@ compiler/tools/prop_runner_test.mdk"
 # The scope and typecheck sibling tests observe unresolved default-owner origins
 # in total matches. Their sole eliminator lines are pinned below; this grants no
 # new constructor mint.
+# `types/interface_sexp.mdk` is the interface codec: it writes the sentinel as
+# `unresolved` and reads that atom back, so it reproduces an origin a frozen row
+# already held and acquires none.
 originun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
 compiler/tools/native_props_test.mdk
 compiler/tools/prop_plan.mdk
 compiler/tools/prop_runner_test.mdk
+compiler/types/interface_sexp.mdk
 compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
 compiler/types/typecheck.mdk"

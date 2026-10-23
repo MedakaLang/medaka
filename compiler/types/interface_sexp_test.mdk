@@ -1,0 +1,1718 @@
+-- Tests for the interface codec: every published row of every stdlib module,
+-- of a battery of synthetic signatures and of a residual-bearing module, and
+-- every field of the prelude's interface value, survives encode, render, parse
+-- and decode with its text, its rendering and its ids intact; malformed text
+-- is refused with its path.
+import test.{
+  Expectation, expectEqual, expectEach, expectAll, expectAtLeast, labelFail,
+  fail
+}
+import list.{sort, indexed, take, drop}
+import map as M
+import string as S
+import frontend.ast.{
+  Decl, TyConOrigin(..), Ty(..), EffAtomTy(..), EffParamTy(..), Constraint(..),
+  Variant(..), ConPayload(..), Field(..), Ns(..), TabKey(..), DataVis(..),
+  Ident, Loc(..), mkIdent
+}
+import frontend.desugar.{desugar, desugarIn}
+import frontend.parser.{parse, parseLocated}
+import driver.loader.{
+  loadProgramFilesLocatedE, dropPathTriple, stdlibOwnership, loadErrorMessage
+}
+import support.ordmap.{omKeys, omEmpty, omInsert}
+import support.sexp_value.{
+  SExp(..), SexpError(..), renderSExp, parseSExp, expectAtom, atomInt, atomBool
+}
+import test_process.{underRoot, mdkModuleStem, testFileStem, withScratchDir}
+import types.interface_sexp.{
+  bindingSExp, bindingOfSExp, schemeSExp, schemeOfSExp, monoSExp, monoOfSExp,
+  effRowOfSExp, paramSExp, paramOfSExp, tyConOriginSExp, tyConOriginOfSExp,
+  pubSchemeSExp, pubSchemeOfSExp, ifaceRefSExp, ifaceRefOfSExp, nested,
+  listSExp, listOfSExp, pairSExp, pairOfSExp, tripleSExp, tripleOfSExp,
+  optionSExp, optionOfSExp, unitSExp, unitOfSExp, ordMapSExp, ordMapOfSExp,
+  intMapSExp, intMapOfSExp, surfaceTySExp, surfaceTyOfSExp, variantSExp,
+  variantOfSExp, tabKeySExp, tabKeyOfSExp, dataVisSExp, dataVisOfSExp,
+  recordInfoSExp, recordInfoOfSExp, predicateSlotSExp, predicateSlotOfSExp,
+  methodPredicateSlotSExp, methodPredicateSlotOfSExp, cDeclaredPrefixSExp,
+  cDeclaredPrefixOfSExp, builtinClassesSExp, builtinClassesOfSExp,
+  spellingPopSExp, spellingPopOfSExp, atomSExp, PreludeInterfaceFile(..),
+  InterfaceSection(..), formatVersion, sectionsOfCache, cacheOfSections,
+  encodeInterface, decodeInterface
+}
+import types.prelude_interface.{
+  PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
+}
+import types.publish.{
+  PubScheme(..), TcReport(..), LiveCell(..), VarKind(..), ppPubScheme, liveCells
+}
+import types.registry.{
+  SpellingPop, spRows, spFloor, spCollided, spInsert, spEmpty
+}
+import types.repr.{
+  Mono(..), Tyvar(..), Scheme(..), IfaceRef(..), ppMonosShared, ppTy
+}
+import types.effect_rows.{EffRow(..), Effvar(..), Atom, atomBuiltin}
+import types.effect_authority.{Authority(..)}
+import types.effect_domain.{Param(..)}
+import types.tc_types.{
+  DriveInputs, RecordInfo(..), PredicateSlot(..), PredicateSlotArgs(..),
+  MethodPredicateSlot(..), CDeclaredPrefix(..), BuiltinClasses(..)
+}
+import types.typecheck.{
+  checkModulesChainReportFor, checkModulesEntryFullReportK, defaultDriveInputs,
+  driveInputsFor, entrySplit
+}
+
+-- ── the law ─────────────────────────────────────────────────────────────────
+
+quantified : PubScheme -> (List Int, List Int, List Int)
+quantified (PubScheme { psScheme = (Forall ids effIds authIds _ _ _) }) =
+  (ids, effIds, authIds)
+
+-- A row encoded, rendered, parsed and decoded: the re-encoded text is the
+-- encoded text, and the rendering and the quantified ids are the original's.
+roundTrips : (String, PubScheme) -> Expectation
+roundTrips (name, p) =
+  let text = renderSExp (bindingSExp name p)
+  labelFail name (match map bindingOfSExp (parseSExp text)
+    Err e => fail "the encoded text does not parse: \{e.seWhat}"
+    Ok (Err e) => fail "decode refused at \{e.sePath}: \{e.seWhat}"
+    Ok (Ok (name2, back)) => expectAll [
+      labelFail "name" (expectEqual name name2),
+      labelFail "text" (expectEqual text (renderSExp (bindingSExp name back))),
+      labelFail "rendering" (expectEqual (ppPubScheme p) (ppPubScheme back)),
+      labelFail "quantified ids" (expectEqual (quantified p) (quantified back)),
+    ])
+
+-- ── the rows ────────────────────────────────────────────────────────────────
+
+-- The prelude as a drive reads it.
+export
+prelude : <IO, FileRead> Result String (List Decl, List Decl)
+prelude = do
+  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+  csrc <- readFile (underRoot "stdlib/core.mdk")
+  Ok (desugar (parse rsrc), desugar (parse csrc))
+
+-- Every stdlib module but the prelude's two, as an import path.
+stdlibModules : <IO, FileRead> Result String (List String)
+stdlibModules = do
+  top <- listDir (underRoot "stdlib")
+  crypto <- listDir (underRoot "stdlib/crypto")
+  let ids = moduleIds "" top ++ moduleIds "crypto." crypto
+  Ok (sort (filter (m => m /= "core" && m /= "runtime") ids))
+
+moduleIds : String -> List String -> List String
+moduleIds prefix names =
+  map
+    (prefix ++ _)
+    (filterMap mdkModuleStem (filter (n => isNone (testFileStem n)) names))
+
+-- The published rows of a graph drive: each module's own rows, as
+-- `check --types` lists them, beside the prelude's.  A module that
+-- reported an error fails the load.
+publishedRows : TcReport -> Result String (List (String, PubScheme))
+publishedRows r = match filter hasErrors r.trDiagnostics
+  [] => Ok (r.trPartial.paCore ++ flatMap ownRows r.trDiagnostics)
+  bad => Err "modules with errors: \{map fst bad}"
+
+-- A module's rows, each named `<module>.<binding>`.
+ownRows : (String, (List (String, PubScheme), a, b)) -> List (String, PubScheme)
+ownRows (mid, (rows, _, _)) = map (row => ("\{mid}.\{fst row}", snd row)) rows
+
+hasErrors : (String, (a, List b, c)) -> Bool
+hasErrors (_, (_, [], _)) = False
+hasErrors _ = True
+
+-- A dotted path imported bare reads as an item of its first segment, so each
+-- module is imported under an alias of its own.
+importLine : (Int, String) -> String
+importLine (i, m) = "import \{m} as M\{i}"
+
+-- One drive over a graph whose entry, written into [dir], imports every stdlib
+-- module, so each module's rows are its own.
+stdlibRows : String ->
+  <IO, FileRead, FileWrite> Result String (List (String, PubScheme))
+stdlibRows dir = do
+  (runtimeDecls, coreDecls) <- prelude
+  mods <- stdlibModules
+  let entry = "\{dir}/all_stdlib.mdk"
+  _ <- writeFile entry (S.join "\n" (map importLine (indexed mods)) ++ "\n")
+  let roots = [dir, underRoot "stdlib"]
+  loaded <- mapErr
+    loadErrorMessage
+    (loadProgramFilesLocatedE (_ => None) entry roots)
+  let pairs = map dropPathTriple loaded
+  let (flat, owned) = stdlibOwnership entry roots (underRoot "stdlib") pairs
+  let (report, _) =
+    checkModulesChainReportFor
+      (driveInputsFor None flat owned)
+      False
+      None
+      ""
+      []
+      runtimeDecls
+      coreDecls
+      (map (p => (fst p, desugarIn (fst p) (snd p))) pairs)
+  graphRows <- publishedRows report
+  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+  runtimeRows <- flatRows (driveInputsFor None True []) rsrc
+  Ok (graphRows ++ map (row => ("runtime.\{fst row}", snd row)) runtimeRows)
+
+-- A flat file's rows, the way `check --types` drives one: the prelude's
+-- `runtime` has no rows of its own in a graph drive, so it is driven flat too.
+flatRows : DriveInputs ->
+  String ->
+  <IO, FileRead> Result String (List (String, PubScheme))
+flatRows inputs src = do
+  (runtimeDecls, coreDecls) <- prelude
+  let (report, _) = checkModulesEntryFullReportK
+    inputs
+    False
+    None
+    runtimeDecls
+    coreDecls
+    [("__user__", desugar (parseLocated src))]
+  match entrySplit report
+    (_, rows, [], _) => Ok rows
+    (_, _, errs, _) => Err "the file has \{length errs} type error(s)"
+
+-- A battery of synthetic signatures: user classes, binder domains,
+-- authority-indexed types, higher-kinded parameters, effect tails and joins,
+-- unsigned bindings.
+battery : String
+battery =
+  """
+  effect Store Prefix
+  effect Var Set
+  effect Http Product (Host : Prefix, Method : Set)
+  effect KV
+  extern load : (path : String) -> <FFI "c", Store path> Int
+  extern loadTwo : (src : String) -> (dst : String) -> <FFI "c", Store src, Store dst> Unit
+  extern getVar : (n : String) -> <FFI "c", Var n> String
+  extern httpGet : (host : String) -> (method : String) -> <FFI "c", Http Host=host Method=method> Int
+  extern kvGet : String -> <FFI "c", KV> Int
+  data Handle (p : Authority Store) = Handle (String @p)
+  data AnyHandle = AnyHandle (p : Authority Store) (Handle p)
+  data Dir (d : Authority Store*) = Dir (String @d)
+  data Conf (p : Authority Store) = Conf { path : String @p, retries : Int }
+  data Rec = Rec { rx : Int, ry : List String }
+  type Pair2 a = (a, a)
+  type Alias a = List (Option a)
+  data Wrap (f : Type -> Type) a = Wrap (f a)
+  interface Container f where
+    cmap : (a -> b) -> f a -> f b
+    cempty : f a
+  interface Sized f requires Container f where
+    csize : f a -> Int
+  data Box a = Box a
+  impl Container Box where
+    cmap f (Box a) = Box (f a)
+    cempty = panic "no"
+  impl Sized Box where
+    csize _ = 1
+
+  under : (dir : String @Store*) -> String -> <FFI "c*", Store dir> Int
+  under dir name = load (dir ++ name)
+  pathOf : (dir : String @Store) -> String @dir
+  pathOf dir = dir
+  joinPaths : (src : String @Store) -> (dst : String @Store) -> String @(src | dst)
+  joinPaths src dst = src
+  readIn : Dir d -> String -> <FFI "c*", Store d> Int
+  readIn (Dir root) name = load (root ++ "blocks/" ++ name)
+  cfg : Unit -> Handle "config/*"
+  cfg _ = Handle "config/app.toml"
+  anyAt : String -> Handle *
+  anyAt s = Handle s
+  readH : Handle p -> <FFI "c", Store p> Int
+  readH (Handle s) = load s
+  readAny : AnyHandle -> <FFI "c", Store> Int
+  readAny (AnyHandle h) = readH h
+  openH : (path : String) -> Handle path
+  openH path = Handle path
+  copyAll : (src : String) -> (dst : String) -> <FFI "c", Store src, Store dst> Unit
+  copyAll src dst = loadTwo src dst
+  literalStore : Unit -> <FFI "c", Store "cfg/*"> Int
+  literalStore _ = load "cfg/*"
+  effOpen : (a -> <e> b) -> a -> <e> b
+  effOpen f x = f x
+  effTwo : (a -> <e> b) -> (b -> <e2> c) -> a -> <e | e2> c
+  effTwo f g x = g (f x)
+  effKV : Unit -> <FFI "c", KV, IO> Int
+  effKV _ = kvGet "x"
+  jmap : (a -> <e2> b) -> Wrap f a -> Wrap f b
+  jmap _ w = panic "x"
+  hk : Container f => f a -> f a
+  hk x = x
+  hk2 : Sized f => f a -> Int
+  hk2 x = csize x
+  multiC : (Display a, Ord a, Eq b) => a -> b -> String
+  multiC a _ = display a
+  recGet : Rec -> Int
+  recGet r = r.rx
+  recMk : Int -> Rec
+  recMk i = Rec { rx = i, ry = [] }
+  aliasUse : Alias Int -> Pair2 Int
+  aliasUse _ = (1, 2)
+  confPath : Conf p -> String @p
+  confPath c = c.path
+  unsignedNum x = x + 1
+  unsignedEff x = println x
+  unsignedPoly x y = (y, x)
+  unsignedShow x = display x ++ "!"
+  unsignedHk f = cmap f
+  unsignedRes x = kvGet x
+  unsignedClosure = x => x
+  litInt = 42
+  litFloat = 3.5
+  unitFn : Unit -> Unit
+  unitFn u = u
+  fnArg : (Int -> Int) -> (Int -> <IO> Int) -> Int
+  fnArg f g = f 1
+  nestedFn : ((a -> b) -> c) -> c
+  nestedFn k = panic "x"
+  tupleRet : a -> (a, Int, String)
+  tupleRet a = (a, 1, "x")
+  """
+
+-- An unsigned binding whose inferred scheme keeps an open authority residual
+-- (`subIn : (a <= d) => ...`); neither the stdlib nor the battery holds one.
+residualModule : String
+residualModule =
+  """
+  effect Audit Prefix
+  data Dir (d : Authority Audit) = Dir (String @d)
+  sub : Dir d -> (p : String @d) -> Dir d
+  sub h _ = h
+  subIn h (Dir p) = sub h p
+  """
+
+test "every published stdlib row round-trips" = withScratchDir
+  (dir => match stdlibRows dir
+    Err e => fail e
+    Ok rows => expectAll [
+      labelFail "rows tested" (expectAtLeast 1500 (length rows)),
+      expectAll (map roundTrips rows),
+    ])
+
+test "every battery row round-trips" = match flatRows defaultDriveInputs battery
+  Err e => fail e
+  Ok rows => expectAll [
+    labelFail "rows tested" (expectEqual 43 (length rows)),
+    expectAll (map roundTrips rows),
+  ]
+
+test "a residual-bearing row round-trips with its residual" =
+  match flatRows defaultDriveInputs residualModule
+    Err e => fail e
+    Ok rows => expectAll [
+      labelFail
+        "the residual is rendered"
+        (expectEqual
+          [True]
+          (map
+            (row => S.contains "<=" (ppPubScheme (snd row)))
+            (filter (row => fst row == "subIn") rows))),
+      expectAll (map roundTrips rows),
+    ]
+
+-- ── decoding refuses ────────────────────────────────────────────────────────
+
+refusal : Result SexpError a -> Option (String, String)
+refusal (Err e) = Some (e.sePath, e.seWhat)
+refusal (Ok _) = None
+
+atom : String -> SExp
+atom = SAtom
+
+node : List String -> SExp
+node items = SList (map SAtom items)
+
+test "a wrong field count or an unknown head is refused at its path" =
+  let closed = SList [atom "row", SList [], atom "closed"]
+  expectEach [
+    (
+      "unknown mono head",
+      expectEqual
+        (Some (
+          "mono",
+          "tvar: unknown head; expected one of tv, con, rigid, app, fun, eff, qual, auth",
+        ))
+        (refusal (monoOfSExp (node ["tvar", "1", "0"]))),
+    ),
+    (
+      "tv with one field",
+      expectEqual
+        (Some ("mono", "tv: expected 2 field(s)"))
+        (refusal (monoOfSExp (node ["tv", "1"]))),
+    ),
+    (
+      "nested: an arrow's argument",
+      expectEqual
+        (Some ("mono/fun.1", "con: expected 2 field(s)"))
+        (refusal
+          (monoOfSExp
+            (SList [
+              atom "fun",
+              node ["con", "Int"],
+              closed,
+              node ["tv", "1", "0"],
+            ]))),
+    ),
+    (
+      "a non-integer id",
+      expectEqual
+        (Some ("mono/tv.1", "expected an integer"))
+        (refusal (monoOfSExp (node ["tv", "x", "0"]))),
+    ),
+    (
+      "a link as a row tail",
+      expectEqual
+        (Some ("row/row.2", "el: a row tail is never a link"))
+        (refusal
+          (effRowOfSExp
+            (SList [
+              atom "row",
+              SList [],
+              SList [atom "el", atom "3", closed],
+            ]))),
+    ),
+    (
+      "one id written two ways",
+      expectEqual
+        (Some ("mono/app.2", "tv: this id was written differently before"))
+        (refusal
+          (monoOfSExp
+            (SList [atom "app", node ["tv", "1", "0"], node ["tv", "1", "2"]]))),
+    ),
+    (
+      "an unknown origin",
+      expectEqual
+        (Some (
+          "origin",
+          "nowhere: unknown head; expected one of unresolved, builtin, module",
+        ))
+        (refusal (tyConOriginOfSExp (atom "nowhere"))),
+    ),
+    (
+      "a scheme missing its mono",
+      expectEqual
+        (Some ("scheme", "forall: expected 6 field(s)"))
+        (refusal
+          (schemeOfSExp
+            (SList [
+              atom "forall",
+              SList [],
+              SList [],
+              SList [],
+              SList [],
+              closed,
+            ]))),
+    ),
+  ]
+
+test "params and origins round-trip" =
+  let params = [
+    PUnit,
+    PPrefix None,
+    PPrefix (Some "a b"),
+    PPath (Some ""),
+    PSet None,
+    PSet (Some ["x", "y"]),
+    PProduct [("Host", PPrefix None), ("Method", PSet (Some []))],
+  ]
+  let origins = [OriginBuiltin, OriginModule "m", OriginModule "crypto.sha256"]
+  expectAll [
+    expectEqual
+      (map (p => Ok (paramSExp p)) params)
+      (map (p => map paramSExp (paramOfSExp (paramSExp p))) params),
+    expectEqual
+      (map (o => Ok (tyConOriginSExp o)) origins)
+      (map
+        (o => map tyConOriginSExp (tyConOriginOfSExp (tyConOriginSExp o)))
+        origins),
+    labelFail
+      "unresolved"
+      (expectEqual
+        (Ok (SAtom "unresolved"))
+        (map tyConOriginSExp (tyConOriginOfSExp (SAtom "unresolved")))),
+  ]
+
+-- ── sharing ─────────────────────────────────────────────────────────────────
+
+-- One id, two occurrences: decoding mints one cell for both.
+test "a variable written twice decodes to one cell" =
+  let cell = Ref (Unbound 4 1)
+  let pair = TFun (TVar cell) (EffRow [] None) (TVar cell)
+  match monoOfSExp (monoSExp pair)
+    Ok (TFun (TVar a) _ (TVar b)) =>
+      let _ = a := Unbound 9 1
+      expectEqual "(tv 9 1)" (renderSExp (monoSExp (TVar b)))
+    _ => fail "the arrow did not decode to an arrow of two variables"
+
+-- A linked type variable is followed: the text holds its target.
+test "a link is followed" =
+  let target = TCon "Int" OriginBuiltin
+  let linked = TVar (Ref (Link target))
+  expectEqual (renderSExp (monoSExp target)) (renderSExp (monoSExp linked))
+
+-- `bindingSExp` panics, naming the row, on what this validator reports for a
+-- linked scheme; the test framework cannot capture a panic, so the finding it
+-- panics on is pinned here.  The scheme encoder alone follows the link.
+test "a linked row is reported by name to the binding encoder" =
+  let row = PubScheme {
+    psScheme =
+      Forall
+        []
+        []
+        []
+        []
+        (EffRow [] None)
+        (TVar (Ref (Link (TCon "Int" OriginBuiltin)))),
+    psContext = [],
+  }
+  expectAll [
+    expectEqual [LinkCell "linkedRow" TyVarK None] (liveCells "linkedRow" row),
+    expectEqual
+      "(forall () () () () (row () closed) (con Int builtin))"
+      (renderSExp (schemeSExp row.psScheme)),
+  ]
+
+-- ── coverage ────────────────────────────────────────────────────────────────
+
+-- The node kinds no published row holds: a rigid head, a linked join member
+-- and a Product parameter.
+shapesRow : PubScheme
+shapesRow =
+  let member =
+    EffRow [atomBuiltin "Log" (PPrefix (Some "a"))] (Some (Ref (EUnbound 2 1)))
+  let join = Ref (EJoin 5 1 [Ref (ELink 3 member), Ref (EUnbound 4 1)])
+  let product = PProduct [("Host", PPrefix (Some "h")), ("Method", PSet None)]
+  PubScheme {
+    psScheme =
+      Forall
+        []
+        [2, 4]
+        []
+        []
+        (EffRow [] None)
+        (TFun (TRigid "r") (EffRow [] (Some join)) (TAuth (AConst product))),
+    psContext = [],
+  }
+
+test "the shapes no published row holds round-trip" =
+  roundTrips ("shapes", shapesRow)
+
+-- Every node kind the grammar names but `unresolved`, which no published row
+-- holds; the origin test above carries it.
+nodeHeads : List String
+nodeHeads = [
+  "(binding ",
+  "(pub ",
+  "(forall ",
+  "(residual ",
+  "(obl ",
+  "(iface ",
+  "(module ",
+  " builtin",
+  "(tv ",
+  "(con ",
+  "(rigid ",
+  "(app ",
+  "(fun ",
+  "(eff ",
+  "(qual ",
+  "(auth ",
+  "(row ",
+  " closed",
+  "(ev ",
+  "(ej ",
+  "(el ",
+  "(atom ",
+  "(label ",
+  "(const ",
+  "(ajoin ",
+  "(aproduct ",
+  "(av ",
+  " unit",
+  "(prefix ",
+  "(path ",
+  "(set ",
+  "(product ",
+  " none",
+  "(some ",
+]
+
+-- The rows the tests above round-trip.
+allRows : String ->
+  <IO, FileRead, FileWrite> Result String (List (String, PubScheme))
+allRows dir = do
+  stdlib <- stdlibRows dir
+  batteryRows <- flatRows defaultDriveInputs battery
+  residualRows <- flatRows defaultDriveInputs residualModule
+  Ok (stdlib ++ batteryRows ++ residualRows ++ [("shapes", shapesRow)])
+
+test "together the rows carry every node kind" = withScratchDir
+  (dir => match allRows dir
+    Err e => fail e
+    Ok rows =>
+      let text =
+        S.join
+          "\n"
+          (map (row => renderSExp (bindingSExp (fst row) (snd row))) rows)
+      expectEqual [] (filter (h => not (S.contains h text)) nodeHeads))
+
+-- ── the prelude's interface value ───────────────────────────────────────────
+
+-- A drive under a prelude key no earlier drive used misses, checks core and
+-- leaves the prelude's interface as the cache's one section.
+preludeInterface : <IO, FileRead> Result String PreludeInterface
+preludeInterface = do
+  (runtimeDecls, coreDecls) <- prelude
+  let _ = checkModulesChainReportFor defaultDriveInputs False (Some (
+    4364,
+    3,
+  )) "" [] runtimeDecls coreDecls [
+    ("m", desugarIn "m" (parseLocated "x = 1")),
+  ]
+  match currentPreludeInterface ()
+    [(_, pi)] => Ok pi
+    sections => Err "expected one section, got \{length sections}"
+
+-- [x] encoded, rendered, parsed and decoded at [path]: the re-encoded text is
+-- the encoded text, and the view of the decoded value is the original's.  A
+-- view reads a value without the codec, one line per component.
+law : (a -> SExp) ->
+  (String -> SExp -> Result SexpError a) ->
+  (a -> List String) ->
+  String ->
+  a ->
+  Expectation
+law enc dec view path x =
+  let text = renderSExp (enc x)
+  labelFail path (match map (dec path) (parseSExp text)
+    Err e => fail "the encoded text does not parse: \{e.seWhat}"
+    Ok (Err e) => fail "decode refused at \{e.sePath}: \{e.seWhat}"
+    Ok (Ok back) => expectAll [
+      labelFail "text" (expectEqual text (renderSExp (enc back))),
+      labelFail "view" (expectEqual (view x) (view back)),
+    ])
+
+originView : TyConOrigin -> String
+originView OriginBuiltin = "builtin"
+originView (OriginModule m) = "module \{m}"
+originView _ = "no origin"
+
+ifaceView : IfaceRef -> String
+ifaceView i = "\{i.irName}@\{originView i.irOrigin}"
+
+pubView : PubScheme -> String
+pubView p = "\{ppPubScheme p} \{debug (quantified p)}"
+
+paramView : EffParamTy -> String
+paramView EPTop = "top"
+paramView (EPLit s) = "lit \{s}"
+paramView (EPName s) = "name \{s}"
+paramView (EPSet members) = "set \{members}"
+paramView (EPProduct axes) = "product \{map axisView axes}"
+
+axisView : (String, EffParamTy) -> String
+axisView (name, param) = "\{name}=\{paramView param}"
+
+eatView : EffAtomTy -> String
+eatView a =
+  "\{a.eatLabel}@\{originView a.eatOrigin} \{paramView a.eatParam} \{a.eatPattern}"
+
+-- The identities, effect atoms and parameters of a surface type, one line
+-- each: `ppTy` drops the identities.
+tyOrigins : Ty -> List String
+tyOrigins (TyCon { tyConName = n, tyConOrigin = o }) = ["\{n}@\{originView o}"]
+tyOrigins (TyApp f a) = tyOrigins f ++ tyOrigins a
+tyOrigins (TyFun a b) = tyOrigins a ++ tyOrigins b
+tyOrigins (TyTuple tys) = flatMap tyOrigins tys
+tyOrigins (TyEffect atoms tails t) = map eatView atoms ++ tails ++ tyOrigins t
+tyOrigins (TyConstrained cs t) = flatMap constraintOrigins cs ++ tyOrigins t
+tyOrigins (TyNamed _ t (Some d)) = eatView d :: tyOrigins t
+tyOrigins (TyNamed _ t None) = tyOrigins t
+tyOrigins (TyQual t params _) = map paramView params ++ tyOrigins t
+tyOrigins (TyRow atoms tails _) = map eatView atoms ++ tails
+tyOrigins (TyAuth params _) = map paramView params
+tyOrigins (TyVar _) = []
+
+constraintOrigins : Constraint -> List String
+constraintOrigins c =
+  "\{c.constraintHead}@\{originView c.constraintOrigin}"
+    :: flatMap tyOrigins c.constraintArgs
+
+tyView : Ty -> String
+tyView t = "\{ppTy t} \{tyOrigins t}"
+
+variantView : Variant -> String
+variantView (Variant name (ConPos tys)) = "\{name} \{map tyView tys}"
+variantView (Variant name (ConNamed fields omitted)) =
+  "\{name} \{map fieldView fields} \{omitted}"
+
+fieldView : Field -> String
+fieldView (Field name t) = "\{name} : \{tyView t}"
+
+visView : DataVis -> String
+visView VisPrivate = "private"
+visView VisAbstract = "abstract"
+visView VisPublic = "public"
+
+dataCtorView : (TabKey, (DataVis, List String, List Variant)) -> String
+dataCtorView (key, (vis, params, variants)) =
+  "\{debug key} \{visView vis} \{params} \{map variantView variants}"
+
+-- The monos render under one naming context, so a variable the result and a
+-- field share renders as one name.
+recordView : RecordInfo -> String
+recordView (RecordInfo ids authIds result fields index) =
+  let monos = result :: map snd fields ++ map snd (M.entries index)
+  "\{ids} \{authIds} \{map fst fields} \{M.keys index} \{ppMonosShared monos}"
+
+slotArgsView : PredicateSlotArgs -> String
+slotArgsView PSArgsUnknown = "unknown"
+slotArgsView (PSArgsKnown args) = "[\{ppMonosShared args}]"
+
+slotView : PredicateSlot -> String
+slotView s = "\{ifaceView s.psIface} \{slotArgsView s.psArgs} \{s.psBoundIds}"
+
+methodSlotView : MethodPredicateSlot -> String
+methodSlotView m = "\{slotView m.mpsPredicate} at \{m.mpsPositions}"
+
+prefixView : CDeclaredPrefix -> String
+prefixView CDPUnknown = "unknown"
+prefixView (CDPLen n) = "\{n}"
+
+classesView : BuiltinClasses -> String
+classesView b =
+  let origins = map originView [b.bcNum, b.bcEq, b.bcOrd, b.bcSemigroup]
+  let flags = [
+    b.bcNumPresent,
+    b.bcEqPresent,
+    b.bcOrdPresent,
+    b.bcSemigroupPresent,
+    b.bcPreludeSeeded,
+  ]
+  "\{origins} \{flags}"
+
+popView : (a -> String) -> SpellingPop a -> List String
+popView payload pop =
+  flatMap
+      (row => map (candView payload (fst row)) (snd row))
+      (M.entries (spRows pop))
+    ++ map
+      (row => "floor \{fst row} \{payload (snd row)}")
+      (M.entries (spFloor pop))
+    ++ map (s => "collided \{s}") (spCollided pop)
+
+candView : (a -> String) -> String -> (Ident, String, a) -> String
+candView payload spelling (ident, owner, p) =
+  "\{spelling} \{debug ident} \{owner} \{payload p}"
+
+-- One row per element of an assoc list of lists, under its key.
+rowsView : (k -> String) -> (v -> String) -> List (k, List v) -> List String
+rowsView key value rows =
+  flatMap (row => map (v => "\{key (fst row)} \{value v}") (snd row)) rows
+
+qualView : (String, String) -> String
+qualView (m, name) = "\{m}.\{name}"
+
+intAtom : Int -> SExp
+intAtom n = SAtom (intToString n)
+
+boolAtom : Bool -> SExp
+boolAtom b = SAtom (if b then "true" else "false")
+
+qualSExp : (String, String) -> SExp
+qualSExp = pairSExp SAtom SAtom
+
+qualOfSExp : String -> SExp -> Result SexpError (String, String)
+qualOfSExp = pairOfSExp expectAtom expectAtom
+
+-- A field's law, its encoded text and the number of components its view holds.
+data FieldLaw = FieldLaw {
+  flName : String,
+  flCount : Int,
+  flText : String,
+  flLaw : Expectation,
+}
+
+field : String ->
+  (a -> SExp) ->
+  (String -> SExp -> Result SexpError a) ->
+  (a -> List String) ->
+  a ->
+  FieldLaw
+field name enc dec view x = FieldLaw {
+  flName = name,
+  flCount = length (view x),
+  flText = renderSExp (enc x),
+  flLaw = law enc dec view name x,
+}
+
+-- Every field of the record, in declaration order.
+fieldLaws : PreludeInterface -> List FieldLaw
+fieldLaws pi = [
+  field
+    "piFunNames"
+    (ordMapSExp unitSExp)
+    (ordMapOfSExp unitOfSExp)
+    omKeys
+    pi.piFunNames,
+  field
+    "piMethodDispatchIdx"
+    (listSExp (pairSExp (pairSExp ifaceRefSExp SAtom) intAtom))
+    (listOfSExp
+      (pairOfSExp (pairOfSExp (nested ifaceRefOfSExp) expectAtom) atomInt))
+    (map (row => "\{ifaceView (fst (fst row))}.\{snd (fst row)} \{snd row}"))
+    pi.piMethodDispatchIdx,
+  field
+    "piDataCtors"
+    (listSExp
+      (pairSExp
+        tabKeySExp
+        (tripleSExp dataVisSExp (listSExp SAtom) (listSExp variantSExp))))
+    (listOfSExp
+      (pairOfSExp
+        (nested tabKeyOfSExp)
+        (tripleOfSExp
+          (nested dataVisOfSExp)
+          (listOfSExp expectAtom)
+          (listOfSExp (nested variantOfSExp)))))
+    (map dataCtorView)
+    pi.piDataCtors,
+  field
+    "piCtorPop"
+    (spellingPopSExp pubSchemeSExp)
+    (spellingPopOfSExp (nested pubSchemeOfSExp))
+    (popView pubView)
+    pi.piCtorPop,
+  field
+    "piRecordPop"
+    (spellingPopSExp recordInfoSExp)
+    (spellingPopOfSExp (nested recordInfoOfSExp))
+    (popView recordView)
+    pi.piRecordPop,
+  field
+    "piBuiltinClasses"
+    builtinClassesSExp
+    (nested builtinClassesOfSExp)
+    (b => [classesView b])
+    pi.piBuiltinClasses,
+  field
+    "piFunPredicateSlots"
+    (listSExp (pairSExp SAtom (listSExp predicateSlotSExp)))
+    (listOfSExp
+      (pairOfSExp expectAtom (listOfSExp (nested predicateSlotOfSExp))))
+    (rowsView (k => k) slotView)
+    pi.piFunPredicateSlots,
+  field
+    "piFunPredicateSlotsQual"
+    (listSExp (pairSExp qualSExp (listSExp predicateSlotSExp)))
+    (listOfSExp
+      (pairOfSExp qualOfSExp (listOfSExp (nested predicateSlotOfSExp))))
+    (rowsView qualView slotView)
+    pi.piFunPredicateSlotsQual,
+  field
+    "piFunConstraintDeclared"
+    (listSExp (pairSExp SAtom cDeclaredPrefixSExp))
+    (listOfSExp (pairOfSExp expectAtom (nested cDeclaredPrefixOfSExp)))
+    (map (row => "\{fst row} \{prefixView (snd row)}"))
+    pi.piFunConstraintDeclared,
+  field
+    "piFunConstraintDeclaredQual"
+    (listSExp (pairSExp qualSExp cDeclaredPrefixSExp))
+    (listOfSExp (pairOfSExp qualOfSExp (nested cDeclaredPrefixOfSExp)))
+    (map (row => "\{qualView (fst row)} \{prefixView (snd row)}"))
+    pi.piFunConstraintDeclaredQual,
+  field
+    "piMethodPredicateSlots"
+    (listSExp (pairSExp SAtom (listSExp methodPredicateSlotSExp)))
+    (listOfSExp
+      (pairOfSExp expectAtom (listOfSExp (nested methodPredicateSlotOfSExp))))
+    (rowsView (k => k) methodSlotView)
+    pi.piMethodPredicateSlots,
+  field
+    "piMethodPredicateSlotsQual"
+    (listSExp (pairSExp qualSExp (listSExp methodPredicateSlotSExp)))
+    (listOfSExp
+      (pairOfSExp qualOfSExp (listOfSExp (nested methodPredicateSlotOfSExp))))
+    (rowsView qualView methodSlotView)
+    pi.piMethodPredicateSlotsQual,
+  field
+    "piCtorExistentials"
+    (intMapSExp unitSExp)
+    (intMapOfSExp unitOfSExp)
+    (m => map intToString (M.keys m))
+    pi.piCtorExistentials,
+  field
+    "piAnyExistentials"
+    boolAtom
+    atomBool
+    (b => ["\{b}"])
+    pi.piAnyExistentials,
+  field
+    "piExternNames"
+    (ordMapSExp (pairSExp surfaceTySExp (listSExp (pairSExp SAtom intAtom))))
+    (ordMapOfSExp
+      (pairOfSExp
+        (nested surfaceTyOfSExp)
+        (listOfSExp (pairOfSExp expectAtom atomInt))))
+    (m =>
+      map
+        (row => "\{fst row} : \{tyView (fst (snd row))} \{snd (snd row)}")
+        (M.entries m))
+    pi.piExternNames,
+  field "piTyvarNext" intAtom atomInt (n => [intToString n]) pi.piTyvarNext,
+  field "piEffvarNext" intAtom atomInt (n => [intToString n]) pi.piEffvarNext,
+  field
+    "piCore"
+    (listSExp (pairSExp SAtom pubSchemeSExp))
+    (listOfSExp (pairOfSExp expectAtom (nested pubSchemeOfSExp)))
+    (map (row => "\{fst row} : \{pubView (snd row)}"))
+    pi.piCore,
+  field
+    "piStandaloneNames"
+    (ordMapSExp unitSExp)
+    (ordMapOfSExp unitOfSExp)
+    omKeys
+    pi.piStandaloneNames,
+]
+
+-- A field that holds no component although the prelude's value fills it, so
+-- its law would pass on an empty walk.  The prelude leaves `piFunNames` and
+-- `piCtorExistentials` empty.
+emptyButFilled : FieldLaw -> Option String
+emptyButFilled f =
+  if f.flCount == 0 && not (any (== f.flName) unfilledFields) then
+    Some f.flName
+  else
+    None
+
+unfilledFields : List String
+unfilledFields = ["piFunNames", "piCtorExistentials"]
+
+test "every field of the prelude's interface round-trips" =
+  match preludeInterface
+    Err e => fail e
+    Ok pi =>
+      let laws = fieldLaws pi
+      expectAll [
+        labelFail "fields" (expectEqual 19 (length laws)),
+        labelFail
+          "fields the prelude fills"
+          (expectEqual [] (filterMap emptyButFilled laws)),
+        expectAll (map (f => f.flLaw) laws),
+      ]
+
+-- ── shapes the prelude's value lacks ────────────────────────────────────────
+
+inM : TyConOrigin
+inM = OriginModule "m"
+
+conAt : Option Loc -> String -> Ty
+conAt loc name = TyCon { tyConName = name, tyConLoc = loc, tyConOrigin = inM }
+
+storeAtom : Option Loc -> EffParamTy -> EffAtomTy
+storeAtom loc param = EffAtomTy {
+  eatLabel = "Store",
+  eatOrigin = inM,
+  eatParam = param,
+  eatLoc = loc,
+  eatPattern = True,
+}
+
+-- Every surface type head and parameter, with [loc] on each node that holds a
+-- location.
+richTyAt : Option Loc -> Ty
+richTyAt loc =
+  let sized = Constraint {
+    constraintHead = "Sized",
+    constraintArgs = [TyVar "f"],
+    constraintOrigin = inM,
+  }
+  let domain = storeAtom loc (EPLit "cfg/*")
+  let product = EPProduct [("Host", EPTop), ("Method", EPSet ["GET", "a b"])]
+  let row = TyRow [storeAtom loc EPTop] ["e2"] loc
+  let parts =
+    TyTuple [TyApp (TyVar "f") (TyVar "a"), row, TyAuth [EPName "p"] loc]
+  TyConstrained
+    [sized]
+    (TyFun
+      (TyNamed
+        "p"
+        (TyQual (conAt loc "String") [EPName "Store"] loc)
+        (Some domain))
+      (TyEffect [storeAtom loc product] ["e"] parts))
+
+someLoc : Option Loc
+someLoc = Some (Loc "m.mdk" 3 1 3 9)
+
+identIn : String -> Ns -> String -> Ident
+identIn m ns name = match mkIdent ns (OriginModule m) name
+  Some ident => ident
+  None => panic "a module origin is an identity"
+
+allNs : List Ns
+allNs = [NsType, NsIface, NsMethod, NsCtor, NsField, NsValue]
+
+hiddenDecl : (TabKey, (DataVis, List String, List Variant))
+hiddenDecl = (
+  TkBare NsType "Hidden",
+  (
+    VisAbstract,
+    ["f", "a"],
+    [
+      Variant
+        "Hidden"
+        (ConNamed
+          [Field "inner" (richTyAt someLoc), Field "tag" (TyVar "a")]
+          True),
+      Variant "Plain" (ConPos [conAt None "Int"]),
+    ],
+  ),
+)
+
+privateDecl : (TabKey, (DataVis, List String, List Variant))
+privateDecl = (
+  TkIdent (identIn "m" NsType "Secret"),
+  (VisPrivate, [], [Variant "Secret" (ConPos [])]),
+)
+
+-- A record over a higher-kinded parameter, with a rigid field and a field
+-- whose arrow has an open effect tail.
+hkRecord : RecordInfo
+hkRecord =
+  let f = Ref (Unbound 11 1)
+  let a = Ref (Unbound 12 1)
+  let fields = [
+    ("inner", TApp (TVar f) (TVar a)),
+    ("tag", TRigid "r"),
+    ("run", TFun (TVar a) (EffRow [] (Some (Ref (EUnbound 3 1)))) (TVar a)),
+  ]
+  RecordInfo
+    [11, 12]
+    [7]
+    (TApp (TApp (TCon "Wrap" inM) (TVar f)) (TVar a))
+    fields
+    (M.fromList fields)
+
+knownSlot : PredicateSlot
+knownSlot =
+  let c = Ref (Unbound 4 1)
+  PredicateSlot {
+    psIface = IfaceRef { irName = "Conv", irOrigin = inM },
+    psArgs = PSArgsKnown [TVar c, TApp (TCon "List" OriginBuiltin) (TVar c)],
+    psBoundIds = [4],
+  }
+
+mixedClasses : BuiltinClasses
+mixedClasses = BuiltinClasses {
+  bcNum = OriginModule "core",
+  bcEq = OriginBuiltin,
+  bcOrd = OriginModule "core",
+  bcSemigroup = OriginBuiltin,
+  bcNumPresent = True,
+  bcEqPresent = False,
+  bcOrdPresent = True,
+  bcSemigroupPresent = False,
+  bcPreludeSeeded = True,
+}
+
+-- Two identities under one spelling, so the spelling has collided, and a
+-- floor-only entry.
+collidedPop : SpellingPop RecordInfo
+collidedPop =
+  spInsert
+    None
+    "Loose"
+    "Loose"
+    hkRecord
+    (spInsert
+      (Some (identIn "n" NsType "Box"))
+      "Box"
+      "Box"
+      hkRecord
+      (spInsert (Some (identIn "m" NsType "Box")) "Box" "Box" hkRecord spEmpty))
+
+dataCtorSExp : (TabKey, (DataVis, List String, List Variant)) -> SExp
+dataCtorSExp =
+  pairSExp
+    tabKeySExp
+    (tripleSExp dataVisSExp (listSExp SAtom) (listSExp variantSExp))
+
+dataCtorOfSExp : String ->
+  SExp ->
+  Result SexpError (TabKey, (DataVis, List String, List Variant))
+dataCtorOfSExp =
+  pairOfSExp
+    (nested tabKeyOfSExp)
+    (tripleOfSExp
+      (nested dataVisOfSExp)
+      (listOfSExp expectAtom)
+      (listOfSExp (nested variantOfSExp)))
+
+-- The fixtures' laws and encoded texts.
+fixtureLaws : List FieldLaw
+fixtureLaws = [
+  field
+    "rich type"
+    surfaceTySExp
+    (nested surfaceTyOfSExp)
+    (t => [tyView t])
+    (richTyAt someLoc),
+  field
+    "abstract decl"
+    dataCtorSExp
+    dataCtorOfSExp
+    (d => [dataCtorView d])
+    hiddenDecl,
+  field
+    "private decl"
+    dataCtorSExp
+    dataCtorOfSExp
+    (d => [dataCtorView d])
+    privateDecl,
+  field
+    "every namespace"
+    (listSExp tabKeySExp)
+    (listOfSExp (nested tabKeyOfSExp))
+    (map debug)
+    (TkBare NsValue "v" :: map (ns => TkIdent (identIn "m" ns "x")) allNs),
+  field
+    "hk record"
+    recordInfoSExp
+    (nested recordInfoOfSExp)
+    (r => [recordView r])
+    hkRecord,
+  field
+    "known slot"
+    predicateSlotSExp
+    (nested predicateSlotOfSExp)
+    (s => [slotView s])
+    knownSlot,
+  field
+    "known method slot"
+    methodPredicateSlotSExp
+    (nested methodPredicateSlotOfSExp)
+    (m => [methodSlotView m])
+    MethodPredicateSlot { mpsPredicate = knownSlot, mpsPositions = [0, 2] },
+  field "prefixes" (listSExp cDeclaredPrefixSExp) (listOfSExp
+    (nested cDeclaredPrefixOfSExp)) (map prefixView) [
+    CDPLen 2,
+    CDPUnknown,
+    CDPLen 0,
+  ],
+  field
+    "mixed classes"
+    builtinClassesSExp
+    (nested builtinClassesOfSExp)
+    (b => [classesView b])
+    mixedClasses,
+  field
+    "collided population"
+    (spellingPopSExp recordInfoSExp)
+    (spellingPopOfSExp (nested recordInfoOfSExp))
+    (popView recordView)
+    collidedPop,
+  field "options" (listSExp (optionSExp SAtom)) (listOfSExp
+    (optionOfSExp expectAtom)) (map (o => debug o)) [
+    None,
+    Some "x",
+  ],
+  field
+    "existentials"
+    (intMapSExp unitSExp)
+    (intMapOfSExp unitOfSExp)
+    (m => map intToString (M.keys m))
+    (M.fromList [(3, ()), (11, ())]),
+]
+
+test "the shapes the prelude's value lacks round-trip" =
+  expectAll (map (f => f.flLaw) fixtureLaws)
+
+test "a location never reaches the text" =
+  expectEqual
+    (renderSExp (surfaceTySExp (richTyAt None)))
+    (renderSExp (surfaceTySExp (richTyAt someLoc)))
+
+-- Every node kind of a surface type, data declaration, record and predicate
+-- slot that the check requires in a prelude interface.  `unresolved` and an
+-- `(ident ...)` written with it are refused, so neither appears.
+componentHeads : List String
+componentHeads = [
+  "(scon ",
+  "(svar ",
+  "(sapp ",
+  "(sfun ",
+  "(stuple ",
+  "(seffect ",
+  "(sconstrained ",
+  "(snamed ",
+  "(squal ",
+  "(srow ",
+  "(sauth ",
+  "(seat ",
+  " stop",
+  "(slit ",
+  "(sname ",
+  "(sset ",
+  "(sproduct ",
+  "(constraint ",
+  "(variant ",
+  "(pos ",
+  "(named ",
+  "(field ",
+  "(ident type ",
+  "(ident iface ",
+  "(ident method ",
+  "(ident ctor ",
+  "(ident field ",
+  "(ident value ",
+  "(tkident ",
+  "(tkbare ",
+  "(private ",
+  "(abstract ",
+  "(public ",
+  "(record ",
+  "(slot ",
+  " psunknown ",
+  "(psknown ",
+  "(mslot ",
+  "cdpunknown",
+  "(cdplen ",
+  "(classes ",
+  "(pop ",
+  "(sprow ",
+  " ()",
+  "none",
+  "(some ",
+]
+
+missingHeads : List FieldLaw -> List String
+missingHeads laws =
+  let text = S.join "\n" (map (f => f.flText) laws)
+  filter (h => not (S.contains h text)) componentHeads
+
+test "the prelude's value and the fixtures carry every node kind" =
+  match preludeInterface
+    Err e => fail e
+    Ok pi => expectEqual [] (missingHeads (fieldLaws pi ++ fixtureLaws))
+
+-- ── sharing ─────────────────────────────────────────────────────────────────
+
+-- The result, a field and the index entry of one record share a variable:
+-- decoding mints one cell for all three.
+test "one decoded record keeps one cell per variable" =
+  let cell = Ref (Unbound 4 1)
+  let xs = TApp (TCon "List" OriginBuiltin) (TVar cell)
+  let record =
+    RecordInfo [4] [] (TVar cell) [("xs", xs)] (omInsert "xs" xs omEmpty)
+  match recordInfoOfSExp (recordInfoSExp record)
+    Ok (RecordInfo _ _ (TVar c) fields index) =>
+      let _ = c := Unbound 9 1
+      expectEqual
+        [
+          "(app (con List builtin) (tv 9 1))",
+          "(app (con List builtin) (tv 9 1))"
+        ]
+        (map (m => renderSExp (monoSExp m)) (map snd fields ++ M.values index))
+    _ => fail "the record did not decode with a variable result"
+
+-- A population's payloads are values of their own, as the freeze zonks each
+-- payload from an empty state: a row and the floor entry of one record share
+-- no cell once decoded.
+test "a population's payloads decode to cells of their own" =
+  let pop = spInsert (Some (identIn "m" NsType "R")) "R" "R" hkRecord spEmpty
+  match (spellingPopOfSExp
+    (nested recordInfoOfSExp)
+    "pop"
+    (spellingPopSExp recordInfoSExp pop))
+    Ok back => match (
+      M.values (spFloor back),
+      flatMap snd (M.entries (spRows back)),
+    )
+      ([RecordInfo _ _ (TApp _ (TVar c)) _ _], [(_, _, rowRecord)]) =>
+        let _ = c := Unbound 40 1
+        expectEqual
+          "(app (app (con Wrap (module m)) (tv 11 1)) (tv 12 1))"
+          (renderSExp (monoSExp (resultOf rowRecord)))
+      _ => fail "the population did not decode to one row and one floor entry"
+    Err e => fail "decode refused at \{e.sePath}: \{e.seWhat}"
+
+resultOf : RecordInfo -> Mono
+resultOf (RecordInfo _ _ result _ _) = result
+
+-- ── decoding the components refuses ─────────────────────────────────────────
+
+test "a malformed component is refused at its path" =
+  let int = node ["con", "Int", "builtin"]
+  let classes = SList [atom "classes", atom "builtin"]
+  expectEach [
+    (
+      "unknown surface head",
+      expectEqual
+        (Some (
+          "ty",
+          "tycon: unknown head; expected one of scon, svar, sapp, sfun, stuple, seffect, sconstrained, snamed, squal, srow, sauth",
+        ))
+        (refusal (surfaceTyOfSExp (node ["tycon", "Int"]))),
+    ),
+    (
+      "a surface head's arity, nested",
+      expectEqual
+        (Some ("ty/sapp.2", "svar: expected 1 field(s)"))
+        (refusal
+          (surfaceTyOfSExp
+            (SList [atom "sapp", node ["svar", "f"], node ["svar"]]))),
+    ),
+    (
+      "an effect atom's arity",
+      expectEqual
+        (Some ("ty/srow.1/0", "seat: expected 4 field(s)"))
+        (refusal
+          (surfaceTyOfSExp
+            (SList [
+              atom "srow",
+              SList [node ["seat", "IO", "builtin"]],
+              SList [],
+            ]))),
+    ),
+    (
+      "an unknown parameter",
+      expectEqual
+        (Some (
+          "ty/sauth.1/0",
+          "top: unknown head; expected one of stop, slit, sname, sset, sproduct",
+        ))
+        (refusal (surfaceTyOfSExp (SList [atom "sauth", SList [atom "top"]]))),
+    ),
+    (
+      "a constraint's arity",
+      expectEqual
+        (Some ("ty/sconstrained.1/0", "constraint: expected 3 field(s)"))
+        (refusal
+          (surfaceTyOfSExp
+            (SList [
+              atom "sconstrained",
+              SList [SList [atom "constraint", atom "Eq", SList []]],
+              node ["svar", "a"],
+            ]))),
+    ),
+    (
+      "an unknown payload",
+      expectEqual
+        (Some (
+          "variant/variant.2",
+          "fields: unknown head; expected one of pos, named",
+        ))
+        (refusal
+          (variantOfSExp
+            (SList [atom "variant", atom "Foo", SList [atom "fields"]]))),
+    ),
+    (
+      "a field's arity",
+      expectEqual
+        (Some ("variant/variant.2/named.1/0", "field: expected 2 field(s)"))
+        (refusal
+          (variantOfSExp
+            (SList [
+              atom "variant",
+              atom "Foo",
+              SList [atom "named", SList [node ["field", "x"]], atom "false"],
+            ]))),
+    ),
+    (
+      "an unknown table key",
+      expectEqual
+        (Some (
+          "tabkey",
+          "tkname: unknown head; expected one of tkident, tkbare",
+        ))
+        (refusal (tabKeyOfSExp (node ["tkname", "type", "X"]))),
+    ),
+    (
+      "an unknown namespace",
+      expectEqual
+        (Some (
+          "tabkey/tkbare.1",
+          "kind: unknown head; expected one of type, iface, method, ctor, field, value",
+        ))
+        (refusal (tabKeyOfSExp (node ["tkbare", "kind", "X"]))),
+    ),
+    (
+      "an identity without one",
+      expectEqual
+        (Some (
+          "tabkey/tkident.1/ident.2",
+          "unresolved: an identity names a module or builtin",
+        ))
+        (refusal
+          (tabKeyOfSExp
+            (SList [
+              atom "tkident",
+              node ["ident", "type", "unresolved", "X"],
+            ]))),
+    ),
+    (
+      "an identity's arity",
+      expectEqual
+        (Some ("tabkey/tkident.1", "ident: expected 3 field(s)"))
+        (refusal
+          (tabKeyOfSExp (SList [atom "tkident", node ["ident", "type", "X"]]))),
+    ),
+    (
+      "an unknown visibility",
+      expectEqual
+        (Some (
+          "vis",
+          "hidden: unknown head; expected one of private, abstract, public",
+        ))
+        (refusal (dataVisOfSExp (atom "hidden"))),
+    ),
+    (
+      "a record's arity",
+      expectEqual
+        (Some ("record", "record: expected 5 field(s)"))
+        (refusal
+          (recordInfoOfSExp
+            (SList [atom "record", SList [], SList [], int, SList []]))),
+    ),
+    (
+      "a record's index out of order",
+      expectEqual
+        (Some ("record/record.5", "a list: keys must ascend strictly"))
+        (refusal
+          (recordInfoOfSExp
+            (SList [
+              atom "record",
+              SList [],
+              SList [],
+              int,
+              SList [],
+              SList [SList [atom "b", int], SList [atom "a", int]],
+            ]))),
+    ),
+    (
+      "unknown slot arguments",
+      expectEqual
+        (Some (
+          "slot/slot.2",
+          "unknown: unknown head; expected one of psunknown, psknown",
+        ))
+        (refusal
+          (predicateSlotOfSExp
+            (SList [
+              atom "slot",
+              node ["iface", "Eq", "builtin"],
+              atom "unknown",
+              SList [],
+            ]))),
+    ),
+    (
+      "a slot's arity",
+      expectEqual
+        (Some ("mslot/mslot.1", "slot: expected 3 field(s)"))
+        (refusal
+          (methodPredicateSlotOfSExp
+            (SList [
+              atom "mslot",
+              SList [atom "slot", atom "psunknown"],
+              SList [],
+            ]))),
+    ),
+    (
+      "a method slot's arity",
+      expectEqual
+        (Some ("mslot", "mslot: expected 2 field(s)"))
+        (refusal (methodPredicateSlotOfSExp (node ["mslot"]))),
+    ),
+    (
+      "a prefix's arity",
+      expectEqual
+        (Some ("prefix", "cdplen: expected 1 field(s)"))
+        (refusal (cDeclaredPrefixOfSExp (node ["cdplen"]))),
+    ),
+    (
+      "the classes' arity",
+      expectEqual
+        (Some ("classes", "classes: expected 9 field(s)"))
+        (refusal (builtinClassesOfSExp classes)),
+    ),
+    (
+      "a population's arity",
+      expectEqual
+        (Some ("pop", "pop: expected 3 field(s)"))
+        (refusal
+          (spellingPopOfSExp
+            unitOfSExp
+            "pop"
+            (SList [atom "pop", SList [], SList []]))),
+    ),
+    (
+      "a population row's arity",
+      expectEqual
+        (Some ("pop/pop.1/0/1/0", "sprow: expected 3 field(s)"))
+        (refusal
+          (spellingPopOfSExp
+            unitOfSExp
+            "pop"
+            (SList [
+              atom "pop",
+              SList [
+                SList [
+                  atom "X",
+                  SList [
+                    SList [
+                      atom "sprow",
+                      node ["ident", "type", "builtin", "X"],
+                      atom "X",
+                    ],
+                  ],
+                ],
+              ],
+              SList [],
+              SList [],
+            ]))),
+    ),
+    (
+      "a pair of one",
+      expectEqual
+        (Some ("pairs/0", "a: expected a pair"))
+        (refusal
+          (listOfSExp
+            (pairOfSExp expectAtom atomInt)
+            "pairs"
+            (SList [node ["a"]]))),
+    ),
+    (
+      "a triple of two",
+      expectEqual
+        (Some ("triple", "a: expected a triple"))
+        (refusal
+          (tripleOfSExp
+            expectAtom
+            expectAtom
+            expectAtom
+            "triple"
+            (node ["a", "b"]))),
+    ),
+    (
+      "an option's arity",
+      expectEqual
+        (Some ("opt", "some: expected 1 field(s)"))
+        (refusal (optionOfSExp expectAtom "opt" (node ["some"]))),
+    ),
+    (
+      "a unit that is not ()",
+      expectEqual
+        (Some ("unit", "x: expected ()"))
+        (refusal (unitOfSExp "unit" (atom "x"))),
+    ),
+    (
+      "a repeated map key",
+      expectEqual
+        (Some ("map", "a list: keys must ascend strictly"))
+        (refusal
+          (ordMapOfSExp
+            unitOfSExp
+            "map"
+            (SList [SList [atom "a", SList []], SList [atom "a", SList []]]))),
+    ),
+    (
+      "a component's own path, nested",
+      expectEqual
+        (Some (
+          "keys/0/tabkey",
+          "x: unknown head; expected one of tkident, tkbare",
+        ))
+        (refusal (listOfSExp (nested tabKeyOfSExp) "keys" (SList [atom "x"]))),
+    ),
+  ]
+
+-- ── the whole file ──────────────────────────────────────────────────────────
+
+ioUnit : Atom
+ioUnit = atomBuiltin "IO" PUnit
+
+ioSet : Atom
+ioSet = atomBuiltin "IO" (PSet (Some ["a b", "c"]))
+
+export
+fileKey : InterfaceKey
+fileKey = InterfaceKey {
+  ikFormat = formatVersion,
+  ikSources = [("core.mdk", "ab12"), ("a b.mdk", "cd34")],
+  ikCompiler = "medaka 0 (sha x)",
+}
+
+fileOf : List (List (List Atom), PreludeInterface) -> PreludeInterfaceFile
+fileOf cache = PreludeInterfaceFile {
+  ifKey = fileKey,
+  ifSections = sectionsOfCache cache,
+}
+
+joinText : List Atom -> String
+joinText j = renderSExp (listSExp atomSExp j)
+
+-- A section as the codec-independent view reads it: its joins, its rows and
+-- the constructor population.
+sectionView : InterfaceSection -> List String
+sectionView s =
+  map joinText s.isJoins
+    ++ map (row => "\{fst row} : \{pubView (snd row)}") s.isInterface.piCore
+    ++ popView pubView s.isInterface.piCtorPop
+
+cacheView : List (List (List Atom), PreludeInterface) -> List String
+cacheView cache =
+  flatMap (s => map joinText (fst s) ++ ["tyvars \{(snd s).piTyvarNext}"]) cache
+
+headerOnly : String
+headerOnly = encodeInterface (fileOf [])
+
+withSection : String -> String
+withSection field = "\{headerOnly}(section (joins ()) (interface \{field}))\n"
+
+failureOf : String -> Option (String, String)
+failureOf text = refusal (decodeInterface text)
+
+-- [text] with the sixteenth field of its first section replaced by a word.
+corrupted : String -> String
+corrupted text = match parseSExp ("(" ++ text ++ ")")
+  Ok (SList (header :: (SList [s, js, SList (i :: fields)]) :: rest)) =>
+    let bad = take 15 fields ++ [atom "zz"] ++ drop 16 fields
+    let first = SList [s, js, SList (i :: bad)]
+    stringJoin "\n" (map renderSExp (header :: first :: rest))
+  _ => text
+
+test "a malformed file is refused" = match preludeInterface
+  Err e => fail e
+  Ok pi =>
+    let good = encodeInterface (fileOf [([[ioUnit]], pi)])
+    expectEach [
+      (
+        "empty text",
+        expectEqual
+          (Some ("file", "a list: expected a header node"))
+          (failureOf ""),
+      ),
+      (
+        "a later version",
+        expectEqual
+          (Some (
+            "header/medaka-interface.1",
+            "2: format version 2, this compiler reads 1",
+          ))
+          (failureOf
+            "(medaka-interface 2 (sources ()) (compiler c) (sections 0))\n"),
+      ),
+      (
+        "truncated in the header",
+        expectEqual
+          (Some ("", "unbalanced open paren"))
+          (failureOf "(medaka-interface 1 (sources ("),
+      ),
+      (
+        "a header alone is a file with no section",
+        expectEqual
+          (Some ("", "unbalanced open paren"))
+          (failureOf "(medaka-interface 1 (sources ())"),
+      ),
+      (
+        "a header counting more sections than the file holds",
+        expectEqual
+          (Some (
+            "header/sections.1",
+            "medaka-interface: header counts 2 section(s), the file holds 1",
+          ))
+          (failureOf (S.replace "(sections 1)" "(sections 2)" good)),
+      ),
+      (
+        "a header counting fewer sections than the file holds",
+        expectEqual
+          (Some (
+            "header/sections.1",
+            "medaka-interface: header counts 0 section(s), the file holds 1",
+          ))
+          (failureOf (S.replace "(sections 1)" "(sections 0)" good)),
+      ),
+      (
+        "trailing text",
+        expectEqual
+          (Some ("file/1", "x: unknown head; expected one of section"))
+          (failureOf (good ++ "x")),
+      ),
+      (
+        "a trailing node",
+        expectEqual
+          (Some ("file/1", "extra: unknown head; expected one of section"))
+          (failureOf (good ++ "(extra)")),
+      ),
+      (
+        "a closing paren too many",
+        expectEqual
+          (Some ("", "trailing text after the first node"))
+          (failureOf (good ++ ")")),
+      ),
+      (
+        "a section cut short",
+        expectEqual
+          (Some ("", "unbalanced open paren"))
+          (failureOf (S.take 200 good)),
+      ),
+      (
+        "a word where the section should be",
+        expectEqual
+          (Some ("file/0", "section: expected 2 field(s)"))
+          (failureOf (headerOnly ++ "section")),
+      ),
+      (
+        "a field of the wrong shape",
+        expectEqual
+          (Some ("file/0/section.2/interface.16", "expected an integer"))
+          (failureOf (corrupted good)),
+      ),
+      (
+        "too few fields",
+        expectEqual
+          (Some ("file/0/section.2", "interface: expected 19 field(s)"))
+          (failureOf (withSection "x")),
+      ),
+    ]
+
+test "the prelude's file round-trips with its key, joins and every row" =
+  match preludeInterface
+    Err e => fail e
+    Ok pi =>
+      let cache = [([[ioUnit]], pi), ([[ioSet, ioUnit], []], pi)]
+      let file = fileOf cache
+      let text = encodeInterface file
+      match decodeInterface text
+        Err e => fail "decode refused at \{e.sePath}: \{e.seWhat}"
+        Ok back => expectAll [
+          labelFail "two encodes" (expectEqual text (encodeInterface file)),
+          labelFail "re-encode" (expectEqual text (encodeInterface back)),
+          labelFail
+            "joins sorted"
+            (expectEqual
+              text
+              (encodeInterface
+                (fileOf [
+                  ([[ioUnit]], pi),
+                  ([[], [ioSet, ioUnit]], pi),
+                ]))),
+          labelFail "key" (expectEqual None (keysMatch fileKey back.ifKey)),
+          labelFail
+            "sections"
+            (expectEqual
+              (map sectionView file.ifSections)
+              (map sectionView back.ifSections)),
+          labelFail
+            "cache inverse"
+            (expectEqual
+              (cacheView cache)
+              (cacheView (cacheOfSections back.ifSections))),
+        ]

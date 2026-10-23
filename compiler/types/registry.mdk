@@ -674,6 +674,16 @@ export
 spFromFloor : OrdMap a -> SpellingPop a
 spFromFloor floor = SpellingPop omEmpty floor []
 
+-- The population whose three projections are [rows], [floor] and [collided],
+-- for a reader rebuilding one from projections it was written as.  It checks
+-- nothing: projections that `spInsert` would not have produced stay so.
+export
+spFromProjections : OrdMap (List (Ident, String, a)) ->
+  OrdMap a ->
+  List String ->
+  SpellingPop a
+spFromProjections rows floor collided = SpellingPop rows floor collided
+
 -- Registers [payload] under [spelling], owned by the declaration named
 -- [owner].  `None` for the identity updates the floor alone.
 export

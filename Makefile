@@ -176,6 +176,9 @@ inlang-support-scc-test:
 inlang-support-util-test:
 	./medaka test compiler/support/util_test.mdk
 
+inlang-support-sexp-value-test:
+	./medaka test compiler/support/sexp_value_test.mdk
+
 inlang-ir-dce-test:
 	./medaka test compiler/ir/dce_test.mdk
 
