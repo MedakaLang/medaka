@@ -3175,7 +3175,6 @@ runTestCmd argv0 =
             None => 100
           let filterOpt = flagValue "--filter" a
           let jsonMode = flag "--json" a
-          let _ = reportTestTrees engines
           match a.positionals
             [] =>
               if jsonMode then
@@ -3207,23 +3206,6 @@ runTestCmd argv0 =
                 stageExit 1
               else
                 runTestManyTargets engines cases filterOpt seedOpt targets
-
--- `test`'s report of the prelude's trees, which its native engine's probe builds
--- take; the prelude texts are read only to key the file.
-reportTestTrees : List Engine -> <IO> Unit
-reportTestTrees engines =
-  if any isNativeEngine engines then
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-    match (
-      readFile (root ++ "/stdlib/runtime.mdk"),
-      readFile (root ++ "/stdlib/core.mdk"),
-    )
-      (Ok rsrc, Ok csrc) => reportChildTrees (root ++ "/stdlib") rsrc csrc
-      _ => ()
-
-isNativeEngine : Engine -> Bool
-isNativeEngine EngNative = True
-isNativeEngine EngInterp = False
 
 -- The supervisor sends a target followed by JSON-string encoded exact `(name,
 -- seed, cases)` triples. These are internal replay requests, so they do not share
@@ -3379,6 +3361,7 @@ runTestManyTargets engines cases filterOpt seedOpt targets =
       let corePath = root ++ "/stdlib/core.mdk"
       let stdlibDir = root ++ "/stdlib"
       let rosterOk = checkTestMdkRoster root targets files
+      let _ = reportSupervisedTrees stdlibDir rtPath corePath
       let anyFailed =
         testFilesGo
           engines
@@ -3391,6 +3374,17 @@ runTestManyTargets engines cases filterOpt seedOpt targets =
           files
           False
       if anyFailed || not rosterOk then stageExit 1
+
+-- The trees' verdict for a `test` run that hands every file to a child process:
+-- the children hold the trees and a passing child's stderr is not shown, so this
+-- process reports it, from the files' header and digest alone.
+reportSupervisedTrees : String -> String -> String -> <IO> Unit
+reportSupervisedTrees stdlibDir rtPath corePath = match (
+  readFile rtPath,
+  readFile corePath,
+)
+  (Ok rsrc, Ok csrc) => reportChildTrees stdlibDir rsrc csrc
+  _ => ()
 
 -- ── doc ───────────────────────────────────────────────────────────────────
 -- The `doc` arm: read the target file, parse
@@ -3707,6 +3701,7 @@ analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
   let rtD = desugaredPrelude rsrc
   let coreD = desugaredPrelude csrc
   let modsD = map desugarPair mods
+  let _ = takeShippedPrelude False stdlibDir rsrc csrc
   let front =
     frontEnd
       (stdlibExportsReader stdlibDir)
@@ -3719,7 +3714,12 @@ analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
           coreD
           modsD)
       FrontInput {
-        fiInputs = driveInputsFor !selectedProfile False [],
+        fiInputs = { driveInputsFor !selectedProfile False [] |
+          diPreludeKey = Some (
+            desugaredPreludeKey rsrc,
+            desugaredPreludeKey csrc,
+          ),
+        },
         fiAllowInternal = False,
         fiTrusted = trusted,
         fiRuntimeSrc = rsrc,
@@ -4375,6 +4375,7 @@ runReplCmd [] =
     let runtimeDecls = desugaredPrelude rsrc
     let preludeDecls = desugaredPrelude csrc
     let _ = initSession runtimeDecls preludeDecls
+    let _ = takeShippedPrelude False (root ++ "/stdlib") rsrc csrc
     Ok (replLoop ())
   match r
     Err msg => dieMsg msg

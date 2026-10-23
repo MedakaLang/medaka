@@ -133,6 +133,19 @@ evIndexOf entries = match !preludeEvidenceRef
   None => denseIndexOf entries
   Some seg => denseIndexOf (filter (aboveSegment seg) entries)
 
+-- [entries] less those the prelude's segment answers; all of them with no segment.
+-- A reader that judges the table rather than trusting it (`evidenceFaults`) indexes
+-- this and lets `evidenceLookup` answer the segment's range.
+export
+entriesAboveSegment : EvTable -> EvTable
+entriesAboveSegment entries = match !preludeEvidenceRef
+  None => entries
+  Some seg =>
+    filter
+      (e => match e
+        EvEntry (EvId _ i) _ => i >= arrayLength seg)
+      entries
+
 denseIndexOf : EvTable -> EvIndex
 denseIndexOf entries =
   let lo = evMinOrdinal entries

@@ -1,5 +1,5 @@
 # META
-source_lines=2467
+source_lines=2496
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -31,7 +31,9 @@ stages=DESUGAR,MARK
 import list.{take}
 import support.util.{stringTrim, joinWith, joinNl, lookupAssoc}
 import string.{words, contains, startsWith, endsWith, split}
-import frontend.desugar_cache.{desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.ast.{Decl}
+import types.tc_types.{DriveInputs(..)}
 import types.interface_sexp.{
   InterfaceSection, InterfaceFault(..), readInterface, cacheOfSections,
   formatVersion, sha256Hex
@@ -439,6 +441,33 @@ loadPreludeElab inputs = match !preludeTreesRef
       None => ()
     preludeTreesRef := Some (inputs, verdict)
     verdict
+
+-- Whether this process has made its load of the trees.
+export
+treesLoaded : Unit -> Bool
+treesLoaded () = isSome !preludeTreesRef
+
+-- [inputs] for a drive over [coreDecls], keyed for the tree arm when this
+-- process holds the shipped prelude and [coreDecls] are all of core: a drive
+-- whose prelude had a shadowed function dropped (`dropShadowedExp`) is not the
+-- core the trees were written for.
+export
+withHeldPrelude : List Decl -> DriveInputs -> DriveInputs
+withHeldPrelude coreDecls inputs = match !preludeTreesRef
+  Some (held, _) =>
+    if length coreDecls == length (desugaredPrelude held.pnCoreSrc) then
+      keyedInputs
+        (
+          desugaredPreludeKey held.pnRuntimeSrc,
+          desugaredPreludeKey held.pnCoreSrc,
+        )
+        inputs
+    else
+      inputs
+  None => inputs
+
+keyedInputs : (Int, Int) -> DriveInputs -> DriveInputs
+keyedInputs key inputs = { inputs | diPreludeKey = Some key }
 
 -- The verdict alone, for a verb that reports it while its children take the trees.
 export
@@ -2473,7 +2502,9 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false) (mem "split" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "seedPreludeInterface" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "seedPreludeElab" false))))
@@ -2549,6 +2580,12 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "preludeTreesRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "loadPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
 (DFunDef false "loadPreludeElab" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "value")) (EApp (EApp (EVar "readPreludeTrees") (EVar "True")) (EVar "inputs"))) (DoLet false false PWild (EMatch (EVar "value") (arm (PCon "Some" (PVar "pe")) () (EApp (EApp (EVar "seedPreludeElab") (ETuple (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "inputs") "pnCoreSrc")))) (EVar "pe"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeTreesRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EVar "verdict"))))))
+(DTypeSig true "treesLoaded" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DFunDef false "treesLoaded" ((PLit LUnit)) (EApp (EVar "isSome") (EUnOp "!" (EVar "preludeTreesRef"))))
+(DTypeSig true "withHeldPrelude" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "DriveInputs") (TyCon "DriveInputs"))))
+(DFunDef false "withHeldPrelude" ((PVar "coreDecls") (PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "held") PWild)) () (EIf (EBinOp "==" (EApp (EVar "length") (EVar "coreDecls")) (EApp (EVar "length") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "held") "pnCoreSrc")))) (EApp (EApp (EVar "keyedInputs") (ETuple (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "held") "pnRuntimeSrc")) (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "held") "pnCoreSrc")))) (EVar "inputs")) (EVar "inputs"))) (arm (PCon "None") () (EVar "inputs"))))
+(DTypeSig false "keyedInputs" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "DriveInputs") (TyCon "DriveInputs"))))
+(DFunDef false "keyedInputs" ((PVar "key") (PVar "inputs")) (ERecordUpdate (EVar "inputs") ((fa "diPreludeKey" (EApp (EVar "Some") (EVar "key"))))))
 (DTypeSig true "checkPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
 (DFunDef false "checkPreludeElab" ((PVar "inputs")) (EApp (EVar "fst") (EApp (EApp (EVar "readPreludeTrees") (EVar "False")) (EVar "inputs"))))
 (DTypeSig true "preludeTreesLine" (TyFun (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -2765,7 +2802,9 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false) (mem "split" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "seedPreludeInterface" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "seedPreludeElab" false))))
@@ -2841,6 +2880,12 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "preludeTreesRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "loadPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
 (DFunDef false "loadPreludeElab" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "value")) (EApp (EApp (EVar "readPreludeTrees") (EVar "True")) (EVar "inputs"))) (DoLet false false PWild (EMatch (EVar "value") (arm (PCon "Some" (PVar "pe")) () (EApp (EApp (EVar "seedPreludeElab") (ETuple (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "inputs") "pnCoreSrc")))) (EVar "pe"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeTreesRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EVar "verdict"))))))
+(DTypeSig true "treesLoaded" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DFunDef false "treesLoaded" ((PLit LUnit)) (EApp (EVar "isSome") (EUnOp "!" (EVar "preludeTreesRef"))))
+(DTypeSig true "withHeldPrelude" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "DriveInputs") (TyCon "DriveInputs"))))
+(DFunDef false "withHeldPrelude" ((PVar "coreDecls") (PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "held") PWild)) () (EIf (EBinOp "==" (EApp (EMethodRef "length") (EVar "coreDecls")) (EApp (EMethodRef "length") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "held") "pnCoreSrc")))) (EApp (EApp (EVar "keyedInputs") (ETuple (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "held") "pnRuntimeSrc")) (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "held") "pnCoreSrc")))) (EVar "inputs")) (EVar "inputs"))) (arm (PCon "None") () (EVar "inputs"))))
+(DTypeSig false "keyedInputs" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "DriveInputs") (TyCon "DriveInputs"))))
+(DFunDef false "keyedInputs" ((PVar "key") (PVar "inputs")) (ERecordUpdate (EVar "inputs") ((fa "diPreludeKey" (EApp (EVar "Some") (EVar "key"))))))
 (DTypeSig true "checkPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
 (DFunDef false "checkPreludeElab" ((PVar "inputs")) (EApp (EVar "fst") (EApp (EApp (EVar "readPreludeTrees") (EVar "False")) (EVar "inputs"))))
 (DTypeSig true "preludeTreesLine" (TyFun (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "String"))))
