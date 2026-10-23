@@ -1,0 +1,1113 @@
+-- Sibling test for `compiler/frontend/ast_codec.mdk`.
+--
+-- The codec's own writer is no oracle for itself, so every corpus is checked
+-- two ways: the re-encoded text of the decoded value equals the text it was
+-- decoded from, and a second dump with a different shape (constructor names,
+-- every field, no compaction) is equal for the original and the decoded value.
+-- The same dump counts which constructors the corpora reach.
+import test.{
+  Expectation, expectAll, expectEach, expectEqual, expectTrue, pass, fail,
+  labelFail
+}
+import test_process.{underRoot}
+import frontend.ast.*
+import frontend.ast_codec.{
+  declsSExp, evEntriesSExp, decodeDecls, decodeEvEntries, readDecls
+}
+import frontend.desugar.{desugar}
+import frontend.desugar_cache.{desugaredPrelude}
+import frontend.parser.{parseLocatedResult}
+import list.{filter, sort}
+import support.sexp_value.{SExp(..), SexpError, renderSExp, cursorOf}
+import types.publish.{CheckedProgram(..), TcReport(..)}
+import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
+import string as S
+
+-- ── corpora ────────────────────────────────────────────────────────────────
+
+-- One tree list with its evidence rows, and where it came from.
+data Sample = Sample {
+  smLabel : String,
+  smDecls : List Decl,
+  smEvidence : List EvEntry,
+}
+
+fixtureDir : String
+fixtureDir = "test/engine_fixtures"
+
+sampleSize : Int
+sampleSize = 40
+
+sampleSeed : Int
+sampleSeed = 4393
+
+-- A linear congruential step; the sample is a function of the seed and the
+-- directory listing, so a failure replays.
+nextSeed : Int -> Int
+nextSeed s = (s * 1103515245 + 12345) % 2147483648
+
+-- Up to [k] distinct elements of [xs], chosen by the seeded walk.
+pickSeeded : Int -> Int -> List a -> List a
+pickSeeded seed k xs = pickGo seed k (length xs) xs []
+
+pickGo : Int -> Int -> Int -> List a -> List Int -> List a
+pickGo seed k n xs chosen
+  | k <= 0 || n == 0 || length chosen >= n = pickAt xs (sort chosen)
+  | otherwise =
+    let s = nextSeed seed
+    let i = s / 65536 % n
+    if elem i chosen then
+      pickGo s k n xs chosen
+    else
+      pickGo s (k - 1) n xs (i :: chosen)
+
+pickAt : List a -> List Int -> List a
+pickAt xs idxs = filterIdx 0 xs idxs
+
+filterIdx : Int -> List a -> List Int -> List a
+filterIdx _ _ [] = []
+filterIdx _ [] _ = []
+filterIdx i (x :: rest) (j :: js)
+  | i == j = x :: filterIdx (i + 1) rest js
+  | otherwise = filterIdx (i + 1) rest (j :: js)
+
+hasSuffix : String -> String -> Bool
+hasSuffix suffix s = S.endsWith suffix s
+
+mdkFiles : String -> List String -> List String
+mdkFiles dir names =
+  sort (map (n => "\{dir}/\{n}") (filter (hasSuffix ".mdk") names))
+
+listMdk : String -> <Env "MEDAKA_ROOT", FileRead> List String
+listMdk rel = match listDir (underRoot rel)
+  Ok names => mdkFiles rel names
+  Err _ => []
+
+desugared : String -> Option (List Decl)
+desugared src = match parseLocatedResult src
+  Ok ds => Some (desugar ds)
+  Err _ => None
+
+fileText : String -> <Env "MEDAKA_ROOT", FileRead> Option String
+fileText rel = match readFile (underRoot rel)
+  Ok t => Some t
+  Err _ => None
+
+-- The elaborated trees of the modules and the evidence the drive produced.
+elaborated : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  Option (List Decl, List (String, List Decl), List EvEntry)
+elaborated rt core mods =
+  let (_, report, _) =
+    elaborateModulesWithReport defaultDriveInputs False None rt core mods
+  match report.trChecked
+    None => None
+    Some c =>
+      map
+        ((coreTrees, userTrees) => (coreTrees, userTrees, c.cpEvidence))
+        c.cpTrees
+
+-- The runtime and core declarations every drive starts from.
+preludeDecls : Unit ->
+  <Env "MEDAKA_ROOT", FileRead> Option (List Decl, List Decl)
+preludeDecls _ = match (
+  fileText "stdlib/runtime.mdk",
+  fileText "stdlib/core.mdk",
+)
+  (Some rsrc, Some csrc) => Some (desugaredPrelude rsrc, desugaredPrelude csrc)
+  _ => None
+
+-- Core elaborated with no user module: the shape the prelude file will hold.
+coreSample : Unit -> <Env "MEDAKA_ROOT", FileRead> Option Sample
+coreSample _ = match preludeDecls ()
+  None => None
+  Some (rt, core) => map coreOf (elaborated rt core [])
+
+coreOf : (List Decl, List (String, List Decl), List EvEntry) -> Sample
+coreOf (coreTrees, _, ev) =
+  Sample { smLabel = "core", smDecls = coreTrees, smEvidence = ev }
+
+stdlibSamples : Unit -> <Env "MEDAKA_ROOT", FileRead> List Sample
+stdlibSamples _ = flatMap stdlibSample (listMdk "stdlib")
+
+stdlibSample : String -> <Env "MEDAKA_ROOT", FileRead> List Sample
+stdlibSample rel = match fileText rel
+  None => []
+  Some src => match desugared src
+    None => []
+    Some ds =>
+      parsedSample rel src
+        ++ [Sample { smLabel = rel, smDecls = ds, smEvidence = [] }]
+
+-- The parser's own output, before desugar removes the sugar.
+parsedSample : String -> String -> List Sample
+parsedSample rel src = match parseLocatedResult src
+  Ok ds =>
+    [Sample { smLabel = "\{rel} (parsed)", smDecls = ds, smEvidence = [] }]
+  Err _ => []
+
+-- A fixture elaborated against the real prelude as the module "main".
+engineSample : List Decl ->
+  List Decl ->
+  String ->
+  <Env "MEDAKA_ROOT", FileRead> List Sample
+engineSample rt core rel = match fileText rel
+  None => []
+  Some src => match desugared src
+    None => []
+    Some ds =>
+      parsedSample rel src
+        ++ (match elaborated rt core [("main", ds)]
+          Some (_, [(_, trees)], ev) =>
+            [Sample { smLabel = rel, smDecls = trees, smEvidence = ev }]
+          _ => [])
+
+engineSamples : Unit -> <Env "MEDAKA_ROOT", FileRead> List Sample
+engineSamples _ = match preludeDecls ()
+  None => []
+  Some (rt, core) =>
+    flatMap
+      (engineSample rt core)
+      (pickSeeded sampleSeed sampleSize (listMdk fixtureDir))
+
+-- The parser's output for every fixture of the directories that spell out
+-- syntax, which is where the sugar the desugared corpora no longer hold lives.
+parsedDirs : List String
+parsedDirs = ["test/construct_fixtures", "test/parse_fixtures", fixtureDir]
+
+parsedFile : String -> <Env "MEDAKA_ROOT", FileRead> List Sample
+parsedFile rel = match fileText rel
+  None => []
+  Some src => parsedSample rel src
+
+parsedSamples : Unit -> <Env "MEDAKA_ROOT", FileRead> List Sample
+parsedSamples _ = flatMap parsedFile (flatMap listMdk parsedDirs)
+
+-- ── the checks ─────────────────────────────────────────────────────────────
+
+declsText : List Decl -> String
+declsText ds = renderSExp (declsSExp ds)
+
+evidenceText : List EvEntry -> String
+evidenceText es = renderSExp (evEntriesSExp es)
+
+dumpDecls : List Decl -> String
+dumpDecls ds = renderSExp (dumpList dumpDecl ds)
+
+dumpEvidence : List EvEntry -> String
+dumpEvidence es = renderSExp (dumpList dumpEvEntry es)
+
+-- Encode, decode, then require the re-encoding and both dumps to agree.
+roundTrips : Sample -> Expectation
+roundTrips s =
+  labelFail
+    s.smLabel
+    (expectAll [
+      match decodeDecls (declsText s.smDecls)
+        Err e => fail "decls: \{debug e}"
+        Ok back => expectAll [
+          expectEqual (declsText s.smDecls) (declsText back),
+          expectEqual (dumpDecls s.smDecls) (dumpDecls back),
+        ],
+      match decodeEvEntries (evidenceText s.smEvidence)
+        Err e => fail "evidence: \{debug e}"
+        Ok back => expectAll [
+          expectEqual (evidenceText s.smEvidence) (evidenceText back),
+          expectEqual (dumpEvidence s.smEvidence) (dumpEvidence back),
+        ],
+    ])
+
+ctorTag : String
+ctorTag = "ctor:"
+
+-- Every constructor name in a dump, from the head atoms the dump marks.
+seenIn : SExp -> List String
+seenIn (SAtom _) = []
+seenIn (SList ((SAtom a) :: rest)) =
+  if S.startsWith ctorTag a then
+    S.sliceClamped (S.length ctorTag) (S.length a) a :: flatMap seenIn rest
+  else
+    flatMap seenIn rest
+seenIn (SList items) = flatMap seenIn items
+
+seenSample : Sample -> List String
+seenSample s =
+  seenIn (dumpList dumpDecl s.smDecls)
+    ++ seenIn (dumpList dumpEvEntry s.smEvidence)
+
+allCtors : List String
+allCtors = [
+  "Lit.LInt", "Lit.LFloat", "Lit.LU64", "Lit.LI64", "Lit.LString", "Lit.LChar",
+  "Lit.LBool", "Lit.LUnit", "TyConOrigin.OriginUnresolved",
+  "TyConOrigin.OriginBuiltin", "TyConOrigin.OriginModule", "Ty.TyCon",
+  "Ty.TyVar", "Ty.TyApp", "Ty.TyFun", "Ty.TyTuple", "Ty.TyEffect",
+  "Ty.TyConstrained", "Ty.TyNamed", "Ty.TyQual", "Ty.TyRow", "Ty.TyAuth",
+  "EffAtomTy.EffAtomTy", "EffParamTy.EPTop", "EffParamTy.EPLit",
+  "EffParamTy.EPName", "EffParamTy.EPSet", "EffParamTy.EPProduct",
+  "Constraint.Constraint", "KindAnn.KindType", "KindAnn.KindEffect",
+  "KindAnn.KindAuthority", "KindAnn.KindArrow", "Route.RNone", "Route.RKey",
+  "Route.RDict", "Route.RDictFwd", "Route.RLocal", "Route.RScalar",
+  "Route.RProj", "EvVal.EvOne", "EvVal.EvMany", "EvVal.EvMethod", "EvVal.EvLit",
+  "EvVal.EvHead", "EvEntry.EvEntry", "Addr.ALocal", "Addr.AGlobal", "Pat.PVar",
+  "Pat.PWild", "Pat.PLit", "Pat.PCon", "Pat.PCons", "Pat.PTuple", "Pat.PList",
+  "Pat.PAs", "Pat.PRng", "Pat.PRec", "RecPatField.RecPatField", "Guard.GBool",
+  "Guard.GBind", "Arm.Arm", "DoStmt.DoExpr", "DoStmt.DoBind", "DoStmt.DoLet",
+  "DoStmt.DoAssign", "DoStmt.DoFieldAssign", "InterpPart.InterpStr",
+  "InterpPart.InterpExpr", "GuardArm.GuardArm", "FieldAssign.FieldAssign",
+  "Section.SecBare", "Section.SecRight", "Section.SecLeft",
+  "FunClause.FunClause", "LetBind.LetBind", "Expr.ELit", "Expr.EVar",
+  "Expr.EApp", "Expr.ELam", "Expr.ELet", "Expr.EMatch", "Expr.EIf",
+  "Expr.EBinOp", "Expr.EUnOp", "Expr.EInfix", "Expr.EFieldAccess",
+  "Expr.ETuple", "Expr.EListLit", "Expr.EArrayLit", "Expr.ERangeList",
+  "Expr.ERangeArray", "Expr.ESlice", "Expr.ELetGroup", "Expr.ESection",
+  "Expr.EIndex", "Expr.EAnnot", "Expr.EHeadAnnot", "Expr.EBlock", "Expr.EDo",
+  "Expr.EStringInterp", "Expr.EGuards", "Expr.ERecordCreate",
+  "Expr.ERecordUpdate", "Expr.EVariantUpdate", "Expr.EMapLit", "Expr.ESetLit",
+  "Expr.EAsPat", "Expr.EMethodRef", "Expr.EDictApp", "Expr.EVarAt",
+  "Expr.EVarId", "Expr.EMethodAt", "Expr.EDictAt", "Expr.ELoc",
+  "Expr.EDoOrigin", "Expr.ENumLit", "Expr.EWideLit", "UseMember.UseMember",
+  "UsePath.UseName", "UsePath.UseGroup", "UsePath.UseWild", "UsePath.UseAlias",
+  "PropParam.PropParam", "MethodDefault.MethodDefault",
+  "IfaceMethod.IfaceMethod", "Super.Super", "Require.Require",
+  "ImplMethod.ImplMethod", "DataVis.VisPrivate", "DataVis.VisAbstract",
+  "DataVis.VisPublic", "Field.Field", "ConPayload.ConPos",
+  "ConPayload.ConNamed", "Variant.Variant", "Attr.AttrDeprecated",
+  "Attr.AttrInline", "Attr.AttrMustUse", "Attr.AttrNoInline",
+  "DeriveRef.DeriveRef", "ExternDecl.ExternDecl", "ExternBind.ExternBind",
+  "Decl.DTypeSig", "Decl.DExtern", "Decl.DFunDef", "Decl.DData", "Decl.DUse",
+  "Decl.DEffect", "Decl.DProp", "Decl.DTest", "Decl.DInterface", "Decl.DImpl",
+  "Decl.DTypeAlias", "Decl.DNewtype", "Decl.DLetGroup", "Decl.DAttrib"
+]
+
+-- Syntax the fixture directories do not happen to spell, parsed and desugared.
+cornerSource : String
+cornerSource = stringJoin "\n" [
+  "@noinline",
+  "f : Int -> Int",
+  "f x = x",
+  "",
+  "extern cAdd : Int -> Int -> <FFI \"c\"> Int",
+  "  bind c \"stub_add\"",
+  "",
+  "g = (xs@(x :: _)) => x",
+  "m = Map { 1 => 2 }",
+  "s = Set { 1, 2 }",
+]
+
+cornerSamples : List Sample
+cornerSamples = match desugared cornerSource
+  None => []
+  Some ds =>
+    parsedSample "corners" cornerSource
+      ++ [Sample { smLabel = "corners", smDecls = ds, smEvidence = [] }]
+
+-- Constructors no source text yields: annotate, the marker and resolve build
+-- them after the trees this test reaches, the wide-literal lowering builds
+-- `LI64`, and `LBool`, `EInfix` and `DoAssign` have no surface syntax left.
+handSample : Sample
+handSample = Sample {
+  smLabel = "hand-built",
+  smDecls =
+    [DFunDef False "hand" [] handBody (Loc "m.mdk" 3 4 3 9) (BinderId "m" 7)],
+  smEvidence = [],
+}
+
+handBody : Expr
+handBody =
+  let e = EVar "e"
+  ETuple [
+    ELit (LI64 1 2),
+    ELit (LBool True),
+    EInfix "f" e e,
+    EAsPat "x" e,
+    EMethodRef "m",
+    EDictApp "d",
+    EVarAt "v" (ALocal 0 1),
+    EVarAt "w" AGlobal,
+    EVarId "z" 3,
+    EDo False [DoAssign "x" e, DoFieldAssign "r" ["f"] e],
+  ]
+
+allSamples : Unit -> <Env "MEDAKA_ROOT", FileRead> List Sample
+allSamples _ =
+  (match coreSample ()
+      Some s => [s]
+      None => [])
+    ++ stdlibSamples ()
+    ++ engineSamples ()
+    ++ parsedSamples ()
+    ++ cornerSamples
+    ++ [handSample]
+
+test "core's elaborated trees and evidence rows round-trip" =
+  match coreSample ()
+    None => fail "core did not elaborate"
+    Some s => expectAll [
+      roundTrips s,
+      labelFail "core has declarations" (expectTrue (length s.smDecls > 100)),
+      labelFail "core has evidence" (expectTrue (length s.smEvidence > 500)),
+    ]
+
+test "every stdlib module's desugared trees round-trip" = expectAll [
+  labelFail
+    "stdlib modules parsed"
+    (expectTrue (length (stdlibSamples ()) > 40)),
+  expectAll (map roundTrips (stdlibSamples ())),
+]
+
+test "a seeded sample of the engine fixtures, elaborated, round-trips" = expectAll
+  [
+    labelFail
+      "fixtures elaborated"
+      (expectTrue
+        (length
+            (filter
+              (s => not (hasSuffix "(parsed)" s.smLabel))
+              (engineSamples ()))
+          >= sampleSize / 2)),
+    expectAll (map roundTrips (engineSamples ())),
+  ]
+
+test "the parser's undesugared trees for the syntax fixtures round-trip" =
+  let samples = parsedSamples () ++ cornerSamples ++ [handSample]
+  expectAll [
+    labelFail "fixtures parsed" (expectTrue (length samples > 300)),
+    expectAll (map roundTrips samples),
+  ]
+
+test "the corpora reach every constructor the codec handles" =
+  let seen = flatMap seenSample (allSamples ())
+  expectEqual [] (filter (c => not (elem c seen)) allCtors)
+
+-- ── fail closed ────────────────────────────────────────────────────────────
+
+refusal : Result SexpError a -> Expectation
+refusal (Err _) = pass
+refusal (Ok _) = fail "decoded a malformed input"
+
+refused : String -> Expectation
+refused text = labelFail text (refusal (decodeDecls text))
+
+test "a refused read is an Err, never a partial value" = expectAll [
+  labelFail "empty list" (expectEqual (Ok 0) (map length (decodeDecls "()"))),
+  refused "(999)",
+  refused "((999 a))",
+  refused "((x a))",
+  refused "(x)",
+  refused "(0)",
+  refused "((0))",
+  refused "() ()",
+  refused "()x",
+  refused "(",
+  refused "",
+  refused "((0 t",
+]
+
+test "truncating a real encoding at any of several offsets is an Err" =
+  match coreSample ()
+    None => fail "core did not elaborate"
+    Some s =>
+      let text = declsText s.smDecls
+      let n = S.length text
+      expectAll
+        (map
+          (k =>
+            labelFail
+              "cut at \{intToString k}"
+              (refusal (decodeDecls (S.take k text))))
+          [0, 1, 2, 10, 100, n / 3, n / 2, n - 2, n - 1])
+
+test "a wrong tag or a trailing node in a real encoding is an Err" =
+  match coreSample ()
+    None => fail "core did not elaborate"
+    Some s =>
+      let text = declsText s.smDecls
+      expectAll [
+        labelFail "trailing node" (refusal (decodeDecls (text ++ " ()"))),
+        labelFail "trailing atom" (refusal (decodeDecls (text ++ " 1"))),
+        labelFail
+          "first tag out of range"
+          (refusal
+            (decodeDecls ("((999" ++ S.sliceClamped 3 (S.length text) text))),
+        labelFail
+          "first tag not an integer"
+          (refusal
+            (decodeDecls ("((zz" ++ S.sliceClamped 3 (S.length text) text))),
+      ]
+
+test "evidence rows refuse the same malformed input" =
+  let refusedEv = text => labelFail text (refusal (decodeEvEntries text))
+  expectAll [
+    refusedEv "((1))",
+    refusedEv "((1 (9)))",
+    refusedEv "((1 (9 a)))",
+    refusedEv "((x (0 0)))",
+    refusedEv "((1 (0 0))",
+    refusedEv "((1 (0 0))) ()",
+  ]
+
+test "readDecls leaves what follows its list for the caller" =
+  let cur = cursorOf "() tail"
+  match readDecls cur
+    Err e => fail (debug e)
+    Ok ds => expectEqual 0 (length ds)
+
+-- ── values the corpora may not reach ───────────────────────────────────────
+
+floatBits : Float -> List Int
+floatBits f = toList (floatToBytes64 f)
+
+floatRow : Float -> EvEntry
+floatRow f = EvEntry (EvId "" 1) (EvLit (Some f) RNone)
+
+floatBack : Float -> Option (List Int)
+floatBack f = match decodeEvEntries (evidenceText [floatRow f])
+  Ok [EvEntry _ (EvLit (Some g) _)] => Some (floatBits g)
+  _ => None
+
+test "floats round-trip bit for bit" =
+  let nan = 0.0 / 0.0
+  let inf = 1.0 / 0.0
+  let values = [
+    0.0, -0.0, 1.5, -2.25, 0.1, 5e-324, 1.7976931348623157e+308, inf, -inf, nan
+  ]
+  expectEach
+    (map
+      (f => (floatString f, expectEqual (Some (floatBits f)) (floatBack f)))
+      values)
+
+floatString : Float -> String
+floatString f = "bits \{debug (floatBits f)}"
+
+test "ids and locations keep their module and span" =
+  let rows = [
+    EvEntry (EvId "" 7) (EvHead "x"),
+    EvEntry (EvId "m" 7) (EvHead "x"),
+    EvEntry (EvId "a.b" 0) (EvHead ""),
+  ]
+  match decodeEvEntries (evidenceText rows)
+    Err e => fail (debug e)
+    Ok back => expectEqual (dumpEvidence rows) (dumpEvidence back)
+
+test "strings with escapes, quotes and unicode round-trip" =
+  let names =
+    ["a b", "", "q\"uote", "back\\slash", "tab\tnew\nline", "naïve ✓", "(", ")"]
+  let rows = map (n => EvEntry (EvId "" 1) (EvHead n)) names
+  match decodeEvEntries (evidenceText rows)
+    Err e => fail (debug e)
+    Ok back => expectEqual (dumpEvidence rows) (dumpEvidence back)
+
+-- ── the constructor-name dump ──────────────────────────────────────────────
+
+dumpInt : Int -> SExp
+dumpInt n = SAtom (intToString n)
+
+dumpString : String -> SExp
+dumpString s = SAtom s
+
+dumpBool : Bool -> SExp
+dumpBool b = SAtom (if b then "True" else "False")
+
+dumpFloat : Float -> SExp
+dumpFloat f = SAtom (debug (toList (floatToBytes64 f)))
+
+dumpList : (a -> SExp) -> List a -> SExp
+dumpList f xs = SList (map f xs)
+
+dumpOpt : (a -> SExp) -> Option a -> SExp
+dumpOpt _ None = SList []
+dumpOpt f (Some x) = SList [f x]
+
+dumpPair : (a -> SExp) -> (b -> SExp) -> (a, b) -> SExp
+dumpPair fa fb (a, b) = SList [fa a, fb b]
+
+dumpLoc : Loc -> SExp
+dumpLoc (Loc f a b c d) =
+  SList [SAtom f, dumpInt a, dumpInt b, dumpInt c, dumpInt d]
+
+dumpEvId : EvId -> SExp
+dumpEvId (EvId m n) = SList [SAtom m, dumpInt n]
+
+dumpBinderId : BinderId -> SExp
+dumpBinderId (BinderId m n) = SList [SAtom m, dumpInt n]
+
+dumpLit : Lit -> SExp
+dumpLit (LInt a0) = SList [SAtom "ctor:Lit.LInt", dumpInt a0]
+dumpLit (LFloat a0) = SList [SAtom "ctor:Lit.LFloat", dumpFloat a0]
+dumpLit (LU64 a0 a1) = SList [SAtom "ctor:Lit.LU64", dumpInt a0, dumpInt a1]
+dumpLit (LI64 a0 a1) = SList [SAtom "ctor:Lit.LI64", dumpInt a0, dumpInt a1]
+dumpLit (LString a0) = SList [SAtom "ctor:Lit.LString", dumpString a0]
+dumpLit (LChar a0) = SList [SAtom "ctor:Lit.LChar", dumpString a0]
+dumpLit (LBool a0) = SList [SAtom "ctor:Lit.LBool", dumpBool a0]
+dumpLit LUnit = SList [SAtom "ctor:Lit.LUnit"]
+
+dumpTyConOrigin : TyConOrigin -> SExp
+dumpTyConOrigin OriginUnresolved =
+  SList [SAtom "ctor:TyConOrigin.OriginUnresolved"]
+dumpTyConOrigin OriginBuiltin = SList [SAtom "ctor:TyConOrigin.OriginBuiltin"]
+dumpTyConOrigin (OriginModule a0) =
+  SList [SAtom "ctor:TyConOrigin.OriginModule", dumpString a0]
+
+dumpTy : Ty -> SExp
+dumpTy (TyCon { tyConName = a0, tyConLoc = a1, tyConOrigin = a2 }) = SList [
+  SAtom "ctor:Ty.TyCon",
+  dumpString a0,
+  dumpOpt dumpLoc a1,
+  dumpTyConOrigin a2,
+]
+dumpTy (TyVar a0) = SList [SAtom "ctor:Ty.TyVar", dumpString a0]
+dumpTy (TyApp a0 a1) = SList [SAtom "ctor:Ty.TyApp", dumpTy a0, dumpTy a1]
+dumpTy (TyFun a0 a1) = SList [SAtom "ctor:Ty.TyFun", dumpTy a0, dumpTy a1]
+dumpTy (TyTuple a0) = SList [SAtom "ctor:Ty.TyTuple", dumpList dumpTy a0]
+dumpTy (TyEffect a0 a1 a2) = SList [
+  SAtom "ctor:Ty.TyEffect",
+  dumpList dumpEffAtomTy a0,
+  dumpList dumpString a1,
+  dumpTy a2,
+]
+dumpTy (TyConstrained a0 a1) =
+  SList [SAtom "ctor:Ty.TyConstrained", dumpList dumpConstraint a0, dumpTy a1]
+dumpTy (TyNamed a0 a1 a2) = SList [
+  SAtom "ctor:Ty.TyNamed",
+  dumpString a0,
+  dumpTy a1,
+  dumpOpt dumpEffAtomTy a2,
+]
+dumpTy (TyQual a0 a1 a2) = SList [
+  SAtom "ctor:Ty.TyQual",
+  dumpTy a0,
+  dumpList dumpEffParamTy a1,
+  dumpOpt dumpLoc a2,
+]
+dumpTy (TyRow a0 a1 a2) = SList [
+  SAtom "ctor:Ty.TyRow",
+  dumpList dumpEffAtomTy a0,
+  dumpList dumpString a1,
+  dumpOpt dumpLoc a2,
+]
+dumpTy (TyAuth a0 a1) =
+  SList [SAtom "ctor:Ty.TyAuth", dumpList dumpEffParamTy a0, dumpOpt dumpLoc a1]
+
+dumpEffAtomTy : EffAtomTy -> SExp
+dumpEffAtomTy (EffAtomTy { eatLabel = a0, eatOrigin = a1, eatParam = a2, eatLoc = a3, eatPattern = a4 }) = SList
+  [
+    SAtom "ctor:EffAtomTy.EffAtomTy",
+    dumpString a0,
+    dumpTyConOrigin a1,
+    dumpEffParamTy a2,
+    dumpOpt dumpLoc a3,
+    dumpBool a4,
+  ]
+
+dumpEffParamTy : EffParamTy -> SExp
+dumpEffParamTy EPTop = SList [SAtom "ctor:EffParamTy.EPTop"]
+dumpEffParamTy (EPLit a0) = SList [SAtom "ctor:EffParamTy.EPLit", dumpString a0]
+dumpEffParamTy (EPName a0) =
+  SList [SAtom "ctor:EffParamTy.EPName", dumpString a0]
+dumpEffParamTy (EPSet a0) =
+  SList [SAtom "ctor:EffParamTy.EPSet", dumpList dumpString a0]
+dumpEffParamTy (EPProduct a0) = SList [
+  SAtom "ctor:EffParamTy.EPProduct",
+  dumpList (dumpPair dumpString dumpEffParamTy) a0,
+]
+
+dumpConstraint : Constraint -> SExp
+dumpConstraint (Constraint { constraintHead = a0, constraintArgs = a1, constraintOrigin = a2 }) = SList
+  [
+    SAtom "ctor:Constraint.Constraint",
+    dumpString a0,
+    dumpList dumpTy a1,
+    dumpTyConOrigin a2,
+  ]
+
+dumpKindAnn : KindAnn -> SExp
+dumpKindAnn KindType = SList [SAtom "ctor:KindAnn.KindType"]
+dumpKindAnn KindEffect = SList [SAtom "ctor:KindAnn.KindEffect"]
+dumpKindAnn (KindAuthority a0 a1 a2 a3) = SList [
+  SAtom "ctor:KindAnn.KindAuthority",
+  dumpString a0,
+  dumpTyConOrigin a1,
+  dumpBool a2,
+  dumpOpt dumpLoc a3,
+]
+dumpKindAnn (KindArrow a0 a1) =
+  SList [SAtom "ctor:KindAnn.KindArrow", dumpKindAnn a0, dumpKindAnn a1]
+
+dumpRoute : Route -> SExp
+dumpRoute RNone = SList [SAtom "ctor:Route.RNone"]
+dumpRoute (RKey a0 a1 a2) = SList [
+  SAtom "ctor:Route.RKey",
+  dumpString a0,
+  dumpList dumpRoute a1,
+  dumpList dumpRoute a2,
+]
+dumpRoute (RDict a0) = SList [SAtom "ctor:Route.RDict", dumpString a0]
+dumpRoute (RDictFwd a0) = SList [SAtom "ctor:Route.RDictFwd", dumpString a0]
+dumpRoute (RLocal a0 a1) =
+  SList [SAtom "ctor:Route.RLocal", dumpString a0, dumpList dumpRoute a1]
+dumpRoute (RScalar a0) = SList [SAtom "ctor:Route.RScalar", dumpString a0]
+dumpRoute (RProj a0 a1) =
+  SList [SAtom "ctor:Route.RProj", dumpRoute a0, dumpList dumpInt a1]
+
+dumpEvVal : EvVal -> SExp
+dumpEvVal (EvOne a0) = SList [SAtom "ctor:EvVal.EvOne", dumpRoute a0]
+dumpEvVal (EvMany a0) = SList [SAtom "ctor:EvVal.EvMany", dumpList dumpRoute a0]
+dumpEvVal (EvMethod a0 a1 a2 a3 a4) = SList [
+  SAtom "ctor:EvVal.EvMethod",
+  dumpString a0,
+  dumpInt a1,
+  dumpRoute a2,
+  dumpList dumpRoute a3,
+  dumpList dumpRoute a4,
+]
+dumpEvVal (EvLit a0 a1) =
+  SList [SAtom "ctor:EvVal.EvLit", dumpOpt dumpFloat a0, dumpRoute a1]
+dumpEvVal (EvHead a0) = SList [SAtom "ctor:EvVal.EvHead", dumpString a0]
+
+dumpEvEntry : EvEntry -> SExp
+dumpEvEntry (EvEntry a0 a1) =
+  SList [SAtom "ctor:EvEntry.EvEntry", dumpEvId a0, dumpEvVal a1]
+
+dumpAddr : Addr -> SExp
+dumpAddr (ALocal a0 a1) =
+  SList [SAtom "ctor:Addr.ALocal", dumpInt a0, dumpInt a1]
+dumpAddr AGlobal = SList [SAtom "ctor:Addr.AGlobal"]
+
+dumpPat : Pat -> SExp
+dumpPat (PVar a0 a1 a2) =
+  SList [SAtom "ctor:Pat.PVar", dumpString a0, dumpLoc a1, dumpBinderId a2]
+dumpPat PWild = SList [SAtom "ctor:Pat.PWild"]
+dumpPat (PLit a0) = SList [SAtom "ctor:Pat.PLit", dumpLit a0]
+dumpPat (PCon a0 a1) =
+  SList [SAtom "ctor:Pat.PCon", dumpString a0, dumpList dumpPat a1]
+dumpPat (PCons a0 a1) = SList [SAtom "ctor:Pat.PCons", dumpPat a0, dumpPat a1]
+dumpPat (PTuple a0) = SList [SAtom "ctor:Pat.PTuple", dumpList dumpPat a0]
+dumpPat (PList a0) = SList [SAtom "ctor:Pat.PList", dumpList dumpPat a0]
+dumpPat (PAs a0 a1 a2 a3) = SList [
+  SAtom "ctor:Pat.PAs",
+  dumpString a0,
+  dumpLoc a1,
+  dumpBinderId a2,
+  dumpPat a3,
+]
+dumpPat (PRng a0 a1 a2) =
+  SList [SAtom "ctor:Pat.PRng", dumpLit a0, dumpLit a1, dumpBool a2]
+dumpPat (PRec a0 a1 a2) = SList [
+  SAtom "ctor:Pat.PRec",
+  dumpString a0,
+  dumpList dumpRecPatField a1,
+  dumpBool a2,
+]
+
+dumpRecPatField : RecPatField -> SExp
+dumpRecPatField (RecPatField a0 a1 a2 a3) = SList [
+  SAtom "ctor:RecPatField.RecPatField",
+  dumpString a0,
+  dumpLoc a1,
+  dumpBinderId a2,
+  dumpOpt dumpPat a3,
+]
+
+dumpGuard : Guard -> SExp
+dumpGuard (GBool a0) = SList [SAtom "ctor:Guard.GBool", dumpExpr a0]
+dumpGuard (GBind a0 a1) =
+  SList [SAtom "ctor:Guard.GBind", dumpPat a0, dumpExpr a1]
+
+dumpArm : Arm -> SExp
+dumpArm (Arm a0 a1 a2) =
+  SList [SAtom "ctor:Arm.Arm", dumpPat a0, dumpList dumpGuard a1, dumpExpr a2]
+
+dumpDoStmt : DoStmt -> SExp
+dumpDoStmt (DoExpr a0) = SList [SAtom "ctor:DoStmt.DoExpr", dumpExpr a0]
+dumpDoStmt (DoBind a0 a1) =
+  SList [SAtom "ctor:DoStmt.DoBind", dumpPat a0, dumpExpr a1]
+dumpDoStmt (DoLet a0 a1 a2 a3 a4) = SList [
+  SAtom "ctor:DoStmt.DoLet",
+  dumpBool a0,
+  dumpBool a1,
+  dumpPat a2,
+  dumpExpr a3,
+  dumpLoc a4,
+]
+dumpDoStmt (DoAssign a0 a1) =
+  SList [SAtom "ctor:DoStmt.DoAssign", dumpString a0, dumpExpr a1]
+dumpDoStmt (DoFieldAssign a0 a1 a2) = SList [
+  SAtom "ctor:DoStmt.DoFieldAssign",
+  dumpString a0,
+  dumpList dumpString a1,
+  dumpExpr a2,
+]
+
+dumpInterpPart : InterpPart -> SExp
+dumpInterpPart (InterpStr a0) =
+  SList [SAtom "ctor:InterpPart.InterpStr", dumpString a0]
+dumpInterpPart (InterpExpr a0) =
+  SList [SAtom "ctor:InterpPart.InterpExpr", dumpExpr a0]
+
+dumpGuardArm : GuardArm -> SExp
+dumpGuardArm (GuardArm a0 a1) =
+  SList [SAtom "ctor:GuardArm.GuardArm", dumpList dumpGuard a0, dumpExpr a1]
+
+dumpFieldAssign : FieldAssign -> SExp
+dumpFieldAssign (FieldAssign a0 a1) =
+  SList [SAtom "ctor:FieldAssign.FieldAssign", dumpString a0, dumpExpr a1]
+
+dumpSection : Section -> SExp
+dumpSection (SecBare a0) = SList [SAtom "ctor:Section.SecBare", dumpString a0]
+dumpSection (SecRight a0 a1) =
+  SList [SAtom "ctor:Section.SecRight", dumpString a0, dumpExpr a1]
+dumpSection (SecLeft a0 a1) =
+  SList [SAtom "ctor:Section.SecLeft", dumpExpr a0, dumpString a1]
+
+dumpFunClause : FunClause -> SExp
+dumpFunClause (FunClause a0 a1) =
+  SList [SAtom "ctor:FunClause.FunClause", dumpList dumpPat a0, dumpExpr a1]
+
+dumpLetBind : LetBind -> SExp
+dumpLetBind (LetBind a0 a1 a2 a3) = SList [
+  SAtom "ctor:LetBind.LetBind",
+  dumpString a0,
+  dumpList dumpFunClause a1,
+  dumpLoc a2,
+  dumpBinderId a3,
+]
+
+dumpExpr : Expr -> SExp
+dumpExpr (ELit a0) = SList [SAtom "ctor:Expr.ELit", dumpLit a0]
+dumpExpr (EVar a0) = SList [SAtom "ctor:Expr.EVar", dumpString a0]
+dumpExpr (EApp a0 a1) = SList [SAtom "ctor:Expr.EApp", dumpExpr a0, dumpExpr a1]
+dumpExpr (ELam a0 a1) =
+  SList [SAtom "ctor:Expr.ELam", dumpList dumpPat a0, dumpExpr a1]
+dumpExpr (ELet a0 a1 a2 a3 a4) = SList [
+  SAtom "ctor:Expr.ELet",
+  dumpLoc a0,
+  dumpBool a1,
+  dumpPat a2,
+  dumpExpr a3,
+  dumpExpr a4,
+]
+dumpExpr (EMatch a0 a1) =
+  SList [SAtom "ctor:Expr.EMatch", dumpExpr a0, dumpList dumpArm a1]
+dumpExpr (EIf a0 a1 a2) =
+  SList [SAtom "ctor:Expr.EIf", dumpExpr a0, dumpExpr a1, dumpExpr a2]
+dumpExpr (EBinOp a0 a1 a2 a3) = SList [
+  SAtom "ctor:Expr.EBinOp",
+  dumpString a0,
+  dumpExpr a1,
+  dumpExpr a2,
+  dumpEvId a3,
+]
+dumpExpr (EUnOp a0 a1 a2) =
+  SList [SAtom "ctor:Expr.EUnOp", dumpString a0, dumpExpr a1, dumpEvId a2]
+dumpExpr (EInfix a0 a1 a2) =
+  SList [SAtom "ctor:Expr.EInfix", dumpString a0, dumpExpr a1, dumpExpr a2]
+dumpExpr (EFieldAccess a0 a1 a2) = SList [
+  SAtom "ctor:Expr.EFieldAccess",
+  dumpExpr a0,
+  dumpString a1,
+  dumpEvId a2,
+]
+dumpExpr (ETuple a0) = SList [SAtom "ctor:Expr.ETuple", dumpList dumpExpr a0]
+dumpExpr (EListLit a0) =
+  SList [SAtom "ctor:Expr.EListLit", dumpList dumpExpr a0]
+dumpExpr (EArrayLit a0) =
+  SList [SAtom "ctor:Expr.EArrayLit", dumpList dumpExpr a0]
+dumpExpr (ERangeList a0 a1 a2) =
+  SList [SAtom "ctor:Expr.ERangeList", dumpExpr a0, dumpExpr a1, dumpBool a2]
+dumpExpr (ERangeArray a0 a1 a2) =
+  SList [SAtom "ctor:Expr.ERangeArray", dumpExpr a0, dumpExpr a1, dumpBool a2]
+dumpExpr (ESlice a0 a1 a2 a3) = SList [
+  SAtom "ctor:Expr.ESlice",
+  dumpExpr a0,
+  dumpExpr a1,
+  dumpExpr a2,
+  dumpBool a3,
+]
+dumpExpr (ELetGroup a0 a1) =
+  SList [SAtom "ctor:Expr.ELetGroup", dumpList dumpLetBind a0, dumpExpr a1]
+dumpExpr (ESection a0) = SList [SAtom "ctor:Expr.ESection", dumpSection a0]
+dumpExpr (EIndex a0 a1) =
+  SList [SAtom "ctor:Expr.EIndex", dumpExpr a0, dumpExpr a1]
+dumpExpr (EAnnot a0 a1) =
+  SList [SAtom "ctor:Expr.EAnnot", dumpExpr a0, dumpTy a1]
+dumpExpr (EHeadAnnot a0 a1) =
+  SList [SAtom "ctor:Expr.EHeadAnnot", dumpExpr a0, dumpTy a1]
+dumpExpr (EBlock a0) = SList [SAtom "ctor:Expr.EBlock", dumpList dumpDoStmt a0]
+dumpExpr (EDo a0 a1) =
+  SList [SAtom "ctor:Expr.EDo", dumpBool a0, dumpList dumpDoStmt a1]
+dumpExpr (EStringInterp a0) =
+  SList [SAtom "ctor:Expr.EStringInterp", dumpList dumpInterpPart a0]
+dumpExpr (EGuards a0) =
+  SList [SAtom "ctor:Expr.EGuards", dumpList dumpGuardArm a0]
+dumpExpr (ERecordCreate a0 a1) = SList [
+  SAtom "ctor:Expr.ERecordCreate",
+  dumpString a0,
+  dumpList dumpFieldAssign a1,
+]
+dumpExpr (ERecordUpdate a0 a1 a2) = SList [
+  SAtom "ctor:Expr.ERecordUpdate",
+  dumpExpr a0,
+  dumpList dumpFieldAssign a1,
+  dumpEvId a2,
+]
+dumpExpr (EVariantUpdate a0 a1 a2) = SList [
+  SAtom "ctor:Expr.EVariantUpdate",
+  dumpString a0,
+  dumpExpr a1,
+  dumpList dumpFieldAssign a2,
+]
+dumpExpr (EMapLit a0 a1) = SList [
+  SAtom "ctor:Expr.EMapLit",
+  dumpString a0,
+  dumpList (dumpPair dumpExpr dumpExpr) a1,
+]
+dumpExpr (ESetLit a0 a1) =
+  SList [SAtom "ctor:Expr.ESetLit", dumpString a0, dumpList dumpExpr a1]
+dumpExpr (EAsPat a0 a1) =
+  SList [SAtom "ctor:Expr.EAsPat", dumpString a0, dumpExpr a1]
+dumpExpr (EMethodRef a0) = SList [SAtom "ctor:Expr.EMethodRef", dumpString a0]
+dumpExpr (EDictApp a0) = SList [SAtom "ctor:Expr.EDictApp", dumpString a0]
+dumpExpr (EVarAt a0 a1) =
+  SList [SAtom "ctor:Expr.EVarAt", dumpString a0, dumpAddr a1]
+dumpExpr (EVarId a0 a1) =
+  SList [SAtom "ctor:Expr.EVarId", dumpString a0, dumpInt a1]
+dumpExpr (EMethodAt a0 a1 a2) =
+  SList [SAtom "ctor:Expr.EMethodAt", dumpString a0, dumpString a1, dumpEvId a2]
+dumpExpr (EDictAt a0 a1) =
+  SList [SAtom "ctor:Expr.EDictAt", dumpString a0, dumpEvId a1]
+dumpExpr (ELoc a0 a1) = SList [SAtom "ctor:Expr.ELoc", dumpLoc a0, dumpExpr a1]
+dumpExpr (EDoOrigin a0 a1) =
+  SList [SAtom "ctor:Expr.EDoOrigin", dumpLoc a0, dumpExpr a1]
+dumpExpr (ENumLit a0 a1 a2) =
+  SList [SAtom "ctor:Expr.ENumLit", dumpInt a0, dumpEvId a1, dumpString a2]
+dumpExpr (EWideLit a0 a1 a2 a3) = SList [
+  SAtom "ctor:Expr.EWideLit",
+  dumpInt a0,
+  dumpInt a1,
+  dumpEvId a2,
+  dumpString a3,
+]
+
+dumpUseMember : UseMember -> SExp
+dumpUseMember (UseMember a0 a1 a2 a3) = SList [
+  SAtom "ctor:UseMember.UseMember",
+  dumpString a0,
+  dumpBool a1,
+  dumpLoc a2,
+  dumpOpt dumpString a3,
+]
+
+dumpUsePath : UsePath -> SExp
+dumpUsePath (UseName a0) =
+  SList [SAtom "ctor:UsePath.UseName", dumpList dumpString a0]
+dumpUsePath (UseGroup a0 a1) = SList [
+  SAtom "ctor:UsePath.UseGroup",
+  dumpList dumpString a0,
+  dumpList dumpUseMember a1,
+]
+dumpUsePath (UseWild a0) =
+  SList [SAtom "ctor:UsePath.UseWild", dumpList dumpString a0]
+dumpUsePath (UseAlias a0 a1) =
+  SList [SAtom "ctor:UsePath.UseAlias", dumpList dumpString a0, dumpString a1]
+
+dumpPropParam : PropParam -> SExp
+dumpPropParam (PropParam a0 a1 a2) =
+  SList [SAtom "ctor:PropParam.PropParam", dumpString a0, dumpLoc a1, dumpTy a2]
+
+dumpMethodDefault : MethodDefault -> SExp
+dumpMethodDefault (MethodDefault a0 a1) = SList [
+  SAtom "ctor:MethodDefault.MethodDefault",
+  dumpList dumpPat a0,
+  dumpExpr a1,
+]
+
+dumpIfaceMethod : IfaceMethod -> SExp
+dumpIfaceMethod (IfaceMethod a0 a1 a2 a3) = SList [
+  SAtom "ctor:IfaceMethod.IfaceMethod",
+  dumpString a0,
+  dumpTy a1,
+  dumpOpt dumpMethodDefault a2,
+  dumpOpt dumpLoc a3,
+]
+
+dumpSuper : Super -> SExp
+dumpSuper (Super { superHead = a0, superParams = a1, superOrigin = a2 }) = SList
+  [
+    SAtom "ctor:Super.Super",
+    dumpString a0,
+    dumpList dumpString a1,
+    dumpTyConOrigin a2,
+  ]
+
+dumpRequire : Require -> SExp
+dumpRequire (Require { requireHead = a0, requireArgs = a1, requireOrigin = a2 }) = SList
+  [
+    SAtom "ctor:Require.Require",
+    dumpString a0,
+    dumpList dumpTy a1,
+    dumpTyConOrigin a2,
+  ]
+
+dumpImplMethod : ImplMethod -> SExp
+dumpImplMethod (ImplMethod a0 a1 a2) = SList [
+  SAtom "ctor:ImplMethod.ImplMethod",
+  dumpString a0,
+  dumpList dumpPat a1,
+  dumpExpr a2,
+]
+
+dumpDataVis : DataVis -> SExp
+dumpDataVis VisPrivate = SList [SAtom "ctor:DataVis.VisPrivate"]
+dumpDataVis VisAbstract = SList [SAtom "ctor:DataVis.VisAbstract"]
+dumpDataVis VisPublic = SList [SAtom "ctor:DataVis.VisPublic"]
+
+dumpField : Field -> SExp
+dumpField (Field a0 a1) =
+  SList [SAtom "ctor:Field.Field", dumpString a0, dumpTy a1]
+
+dumpConPayload : ConPayload -> SExp
+dumpConPayload (ConPos a0) =
+  SList [SAtom "ctor:ConPayload.ConPos", dumpList dumpTy a0]
+dumpConPayload (ConNamed a0 a1) =
+  SList [SAtom "ctor:ConPayload.ConNamed", dumpList dumpField a0, dumpBool a1]
+
+dumpVariant : Variant -> SExp
+dumpVariant (Variant a0 a1) =
+  SList [SAtom "ctor:Variant.Variant", dumpString a0, dumpConPayload a1]
+
+dumpAttr : Attr -> SExp
+dumpAttr (AttrDeprecated a0) =
+  SList [SAtom "ctor:Attr.AttrDeprecated", dumpOpt dumpString a0]
+dumpAttr AttrInline = SList [SAtom "ctor:Attr.AttrInline"]
+dumpAttr AttrMustUse = SList [SAtom "ctor:Attr.AttrMustUse"]
+dumpAttr AttrNoInline = SList [SAtom "ctor:Attr.AttrNoInline"]
+
+dumpDeriveRef : DeriveRef -> SExp
+dumpDeriveRef (DeriveRef a0 a1) =
+  SList [SAtom "ctor:DeriveRef.DeriveRef", dumpString a0, dumpOpt dumpLoc a1]
+
+dumpExternDecl : ExternDecl -> SExp
+dumpExternDecl (ExternDecl { edPub = a0, edName = a1, edTy = a2, edLoc = a3, edBinds = a4 }) = SList
+  [
+    SAtom "ctor:ExternDecl.ExternDecl",
+    dumpBool a0,
+    dumpString a1,
+    dumpTy a2,
+    dumpLoc a3,
+    dumpList dumpExternBind a4,
+  ]
+
+dumpExternBind : ExternBind -> SExp
+dumpExternBind (ExternBind { ebHost = a0, ebSymbol = a1, ebLoc = a2 }) = SList [
+  SAtom "ctor:ExternBind.ExternBind",
+  dumpString a0,
+  dumpString a1,
+  dumpLoc a2,
+]
+
+dumpDecl : Decl -> SExp
+dumpDecl (DTypeSig a0 a1 a2 a3) = SList [
+  SAtom "ctor:Decl.DTypeSig",
+  dumpBool a0,
+  dumpString a1,
+  dumpTy a2,
+  dumpLoc a3,
+]
+dumpDecl (DExtern a0) = SList [SAtom "ctor:Decl.DExtern", dumpExternDecl a0]
+dumpDecl (DFunDef a0 a1 a2 a3 a4 a5) = SList [
+  SAtom "ctor:Decl.DFunDef",
+  dumpBool a0,
+  dumpString a1,
+  dumpList dumpPat a2,
+  dumpExpr a3,
+  dumpLoc a4,
+  dumpBinderId a5,
+]
+dumpDecl (DData { dataVis = a0, dataName = a1, dataParams = a2, dataParamKinds = a3, dataCtors = a4, dataCtorBinders = a5, dataDerives = a6, dataOrigin = a7, dataExtern = a8, dataNameLoc = a9 }) = SList
+  [
+    SAtom "ctor:Decl.DData",
+    dumpDataVis a0,
+    dumpString a1,
+    dumpList dumpString a2,
+    dumpList (dumpOpt dumpKindAnn) a3,
+    dumpList dumpVariant a4,
+    dumpList (dumpList (dumpPair dumpString dumpKindAnn)) a5,
+    dumpList dumpDeriveRef a6,
+    dumpTyConOrigin a7,
+    dumpBool a8,
+    dumpOpt dumpLoc a9,
+  ]
+dumpDecl (DUse a0 a1 a2) =
+  SList [SAtom "ctor:Decl.DUse", dumpBool a0, dumpUsePath a1, dumpLoc a2]
+dumpDecl (DEffect a0 a1 a2 a3 a4 a5) = SList [
+  SAtom "ctor:Decl.DEffect",
+  dumpBool a0,
+  dumpString a1,
+  dumpOpt dumpString a2,
+  dumpList (dumpPair dumpString dumpString) a3,
+  dumpTyConOrigin a4,
+  dumpOpt dumpLoc a5,
+]
+dumpDecl (DProp a0 a1 a2 a3) = SList [
+  SAtom "ctor:Decl.DProp",
+  dumpBool a0,
+  dumpString a1,
+  dumpList dumpPropParam a2,
+  dumpExpr a3,
+]
+dumpDecl (DTest a0 a1 a2) =
+  SList [SAtom "ctor:Decl.DTest", dumpBool a0, dumpString a1, dumpExpr a2]
+dumpDecl (DInterface { pub = a0, def = a1, name = a2, typarams = a3, typaramKinds = a4, supers = a5, methods = a6, ifaceOrigin = a7, ifaceNameLoc = a8 }) = SList
+  [
+    SAtom "ctor:Decl.DInterface",
+    dumpBool a0,
+    dumpBool a1,
+    dumpString a2,
+    dumpList dumpString a3,
+    dumpList (dumpOpt dumpKindAnn) a4,
+    dumpList dumpSuper a5,
+    dumpList dumpIfaceMethod a6,
+    dumpTyConOrigin a7,
+    dumpOpt dumpLoc a8,
+  ]
+dumpDecl (DImpl { pub = a0, iface = a1, tys = a2, reqs = a3, methods = a4, implOrigin = a5, implIfaceLoc = a6 }) = SList
+  [
+    SAtom "ctor:Decl.DImpl",
+    dumpBool a0,
+    dumpString a1,
+    dumpList dumpTy a2,
+    dumpList dumpRequire a3,
+    dumpList dumpImplMethod a4,
+    dumpTyConOrigin a5,
+    dumpOpt dumpLoc a6,
+  ]
+dumpDecl (DTypeAlias { tyAliasPub = a0, tyAliasName = a1, tyAliasParams = a2, tyAliasParamKinds = a3, tyAliasRhs = a4, tyAliasOrigin = a5, tyAliasNameLoc = a6 }) = SList
+  [
+    SAtom "ctor:Decl.DTypeAlias",
+    dumpBool a0,
+    dumpString a1,
+    dumpList dumpString a2,
+    dumpList (dumpOpt dumpKindAnn) a3,
+    dumpTy a4,
+    dumpTyConOrigin a5,
+    dumpOpt dumpLoc a6,
+  ]
+dumpDecl (DNewtype { newtypePub = a0, newtypeName = a1, newtypeParams = a2, newtypeParamKinds = a3, newtypeCtor = a4, newtypeCtorBinders = a5, newtypeFieldTy = a6, newtypeDerives = a7, newtypeOrigin = a8, newtypeNameLoc = a9 }) = SList
+  [
+    SAtom "ctor:Decl.DNewtype",
+    dumpBool a0,
+    dumpString a1,
+    dumpList dumpString a2,
+    dumpList (dumpOpt dumpKindAnn) a3,
+    dumpString a4,
+    dumpList (dumpPair dumpString dumpKindAnn) a5,
+    dumpTy a6,
+    dumpList dumpDeriveRef a7,
+    dumpTyConOrigin a8,
+    dumpOpt dumpLoc a9,
+  ]
+dumpDecl (DLetGroup a0 a1) =
+  SList [SAtom "ctor:Decl.DLetGroup", dumpBool a0, dumpList dumpLetBind a1]
+dumpDecl (DAttrib a0 a1) =
+  SList [SAtom "ctor:Decl.DAttrib", dumpList dumpAttr a0, dumpDecl a1]
