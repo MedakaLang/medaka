@@ -35,7 +35,7 @@
 import json.{Json(..), jArray, jObject, stringify}
 import list.{filterMap, nub, sort}
 import string.{
-  byteLength, contains, lines, split, startsWith, toInt, unlines, words
+  byteLength, contains, lines, split, startsWith, toInt, trim, unlines, words
 }
 import test.{
   Expectation,
@@ -383,7 +383,21 @@ test "stage_counts: per-verb stage counts match stage_counts.golden" = withScrat
     let allProbes = probes ++ driveProbes dir ++ lspProbes dir
     let rows = flatMap fst allProbes
     let golden = underRoot "test/arch_goldens/stage_counts.golden"
-    expectAll (map snd allProbes ++ [pinRows golden rows]))
+    expectAll
+      ([preludeInterfaceFresh (underRoot "stdlib/core.mdk")]
+        ++ map snd allProbes
+        ++ [pinRows golden rows]))
+
+-- The counts assume the prelude loads from `stdlib/core.mdki`; a stale or
+-- missing file makes the typechecker fall back and count one more module.
+preludeInterfaceFresh : String ->
+  <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> Expectation
+preludeInterfaceFresh core =
+  let (code, out, _) = spawnPlain [] ["interface", "verify", core]
+  if code == 0 && trim out == "fresh" then
+    pass
+  else
+    fail "stdlib/core.mdki is not fresh (\{trim out}); run `make medaka`"
 
 pinRows : String ->
   List String ->

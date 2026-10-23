@@ -3,6 +3,8 @@
 `checkSourceStaleness` emits the warning with `ePutStrLn`, and nothing else in the tree prints it
 (`grep -rn 'may be stale; rebuild' compiler/` finds exactly one call site, inside that function).
 
+The prelude interface `stdlib/core.mdki` is rewritten by `make medaka` and checked by the same stamp; a stale file makes the check family fall back to the core pass (exit 1 under `MEDAKA_STRICT=1`), and `MEDAKA_NO_INTERFACE=1` disables the load. `test/stage_counts_test.mdk` asserts it is `fresh`.
+
 ## [B-STDERR] Warning-on-stderr, both directions load-bearing
 
 Measured on a deliberately stale `medaka run`: stdout carries the program's value alone, exit 0,
