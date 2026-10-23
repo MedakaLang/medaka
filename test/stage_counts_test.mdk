@@ -388,8 +388,10 @@ test "stage_counts: per-verb stage counts match stage_counts.golden" = withScrat
         ++ map snd allProbes
         ++ [pinRows golden rows]))
 
--- The counts assume the prelude loads from `stdlib/core.mdki`; a stale or
--- missing file makes the typechecker fall back and count one more module.
+-- The counts assume the prelude loads from `stdlib/core.mdki` (check family)
+-- and `stdlib/core.mdke` (tree arm); `interface verify` is fresh only when both
+-- are. A stale or missing file makes its arm fall back and count one more
+-- module, which would otherwise read as a count regression.
 preludeInterfaceFresh : String ->
   <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> Expectation
 preludeInterfaceFresh core =
@@ -397,7 +399,8 @@ preludeInterfaceFresh core =
   if code == 0 && trim out == "fresh" then
     pass
   else
-    fail "stdlib/core.mdki is not fresh (\{trim out}); run `make medaka`"
+    fail
+      "stdlib/core.mdki or stdlib/core.mdke is not fresh (\{trim out}); run `make medaka`"
 
 pinRows : String ->
   List String ->

@@ -2,7 +2,7 @@
 
 One row per piece of mutable typechecker state: the four module-level cells of `compiler/types/typecheck.mdk`, the fields of its bundle records (`ModuleCtx`, `GraphCtx`, `GraphRun`, `CrossRun`, declared in `compiler/types/tc_types.mdk`), the fields of the process's interners (`Interners`, `Lineage`), the fields of the records that carry the drive's configuration (`TcConfig`, `DriveInputs`, `TraceSink`) and of the context records that replace the old cells (`GroupCtx`, `DynCtx`, `SiteCtx`), and the cells outside the file that a drive reads or writes. It is the inventory the state-by-lifetime split works from.
 
-Counts: 3 module-level cells in `types.typecheck`; field rows `ModuleCtx` 3, `ModuleCells` 91, `GraphRun` 30, `CrossRun` 14, `GraphCtx` 19, `Interners` 2, `Lineage` 3, `TcConfig` 5, `DriveInputs` 7, `TraceSink` 8, `GroupCtx` 2, `DynCtx` 10, `SiteCtx` 3; 200 rows in the first table (the 3 cells and 197 fields), 6 rows outside the file and 2 beside the drive. The first table is pinned to the cell census by `test/arch_boundaries_test.mdk`.
+Counts: 3 module-level cells in `types.typecheck`; field rows `ModuleCtx` 3, `ModuleCells` 91, `GraphRun` 30, `CrossRun` 14, `GraphCtx` 19, `Interners` 2, `Lineage` 3, `TcConfig` 5, `DriveInputs` 7, `TraceSink` 8, `GroupCtx` 2, `DynCtx` 10, `SiteCtx` 3; 200 rows in the first table (the 3 cells and 197 fields), 8 rows outside the file and 3 beside the drive. The first table is pinned to the cell census by `test/arch_boundaries_test.mdk`.
 
 Stage-6 denominators: met at `d111d97fc` (the sprint head after the last code slice of arch-p2-6d, the Phase 2 exit). The four module-level cells are `interners` and the three memo refs; `perRun` (arch-p2-6c) and `graphCtx` (arch-p2-6d) are deleted. The module record is a parameter of its readers or comes through `DynCtx.dcModule` and `SiteCtx.sxModule`; the graph record is a parameter of the drive layer or comes through `ModuleCtx.mcGraph`. The 6c frontier counts (`graphCtx` 276 / 1457 / 463 at the head of arch-p2-6c, over `compiler/types/typecheck.mdk` with the carrier holders as stops) describe the cell that is now gone.
 
@@ -228,16 +228,19 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | preludeScopeMemoRef | prelude scope memo, one entry (frontend/resolve.mdk) | process | module-level | preludeScopeFor | never | interner | no | - | - |
 | loadedSourcesRef | path to source text of every loaded file (driver/loader.mdk, the one driver.loader cell in cells.golden) | process | module-level | noteLoadedSource | never | interner | no | - | - |
 | preludeCacheRef | process-wide prelude interface cache, one entry: the interface sections of one compiler generation, each valid for the IO joins it lists (types/prelude_interface.mdk) | process | module-level | seedPreludeInterface, called by checkCoreMemoized on its miss path and by loadPreludeInterface (driver/build_cmd.mdk) with a loaded file's sections | never | interner | no | - | - |
+| preludeElabCacheRef | process-wide cache of the prelude's elaborated trees, one entry: the value of one compiler generation and whether its binders are already relocated onto this process's desugar of core (types/prelude_elab.mdk) | process | module-level | seedPreludeElab, called by loadPreludeElab (driver/build_cmd.mdk) with a loaded file's value; preludeElabFor (relocation) | never | interner | no | - | - |
+| preludeEvidenceRef | the prelude's evidence rows as a dense array from ordinal 0 to the prelude's counter, built when a process holds the elaborated trees, so each drive's evidence index spans only its own ordinals (types/route_key.mdk) | process | module-level | setPreludeEvidence, called by seedPreludeElab | never | interner | no | - | - |
 | program_facts.currentFacts | the ProgramFacts value lowering and eval read for the run in progress (types/program_facts.mdk); deleted by the issue "thread ProgramFacts through lower and EvalEnv" | run | module-level | withFacts | withFacts restores the previous value | delete | n/a | - | #4317 |
 
 ## Cells beside the drive
 
-Process cells a driver keeps while it prepares a drive's inputs. No drive reads or writes them; they are listed because they decide what `preludeCacheRef` holds.
+Process cells a driver keeps while it prepares a drive's inputs. No drive reads or writes them; they are listed because they decide what `preludeCacheRef` and `preludeElabCacheRef` hold.
 
 | name | holds | lifetime | owner-today | writers | reset | target | interface-fills | source | issue |
 |---|---|---|---|---|---|---|---|---|---|
 | preludeSourceHashesRef | SHA-256 of each prelude source text this process hashed, at most four entries (driver/build_cmd.mdk) | process | module-level | preludeSourceHash | never | interner | no | - | - |
 | preludeVerdictRef | the verdict on `core.mdki` of this process's last load, with the stdlib directory, prelude texts and compiler identity it was read for (driver/build_cmd.mdk) | process | module-level | loadPreludeInterface | never (replaced by a load with other inputs) | interner | no | - | - |
+| preludeTreesRef | the verdict on `core.mdke` of this process's last load, with the inputs it was read for (driver/build_cmd.mdk); `loadPreludeElab` answers from it, so the verb's verdict and the drive's seed come from one read | process | module-level | loadPreludeElab | never (replaced by a load with other inputs) | interner | no | - | - |
 
 ## Interface fills (input to playbook C1)
 

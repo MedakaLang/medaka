@@ -768,6 +768,8 @@ sideNames = [
   "preludeScopeMemoRef",
   "loadedSourcesRef",
   "preludeCacheRef",
+  "preludeElabCacheRef",
+  "preludeEvidenceRef",
   "program_facts.currentFacts",
 ]
 

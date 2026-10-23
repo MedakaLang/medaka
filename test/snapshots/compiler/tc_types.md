@@ -3150,8 +3150,8 @@ public export data PreludePreamble = PreludePreamble {
 -- (`driveGraphK`): the same preamble, the same per-module worker, the same
 -- graph-end drain.  The selection names the three points where the two output
 -- contracts genuinely part company — the promotion-eligible seed, the core pass
--- (the tree arm needs core's marked decls back, so it cannot continue from the
--- prelude interface), and whether the marked trees are dict-passed and published.
+-- (the tree arm needs core's dict-passed decls back, so it continues from the
+-- prelude interface only when the shipped trees are held too), and whether the marked trees are dict-passed and published.
 --   * `GOutDiags` — per-module diagnostics and schemes.  What `check`, the LSP,
 --     the playground, MCP and `medaka test`'s gate consume.
 --   * `GOutTrees` — the same diagnostics PLUS the elaborated, dict-passed trees,
