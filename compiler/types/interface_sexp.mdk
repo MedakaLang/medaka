@@ -163,9 +163,8 @@ paramNode (PPrefix s) = tagged "prefix" [optNode s]
 paramNode (PPath s) = tagged "path" [optNode s]
 paramNode (PSet None) = tagged "set" [SAtom "none"]
 paramNode (PSet (Some members)) = tagged "set" [SList (map SAtom members)]
-paramNode (PProduct axes) = tagged "product" [
-  SList (map (axis => SList [SAtom (fst axis), paramNode (snd axis)]) axes),
-]
+paramNode (PProduct axes) =
+  tagged "product" [listSExp (pairSExp SAtom paramNode) axes]
 
 -- The printers below read zonked values only; a link reaching one is a zonk
 -- that did not run.
@@ -184,9 +183,8 @@ authNode (AVar cell) = match !cell
   ]
   ALink id _ _ => unzonked "the linked authority variable \{id}"
 authNode (AJoin members) = tagged "ajoin" [SList (map authNode members)]
-authNode (AProduct axes) = tagged "aproduct" [
-  SList (map (axis => SList [SAtom (fst axis), authNode (snd axis)]) axes),
-]
+authNode (AProduct axes) =
+  tagged "aproduct" [listSExp (pairSExp SAtom authNode) axes]
 
 labelNode : EffLabel -> SExp
 labelNode (EffLabel name origin) =
@@ -602,6 +600,20 @@ decList : (String -> SExp -> Result SexpError a) ->
   Result SexpError (List a)
 decList f path node = map snd (decEach (stateless f) emptyZonk path node)
 
+-- A two-element list holding a name and a value; [what] is the refusal's text
+-- for any other shape.
+decNamed : String ->
+  (ZState -> String -> SExp -> Dec a) ->
+  ZState ->
+  String ->
+  SExp ->
+  Dec (String, a)
+decNamed _ f z path (SList [n, x]) = do
+  name <- expectAtom "\{path}/0" n
+  (z1, v) <- f z "\{path}/1" x
+  Ok (z1, (name, v))
+decNamed what _ _ path node = refuse path node what
+
 -- A repeated id must be written as its first occurrence was.
 same : String -> SExp -> SExp -> a -> Result SexpError a
 same path node first v =
@@ -639,11 +651,15 @@ decParam path (SList [SAtom "product", axes]) =
 decParam path node = misfit path paramHeads node
 
 decParamAxis : String -> SExp -> Result SexpError (String, Param)
-decParamAxis path (SList [n, p]) = do
-  name <- expectAtom "\{path}/0" n
-  param <- decParam "\{path}/1" p
-  Ok (name, param)
-decParamAxis path node = refuse path node "expected an axis (NAME PARAM)"
+decParamAxis path node =
+  map
+    snd
+    (decNamed
+      "expected an axis (NAME PARAM)"
+      (stateless decParam)
+      emptyZonk
+      path
+      node)
 
 authHeads : List (String, Int)
 authHeads = [("const", 1), ("av", 5), ("ajoin", 1), ("aproduct", 1)]
@@ -673,11 +689,7 @@ decAuth z path (SList [SAtom "aproduct", axes]) =
 decAuth _ path node = misfit path authHeads node
 
 decAuthAxis : ZState -> String -> SExp -> Dec (String, Authority)
-decAuthAxis z path (SList [n, a]) = do
-  name <- expectAtom "\{path}/0" n
-  (z1, auth) <- decAuth z "\{path}/1" a
-  Ok (z1, (name, auth))
-decAuthAxis _ path node = refuse path node "expected an axis (NAME AUTH)"
+decAuthAxis = decNamed "expected an axis (NAME AUTH)" decAuth
 
 decLabel : String -> SExp -> Result SexpError EffLabel
 decLabel path (SList [SAtom "label", n, o]) = do
@@ -1135,11 +1147,7 @@ decDataVis path node =
   misfit path [("private", 0), ("abstract", 0), ("public", 0)] node
 
 decNamedMono : ZState -> String -> SExp -> Dec (String, Mono)
-decNamedMono z path (SList [n, m]) = do
-  name <- expectAtom "\{path}/0" n
-  (z1, m1) <- decMono z "\{path}/1" m
-  Ok (z1, (name, m1))
-decNamedMono _ path node = refuse path node "expected a pair (NAME MONO)"
+decNamedMono = decNamed "expected a pair (NAME MONO)" decMono
 
 decRecord : ZState -> String -> SExp -> Dec RecordInfo
 decRecord z path (SList [SAtom "record", ids, authIds, r, fs, ix]) = do
@@ -1299,7 +1307,7 @@ mergeSections drives =
   let joinsByText = fold addJoin omEmpty keyed
   map
     (k => InterfaceSection {
-      isJoins = sortedJoins (lookupOr [] (fst k) joinsByText),
+      isJoins = sortedJoins (optionOr [] (omLookup (fst k) joinsByText)),
       isInterface = snd (snd k),
     })
     (dedupBy fst keyed)
@@ -1307,12 +1315,8 @@ mergeSections drives =
 addJoin : OrdMap (List (List Atom)) ->
   (String, (List Atom, PreludeInterface)) ->
   OrdMap (List (List Atom))
-addJoin acc (text, (join, _)) = omInsert text (join :: lookupOr [] text acc) acc
-
-lookupOr : a -> String -> OrdMap a -> a
-lookupOr fallback key m = match omLookup key m
-  Some v => v
-  None => fallback
+addJoin acc (text, (join, _)) =
+  omInsert text (join :: optionOr [] (omLookup text acc)) acc
 
 sortedJoins : List (List Atom) -> List (List Atom)
 sortedJoins joins = dedupBy joinText (sortOn joinText joins)

@@ -9,7 +9,7 @@ import support.sexp_value.{
   expectAtom,
 }
 import list.{reverse}
-import test.{expectAll, expectEqual, expectErr, expectOk}
+import test.{expectAll, expectEqual, expectErr}
 
 -- One atom per escape class.
 classAtoms : List String

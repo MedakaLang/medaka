@@ -7,49 +7,39 @@
 -- per-join drives (`mergeSections`), the text does not depend on the user's
 -- program, and the real prelude stays under its size bound.
 import test.{
-  Expectation, expectTrue, expectEqual, expectAll, expectEach, expectAtLeast,
-  expectAtMost, labelFail, fail, pass
+  Expectation, expectTrue, expectEqual, expectAll, expectAtLeast, expectAtMost,
+  labelFail, fail, pass
 }
 import list.{zip, indexed, drop, sort}
 import string as S
 import frontend.ast.{Decl, EffParamTy(..), TyConOrigin(..)}
 import frontend.desugar.{desugar, desugarIn}
 import frontend.parser.{parse, parseLocated}
-import support.ordmap.{omMapValues, omEmpty}
-import support.sexp_value.{SexpError(..)}
+import support.ordmap.{omEmpty}
 import test_process.{underRoot}
 import types.effect_rows.{Atom, renderAtom}
+import types.interface_sexp_test.{prelude, fileKey}
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), formatVersion,
   encodeInterface, decodeInterface, mergeSections, cacheOfSections,
   interfaceFaults
 }
 import types.prelude_interface.{
-  PreludeInterface(..), GraphRunSeed(..), InterfaceKey(..), freezeInterface,
-  thawInterface, seedPreludeInterface, preludeCacheHit, currentPreludeInterface
+  PreludeInterface(..), InterfaceKey(..), freezeInterface, thawInterface,
+  seedPreludeInterface, preludeCacheHit, currentPreludeInterface
 }
 import types.repr.{Scheme(..), Mono(..), Tyvar(..)}
 import types.effect_rows.{EffRow(..)}
 import types.publish.{
   PubScheme(..), LiveCell(..), VarKind(..), liveCells, freezeRows
 }
-import types.tc_types.{
-  DriveInputs(..), GraphCtx(..), CrossRun(..), GraphRun(..)
-}
+import types.tc_types.{GraphCtx(..)}
 import types.typecheck.{
   checkModulesChainReportFor, checkModulesChainReportForGraph,
   defaultDriveInputs
 }
 
 -- ── drives ──────────────────────────────────────────────────────────────────
-
--- The prelude as a drive reads it.
-realPrelude : <IO, FileRead> Result String (List Decl, List Decl)
-realPrelude = do
-  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
-  csrc <- readFile (underRoot "stdlib/core.mdk")
-  let decls = src => desugar (parse src)
-  Ok (decls rsrc, decls csrc)
 
 -- A one-extern runtime and a core whose unsigned `viaStdin` takes its row from
 -- the IO join: with an empty join it also carries `Stdin`.
@@ -101,20 +91,13 @@ realDrive : Int ->
   String ->
   <IO, FileRead> Result String (List (List Atom, PreludeInterface))
 realDrive n grants userSrc = do
-  prelude <- realPrelude
-  Ok (driveUnder n grants prelude userSrc)
+  pre <- prelude
+  Ok (driveUnder n grants pre userSrc)
 
 oneInterface : List (List Atom, PreludeInterface) ->
   Result String PreludeInterface
 oneInterface [(_, pi)] = Ok pi
 oneInterface drives = Err "expected one drive, got \{length drives}"
-
-fileKey : InterfaceKey
-fileKey = InterfaceKey {
-  ikFormat = formatVersion,
-  ikSources = [("core.mdk", "ab12"), ("a b.mdk", "cd34")],
-  ikCompiler = "medaka 0 (sha x)",
-}
 
 fileOfDrives : List (List Atom, PreludeInterface) -> PreludeInterfaceFile
 fileOfDrives drives = PreludeInterfaceFile {
@@ -154,10 +137,6 @@ tokenMiddles text =
       None => [])
     ["medaka-interface", "sources", "compiler", "section", "joins", "interface"]
 
-resultOption : Result e a -> Option a
-resultOption (Ok x) = Some x
-resultOption (Err _) = None
-
 decodes : String -> Bool
 decodes text = match decodeInterface text
   Ok _ => True
@@ -185,7 +164,7 @@ test "a truncated file is refused unless only the final newline is missing" =
         (Some smallText)
         (map
           encodeInterface
-          (resultOption (decodeInterface (S.take (n - 1) smallText))))),
+          (fromResult (decodeInterface (S.take (n - 1) smallText))))),
   ]
 
 -- ── 2. byte flips ───────────────────────────────────────────────────────────
@@ -542,12 +521,12 @@ test "the tiny interface file matches its fixture and round-trips" =
             (Some [2])
             (map
               (f => map (s => length s.isJoins) f.ifSections)
-              (resultOption (decodeInterface golden)))),
+              (fromResult (decodeInterface golden)))),
         labelFail
           "decode then encode returns the fixture"
           (expectEqual
             (Some golden)
-            (map encodeInterface (resultOption (decodeInterface golden)))),
+            (map encodeInterface (fromResult (decodeInterface golden)))),
       ]
 
 -- ── 9. a live link ──────────────────────────────────────────────────────────

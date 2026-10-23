@@ -20,7 +20,7 @@ import frontend.parser.{parse, parseLocated}
 import driver.loader.{
   loadProgramFilesLocatedE, dropPathTriple, stdlibOwnership, loadErrorMessage
 }
-import support.ordmap.{OrdMap, omKeys, omEmpty, omInsert}
+import support.ordmap.{omKeys, omEmpty, omInsert}
 import support.sexp_value.{
   SExp(..), SexpError(..), renderSExp, parseSExp, expectAtom, atomInt, atomBool
 }
@@ -44,8 +44,7 @@ import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
 }
 import types.publish.{
-  PubScheme(..), TcReport(..), PartialAnalysis(..), LiveCell(..), VarKind(..),
-  ppPubScheme, liveCells
+  PubScheme(..), TcReport(..), LiveCell(..), VarKind(..), ppPubScheme, liveCells
 }
 import types.registry.{
   SpellingPop, spRows, spFloor, spCollided, spInsert, spEmpty
@@ -89,6 +88,7 @@ roundTrips (name, p) =
 -- ── the rows ────────────────────────────────────────────────────────────────
 
 -- The prelude as a drive reads it.
+export
 prelude : <IO, FileRead> Result String (List Decl, List Decl)
 prelude = do
   rsrc <- readFile (underRoot "stdlib/runtime.mdk")
@@ -178,8 +178,9 @@ flatRows inputs src = do
     (_, rows, [], _) => Ok rows
     (_, _, errs, _) => Err "the file has \{length errs} type error(s)"
 
--- Spike B's battery: user classes, binder domains, authority-indexed types,
--- higher-kinded parameters, effect tails and joins, unsigned bindings.
+-- A battery of synthetic signatures: user classes, binder domains,
+-- authority-indexed types, higher-kinded parameters, effect tails and joins,
+-- unsigned bindings.
 battery : String
 battery =
   """
@@ -1138,7 +1139,8 @@ test "a location never reaches the text" =
     (renderSExp (surfaceTySExp (richTyAt None)))
     (renderSExp (surfaceTySExp (richTyAt someLoc)))
 
--- Every node kind the new grammar lines name.  `unresolved` and an
+-- Every node kind of a surface type, data declaration, record and predicate
+-- slot that the check requires in a prelude interface.  `unresolved` and an
 -- `(ident ...)` written with it are refused, so neither appears.
 componentHeads : List String
 componentHeads = [
@@ -1539,6 +1541,7 @@ ioUnit = atomBuiltin "IO" PUnit
 ioSet : Atom
 ioSet = atomBuiltin "IO" (PSet (Some ["a b", "c"]))
 
+export
 fileKey : InterfaceKey
 fileKey = InterfaceKey {
   ikFormat = formatVersion,
