@@ -1,5 +1,8 @@
--- Property rows for the interface file codec: a truncated or flipped file is
--- refused rather than half-read, the real prelude's text carries its version,
+-- Property rows for the interface file codec: a truncated file is refused
+-- rather than half-read, no flipped byte decodes to a different file (the
+-- header digest sees the ones the source hashes cannot), a header under another
+-- version is refused for its version before its shape, an interface holding a
+-- live link is reported by row, the real prelude's text carries its version,
 -- a thaw and re-freeze changes nothing, the file's sections are built from
 -- per-join drives (`mergeSections`), the text does not depend on the user's
 -- program, and the real prelude stays under its size bound.
@@ -9,23 +12,27 @@ import test.{
 }
 import list.{zip, indexed, drop, sort}
 import string as S
-import frontend.ast.{Decl, EffParamTy(..)}
+import frontend.ast.{Decl, EffParamTy(..), TyConOrigin(..)}
 import frontend.desugar.{desugar, desugarIn}
 import frontend.parser.{parse, parseLocated}
-import support.ordmap.{omMapValues}
+import support.ordmap.{omMapValues, omEmpty}
 import support.sexp_value.{SexpError(..)}
 import test_process.{underRoot}
 import types.effect_rows.{Atom, renderAtom}
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), formatVersion,
-  encodeInterface, decodeInterface, mergeSections, cacheOfSections
+  encodeInterface, decodeInterface, mergeSections, cacheOfSections,
+  interfaceFaults
 }
 import types.prelude_interface.{
   PreludeInterface(..), GraphRunSeed(..), InterfaceKey(..), freezeInterface,
   thawInterface, seedPreludeInterface, preludeCacheHit, currentPreludeInterface
 }
-import types.repr.{Scheme}
-import types.publish.{PubScheme(..), LiveCell, liveCells, freezeRows}
+import types.repr.{Scheme(..), Mono(..), Tyvar(..)}
+import types.effect_rows.{EffRow(..)}
+import types.publish.{
+  PubScheme(..), LiveCell(..), VarKind(..), liveCells, freezeRows
+}
 import types.tc_types.{
   DriveInputs(..), GraphCtx(..), CrossRun(..), GraphRun(..)
 }
@@ -211,31 +218,54 @@ flipSites = [
   ("a type variable id", "(tv ", 4),
 ]
 
--- How a flip at [site] reads: refused, accepted as a different file, or
--- accepted as the same text (the failure).
-flipOutcome : String -> (String, String, Int) -> (String, String)
-flipOutcome text (label, marker, offset) = match S.indexOf marker text
-  None => (label, "site absent")
-  Some i => match decodeInterface (flipAt (i + offset) text)
-    Err _ => (label, "Err")
-    Ok f =>
-      if encodeInterface f == text then
-        (label, "Ok identical")
-      else
-        (label, "Ok different")
+-- How a flip at [i] reads: refused, accepted as a different file, or accepted
+-- as the same text (a flip of a trailing newline or of space between tokens).
+flipOutcomeAt : String -> Int -> String
+flipOutcomeAt text i = match decodeInterface (flipAt i text)
+  Err _ => "Err"
+  Ok f => if encodeInterface f == text then "Ok identical" else "Ok different"
 
-siteLabel : (String, String, Int) -> String
-siteLabel (label, _, _) = label
+siteOffset : String -> (String, String, Int) -> Option Int
+siteOffset text (_, marker, offset) = map (+ offset) (S.indexOf marker text)
 
-flipTable : String -> List (String, String)
-flipTable text = map (flipOutcome text) flipSites
+count : String -> List String -> Int
+count outcome outcomes = length (filter (== outcome) outcomes)
 
-test "a flipped byte is refused or changes what the file says" =
-  expectEqual
-    (map (site => (siteLabel site, True)) flipSites)
-    (map
-      (row => (fst row, snd row == "Err" || snd row == "Ok different"))
-      (flipTable smallText))
+-- Every position of the small file, and the ten fixed places.
+tinyOutcomes : List String
+tinyOutcomes = map (flipOutcomeAt tinyText) [0..=S.length tinyText - 1]
+
+siteOutcomes : List String
+siteOutcomes =
+  flatMap
+    (site => match siteOffset smallText site
+      Some i => [flipOutcomeAt smallText i]
+      None => ["site absent"])
+    flipSites
+
+-- The sources' hashes cover no byte of a section, so it is the digest that
+-- refuses a flip there.
+test "no flipped byte decodes to a different file" = expectAll [
+  labelFail "positions tried" (expectAtLeast 1000 (length tinyOutcomes)),
+  labelFail
+    "flips that change what the file says"
+    (expectEqual 0 (count "Ok different" tinyOutcomes)),
+  labelFail
+    "most flips are refused"
+    (expectAtLeast (length tinyOutcomes / 2) (count "Err" tinyOutcomes)),
+  labelFail
+    "the ten fixed sites are refused"
+    (expectEqual (map (_ => "Err") flipSites) siteOutcomes),
+]
+
+-- A header under another version, whatever its shape, is refused for its version.
+test "a header of another version is refused for its version, not its shape" =
+  match decodeInterface "(medaka-interface 2 (sources ()))\n"
+    Ok _ => fail "a later version decoded"
+    Err e => expectAll [
+      labelFail "message" (expectTrue (S.contains "format version 2" e.seWhat)),
+      labelFail "path" (expectEqual "header/medaka-interface.1" e.sePath),
+    ]
 
 -- ── the real prelude's text ─────────────────────────────────────────────────
 
@@ -469,6 +499,14 @@ tinyPrelude = (
       ])),
 )
 
+-- The extern catalog is process-wide and not part of what the golden pins, so
+-- the sections are encoded with an empty one.
+withoutExterns : InterfaceSection -> InterfaceSection
+withoutExterns s = InterfaceSection {
+  isJoins = s.isJoins,
+  isInterface = { s.isInterface | piExternNames = omEmpty },
+}
+
 -- Two joins that give the same text, so the one section lists both.
 tinyText : String
 tinyText = encodeInterface PreludeInterfaceFile {
@@ -478,15 +516,17 @@ tinyText = encodeInterface PreludeInterfaceFile {
     ikCompiler = "medaka 0 (sha x)",
   },
   ifSections =
-    mergeSections
-      (driveUnder 71 allGrants tinyPrelude "x = 1"
-        ++ driveUnder 72 stdinOnly tinyPrelude "x = 1"),
+    map
+      withoutExterns
+      (mergeSections
+        (driveUnder 71 allGrants tinyPrelude "x = 1"
+          ++ driveUnder 72 stdinOnly tinyPrelude "x = 1")),
 }
 
 tinyFixture : String
-tinyFixture = underRoot "test/interface_fixtures/tiny.mdki"
+tinyFixture = underRoot "test/arch_goldens/interface_tiny.mdki"
 
--- INTERFACE_FIXTURE_WRITE=1 rewrites the fixture instead of comparing.
+-- INTERFACE_FIXTURE_WRITE=1 rewrites the golden instead of comparing.
 test "the tiny interface file matches its fixture and round-trips" =
   match getEnv "INTERFACE_FIXTURE_WRITE"
     Some "1" => match writeFile tinyFixture tinyText
@@ -509,3 +549,26 @@ test "the tiny interface file matches its fixture and round-trips" =
             (Some golden)
             (map encodeInterface (resultOption (decodeInterface golden)))),
       ]
+
+-- ── 9. a live link ──────────────────────────────────────────────────────────
+
+-- `encodeInterface` panics, naming the row, on the faults this reports; the
+-- test framework cannot capture a panic, so the faults are pinned here.
+test "an interface holding a linked core row is reported by row name" =
+  match oneInterface (driveUnder 81 allGrants syntheticPrelude "x = 1")
+    Err e => fail e
+    Ok pi =>
+      let row = PubScheme {
+        psScheme =
+          Forall
+            []
+            []
+            []
+            []
+            (EffRow [] None)
+            (TVar (Ref (Link (TCon "Int" OriginBuiltin)))),
+        psContext = [],
+      }
+      expectEqual
+        [LinkCell "linkedRow" TyVarK None]
+        (interfaceFaults { pi | piCore = [("linkedRow", row)] })

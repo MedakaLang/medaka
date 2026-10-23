@@ -87,17 +87,26 @@
 --
 -- The whole file: top-level nodes, the header first, then the sections in order.
 --   (medaka-interface <version> (sources ((<path> <hash>) ...)) (compiler <id>)
---     (sections <n>))
+--     (sections <n>) (digest <hex>))
 --   (section (joins (<join> ...)) <interface>)   a join is a list of `atom` nodes
 --   (interface <field> x19)                   `PreludeInterface`, field order
+-- `digest` is the SHA-256, in lower-case hex, of the canonical text of the
+-- `sources`, `compiler` and `sections` nodes and then each section node, joined
+-- by single newlines; the header key hashes source files, so only the digest
+-- sees a byte changed inside a section.
 -- A section's joins are written in the order of their rendered text.  A header
--- whose version is not `formatVersion`, a missing, truncated or extra node, a
--- section count that differs from the nodes present, or any component refusal
--- is an `Err`, never a partial record.
+-- whose version is not `formatVersion` (read before the header's shape), a
+-- digest that differs from the nodes present, a missing, truncated or extra
+-- node, a section count that differs from the nodes present, or any component
+-- refusal is an `Err`, never a partial record.
 import list.{mapAccumL, sortOn}
+import crypto.sha256.{sha256}
+import hex as Hex
+import bytes.{encodeUtf8}
+import string as S
 import map as IdMap
 import map.{Map}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
 import support.util.{dedupBy}
 import support.sexp_value.{
   SExp(..), SexpError(..), renderSExp, parseSExp, expectAtom, atomInt, atomBool
@@ -1314,13 +1323,25 @@ joinText j = renderSExp (joinNode j)
 pairAtoms : (String, String) -> SExp
 pairAtoms = pairSExp SAtom SAtom
 
-headerNode : InterfaceKey -> Int -> SExp
-headerNode key count = tagged "medaka-interface" [
-  intNode formatVersion,
+headerFields : InterfaceKey -> Int -> List SExp
+headerFields key count = [
   tagged "sources" [listSExp pairAtoms key.ikSources],
   tagged "compiler" [SAtom key.ikCompiler],
   tagged "sections" [intNode count],
 ]
+
+-- The digest of the nodes the header and the sections hold, as canonical text.
+digestOf : List SExp -> String
+digestOf nodes =
+  Hex.encode (sha256 (encodeUtf8 (stringJoin "\n" (map renderSExp nodes))))
+
+headerNode : InterfaceKey -> Int -> List SExp -> SExp
+headerNode key count sections =
+  let fields = headerFields key count
+  tagged
+    "medaka-interface"
+    (intNode formatVersion
+      :: fields ++ [tagged "digest" [SAtom (digestOf (fields ++ sections))]])
 
 joinNode : List Atom -> SExp
 joinNode = listSExp atomSExp
@@ -1366,16 +1387,48 @@ interfaceNode (PreludeInterface funNames dispatch ctors ctorPop recordPop classe
     ordMapSExp unitSExp standalone,
   ]
 
+-- The live cells a published row of the interface holds that a frozen row
+-- cannot: a link or an open summary.
+export
+interfaceFaults : PreludeInterface -> List LiveCell
+interfaceFaults pi =
+  filter
+    notFrozen
+    (flatMap (row => liveCells (fst row) (snd row)) pi.piCore
+      ++ popFaults "ctor" pi.piCtorPop)
+
+popFaults : String -> SpellingPop PubScheme -> List LiveCell
+popFaults label pop =
+  flatMap
+      (k => match omLookup k (spFloor pop)
+        Some p => liveCells "\{label} \{k}" p
+        None => [])
+      (omKeys (spFloor pop))
+    ++ flatMap
+      (k => match omLookup k (spRows pop)
+        Some rows => flatMap (r => liveCells "\{label} \{k}" (thd3 r)) rows
+        None => [])
+      (omKeys (spRows pop))
+
+thd3 : (a, b, c) -> c
+thd3 (_, _, c) = c
+
+-- Panics, naming the row, on a section whose interface holds a live link.  The
+-- file's header always carries `formatVersion`; `ikFormat` is not written, and
+-- `decodeInterface` sets it.
 export
 encodeInterface : PreludeInterfaceFile -> String
 encodeInterface f =
-  stringJoin
-      "\n"
-      (map
-        renderSExp
-        (headerNode f.ifKey (length f.ifSections)
-          :: map sectionNode f.ifSections))
-    ++ "\n"
+  match flatMap (s => interfaceFaults s.isInterface) f.ifSections
+    [] =>
+      let sections = map sectionNode f.ifSections
+      stringJoin
+          "\n"
+          (map
+            renderSExp
+            (headerNode f.ifKey (length f.ifSections) sections :: sections))
+        ++ "\n"
+    faults => panic "interface row is not frozen: \{debug faults}"
 
 decPairAtoms : Reader (String, String)
 decPairAtoms = pairOfSExp expectAtom expectAtom
@@ -1475,29 +1528,44 @@ decSection path (SList [SAtom "section", js, i]) = do
   Ok InterfaceSection { isJoins = joins, isInterface = value }
 decSection path node = misfit path [("section", 2)] node
 
--- The key and the number of section nodes the file claims to hold.
-decHeader : Reader (InterfaceKey, Int)
-decHeader path (SList [SAtom "medaka-interface", v, SList [SAtom "sources", srcs], SList [SAtom "compiler", c], SList [SAtom "sections", cnt]]) =
-  do
-    version <- atomInt (at path "medaka-interface" 1) v
-    sources <- listOfSExp decPairAtoms (at path "sources" 1) srcs
-    compiler <- expectAtom (at path "compiler" 1) c
-    count <- atomInt (at path "sections" 1) cnt
-    if version == formatVersion then
-      Ok (
-        InterfaceKey {
-          ikFormat = version,
-          ikSources = sources,
-          ikCompiler = compiler,
-        },
-        count,
-      )
-    else
-      refuse
-        (at path "medaka-interface" 1)
-        v
-        "format version \{version}, this compiler reads \{formatVersion}"
-decHeader path node = misfit path [("medaka-interface", 4)] node
+-- The key, the number of section nodes the file claims to hold, the digest it
+-- claims and the canonical text of the header nodes the digest covers.  The
+-- version is read before the shape.
+decHeader : Reader (InterfaceKey, Int, String, List SExp)
+decHeader path (SList ((SAtom "medaka-interface") :: v :: rest)) = do
+  version <- atomInt (at path "medaka-interface" 1) v
+  if version == formatVersion then match rest
+    [SList [SAtom "sources", srcs], SList [SAtom "compiler", c], SList [SAtom "sections", cnt], SList [SAtom "digest", d]] =>
+      do
+        sources <- listOfSExp decPairAtoms (at path "sources" 1) srcs
+        compiler <- expectAtom (at path "compiler" 1) c
+        count <- atomInt (at path "sections" 1) cnt
+        claimed <- expectAtom (at path "digest" 1) d
+        Ok (
+          InterfaceKey {
+            ikFormat = version,
+            ikSources = sources,
+            ikCompiler = compiler,
+          },
+          count,
+          claimed,
+          [
+            SList [SAtom "sources", srcs],
+            SList [SAtom "compiler", c],
+            SList [SAtom "sections", cnt],
+          ],
+        )
+    _ =>
+      misfit
+        path
+        [("medaka-interface", 5)]
+        (SList (SAtom "medaka-interface" :: v :: rest))
+  else
+    refuse
+      (at path "medaka-interface" 1)
+      v
+      "format version \{version}, this compiler reads \{formatVersion}"
+decHeader path node = misfit path [("medaka-interface", 5)] node
 
 -- The text is read as the items of one list, since a parse reads one node.
 -- The header's section count must equal the section nodes present, so a file
@@ -1509,13 +1577,19 @@ decodeInterface text = do
   top <- parseSExp ("(" ++ text ++ ")")
   match top
     SList (header :: sections) => do
-      (key, count) <- decHeader "header" header
+      (key, count, claimed, fields) <- decHeader "header" header
       secs <- decList decSection "file" (SList sections)
-      if length secs == count then
-        Ok PreludeInterfaceFile { ifKey = key, ifSections = secs }
-      else
+      let found = digestOf (fields ++ sections)
+      if length secs /= count then
         refuse
           "header/sections.1"
           header
           "header counts \{count} section(s), the file holds \{length secs}"
+      else if found /= claimed then
+        refuse
+          "header/digest.1"
+          header
+          "digest \{S.take 12 claimed} expected, \{S.take 12 found} found"
+      else
+        Ok PreludeInterfaceFile { ifKey = key, ifSections = secs }
     _ => refuse "file" top "expected a header node"
