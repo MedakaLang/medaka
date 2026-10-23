@@ -57870,14 +57870,17 @@ beginModuleMarking mctx mid prog top seed =
     None =>
       panic
         "checkBodyImpl: Module arm entered with no mark sets (no driver preamble ran)"
-  let known =
-    dedup (ms.msBareDictNames ++ mctx.mcGraph.promotionHarvestRef.value)
-  let names =
-    known ++ aliasDictNames mctx.mcGraph known ms.msUnits [(mid, prog)]
+  -- Core imports nothing, so the dict names nameable in it are its own `=>`
+  -- signatures, the set its `dictPass` gives parameters to.  A user definition that
+  -- shares a bare name with a core one is a different definition.
+  let known = match mid
+    "" => constrainedSigNames prog
+    _ => dedup (ms.msBareDictNames ++ mctx.mcGraph.promotionHarvestRef.value)
+  let aliases = aliasDictNames mctx.mcGraph known ms.msUnits [(mid, prog)]
   mctx.mcCells.markingRef := Some ModuleMarking {
     mmCtx = moduleMarkCtx mctx.mcGraph ms mid prog seed.msImportedValues,
     mmTop = top,
-    mmDictSet = Ref (omFromNames names omEmpty),
+    mmDictSet = Ref (omFromNames (known ++ aliases) omEmpty),
     mmUserNames = omFromNames (declTopFnNames prog) seed.msImportedNames,
     mmExterns = omFromNames (declExternNames prog) seed.msImportedExterns,
   }
