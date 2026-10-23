@@ -8,8 +8,8 @@
    under with the key its module has now. -}
 
 import args.{
-  ArgSpec, spec, valueList, withStrictDash, parseArgs, flagValues,
-  unknownFlagMessage
+  ArgSpec, FlagSpec, spec, switch, valueList, withStrictDash, parseArgs, flag,
+  flagValues, unknownFlagMessage
 }
 import bytes.{encodeUtf8}
 import crypto.sha256.{sha256}
@@ -55,12 +55,15 @@ interfaceHelpText = stringConcat [
   "  show    prints the header and every published row.\n",
   "  verify  prints `fresh`, `stale: <component>` or `missing`; exit 0 only on\n",
   "          `fresh`.\n",
+  "\n",
+  "  -h, --help  prints this help.\n",
 ]
 
 writeSpec : ArgSpec
 writeSpec =
   withStrictDash
     (spec "interface write" [
+      helpSwitch,
       valueList
         ["--target"]
         "PROFILE"
@@ -68,7 +71,10 @@ writeSpec =
     ])
 
 plainSpec : String -> ArgSpec
-plainSpec verb = withStrictDash (spec verb [])
+plainSpec verb = withStrictDash (spec verb [helpSwitch])
+
+helpSwitch : FlagSpec
+helpSwitch = switch ["--help", "-h"] "print this help"
 
 -- ── the key ─────────────────────────────────────────────────────────────────
 
@@ -276,11 +282,6 @@ verifyCmd modulePath =
 
 -- ── dispatch ────────────────────────────────────────────────────────────────
 
-wantsHelp : List String -> Bool
-wantsHelp ("--help" :: _) = True
-wantsHelp ("-h" :: _) = True
-wantsHelp _ = False
-
 printHelp : Unit -> <IO> Unit
 printHelp _ =
   let _ = putStrLn interfaceHelpText
@@ -289,38 +290,37 @@ printHelp _ =
 oneModule : ArgSpec -> List String -> (String -> <IO> Unit) -> <IO> Unit
 oneModule sp argv run = match parseArgs sp argv
   Err m => failWith m
-  Ok a => match a.positionals
-    [path] => run path
-    [] => failWith "usage: \{sp.verb} <path>"
-    _ :: extra :: _ => failWith (unknownFlagMessage sp extra)
+  Ok a =>
+    if flag "--help" a then
+      printHelp ()
+    else match a.positionals
+      [path] => run path
+      [] => failWith "usage: \{sp.verb} <path>"
+      _ :: extra :: _ => failWith (unknownFlagMessage sp extra)
 
 writeArgs : List String -> <IO> Unit
 writeArgs argv = match parseArgs writeSpec argv
   Err m => failWith m
-  Ok a => match a.positionals
-    [path] => writeCmd path (flagValues "--target" a)
-    [] =>
-      failWith
-        "usage: medaka interface write <module.mdk> [--target <profile>]..."
-    _ :: extra :: _ => failWith (unknownFlagMessage writeSpec extra)
+  Ok a =>
+    if flag "--help" a then
+      printHelp ()
+    else match a.positionals
+      [path] => writeCmd path (flagValues "--target" a)
+      [] =>
+        failWith
+          "usage: medaka interface write <module.mdk> [--target <profile>]..."
+      _ :: extra :: _ => failWith (unknownFlagMessage writeSpec extra)
 
 {- | `medaka interface <write|show|verify> …`. -}
 export
 runInterfaceCmd : List String -> <IO> Unit
 runInterfaceCmd [] =
   failWith "usage: medaka interface <write|show|verify> <module.mdk>"
-runInterfaceCmd ("write" :: rest) =
-  if wantsHelp rest then printHelp () else writeArgs rest
+runInterfaceCmd ("write" :: rest) = writeArgs rest
 runInterfaceCmd ("show" :: rest) =
-  if wantsHelp rest then
-    printHelp ()
-  else
-    oneModule (plainSpec "interface show") rest showCmd
+  oneModule (plainSpec "interface show") rest showCmd
 runInterfaceCmd ("verify" :: rest) =
-  if wantsHelp rest then
-    printHelp ()
-  else
-    oneModule (plainSpec "interface verify") rest verifyCmd
+  oneModule (plainSpec "interface verify") rest verifyCmd
 runInterfaceCmd (sub :: _) =
   failWith
     "medaka interface: unknown subcommand '\{sub}' (expected: write, show, verify)"
