@@ -283,14 +283,19 @@ stopAt cur p v =
   let _ = cursorStep cur p
   v
 
--- The value of the decimal digits from `p`; the cursor is left after them.
+-- The negated value of the decimal digits from `p`; the cursor is left after
+-- them.  The sum is carried below zero because the least `Int`'s magnitude is
+-- not an `Int`; a digit that would pass the least `Int` fails the cursor.
 digitsInto : SexpCursor -> Int -> Int -> Int
 digitsInto cur p acc
   | p >= cur.scLen = stopAt cur p acc
   | otherwise =
     let d = byteBlockGetUnsafe p cur.scBytes - 48
     if d >= 0 && d <= 9 then
-      digitsInto cur (p + 1) (acc * 10 + d)
+      if acc < (intMinBound + d) / 10 then
+        cursorFail cur 0
+      else
+        digitsInto cur (p + 1) (acc * 10 - d)
     else
       stopAt cur p acc
 
@@ -306,14 +311,17 @@ cursorInt cur =
     let start = if neg then cur.scPos.value + 1 else cur.scPos.value
     let v = digitsInto cur start 0
     let p = cur.scPos.value
-    if p == start
+    if cursorFailed cur
+      || p == start
       || p < cur.scLen
         && not (isSpecialByte (byteBlockGetUnsafe p cur.scBytes)) then
       cursorFail cur 0
     else if neg then
-      0 - v
-    else
       v
+    else if v == intMinBound then
+      cursorFail cur 0
+    else
+      0 - v
 
 -- A bare or quoted atom, escapes resolved.
 export

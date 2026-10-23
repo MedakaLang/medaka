@@ -395,6 +395,11 @@ test "arch_boundaries: types.interface_sexp closure matches its golden" =
     "closure.types.interface_sexp.golden"
     (closureOf (buildGraph loadModules) "types.interface_sexp")
 
+test "arch_boundaries: types.prelude_elab closure matches its golden" =
+  pin
+    "closure.types.prelude_elab.golden"
+    (closureOf (buildGraph loadModules) "types.prelude_elab")
+
 test "arch_boundaries: frontend.ast_codec closure matches its golden" =
   pin
     "closure.frontend.ast_codec.golden"

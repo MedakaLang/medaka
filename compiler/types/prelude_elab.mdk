@@ -1,0 +1,374 @@
+-- The prelude's elaborated trees as a value, an on-disk file and a process
+-- cache.
+--
+-- `PreludeElab` is core after the tree arm's elaboration with no user module:
+-- the dict-passed declarations, the evidence rows those trees reference, the
+-- binder rows, and four counters.  Every id in it is core's own, so every
+-- `EvId` and `BinderId` carries the module `""`.  A drive that takes the value
+-- must start its id interners past the counters: `peEvCounter` is one past the
+-- highest evidence ordinal the elaboration minted, `peLocalCounter` one past
+-- the highest `$k$lb` local-abstraction suffix its trees hold, `peBinderCount`
+-- the number of binder rows and `peBinderBase` the first binder ordinal (binder
+-- ordinals are relocated by offset, never restored).
+--
+-- File grammar: the first line is the header, then three lines (declarations,
+-- evidence rows, binder rows), each one list.
+--   (medaka-elab <version> (sources ((<path> <hash>) ...)) (compiler <id>)
+--     (counters <K> <L> <N> <B0>) (digest <hex>))
+-- The digest is the SHA-256 of the bytes after the header line and is checked
+-- before any of them is decoded, so a flipped or cut byte never reaches the
+-- cursor.  The header's own fields are not under the digest: a flip there reads
+-- as a different key (stale on comparison) or a refused header.  A binder row
+-- is `(<id> <name> <type> (<type>?) <t|f>)`; an id of module `""` is its bare
+-- ordinal, any other is `(<module> <ordinal>)`.
+--
+-- The body is never built as an `SExp`: the cursor readers of
+-- `frontend.ast_codec` and the binder reader below take it off the bytes.
+
+import frontend.ast.{BinderId(..), Decl, EvEntry(..), EvId(..)}
+import frontend.ast_codec.{declsSExp, evEntriesSExp, readDecls, readEvEntries}
+import list.{reverse}
+import string as S
+import support.sexp_value.{
+  SExp(..), SexpError(..), SexpCursor, atomInt, cursorAtEnd, cursorAtom,
+  cursorClose, cursorFail, cursorFailed, cursorInt, cursorList, cursorOf,
+  cursorOffset, cursorOpen, cursorPeek, cursorChar, expectAtom, parseSExp,
+  renderSExp
+}
+import support.util.{splitOnChar}
+import types.evidence_coverage.{EvidenceFault(..), evidenceFaults}
+import types.interface_sexp.{InterfaceFault(..), sha256Hex}
+import types.prelude_interface.{InterfaceKey(..)}
+import types.runtime_types.{
+  BinderRow(..), RuntimeType(..), binderOrdinal, runtimeTypeName,
+  runtimeTypeFromName
+}
+
+-- ── the value ───────────────────────────────────────────────────────────────
+
+public export data PreludeElab = PreludeElab {
+  peDecls : List Decl,
+  peEvidence : List EvEntry,
+  peBinders : List BinderRow,
+  peEvCounter : Int,
+  peLocalCounter : Int,
+  peBinderCount : Int,
+  peBinderBase : Int,
+}
+
+-- The value of an elaboration of core with no user module: [evidence] is the
+-- whole published table, of which only the rows a tree references are kept.
+-- The counters are read off the elaboration's own output.
+export
+preludeElabOf : List Decl -> List EvEntry -> List BinderRow -> PreludeElab
+preludeElabOf decls evidence binders = PreludeElab {
+  peDecls = decls,
+  peEvidence = referencedRows decls evidence,
+  peBinders = binders,
+  peEvCounter = evidenceHighWater evidence,
+  peLocalCounter = localHighWater (declsSExp decls),
+  peBinderCount = length binders,
+  peBinderBase = binderBase binders,
+}
+
+evidenceHighWater : List EvEntry -> Int
+evidenceHighWater rows =
+  fold (acc (EvEntry (EvId _ i) _) => max acc (i + 1)) 0 rows
+
+binderBase : List BinderRow -> Int
+binderBase [] = 0
+binderBase (r :: rest) =
+  fold (acc row => min acc (binderOrdinal row.brId)) (binderOrdinal r.brId) rest
+
+-- A table with no row faults at every site its trees carry, so the faults name
+-- exactly the ids the trees reference.
+referencedRows : List Decl -> List EvEntry -> List EvEntry
+referencedRows decls rows =
+  let size = evidenceHighWater rows
+  let marks = arrayMake size False
+  let _ = markReferenced marks (evidenceFaults (Some (decls, [])) [])
+  filter (isMarked marks) rows
+
+markReferenced : Array Bool -> List EvidenceFault -> Unit
+markReferenced _ [] = ()
+markReferenced marks ((MissingEntry _ i _) :: rest) =
+  let _ = if i >= 0 && i < arrayLength marks then arraySetUnsafe i True marks
+  markReferenced marks rest
+markReferenced marks (_ :: rest) = markReferenced marks rest
+
+isMarked : Array Bool -> EvEntry -> Bool
+isMarked marks (EvEntry (EvId _ i) _) =
+  i >= 0 && i < arrayLength marks && arrayGetUnsafe i marks
+
+-- One past the highest k of any `<name>$<k>$lb` atom.
+localHighWater : SExp -> Int
+localHighWater (SAtom s) = localSuffix s
+localHighWater (SList items) =
+  fold (acc n => max acc (localHighWater n)) 0 items
+
+localSuffix : String -> Int
+localSuffix s
+  | S.endsWith "$lb" s = match reverse (splitOnChar '$' s)
+    _ :: k :: _ => match stringToInt k
+      Some n => n + 1
+      None => 0
+    _ => 0
+  | otherwise = 0
+
+-- ── the file ────────────────────────────────────────────────────────────────
+
+export
+formatVersion : Int
+formatVersion = 1
+
+-- The key an elaborated-trees file is validated against: the interface file's
+-- key with this file's own format version.
+export
+elabKeyOf : InterfaceKey -> InterfaceKey
+elabKeyOf key = InterfaceKey {
+  ikFormat = formatVersion,
+  ikSources = key.ikSources,
+  ikCompiler = key.ikCompiler,
+}
+
+sexpBinderId : BinderId -> SExp
+sexpBinderId (BinderId "" n) = SAtom (intToString n)
+sexpBinderId (BinderId m n) = SList [SAtom m, SAtom (intToString n)]
+
+sexpBinder : BinderRow -> SExp
+sexpBinder row = SList [
+  sexpBinderId row.brId,
+  SAtom row.brName,
+  SAtom (runtimeTypeName row.brType),
+  SList
+    (map
+      (t => SAtom (runtimeTypeName t))
+      (match row.brReturns
+        Some t => [t]
+        None => [])),
+  SAtom (if row.brSigned then "t" else "f"),
+]
+
+binderLine : List BinderRow -> String
+binderLine rows = renderSExp (SList (map sexpBinder rows))
+
+headerNode : InterfaceKey -> PreludeElab -> String -> SExp
+headerNode key pe digest = SList [
+  SAtom "medaka-elab",
+  SAtom (intToString formatVersion),
+  SList [
+    SAtom "sources",
+    SList (map (s => SList [SAtom (fst s), SAtom (snd s)]) key.ikSources),
+  ],
+  SList [SAtom "compiler", SAtom key.ikCompiler],
+  SList [
+    SAtom "counters",
+    SAtom (intToString pe.peEvCounter),
+    SAtom (intToString pe.peLocalCounter),
+    SAtom (intToString pe.peBinderCount),
+    SAtom (intToString pe.peBinderBase),
+  ],
+  SList [SAtom "digest", SAtom digest],
+]
+
+bodyText : PreludeElab -> String
+bodyText pe =
+  "\{renderSExp (declsSExp pe.peDecls)}\n\{renderSExp (evEntriesSExp pe.peEvidence)}\n\{binderLine pe.peBinders}\n"
+
+-- The whole file for [pe] under [key]; the key's own format field is not
+-- written, the header always carries `formatVersion`.
+export
+encodeElabFile : InterfaceKey -> PreludeElab -> String
+encodeElabFile key pe =
+  let body = bodyText pe
+  "\{renderSExp (headerNode key pe (sha256Hex body))}\n\{body}"
+
+-- The digest a file's body has: the SHA-256 of the bytes after the first line.
+export
+elabDigestOf : String -> String
+elabDigestOf text = match S.indexOf "\n" text
+  Some i => sha256Hex (S.drop (i + 1) text)
+  None => sha256Hex ""
+
+export
+renderElabFault : InterfaceFault -> String
+renderElabFault (WrongFormat v) =
+  "elaborated-trees format version \{v}, this compiler reads \{formatVersion}"
+renderElabFault (Malformed e) = "\{e.sePath}: \{e.seWhat} (elaborated trees)"
+
+refuse : String -> String -> Result InterfaceFault a
+refuse path what =
+  Err (Malformed SexpError { seOffset = 0, sePath = path, seWhat = what })
+
+failure : SexpError -> Result InterfaceFault a
+failure e = Err (Malformed e)
+
+-- The version the header declares, when it declares one.
+declaredVersion : SExp -> Option Int
+declaredVersion (SList ((SAtom "medaka-elab") :: v :: _)) = match atomInt "" v
+  Ok n => Some n
+  Err _ => None
+declaredVersion _ = None
+
+-- The key, the four counters and the digest a header claims.
+data Header = Header {
+  hKey : InterfaceKey,
+  hCounters : (Int, Int, Int, Int),
+  hDigest : String,
+}
+
+headerOf : SExp -> Result SexpError Header
+headerOf (SList [SAtom "medaka-elab", v, SList [SAtom "sources", srcs], SList [SAtom "compiler", c], SList [SAtom "counters", k, l, n, b], SList [SAtom "digest", d]]) =
+  do
+    version <- atomInt "header/version" v
+    sources <- traverse sourceOf (listItems srcs)
+    compiler <- expectAtom "header/compiler" c
+    kk <- atomInt "header/counters" k
+    ll <- atomInt "header/counters" l
+    nn <- atomInt "header/counters" n
+    bb <- atomInt "header/counters" b
+    digest <- expectAtom "header/digest" d
+    Ok Header {
+      hKey = InterfaceKey {
+        ikFormat = version,
+        ikSources = sources,
+        ikCompiler = compiler,
+      },
+      hCounters = (kk, ll, nn, bb),
+      hDigest = digest,
+    }
+headerOf node = Err SexpError {
+  seOffset = 0,
+  sePath = "header",
+  seWhat = "expected a medaka-elab header of five fields",
+}
+
+listItems : SExp -> List SExp
+listItems (SList items) = items
+listItems _ = []
+
+sourceOf : SExp -> Result SexpError (String, String)
+sourceOf (SList [SAtom p, SAtom h]) = Ok (p, h)
+sourceOf _ = Err SexpError {
+  seOffset = 0,
+  sePath = "header/sources",
+  seWhat = "expected a (path hash) pair",
+}
+
+readBinderId : SexpCursor -> BinderId
+readBinderId cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorOpen cur
+    let m = cursorAtom cur
+    let n = cursorInt cur
+    let _ = cursorClose cur
+    BinderId m n
+  else
+    BinderId "" (cursorInt cur)
+
+readRuntimeType : SexpCursor -> RuntimeType
+readRuntimeType cur = match runtimeTypeFromName (cursorAtom cur)
+  Some t => t
+  None => cursorFail cur RTValue
+
+readBinder : SexpCursor -> BinderRow
+readBinder cur =
+  let _ = cursorOpen cur
+  let bid = readBinderId cur
+  let name = cursorAtom cur
+  let ty = readRuntimeType cur
+  let returns = match cursorList readRuntimeType cur
+    [] => None
+    [t] => Some t
+    _ => cursorFail cur None
+  let flag = cursorChar cur
+  let signed =
+    if flag == 116 then
+      True
+    else if flag == 102 then
+      False
+    else
+      cursorFail cur False
+  let _ = cursorClose cur
+  BinderRow {
+    brId = bid,
+    brName = name,
+    brType = ty,
+    brReturns = returns,
+    brSigned = signed,
+  }
+
+-- The value of a file, or why it is refused: the version first, then the
+-- header, then the digest of the body, and only then the body.  The key is the
+-- one the header carries.
+export
+readElabFile : String -> Result InterfaceFault (InterfaceKey, PreludeElab)
+readElabFile text = match S.indexOf "\n" text
+  None => refuse "file" "no header line"
+  Some i => match parseSExp (S.take i text)
+    Err e => failure e
+    Ok node => match declaredVersion node
+      Some v if v /= formatVersion => Err (WrongFormat v)
+      _ => match headerOf node
+        Err e => failure e
+        Ok h =>
+          let body = S.drop (i + 1) text
+          if sha256Hex body /= h.hDigest then
+            refuse "header/digest" "the body does not match the digest"
+          else
+            decodeBody h body
+
+decodeBody : Header ->
+  String ->
+  Result InterfaceFault (InterfaceKey, PreludeElab)
+decodeBody h body =
+  let cur = cursorOf body
+  match readDecls cur
+    Err e => failure e
+    Ok decls => match readEvEntries cur
+      Err e => failure e
+      Ok evidence =>
+        let binders = cursorList readBinder cur
+        if cursorFailed cur then
+          refuse "binders" "malformed or truncated encoding"
+        else if not (cursorAtEnd cur) then
+          failure SexpError {
+            seOffset = cursorOffset cur,
+            sePath = "",
+            seWhat = "trailing text after the binder rows",
+          }
+        else
+          let (k, l, n, b) = h.hCounters
+          if n /= length binders || b /= binderBase binders then
+            refuse
+              "header/counters"
+              "the binder count or base disagrees with the rows"
+          else
+            Ok (
+              h.hKey,
+              PreludeElab {
+                peDecls = decls,
+                peEvidence = evidence,
+                peBinders = binders,
+                peEvCounter = k,
+                peLocalCounter = l,
+                peBinderCount = n,
+                peBinderBase = b,
+              },
+            )
+
+-- ── the process cache ───────────────────────────────────────────────────────
+
+-- One value for one compiler generation, the pair `preludeCacheHit` keys by.
+preludeElabCacheRef : Ref (Option ((Int, Int), PreludeElab))
+preludeElabCacheRef = Ref None
+
+export
+seedPreludeElab : (Int, Int) -> PreludeElab -> Unit
+seedPreludeElab generation pe = preludeElabCacheRef := Some (generation, pe)
+
+export
+preludeElabHit : (Int, Int) -> Option PreludeElab
+preludeElabHit generation = match !preludeElabCacheRef
+  Some (seen, pe) if seen == generation => Some pe
+  _ => None

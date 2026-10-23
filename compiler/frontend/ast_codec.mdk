@@ -83,10 +83,8 @@ checked path cur v =
 
 -- ── building blocks ────────────────────────────────────────────────────────
 
--- The least `Int` is the atom `min`: the cursor reads a decimal's magnitude
--- before negating it, and that magnitude is not an `Int`.
 sexpInt : Int -> SExp
-sexpInt n = if n == intMinBound then SAtom "min" else SAtom (intToString n)
+sexpInt n = SAtom (intToString n)
 
 sexpString : String -> SExp
 sexpString s = SAtom s
@@ -130,11 +128,7 @@ bytesOfWord : Int -> List Int
 bytesOfWord w = [w / 16777216 % 256, w / 65536 % 256, w / 256 % 256, w % 256]
 
 readInt : SexpCursor -> Int
-readInt cur =
-  if cursorPeek cur == 109 then
-    if cursorAtom cur == "min" then intMinBound else cursorFail cur 0
-  else
-    cursorInt cur
+readInt cur = cursorInt cur
 
 readString : SexpCursor -> String
 readString cur = cursorAtom cur

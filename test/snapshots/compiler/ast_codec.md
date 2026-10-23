@@ -1,5 +1,5 @@
 # META
-source_lines=1792
+source_lines=1786
 stages=DESUGAR,MARK
 # SOURCE
 -- A faithful, fail-closed codec for the elaborated AST and the evidence rows.
@@ -87,10 +87,8 @@ checked path cur v =
 
 -- ── building blocks ────────────────────────────────────────────────────────
 
--- The least `Int` is the atom `min`: the cursor reads a decimal's magnitude
--- before negating it, and that magnitude is not an `Int`.
 sexpInt : Int -> SExp
-sexpInt n = if n == intMinBound then SAtom "min" else SAtom (intToString n)
+sexpInt n = SAtom (intToString n)
 
 sexpString : String -> SExp
 sexpString s = SAtom s
@@ -134,11 +132,7 @@ bytesOfWord : Int -> List Int
 bytesOfWord w = [w / 16777216 % 256, w / 65536 % 256, w / 256 % 256, w % 256]
 
 readInt : SexpCursor -> Int
-readInt cur =
-  if cursorPeek cur == 109 then
-    if cursorAtom cur == "min" then intMinBound else cursorFail cur 0
-  else
-    cursorInt cur
+readInt cur = cursorInt cur
 
 readString : SexpCursor -> String
 readString cur = cursorAtom cur
@@ -1816,7 +1810,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "checked" (TyFun (TyCon "String") (TyFun (TyCon "SexpCursor") (TyFun (TyVar "a") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a"))))))
 (DFunDef false "checked" ((PVar "path") (PVar "cur") (PVar "v")) (EIf (EApp (EVar "cursorFailed") (EVar "cur")) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (EVar "path")) (fa "seWhat" (ELit (LString "malformed or truncated encoding")))))) (EApp (EVar "Ok") (EVar "v"))))
 (DTypeSig false "sexpInt" (TyFun (TyCon "Int") (TyCon "SExp")))
-(DFunDef false "sexpInt" ((PVar "n")) (EIf (EBinOp "==" (EVar "n") (EVar "intMinBound")) (EApp (EVar "SAtom") (ELit (LString "min"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "n")))))
+(DFunDef false "sexpInt" ((PVar "n")) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "n"))))
 (DTypeSig false "sexpString" (TyFun (TyCon "String") (TyCon "SExp")))
 (DFunDef false "sexpString" ((PVar "s")) (EApp (EVar "SAtom") (EVar "s")))
 (DTypeSig false "sexpBool" (TyFun (TyCon "Bool") (TyCon "SExp")))
@@ -1844,7 +1838,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "bytesOfWord" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "bytesOfWord" ((PVar "w")) (EListLit (EBinOp "%" (EBinOp "/" (EVar "w") (ELit (LInt 16777216))) (ELit (LInt 256))) (EBinOp "%" (EBinOp "/" (EVar "w") (ELit (LInt 65536))) (ELit (LInt 256))) (EBinOp "%" (EBinOp "/" (EVar "w") (ELit (LInt 256))) (ELit (LInt 256))) (EBinOp "%" (EVar "w") (ELit (LInt 256)))))
 (DTypeSig false "readInt" (TyFun (TyCon "SexpCursor") (TyCon "Int")))
-(DFunDef false "readInt" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 109))) (EIf (EBinOp "==" (EApp (EVar "cursorAtom") (EVar "cur")) (ELit (LString "min"))) (EVar "intMinBound") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit (LInt 0)))) (EApp (EVar "cursorInt") (EVar "cur"))))
+(DFunDef false "readInt" ((PVar "cur")) (EApp (EVar "cursorInt") (EVar "cur")))
 (DTypeSig false "readString" (TyFun (TyCon "SexpCursor") (TyCon "String")))
 (DFunDef false "readString" ((PVar "cur")) (EApp (EVar "cursorAtom") (EVar "cur")))
 (DTypeSig false "readBool" (TyFun (TyCon "SexpCursor") (TyCon "Bool")))
@@ -2412,7 +2406,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "checked" (TyFun (TyCon "String") (TyFun (TyCon "SexpCursor") (TyFun (TyVar "a") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a"))))))
 (DFunDef false "checked" ((PVar "path") (PVar "cur") (PVar "v")) (EIf (EApp (EVar "cursorFailed") (EVar "cur")) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (EVar "path")) (fa "seWhat" (ELit (LString "malformed or truncated encoding")))))) (EApp (EVar "Ok") (EVar "v"))))
 (DTypeSig false "sexpInt" (TyFun (TyCon "Int") (TyCon "SExp")))
-(DFunDef false "sexpInt" ((PVar "n")) (EIf (EBinOp "==" (EVar "n") (EVar "intMinBound")) (EApp (EVar "SAtom") (ELit (LString "min"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "n")))))
+(DFunDef false "sexpInt" ((PVar "n")) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "n"))))
 (DTypeSig false "sexpString" (TyFun (TyCon "String") (TyCon "SExp")))
 (DFunDef false "sexpString" ((PVar "s")) (EApp (EVar "SAtom") (EVar "s")))
 (DTypeSig false "sexpBool" (TyFun (TyCon "Bool") (TyCon "SExp")))
@@ -2440,7 +2434,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "bytesOfWord" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "bytesOfWord" ((PVar "w")) (EListLit (EBinOp "%" (EBinOp "/" (EVar "w") (ELit (LInt 16777216))) (ELit (LInt 256))) (EBinOp "%" (EBinOp "/" (EVar "w") (ELit (LInt 65536))) (ELit (LInt 256))) (EBinOp "%" (EBinOp "/" (EVar "w") (ELit (LInt 256))) (ELit (LInt 256))) (EBinOp "%" (EVar "w") (ELit (LInt 256)))))
 (DTypeSig false "readInt" (TyFun (TyCon "SexpCursor") (TyCon "Int")))
-(DFunDef false "readInt" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 109))) (EIf (EBinOp "==" (EApp (EVar "cursorAtom") (EVar "cur")) (ELit (LString "min"))) (EVar "intMinBound") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit (LInt 0)))) (EApp (EVar "cursorInt") (EVar "cur"))))
+(DFunDef false "readInt" ((PVar "cur")) (EApp (EVar "cursorInt") (EVar "cur")))
 (DTypeSig false "readString" (TyFun (TyCon "SexpCursor") (TyCon "String")))
 (DFunDef false "readString" ((PVar "cur")) (EApp (EVar "cursorAtom") (EVar "cur")))
 (DTypeSig false "readBool" (TyFun (TyCon "SexpCursor") (TyCon "Bool")))
