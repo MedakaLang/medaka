@@ -8,7 +8,7 @@ check_hello.load.located	1
 check_hello.parse.prescan	3
 check_hello.read.source	2
 check_hello.typecheck.drive	1
-check_hello.typecheck.module	2
+check_hello.typecheck.module	1
 check_three_mod.exit	0
 check_three_mod.desugar	7
 check_three_mod.exhaust.guards	6
@@ -20,7 +20,7 @@ check_three_mod.parse.prescan	7
 check_three_mod.read.source	6
 check_three_mod.resolve	5
 check_three_mod.typecheck.drive	1
-check_three_mod.typecheck.module	6
+check_three_mod.typecheck.module	5
 check_json_three_mod.exit	0
 check_json_three_mod.desugar	7
 check_json_three_mod.exhaust.guards	5
@@ -32,7 +32,7 @@ check_json_three_mod.parse.prescan	7
 check_json_three_mod.read.source	6
 check_json_three_mod.resolve	5
 check_json_three_mod.typecheck.drive	1
-check_json_three_mod.typecheck.module	6
+check_json_three_mod.typecheck.module	5
 run_hello.exit	0
 run_hello.desugar	4
 run_hello.exhaust.guards	1
@@ -85,7 +85,7 @@ check_bad.load.located	1
 check_bad.parse.prescan	3
 check_bad.read.source	2
 check_bad.typecheck.drive	1
-check_bad.typecheck.module	2
+check_bad.typecheck.module	1
 run_bad.exit	1
 run_bad.desugar	4
 run_bad.exhaust.guards	1
@@ -119,7 +119,7 @@ check_vm.load.located	1
 check_vm.parse.prescan	3
 check_vm.read.source	2
 check_vm.typecheck.drive	1
-check_vm.typecheck.module	2
+check_vm.typecheck.module	1
 run_vm.exit	0
 run_vm.desugar	4
 run_vm.exhaust.guards	1
@@ -154,7 +154,7 @@ check_vmm.parse.prescan	4
 check_vmm.read.source	3
 check_vmm.resolve	2
 check_vmm.typecheck.drive	1
-check_vmm.typecheck.module	3
+check_vmm.typecheck.module	2
 run_vmm.exit	0
 run_vmm.desugar	4
 run_vmm.exhaust.guards	2
@@ -271,7 +271,7 @@ test_doc_eval.lint.comments	1
 test_doc_eval.parse.prescan	4
 test_doc_eval.read.source	1
 test_doc_eval.typecheck.drive	2
-test_doc_eval.typecheck.module	4
+test_doc_eval.typecheck.module	3
 test_docimp_eval.exit	0
 test_docimp_eval.desugar	6
 test_docimp_eval.exhaust.guards	2
@@ -284,7 +284,7 @@ test_docimp_eval.parse.prescan	6
 test_docimp_eval.read.source	3
 test_docimp_eval.resolve	2
 test_docimp_eval.typecheck.drive	2
-test_docimp_eval.typecheck.module	6
+test_docimp_eval.typecheck.module	5
 test_propsdoc_eval.exit	0
 test_propsdoc_eval.desugar	8
 test_propsdoc_eval.exhaust.guards	1
@@ -295,7 +295,7 @@ test_propsdoc_eval.lint.comments	2
 test_propsdoc_eval.parse.prescan	7
 test_propsdoc_eval.read.source	2
 test_propsdoc_eval.typecheck.drive	4
-test_propsdoc_eval.typecheck.module	8
+test_propsdoc_eval.typecheck.module	7
 test_arb_eval.exit	0
 test_arb_eval.desugar	11
 test_arb_eval.exhaust.guards	1
@@ -306,7 +306,7 @@ test_arb_eval.lint.comments	2
 test_arb_eval.parse.prescan	10
 test_arb_eval.read.source	2
 test_arb_eval.typecheck.drive	5
-test_arb_eval.typecheck.module	10
+test_arb_eval.typecheck.module	9
 test_tonly_native.exit	0
 test_tonly_native.desugar	11
 test_tonly_native.exhaust.guards	6
@@ -332,7 +332,7 @@ test_doc_native.load.located	1
 test_doc_native.parse.prescan	6
 test_doc_native.read.source	3
 test_doc_native.typecheck.drive	2
-test_doc_native.typecheck.module	5
+test_doc_native.typecheck.module	4
 lsp.a_references.exit	0
 lsp.a_references.desugar	10
 lsp.a_references.exhaust.guards	8
@@ -345,7 +345,7 @@ lsp.a_references.parse.prescan	10
 lsp.a_references.read.source	7
 lsp.a_references.resolve	8
 lsp.a_references.typecheck.drive	1
-lsp.a_references.typecheck.module	9
+lsp.a_references.typecheck.module	8
 lsp.b_references_twice.exit	0
 lsp.b_references_twice.desugar	10
 lsp.b_references_twice.exhaust.guards	8
@@ -358,7 +358,7 @@ lsp.b_references_twice.parse.prescan	10
 lsp.b_references_twice.read.source	7
 lsp.b_references_twice.resolve	8
 lsp.b_references_twice.typecheck.drive	1
-lsp.b_references_twice.typecheck.module	9
+lsp.b_references_twice.typecheck.module	8
 lsp.c_didchange.exit	0
 lsp.c_didchange.desugar	7
 lsp.c_didchange.exhaust.guards	8
@@ -370,7 +370,7 @@ lsp.c_didchange.parse.prescan	7
 lsp.c_didchange.read.source	4
 lsp.c_didchange.resolve	5
 lsp.c_didchange.typecheck.drive	4
-lsp.c_didchange.typecheck.module	6
+lsp.c_didchange.typecheck.module	5
 lsp.d_hover.exit	0
 lsp.d_hover.desugar	4
 lsp.d_hover.exhaust.guards	2
@@ -383,4 +383,4 @@ lsp.d_hover.parse.prescan	5
 lsp.d_hover.read.source	2
 lsp.d_hover.resolve	2
 lsp.d_hover.typecheck.drive	1
-lsp.d_hover.typecheck.module	3
+lsp.d_hover.typecheck.module	2

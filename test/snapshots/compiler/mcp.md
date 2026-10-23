@@ -1,5 +1,5 @@
 # META
-source_lines=1843
+source_lines=1852
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -88,6 +88,7 @@ import tools.lint.{
   StdlibIndex,
 }
 import tools.test_cmd.{runTestGradedReport}
+import driver.build_cmd.{lastPreludeStaleLine}
 import driver.profile_select.{carryProjectProfile}
 import types.target_profile.{selectedProfile}
 import tools.doctest.{
@@ -261,21 +262,29 @@ logMcpCall method name args = match getEnv "MEDAKA_MCP_LOG"
 -- Splice a compact `staleBinary` field onto an already-built tool result
 -- (always a `JObject` — every mcpTools handler returns one via
 -- `toolTextResult`) ONLY when the live compiler source has diverged from what
--- this binary was built from.  Fresh/unknown ⇒ `result` is returned
--- UNCHANGED — zero added tokens in the common case.
+-- this binary was built from, and a `stalePreludeInterface` field when the
+-- server found `stdlib/core.mdki` stale and checks `core.mdk` instead.
+-- Fresh/unknown ⇒ `result` is returned UNCHANGED — zero added tokens in the
+-- common case.
 attachStaleness : (Unit -> <IO> Option String) -> Json -> <IO> Json
-attachStaleness stalenessCheck result = match stalenessCheck ()
-  None => result
-  Some compilerDir =>
-    jsonObjectAppend
-      "staleBinary"
-      (JString
-        (stringConcat [
-          "this server's binary predates the compiler source at ",
-          compilerDir,
-          " — results may reflect the OLD compiler. Rebuild with 'make medaka' and reconnect (/mcp).",
-        ]))
-      result
+attachStaleness stalenessCheck result =
+  let withBinary = match stalenessCheck ()
+    None => result
+    Some compilerDir =>
+      jsonObjectAppend
+        "staleBinary"
+        (JString
+          (stringConcat [
+            "this server's binary predates the compiler source at ",
+            compilerDir,
+            " — results may reflect the OLD compiler. Rebuild with 'make medaka' and reconnect (/mcp).",
+          ]))
+        result
+  -- The prelude interface's verdict was read once, at server start.
+  match lastPreludeStaleLine ()
+    None => withBinary
+    Some line =>
+      jsonObjectAppend "stalePreludeInterface" (JString line) withBinary
 
 -- Append one (key, value) pair onto a `JObject`'s own Array-backed pairs,
 -- preserving insertion order (json.mdk's own invariant).  A total fallback
@@ -333,7 +342,7 @@ toolsListResult = jObject [("tools", jArray (map toolDescriptor mcpTools))]
 -- `{ content: [ { type: "text", text } ], isError }`.
 
 data McpTool =
-  | McpTool String String Json (String -> String -> String -> Json -> <IO> Json)
+  McpTool String String Json (String -> String -> String -> Json -> <IO> Json)
 --        name   desc   schema  handler(runtimeSrc coreSrc stdlibDir args)
 
 -- Descriptions are DIRECTIVE (gopls/Serena convention), not just descriptive:
@@ -1859,6 +1868,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" false) (mem "lintFileDiagTripleParsed" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "applySuppressionsMulti" false) (mem "applyFindingDeny" false) (mem "splitLintNames" false) (mem "buildStdlibIndex" false) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeeded" false) (mem "StdlibIndex" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestGradedReport" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "lastPreludeStaleLine" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "exResultJsonFields" false) (mem "RunResult" false) (mem "Engine" true) (mem "engineName" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false))))
@@ -1885,7 +1895,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "logMcpCall" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "logMcpCall" ((PVar "method") (PVar "name") (PVar "args")) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_LOG"))) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PLit (LString ""))) () (EVar "unit")) (arm (PCon "Some" (PVar "path")) () (EBlock (DoLet false false (PVar "ts") (EApp (EVar "floatToString") (EApp (EVar "wallTimeSec") (ELit LUnit)))) (DoLet false false (PVar "line") (EApp (EVar "stringConcat") (EListLit (EVar "ts") (ELit (LString "\t")) (EApp (EVar "stringify") (EApp (EVar "JString") (EVar "method"))) (ELit (LString "\t")) (EApp (EVar "stringify") (EApp (EVar "JString") (EVar "name"))) (ELit (LString "\t")) (EVar "args") (ELit (LString "\n"))))) (DoExpr (EMatch (EApp (EApp (EVar "appendFile") (EVar "path")) (EVar "line")) (arm (PCon "Ok" PWild) () (EVar "unit")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "logMcp") (EApp (EVar "stringConcat") (EListLit (ELit (LString "log write failed: ")) (EVar "e")))))))))))
 (DTypeSig false "attachStaleness" (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))
-(DFunDef false "attachStaleness" ((PVar "stalenessCheck") (PVar "result")) (EMatch (EApp (EVar "stalenessCheck") (ELit LUnit)) (arm (PCon "None") () (EVar "result")) (arm (PCon "Some" (PVar "compilerDir")) () (EApp (EApp (EApp (EVar "jsonObjectAppend") (ELit (LString "staleBinary"))) (EApp (EVar "JString") (EApp (EVar "stringConcat") (EListLit (ELit (LString "this server's binary predates the compiler source at ")) (EVar "compilerDir") (ELit (LString " — results may reflect the OLD compiler. Rebuild with 'make medaka' and reconnect (/mcp).")))))) (EVar "result")))))
+(DFunDef false "attachStaleness" ((PVar "stalenessCheck") (PVar "result")) (EBlock (DoLet false false (PVar "withBinary") (EMatch (EApp (EVar "stalenessCheck") (ELit LUnit)) (arm (PCon "None") () (EVar "result")) (arm (PCon "Some" (PVar "compilerDir")) () (EApp (EApp (EApp (EVar "jsonObjectAppend") (ELit (LString "staleBinary"))) (EApp (EVar "JString") (EApp (EVar "stringConcat") (EListLit (ELit (LString "this server's binary predates the compiler source at ")) (EVar "compilerDir") (ELit (LString " — results may reflect the OLD compiler. Rebuild with 'make medaka' and reconnect (/mcp).")))))) (EVar "result"))))) (DoExpr (EMatch (EApp (EVar "lastPreludeStaleLine") (ELit LUnit)) (arm (PCon "None") () (EVar "withBinary")) (arm (PCon "Some" (PVar "line")) () (EApp (EApp (EApp (EVar "jsonObjectAppend") (ELit (LString "stalePreludeInterface"))) (EApp (EVar "JString") (EVar "line"))) (EVar "withBinary")))))))
 (DTypeSig false "jsonObjectAppend" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyCon "Json")))))
 (DFunDef false "jsonObjectAppend" ((PVar "key") (PVar "value") (PCon "JObject" (PVar "pairs"))) (EApp (EVar "JObject") (EApp (EVar "arrayFromList") (EBinOp "++" (EApp (EVar "jsonPairsToList") (EVar "pairs")) (EListLit (ETuple (EVar "key") (EVar "value")))))))
 (DFunDef false "jsonObjectAppend" (PWild PWild (PVar "other")) (EVar "other"))
@@ -2104,6 +2114,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" false) (mem "lintFileDiagTripleParsed" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "applySuppressionsMulti" false) (mem "applyFindingDeny" false) (mem "splitLintNames" false) (mem "buildStdlibIndex" false) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeeded" false) (mem "StdlibIndex" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestGradedReport" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "lastPreludeStaleLine" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "exResultJsonFields" false) (mem "RunResult" false) (mem "Engine" true) (mem "engineName" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false))))
@@ -2130,7 +2141,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "logMcpCall" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "logMcpCall" ((PVar "method") (PVar "name") (PVar "args")) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_LOG"))) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PLit (LString ""))) () (EVar "unit")) (arm (PCon "Some" (PVar "path")) () (EBlock (DoLet false false (PVar "ts") (EApp (EVar "floatToString") (EApp (EVar "wallTimeSec") (ELit LUnit)))) (DoLet false false (PVar "line") (EApp (EVar "stringConcat") (EListLit (EVar "ts") (ELit (LString "\t")) (EApp (EVar "stringify") (EApp (EVar "JString") (EVar "method"))) (ELit (LString "\t")) (EApp (EVar "stringify") (EApp (EVar "JString") (EVar "name"))) (ELit (LString "\t")) (EVar "args") (ELit (LString "\n"))))) (DoExpr (EMatch (EApp (EApp (EVar "appendFile") (EVar "path")) (EVar "line")) (arm (PCon "Ok" PWild) () (EVar "unit")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "logMcp") (EApp (EVar "stringConcat") (EListLit (ELit (LString "log write failed: ")) (EVar "e")))))))))))
 (DTypeSig false "attachStaleness" (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))
-(DFunDef false "attachStaleness" ((PVar "stalenessCheck") (PVar "result")) (EMatch (EApp (EVar "stalenessCheck") (ELit LUnit)) (arm (PCon "None") () (EVar "result")) (arm (PCon "Some" (PVar "compilerDir")) () (EApp (EApp (EApp (EVar "jsonObjectAppend") (ELit (LString "staleBinary"))) (EApp (EVar "JString") (EApp (EVar "stringConcat") (EListLit (ELit (LString "this server's binary predates the compiler source at ")) (EVar "compilerDir") (ELit (LString " — results may reflect the OLD compiler. Rebuild with 'make medaka' and reconnect (/mcp).")))))) (EVar "result")))))
+(DFunDef false "attachStaleness" ((PVar "stalenessCheck") (PVar "result")) (EBlock (DoLet false false (PVar "withBinary") (EMatch (EApp (EVar "stalenessCheck") (ELit LUnit)) (arm (PCon "None") () (EVar "result")) (arm (PCon "Some" (PVar "compilerDir")) () (EApp (EApp (EApp (EVar "jsonObjectAppend") (ELit (LString "staleBinary"))) (EApp (EVar "JString") (EApp (EVar "stringConcat") (EListLit (ELit (LString "this server's binary predates the compiler source at ")) (EVar "compilerDir") (ELit (LString " — results may reflect the OLD compiler. Rebuild with 'make medaka' and reconnect (/mcp).")))))) (EVar "result"))))) (DoExpr (EMatch (EApp (EVar "lastPreludeStaleLine") (ELit LUnit)) (arm (PCon "None") () (EVar "withBinary")) (arm (PCon "Some" (PVar "line")) () (EApp (EApp (EApp (EVar "jsonObjectAppend") (ELit (LString "stalePreludeInterface"))) (EApp (EVar "JString") (EVar "line"))) (EVar "withBinary")))))))
 (DTypeSig false "jsonObjectAppend" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyCon "Json")))))
 (DFunDef false "jsonObjectAppend" ((PVar "key") (PVar "value") (PCon "JObject" (PVar "pairs"))) (EApp (EVar "JObject") (EApp (EVar "arrayFromList") (EBinOp "++" (EApp (EVar "jsonPairsToList") (EVar "pairs")) (EListLit (ETuple (EVar "key") (EVar "value")))))))
 (DFunDef false "jsonObjectAppend" (PWild PWild (PVar "other")) (EVar "other"))

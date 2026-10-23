@@ -160,6 +160,14 @@ infers the branch from git, so deploying from a topic branch publishes a
 production origin keeps serving 404. Set `CF_PAGES_BRANCH` only to publish a
 preview on purpose.
 
+**The prelude interface ships as two more `dist/` files**, `core.mdki` (copied
+from `stdlib/core.mdki`) and `compiler_fingerprint.txt` (the compiler source
+hash). `build_playground_wasm.sh` copies them only after `medaka interface verify
+stdlib/core.mdk` says `fresh`, so run `make medaka` first; `build_site.sh` fails
+closed if either is missing. `_headers` serves both as `text/plain;
+charset=utf-8`, with no COEP rule, as for `/dist/*.mdk`. The compiler worker
+seeds the prelude from them; a mismatch falls back to the core pass.
+
 ⚠️ **`sleep` needs cross-origin isolation.** `_headers` sends
 `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy:
 require-corp` on the playground route, its three workers, and every module the page

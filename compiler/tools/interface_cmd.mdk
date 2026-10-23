@@ -1,0 +1,320 @@
+{- interface_cmd.mdk: `medaka interface write|show|verify`, the driver for the
+   prelude interface file (`<module>.mdki`, the format of `types.interface_sexp`).
+
+   `write` is the prelude's judge: it type-checks the module on the
+   diagnostics arm under each named target profile, and only a module that
+   checks clean under all of them leaves a file.  `show` prints a file's header
+   and every published row.  `verify` compares the key a file was written
+   under with the key its module has now. -}
+
+import args.{
+  ArgSpec, FlagSpec, spec, switch, valueList, withStrictDash, parseArgs, flag,
+  flagValues, unknownFlagMessage
+}
+import io.{runCommandOk}
+import list.{zip}
+import string as S
+import driver.build_cmd.{
+  PreludeInputs(..), readPreludeFile, preludeInterfaceKey, faultComponent
+}
+import driver.diagnostics.{analyzeFrom, ppDiagCliSrc, diagIsError}
+import driver.front_gate.{cliStdlibExports}
+import frontend.parser.{parseLocated}
+import support.path.{dirOf, baseName, joinPath}
+import support.stage_count.{stageExit}
+import support.util.{joinNl, joinWith}
+import types.effect_rows.{Atom, renderAtom}
+import types.interface_sexp.{
+  PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface,
+  readInterface, renderFault, mergeSections
+}
+import types.prelude_interface.{
+  PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
+}
+import types.publish.{ppPubScheme}
+import types.target_profile.{TargetProfile, lookupProfile, selectedProfile}
+
+-- ── help ────────────────────────────────────────────────────────────────────
+
+export
+interfaceHelpText : String
+interfaceHelpText = stringConcat [
+  "medaka interface — Write, show and verify the prelude interface file\n",
+  "\n",
+  "Usage:\n",
+  "  medaka interface write  <module.mdk> [--target <profile>]...\n",
+  "  medaka interface show   <file.mdki>\n",
+  "  medaka interface verify <module.mdk>\n",
+  "\n",
+  "  write   type-checks the module (the prelude's core, with runtime.mdk beside\n",
+  "          it) under each --target profile and writes <module>.mdki beside it.\n",
+  "          Without --target the profiles are the full IO join and\n",
+  "          wasmgc/browser-worker.  A module with a type error leaves no file.\n",
+  "  show    prints the header and every published row.\n",
+  "  verify  prints `fresh`, `stale: <component>` or `missing`; exit 0 only on\n",
+  "          `fresh`.\n",
+  "\n",
+  "  -h, --help  prints this help.\n",
+]
+
+writeSpec : ArgSpec
+writeSpec =
+  withStrictDash
+    (spec "interface write" [
+      helpSwitch,
+      valueList
+        ["--target"]
+        "PROFILE"
+        "a target profile whose IO join gets a section (repeatable)",
+    ])
+
+plainSpec : String -> ArgSpec
+plainSpec verb = withStrictDash (spec verb [helpSwitch])
+
+helpSwitch : FlagSpec
+helpSwitch = switch ["--help", "-h"] "print this help"
+
+-- ── the key ─────────────────────────────────────────────────────────────────
+
+-- What [modulePath] is checked and keyed from: its directory as the stdlib, the
+-- two prelude texts, and the compiler running now.
+inputsOf : String -> String -> String -> PreludeInputs
+inputsOf modulePath runtimeSrc coreSrc = PreludeInputs {
+  pnStdlibDir = dirOf modulePath,
+  pnRuntimeSrc = runtimeSrc,
+  pnCoreSrc = coreSrc,
+  pnCompiler = buildFingerprint (),
+}
+
+-- The interface file is named for the module it was built from.
+interfacePath : String -> String
+interfacePath modulePath = modulePath ++ "i"
+
+runtimePathOf : String -> String
+runtimePathOf modulePath = joinPath (dirOf modulePath) "runtime.mdk"
+
+-- ── write ───────────────────────────────────────────────────────────────────
+
+defaultTargets : List String
+defaultTargets = ["", "wasmgc/browser-worker"]
+
+profileOfTarget : String -> Result String (Option TargetProfile)
+profileOfTarget "" = Ok None
+profileOfTarget name = map Some (lookupProfile name)
+
+-- The module checked as a user file under [profile], on the diagnostics arm: the
+-- verdict.  A trivial program is then driven against the same prelude, which
+-- leaves the prelude's interface in the process cache under the profile's IO
+-- join (a drive of the prelude's own text as the user file leaves none).
+-- Errors come back rendered.
+driveUnder : PreludeInputs ->
+  String ->
+  Option TargetProfile ->
+  <IO> Result String (List (List Atom, PreludeInterface))
+driveUnder inputs modulePath profile =
+  let saved = !selectedProfile
+  selectedProfile := profile
+  let exports = cliStdlibExports inputs.pnStdlibDir
+  let runtimeSrc = inputs.pnRuntimeSrc
+  let coreSrc = inputs.pnCoreSrc
+  let errors =
+    filter
+      diagIsError
+      (analyzeFrom exports "" runtimeSrc coreSrc (parseLocated coreSrc))
+  let trivial = match errors
+    [] => analyzeFrom exports "" runtimeSrc coreSrc (parseLocated "x = 1\n")
+    _ => []
+  selectedProfile := saved
+  match (errors, length trivial)
+    ([], _) => match currentPreludeInterface ()
+      [] => Err "medaka interface write: the check left no prelude interface"
+      sections => Ok (flatMap (s => map (j => (j, snd s)) (fst s)) sections)
+    _ => Err (joinNl (map (ppDiagCliSrc coreSrc modulePath) errors))
+
+-- The file for [modulePath] checked under [targets] (profile names, "" for the
+-- full join; none given means the default targets).
+export
+buildInterfaceFile : String ->
+  List String ->
+  <IO> Result String PreludeInterfaceFile
+buildInterfaceFile modulePath targets = do
+  runtimeSrc <- readPreludeFile (runtimePathOf modulePath)
+  coreSrc <- readPreludeFile modulePath
+  profiles <- traverse profileOfTarget (if isEmpty targets then
+    defaultTargets
+  else
+    targets)
+  let inputs = inputsOf modulePath runtimeSrc coreSrc
+  drives <- traverse (driveUnder inputs modulePath) profiles
+  Ok PreludeInterfaceFile {
+    ifKey = preludeInterfaceKey (baseName modulePath) inputs,
+    ifSections = mergeSections (flatMap (d => d) drives),
+  }
+
+-- The text goes into a fresh directory beside the target and is renamed over
+-- it, so a reader never sees a half-written file.  `mktemp -d` makes the
+-- directory atomically, so concurrent writers, even of the same module, never
+-- share a staging file; the directory is removed on every path.
+writeAtomically : String -> String -> <IO> Result String Unit
+writeAtomically path text =
+  match runCommandOk "mktemp" ["-d", "\{path}.new.XXXXXX"]
+    Err e => Err "cannot make a staging directory beside `\{path}`: \{e}"
+    Ok (out, _) =>
+      let dir = S.trim out
+      let staging = joinPath dir (baseName path)
+      let result = match writeFile staging text
+        Err e => Err "cannot write `\{staging}`: \{e}"
+        Ok _ => match rename staging path
+          Ok _ => Ok ()
+          Err e => Err "cannot move `\{staging}` to `\{path}`: \{e}"
+      let _ = removeFile staging
+      let _ = removeDir dir
+      result
+
+failWith : String -> <IO> Unit
+-- The same two lines as `entries/entry_support.mdk`'s `failWith`; a tool cannot import an entry.
+-- lint-disable-next-line rule-duplicate-body
+failWith msg =
+  let _ = ePutStrLn msg
+  stageExit 1
+
+writeCmd : String -> List String -> <IO> Unit
+writeCmd modulePath targets
+  | buildFingerprint () == "" =
+    failWith
+      "medaka interface write: this binary carries no build fingerprint (an unstamped build), so a file it wrote could not be told from another unstamped compiler's; build with `make medaka`"
+  | otherwise = match buildInterfaceFile modulePath targets
+    Err e => failWith e
+    Ok file =>
+      match writeAtomically (interfacePath modulePath) (encodeInterface file)
+        Err e => failWith "medaka interface write: \{e}"
+        Ok _ => putStrLn "wrote \{interfacePath modulePath}"
+
+-- ── show ────────────────────────────────────────────────────────────────────
+
+joinView : List Atom -> String
+joinView j = joinWith "," (map renderAtom j)
+
+sectionLines : Int -> Int -> InterfaceSection -> List String
+sectionLines n total s =
+  ["section \{n} of \{total}"]
+    ++ map (j => "  join \{joinView j}") s.isJoins
+    ++ map
+      (row => "  row \{fst row} : \{ppPubScheme (snd row)}")
+      s.isInterface.piCore
+
+-- The header and every section of a decoded file; [digest] is the file's own.
+export
+showLines : String -> PreludeInterfaceFile -> List String
+showLines digest f =
+  let total = length f.ifSections
+  ["format \{f.ifKey.ikFormat}"]
+    ++ map (s => "source \{fst s} sha256 \{snd s}") f.ifKey.ikSources
+    ++ [
+      "compiler \{f.ifKey.ikCompiler}",
+      "sections \{total}",
+      "digest \{digest}",
+    ]
+    ++ flatMap
+      (p => sectionLines (fst p) total (snd p))
+      (zip [1..=total] f.ifSections)
+
+showCmd : String -> <IO> Unit
+showCmd path
+  | S.endsWith ".mdk" path =
+    failWith
+      "medaka interface show: `\{path}` is a source file; show takes the `.mdki` that `medaka interface write` wrote beside it (`\{interfacePath path}`)"
+  | otherwise = showFile path
+
+showFile : String -> <IO> Unit
+showFile path = match readFile path
+  Err e => failWith "medaka interface show: cannot read `\{path}`: \{e}"
+  Ok text => match readInterface text
+    Err fault =>
+      failWith "medaka interface show: `\{path}`: \{renderFault fault}"
+    Ok (f, digest) => putStrLn (joinNl (showLines digest f))
+
+-- ── verify ──────────────────────────────────────────────────────────────────
+
+public export data Verdict = Fresh | Stale String | Missing
+
+export
+verdictText : Verdict -> String
+verdictText Fresh = "fresh"
+verdictText (Stale component) = "stale: \{component}"
+verdictText Missing = "missing"
+
+-- How [modulePath]'s interface file stands against the module's sources now.
+export
+verdictOf : String -> <IO> Verdict
+verdictOf modulePath = match readFile (interfacePath modulePath)
+  Err _ => Missing
+  Ok text => match readInterface text
+    Err fault => Stale (faultComponent fault)
+    Ok (f, _) => match (
+      readFile (runtimePathOf modulePath),
+      readFile modulePath,
+    )
+      (Ok runtimeSrc, Ok coreSrc) =>
+        match (keysMatch
+          f.ifKey
+          (preludeInterfaceKey
+            (baseName modulePath)
+            (inputsOf modulePath runtimeSrc coreSrc)))
+          None => Fresh
+          Some component => Stale component
+      _ => Stale "sources"
+
+verifyCmd : String -> <IO> Unit
+verifyCmd modulePath =
+  let verdict = verdictOf modulePath
+  let _ = putStrLn (verdictText verdict)
+  match verdict
+    Fresh => ()
+    _ => stageExit 1
+
+-- ── dispatch ────────────────────────────────────────────────────────────────
+
+printHelp : Unit -> <IO> Unit
+printHelp _ =
+  let _ = putStrLn interfaceHelpText
+  stageExit 0
+
+oneModule : ArgSpec -> List String -> (String -> <IO> Unit) -> <IO> Unit
+oneModule sp argv run = match parseArgs sp argv
+  Err m => failWith m
+  Ok a =>
+    if flag "--help" a then
+      printHelp ()
+    else match a.positionals
+      [path] => run path
+      [] => failWith "usage: \{sp.verb} <path>"
+      _ :: extra :: _ => failWith (unknownFlagMessage sp extra)
+
+writeArgs : List String -> <IO> Unit
+writeArgs argv = match parseArgs writeSpec argv
+  Err m => failWith m
+  Ok a =>
+    if flag "--help" a then
+      printHelp ()
+    else match a.positionals
+      [path] => writeCmd path (flagValues "--target" a)
+      [] =>
+        failWith
+          "usage: medaka interface write <module.mdk> [--target <profile>]..."
+      _ :: extra :: _ => failWith (unknownFlagMessage writeSpec extra)
+
+{- | `medaka interface <write|show|verify> …`. -}
+export
+runInterfaceCmd : List String -> <IO> Unit
+runInterfaceCmd [] =
+  failWith
+    "usage: medaka interface write|verify <module.mdk>, medaka interface show <file.mdki>"
+runInterfaceCmd ("write" :: rest) = writeArgs rest
+runInterfaceCmd ("show" :: rest) =
+  oneModule (plainSpec "interface show") rest showCmd
+runInterfaceCmd ("verify" :: rest) =
+  oneModule (plainSpec "interface verify") rest verifyCmd
+runInterfaceCmd (sub :: _) =
+  failWith
+    "medaka interface: unknown subcommand '\{sub}' (expected: write, show, verify)"

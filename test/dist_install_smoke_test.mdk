@@ -3,7 +3,7 @@
    file it ships; it must exist), otherwise a fresh scripts/make_dist.sh run whose
    stdout path must exist.
    Proves: the tarball unpacks into exactly one top-level dir holding medaka,
-   medaka_emitter, stdlib, runtime/medaka_rt.c, LICENSE, LICENSE-bdwgc and
+   medaka_emitter, stdlib (with its core.mdki), runtime/medaka_rt.c, LICENSE, LICENSE-bdwgc and
    README.md; from a probe
    dir OUTSIDE the repo with MEDAKA_ROOT unset, `medaka run` prints 12345,
    `medaka build` exits 0 producing an executable that prints 12345.
@@ -18,8 +18,8 @@ import test.{Expectation, fail, pass}
 
 requiredNames : List String
 requiredNames = [
-  "medaka", "medaka_emitter", "stdlib", "runtime/medaka_rt.c", "LICENSE",
-  "LICENSE-bdwgc", "README.md"
+  "medaka", "medaka_emitter", "stdlib", "stdlib/core.mdki",
+  "runtime/medaka_rt.c", "LICENSE", "LICENSE-bdwgc", "README.md"
 ]
 
 -- Stat helper: a path counts as present if it is a file or a directory.

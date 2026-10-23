@@ -11,7 +11,7 @@
 -- Stdlib paths (runtime.mdk / core.mdk) resolve from MEDAKA_ROOT, mirroring
 -- compiler/driver/build_cmd.mdk's envOr — compiler has no getcwd/executable_name
 -- extern.  The implemented subcommands are exactly the dispatch arms below
--- (check/fmt/new/build/run/test/repl/lsp/doc/check-policy/manifest/gate); any other
+-- (check/fmt/new/build/run/test/repl/lsp/doc/check-policy/manifest/gate/interface); any other
 -- subcommand falls through to the catch-all, which prints "not yet in native
 -- CLI" and exits 1.
 
@@ -29,6 +29,7 @@ import tools.snapshot.{
 }
 import tools.fmt.{formatSourceChecked, FmtMode(..)}
 import tools.gate_cmd.{gateHelpText, runGateCmd}
+import tools.interface_cmd.{interfaceHelpText, runInterfaceCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
   BuildReport,
@@ -40,6 +41,9 @@ import driver.build_cmd.{
   envOr,
   defaultMedakaRoot,
   readPreludeFile,
+  loadPreludeInterface,
+  PreludeInputs(..),
+  preludeStaleLine,
 }
 import support.util.{
   reverseL,
@@ -464,6 +468,34 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
     else
       ePutStrLn msg
 
+-- The inputs a prelude interface is read for by this binary.
+shippedInputs : String -> String -> String -> PreludeInputs
+shippedInputs stdlibDir rsrc csrc = PreludeInputs {
+  pnStdlibDir = stdlibDir,
+  pnRuntimeSrc = rsrc,
+  pnCoreSrc = csrc,
+  pnCompiler = buildFingerprint (),
+}
+
+-- The check family's prelude: load `<stdlibDir>/core.mdki` into the prelude
+-- cache, and report a stale file on stderr, once per process.  Under
+-- MEDAKA_STRICT a stale file stops the verb, as a stale binary does.  `run`
+-- and `build` do not call this: `run --json`'s machine channel is stderr.
+loadCheckPrelude : String -> String -> String -> <IO> Unit
+loadCheckPrelude stdlibDir rsrc csrc =
+  let verdict = loadPreludeInterface (shippedInputs stdlibDir rsrc csrc)
+  match preludeStaleLine verdict
+    None => ()
+    Some msg =>
+      if envOr "MEDAKA_STRICT" "" /= "" then dieMsg msg else ePutStrLn msg
+
+-- The same load for a verb outside the check family, which prints nothing: a
+-- stale file only means core is checked from source.
+seedCheckPrelude : String -> String -> String -> <IO> Unit
+seedCheckPrelude stdlibDir rsrc csrc =
+  let _ = loadPreludeInterface (shippedInputs stdlibDir rsrc csrc)
+  ()
+
 -- Is this argv `medaka run … --json …`?  The predicate is deliberately the
 -- BYTE-IDENTICAL one `runRunCmd` uses to compute its own `jsonMode`
 -- (`runFlagGiven "--json"` over the whole post-verb argv, program passthrough args
@@ -557,6 +589,7 @@ runCli _ = match args ()
     dispatchSub checkPolicyHelpText runCheckPolicyCmd rest
   "manifest" :: rest => dispatchSub manifestHelpText runManifestCmd rest
   "gate" :: rest => dispatchSub gateHelpText runGateCmd rest
+  "interface" :: rest => dispatchSub interfaceHelpText runInterfaceCmd rest
   "repl" :: rest => runReplCmd rest
   "lsp" :: rest => runLspCmd rest
   "mcp" :: rest => runMcpCmd rest
@@ -610,6 +643,7 @@ usage _ =
       "  medaka manifest <file.mdk> [--fn name]  Emit the verified capability manifest as TOML\n",
       "  medaka gate list [<selector>...] [--json]  Query the gate registry (test/gates.toml)\n",
       "  medaka gate run [<selector>...] [--dry-run]  Run the selected gates\n",
+      "  medaka interface write|verify <module.mdk>, show <file.mdki>  Write, show or verify the prelude interface file\n",
       "  medaka help               Show this message\n",
       "  medaka --version          Show the compiler version\n"
     ])
@@ -714,6 +748,7 @@ runCheckCmd argv =
         Ok rsrc => match readPreludeFile corePath
           Err msg => dieMsg msg
           Ok csrc =>
+            let _ = loadCheckPrelude stdlibDir rsrc csrc
             if jsonMode then
               -- E: `--types` requests a human-text scheme dump; the `--json`
               -- envelope has no field for one (structured diagnostics only), so
@@ -3174,6 +3209,7 @@ runTestJsonCmd engines cases filterOpt target =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
+    let _ = seedCheckPrelude stdlibDir rsrc csrc
     tsrc <- readSource target
     let userDecls = targetDesugared tsrc
     if filterMatchedNothing filterOpt tsrc userDecls then
@@ -3309,6 +3345,7 @@ runDocTargets (target :: _) =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
+    let _ = seedCheckPrelude stdlibDir rsrc csrc
     tsrc <- readSource target
     Ok (putStr (runDoc rsrc csrc tsrc target roots))
   match r
@@ -3330,6 +3367,7 @@ runDocLibraryTargets outDir targets =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
+    let _ = seedCheckPrelude stdlibDir rsrc csrc
     _ <- ensureOutDir outDir
     -- A `*_test.mdk` sibling holds a module's tests, not library surface, so
     -- the library reference has no page for it ([P-TEST-SIBLING]).
@@ -4295,6 +4333,7 @@ runLspServerFromEnv _ =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
+    let _ = loadCheckPrelude (root ++ "/stdlib") rsrc csrc
     Ok (runServer rsrc csrc medakaVersion)
   match r
     Err msg => dieMsg msg
@@ -4351,6 +4390,7 @@ runMcpServerFromEnv _ =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
+    let _ = loadCheckPrelude stdlibDir rsrc csrc
     Ok (runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict medakaVersion)
   match r
     Err msg => dieMsg msg

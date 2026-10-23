@@ -11,6 +11,7 @@
 //
 // Protocol:
 //   Receives: { source: string, assets: { wasm: ArrayBuffer, runtime: string, core: string,
+//                                          coreInterface?: string, compilerFingerprint?: string,
 //                                          wat2wasmBytes: ArrayBuffer } }
 //   Posts:    { ok: false, diagnostics }          — type/parse error; diagnostics = check --json shape
 //           | { ok: true,  wasm: ArrayBuffer, diagnostics? } — assembled user wasm (transferable);
@@ -32,7 +33,7 @@ let wat2wasmReady = false;
 
 self.onmessage = async function(e) {
   const { source, assets } = e.data;
-  const { wasm: wasmBuffer, runtime, core, wat2wasmBytes, extra } = assets;
+  const { wasm: wasmBuffer, runtime, core, wat2wasmBytes, extra, coreInterface, compilerFingerprint } = assets;
 
   // Initialize the WAT assembler on first use (pass bytes directly to avoid a
   // fetch; uses the single-object form to suppress the deprecation warning).
@@ -51,7 +52,7 @@ self.onmessage = async function(e) {
   try {
     compileResult = await compile(source, {
       wasm: new Uint8Array(wasmBuffer),
-      stdlib: { runtime, core, extra },
+      stdlib: { runtime, core, extra, coreInterface, compilerFingerprint },
     });
   } catch (err) {
     self.postMessage({ ok: false, diagnostics: synthErr('compile error: ' + (err && err.message || String(err))) });

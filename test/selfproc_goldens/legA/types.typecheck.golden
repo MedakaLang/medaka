@@ -434,7 +434,7 @@ checkBodyImpl : GraphCtx -> CheckRunSeed -> ModuleSeed -> String -> List Decl ->
 checkCallObligationsU : ModuleCtx -> Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : ModuleCtx -> List String -> String -> List FunClause -> Unit
 checkCoherence : ModuleCtx -> ImplEnv -> Int -> Unit
-checkCoreMemoized : ModuleCtx -> Option GraphRun -> Option (Int, Int) -> List Decl -> List (String, Scheme) -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
+checkCoreMemoized : ModuleCtx -> Option GraphRun -> Option (Int, Int) -> List Decl -> List Decl -> List (String, Scheme) -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
 checkDeclAuthorityDomains : ModuleCtx -> List (String, Param) -> List (String, KindAnn) -> List Ty -> Unit
 checkDeclAuthorityUses : ModuleCtx -> List Decl -> Unit
 checkDeclAuthorityUsesDecl : ModuleCtx -> Decl -> Unit

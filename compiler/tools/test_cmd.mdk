@@ -75,7 +75,10 @@ import driver.loader.{
   findProjectRootOrSelf,
   readSource,
 }
-import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
+import driver.build_cmd.{
+  readPreludeFile, envOr, defaultMedakaRoot, loadPreludeInterface,
+  PreludeInputs(..)
+}
 import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
   driveInputsFor,
@@ -339,6 +342,13 @@ runTestUnderProfile engines runtimeP coreP target roots cases filterOpt =
                 let _ = ePutStrLn err
                 False
               Ok (file, index) =>
+                let _ = loadPreludeInterface
+                  PreludeInputs {
+                    pnStdlibDir = dirOf runtimeP,
+                    pnRuntimeSrc = rsrc,
+                    pnCoreSrc = csrc,
+                    pnCompiler = buildFingerprint (),
+                  }
                 -- S-1/#2234 (F-converge): the prelude halves go through the
                 -- content-keyed `desugaredPrelude` memo; only the USER source is
                 -- parsed+desugared fresh here.
@@ -716,7 +726,7 @@ data TestPair =
 -- custom Arbitrary property parameters.  It carries the reduced helper graph
 -- and the route words whose helpers the typechecker rejected.
 data HelperValidation =
-  | HelperValidation TestPair (List PropHelper) (OrdMap String) (Option String)
+  HelperValidation TestPair (List PropHelper) (OrdMap String) (Option String)
 
 -- What the DOCTEST phase's interpreter arm evaluates.  The two shapes are NOT
 -- interchangeable, which is why this is a separate type rather than a third

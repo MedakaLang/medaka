@@ -1631,6 +1631,14 @@ while IFS= read -r f; do
   case "$f" in
     compiler/*.mdk|compiler/*/*.mdk|stdlib/core.mdk|stdlib/runtime.mdk) add 'diff_compiler_selfproc' ;;
   esac
+  # The prelude interface on/off differential (diff_interface_onoff): the files
+  # that write, key, read, load and seed the interface, and the two prelude
+  # sources it is a function of.  Same set as that gate's `sources` in
+  # test/gates.toml; the `stdlib/*` blast-radius arm above adds only
+  # `diff_compiler_*`, which does not match this gate's name.
+  case "$f" in
+    compiler/types/prelude_interface.mdk|compiler/types/interface_sexp.mdk|compiler/types/typecheck.mdk|compiler/support/sexp_value.mdk|compiler/driver/loader.mdk|compiler/driver/diagnostics.mdk|compiler/driver/build_cmd.mdk|compiler/driver/medaka_cli.mdk|compiler/tools/interface_cmd.mdk|stdlib/core.mdk|stdlib/runtime.mdk|test/build_native_medaka.sh|test/diff_interface_onoff.sh) add 'diff_interface_onoff' ;;
+  esac
 done < "$CHANGED_PATHS"
 
 # ── the control-byte ratchet applies to EVERY tracked source file (#1987 F4) ──

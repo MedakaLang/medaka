@@ -10,6 +10,10 @@
 
 /dist/*.mdk
   Content-Type: text/plain; charset=utf-8
+/dist/core.mdki
+  Content-Type: text/plain; charset=utf-8
+/dist/compiler_fingerprint.txt
+  Content-Type: text/plain; charset=utf-8
 
 # Cross-origin isolation for the playground page and its dedicated workers, so
 # `sleep` can block a worker on Atomics.wait (SharedArrayBuffer needs isolation).

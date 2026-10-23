@@ -478,8 +478,8 @@ tinyPrelude = (
       ])),
 )
 
--- The extern catalog is process-wide and not part of what the golden pins, so
--- the sections are encoded with an empty one.
+-- The extern catalog is not part of what the golden pins, so the sections are
+-- encoded with an empty one.
 withoutExterns : InterfaceSection -> InterfaceSection
 withoutExterns s = InterfaceSection {
   isJoins = s.isJoins,

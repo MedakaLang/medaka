@@ -16,6 +16,7 @@
 #   vendor/codemirror/codemirror.js
 #   dist/playground.wasm
 #   dist/runtime.mdk  dist/core.mdk
+#   dist/core.mdki  dist/compiler_fingerprint.txt  prelude interface + its compiler identity
 #   dist/<m>.mdk      for every browser-vfs module (stdlib and playground-local)
 #   dist/stdlib_modules.json  stdlib ids
 #   dist/playground_modules.json  playground-local ids
@@ -54,6 +55,8 @@ fi
 [ -f "$DIST/playground_modules.json" ] || { echo "FAIL: dist/playground_modules.json still missing after build"; exit 1; }
 [ -f "$DIST/runtime.mdk" ]     || { echo "FAIL: dist/runtime.mdk missing"; exit 1; }
 [ -f "$DIST/core.mdk" ]        || { echo "FAIL: dist/core.mdk missing"; exit 1; }
+[ -f "$DIST/core.mdki" ]       || { echo "FAIL: dist/core.mdki missing"; exit 1; }
+[ -f "$DIST/compiler_fingerprint.txt" ] || { echo "FAIL: dist/compiler_fingerprint.txt missing"; exit 1; }
 
 # ── Assemble site/ ───────────────────────────────────────────────────────────
 echo "[build_site] assembling $SITE ..."
@@ -102,6 +105,8 @@ cp "$DIST/playground.wasm"     "$SITE/dist/"
 cp "$DIST/stdlib_modules.json" "$SITE/dist/"
 cp "$DIST/playground_modules.json" "$SITE/dist/"
 cp "$DIST"/*.mdk               "$SITE/dist/"
+cp "$DIST/core.mdki"           "$SITE/dist/"
+cp "$DIST/compiler_fingerprint.txt" "$SITE/dist/"
 
 # Cloudflare Pages `_headers` file — see the file itself for why this exists
 # (routes /dist/*.mdk through Cloudflare's compressible-content-type list).
@@ -190,7 +195,7 @@ listed="$stdlib_listed $playground_listed"
 for m in $listed; do
   [ -f "$SITE/dist/$m.mdk" ] || missing="$missing $m.mdk"
 done
-for f in runtime.mdk core.mdk; do
+for f in runtime.mdk core.mdk core.mdki compiler_fingerprint.txt; do
   [ -f "$SITE/dist/$f" ] || missing="$missing $f"
 done
 if [ -n "$missing" ]; then

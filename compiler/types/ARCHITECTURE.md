@@ -49,6 +49,9 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 an interface load would have to fill it. Lifetimes (205 rows, the 199 in the first table and the 6 outside it): process 16, config 15, graph 65, module 83, group 3, run 23. The prelude interface cache (`preludeCacheRef`, `types.prelude_interface`) is one of the six outside rows; it is process-lifetime and reset never. `ModuleCtx.mcLoc` is a scoped value, not a cell: a construct hands its sub-walk an updated copy of the record, and the diagnostic location is the span of the innermost enclosing construct. Its "Interface fills" section names the producer and kind of each row playbook C1 restores.
 The per-module cell counts are in `test/arch_goldens/cells.golden`.
 
+## The prelude interface
+The prelude's core pass is a value, `PreludeInterface` (`prelude_interface.mdk`), cached once per compiler generation. `interface_sexp.mdk` encodes it to `stdlib/core.mdki`; `medaka interface write|show|verify` writes, prints and checks the file, and `make medaka` and CI's `setup-medaka` rewrite it. The check family, `doc`, `lsp`, `mcp` and `test` read it through `loadPreludeInterface` (`driver/build_cmd.mdk`) when the file's header (format version, source hashes, compiler fingerprint) matches, and seed the cache instead of running the core pass. A stale or undecodable file falls back to the core pass; `check` and the servers say so on stderr (`check --json` prints the line on stderr too, not in the envelope; `run --json` is silent), and `MEDAKA_STRICT=1` makes that exit 1. `MEDAKA_NO_INTERFACE=1` turns the load off.
+
 ## Laws that bind it
 - **A1** — types imports `frontend/` and `support/`; `ir/` and `eval/` must reach its facts through `disposition`, `runtime_types` and `route_key`, not `typecheck.mdk`.
 - **A2, A3** — `typecheck.mdk` still writes routes into cells and keeps module-level state; extracted modules should publish values and own no global cell.
