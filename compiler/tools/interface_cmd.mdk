@@ -203,26 +203,22 @@ elaborateCore runtimeSrc coreSrc =
           Ok (preludeElabOf trees c.cpEvidence (map snd (entries c.cpBinders)))
 
 -- Both files for [modulePath]: the interface file, and the elaborated trees
--- under the same key.  The loc state is reset before the prelude is parsed so
--- no span of an earlier parse is written into the trees.  A type error shows as
--- the interface check's diagnostic.
+-- under the same key.  A type error shows as the interface check's diagnostic.
 export
 buildBoth : String ->
   List String ->
   <IO> Result String (PreludeInterfaceFile, PreludeElab)
-buildBoth modulePath targets =
-  let _ = parseLocated ""
-  match (
-    readPreludeFile (runtimePathOf modulePath),
-    readPreludeFile modulePath,
-  )
-    (Ok runtimeSrc, Ok coreSrc) =>
-      let elab = elaborateCore runtimeSrc coreSrc
-      match buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
-        Err e => Err e
-        Ok file => map (e => (file, e)) elab
-    (Err e, _) => Err e
-    (_, Err e) => Err e
+buildBoth modulePath targets = match (
+  readPreludeFile (runtimePathOf modulePath),
+  readPreludeFile modulePath,
+)
+  (Ok runtimeSrc, Ok coreSrc) =>
+    let elab = elaborateCore runtimeSrc coreSrc
+    match buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
+      Err e => Err e
+      Ok file => map (e => (file, e)) elab
+  (Err e, _) => Err e
+  (_, Err e) => Err e
 
 -- Each text goes into a staging directory beside the first target and is then
 -- renamed over its target, so a reader never sees a half-written file and a

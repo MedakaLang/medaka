@@ -609,6 +609,7 @@ renderFail : PFail -> String
 reservedIdentKeyword : Token -> Option String
 reservedKeywordMsg : String -> String
 reservedOrPatFail : Token -> ParserE <> Pat
+resetLocState : Unit -> Unit
 resultDecls : Array Token -> PR (List Decl) -> List Decl
 resultDeclsResult : String -> Array Token -> Array Int -> Int -> PR (List Decl) -> Result ParseError (List Decl)
 rhsStartIdx : Array Token -> Int -> Int -> Int -> Int
