@@ -1,0 +1,11 @@
+-- REGRESSION GUARD (#4392): as core_private_name_promoted_user_fn, but the user fn
+-- carries a `=>` signature instead of being promoted.  Expected: (int 3, Lt, Gt, Gt).
+interface Speak a where
+  speak : a -> String
+impl Speak Int where
+  speak x = "int \{x}"
+compareNaN : Speak a => a -> String
+compareNaN x = speak x
+nan : Float
+nan = 0.0 / 0.0
+main = (compareNaN 3, compare nan 1.0, compare 1.0 nan, compare 2.0 1.0)

@@ -56163,13 +56163,12 @@ dictPassModulesIfEnabled mctx dictNames core2 modules2 =
   -- out of it.  Here because `dictPass` is itself a reader (`bodyRDictNames`),
   -- and this is the Module arm's one funnel into it.
   let idx = evIndexOf (drivenEvidence mctx.mcGraph ())
-  let allModDecls = flatMap snd modules2
   let promotedQ =
     mctx.mcGraph.crossRun.crossModuleFunPredicateSlotsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
-  setFunPredicateSlots
-    mctx
-    (scopePredicateSlots promotedQ allMods (core2 ++ allModDecls))
+  -- core imports nothing, so its definitions take their dict parameters from core's
+  -- own signatures: a user fn sharing a bare name with a core private is another fn.
+  setFunPredicateSlots mctx (scopePredicateSlots [] omEmpty core2)
   -- 🚨 B-2.2-b1: THE SIDECAR IS CLEARED, NOT LEFT ALONE.  `f` shipped arguing that
   -- writing no companion here is "absence, which is correct"; it is not — FAIL-CLOSED
   -- REQUIRES WRITING `[]`.  No module record is minted
@@ -56183,7 +56182,7 @@ dictPassModulesIfEnabled mctx dictNames core2 modules2 =
     scopeMethodPredicateSlots
       mctx.mcGraph.crossRun.crossModuleMethodPredicateSlotsQualRef.value
       allMods
-  let core2' = dictPass mctx idx "" dictNames core2
+  let core2' = dictPass mctx idx "" (constrainedSigNames core2) core2
   -- ONE reverse-reachability index for the whole run: `dictPassModulesScoped` asks the
   -- importer question once per module, and re-deriving it there re-walked the graph
   -- (twice — ids and decls) with a decl-list scan at every visited node.
