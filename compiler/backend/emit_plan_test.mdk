@@ -65,6 +65,7 @@ import backend.emit_plan.{
 
 import backend.trmc_analysis.{ctorTailIsCons, dispMembersOf, dispRootOf}
 import backend.wasm_preamble.{jsImportField}
+import backend.global_plan.{validateGlobalInit}
 
 val : String -> CExpr -> CBind
 val name rhs = synthBind name [CClause [] rhs]
@@ -111,6 +112,34 @@ test "a pure literal global and a reader of it are eager" = expectAll [
 
 test "a self loop, a reader of it, and a mutual cycle are lazy; main is not" =
   expectEqual ["c", "d", "x", "y"] (planOf mixed).lazyGlobals
+
+test "the plan carries one source-prioritized value order and its eager filter" =
+  let binds = [
+    val "a" (ref "c"),
+    val "b" (CLit (LInt 5)),
+    val "c" (CLit (LInt 40)),
+    val "main" (ref "a"),
+  ]
+  let plan = planOf binds
+  let mixedPlan = planOf mixed
+  expectEach [
+    ("priority", expectEqual ["b", "c", "a"] plan.globalInit.valueOrder),
+    ("acyclic eager", expectEqual ["b", "c", "a"] plan.globalInit.eagerOrder),
+    (
+      "mixed members",
+      expectEqual ["a", "b", "c", "d", "x", "y"] mixedPlan.globalInit.valueOrder,
+    ),
+    ("mixed eager", expectEqual ["a", "b"] mixedPlan.globalInit.eagerOrder),
+    (
+      "Core validation",
+      expectEqual
+        []
+        (validateGlobalInit
+          (program mixed)
+          mixedPlan.lazyGlobals
+          mixedPlan.globalInit),
+    ),
+  ]
 
 test "a cycle's members share one reach set" = expectAll [
   labelFail
@@ -300,6 +329,15 @@ test "wasm reach keeps a dispatch-only impl and its lazy global, drops the rest"
         Some u => "Some (\{u.total}, \{u.kept})"
         None => "None")),
     labelFail "g is lazy" (expectEqual ["g"] plan.lazyGlobals),
+    labelFail
+      "reached value order"
+      (expectEqual ["g"] plan.globalInit.valueOrder),
+    labelFail "reached eager order" (expectEqual [] plan.globalInit.eagerOrder),
+    labelFail
+      "reached Core validates"
+      (expectEqual
+        []
+        (validateGlobalInit reached plan.lazyGlobals plan.globalInit)),
     labelFail
       "dead has no eagerReach entry"
       (expectEqual ["<no entry>"] (reachOf "dead" plan)),

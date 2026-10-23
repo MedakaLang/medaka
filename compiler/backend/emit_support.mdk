@@ -207,6 +207,7 @@ valGlobalNames (_ :: rest) = valGlobalNames rest
 -- to a constructor / not-emitted name never becomes a graph node.  Membership is
 -- tested against an OrdMap SET (`nameSet`), never a `List` — a `List` here would be
 -- O(V) per edge = O(V*E), the exact quadratic #553 warns against.
+export
 eagerCalleesMap : OrdMap Unit -> List CBind -> OrdMap (List String)
 eagerCalleesMap _ [] = omEmpty
 eagerCalleesMap nameSet (b :: rest) =
@@ -492,6 +493,7 @@ clausesHaveMethod ((CClause _ body) :: rest) =
 
 -- the set of bind names that dispatch eagerly in their own body (the taint SOURCES,
 -- alongside cycle membership computed during the fold).
+export
 methodTaintSet : List CBind -> OrdMap Unit
 methodTaintSet [] = omEmpty
 methodTaintSet (b :: rest) =

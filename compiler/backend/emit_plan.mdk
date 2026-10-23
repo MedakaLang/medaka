@@ -2,6 +2,7 @@
 -- and neither recomputes.  Built once, right after lowering, from the program an
 -- emitter is about to receive.
 
+import backend.global_plan.{GlobalInitPlan, planGlobals}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{Lit(..), Pat(..), hostRows}
 import ir.core_ir.{
@@ -66,8 +67,9 @@ import backend.trmc_analysis.{
 --
 -- `target` is the backend the plan was built for; the emitter asserts it is its own.
 -- `lazyGlobals` are the value globals emitted as forced-on-first-use cells.
--- `eagerReach` maps each binding to the value globals it eagerly reaches; the
--- value-global init order is sorted by it.
+-- `eagerReach` maps each binding to the value globals it eagerly reaches.
+-- `globalInit` gives the complete value order and its eager subsequence; the
+-- gateway checks both against Core before either target consumes them.
 -- `trmc` says which functions are tail-recursive modulo constructor (TRMC-DESIGN.md).
 -- `dispGroups` are the dispatch-graph TMC groups (WASMGC-TRMC-DESIGN.md §11): a
 -- group's members are emitted as one destination-passing loop rooted at its root.
@@ -84,6 +86,7 @@ public export data EmitPlan = EmitPlan {
   wasmOnlyReach : Option ReachUnits,
   lazyGlobals : List String,
   eagerReach : OrdMap (List String),
+  globalInit : GlobalInitPlan,
   trmc : TrmcVerdicts,
   dispGroups : List DispGroup,
   wasmDemand : WasmDemand,
@@ -171,7 +174,8 @@ planOver : Backend ->
   List (String, (List (String, String), (List String, String))) ->
   CProgram ->
   EmitPlan
-planOver target reach ffiRows (CProgram groups ctorArs _ impls _ facts) =
+planOver target reach ffiRows prog =
+  let (CProgram groups ctorArs _ impls _ facts) = prog
   -- first entry wins on a repeated constructor name, as in both emitters' tables
   let ctors = omFromPairs (reverseL ctorArs) omEmpty
   let fns = filterList isTopFn groups
@@ -183,13 +187,16 @@ planOver target reach ffiRows (CProgram groups ctorArs _ impls _ facts) =
         impls
     LlvmBackend => (noDemand, [], [])
     EvalBackend => (noDemand, [], [])
+  let lazy = lazyGlobalNames groups
+  let eager = eagerReachMap groups
   EmitPlan {
     target = target,
     entryOutcome = facts.factEntryOutcome,
     methodResults = indexMethodResults facts.factMethodResults,
     wasmOnlyReach = reach,
-    lazyGlobals = lazyGlobalNames groups,
-    eagerReach = eagerReachMap groups,
+    lazyGlobals = lazy,
+    eagerReach = eager,
+    globalInit = planGlobals prog lazy eager,
     trmc = TrmcVerdicts {
       eligibleFns =
         omFromNames
