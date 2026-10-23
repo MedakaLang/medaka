@@ -66,7 +66,7 @@ import frontend.parser.{
   declPosChildLocs,
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import support.char.{isIdentChar}
 import support.util.{maxI, utf8Len, joinWith, startsWith, contains, allList}
 import string.{stripCR, toInt}
@@ -113,7 +113,7 @@ import frontend.ast.{
 -- hover, completion and inlay to answer from (`Kept`).
 
 public export data Docs =
-  | Docs (List (String, String)) (List String) (List (String, Kept))
+  Docs (List (String, String)) (List String) (List (String, Kept))
 
 -- What the last publish of a buffer kept, with the buffer source it analyzed.
 -- A single-document publish keeps the env its drive gave.  A project publish
@@ -727,8 +727,7 @@ docEnv runtimeSrc coreSrc src =
     Err _ => None
     Ok userRaw =>
       let userDecls = desugar userRaw
-      let preludeKey =
-        Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
+      let preludeKey = Some (preludeGeneration runtimeSrc coreSrc)
       let report = checkOneReportK (driveInputsFor
         !selectedProfile
         False

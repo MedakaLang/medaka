@@ -1,5 +1,5 @@
 # META
-source_lines=4510
+source_lines=4507
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -20,8 +20,6 @@ stages=DESUGAR,MARK
 -- CLI" and exits 1.
 
 import tools.check.{
-  runCheck,
-  checkHasErrors,
   checkModulesReport,
   entryExhaust,
 }
@@ -46,7 +44,6 @@ import driver.build_cmd.{
   defaultMedakaRoot,
   readPreludeSources,
   loadPreludeInterface,
-  preludeGeneration,
   preludeStaleLine,
   shippedInputs,
   TreesVerdict,
@@ -130,7 +127,7 @@ import frontend.parser.{
   Positions,
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
-import frontend.desugar_cache.{desugaredPrelude}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.desugar.{desugarIn}
 import tools.target_parse.{targetDesugared}
 import driver.loader.{
@@ -4513,13 +4510,13 @@ runMcpServerFromEnv _ =
     Err msg => dieMsg msg
     Ok v => v
 # DESUGAR
-(DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "checkHasErrors" false) (mem "checkModulesReport" false) (mem "entryExhaust" false))))
+(DUse false (UseGroup ("tools" "check") ((mem "checkModulesReport" false) (mem "entryExhaust" false))))
 (DUse false (UseGroup ("tools" "snapshot") ((mem "runSnapshotWorker" false) (mem "runSnapshotSupervisor" false) (mem "parseStages" false) (mem "SnapMode" true))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false) (mem "FmtMode" true))))
 (DUse false (UseGroup ("tools" "gate_cmd") ((mem "gateHelpText" false) (mem "runGateCmd" false))))
 (DUse false (UseGroup ("tools" "interface_cmd") ((mem "interfaceHelpText" false) (mem "runInterfaceCmd" false))))
 (DUse false (UseGroup ("tools" "new_cmd") ((mem "newProject" false))))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildReport" false) (mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeSources" false) (mem "loadPreludeInterface" false) (mem "preludeGeneration" false) (mem "preludeStaleLine" false) (mem "shippedInputs" false) (mem "TreesVerdict" false) (mem "checkPreludeElab" false) (mem "loadPreludeElab" false) (mem "preludeTreesLine" false) (mem "preludeDeclsLine" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildReport" false) (mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeSources" false) (mem "loadPreludeInterface" false) (mem "preludeStaleLine" false) (mem "shippedInputs" false) (mem "TreesVerdict" false) (mem "checkPreludeElab" false) (mem "loadPreludeElab" false) (mem "preludeTreesLine" false) (mem "preludeDeclsLine" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageCountInit" false) (mem "stageDump" false) (mem "stageExit" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
@@ -4534,7 +4531,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true) (mem "EvTable" false) (mem "EvId" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "Positions" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false))))
@@ -5034,13 +5031,13 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runMcpServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeSources") (EVar "stdlibDir"))) (ELam ((PTuple (PVar "rsrc") (PVar "csrc"))) (ELet false PWild (EApp (EApp (EApp (EVar "loadCheckPrelude") (EVar "stdlibDir")) (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")) (EVar "medakaVersion"))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 # MARK
-(DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "checkHasErrors" false) (mem "checkModulesReport" false) (mem "entryExhaust" false))))
+(DUse false (UseGroup ("tools" "check") ((mem "checkModulesReport" false) (mem "entryExhaust" false))))
 (DUse false (UseGroup ("tools" "snapshot") ((mem "runSnapshotWorker" false) (mem "runSnapshotSupervisor" false) (mem "parseStages" false) (mem "SnapMode" true))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false) (mem "FmtMode" true))))
 (DUse false (UseGroup ("tools" "gate_cmd") ((mem "gateHelpText" false) (mem "runGateCmd" false))))
 (DUse false (UseGroup ("tools" "interface_cmd") ((mem "interfaceHelpText" false) (mem "runInterfaceCmd" false))))
 (DUse false (UseGroup ("tools" "new_cmd") ((mem "newProject" false))))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildReport" false) (mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeSources" false) (mem "loadPreludeInterface" false) (mem "preludeGeneration" false) (mem "preludeStaleLine" false) (mem "shippedInputs" false) (mem "TreesVerdict" false) (mem "checkPreludeElab" false) (mem "loadPreludeElab" false) (mem "preludeTreesLine" false) (mem "preludeDeclsLine" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildReport" false) (mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeSources" false) (mem "loadPreludeInterface" false) (mem "preludeStaleLine" false) (mem "shippedInputs" false) (mem "TreesVerdict" false) (mem "checkPreludeElab" false) (mem "loadPreludeElab" false) (mem "preludeTreesLine" false) (mem "preludeDeclsLine" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageCountInit" false) (mem "stageDump" false) (mem "stageExit" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
@@ -5055,7 +5052,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true) (mem "EvTable" false) (mem "EvId" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "Positions" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false))))

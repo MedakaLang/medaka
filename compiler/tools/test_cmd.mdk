@@ -62,7 +62,7 @@ import tools.target_parse.{
   targetDesugared,
   targetExamples,
 }
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import driver.loader.{
   loadProgramFilesLocatedE,
   modIdToPath,
@@ -297,19 +297,17 @@ runTest engines runtimeP coreP target roots cases filterOpt =
     Err m =>
       let _ = ePutStrLn ("error: " ++ m)
       False
-    Ok _ =>
-      runTestUnderProfile engines runtimeP coreP target roots cases filterOpt
+    Ok _ => runTestUnderProfile engines runtimeP target roots cases filterOpt
 
 -- `runTest` once the target's project profile is the selected one.
 runTestUnderProfile : List Engine ->
-  String ->
   String ->
   String ->
   List String ->
   Int ->
   Option String ->
   <IO> Bool
-runTestUnderProfile engines runtimeP coreP target roots cases filterOpt =
+runTestUnderProfile engines runtimeP target roots cases filterOpt =
   match readPreludeSources (dirOf runtimeP)
     Err e =>
       let _ = ePutStrLn e
@@ -967,7 +965,7 @@ gateOfCheck False rsrc csrc target roots mods =
       []
       (desugaredPrelude rsrc)
       (desugaredPrelude csrc)
-      (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+      (Some (preludeGeneration rsrc csrc))
       (chainKeyOf target roots)
       mods)
 

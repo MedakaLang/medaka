@@ -21,9 +21,9 @@ import support.sexp_value.{SExp(..)}
 import support.util.{joinNl, splitOnChar}
 import list.{reverse}
 import map.{entries}
+import frontend.desugar_cache.{preludeGeneration}
 import driver.build_cmd.{
-  TreesVerdict(..), loadPreludeElab, loadPreludeInterface, preludeGeneration,
-  shippedInputs
+  TreesVerdict(..), loadPreludeElab, loadPreludeInterface, shippedInputs
 }
 import eval.eval.{evalModulesOutputFacts}
 import types.prelude_elab.{PreludeElab(..), preludeElabFor, readElabKey}

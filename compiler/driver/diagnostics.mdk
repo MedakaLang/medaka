@@ -28,7 +28,7 @@ import frontend.parser.{
   parseErrorCol,
   parseErrorMessage,
 }
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.parse_cache.{takeFirstN}
 import frontend.desugar.{desugar, checkDerives}
 import frontend.resolve.{
@@ -1039,8 +1039,7 @@ analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard =
   -- the identity of those two trees, for the typechecker's prelude interface cache
   -- (`checkCoreMemoized`, types/typecheck.mdk): the prelude is typechecked once
   -- per process, not once per call.
-  let preludeKey =
-    Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
+  let preludeKey = Some (preludeGeneration runtimeSrc coreSrc)
   -- Oracle superset = target + prelude (runtime + core) so exhaustiveness of a
   -- multi-clause function over a prelude ADT (Result/Option/…) isn't false-flagged.
   let guardWarns = checkGuardExhaustivenessWith (raw ++ runtimeP ++ coreP) raw
@@ -1233,10 +1232,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
   FrontGraph mods pairs =>
     let rt = desugaredPrelude fi.fiRuntimeSrc
     let core = desugaredPrelude fi.fiCoreSrc
-    let preludeKey = Some (
-      desugaredPreludeKey fi.fiRuntimeSrc,
-      desugaredPreludeKey fi.fiCoreSrc,
-    )
+    let preludeKey = Some (preludeGeneration fi.fiRuntimeSrc fi.fiCoreSrc)
     let driveIn = FrontDriveIn {
       fdInputs = fi.fiInputs,
       fdPreludeKey = preludeKey,
@@ -1964,8 +1960,7 @@ projectEntryAnalysisOr kept cacheRef parseCacheRef read entry roots runtimeSrc c
   -- #2719 (a1): the SAME prelude key `analyzeProject` mints, so hover/completion
   -- shares the process-wide prelude interface instead of re-typechecking and
   -- re-solving runtime + core on every request.
-  let preludeKey =
-    Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
+  let preludeKey = Some (preludeGeneration runtimeSrc coreSrc)
   match loadProgramFilesLocatedCached parseCacheRef wread entry roots
     Err _ => None
     Ok mods => match kept (graphIdOf mods)

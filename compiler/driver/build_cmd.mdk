@@ -28,7 +28,7 @@ import list.{take}
 import support.util.{stringTrim, joinWith, joinNl, lookupAssoc}
 import string.{words, contains, startsWith, endsWith, split}
 import frontend.desugar_cache.{
-  desugaredPrelude, desugaredPreludeKey, registerPreludeDecls
+  desugaredPrelude, preludeGeneration, registerPreludeDecls
 }
 import frontend.desugar.{reserveBinderOrdinals}
 import frontend.ast.{Decl}
@@ -359,19 +359,19 @@ preludeInterfaceKey coreName inputs =
 -- identity is its own build fingerprint.
 export
 shippedInputs : String -> String -> String -> PreludeInputs
-shippedInputs stdlibDir rsrc csrc = PreludeInputs {
+shippedInputs stdlibDir rsrc csrc =
+  shippedInputsFor (buildFingerprint ()) stdlibDir rsrc csrc
+
+-- `shippedInputs` for a host whose compiler identity comes from elsewhere than
+-- `buildFingerprint` (the playground reads it from a shipped file).
+export
+shippedInputsFor : String -> String -> String -> String -> PreludeInputs
+shippedInputsFor compiler stdlibDir rsrc csrc = PreludeInputs {
   pnStdlibDir = stdlibDir,
   pnRuntimeSrc = rsrc,
   pnCoreSrc = csrc,
-  pnCompiler = buildFingerprint (),
+  pnCompiler = compiler,
 }
-
--- The generation the desugar cache gives the two prelude texts, the pair the
--- prelude caches and a drive's `diPreludeKey` are keyed by.
-export
-preludeGeneration : String -> String -> (Int, Int)
-preludeGeneration rsrc csrc =
-  (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
 
 -- The stale component a file that does not decode names: its format version
 -- when that is what was refused, else the file itself.
@@ -414,10 +414,7 @@ loadPreludeInterface inputs = match !preludeVerdictRef
     let _ = match verdict
       PVLoaded sections =>
         seedPreludeInterface
-          (
-            desugaredPreludeKey inputs.pnRuntimeSrc,
-            desugaredPreludeKey inputs.pnCoreSrc,
-          )
+          (preludeGeneration inputs.pnRuntimeSrc inputs.pnCoreSrc)
           (cacheOfSections sections)
       _ => ()
     preludeVerdictRef := Some (inputs, verdict)

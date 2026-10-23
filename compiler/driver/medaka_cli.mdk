@@ -16,8 +16,6 @@
 -- CLI" and exits 1.
 
 import tools.check.{
-  runCheck,
-  checkHasErrors,
   checkModulesReport,
   entryExhaust,
 }
@@ -42,7 +40,6 @@ import driver.build_cmd.{
   defaultMedakaRoot,
   readPreludeSources,
   loadPreludeInterface,
-  preludeGeneration,
   preludeStaleLine,
   shippedInputs,
   TreesVerdict,
@@ -126,7 +123,7 @@ import frontend.parser.{
   Positions,
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
-import frontend.desugar_cache.{desugaredPrelude}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.desugar.{desugarIn}
 import tools.target_parse.{targetDesugared}
 import driver.loader.{
