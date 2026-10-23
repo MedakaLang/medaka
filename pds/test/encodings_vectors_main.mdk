@@ -105,7 +105,7 @@ multibaseArm fname bytes = match readFile fname
         actualEncode
         (expected == actualEncode)
     let decoded = multibaseBase58btcDecode expected
-    let expectedDecode = Ok bytes : Result String Bytes
+    let expectedDecode : Result String Bytes = Ok bytes
     let p2 =
       check
         "multibase-decode:\{fname}"
@@ -156,7 +156,7 @@ specVectorChecks line = match split "\t" line
         actualEncode
         (expectedB58 == actualEncode)
     let decoded = base58btcDecode expectedB58
-    let expectedDecode = Ok inputBytes : Result String Bytes
+    let expectedDecode : Result String Bytes = Ok inputBytes
     let p2 =
       check
         "base58-spec-decode:\{expectedB58}"
@@ -248,7 +248,7 @@ varintExampleChecks line = match split "\t" line
         (encode actualBytes)
         (expectedBytes == actualBytes)
     let decodedAll = uvarintDecodeAll expectedBytes
-    let expectedDecode = Ok value : Result String Int
+    let expectedDecode : Result String Int = Ok value
     let p2 =
       check
         "varint-decode:\{decStr}"

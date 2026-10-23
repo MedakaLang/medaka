@@ -27,7 +27,7 @@ import tools.test_pins.{
 public export data GradedProp = GradedProp PropResult (Option PinVerdict)
 
 public export data GradedTest =
-  | GradedTest String String Int ExResult (Option PinVerdict)
+  GradedTest String String Int ExResult (Option PinVerdict)
 
 export
 gradeProps : PinIndex -> String -> List PropResult -> List GradedProp

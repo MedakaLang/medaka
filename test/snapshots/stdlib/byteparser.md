@@ -62,7 +62,7 @@ public export data BResult a = BOk a Int | BErr String Int
    end position, and returns a `BResult`. `ByteParser` fixes `e` to the empty
    row, and every parser in this module has that type. -}
 public export data ByteParserE (e : Effect) a =
-  | ByteParserE (Bytes -> Int -> Int -> <e> BResult a)
+  ByteParserE (Bytes -> Int -> Int -> <e> BResult a)
 
 -- | A parser whose steps perform no effects. Every parser this module
 -- exports has this type.

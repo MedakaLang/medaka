@@ -1300,7 +1300,7 @@ findIndicesRefGo p i (x :: rest)
   | otherwise = findIndicesRefGo p (i + 1) rest
 
 prop "span agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
-  let none = [] : List Int
+  let none : List Int = []
   eq (span (x => True) xs) (spanRef (x => True) xs)
     && eq (span (x => False) xs) (spanRef (x => False) xs)
     && eq (span (x => x < k) xs) (spanRef (x => x < k) xs)
@@ -1309,7 +1309,7 @@ prop "span agrees with a plain reference on all, none, mixed, [] and singletons"
     && eq (span (x => x < 3) [1, 2, 3, 1]) (spanRef (x => x < 3) [1, 2, 3, 1])
 
 prop "break agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
-  let none = [] : List Int
+  let none : List Int = []
   eq (break (x => True) xs) (spanRef (x => False) xs)
     && eq (break (x => False) xs) (spanRef (x => True) xs)
     && eq (break (x => x > k) xs) (spanRef (x => not (x > k)) xs)
@@ -1317,7 +1317,7 @@ prop "break agrees with a plain reference on all, none, mixed, [] and singletons
     && eq (break (x => x > k) [k]) (spanRef (x => not (x > k)) [k])
 
 prop "findIndices agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
-  let none = [] : List Int
+  let none : List Int = []
   eq (findIndices (x => True) xs) (findIndicesRef (x => True) xs)
     && eq (findIndices (x => False) xs) (findIndicesRef (x => False) xs)
     && eq (findIndices (x => x < k) xs) (findIndicesRef (x => x < k) xs)

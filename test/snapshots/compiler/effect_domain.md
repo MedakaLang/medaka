@@ -364,7 +364,7 @@ domainKey (PProduct ax) =
 -- members on the regroup axis, `None` for the whole axis, and the axes of
 -- its first tuple, in schema order, that it is rebuilt in.
 data PGroup =
-  | PGroup String (List (String, Param)) (Option (List String)) (List (String, Param))
+  PGroup String (List (String, Param)) (Option (List String)) (List (String, Param))
 
 addGroup : String -> Param -> List PGroup -> List PGroup
 addGroup axis p gs =

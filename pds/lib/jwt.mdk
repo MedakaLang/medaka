@@ -86,8 +86,7 @@ public export data Claims = Claims {
   iat : Int,
   nbf : Int,
   exp : Int,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 -- | Why a token was refused. Every constructor is a rejection; there is no
 --   "accepted with warnings" state.
@@ -333,8 +332,7 @@ public export data ServiceAuthRequest = ServiceAuthRequest {
   jti : String,
   iat : Int,
   exp : Option Int,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | How many seconds a service-auth token stays valid when its request names
      no `exp` of its own.

@@ -69,8 +69,7 @@ public export data ServiceJwtClaims = ServiceJwtClaims {
   aud : String,
   lxm : String,
   exp : Int,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | Why a token was refused, one constructor per refusal class.
 

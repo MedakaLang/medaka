@@ -151,7 +151,7 @@ public export data WasmUse =
 -- One extern: its name, then the llvm, wasm and eval dispositions.  The
 -- interpreter selects through its own keyed tables, so its column has no family.
 public export data ExternRow =
-  | ExternRow String (Disposition LlvmFamily) (Disposition WasmFamily) (Disposition Unit)
+  ExternRow String (Disposition LlvmFamily) (Disposition WasmFamily) (Disposition Unit)
 
 export
 rowName : ExternRow -> String

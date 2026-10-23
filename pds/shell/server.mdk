@@ -1200,7 +1200,7 @@ applyRateLimit limiterRef identity classes nowSeconds =
    arguments so that a call site cannot silently swap them — they have the
    same type and opposite meanings. -}
 data Deadlines (h : Authority Net) (d : Authority FileWrite*) (e : Effect) =
-  | Deadlines (ServeDeadline h d e) (ServeDeadline h d e)
+  Deadlines (ServeDeadline h d e) (ServeDeadline h d e)
 
 {- | One connection's place in the un-framed census: the process-wide count,
    and whether THIS connection is still one of the connections it counts.
@@ -1413,7 +1413,7 @@ export data BufferWaiter = BufferWaiter (Ref Bool) (Ref Bool) Int
    because the list also holds waiters that have given up: their charge comes
    off the moment they do, and only a release walking past them drops them. -}
 export data BufferCensus =
-  | BufferCensus (Ref Int) (Ref Int) (Ref (List BufferWaiter))
+  BufferCensus (Ref Int) (Ref Int) (Ref (List BufferWaiter))
 
 -- | An empty budget, charged by nothing yet.
 export
@@ -1594,7 +1594,7 @@ admitBufferBytes census bytes =
    waits on the budget again, and every holder gives its charge back within
    `upstreamCallTimeout` (`pds/shell/egress.mdk`) and `writeTimeout`. -}
 export data EgressCensus =
-  | EgressCensus (Ref Int) (Ref Int) (Ref (List BufferWaiter))
+  EgressCensus (Ref Int) (Ref Int) (Ref (List BufferWaiter))
 
 -- | An empty budget, charged by nothing yet.
 export
@@ -1917,7 +1917,7 @@ readBufferLive (ReadBuffer b _) =
    outbound path charges it. The derivation census joins them on the same
    argument: only the login path charges it, and it already holds this. -}
 export data Serving =
-  | Serving TrustedProxy (Option Egress) ProxyCensus BufferCensus EgressCensus DerivationCensus (Ref Bool) ServiceSigner
+  Serving TrustedProxy (Option Egress) ProxyCensus BufferCensus EgressCensus DerivationCensus (Ref Bool) ServiceSigner
 
 export
 makeServing : TrustedProxy ->

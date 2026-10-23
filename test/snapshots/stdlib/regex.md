@@ -1,5 +1,5 @@
 # META
-source_lines=1746
+source_lines=1743
 stages=DESUGAR,MARK
 # SOURCE
 {- | Regular expressions, matched in linear time.
@@ -88,8 +88,7 @@ export data Regex = Regex {
 public export data RegexError = RegexError {
   message : String,
   position : Int,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | One capture group's span and text.
 
@@ -99,8 +98,7 @@ public export data Group = Group {
   start : Int,
   end : Int,
   text : String,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | One match: its span, its text, and its capture groups.
 
@@ -111,8 +109,7 @@ public export data Match = Match {
   end : Int,
   text : String,
   groups : List (Option Group),
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 export impl Debug Regex where
   debug re = "regex " ++ debugStringLit re.src

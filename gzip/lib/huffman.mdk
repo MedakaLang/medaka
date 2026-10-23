@@ -80,8 +80,7 @@ import test.{expectEqual, expectTrue, fail}
 public export data Huffman = Huffman {
   counts : Array Int,
   symbols : Array Int,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 -- Largest legal DEFLATE Huffman code length (RFC 1951 §3.2.7).
 maxCodeLen : Int

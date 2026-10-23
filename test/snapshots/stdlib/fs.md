@@ -1,5 +1,5 @@
 # META
-source_lines=276
+source_lines=275
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -31,8 +31,7 @@ public export data FileStat = FileStat {
   isDir : Bool,
   isFile : Bool,
   mtime : Float,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 {- | The metadata of a path as a `FileStat`, or `Err` when the path cannot
    be examined, for instance because it does not exist. -}

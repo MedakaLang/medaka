@@ -1,5 +1,5 @@
 # META
-source_lines=441
+source_lines=440
 stages=DESUGAR,MARK
 # SOURCE
 {- | Durations, a UTC calendar, and the clock.
@@ -141,8 +141,7 @@ public export data DateTime = DateTime {
   hour : Int,
   minute : Int,
   second : Int,
-}
-  deriving (Eq, Ord, Debug)
+} deriving (Eq, Ord, Debug)
 
 -- Days since 1970-01-01 for a civil (y, m, d).  Hinnant's days_from_civil.
 daysFromCivil : Int -> Int -> Int -> Int

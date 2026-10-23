@@ -39,7 +39,7 @@ import list.{nub, reverse, mapAccumL}
 -- would cycle.  `fix` is a plain (Loc span, replacement) pair, converted to a
 -- real `Fix` on the diagnostics side.
 public export data TcDiag =
-  | TcDiag String Int (Option Loc) String (Option String) (Option (Loc, String))
+  TcDiag String Int (Option Loc) String (Option String) (Option (Loc, String))
 
 export
 tcCode : TcDiag -> String

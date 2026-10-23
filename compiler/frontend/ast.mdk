@@ -1789,7 +1789,7 @@ public export data MethodDefault = MethodDefault (List Pat) Expr
 -- constructor and no `Ty` carries a loc.  `None` where the node is synthesized
 -- rather than parsed.
 public export data IfaceMethod =
-  | IfaceMethod String Ty (Option MethodDefault) (Option Loc)
+  IfaceMethod String Ty (Option MethodDefault) (Option Loc)
 -- `interface Sub … : Sup a` — a SUPERINTERFACE occurrence.  `superOrigin` is the
 -- #1110 interface-occurrence identity of `Sup`; `superParams` are the subject
 -- interface's own type-parameter NAMES the superinterface is applied to (not

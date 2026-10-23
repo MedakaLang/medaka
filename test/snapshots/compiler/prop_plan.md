@@ -154,7 +154,7 @@ public export data PlanField = PlanField (Option String) Ty
 public export data PlanCtor = PlanCtor String String (List PlanField)
 
 public export data PlanDef =
-  | PlanDef TypeKey String (List String) PlanVisibility (List PlanCtor)
+  PlanDef TypeKey String (List String) PlanVisibility (List PlanCtor)
 
 public export data CustomPlan = CustomPlan TypeKey Ty String
 
@@ -211,7 +211,7 @@ reasonText PEInaccessibleConstructors =
 -- rescanning declarations for every generated value.
 public export data ArbPlan = ArbPlan Ty String
 public export data PlanEnv =
-  | PlanEnv String (OrdMap (List PlanDef)) (OrdMap (List ArbPlan)) (OrdMap Unit) (OrdMap Unit)
+  PlanEnv String (OrdMap (List PlanDef)) (OrdMap (List ArbPlan)) (OrdMap Unit) (OrdMap Unit)
 
 -- A source module is carried beside its elaborated/mangled counterpart.  The
 -- former supplies a constructor spelling which can be imported into a native

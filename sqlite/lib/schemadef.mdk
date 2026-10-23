@@ -96,7 +96,7 @@ public export data ColDef = ColDef String String Bool Bool deriving (Eq, Debug)
 
 -- | A parsed `CREATE TABLE`: the table name and its ordered columns.
 public export data CreateTable =
-  | CreateTable String (List ColDef)
+  CreateTable String (List ColDef)
   deriving (Eq, Debug)
 
 -- | A column's type AFFINITY — the storage class SQLite coerces values toward.
@@ -646,7 +646,7 @@ ipkAgrees ct readerIpk = ctIpkIndex ct == readerIpk
 -- | A parsed single-column `CREATE INDEX`: the index name, the table it is on,
 --   and the single indexed column name.
 public export data CreateIndex =
-  | CreateIndex String String String
+  CreateIndex String String String
   deriving (Eq, Debug)
 
 -- | The index's name.

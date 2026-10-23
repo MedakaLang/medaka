@@ -71,7 +71,7 @@ export data RepoCommit = RepoCommit Tid Cid Cid Bytes Bytes Signature
 
 -- | Immutable repository state; its representation is private.
 export data Repo =
-  | Repo String SecretKey PublicKey Mst BlockStore RepoCommit RepoFootprint
+  Repo String SecretKey PublicKey Mst BlockStore RepoCommit RepoFootprint
 
 {- | What the repository's full CAR export holds besides its commit block: how
    many MST node blocks and the bytes their CAR sections take, and the record

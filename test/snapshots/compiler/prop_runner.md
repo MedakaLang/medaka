@@ -1104,7 +1104,7 @@ propRequestCases : PropRequest -> Int
 propRequestCases (PropRequest _ _ cases) = cases
 
 public export data PropResult =
-  | PropResult String String PropStatus (Option PropFailureKind) String Int Int
+  PropResult String String PropStatus (Option PropFailureKind) String Int Int
 --                                          name   ok   detail
 
 public export data PreparedPropRequest =

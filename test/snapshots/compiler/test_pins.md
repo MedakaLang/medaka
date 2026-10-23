@@ -1,5 +1,5 @@
 # META
-source_lines=523
+source_lines=522
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_pins.mdk -- the typed known-red ledger shared by test
@@ -39,8 +39,7 @@ public export data TestPin = Pin {
   pinCases : Option Int,
   pinDetail : Option String,
   pinExpected : Option TestExpectedFailure,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 export type PinIndex = OrdMap TestPin
 
