@@ -1,0 +1,11 @@
+-- #4392 across modules: the constrained `otherwise` lives in `lib` and is named
+-- only through an alias, yet it still must not reach core's own guards.
+-- Expected: (int 3, nonpos, Lt).
+import core_private_name_nullary_xmod.lib as L
+
+pick : Int -> String
+pick n
+  | n > 0 = "pos"
+  | True = "nonpos"
+
+main = (L.otherwise 3, pick 0, compare (0.0 / 0.0) 1.0)
