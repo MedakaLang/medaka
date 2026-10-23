@@ -242,3 +242,14 @@ runs:
           exit 1
         fi
         echo "artifact provenance OK: emitter stamp matches this checkout ($stamped)"
+
+    # stdlib/core.mdki is gitignored and not shipped in the artifact: it is a pure
+    # function of stdlib/core.mdk, so re-deriving it here (a core check, ~0.3 s) is
+    # never stale, whereas a shipped copy would have to be trusted like the stamp.
+    - name: Write stdlib/core.mdki (derived from this checkout)
+      if: inputs.binary == 'artifact'
+      shell: bash
+      run: |
+        set -eu
+        ./medaka interface write stdlib/core.mdk
+        ./medaka interface verify stdlib/core.mdk

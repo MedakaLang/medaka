@@ -56,3 +56,6 @@
 # Python bytecode caches: interpreter-version-specific; never track them, or any import dirties the tree.
 __pycache__/
 *.pyc
+# build_native_medaka.sh output: the prelude interface derived from stdlib/core.mdk by
+# `medaka interface write`; regenerable on every build, never checked in.
+/stdlib/*.mdki

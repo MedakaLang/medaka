@@ -816,3 +816,13 @@ the native `medaka` binary itself drives compilation and execution with no OCaml
   2026-06-26); `diff_native_cli.sh` today diffs against captured goldens, not a live OCaml binary.
 - Mega-build (`run` wired) native-compiles clean; combined toolchain binary ~1.59 MB.
 - Seed `compiler/seed/emitter.ll.gz` byte-identical; `selfcompile_fixpoint.sh` C3a/C3b YES.
+
+## Prelude interface (`stdlib/core.mdki`) is written by every build
+
+After stage B, `test/build_native_medaka.sh` runs `./medaka interface write stdlib/core.mdk` and
+fails the build if that fails. It sits after the three-way stage-B choice (skip-if-fresh, build-cache
+hit, real link), so all three paths leave a freshly derived, gitignored `stdlib/core.mdki`; a stale
+file never survives a build. It is skipped when the output is not `$ROOT/medaka`, because that binary
+resolves a different stdlib root. CI does not ship the file in the build-once artifact: the
+`binary: artifact` arm of `.github/actions/setup-medaka/action.yml` re-runs `interface write` and
+`interface verify` after the download.
