@@ -1,5 +1,5 @@
 # META
-source_lines=183
+source_lines=185
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's desugared declarations as a file.
@@ -112,12 +112,17 @@ renderDeclsFault (WrongFormat v) =
 renderDeclsFault (Malformed e) =
   "\{e.sePath}: \{e.seWhat} (prelude declarations)"
 
+-- The key a file's header claims and the bytes its digest covers, after its
+-- version, header and digest are checked, without decoding them.
+export
+readDeclsFramed : String -> Result InterfaceFault (InterfaceKey, String)
+readDeclsFramed text = checkedFramed "medaka-decls" declsFormatVersion text
+
 -- The key a file's header claims, after its version, header and digest are
 -- checked, without decoding the body.
 export
 readDeclsKey : String -> Result InterfaceFault InterfaceKey
-readDeclsKey text =
-  map fst (checkedFramed "medaka-decls" declsFormatVersion text)
+readDeclsKey text = map fst (readDeclsFramed text)
 
 -- The value of a file, or why it is refused: the version first, then the
 -- header, then the digest, then the counters line, then the body.  The key is
@@ -125,20 +130,21 @@ readDeclsKey text =
 export
 readDeclsFile : String -> Result InterfaceFault (InterfaceKey, PreludeDecls)
 readDeclsFile text = do
-  (key, covered) <- checkedFramed "medaka-decls" declsFormatVersion text
-  decodeCovered key covered
+  (key, covered) <- readDeclsFramed text
+  pd <- decodeDeclsBody covered
+  Ok (key, pd)
 
-decodeCovered : InterfaceKey ->
-  String ->
-  Result InterfaceFault (InterfaceKey, PreludeDecls)
-decodeCovered key covered = match S.indexOf "\n" covered
+-- The value of the bytes a file's digest covers (`readDeclsFramed`): the
+-- counters line, then the two trees.
+export
+decodeDeclsBody : String -> Result InterfaceFault PreludeDecls
+decodeDeclsBody covered = match S.indexOf "\n" covered
   None => refuse "counters" "no counters line"
   Some j => match parseSExp (S.take j covered)
     Err e => failure e
     Ok node => match countersOf node
       Err e => failure e
-      Ok (rn, rb, cn, cb) =>
-        decodeBody key (rn, rb, cn, cb) (S.drop (j + 1) covered)
+      Ok counters => decodeBody counters (S.drop (j + 1) covered)
 
 countersOf : SExp -> Result SexpError (Int, Int, Int, Int)
 countersOf (SList [SAtom "counters", a, b, c, d]) = do
@@ -153,11 +159,10 @@ countersOf _ = Err SexpError {
   seWhat = "expected a counters line of four numbers",
 }
 
-decodeBody : InterfaceKey ->
-  (Int, Int, Int, Int) ->
+decodeBody : (Int, Int, Int, Int) ->
   String ->
-  Result InterfaceFault (InterfaceKey, PreludeDecls)
-decodeBody key (rn, rb, cn, cb) body
+  Result InterfaceFault PreludeDecls
+decodeBody (rn, rb, cn, cb) body
   | rn < 0 || rb < 0 || cn < 0 || cb < 0 =
     refuse "counters" "a counter is negative"
   | otherwise =
@@ -168,17 +173,14 @@ decodeBody key (rn, rb, cn, cb) body
         Err e => failure e
         Ok core =>
           if cursorAtEnd cur then
-            Ok (
-              key,
-              PreludeDecls {
-                pdRuntime = runtime,
-                pdCore = core,
-                pdRuntimeBinders = rn,
-                pdRuntimeBase = rb,
-                pdCoreBinders = cn,
-                pdCoreBase = cb,
-              },
-            )
+            Ok PreludeDecls {
+              pdRuntime = runtime,
+              pdCore = core,
+              pdRuntimeBinders = rn,
+              pdRuntimeBase = rb,
+              pdCoreBinders = cn,
+              pdCoreBase = cb,
+            }
           else
             failure SexpError {
               seOffset = cursorOffset cur,
@@ -209,17 +211,19 @@ decodeBody key (rn, rb, cn, cb) body
 (DTypeSig true "renderDeclsFault" (TyFun (TyCon "InterfaceFault") (TyCon "String")))
 (DFunDef false "renderDeclsFault" ((PCon "WrongFormat" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "prelude declarations format version ")) (EApp (EVar "display") (EVar "v"))) (ELit (LString ", this compiler reads "))) (EApp (EVar "display") (EVar "declsFormatVersion"))) (ELit (LString ""))))
 (DFunDef false "renderDeclsFault" ((PCon "Malformed" (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "e") "sePath"))) (ELit (LString ": "))) (EApp (EVar "display") (EFieldAccess (EVar "e") "seWhat"))) (ELit (LString " (prelude declarations)"))))
+(DTypeSig true "readDeclsFramed" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "String")))))
+(DFunDef false "readDeclsFramed" ((PVar "text")) (EApp (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EVar "text")))
 (DTypeSig true "readDeclsKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey"))))
-(DFunDef false "readDeclsKey" ((PVar "text")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EVar "text"))))
+(DFunDef false "readDeclsKey" ((PVar "text")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "readDeclsFramed") (EVar "text"))))
 (DTypeSig true "readDeclsFile" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeDecls")))))
-(DFunDef false "readDeclsFile" ((PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EVar "text"))) (ELam ((PTuple (PVar "key") (PVar "covered"))) (EApp (EApp (EVar "decodeCovered") (EVar "key")) (EVar "covered")))))
-(DTypeSig false "decodeCovered" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeDecls"))))))
-(DFunDef false "decodeCovered" ((PVar "key") (PVar "covered")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "covered")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "no counters line")))) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "j")) (EVar "covered"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EMatch (EApp (EVar "countersOf") (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "rn") (PVar "rb") (PVar "cn") (PVar "cb"))) () (EApp (EApp (EApp (EVar "decodeBody") (EVar "key")) (ETuple (EVar "rn") (EVar "rb") (EVar "cn") (EVar "cb"))) (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "covered"))))))))))
+(DFunDef false "readDeclsFile" ((PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EVar "readDeclsFramed") (EVar "text"))) (ELam ((PTuple (PVar "key") (PVar "covered"))) (EApp (EApp (EVar "andThen") (EApp (EVar "decodeDeclsBody") (EVar "covered"))) (ELam ((PVar "pd")) (EApp (EVar "Ok") (ETuple (EVar "key") (EVar "pd"))))))))
+(DTypeSig true "decodeDeclsBody" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "PreludeDecls"))))
+(DFunDef false "decodeDeclsBody" ((PVar "covered")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "covered")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "no counters line")))) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "j")) (EVar "covered"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EMatch (EApp (EVar "countersOf") (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "counters")) () (EApp (EApp (EVar "decodeBody") (EVar "counters")) (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "covered"))))))))))
 (DTypeSig false "countersOf" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "countersOf" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "counters"))) (PVar "a") (PVar "b") (PVar "c") (PVar "d")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "a"))) (ELam ((PVar "rn")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "b"))) (ELam ((PVar "rb")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "c"))) (ELam ((PVar "cn")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "d"))) (ELam ((PVar "cb")) (EApp (EVar "Ok") (ETuple (EVar "rn") (EVar "rb") (EVar "cn") (EVar "cb"))))))))))))
 (DFunDef false "countersOf" (PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "counters"))) (fa "seWhat" (ELit (LString "expected a counters line of four numbers")))))))
-(DTypeSig false "decodeBody" (TyFun (TyCon "InterfaceKey") (TyFun (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeDecls")))))))
-(DFunDef false "decodeBody" ((PVar "key") (PTuple (PVar "rn") (PVar "rb") (PVar "cn") (PVar "cb")) (PVar "body")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "rn") (ELit (LInt 0))) (EBinOp "<" (EVar "rb") (ELit (LInt 0)))) (EBinOp "<" (EVar "cn") (ELit (LInt 0)))) (EBinOp "<" (EVar "cb") (ELit (LInt 0)))) (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "a counter is negative"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "body"))) (DoExpr (EMatch (EApp (EVar "readDecls") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "runtime")) () (EMatch (EApp (EVar "readDecls") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "core")) () (EIf (EApp (EVar "cursorAtEnd") (EVar "cur")) (EApp (EVar "Ok") (ETuple (EVar "key") (ERecordCreate "PreludeDecls" ((fa "pdRuntime" (EVar "runtime")) (fa "pdCore" (EVar "core")) (fa "pdRuntimeBinders" (EVar "rn")) (fa "pdRuntimeBase" (EVar "rb")) (fa "pdCoreBinders" (EVar "cn")) (fa "pdCoreBase" (EVar "cb")))))) (EApp (EVar "failure") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (ELit (LString "trailing text after the core declarations"))))))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "decodeBody" (TyFun (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "PreludeDecls")))))
+(DFunDef false "decodeBody" ((PTuple (PVar "rn") (PVar "rb") (PVar "cn") (PVar "cb")) (PVar "body")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "rn") (ELit (LInt 0))) (EBinOp "<" (EVar "rb") (ELit (LInt 0)))) (EBinOp "<" (EVar "cn") (ELit (LInt 0)))) (EBinOp "<" (EVar "cb") (ELit (LInt 0)))) (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "a counter is negative"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "body"))) (DoExpr (EMatch (EApp (EVar "readDecls") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "runtime")) () (EMatch (EApp (EVar "readDecls") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "core")) () (EIf (EApp (EVar "cursorAtEnd") (EVar "cur")) (EApp (EVar "Ok") (ERecordCreate "PreludeDecls" ((fa "pdRuntime" (EVar "runtime")) (fa "pdCore" (EVar "core")) (fa "pdRuntimeBinders" (EVar "rn")) (fa "pdRuntimeBase" (EVar "rb")) (fa "pdCoreBinders" (EVar "cn")) (fa "pdCoreBase" (EVar "cb"))))) (EApp (EVar "failure") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (ELit (LString "trailing text after the core declarations"))))))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "readDecls" false))))
@@ -244,14 +248,16 @@ decodeBody key (rn, rb, cn, cb) body
 (DTypeSig true "renderDeclsFault" (TyFun (TyCon "InterfaceFault") (TyCon "String")))
 (DFunDef false "renderDeclsFault" ((PCon "WrongFormat" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "prelude declarations format version ")) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ", this compiler reads "))) (EApp (EMethodRef "display") (EVar "declsFormatVersion"))) (ELit (LString ""))))
 (DFunDef false "renderDeclsFault" ((PCon "Malformed" (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "e") "sePath"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "e") "seWhat"))) (ELit (LString " (prelude declarations)"))))
+(DTypeSig true "readDeclsFramed" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "String")))))
+(DFunDef false "readDeclsFramed" ((PVar "text")) (EApp (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EVar "text")))
 (DTypeSig true "readDeclsKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey"))))
-(DFunDef false "readDeclsKey" ((PVar "text")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EVar "text"))))
+(DFunDef false "readDeclsKey" ((PVar "text")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "readDeclsFramed") (EVar "text"))))
 (DTypeSig true "readDeclsFile" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeDecls")))))
-(DFunDef false "readDeclsFile" ((PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EVar "text"))) (ELam ((PTuple (PVar "key") (PVar "covered"))) (EApp (EApp (EVar "decodeCovered") (EVar "key")) (EVar "covered")))))
-(DTypeSig false "decodeCovered" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeDecls"))))))
-(DFunDef false "decodeCovered" ((PVar "key") (PVar "covered")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "covered")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "no counters line")))) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "j")) (EVar "covered"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EMatch (EApp (EVar "countersOf") (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "rn") (PVar "rb") (PVar "cn") (PVar "cb"))) () (EApp (EApp (EApp (EVar "decodeBody") (EVar "key")) (ETuple (EVar "rn") (EVar "rb") (EVar "cn") (EVar "cb"))) (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "covered"))))))))))
+(DFunDef false "readDeclsFile" ((PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readDeclsFramed") (EVar "text"))) (ELam ((PTuple (PVar "key") (PVar "covered"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "decodeDeclsBody") (EVar "covered"))) (ELam ((PVar "pd")) (EApp (EVar "Ok") (ETuple (EVar "key") (EVar "pd"))))))))
+(DTypeSig true "decodeDeclsBody" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "PreludeDecls"))))
+(DFunDef false "decodeDeclsBody" ((PVar "covered")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "covered")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "no counters line")))) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "j")) (EVar "covered"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EMatch (EApp (EVar "countersOf") (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "counters")) () (EApp (EApp (EVar "decodeBody") (EVar "counters")) (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "covered"))))))))))
 (DTypeSig false "countersOf" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "countersOf" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "counters"))) (PVar "a") (PVar "b") (PVar "c") (PVar "d")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "a"))) (ELam ((PVar "rn")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "b"))) (ELam ((PVar "rb")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "c"))) (ELam ((PVar "cn")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "d"))) (ELam ((PVar "cb")) (EApp (EVar "Ok") (ETuple (EVar "rn") (EVar "rb") (EVar "cn") (EVar "cb"))))))))))))
 (DFunDef false "countersOf" (PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "counters"))) (fa "seWhat" (ELit (LString "expected a counters line of four numbers")))))))
-(DTypeSig false "decodeBody" (TyFun (TyCon "InterfaceKey") (TyFun (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeDecls")))))))
-(DFunDef false "decodeBody" ((PVar "key") (PTuple (PVar "rn") (PVar "rb") (PVar "cn") (PVar "cb")) (PVar "body")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "rn") (ELit (LInt 0))) (EBinOp "<" (EVar "rb") (ELit (LInt 0)))) (EBinOp "<" (EVar "cn") (ELit (LInt 0)))) (EBinOp "<" (EVar "cb") (ELit (LInt 0)))) (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "a counter is negative"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "body"))) (DoExpr (EMatch (EApp (EVar "readDecls") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "runtime")) () (EMatch (EApp (EVar "readDecls") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "core")) () (EIf (EApp (EVar "cursorAtEnd") (EVar "cur")) (EApp (EVar "Ok") (ETuple (EVar "key") (ERecordCreate "PreludeDecls" ((fa "pdRuntime" (EVar "runtime")) (fa "pdCore" (EVar "core")) (fa "pdRuntimeBinders" (EVar "rn")) (fa "pdRuntimeBase" (EVar "rb")) (fa "pdCoreBinders" (EVar "cn")) (fa "pdCoreBase" (EVar "cb")))))) (EApp (EVar "failure") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (ELit (LString "trailing text after the core declarations"))))))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "decodeBody" (TyFun (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "PreludeDecls")))))
+(DFunDef false "decodeBody" ((PTuple (PVar "rn") (PVar "rb") (PVar "cn") (PVar "cb")) (PVar "body")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "rn") (ELit (LInt 0))) (EBinOp "<" (EVar "rb") (ELit (LInt 0)))) (EBinOp "<" (EVar "cn") (ELit (LInt 0)))) (EBinOp "<" (EVar "cb") (ELit (LInt 0)))) (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "a counter is negative"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "body"))) (DoExpr (EMatch (EApp (EVar "readDecls") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "runtime")) () (EMatch (EApp (EVar "readDecls") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "core")) () (EIf (EApp (EVar "cursorAtEnd") (EVar "cur")) (EApp (EVar "Ok") (ERecordCreate "PreludeDecls" ((fa "pdRuntime" (EVar "runtime")) (fa "pdCore" (EVar "core")) (fa "pdRuntimeBinders" (EVar "rn")) (fa "pdRuntimeBase" (EVar "rb")) (fa "pdCoreBinders" (EVar "cn")) (fa "pdCoreBase" (EVar "cb"))))) (EApp (EVar "failure") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (ELit (LString "trailing text after the core declarations"))))))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

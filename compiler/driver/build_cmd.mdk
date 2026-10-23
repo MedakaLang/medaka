@@ -27,18 +27,25 @@
 import list.{take}
 import support.util.{stringTrim, joinWith, joinNl, lookupAssoc}
 import string.{words, contains, startsWith, endsWith, split}
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{
+  desugaredPrelude, desugaredPreludeKey, registerPreludeDecls
+}
+import frontend.desugar.{reserveBinderOrdinals}
 import frontend.ast.{Decl}
 import types.tc_types.{DriveInputs(..)}
 import types.interface_sexp.{
-  InterfaceSection, InterfaceFault(..), readInterface, cacheOfSections,
-  formatVersion, sha256Hex
+  InterfaceSection, InterfaceFault(..), readInterface, readInterfaceKey,
+  cacheOfSections, formatVersion, sha256Hex
 }
 import types.prelude_interface.{
   InterfaceKey, interfaceKeyOf, keysMatch, seedPreludeInterface
 }
 import types.prelude_elab.{
-  PreludeElab, elabKeyOf, readElabFile, readElabKey, seedPreludeElab
+  PreludeElab, binderSpan, elabKeyOf, readElabFile, readElabKey, relocDecls,
+  seedPreludeElab
+}
+import types.prelude_decls.{
+  PreludeDecls(..), declsKeyOf, decodeDeclsBody, readDeclsFramed
 }
 import support.stage_count.{forwardStageLines}
 import io.{runCommandOk}
@@ -245,17 +252,60 @@ defaultMedakaEmitter = joinPath exeDir "medaka_emitter"
 -- it as a String, and the memo reaches them without re-signing any of them.
 export
 readPreludeFile : String -> <IO> Result String String
-readPreludeFile path = match readFile path
+readPreludeFile path = do
+  src <- readPreludeText path
+  validatedPrelude path src
+
+readPreludeText : String -> <IO> Result String String
+readPreludeText path = match readFile path
   Err e =>
     Err
       "error: cannot read the stdlib prelude at `\{path}`: \{e}; set MEDAKA_ROOT to your medaka checkout"
-  Ok src => match parseResult src
-    Err pe =>
-      Err
-        "\{ppDiagCliSrc src path (parseErrDiag path pe)}\n  (while loading the implicit prelude)"
-    Ok decls =>
-      let _ = notePreludeParse src decls
-      Ok src
+  Ok src => Ok src
+
+validatedPrelude : String -> String -> Result String String
+validatedPrelude path src = match parseResult src
+  Err pe =>
+    Err
+      "\{ppDiagCliSrc src path (parseErrDiag path pe)}\n  (while loading the implicit prelude)"
+  Ok decls =>
+    let _ = notePreludeParse src decls
+    Ok src
+
+-- The two prelude texts in [stdlibDir], `runtime.mdk` then `core.mdk`, for a verb
+-- that drives them.  When `core.mdkd` is fresh for them the desugar memo takes
+-- its trees and neither text is parsed: the file's key holds both texts' hashes,
+-- and `medaka interface write` writes no file for a text that does not parse.
+-- Otherwise each is parsed as `readPreludeFile` parses it, and a failure is
+-- reported in the same order: the runtime text's parse error before an
+-- unreadable core.
+export
+readPreludeSources : String -> <IO> Result String (String, String)
+readPreludeSources stdlibDir =
+  readPreludeSourcesAs (buildFingerprint ()) stdlibDir
+
+-- `readPreludeSources` for the files [compiler] wrote: a binary built without
+-- an identity of its own (a test) names the writer it trusts.
+export
+readPreludeSourcesAs : String -> String -> <IO> Result String (String, String)
+readPreludeSourcesAs compiler stdlibDir =
+  let rtPath = joinPath stdlibDir "runtime.mdk"
+  let corePath = joinPath stdlibDir "core.mdk"
+  match readPreludeText rtPath
+    Err e => Err e
+    Ok rsrc => match readPreludeText corePath
+      Err e => do
+        _ <- validatedPrelude rtPath rsrc
+        Err e
+      Ok csrc =>
+        if takePreludeDecls { shippedInputs stdlibDir rsrc csrc |
+          pnCompiler = compiler,
+        } then
+          Ok (rsrc, csrc)
+        else do
+          _ <- validatedPrelude rtPath rsrc
+          _ <- validatedPrelude corePath csrc
+          Ok (rsrc, csrc)
 
 -- ---- the prelude interface file ----
 -- `<stdlib>/core.mdki` (written by `medaka interface write`) holds core's
@@ -386,6 +436,147 @@ lastPreludeStaleLine : Unit -> Option String
 lastPreludeStaleLine _ = match !preludeVerdictRef
   Some (_, verdict) => preludeStaleLine verdict
   None => None
+
+-- ---- the prelude's desugared declarations ----
+-- `<stdlib>/core.mdkd`, written beside `core.mdki` by the same `medaka interface
+-- write`, holds both texts' desugared declarations.  A process that finds it
+-- fresh beside a `core.mdki` whose header is fresh parses neither text: the
+-- desugar memo holds a decoder per text, run on that text's first demand.  The
+-- key is read off the two headers against the source hashes, never through a
+-- desugar, so the generation every prelude cache keys by is the decoded one.
+
+public export data DeclsVerdict =
+  | DVLoaded
+  | DVStale String
+  | DVNoInterface
+  | DVDisabled
+
+-- How `<stdlibDir>/core.mdkd` stands against [inputs], with the bytes its digest
+-- covers when it is fresh.  Beside a `core.mdki` whose header does not carry
+-- [inputs]' key there is nothing to report: the interface's own verdict covers it.
+readPreludeDecls : PreludeInputs -> <IO> (DeclsVerdict, Option String)
+readPreludeDecls inputs
+  | envOr "MEDAKA_NO_INTERFACE" "" /= "" = (DVDisabled, None)
+  | not (interfaceHeaderFresh inputs) = (DVNoInterface, None)
+  | otherwise = match readFile (joinPath inputs.pnStdlibDir "core.mdkd")
+    Err _ => (DVStale "missing", None)
+    Ok text => match readDeclsFramed text
+      Err fault => (DVStale (faultComponent fault), None)
+      Ok (key, _) if key.ikCompiler == "" => (DVStale "compiler", None)
+      Ok (key, covered) =>
+        match keysMatch key (declsKeyOf (preludeInterfaceKey "core.mdk" inputs))
+          None => (DVLoaded, Some covered)
+          Some component => (DVStale component, None)
+
+-- Whether `<stdlibDir>/core.mdki`'s header line carries the key [inputs] expect.
+interfaceHeaderFresh : PreludeInputs -> <IO> Bool
+interfaceHeaderFresh inputs
+  | inputs.pnCompiler == "" = False
+  | otherwise = match readFile (joinPath inputs.pnStdlibDir "core.mdki")
+    Err _ => False
+    Ok text => match readInterfaceKey text
+      Ok key =>
+        key.ikCompiler /= ""
+          && isNone (keysMatch key (preludeInterfaceKey "core.mdk" inputs))
+      Err _ => False
+
+-- The verdict of this process's load of the declarations, with its inputs.  A
+-- body that fails to decode on first demand turns it stale.
+preludeDeclsRef : Ref (Option (PreludeInputs, DeclsVerdict))
+preludeDeclsRef = Ref None
+
+-- Hand `core.mdkd`'s trees for [inputs] to the desugar memo, once per process
+-- per input; whether they were taken.
+takePreludeDecls : PreludeInputs -> <IO> Bool
+takePreludeDecls inputs = match !preludeDeclsRef
+  Some (seen, DVLoaded) if seen == inputs => True
+  Some (seen, _) if seen == inputs => False
+  _ =>
+    let (verdict, covered) = readPreludeDecls inputs
+    preludeDeclsRef := Some (inputs, verdict)
+    match covered
+      Some body =>
+        let _ = holdPreludeDecls inputs body
+        True
+      None => False
+
+-- One decoder per text over the digest-checked [covered] bytes.  The body is
+-- decoded once, on the first demand of either text, and each tree is moved onto
+-- the binder counter as it stands at that text's own demand, as a desugar there
+-- would have minted it.
+holdPreludeDecls : PreludeInputs -> String -> Unit
+holdPreludeDecls inputs covered =
+  let decoded = Ref None
+  let value =
+    _ => match decoded.value
+      Some pd => pd
+      None =>
+        let pd = match decodeDeclsBody covered
+          Ok v if describes v => Some v
+          Ok _ =>
+            preludeDeclsRef := Some (inputs, DVStale "file")
+            None
+          Err fault =>
+            preludeDeclsRef := Some (inputs, DVStale (faultComponent fault))
+            None
+        decoded := Some pd
+        pd
+  let _ = registerPreludeDecls inputs.pnRuntimeSrc (_ =>
+    map
+      (pd => placed pd.pdRuntimeBinders pd.pdRuntimeBase pd.pdRuntime)
+      (value ()))
+  registerPreludeDecls inputs.pnCoreSrc (_ =>
+    map (pd => placed pd.pdCoreBinders pd.pdCoreBase pd.pdCore) (value ()))
+
+-- Whether each tree's minted binder ordinals are the run its counters claim.
+-- The digest covers the counters line, so only a writer that lied passes the
+-- digest and fails here; a lie would shift every id minted after the tree.
+describes : PreludeDecls -> Bool
+describes pd =
+  runOf pd.pdRuntimeBinders pd.pdRuntimeBase pd.pdRuntime
+    && runOf pd.pdCoreBinders pd.pdCoreBase pd.pdCore
+
+runOf : Int -> Int -> List Decl -> Bool
+runOf 0 _ decls = fst (binderSpan decls) < 0
+runOf count base decls = binderSpan decls == (base, count)
+
+-- [decls], whose [count] minted binder ordinals run from [base], moved onto the
+-- next [count] ordinals of the counter.
+placed : Int -> Int -> List Decl -> List Decl
+placed count base decls =
+  let first = reserveBinderOrdinals count
+  if first == base then decls else relocDecls (first - base) decls
+
+-- The declarations' verdict for [inputs]: this process's load, or for a process
+-- that did not load them (a `test` supervisor), the files read now.
+export
+preludeDeclsVerdict : PreludeInputs -> <IO> DeclsVerdict
+preludeDeclsVerdict inputs = match !preludeDeclsRef
+  Some (seen, verdict) if seen == inputs => verdict
+  _ => fst (readPreludeDecls inputs)
+
+-- The one line a verb prints for [verdict], if any.
+export
+preludeDeclsLine : DeclsVerdict -> Option String
+preludeDeclsLine (DVStale component) =
+  Some "prelude decls stale: parsing stdlib/core.mdk (\{component})"
+preludeDeclsLine _ = None
+
+-- How a verb reports one of the prelude files' stale lines: under MEDAKA_STRICT
+-- a stop through [stop]; staged through [staging] when the verb's machine channel
+-- is stderr (`run --json`, docs/ops/CLI-CONFORMANCE.md section 4); else one line
+-- of prose on stderr.
+export
+reportStaleLine : (String -> <IO> Unit) ->
+  Option (String -> Unit) ->
+  Option String ->
+  <IO> Unit
+reportStaleLine _ _ None = ()
+reportStaleLine stop staging (Some msg)
+  | envOr "MEDAKA_STRICT" "" /= "" = stop msg
+  | otherwise = match staging
+    Some stage => stage msg
+    None => ePutStrLn msg
 
 -- ---- the prelude's elaborated trees ----
 -- `<stdlib>/core.mdke`, written beside `core.mdki` by the same `medaka interface

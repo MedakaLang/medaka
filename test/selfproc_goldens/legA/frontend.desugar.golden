@@ -114,6 +114,7 @@ qualifiedAt : Expr -> String -> Expr -> Expr
 qualifyAliasRefs : List Decl -> List Decl
 qualifyAliasRefsWith : List String -> List Decl -> List Decl
 recPatFields : List Field -> List String -> List RecPatField
+reserveBinderOrdinals : Int -> Int
 rewriteAliasQual : List String -> Expr -> Expr
 rewriteAssignIndex : Expr -> Expr
 rewriteContainerLit : Expr -> Expr

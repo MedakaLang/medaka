@@ -5,16 +5,22 @@
 -- refusals and the cache, not the counter values.  The writer's rows, where a
 -- fresh process gives core's counters their promised values, are in
 -- `compiler/tools/interface_cmd_test.mdk`.
-import test.{expectAll, expectEqual, expectTrue, fail, labelFail}
+import test.{Expectation, expectAll, expectEqual, expectTrue, fail, labelFail}
 import test_process.{underRoot}
-import frontend.ast.{Decl, EvEntry(..), EvId(..), EvVal(..)}
+import frontend.ast.{
+  Addr(..), Arm(..), BinderId(..), Decl(..), DoStmt(..), EvEntry(..), EvId(..),
+  EvVal(..), Expr(..), FieldAssign(..), FunClause(..), Guard(..), GuardArm(..),
+  IfaceMethod(..), ImplMethod(..), InterpPart(..), LetBind(..), Lit(..),
+  MethodDefault(..), Pat(..), RecPatField(..), Section(..), TyConOrigin(..),
+  Ty(..), UsePath(..), noBinderId, noDeclLoc
+}
 import frontend.desugar_cache.{desugaredPrelude}
 import string as S
 import support.sexp_value.{SexpError(..)}
 import types.interface_sexp.{InterfaceFault(..), sha256Hex}
 import types.prelude_elab.{
   PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile, elabKeyOf,
-  seedPreludeElab, preludeElabHit, formatVersion
+  seedPreludeElab, preludeElabHit, formatVersion, binderSpan, relocDecls
 }
 import types.prelude_interface.{InterfaceKey(..), interfaceKeyOf, keysMatch}
 import types.publish.{CheckedProgram(..), TcReport(..)}
@@ -299,3 +305,182 @@ test "a value whose rows do not fit its counter is not held" =
   }
   let _ = seedPreludeElab (7, 8) bad
   expectEqual None (map (p => p.peLocalCounter) (preludeElabHit (7, 8)))
+
+-- ── the binder relocation walk ──────────────────────────────────────────────
+-- One row per arm of `relocDecl`/`relocPat`/`relocExpr` and the walkers under
+-- them that can reach a binder: each declaration holds exactly one minted
+-- binder, at ordinal 0, behind that arm alone.
+
+minted : BinderId
+minted = BinderId "" 0
+
+boundVar : Pat
+boundVar = PVar "x" noDeclLoc minted
+
+var : Expr
+var = EVar "x"
+
+-- An expression whose only binder is its lambda's parameter.
+binding : Expr
+binding = ELam [boundVar] var
+
+ev : EvId
+ev = EvId "" 0
+
+bodyOf : Expr -> Decl
+bodyOf e = DFunDef False "f" [] e noDeclLoc noBinderId
+
+paramOf : Pat -> Decl
+paramOf p = DFunDef False "f" [p] var noDeclLoc noBinderId
+
+letBind : BinderId -> List Pat -> LetBind
+letBind bid ps = LetBind "g" [FunClause ps var] noDeclLoc bid
+
+interfaceWith : Option MethodDefault -> Decl
+interfaceWith dflt = DInterface {
+  pub = False,
+  def = False,
+  name = "I",
+  typarams = [],
+  typaramKinds = [],
+  supers = [],
+  methods = [IfaceMethod "m" (TyVar "a") dflt None],
+  ifaceOrigin = OriginUnresolved,
+  ifaceNameLoc = None,
+}
+
+declRows : List (String, Decl)
+declRows = [
+  ("DFunDef id", DFunDef False "f" [] var noDeclLoc minted),
+  ("DFunDef parameter", paramOf boundVar),
+  ("DLetGroup id", DLetGroup False [letBind minted []]),
+  ("DLetGroup clause", DLetGroup False [letBind noBinderId [boundVar]]),
+  ("DInterface default", interfaceWith (Some (MethodDefault [boundVar] var))),
+  (
+    "DImpl method",
+    DImpl {
+      pub = False,
+      iface = "I",
+      tys = [],
+      reqs = [],
+      methods = [ImplMethod "m" [boundVar] var],
+      implOrigin = OriginUnresolved,
+      implIfaceLoc = None,
+    },
+  ),
+  ("DProp", DProp False "p" [] binding),
+  ("DTest", DTest False "t" binding),
+  ("DAttrib", DAttrib [] (paramOf boundVar)),
+]
+
+patRows : List (String, Decl)
+patRows =
+  map
+    ((label, p) => (label, paramOf p))
+    [
+      ("PAs id", PAs "y" noDeclLoc minted PWild),
+      ("PAs inner", PAs "y" noDeclLoc noBinderId boundVar),
+      ("PCon", PCon "C" [boundVar]),
+      ("PCons", PCons boundVar PWild),
+      ("PTuple", PTuple [boundVar]),
+      ("PList", PList [boundVar]),
+      ("PRec pun", PRec "R" [RecPatField "f" noDeclLoc minted None] False),
+      (
+        "PRec subpattern",
+        PRec "R" [RecPatField "f" noDeclLoc noBinderId (Some boundVar)] False,
+      ),
+    ]
+
+exprRows : List (String, Decl)
+exprRows =
+  map
+    ((label, e) => (label, bodyOf e))
+    [
+      ("ELam", binding),
+      ("ELet", ELet noDeclLoc False boundVar var var),
+      ("ELetGroup", ELetGroup [letBind minted []] var),
+      ("EMatch arm", EMatch var [Arm boundVar [] var]),
+      ("EMatch scrutinee", EMatch binding []),
+      ("Arm GBind", EMatch var [Arm PWild [GBind boundVar var] var]),
+      ("Arm GBool", EMatch var [Arm PWild [GBool binding] var]),
+      ("EGuards", EGuards [GuardArm [GBind boundVar var] var]),
+      ("EBlock DoExpr", EBlock [DoExpr binding]),
+      ("EBlock DoBind", EBlock [DoBind boundVar var]),
+      ("EDo DoLet", EDo False [DoLet False False boundVar var noDeclLoc]),
+      ("DoAssign", EBlock [DoAssign "x" binding]),
+      ("DoFieldAssign", EBlock [DoFieldAssign "x" ["f"] binding]),
+      ("ELoc", ELoc noDeclLoc binding),
+      ("EDoOrigin", EDoOrigin noDeclLoc binding),
+      ("EApp", EApp var binding),
+      ("EIf", EIf var var binding),
+      ("EBinOp", EBinOp "+" var binding ev),
+      ("EUnOp", EUnOp "-" binding ev),
+      ("EInfix", EInfix "+" var binding),
+      ("EFieldAccess", EFieldAccess binding "f" ev),
+      ("ERecordCreate", ERecordCreate "R" [FieldAssign "f" binding]),
+      ("ERecordUpdate", ERecordUpdate var [FieldAssign "f" binding] ev),
+      ("EVariantUpdate", EVariantUpdate "C" binding []),
+      ("EArrayLit", EArrayLit [binding]),
+      ("EListLit", EListLit [binding]),
+      ("ETuple", ETuple [binding]),
+      ("EIndex", EIndex var binding),
+      ("ERangeList", ERangeList var binding False),
+      ("ERangeArray", ERangeArray var binding True),
+      ("ESlice", ESlice var var binding False),
+      ("EAnnot", EAnnot binding (TyVar "a")),
+      ("EHeadAnnot", EHeadAnnot binding (TyVar "a")),
+      ("EStringInterp", EStringInterp [InterpStr "s", InterpExpr binding]),
+      ("ESection right", ESection (SecRight "+" binding)),
+      ("ESection left", ESection (SecLeft binding "+")),
+      ("EMapLit", EMapLit "M" [(var, binding)]),
+      ("ESetLit", ESetLit "S" [binding]),
+      ("EAsPat", EAsPat "x" binding),
+    ]
+
+-- Nodes that hold no binder.  The expression and pattern leaves sit beside one
+-- binder, which still moves; the declarations hold none and keep their span.
+leafRows : List (String, Decl)
+leafRows =
+  map
+      ((label, e) => (label, bodyOf (ETuple [e, binding])))
+      [
+        ("ELit", ELit (LInt 1)),
+        ("EVar", var),
+        ("ESection bare", ESection (SecBare "+")),
+        ("EMethodRef", EMethodRef "m"),
+        ("EDictApp", EDictApp "d"),
+        ("EVarAt", EVarAt "x" AGlobal),
+        ("EVarId", EVarId "x" 3),
+        ("EMethodAt", EMethodAt "m" "I" ev),
+        ("EDictAt", EDictAt "d" ev),
+        ("ENumLit", ENumLit 1 ev "Int"),
+        ("EWideLit", EWideLit 0 1 ev "U64"),
+        ("PWild", EMatch var [Arm PWild [] var]),
+        ("PLit", EMatch var [Arm (PLit (LInt 1)) [] var]),
+        ("PRng", EMatch var [Arm (PRng (LInt 1) (LInt 2) True) [] var]),
+        ("InterpStr", EStringInterp [InterpStr "s"]),
+      ]
+    ++ [
+      ("DTypeSig", DTypeSig False "f" (TyVar "a") noDeclLoc),
+      ("DUse", DUse False (UseName ["m"]) noDeclLoc),
+      ("DEffect", DEffect False "E" None [] OriginUnresolved None),
+      ("IfaceMethod without default", interfaceWith None),
+    ]
+
+-- A row's binders move by [offset]; a row with none keeps its span.
+movesBy : Int -> (String, Decl) -> Expectation
+movesBy offset (label, d) =
+  let (first, count) = binderSpan [d]
+  let expected = if count > 0 then (first + offset, count) else (first, count)
+  labelFail label (expectEqual expected (binderSpan (relocDecls offset [d])))
+
+test "every walker arm that reaches a binder moves it, and no other node holds one" =
+  let binderRows = declRows ++ patRows ++ exprRows
+  expectAll [
+    labelFail
+      "each binder row holds exactly the one binder"
+      (expectEqual
+        (map (_ => (0, 1)) binderRows)
+        (map (row => binderSpan [snd row]) binderRows)),
+    expectAll (map (movesBy 7) (binderRows ++ leafRows)),
+  ]
