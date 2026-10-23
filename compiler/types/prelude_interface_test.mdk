@@ -5,10 +5,12 @@
 -- binder ordinal: its types are `List`, `OrdMap`, `Map Int Unit`, `Int`,
 -- `Bool`, `PubScheme`, `RecordInfo` and the frozen slot, prefix and
 -- population forms, none of which names an `EvId` or `Ident` ordinal.
-import test.{expectEqual, expectNone, expectAll, expectEach}
+import test.{expectEqual, expectNone, expectAll, expectEach, fail}
 import list.{zip}
 import map as M
-import support.ordmap.{omEmpty, omInsert, omKeys, omLookup}
+import support.ordmap.{
+  omEmpty, omInsert, omKeys, omLookup, omFromNames, omHasKey
+}
 import types.effect_domain.{Param(..)}
 import types.effect_rows.{EffRow(..), Atom, atomBuiltin}
 import types.prelude_interface.{
@@ -19,14 +21,18 @@ import types.prelude_interface.{
 import types.publish.{PubScheme(..), liveCells, ppPubScheme, freezeRows}
 import types.registry.{spFromFloor, spFloor}
 import types.repr.{Mono(..), Tyvar(..), Scheme(..), VecObl(..), IfaceRef(..)}
-import frontend.ast.{TyConOrigin(..)}
+import frontend.ast.{TyConOrigin(..), Decl, externDecls}
 import types.tc_types.{
   GraphCtx(..), CrossRun(..), GraphRun(..), BuiltinClasses(..),
   PredicateSlot(..), MethodPredicateSlot(..), CDeclaredPrefix(..),
   RecordInfo(..)
 }
 import types.typecheck.{defaultDriveInputs, checkModulesChainReportForGraph}
-import frontend.desugar.{desugar}
+import types.interface_sexp.{
+  PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface
+}
+import types.interface_sexp_test.{prelude, fileKey}
+import frontend.desugar.{desugar, desugarIn}
 import frontend.parser.{parse, parseLocated}
 
 -- ── a small core pass result ────────────────────────────────────────────────
@@ -284,3 +290,78 @@ test "a listed join hits its section; an unlisted join and another generation mi
     expectNone (tyvarsAt (3, 5) []),
     expectEqual 2 (length (currentPreludeInterface ())),
   ]
+
+-- ── the extern catalog ──────────────────────────────────────────────────────
+
+-- A runtime declaring one extern the real runtime does not, over a one-type core.
+foreignPrelude : String -> (List Decl, List Decl)
+foreignPrelude name = (
+  desugar (parse "extern \{name} : Unit -> Int\n"),
+  desugar (parse "data Option a = None | Some a\n"),
+)
+
+-- The graph record a drive of a one-line module ends in.  Under no prelude key the
+-- drive neither reads nor writes the prelude cache.
+driveWith : Option (Int, Int) -> (List Decl, List Decl) -> GraphCtx
+driveWith key (runtimeDecls, coreDecls) =
+  snd
+    (checkModulesChainReportForGraph
+      defaultDriveInputs
+      False
+      key
+      ""
+      []
+      runtimeDecls
+      coreDecls
+      [("m", desugarIn "m" (parseLocated "x = 1"))])
+
+-- The cache's interfaces after a drive under a prelude key no earlier drive used,
+-- so the drive misses and freezes its own.
+keyedDrive : Int -> (List Decl, List Decl) -> List PreludeInterface
+keyedDrive n pre =
+  let _ = driveWith (Some (6403, n)) pre
+  map snd (currentPreludeInterface ())
+
+externNamesOf : List Decl -> List String
+externNamesOf decls =
+  omKeys (omFromNames (map (d => d.edName) (externDecls decls)) omEmpty)
+
+encodedSections : List PreludeInterface -> String
+encodedSections pis = encodeInterface PreludeInterfaceFile {
+  ifKey = fileKey,
+  ifSections =
+    map (pi => InterfaceSection { isJoins = [], isInterface = pi }) pis,
+}
+
+test "a prelude interface holds exactly the externs its own runtime declares" =
+  match prelude
+    Err e => fail e
+    Ok real =>
+      let _ = keyedDrive 1 (foreignPrelude "zzForeignExternA")
+      expectEqual
+        [externNamesOf (fst real)]
+        (map (pi => omKeys pi.piExternNames) (keyedDrive 2 real))
+
+test "the encoded real prelude does not depend on a runtime driven before it" =
+  match prelude
+    Err e => fail e
+    Ok real =>
+      let before = encodedSections (keyedDrive 3 real)
+      let _ = keyedDrive 4 (foreignPrelude "zzForeignExternB")
+      expectEqual before (encodedSections (keyedDrive 5 real))
+
+-- The second keyed drive of the real prelude hits the interface the first one
+-- cached, after an unkeyed drive of another runtime that left the cache alone.
+test "a prelude interface hit keeps the externs of a runtime driven before it" =
+  match prelude
+    Err e => fail e
+    Ok real =>
+      let _ = keyedDrive 6 real
+      let _ = driveWith None (foreignPrelude "zzForeignExternC")
+      let catalog =
+        (driveWith (Some (6403, 6)) real).builtinExternNamesRef.value
+      expectEqual
+        []
+        (filter
+          (n => not (omHasKey n catalog))
+          ("zzForeignExternC" :: externNamesOf (fst real)))
