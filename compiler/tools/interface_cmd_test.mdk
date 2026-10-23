@@ -14,6 +14,7 @@ import string as S
 import tools.interface_cmd.{
   buildInterfaceFile, showLines, verdictOf, verdictText
 }
+import driver.build_cmd.{readPreludeInterface, PreludeVerdict(..)}
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface,
   decodeInterface
@@ -72,6 +73,51 @@ test "verify reads fresh, then stale: sources after an edit, and missing without
                         "stale: sources"
                         (verdictText (verdictOf scratchCore))),
                   ]
+    _ => fail "could not stage the scratch stdlib")
+
+verdictName : PreludeVerdict -> String
+verdictName (PVLoaded _) = "loaded"
+verdictName PVMissing = "missing"
+verdictName (PVStale component) = "stale: \{component}"
+verdictName PVDisabled = "disabled"
+
+-- The verdict of reading [file], written under compiler identity [written],
+-- as compiler [reader].
+readUnder : String ->
+  String ->
+  String ->
+  PreludeInterfaceFile ->
+  String ->
+  String ->
+  <IO> Result String String
+readUnder dir runtimeSrc coreSrc file written reader =
+  let stamped = { file | ifKey = { file.ifKey | ikCompiler = written } }
+  map
+    (_ => verdictName (readPreludeInterface dir runtimeSrc coreSrc reader))
+    (writeFile "\{dir}/core.mdki" (encodeInterface stamped))
+
+test "an empty compiler identity on either side reads stale: compiler" = withScratchDir
+  (dir => match (copyInto dir "runtime.mdk", copyInto dir "core.mdk")
+    (Ok _, Ok _) => match (
+      readFile "\{dir}/runtime.mdk",
+      readFile "\{dir}/core.mdk",
+      buildInterfaceFile "\{dir}/core.mdk" [],
+    )
+      (Ok runtimeSrc, Ok coreSrc, Ok file) =>
+        let read = readUnder dir runtimeSrc coreSrc file
+        expectAll [
+          labelFail
+            "both empty"
+            (expectEqual (Ok "stale: compiler") (read "" "")),
+          labelFail
+            "file empty"
+            (expectEqual (Ok "stale: compiler") (read "" "x")),
+          labelFail
+            "reader empty"
+            (expectEqual (Ok "stale: compiler") (read "x" "")),
+          labelFail "both named" (expectEqual (Ok "loaded") (read "x" "x")),
+        ]
+      _ => fail "could not read the scratch stdlib"
     _ => fail "could not stage the scratch stdlib")
 
 test "a core with a type error is refused with its diagnostic" = withScratchDir

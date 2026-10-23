@@ -315,6 +315,7 @@ readPreludeInterface stdlibDir runtimeSrc coreSrc compiler
     Err _ => PVMissing
     Ok text => match decodeInterface text
       Err e => PVStale (undecodedComponent e.seWhat)
+      Ok f if compiler == "" || f.ifKey.ikCompiler == "" => PVStale "compiler"
       Ok f =>
         let expected =
           preludeInterfaceKey "core.mdk" runtimeSrc coreSrc compiler

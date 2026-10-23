@@ -192,12 +192,16 @@ failWith msg =
   stageExit 1
 
 writeCmd : String -> List String -> <IO> Unit
-writeCmd modulePath targets = match buildInterfaceFile modulePath targets
-  Err e => failWith e
-  Ok file =>
-    match writeAtomically (interfacePath modulePath) (encodeInterface file)
-      Err e => failWith "medaka interface write: \{e}"
-      Ok _ => putStrLn "wrote \{interfacePath modulePath}"
+writeCmd modulePath targets
+  | buildFingerprint () == "" =
+    failWith
+      "medaka interface write: this binary carries no build fingerprint (an unstamped build), so a file it wrote could not be told from another unstamped compiler's; build with `make medaka`"
+  | otherwise = match buildInterfaceFile modulePath targets
+    Err e => failWith e
+    Ok file =>
+      match writeAtomically (interfacePath modulePath) (encodeInterface file)
+        Err e => failWith "medaka interface write: \{e}"
+        Ok _ => putStrLn "wrote \{interfacePath modulePath}"
 
 -- ── show ────────────────────────────────────────────────────────────────────
 
