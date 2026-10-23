@@ -1,5 +1,5 @@
 # META
-source_lines=329
+source_lines=326
 stages=DESUGAR,MARK
 # SOURCE
 {- interface_cmd.mdk: `medaka interface write|show|verify`, the driver for the
@@ -20,7 +20,9 @@ import crypto.sha256.{sha256}
 import hex as Hex
 import list.{zip}
 import string as S
-import driver.build_cmd.{readPreludeFile}
+import driver.build_cmd.{
+  readPreludeFile, preludeInterfaceKey, undecodedComponent
+}
 import driver.diagnostics.{analyzeFrom, ppDiagCliSrc, diagIsError}
 import driver.front_gate.{cliStdlibExports}
 import frontend.parser.{parseLocated}
@@ -29,12 +31,11 @@ import support.stage_count.{stageExit}
 import support.util.{joinNl, joinWith}
 import types.effect_rows.{Atom, renderAtom}
 import types.interface_sexp.{
-  PreludeInterfaceFile(..), InterfaceSection(..), formatVersion,
-  encodeInterface, decodeInterface, mergeSections
+  PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface,
+  decodeInterface, mergeSections
 }
 import types.prelude_interface.{
-  PreludeInterface(..), InterfaceKey(..), interfaceKeyOf, keysMatch,
-  currentPreludeInterface
+  PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
 }
 import types.publish.{ppPubScheme}
 import types.target_profile.{TargetProfile, lookupProfile, selectedProfile}
@@ -82,10 +83,7 @@ sha256Of text = Hex.encode (sha256 (encodeUtf8 text))
 -- relative to the stdlib directory, hashed, and the compiler that checked them.
 keyOfSources : String -> String -> String -> InterfaceKey
 keyOfSources coreName runtimeSrc coreSrc =
-  interfaceKeyOf
-    formatVersion
-    [("runtime.mdk", sha256Of runtimeSrc), (coreName, sha256Of coreSrc)]
-    (buildFingerprint ())
+  preludeInterfaceKey coreName runtimeSrc coreSrc (buildFingerprint ())
 
 -- The interface file is named for the module it was built from.
 interfacePath : String -> String
@@ -262,8 +260,7 @@ verdictOf : String -> <IO> Verdict
 verdictOf modulePath = match readFile (interfacePath modulePath)
   Err _ => Missing
   Ok text => match decodeInterface text
-    Err e =>
-      Stale (if S.contains "format version" e.seWhat then "format" else "file")
+    Err e => Stale (undecodedComponent e.seWhat)
     Ok f => match (readFile (runtimePathOf modulePath), readFile modulePath)
       (Ok runtimeSrc, Ok coreSrc) =>
         match (keysMatch
@@ -338,7 +335,7 @@ runInterfaceCmd (sub :: _) =
 (DUse false (UseAlias ("hex") "Hex"))
 (DUse false (UseGroup ("list") ((mem "zip" false))))
 (DUse false (UseAlias ("string") "S"))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "preludeInterfaceKey" false) (mem "undecodedComponent" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeFrom" false) (mem "ppDiagCliSrc" false) (mem "diagIsError" false))))
 (DUse false (UseGroup ("driver" "front_gate") ((mem "cliStdlibExports" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false))))
@@ -346,8 +343,8 @@ runInterfaceCmd (sub :: _) =
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "renderAtom" false))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "PreludeInterfaceFile" true) (mem "InterfaceSection" true) (mem "formatVersion" false) (mem "encodeInterface" false) (mem "decodeInterface" false) (mem "mergeSections" false))))
-(DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "currentPreludeInterface" false))))
+(DUse false (UseGroup ("types" "interface_sexp") ((mem "PreludeInterfaceFile" true) (mem "InterfaceSection" true) (mem "encodeInterface" false) (mem "decodeInterface" false) (mem "mergeSections" false))))
+(DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true) (mem "keysMatch" false) (mem "currentPreludeInterface" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ppPubScheme" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "lookupProfile" false) (mem "selectedProfile" false))))
 (DTypeSig true "interfaceHelpText" (TyCon "String"))
@@ -359,7 +356,7 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "sha256Of" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "sha256Of" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256") (EApp (EVar "encodeUtf8") (EVar "text")))))
 (DTypeSig false "keyOfSources" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "InterfaceKey")))))
-(DFunDef false "keyOfSources" ((PVar "coreName") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "formatVersion")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (EApp (EVar "sha256Of") (EVar "runtimeSrc"))) (ETuple (EVar "coreName") (EApp (EVar "sha256Of") (EVar "coreSrc"))))) (EApp (EVar "buildFingerprint") (ELit LUnit))))
+(DFunDef false "keyOfSources" ((PVar "coreName") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EApp (EVar "preludeInterfaceKey") (EVar "coreName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "buildFingerprint") (ELit LUnit))))
 (DTypeSig false "interfacePath" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "interfacePath" ((PVar "modulePath")) (EBinOp "++" (EVar "modulePath") (ELit (LString "i"))))
 (DTypeSig false "runtimePathOf" (TyFun (TyCon "String") (TyCon "String")))
@@ -401,7 +398,7 @@ runInterfaceCmd (sub :: _) =
 (DFunDef false "verdictText" ((PCon "Stale" (PVar "component"))) (EBinOp "++" (EBinOp "++" (ELit (LString "stale: ")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ""))))
 (DFunDef false "verdictText" ((PCon "Missing")) (ELit (LString "missing")))
 (DTypeSig true "verdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
-(DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "interfacePath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "decodeInterface") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Stale") (EIf (EApp (EApp (EVar "S.contains") (ELit (LString "format version"))) (EFieldAccess (EVar "e") "seWhat")) (ELit (LString "format")) (ELit (LString "file"))))) (arm (PCon "Ok" (PVar "f")) () (EMatch (ETuple (EApp (EVar "readFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EMatch (EApp (EApp (EVar "keysMatch") (EFieldAccess (EVar "f") "ifKey")) (EApp (EApp (EApp (EVar "keyOfSources") (EApp (EVar "baseName") (EVar "modulePath"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (arm (PCon "None") () (EVar "Fresh")) (arm (PCon "Some" (PVar "component")) () (EApp (EVar "Stale") (EVar "component"))))) (arm PWild () (EApp (EVar "Stale") (ELit (LString "sources"))))))))))
+(DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "interfacePath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "decodeInterface") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Stale") (EApp (EVar "undecodedComponent") (EFieldAccess (EVar "e") "seWhat")))) (arm (PCon "Ok" (PVar "f")) () (EMatch (ETuple (EApp (EVar "readFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EMatch (EApp (EApp (EVar "keysMatch") (EFieldAccess (EVar "f") "ifKey")) (EApp (EApp (EApp (EVar "keyOfSources") (EApp (EVar "baseName") (EVar "modulePath"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (arm (PCon "None") () (EVar "Fresh")) (arm (PCon "Some" (PVar "component")) () (EApp (EVar "Stale") (EVar "component"))))) (arm PWild () (EApp (EVar "Stale") (ELit (LString "sources"))))))))))
 (DTypeSig false "verifyCmd" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "verifyCmd" ((PVar "modulePath")) (EBlock (DoLet false false (PVar "verdict") (EApp (EVar "verdictOf") (EVar "modulePath"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "verdictText") (EVar "verdict")))) (DoExpr (EMatch (EVar "verdict") (arm (PCon "Fresh") () (ELit LUnit)) (arm PWild () (EApp (EVar "stageExit") (ELit (LInt 1))))))))
 (DTypeSig false "wantsHelp" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
@@ -427,7 +424,7 @@ runInterfaceCmd (sub :: _) =
 (DUse false (UseAlias ("hex") "Hex"))
 (DUse false (UseGroup ("list") ((mem "zip" false))))
 (DUse false (UseAlias ("string") "S"))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "preludeInterfaceKey" false) (mem "undecodedComponent" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeFrom" false) (mem "ppDiagCliSrc" false) (mem "diagIsError" false))))
 (DUse false (UseGroup ("driver" "front_gate") ((mem "cliStdlibExports" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false))))
@@ -435,8 +432,8 @@ runInterfaceCmd (sub :: _) =
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "renderAtom" false))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "PreludeInterfaceFile" true) (mem "InterfaceSection" true) (mem "formatVersion" false) (mem "encodeInterface" false) (mem "decodeInterface" false) (mem "mergeSections" false))))
-(DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "currentPreludeInterface" false))))
+(DUse false (UseGroup ("types" "interface_sexp") ((mem "PreludeInterfaceFile" true) (mem "InterfaceSection" true) (mem "encodeInterface" false) (mem "decodeInterface" false) (mem "mergeSections" false))))
+(DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true) (mem "keysMatch" false) (mem "currentPreludeInterface" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ppPubScheme" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "lookupProfile" false) (mem "selectedProfile" false))))
 (DTypeSig true "interfaceHelpText" (TyCon "String"))
@@ -448,7 +445,7 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "sha256Of" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "sha256Of" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256") (EApp (EVar "encodeUtf8") (EVar "text")))))
 (DTypeSig false "keyOfSources" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "InterfaceKey")))))
-(DFunDef false "keyOfSources" ((PVar "coreName") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "formatVersion")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (EApp (EVar "sha256Of") (EVar "runtimeSrc"))) (ETuple (EVar "coreName") (EApp (EVar "sha256Of") (EVar "coreSrc"))))) (EApp (EVar "buildFingerprint") (ELit LUnit))))
+(DFunDef false "keyOfSources" ((PVar "coreName") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EApp (EVar "preludeInterfaceKey") (EVar "coreName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "buildFingerprint") (ELit LUnit))))
 (DTypeSig false "interfacePath" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "interfacePath" ((PVar "modulePath")) (EBinOp "++" (EVar "modulePath") (ELit (LString "i"))))
 (DTypeSig false "runtimePathOf" (TyFun (TyCon "String") (TyCon "String")))
@@ -490,7 +487,7 @@ runInterfaceCmd (sub :: _) =
 (DFunDef false "verdictText" ((PCon "Stale" (PVar "component"))) (EBinOp "++" (EBinOp "++" (ELit (LString "stale: ")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ""))))
 (DFunDef false "verdictText" ((PCon "Missing")) (ELit (LString "missing")))
 (DTypeSig true "verdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
-(DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "interfacePath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "decodeInterface") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Stale") (EIf (EApp (EApp (EVar "S.contains") (ELit (LString "format version"))) (EFieldAccess (EVar "e") "seWhat")) (ELit (LString "format")) (ELit (LString "file"))))) (arm (PCon "Ok" (PVar "f")) () (EMatch (ETuple (EApp (EVar "readFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EMatch (EApp (EApp (EVar "keysMatch") (EFieldAccess (EVar "f") "ifKey")) (EApp (EApp (EApp (EVar "keyOfSources") (EApp (EVar "baseName") (EVar "modulePath"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (arm (PCon "None") () (EVar "Fresh")) (arm (PCon "Some" (PVar "component")) () (EApp (EVar "Stale") (EVar "component"))))) (arm PWild () (EApp (EVar "Stale") (ELit (LString "sources"))))))))))
+(DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "interfacePath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "decodeInterface") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Stale") (EApp (EVar "undecodedComponent") (EFieldAccess (EVar "e") "seWhat")))) (arm (PCon "Ok" (PVar "f")) () (EMatch (ETuple (EApp (EVar "readFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EMatch (EApp (EApp (EVar "keysMatch") (EFieldAccess (EVar "f") "ifKey")) (EApp (EApp (EApp (EVar "keyOfSources") (EApp (EVar "baseName") (EVar "modulePath"))) (EVar "runtimeSrc")) (EVar "coreSrc"))) (arm (PCon "None") () (EVar "Fresh")) (arm (PCon "Some" (PVar "component")) () (EApp (EVar "Stale") (EVar "component"))))) (arm PWild () (EApp (EVar "Stale") (ELit (LString "sources"))))))))))
 (DTypeSig false "verifyCmd" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "verifyCmd" ((PVar "modulePath")) (EBlock (DoLet false false (PVar "verdict") (EApp (EVar "verdictOf") (EVar "modulePath"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "verdictText") (EVar "verdict")))) (DoExpr (EMatch (EVar "verdict") (arm (PCon "Fresh") () (ELit LUnit)) (arm PWild () (EApp (EVar "stageExit") (ELit (LInt 1))))))))
 (DTypeSig false "wantsHelp" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))

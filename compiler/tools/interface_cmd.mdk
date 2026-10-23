@@ -16,7 +16,9 @@ import crypto.sha256.{sha256}
 import hex as Hex
 import list.{zip}
 import string as S
-import driver.build_cmd.{readPreludeFile}
+import driver.build_cmd.{
+  readPreludeFile, preludeInterfaceKey, undecodedComponent
+}
 import driver.diagnostics.{analyzeFrom, ppDiagCliSrc, diagIsError}
 import driver.front_gate.{cliStdlibExports}
 import frontend.parser.{parseLocated}
@@ -25,12 +27,11 @@ import support.stage_count.{stageExit}
 import support.util.{joinNl, joinWith}
 import types.effect_rows.{Atom, renderAtom}
 import types.interface_sexp.{
-  PreludeInterfaceFile(..), InterfaceSection(..), formatVersion,
-  encodeInterface, decodeInterface, mergeSections
+  PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface,
+  decodeInterface, mergeSections
 }
 import types.prelude_interface.{
-  PreludeInterface(..), InterfaceKey(..), interfaceKeyOf, keysMatch,
-  currentPreludeInterface
+  PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
 }
 import types.publish.{ppPubScheme}
 import types.target_profile.{TargetProfile, lookupProfile, selectedProfile}
@@ -78,10 +79,7 @@ sha256Of text = Hex.encode (sha256 (encodeUtf8 text))
 -- relative to the stdlib directory, hashed, and the compiler that checked them.
 keyOfSources : String -> String -> String -> InterfaceKey
 keyOfSources coreName runtimeSrc coreSrc =
-  interfaceKeyOf
-    formatVersion
-    [("runtime.mdk", sha256Of runtimeSrc), (coreName, sha256Of coreSrc)]
-    (buildFingerprint ())
+  preludeInterfaceKey coreName runtimeSrc coreSrc (buildFingerprint ())
 
 -- The interface file is named for the module it was built from.
 interfacePath : String -> String
@@ -258,8 +256,7 @@ verdictOf : String -> <IO> Verdict
 verdictOf modulePath = match readFile (interfacePath modulePath)
   Err _ => Missing
   Ok text => match decodeInterface text
-    Err e =>
-      Stale (if S.contains "format version" e.seWhat then "format" else "file")
+    Err e => Stale (undecodedComponent e.seWhat)
     Ok f => match (readFile (runtimePathOf modulePath), readFile modulePath)
       (Ok runtimeSrc, Ok coreSrc) =>
         match (keysMatch
