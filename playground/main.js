@@ -150,7 +150,7 @@ let mainThreadWasm = null;
 async function langAssets() {
   const a = await loadAssets();
   if (!mainThreadWasm) mainThreadWasm = new Uint8Array(a.wasm);
-  return { wasm: mainThreadWasm, stdlib: { runtime: a.runtime, core: a.core, extra: a.extra } };
+  return { wasm: mainThreadWasm, stdlib: { runtime: a.runtime, core: a.core, extra: a.extra, coreInterface: a.coreInterface, compilerFingerprint: a.compilerFingerprint } };
 }
 
 // Warm the main-thread compiler module once (a throwaway hover) so V8 tiers it up
@@ -314,6 +314,18 @@ async function fetchOk(name) {
   return r;
 }
 
+// The shipped prelude interface and its compiler fingerprint are an optimization:
+// a 404 or a network error on either leaves the guest checking core as before, so
+// neither may fail the asset wave.
+async function fetchTextOrNull(name) {
+  try {
+    const r = await fetch(name);
+    return r.ok ? await r.text() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function loadBrowserModules() {
   const lists = await Promise.all([
     fetchOk('dist/stdlib_modules.json').then((r) => r.json()),
@@ -333,20 +345,26 @@ async function loadAssets() {
   assetsLoading = (async () => {
     // One wave: every fetch in flight at once.  The modules wait only for their
     // (small) list, while the compiler wasm is still arriving.
-    const [wasmResp, runtimeResp, coreResp, wat2wasmResp, extra] = await Promise.all([
+    const [wasmResp, runtimeResp, coreResp, wat2wasmResp, extra, ifaceText, fingerprintText] = await Promise.all([
       fetchOk('dist/playground.wasm'),
       fetchOk('dist/runtime.mdk'),
       fetchOk('dist/core.mdk'),
       fetchOk('vendor/wat2wasm/wat2wasm_bg.wasm'),
       loadBrowserModules(),
+      fetchTextOrNull('dist/core.mdki'),
+      fetchTextOrNull('dist/compiler_fingerprint.txt'),
     ]);
+    // The pair travels together: one without the other is the same as neither.
+    const shipped = ifaceText != null && fingerprintText != null;
+    const coreInterface = shipped ? ifaceText : undefined;
+    const compilerFingerprint = shipped ? fingerprintText : undefined;
     const [wasm, runtime, core, wat2wasmBytes] = await Promise.all([
       wasmResp.arrayBuffer(),
       runtimeResp.text(),
       coreResp.text(),
       wat2wasmResp.arrayBuffer(),
     ]);
-    cachedAssets = { wasm, runtime, core, wat2wasmBytes, extra };
+    cachedAssets = { wasm, runtime, core, wat2wasmBytes, extra, coreInterface, compilerFingerprint };
     assetsLoading = null;
     return cachedAssets;
   })();
@@ -383,7 +401,7 @@ async function initLanguageService() {
   const w = getLanguageWorker();
   w.postMessage({
     type: 'init',
-    assets: { wasm: assets.wasm, runtime: assets.runtime, core: assets.core, extra: assets.extra },
+    assets: { wasm: assets.wasm, runtime: assets.runtime, core: assets.core, extra: assets.extra, coreInterface: assets.coreInterface, compilerFingerprint: assets.compilerFingerprint },
   });
   // Kick an initial analyze once the worker signals ready.
   scheduleAnalyze();

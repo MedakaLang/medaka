@@ -26,7 +26,9 @@
 //   const wasm = await loadCompiler(wasmBytesOrPath);   // Node: path or bytes; browser: bytes
 //   const r = await compile(source, { wasm, stdlib });   // diagnostics + WAT
 //   const a = await analyze(source, { wasm, stdlib });   // diagnostics ONLY, no codegen
-//     stdlib = { runtime: <runtime.mdk text>, core: <core.mdk text> }
+//     stdlib = { runtime: <runtime.mdk text>, core: <core.mdk text>,
+//                coreInterface?: <core.mdki text>, compilerFingerprint?: <text> }
+//     (the last two are optional and travel together; see buildVfs)
 //     r = { ok:true, wat:string, diagnostics?:{files:[...]} } | { ok:false, diagnostics:{files:[...]} }
 //     (diagnostics is present on an ok:true result only when there were WARNINGS —
 //     e.g. W-NONEXHAUSTIVE. Warnings never block emit, matching native `medaka check`.)
@@ -87,6 +89,13 @@ function buildVfs(source, stdlib) {
   // implicit prelude and is never loaded as a module.
   vfsMap.set(USER_ROOT + '/' + RUNTIME_PATH, runtimeBytes);
   vfsMap.set(CORE_PATH, enc(stdlib.core));
+  // The shipped prelude interface and the compiler identity it was written under
+  // sit beside core.mdk (the guest looks them up as `dirOf core.mdk`/<name>).
+  // Both are optional; without either the guest checks core as it always did.
+  if (stdlib.coreInterface != null && stdlib.compilerFingerprint != null) {
+    vfsMap.set(USER_ROOT + '/core.mdki', enc(stdlib.coreInterface));
+    vfsMap.set(USER_ROOT + '/compiler_fingerprint.txt', enc(stdlib.compilerFingerprint));
+  }
   vfsMap.set(USER_PATH, enc(source));
   // A prelude-only program resolves no sibling imports.  Extra stdlib modules
   // (list/map/...) a program imports go in opts.stdlib.extra as { '<id>': text }
