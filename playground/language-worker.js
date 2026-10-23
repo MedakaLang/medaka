@@ -37,14 +37,15 @@
 import { analyze } from './compile.mjs';
 
 let wasmBytes = null;   // Uint8Array of playground.wasm
-let stdlib = null;      // { runtime, core }
+let stdlib = null;      // { runtime, core, extra, coreInterface?, compilerFingerprint? }
 
 self.onmessage = async function (e) {
   const msg = e.data;
 
   if (msg.type === 'init') {
     wasmBytes = new Uint8Array(msg.assets.wasm);
-    stdlib = { runtime: msg.assets.runtime, core: msg.assets.core, extra: msg.assets.extra };
+    stdlib = { runtime: msg.assets.runtime, core: msg.assets.core, extra: msg.assets.extra,
+               coreInterface: msg.assets.coreInterface, compilerFingerprint: msg.assets.compilerFingerprint };
     self.postMessage({ type: 'ready' });
     return;
   }

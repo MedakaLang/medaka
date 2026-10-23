@@ -13,6 +13,10 @@
 #   * playground.wasm   — the combined compiler, as WasmGC  (do NOT commit)
 #   * runtime.mdk       — copy of stdlib/runtime.mdk (browser feeds via vfs)
 #   * core.mdk          — copy of stdlib/core.mdk     (browser feeds via vfs)
+#   * core.mdki         — copy of stdlib/core.mdki, the checked interface `make medaka`
+#                         wrote; the browser seeds the prelude cache from it
+#   * compiler_fingerprint.txt — FP_COMPILER of this checkout (the compiler identity
+#                         core.mdki was written under; the wasm cannot compute it)
 #   * <id>.mdk          — browser-vfs modules (stdlib and playground-local)
 #   * stdlib_modules.json — stdlib module ids, generated (do NOT commit)
 #   * playground_modules.json — playground-local module ids, generated (do NOT commit)
@@ -109,6 +113,23 @@ rm -f "$WAT"  # keep dist lean; WAT is huge and regenerable
 cp "$RUNTIME" "$DIST/runtime.mdk"
 cp "$CORE"    "$DIST/core.mdk"
 
+# The interface is shipped only if it is fresh for the sources being shipped: a stale
+# copy would be refused by the browser anyway, so fail the build instead.
+IFACE="$ROOT/stdlib/core.mdki"
+[ -f "$IFACE" ] || { echo "FAIL: $IFACE missing (make medaka writes it)"; exit 1; }
+"$MEDAKA" interface verify "$CORE" | grep -qx fresh \
+  || { echo "FAIL: stdlib/core.mdki is not fresh for stdlib/core.mdk; run make medaka"; exit 1; }
+cp "$IFACE" "$DIST/core.mdki"
+
+# FP_COMPILER, as src_fingerprint_compiler in test/build_native_medaka.sh computes it.
+if command -v sha256sum >/dev/null 2>&1; then HASH_CMD="sha256sum"; else HASH_CMD="shasum -a 256"; fi
+( cd "$ROOT" && { find compiler -name '*.mdk' -not -name '*_test.mdk' -print
+    find stdlib -name '*.mdk' -not -name '*_test.mdk' -print
+  } | LC_ALL=C sort | while IFS= read -r f; do
+    printf '%s\n' "$f"
+    cat "$f"
+  done ) | $HASH_CMD | cut -d' ' -f1 > "$DIST/compiler_fingerprint.txt"
+
 # Every stdlib module ships (docs/design/TARGETS-DESIGN.md §6.4): a program that
 # uses one whose labels `wasmgc/browser-worker` withholds is refused by the
 # compiler's target check, with the same located T-TARGET-CAPABILITY diagnostic
@@ -148,7 +169,8 @@ printf '%s\n' $PLAYGROUND_MODULES \
 
 echo
 echo "artifacts in $DIST:"
-for f in playground.wasm runtime.mdk core.mdk stdlib_modules.json playground_modules.json $(for m in $STDLIB_MODULES $PLAYGROUND_MODULES; do echo "$m.mdk"; done); do
-  [ -f "$DIST/$f" ] && printf '  %-20s %10d bytes\n' "$f" "$(wc -c < "$DIST/$f")"
+for f in playground.wasm runtime.mdk core.mdk core.mdki compiler_fingerprint.txt stdlib_modules.json playground_modules.json $(for m in $STDLIB_MODULES $PLAYGROUND_MODULES; do echo "$m.mdk"; done); do
+  [ -f "$DIST/$f" ] || { echo "FAIL: $DIST/$f missing"; exit 1; }
+  printf '  %-20s %10d bytes\n' "$f" "$(wc -c < "$DIST/$f")"
 done
 echo "DONE"

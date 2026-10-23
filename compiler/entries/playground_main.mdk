@@ -126,7 +126,8 @@ import json.{
   jArray,
   stringify,
 }
-import support.path.{dirOf}
+import support.path.{dirOf, joinPath}
+import driver.build_cmd.{loadPreludeInterface}
 import support.char.{isIdentChar, isDigit}
 import entries.entry_support.{
   rootsOrDefault,
@@ -134,7 +135,7 @@ import entries.entry_support.{
   stampModulePaths,
   failWith,
 }
-import support.util.{startsWith, splitOnChar, filterList}
+import support.util.{startsWith, splitOnChar, filterList, stringTrim}
 import types.publish.{PubScheme(..), ppPubScheme}
 import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
 import types.typecheck.{
@@ -262,7 +263,7 @@ run : Bool ->
   <IO> Unit
 run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
   Err e => emitLoadFail entry e
-  Ok rsrc => match readFile coreP
+  Ok rsrc => match readCoreSeeding coreP rsrc
     Err e => emitLoadFail entry e
     Ok csrc => match readFile entry
       Err e => emitLoadFail entry e
@@ -343,6 +344,28 @@ dropPath (mid, _, decls) = (mid, decls)
 -- inside the loader, so a long editing session cannot grow it.
 playgroundParseCache : Ref (List (String, List Decl))
 playgroundParseCache = Ref []
+
+-- Read core.mdk, seeding the prelude cache first when the host shipped an
+-- interface for it.
+readCoreSeeding : String -> String -> <IO> Result String String
+readCoreSeeding coreP rsrc = match readFile coreP
+  Err e => Err e
+  Ok csrc =>
+    let _ = seedShippedInterface coreP rsrc csrc
+    Ok csrc
+
+-- Seed the prelude cache from the `core.mdki` and `compiler_fingerprint.txt`
+-- beside [coreP], when the host supplied both.  The browser has no build
+-- fingerprint of its own, so the shipped file is the compiler identity; any
+-- verdict but a load leaves the drives to check core as before.
+seedShippedInterface : String -> String -> String -> <IO> Unit
+seedShippedInterface coreP rsrc csrc =
+  let dir = dirOf coreP
+  match readFile (joinPath dir "compiler_fingerprint.txt")
+    Err _ => ()
+    Ok fp =>
+      let _ = loadPreludeInterface dir rsrc csrc (stringTrim fp)
+      ()
 
 -- Single module: one unguarded `frontEnd` run over the located parse (correct
 -- single-file type errors).  Clean ⇒ emit.
@@ -789,7 +812,7 @@ runQuery : Bool -> String -> String -> String -> List String -> <IO> Unit
 runQuery isHover runtimeP coreP entry (lineS :: colS :: _) =
   match readFile runtimeP
     Err _ => emitQuery isHover JNull
-    Ok rsrc => match readFile coreP
+    Ok rsrc => match readCoreSeeding coreP rsrc
       Err _ => emitQuery isHover JNull
       Ok csrc => match readFile entry
         Err _ => emitQuery isHover JNull
