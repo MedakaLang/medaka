@@ -14,6 +14,9 @@ import string as S
 import tools.interface_cmd.{
   buildInterfaceFile, showLines, verdictOf, verdictText
 }
+import driver.build_cmd.{
+  readPreludeInterface, PreludeInputs(..), PreludeVerdict(..)
+}
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface,
   decodeInterface
@@ -47,49 +50,104 @@ copyInto dir name = match readFile (underRoot "stdlib/\{name}")
   Err e => Err e
   Ok text => writeFile "\{dir}/\{name}" text
 
-test "verify reads fresh, then stale: sources after an edit, and missing without a file" = withScratchDir
-  (dir => match (copyInto dir "runtime.mdk", copyInto dir "core.mdk")
-    (Ok _, Ok _) =>
-      let scratchCore = "\{dir}/core.mdk"
-      match buildInterfaceFile scratchCore []
-        Err e => fail e
-        Ok file =>
-          let before = verdictText (verdictOf scratchCore)
-          match writeFile "\{scratchCore}i" (encodeInterface file)
-            Err e => fail e
-            Ok _ =>
-              let fresh = verdictText (verdictOf scratchCore)
-              match readFile scratchCore
-                Err e => fail e
-                Ok text => match writeFile scratchCore (text ++ " ")
-                  Err e => fail e
-                  Ok _ => expectAll [
-                    labelFail "no file yet" (expectEqual "missing" before),
-                    labelFail "file just written" (expectEqual "fresh" fresh),
-                    labelFail
-                      "source edited"
-                      (expectEqual
-                        "stale: sources"
-                        (verdictText (verdictOf scratchCore))),
-                  ]
-    _ => fail "could not stage the scratch stdlib")
+-- [body] run on a scratch directory holding the real runtime.mdk and core.mdk.
+withStagedStdlib : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withStagedStdlib body = withScratchDir (dir => match (
+  copyInto dir "runtime.mdk",
+  copyInto dir "core.mdk",
+)
+  (Ok _, Ok _) => body dir
+  _ => fail "could not stage the scratch stdlib")
 
-test "a core with a type error is refused with its diagnostic" = withScratchDir
-  (dir => match (copyInto dir "runtime.mdk", copyInto dir "core.mdk")
-    (Ok _, Ok _) =>
-      let scratchCore = "\{dir}/core.mdk"
-      match readFile scratchCore
-        Err e => fail e
-        Ok text =>
-          match (writeFile
-            scratchCore
-            (text ++ "\nbadBinding : Int\nbadBinding = \"x\"\n"))
-            Err e => fail e
-            Ok _ =>
-              expectErrContains
-                "type mismatch"
-                (map (_ => ()) (buildInterfaceFile scratchCore []))
-    _ => fail "could not stage the scratch stdlib")
+test "verify reads fresh, then stale: sources after an edit, and missing without a file" = withStagedStdlib
+  (dir =>
+    let scratchCore = "\{dir}/core.mdk"
+    match buildInterfaceFile scratchCore []
+      Err e => fail e
+      Ok file =>
+        let before = verdictText (verdictOf scratchCore)
+        match writeFile "\{scratchCore}i" (encodeInterface file)
+          Err e => fail e
+          Ok _ =>
+            let fresh = verdictText (verdictOf scratchCore)
+            match readFile scratchCore
+              Err e => fail e
+              Ok text => match writeFile scratchCore (text ++ " ")
+                Err e => fail e
+                Ok _ => expectAll [
+                  labelFail "no file yet" (expectEqual "missing" before),
+                  labelFail "file just written" (expectEqual "fresh" fresh),
+                  labelFail
+                    "source edited"
+                    (expectEqual
+                      "stale: sources"
+                      (verdictText (verdictOf scratchCore))),
+                ])
+
+verdictName : PreludeVerdict -> String
+verdictName (PVLoaded _) = "loaded"
+verdictName PVMissing = "missing"
+verdictName (PVStale component) = "stale: \{component}"
+verdictName PVDisabled = "disabled"
+
+-- The verdict of reading [file], written under compiler identity [written],
+-- as compiler [reader].
+readUnder : PreludeInputs ->
+  PreludeInterfaceFile ->
+  String ->
+  <IO> Result String String
+readUnder inputs file written =
+  let stamped = { file | ifKey = { file.ifKey | ikCompiler = written } }
+  map
+    (_ => verdictName (readPreludeInterface inputs))
+    (writeFile "\{inputs.pnStdlibDir}/core.mdki" (encodeInterface stamped))
+
+test "an empty compiler identity on either side reads stale: compiler" = withStagedStdlib
+  (dir => match (
+    readFile "\{dir}/runtime.mdk",
+    readFile "\{dir}/core.mdk",
+    buildInterfaceFile "\{dir}/core.mdk" [],
+  )
+    (Ok runtimeSrc, Ok coreSrc, Ok file) =>
+      let read written reader =
+        readUnder
+          PreludeInputs {
+            pnStdlibDir = dir,
+            pnRuntimeSrc = runtimeSrc,
+            pnCoreSrc = coreSrc,
+            pnCompiler = reader,
+          }
+          file
+          written
+      expectAll [
+        labelFail
+          "both empty"
+          (expectEqual (Ok "stale: compiler") (read "" "")),
+        labelFail
+          "file empty"
+          (expectEqual (Ok "stale: compiler") (read "" "x")),
+        labelFail
+          "reader empty"
+          (expectEqual (Ok "stale: compiler") (read "x" "")),
+        labelFail "both named" (expectEqual (Ok "loaded") (read "x" "x")),
+      ]
+    _ => fail "could not read the scratch stdlib")
+
+test "a core with a type error is refused with its diagnostic" = withStagedStdlib
+  (dir =>
+    let scratchCore = "\{dir}/core.mdk"
+    match readFile scratchCore
+      Err e => fail e
+      Ok text =>
+        match (writeFile
+          scratchCore
+          (text ++ "\nbadBinding : Int\nbadBinding = \"x\"\n"))
+          Err e => fail e
+          Ok _ =>
+            expectErrContains
+              "type mismatch"
+              (map (_ => ()) (buildInterfaceFile scratchCore [])))
 
 -- ── the check family's fallback ─────────────────────────────────────────────
 --
@@ -99,7 +157,9 @@ test "a core with a type error is refused with its diagnostic" = withScratchDir
 -- read the fresh file with the interface disabled.
 
 helloSrc : String
-helloSrc = "main : <Stdout> Unit\nmain = println \"hi\"\n"
+helloSrc = """main : <Stdout> Unit
+main = println "hi"
+"""
 
 staleLine : String -> String
 staleLine component =
@@ -122,8 +182,25 @@ reKeyed change text = match decodeInterface text
   Err e => Err e.seWhat
   Ok f => Ok (encodeInterface { f | ifKey = change f.ifKey })
 
--- The stale variants of [fresh]: (name, the component the line names, text).
-staleFiles : String -> Result String (List (String, String, String))
+-- What a spawned run gave: exit code, stdout and stderr.
+data Run = Run {
+  runCode : Int,
+  runOut : String,
+  runErr : String,
+} deriving (Eq, Debug)
+
+runOf : (Int, String, String) -> Run
+runOf (code, out, err) = Run { runCode = code, runOut = out, runErr = err }
+
+-- A stale variant of the fresh file: its name, the component the line names,
+-- and its text.
+data StaleFile = StaleFile {
+  sfName : String,
+  sfComponent : String,
+  sfText : String,
+}
+
+staleFiles : String -> Result String (List StaleFile)
 staleFiles fresh = do
   foreignCompiler <- reKeyed
     (k => { k | ikCompiler = "not-this-compiler" })
@@ -132,15 +209,14 @@ staleFiles fresh = do
     (k => { k | ikSources = map (s => (fst s, "0")) k.ikSources })
     fresh
   Ok [
-    ("compiler", "compiler", foreignCompiler),
-    ("sources", "sources", otherSources),
-    ("truncated", "file", S.take (S.length fresh / 2) fresh),
-    (
-      "version",
-      "format",
-      S.replace "(medaka-interface 1 " "(medaka-interface 99 " fresh,
-    ),
-    ("digest", "file", S.replace "(digest " "(digest 0" fresh),
+    StaleFile "compiler" "compiler" foreignCompiler,
+    StaleFile "sources" "sources" otherSources,
+    StaleFile "truncated" "file" (S.take (S.length fresh / 2) fresh),
+    StaleFile
+      "version"
+      "format"
+      (S.replace "(medaka-interface 1 " "(medaka-interface 99 " fresh),
+    StaleFile "digest" "file" (S.replace "(digest " "(digest 0" fresh),
   ]
 
 -- `env` arguments running the binary under [root] with [env] set, after
@@ -161,44 +237,36 @@ under root env verb =
     ++ verb
 
 -- One case: its label, its `env` arguments, and what the run must give.
-data Case = Case String (List String) (Int, String, String)
-
-caseArgv : Case -> List String
-caseArgv (Case _ argv _) = argv
+data Case = Case { caseLabel : String, caseArgv : List String, caseWant : Run }
 
 caseVerdict : Case -> Result String (Int, String, String) -> Expectation
-caseVerdict (Case label _ want) got =
-  labelFail label (expectEqual (Ok want) got)
+caseVerdict c got =
+  labelFail c.caseLabel (expectEqual (Ok c.caseWant) (map runOf got))
 
 -- A stale variant's cases: the reference's output with the one line on stderr,
 -- and exit 1 under MEDAKA_STRICT.
 staleCases : String ->
-  (Int, String, String) ->
-  (Int, String, String) ->
-  (String, String, String) ->
+  Run ->
+  Run ->
+  StaleFile ->
   <Env "MEDAKA_ROOT", Env "MEDAKA"> List Case
-staleCases dir (code, out, _) (jcode, jout, _) (name, component, _) =
-  let root = "\{dir}/\{name}"
+staleCases dir checkRef jsonRef f =
+  let root = "\{dir}/\{f.sfName}"
   let hello = "\{dir}/hello.mdk"
+  let line = staleLine f.sfComponent
   [
-    Case "\{name}: check" (under root [] ["check", hello]) (
-      code,
-      out,
-      staleLine component,
-    ),
-    Case "\{name}: check --json" (under root [] ["check", "--json", hello]) (
-      jcode,
-      jout,
-      staleLine component,
-    ),
-    Case "\{name}: check under MEDAKA_STRICT" (under
+    Case "\{f.sfName}: check" (under root [] ["check", hello]) { checkRef |
+      runErr = line,
+    },
+    Case "\{f.sfName}: check --json" (under root [] [
+      "check", "--json", hello
+    ]) { jsonRef |
+      runErr = line,
+    },
+    Case "\{f.sfName}: check under MEDAKA_STRICT" (under
       root
       ["MEDAKA_STRICT=1"]
-      ["check", hello]) (
-      1,
-      "",
-      staleLine component,
-    ),
+      ["check", hello]) Run { runCode = 1, runOut = "", runErr = line },
   ]
 
 -- The reference runs: `check`, `check --json` and `run --json` of hello over
@@ -217,8 +285,8 @@ referenceArgvs dir =
 -- no file, a stale file with the interface disabled, and `run --json` over a
 -- stale file.
 silentCases : String ->
-  (Int, String, String) ->
-  (Int, String, String) ->
+  Run ->
+  Run ->
   <Env "MEDAKA_ROOT", Env "MEDAKA"> List Case
 silentCases dir checkRef runRef =
   let hello = "\{dir}/hello.mdk"
@@ -235,21 +303,12 @@ silentCases dir checkRef runRef =
       runRef,
   ]
 
-stageAll : String ->
-  String ->
-  List (String, String, String) ->
-  <IO> Result String Unit
+stageAll : String -> String -> List StaleFile -> <IO> Result String Unit
 stageAll dir fresh stale = do
   _ <- writeFile "\{dir}/hello.mdk" helloSrc
   _ <- stageRoot "\{dir}/fresh" (Some fresh)
   _ <- stageRoot "\{dir}/missing" None
-  firstErr (map (v => stageRoot "\{dir}/\{nameOf v}" (Some (textOf v))) stale)
-
-nameOf : (String, String, String) -> String
-nameOf (name, _, _) = name
-
-textOf : (String, String, String) -> String
-textOf (_, _, text) = text
+  firstErr (map (f => stageRoot "\{dir}/\{f.sfName}" (Some f.sfText)) stale)
 
 firstErr : List (Result String Unit) -> Result String Unit
 firstErr [] = Ok ()
@@ -264,20 +323,17 @@ test "a stale prelude interface prints one line on the check family and changes 
       Ok stale => match stageAll dir fresh stale
         Err e => fail e
         Ok _ => match runCommandBatch "env" 3 (referenceArgvs dir)
-          [Ok checkRef, Ok jsonRef, Ok runRef] =>
+          [Ok c, Ok j, Ok r] =>
+            let checkRef = runOf c
+            let jsonRef = runOf j
+            let runRef = runOf r
             let cases =
               flatMap (staleCases dir checkRef jsonRef) stale
                 ++ silentCases dir checkRef runRef
-            let runs = runCommandBatch "env" 4 (map caseArgv cases)
+            let runs = runCommandBatch "env" 4 (map (c => c.caseArgv) cases)
             expectAll
               (labelFail
                   "the reference check passes"
-                  (expectEqual (0, "") (checkCode checkRef, checkErr checkRef))
+                  (expectEqual (0, "") (checkRef.runCode, checkRef.runErr))
                 :: zipWith caseVerdict cases runs)
           other => fail "reference runs failed: \{debug other}")
-
-checkCode : (Int, String, String) -> Int
-checkCode (code, _, _) = code
-
-checkErr : (Int, String, String) -> String
-checkErr (_, _, err) = err

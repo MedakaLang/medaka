@@ -50,9 +50,7 @@ an interface load would have to fill it. Lifetimes (205 rows, the 199 in the fir
 The per-module cell counts are in `test/arch_goldens/cells.golden`.
 
 ## The prelude interface
-The prelude's core pass is a value, `PreludeInterface` (`prelude_interface.mdk`), cached once per compiler generation. `interface_sexp.mdk` encodes it to `stdlib/core.mdki`; `medaka interface write|show|verify` writes, prints and checks the file, and `make medaka` rewrites it. The check family, `lsp`, `mcp` and `test` read it through the loader (`loadPreludeInterface`) when the file's header (format version, source hashes, compiler fingerprint) matches, and seed the cache instead of running the core pass. A stale or undecodable file falls back to the core pass; `check` and the servers say so on stderr, and `MEDAKA_STRICT=1` makes that exit 1. `MEDAKA_NO_INTERFACE=1` turns the load off.
-
-An unstamped build has an empty compiler fingerprint, and two empty fingerprints compare equal, so one unstamped binary accepts a file another unstamped binary wrote from different compiler source. Only `make medaka` stamps and writes.
+The prelude's core pass is a value, `PreludeInterface` (`prelude_interface.mdk`), cached once per compiler generation. `interface_sexp.mdk` encodes it to `stdlib/core.mdki`; `medaka interface write|show|verify` writes, prints and checks the file, and `make medaka` and CI's `setup-medaka` rewrite it. The check family, `doc`, `lsp`, `mcp` and `test` read it through `loadPreludeInterface` (`driver/build_cmd.mdk`) when the file's header (format version, source hashes, compiler fingerprint) matches, and seed the cache instead of running the core pass. A stale or undecodable file falls back to the core pass; `check` and the servers say so on stderr (`check --json` prints the line on stderr too, not in the envelope; `run --json` is silent), and `MEDAKA_STRICT=1` makes that exit 1. `MEDAKA_NO_INTERFACE=1` turns the load off.
 
 ## Laws that bind it
 - **A1** — types imports `frontend/` and `support/`; `ir/` and `eval/` must reach its facts through `disposition`, `runtime_types` and `route_key`, not `typecheck.mdk`.

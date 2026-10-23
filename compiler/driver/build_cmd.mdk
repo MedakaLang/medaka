@@ -24,15 +24,13 @@
 -- unemittable construct → `panic: … gap …`) or empty IR aborts the build with
 -- the emitter's own diagnostic surfaced.
 
-import bytes.{encodeUtf8}
-import crypto.sha256.{sha256}
-import hex as Hex
 import list.{take}
 import support.util.{stringTrim, joinWith, joinNl, lookupAssoc}
 import string.{words, contains, startsWith, endsWith, split}
 import frontend.desugar_cache.{desugaredPreludeKey}
 import types.interface_sexp.{
-  InterfaceSection, decodeInterface, cacheOfSections, formatVersion
+  InterfaceSection, InterfaceFault(..), readInterface, cacheOfSections,
+  formatVersion, sha256Hex
 }
 import types.prelude_interface.{
   InterfaceKey, interfaceKeyOf, keysMatch, seedPreludeInterface
@@ -266,88 +264,91 @@ public export data PreludeVerdict =
   | PVStale String
   | PVDisabled
 
+-- What a prelude interface is read for: the stdlib directory holding
+-- `core.mdki`, the two prelude texts, and the running compiler's identity (the
+-- native CLI passes `buildFingerprint ()`).
+public export data PreludeInputs = PreludeInputs {
+  pnStdlibDir : String,
+  pnRuntimeSrc : String,
+  pnCoreSrc : String,
+  pnCompiler : String,
+} deriving (Eq)
+
 preludeSourceHashesRef : Ref (List (String, String))
 preludeSourceHashesRef = Ref []
 
--- The SHA-256 of a prelude source, computed once per text per process: the two
--- hashes cost a fifth of a warm request, which a long-lived process must not
--- pay again.
+-- The SHA-256 of a prelude source, computed once per text per process: a
+-- long-lived process must not hash the same text on every request.
 preludeSourceHash : String -> String
 preludeSourceHash src = match lookupAssoc src !preludeSourceHashesRef
   Some h => h
   None =>
-    let h = Hex.encode (sha256 (encodeUtf8 src))
+    let h = sha256Hex src
     preludeSourceHashesRef := take 4 ((src, h) :: !preludeSourceHashesRef)
     h
 
--- The key an interface of [coreSrc] (named [coreName] beside `runtime.mdk`)
--- is written under by [compiler].
+-- The key an interface of the core text (named [coreName] beside
+-- `runtime.mdk`) is written under by the inputs' compiler.
 export
-preludeInterfaceKey : String -> String -> String -> String -> InterfaceKey
-preludeInterfaceKey coreName runtimeSrc coreSrc compiler =
+preludeInterfaceKey : String -> PreludeInputs -> InterfaceKey
+preludeInterfaceKey coreName inputs =
   interfaceKeyOf
     formatVersion
     [
-      ("runtime.mdk", preludeSourceHash runtimeSrc),
-      (coreName, preludeSourceHash coreSrc),
+      ("runtime.mdk", preludeSourceHash inputs.pnRuntimeSrc),
+      (coreName, preludeSourceHash inputs.pnCoreSrc),
     ]
-    compiler
+    inputs.pnCompiler
 
 -- The stale component a file that does not decode names: its format version
 -- when that is what was refused, else the file itself.
 export
-undecodedComponent : String -> String
-undecodedComponent what =
-  if contains "format version" what then "format" else "file"
+faultComponent : InterfaceFault -> String
+faultComponent (WrongFormat _) = "format"
+faultComponent (Malformed _) = "file"
 
 -- How `<stdlibDir>/core.mdki` stands against the two prelude texts and the
--- running compiler's identity ([compiler], an input: the native CLI passes
--- `buildFingerprint ()`).  `MEDAKA_NO_INTERFACE` set to anything disables it.
+-- running compiler's identity.  `MEDAKA_NO_INTERFACE` set to anything disables
+-- it.
 export
-readPreludeInterface : String ->
-  String ->
-  String ->
-  String ->
-  <IO> PreludeVerdict
-readPreludeInterface stdlibDir runtimeSrc coreSrc compiler
+readPreludeInterface : PreludeInputs -> <IO> PreludeVerdict
+readPreludeInterface inputs
   | envOr "MEDAKA_NO_INTERFACE" "" /= "" = PVDisabled
-  | otherwise = match readFile (joinPath stdlibDir "core.mdki")
+  | otherwise = match readFile (joinPath inputs.pnStdlibDir "core.mdki")
     Err _ => PVMissing
-    Ok text => match decodeInterface text
-      Err e => PVStale (undecodedComponent e.seWhat)
-      Ok f =>
-        let expected =
-          preludeInterfaceKey "core.mdk" runtimeSrc coreSrc compiler
+    Ok text => match readInterface text
+      Err fault => PVStale (faultComponent fault)
+      Ok (f, _) if inputs.pnCompiler == "" || f.ifKey.ikCompiler == "" =>
+        PVStale "compiler"
+      Ok (f, _) =>
+        let expected = preludeInterfaceKey "core.mdk" inputs
         match keysMatch f.ifKey expected
           None => PVLoaded f.ifSections
           Some component => PVStale component
 
 -- The verdict of this process's last load, with the inputs it was read for.
-preludeVerdictRef : Ref (Option ((String, String, String, String), PreludeVerdict))
+preludeVerdictRef : Ref (Option (PreludeInputs, PreludeVerdict))
 preludeVerdictRef = Ref None
 
 -- `readPreludeInterface`, once per process per input, seeding the prelude
 -- cache on a load under the generation the desugar cache gives the two texts.
 export
-loadPreludeInterface : String ->
-  String ->
-  String ->
-  String ->
-  <IO> PreludeVerdict
-loadPreludeInterface stdlibDir runtimeSrc coreSrc compiler =
-  let inputs = (stdlibDir, runtimeSrc, coreSrc, compiler)
-  match !preludeVerdictRef
-    Some (seen, verdict) if seen == inputs => verdict
-    _ =>
-      let verdict = readPreludeInterface stdlibDir runtimeSrc coreSrc compiler
-      let _ = match verdict
-        PVLoaded sections =>
-          seedPreludeInterface
-            (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
-            (cacheOfSections sections)
-        _ => ()
-      preludeVerdictRef := Some (inputs, verdict)
-      verdict
+loadPreludeInterface : PreludeInputs -> <IO> PreludeVerdict
+loadPreludeInterface inputs = match !preludeVerdictRef
+  Some (seen, verdict) if seen == inputs => verdict
+  _ =>
+    let verdict = readPreludeInterface inputs
+    let _ = match verdict
+      PVLoaded sections =>
+        seedPreludeInterface
+          (
+            desugaredPreludeKey inputs.pnRuntimeSrc,
+            desugaredPreludeKey inputs.pnCoreSrc,
+          )
+          (cacheOfSections sections)
+      _ => ()
+    preludeVerdictRef := Some (inputs, verdict)
+    verdict
 
 -- The one line a check-family verb prints for [verdict], if any.
 export
