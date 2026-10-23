@@ -1,5 +1,5 @@
 # META
-source_lines=1471
+source_lines=1501
 stages=DESUGAR,MARK
 # SOURCE
 -- The scheme-level interface codec: every type a published scheme is built
@@ -99,7 +99,8 @@ stages=DESUGAR,MARK
 import list.{mapAccumL, sortOn}
 import map as IdMap
 import map.{Map}
-import support.ordmap.{OrdMap}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import support.util.{dedupBy}
 import support.sexp_value.{
   SExp(..), SexpError(..), renderSExp, parseSExp, expectAtom, atomInt, atomBool
 }
@@ -1281,6 +1282,37 @@ cacheOfSections : List InterfaceSection ->
   List (List (List Atom), PreludeInterface)
 cacheOfSections = map (s => (s.isJoins, s.isInterface))
 
+-- One section per distinct interface text.  [drives] pairs a join with the
+-- interface a drive under it produced; the sections come in order of first
+-- appearance, each listing its joins sorted as the encoder writes them, once.
+export
+mergeSections : List (List Atom, PreludeInterface) -> List InterfaceSection
+mergeSections drives =
+  let keyed = map (d => (renderSExp (interfaceNode (snd d)), d)) drives
+  let joinsByText = fold addJoin omEmpty keyed
+  map
+    (k => InterfaceSection {
+      isJoins = sortedJoins (lookupOr [] (fst k) joinsByText),
+      isInterface = snd (snd k),
+    })
+    (dedupBy fst keyed)
+
+addJoin : OrdMap (List (List Atom)) ->
+  (String, (List Atom, PreludeInterface)) ->
+  OrdMap (List (List Atom))
+addJoin acc (text, (join, _)) = omInsert text (join :: lookupOr [] text acc) acc
+
+lookupOr : a -> String -> OrdMap a -> a
+lookupOr fallback key m = match omLookup key m
+  Some v => v
+  None => fallback
+
+sortedJoins : List (List Atom) -> List (List Atom)
+sortedJoins joins = dedupBy joinText (sortOn joinText joins)
+
+joinText : List Atom -> String
+joinText j = renderSExp (joinNode j)
+
 pairAtoms : (String, String) -> SExp
 pairAtoms = pairSExp SAtom SAtom
 
@@ -1296,9 +1328,7 @@ joinNode = listSExp atomSExp
 
 sectionNode : InterfaceSection -> SExp
 sectionNode s = tagged "section" [
-  tagged "joins" [
-    listSExp joinNode (sortOn (j => renderSExp (joinNode j)) s.isJoins),
-  ],
+  tagged "joins" [listSExp joinNode (sortOn joinText s.isJoins)],
   interfaceNode s.isInterface,
 ]
 
@@ -1477,7 +1507,8 @@ decodeInterface text = do
 (DUse false (UseGroup ("list") ((mem "mapAccumL" false) (mem "sortOn" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "dedupBy" false))))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "renderSExp" false) (mem "parseSExp" false) (mem "expectAtom" false) (mem "atomInt" false) (mem "atomBool" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true))))
 (DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "ZState" true) (mem "LiveCell" true) (mem "emptyZonk" false) (mem "zonkMono" false) (mem "zonkRow" false) (mem "zonkAuthority" false) (mem "zonkVecObl" false) (mem "zonkScheme" false) (mem "freezePub" false) (mem "liveCells" false))))
@@ -1956,6 +1987,16 @@ decodeInterface text = do
 (DFunDef false "sectionsOfCache" () (EApp (EVar "map") (ELam ((PVar "s")) (ERecordCreate "InterfaceSection" ((fa "isJoins" (EApp (EVar "fst") (EVar "s"))) (fa "isInterface" (EApp (EVar "snd") (EVar "s"))))))))
 (DTypeSig true "cacheOfSections" (TyFun (TyApp (TyCon "List") (TyCon "InterfaceSection")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface")))))
 (DFunDef false "cacheOfSections" () (EApp (EVar "map") (ELam ((PVar "s")) (ETuple (EFieldAccess (EVar "s") "isJoins") (EFieldAccess (EVar "s") "isInterface")))))
+(DTypeSig true "mergeSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "List") (TyCon "InterfaceSection"))))
+(DFunDef false "mergeSections" ((PVar "drives")) (EBlock (DoLet false false (PVar "keyed") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "renderSExp") (EApp (EVar "interfaceNode") (EApp (EVar "snd") (EVar "d")))) (EVar "d")))) (EVar "drives"))) (DoLet false false (PVar "joinsByText") (EApp (EApp (EApp (EVar "fold") (EVar "addJoin")) (EVar "omEmpty")) (EVar "keyed"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ERecordCreate "InterfaceSection" ((fa "isJoins" (EApp (EVar "sortedJoins") (EApp (EApp (EApp (EVar "lookupOr") (EListLit)) (EApp (EVar "fst") (EVar "k"))) (EVar "joinsByText")))) (fa "isInterface" (EApp (EVar "snd") (EApp (EVar "snd") (EVar "k")))))))) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EVar "keyed"))))))
+(DTypeSig false "addJoin" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))
+(DFunDef false "addJoin" ((PVar "acc") (PTuple (PVar "text") (PTuple (PVar "join") PWild))) (EApp (EApp (EApp (EVar "omInsert") (EVar "text")) (EBinOp "::" (EVar "join") (EApp (EApp (EApp (EVar "lookupOr") (EListLit)) (EVar "text")) (EVar "acc")))) (EVar "acc")))
+(DTypeSig false "lookupOr" (TyFun (TyVar "a") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyVar "a")))))
+(DFunDef false "lookupOr" ((PVar "fallback") (PVar "key") (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "fallback"))))
+(DTypeSig false "sortedJoins" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "sortedJoins" ((PVar "joins")) (EApp (EApp (EVar "dedupBy") (EVar "joinText")) (EApp (EApp (EVar "sortOn") (EVar "joinText")) (EVar "joins"))))
+(DTypeSig false "joinText" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
+(DFunDef false "joinText" ((PVar "j")) (EApp (EVar "renderSExp") (EApp (EVar "joinNode") (EVar "j"))))
 (DTypeSig false "pairAtoms" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "SExp")))
 (DFunDef false "pairAtoms" () (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "SAtom")))
 (DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyCon "SExp")))
@@ -1963,7 +2004,7 @@ decodeInterface text = do
 (DTypeSig false "joinNode" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "SExp")))
 (DFunDef false "joinNode" () (EApp (EVar "listSExp") (EVar "atomSExp")))
 (DTypeSig false "sectionNode" (TyFun (TyCon "InterfaceSection") (TyCon "SExp")))
-(DFunDef false "sectionNode" ((PVar "s")) (EApp (EApp (EVar "tagged") (ELit (LString "section"))) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "joins"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "joinNode")) (EApp (EApp (EVar "sortOn") (ELam ((PVar "j")) (EApp (EVar "renderSExp") (EApp (EVar "joinNode") (EVar "j"))))) (EFieldAccess (EVar "s") "isJoins"))))) (EApp (EVar "interfaceNode") (EFieldAccess (EVar "s") "isInterface")))))
+(DFunDef false "sectionNode" ((PVar "s")) (EApp (EApp (EVar "tagged") (ELit (LString "section"))) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "joins"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "joinNode")) (EApp (EApp (EVar "sortOn") (EVar "joinText")) (EFieldAccess (EVar "s") "isJoins"))))) (EApp (EVar "interfaceNode") (EFieldAccess (EVar "s") "isInterface")))))
 (DTypeSig false "interfaceNode" (TyFun (TyCon "PreludeInterface") (TyCon "SExp")))
 (DFunDef false "interfaceNode" ((PCon "PreludeInterface" (PVar "funNames") (PVar "dispatch") (PVar "ctors") (PVar "ctorPop") (PVar "recordPop") (PVar "classes") (PVar "funSlots") (PVar "funSlotsQual") (PVar "declared") (PVar "declaredQual") (PVar "methodSlots") (PVar "methodSlotsQual") (PVar "ctorEx") (PVar "anyEx") (PVar "externs") (PVar "tyvarNext") (PVar "effvarNext") (PVar "core") (PVar "standalone"))) (EApp (EApp (EVar "tagged") (ELit (LString "interface"))) (EListLit (EApp (EApp (EVar "ordMapSExp") (EVar "unitSExp")) (EVar "funNames")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EApp (EApp (EVar "pairSExp") (EVar "ifaceRefSExp")) (EVar "SAtom"))) (EVar "intNode"))) (EVar "dispatch")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "tabKeySExp")) (EApp (EApp (EApp (EVar "tripleSExp") (EVar "dataVisSExp")) (EApp (EVar "listSExp") (EVar "SAtom"))) (EApp (EVar "listSExp") (EVar "variantSExp"))))) (EVar "ctors")) (EApp (EApp (EVar "spellingPopSExp") (EVar "pubSchemeSExp")) (EVar "ctorPop")) (EApp (EApp (EVar "spellingPopSExp") (EVar "recordInfoSExp")) (EVar "recordPop")) (EApp (EVar "builtinClassesSExp") (EVar "classes")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EApp (EVar "listSExp") (EVar "predicateSlotSExp")))) (EVar "funSlots")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EApp (EVar "listSExp") (EVar "predicateSlotSExp")))) (EVar "funSlotsQual")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "cDeclaredPrefixSExp"))) (EVar "declared")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EVar "cDeclaredPrefixSExp"))) (EVar "declaredQual")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EApp (EVar "listSExp") (EVar "methodPredicateSlotSExp")))) (EVar "methodSlots")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EApp (EVar "listSExp") (EVar "methodPredicateSlotSExp")))) (EVar "methodSlotsQual")) (EApp (EApp (EVar "intMapSExp") (EVar "unitSExp")) (EVar "ctorEx")) (EApp (EVar "boolNode") (EVar "anyEx")) (EApp (EApp (EVar "ordMapSExp") (EApp (EApp (EVar "pairSExp") (EVar "surfaceTySExp")) (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "intNode"))))) (EVar "externs")) (EApp (EVar "intNode") (EVar "tyvarNext")) (EApp (EVar "intNode") (EVar "effvarNext")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "pubSchemeSExp"))) (EVar "core")) (EApp (EApp (EVar "ordMapSExp") (EVar "unitSExp")) (EVar "standalone")))))
 (DTypeSig true "encodeInterface" (TyFun (TyCon "PreludeInterfaceFile") (TyCon "String")))
@@ -1988,7 +2029,8 @@ decodeInterface text = do
 (DUse false (UseGroup ("list") ((mem "mapAccumL" false) (mem "sortOn" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "dedupBy" false))))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "renderSExp" false) (mem "parseSExp" false) (mem "expectAtom" false) (mem "atomInt" false) (mem "atomBool" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true))))
 (DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "ZState" true) (mem "LiveCell" true) (mem "emptyZonk" false) (mem "zonkMono" false) (mem "zonkRow" false) (mem "zonkAuthority" false) (mem "zonkVecObl" false) (mem "zonkScheme" false) (mem "freezePub" false) (mem "liveCells" false))))
@@ -2467,6 +2509,16 @@ decodeInterface text = do
 (DFunDef false "sectionsOfCache" () (EApp (EMethodRef "map") (ELam ((PVar "s")) (ERecordCreate "InterfaceSection" ((fa "isJoins" (EApp (EVar "fst") (EVar "s"))) (fa "isInterface" (EApp (EVar "snd") (EVar "s"))))))))
 (DTypeSig true "cacheOfSections" (TyFun (TyApp (TyCon "List") (TyCon "InterfaceSection")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface")))))
 (DFunDef false "cacheOfSections" () (EApp (EMethodRef "map") (ELam ((PVar "s")) (ETuple (EFieldAccess (EVar "s") "isJoins") (EFieldAccess (EVar "s") "isInterface")))))
+(DTypeSig true "mergeSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "List") (TyCon "InterfaceSection"))))
+(DFunDef false "mergeSections" ((PVar "drives")) (EBlock (DoLet false false (PVar "keyed") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "renderSExp") (EApp (EVar "interfaceNode") (EApp (EVar "snd") (EVar "d")))) (EVar "d")))) (EVar "drives"))) (DoLet false false (PVar "joinsByText") (EApp (EApp (EApp (EMethodRef "fold") (EVar "addJoin")) (EVar "omEmpty")) (EDictApp "keyed"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ERecordCreate "InterfaceSection" ((fa "isJoins" (EApp (EVar "sortedJoins") (EApp (EApp (EApp (EVar "lookupOr") (EListLit)) (EApp (EVar "fst") (EVar "k"))) (EVar "joinsByText")))) (fa "isInterface" (EApp (EVar "snd") (EApp (EVar "snd") (EVar "k")))))))) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EDictApp "keyed"))))))
+(DTypeSig false "addJoin" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))
+(DFunDef false "addJoin" ((PVar "acc") (PTuple (PVar "text") (PTuple (PVar "join") PWild))) (EApp (EApp (EApp (EVar "omInsert") (EVar "text")) (EBinOp "::" (EVar "join") (EApp (EApp (EApp (EVar "lookupOr") (EListLit)) (EVar "text")) (EVar "acc")))) (EVar "acc")))
+(DTypeSig false "lookupOr" (TyFun (TyVar "a") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyVar "a")))))
+(DFunDef false "lookupOr" ((PVar "fallback") (PVar "key") (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "fallback"))))
+(DTypeSig false "sortedJoins" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "sortedJoins" ((PVar "joins")) (EApp (EApp (EVar "dedupBy") (EVar "joinText")) (EApp (EApp (EVar "sortOn") (EVar "joinText")) (EVar "joins"))))
+(DTypeSig false "joinText" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
+(DFunDef false "joinText" ((PVar "j")) (EApp (EVar "renderSExp") (EApp (EVar "joinNode") (EVar "j"))))
 (DTypeSig false "pairAtoms" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "SExp")))
 (DFunDef false "pairAtoms" () (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "SAtom")))
 (DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyCon "SExp")))
@@ -2474,7 +2526,7 @@ decodeInterface text = do
 (DTypeSig false "joinNode" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "SExp")))
 (DFunDef false "joinNode" () (EApp (EVar "listSExp") (EVar "atomSExp")))
 (DTypeSig false "sectionNode" (TyFun (TyCon "InterfaceSection") (TyCon "SExp")))
-(DFunDef false "sectionNode" ((PVar "s")) (EApp (EApp (EVar "tagged") (ELit (LString "section"))) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "joins"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "joinNode")) (EApp (EApp (EVar "sortOn") (ELam ((PVar "j")) (EApp (EVar "renderSExp") (EApp (EVar "joinNode") (EVar "j"))))) (EFieldAccess (EVar "s") "isJoins"))))) (EApp (EVar "interfaceNode") (EFieldAccess (EVar "s") "isInterface")))))
+(DFunDef false "sectionNode" ((PVar "s")) (EApp (EApp (EVar "tagged") (ELit (LString "section"))) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "joins"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "joinNode")) (EApp (EApp (EVar "sortOn") (EVar "joinText")) (EFieldAccess (EVar "s") "isJoins"))))) (EApp (EVar "interfaceNode") (EFieldAccess (EVar "s") "isInterface")))))
 (DTypeSig false "interfaceNode" (TyFun (TyCon "PreludeInterface") (TyCon "SExp")))
 (DFunDef false "interfaceNode" ((PCon "PreludeInterface" (PVar "funNames") (PVar "dispatch") (PVar "ctors") (PVar "ctorPop") (PVar "recordPop") (PVar "classes") (PVar "funSlots") (PVar "funSlotsQual") (PVar "declared") (PVar "declaredQual") (PVar "methodSlots") (PVar "methodSlotsQual") (PVar "ctorEx") (PVar "anyEx") (PVar "externs") (PVar "tyvarNext") (PVar "effvarNext") (PVar "core") (PVar "standalone"))) (EApp (EApp (EVar "tagged") (ELit (LString "interface"))) (EListLit (EApp (EApp (EVar "ordMapSExp") (EVar "unitSExp")) (EVar "funNames")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EApp (EApp (EVar "pairSExp") (EVar "ifaceRefSExp")) (EVar "SAtom"))) (EVar "intNode"))) (EVar "dispatch")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "tabKeySExp")) (EApp (EApp (EApp (EVar "tripleSExp") (EVar "dataVisSExp")) (EApp (EVar "listSExp") (EVar "SAtom"))) (EApp (EVar "listSExp") (EVar "variantSExp"))))) (EVar "ctors")) (EApp (EApp (EVar "spellingPopSExp") (EVar "pubSchemeSExp")) (EVar "ctorPop")) (EApp (EApp (EVar "spellingPopSExp") (EVar "recordInfoSExp")) (EVar "recordPop")) (EApp (EVar "builtinClassesSExp") (EVar "classes")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EApp (EVar "listSExp") (EVar "predicateSlotSExp")))) (EVar "funSlots")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EApp (EVar "listSExp") (EVar "predicateSlotSExp")))) (EVar "funSlotsQual")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "cDeclaredPrefixSExp"))) (EVar "declared")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EVar "cDeclaredPrefixSExp"))) (EVar "declaredQual")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EApp (EVar "listSExp") (EVar "methodPredicateSlotSExp")))) (EVar "methodSlots")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EApp (EVar "listSExp") (EVar "methodPredicateSlotSExp")))) (EVar "methodSlotsQual")) (EApp (EApp (EVar "intMapSExp") (EVar "unitSExp")) (EVar "ctorEx")) (EApp (EVar "boolNode") (EVar "anyEx")) (EApp (EApp (EVar "ordMapSExp") (EApp (EApp (EVar "pairSExp") (EVar "surfaceTySExp")) (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "intNode"))))) (EVar "externs")) (EApp (EVar "intNode") (EVar "tyvarNext")) (EApp (EVar "intNode") (EVar "effvarNext")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "pubSchemeSExp"))) (EVar "core")) (EApp (EApp (EVar "ordMapSExp") (EVar "unitSExp")) (EVar "standalone")))))
 (DTypeSig true "encodeInterface" (TyFun (TyCon "PreludeInterfaceFile") (TyCon "String")))
