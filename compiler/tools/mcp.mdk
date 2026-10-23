@@ -84,6 +84,7 @@ import tools.lint.{
   StdlibIndex,
 }
 import tools.test_cmd.{runTestGradedReport}
+import driver.build_cmd.{lastPreludeStaleLine}
 import driver.profile_select.{carryProjectProfile}
 import types.target_profile.{selectedProfile}
 import tools.doctest.{
@@ -257,21 +258,29 @@ logMcpCall method name args = match getEnv "MEDAKA_MCP_LOG"
 -- Splice a compact `staleBinary` field onto an already-built tool result
 -- (always a `JObject` — every mcpTools handler returns one via
 -- `toolTextResult`) ONLY when the live compiler source has diverged from what
--- this binary was built from.  Fresh/unknown ⇒ `result` is returned
--- UNCHANGED — zero added tokens in the common case.
+-- this binary was built from, and a `stalePreludeInterface` field when the
+-- server found `stdlib/core.mdki` stale and checks `core.mdk` instead.
+-- Fresh/unknown ⇒ `result` is returned UNCHANGED — zero added tokens in the
+-- common case.
 attachStaleness : (Unit -> <IO> Option String) -> Json -> <IO> Json
-attachStaleness stalenessCheck result = match stalenessCheck ()
-  None => result
-  Some compilerDir =>
-    jsonObjectAppend
-      "staleBinary"
-      (JString
-        (stringConcat [
-          "this server's binary predates the compiler source at ",
-          compilerDir,
-          " — results may reflect the OLD compiler. Rebuild with 'make medaka' and reconnect (/mcp).",
-        ]))
-      result
+attachStaleness stalenessCheck result =
+  let withBinary = match stalenessCheck ()
+    None => result
+    Some compilerDir =>
+      jsonObjectAppend
+        "staleBinary"
+        (JString
+          (stringConcat [
+            "this server's binary predates the compiler source at ",
+            compilerDir,
+            " — results may reflect the OLD compiler. Rebuild with 'make medaka' and reconnect (/mcp).",
+          ]))
+        result
+  -- The prelude interface's verdict was read once, at server start.
+  match lastPreludeStaleLine ()
+    None => withBinary
+    Some line =>
+      jsonObjectAppend "stalePreludeInterface" (JString line) withBinary
 
 -- Append one (key, value) pair onto a `JObject`'s own Array-backed pairs,
 -- preserving insertion order (json.mdk's own invariant).  A total fallback
@@ -329,7 +338,7 @@ toolsListResult = jObject [("tools", jArray (map toolDescriptor mcpTools))]
 -- `{ content: [ { type: "text", text } ], isError }`.
 
 data McpTool =
-  | McpTool String String Json (String -> String -> String -> Json -> <IO> Json)
+  McpTool String String Json (String -> String -> String -> Json -> <IO> Json)
 --        name   desc   schema  handler(runtimeSrc coreSrc stdlibDir args)
 
 -- Descriptions are DIRECTIVE (gopls/Serena convention), not just descriptive:

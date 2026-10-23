@@ -8,15 +8,17 @@ import test.{
   Expectation, expectAll, expectEqual, expectTrue, expectErrContains, fail,
   labelFail
 }
-import test_process.{underRoot, withScratchDir}
+import test_process.{underRoot, withScratchDir, medakaBin}
+import list.{zipWith}
 import string as S
 import tools.interface_cmd.{
   buildInterfaceFile, showLines, verdictOf, verdictText
 }
 import types.interface_sexp.{
-  PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface
+  PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface,
+  decodeInterface
 }
-import types.prelude_interface.{PreludeInterface(..)}
+import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}
 
 corePath : String
 corePath = underRoot "stdlib/core.mdk"
@@ -88,3 +90,194 @@ test "a core with a type error is refused with its diagnostic" = withScratchDir
                 "type mismatch"
                 (map (_ => ()) (buildInterfaceFile scratchCore []))
     _ => fail "could not stage the scratch stdlib")
+
+-- ── the check family's fallback ─────────────────────────────────────────────
+--
+-- Each case runs the built binary under its own scratch MEDAKA_ROOT, which has
+-- the real prelude and no `compiler/` directory (so the binary's own staleness
+-- check skips it), and holds one variant of `core.mdki`.  The reference runs
+-- read the fresh file with the interface disabled.
+
+helloSrc : String
+helloSrc = "main : <Stdout> Unit\nmain = println \"hi\"\n"
+
+staleLine : String -> String
+staleLine component =
+  "prelude interface stale: checking stdlib/core.mdk (\{component})\n"
+
+-- A scratch root holding the real prelude and [mdki] as its `core.mdki`.
+stageRoot : String -> Option String -> <IO> Result String Unit
+stageRoot root mdki = do
+  _ <- makeDir root
+  _ <- makeDir "\{root}/stdlib"
+  _ <- copyInto "\{root}/stdlib" "runtime.mdk"
+  _ <- copyInto "\{root}/stdlib" "core.mdk"
+  match mdki
+    Some text => writeFile "\{root}/stdlib/core.mdki" text
+    None => Ok ()
+
+-- [text] with its key changed and its digest recomputed.
+reKeyed : (InterfaceKey -> InterfaceKey) -> String -> Result String String
+reKeyed change text = match decodeInterface text
+  Err e => Err e.seWhat
+  Ok f => Ok (encodeInterface { f | ifKey = change f.ifKey })
+
+-- The stale variants of [fresh]: (name, the component the line names, text).
+staleFiles : String -> Result String (List (String, String, String))
+staleFiles fresh = do
+  foreignCompiler <- reKeyed
+    (k => { k | ikCompiler = "not-this-compiler" })
+    fresh
+  otherSources <- reKeyed
+    (k => { k | ikSources = map (s => (fst s, "0")) k.ikSources })
+    fresh
+  Ok [
+    ("compiler", "compiler", foreignCompiler),
+    ("sources", "sources", otherSources),
+    ("truncated", "file", S.take (S.length fresh / 2) fresh),
+    (
+      "version",
+      "format",
+      S.replace "(medaka-interface 1 " "(medaka-interface 99 " fresh,
+    ),
+    ("digest", "file", S.replace "(digest " "(digest 0" fresh),
+  ]
+
+-- `env` arguments running the binary under [root] with [env] set, after
+-- clearing the switches this file's own run may carry.
+under : String ->
+  List String ->
+  List String ->
+  <Env "MEDAKA_ROOT", Env "MEDAKA"> List String
+under root env verb =
+  [
+      "MEDAKA_ROOT=\{root}",
+      "MEDAKA_STRICT=",
+      "MEDAKA_NO_INTERFACE=",
+      "MEDAKA_STAGE_COUNTS=",
+    ]
+    ++ env
+    ++ [medakaBin]
+    ++ verb
+
+-- One case: its label, its `env` arguments, and what the run must give.
+data Case = Case String (List String) (Int, String, String)
+
+caseArgv : Case -> List String
+caseArgv (Case _ argv _) = argv
+
+caseVerdict : Case -> Result String (Int, String, String) -> Expectation
+caseVerdict (Case label _ want) got =
+  labelFail label (expectEqual (Ok want) got)
+
+-- A stale variant's cases: the reference's output with the one line on stderr,
+-- and exit 1 under MEDAKA_STRICT.
+staleCases : String ->
+  (Int, String, String) ->
+  (Int, String, String) ->
+  (String, String, String) ->
+  <Env "MEDAKA_ROOT", Env "MEDAKA"> List Case
+staleCases dir (code, out, _) (jcode, jout, _) (name, component, _) =
+  let root = "\{dir}/\{name}"
+  let hello = "\{dir}/hello.mdk"
+  [
+    Case "\{name}: check" (under root [] ["check", hello]) (
+      code,
+      out,
+      staleLine component,
+    ),
+    Case "\{name}: check --json" (under root [] ["check", "--json", hello]) (
+      jcode,
+      jout,
+      staleLine component,
+    ),
+    Case "\{name}: check under MEDAKA_STRICT" (under
+      root
+      ["MEDAKA_STRICT=1"]
+      ["check", hello]) (
+      1,
+      "",
+      staleLine component,
+    ),
+  ]
+
+-- The reference runs: `check`, `check --json` and `run --json` of hello over
+-- the fresh file with the interface disabled.
+referenceArgvs : String -> <Env "MEDAKA_ROOT", Env "MEDAKA"> List (List String)
+referenceArgvs dir =
+  let off = under "\{dir}/fresh" ["MEDAKA_NO_INTERFACE=1"]
+  let hello = "\{dir}/hello.mdk"
+  [
+    off ["check", hello],
+    off ["check", "--json", hello],
+    off ["run", "--json", hello],
+  ]
+
+-- The silent cases, each giving its reference's output exactly: a fresh file,
+-- no file, a stale file with the interface disabled, and `run --json` over a
+-- stale file.
+silentCases : String ->
+  (Int, String, String) ->
+  (Int, String, String) ->
+  <Env "MEDAKA_ROOT", Env "MEDAKA"> List Case
+silentCases dir checkRef runRef =
+  let hello = "\{dir}/hello.mdk"
+  [
+    Case "fresh: check" (under "\{dir}/fresh" [] ["check", hello]) checkRef,
+    Case "missing: check" (under "\{dir}/missing" [] ["check", hello]) checkRef,
+    Case
+      "disabled: check"
+      (under "\{dir}/compiler" ["MEDAKA_NO_INTERFACE=1"] ["check", hello])
+      checkRef,
+    Case
+      "compiler: run --json"
+      (under "\{dir}/compiler" [] ["run", "--json", hello])
+      runRef,
+  ]
+
+stageAll : String ->
+  String ->
+  List (String, String, String) ->
+  <IO> Result String Unit
+stageAll dir fresh stale = do
+  _ <- writeFile "\{dir}/hello.mdk" helloSrc
+  _ <- stageRoot "\{dir}/fresh" (Some fresh)
+  _ <- stageRoot "\{dir}/missing" None
+  firstErr (map (v => stageRoot "\{dir}/\{nameOf v}" (Some (textOf v))) stale)
+
+nameOf : (String, String, String) -> String
+nameOf (name, _, _) = name
+
+textOf : (String, String, String) -> String
+textOf (_, _, text) = text
+
+firstErr : List (Result String Unit) -> Result String Unit
+firstErr [] = Ok ()
+firstErr ((Err e) :: _) = Err e
+firstErr ((Ok _) :: rest) = firstErr rest
+
+test "a stale prelude interface prints one line on the check family and changes no output" = withScratchDir
+  (dir => match readFile (underRoot "stdlib/core.mdki")
+    Err e => fail "no stdlib/core.mdki (run make medaka): \{e}"
+    Ok fresh => match staleFiles fresh
+      Err e => fail e
+      Ok stale => match stageAll dir fresh stale
+        Err e => fail e
+        Ok _ => match runCommandBatch "env" 3 (referenceArgvs dir)
+          [Ok checkRef, Ok jsonRef, Ok runRef] =>
+            let cases =
+              flatMap (staleCases dir checkRef jsonRef) stale
+                ++ silentCases dir checkRef runRef
+            let runs = runCommandBatch "env" 4 (map caseArgv cases)
+            expectAll
+              (labelFail
+                  "the reference check passes"
+                  (expectEqual (0, "") (checkCode checkRef, checkErr checkRef))
+                :: zipWith caseVerdict cases runs)
+          other => fail "reference runs failed: \{debug other}")
+
+checkCode : (Int, String, String) -> Int
+checkCode (code, _, _) = code
+
+checkErr : (Int, String, String) -> String
+checkErr (_, _, err) = err

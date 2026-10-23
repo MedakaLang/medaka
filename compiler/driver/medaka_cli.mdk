@@ -41,6 +41,8 @@ import driver.build_cmd.{
   envOr,
   defaultMedakaRoot,
   readPreludeFile,
+  loadPreludeInterface,
+  preludeStaleLine,
 }
 import support.util.{
   reverseL,
@@ -465,6 +467,25 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
     else
       ePutStrLn msg
 
+-- The check family's prelude: load `<stdlibDir>/core.mdki` into the prelude
+-- cache, and report a stale file on stderr, once per process.  Under
+-- MEDAKA_STRICT a stale file stops the verb, as a stale binary does.  `run`
+-- and `build` do not call this: `run --json`'s machine channel is stderr.
+loadCheckPrelude : String -> String -> String -> <IO> Unit
+loadCheckPrelude stdlibDir rsrc csrc =
+  let verdict = loadPreludeInterface stdlibDir rsrc csrc (buildFingerprint ())
+  match preludeStaleLine verdict
+    None => ()
+    Some msg =>
+      if envOr "MEDAKA_STRICT" "" /= "" then dieMsg msg else ePutStrLn msg
+
+-- The same load for a verb outside the check family, which prints nothing: a
+-- stale file only means core is checked from source.
+seedCheckPrelude : String -> String -> String -> <IO> Unit
+seedCheckPrelude stdlibDir rsrc csrc =
+  let _ = loadPreludeInterface stdlibDir rsrc csrc (buildFingerprint ())
+  ()
+
 -- Is this argv `medaka run … --json …`?  The predicate is deliberately the
 -- BYTE-IDENTICAL one `runRunCmd` uses to compute its own `jsonMode`
 -- (`runFlagGiven "--json"` over the whole post-verb argv, program passthrough args
@@ -717,6 +738,7 @@ runCheckCmd argv =
         Ok rsrc => match readPreludeFile corePath
           Err msg => dieMsg msg
           Ok csrc =>
+            let _ = loadCheckPrelude stdlibDir rsrc csrc
             if jsonMode then
               -- E: `--types` requests a human-text scheme dump; the `--json`
               -- envelope has no field for one (structured diagnostics only), so
@@ -3177,6 +3199,7 @@ runTestJsonCmd engines cases filterOpt target =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
+    let _ = seedCheckPrelude stdlibDir rsrc csrc
     tsrc <- readSource target
     let userDecls = targetDesugared tsrc
     if filterMatchedNothing filterOpt tsrc userDecls then
@@ -3312,6 +3335,7 @@ runDocTargets (target :: _) =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
+    let _ = seedCheckPrelude stdlibDir rsrc csrc
     tsrc <- readSource target
     Ok (putStr (runDoc rsrc csrc tsrc target roots))
   match r
@@ -3333,6 +3357,7 @@ runDocLibraryTargets outDir targets =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
+    let _ = seedCheckPrelude stdlibDir rsrc csrc
     _ <- ensureOutDir outDir
     -- A `*_test.mdk` sibling holds a module's tests, not library surface, so
     -- the library reference has no page for it ([P-TEST-SIBLING]).
@@ -4298,6 +4323,7 @@ runLspServerFromEnv _ =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
+    let _ = loadCheckPrelude (root ++ "/stdlib") rsrc csrc
     Ok (runServer rsrc csrc medakaVersion)
   match r
     Err msg => dieMsg msg
@@ -4354,6 +4380,7 @@ runMcpServerFromEnv _ =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
+    let _ = loadCheckPrelude stdlibDir rsrc csrc
     Ok (runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict medakaVersion)
   match r
     Err msg => dieMsg msg
