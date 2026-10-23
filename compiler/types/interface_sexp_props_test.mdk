@@ -156,34 +156,22 @@ decodes text = match decodeInterface text
   Ok _ => True
   Err _ => False
 
--- The prefixes of [text] shorter than it that decode, by length.
-decodingPrefixes : String -> List Int
-decodingPrefixes text =
-  filter
-    (i => decodes (S.take i text))
-    (nodeEnds text ++ tokenMiddles text ++ [0, 1])
-
--- The file carries no section count or end marker, so a cut that falls between
--- two nodes of the top level leaves a shorter, well-formed file: after the
--- header (no section) or after the final newline (nothing lost).  Every other
--- prefix is refused.
-test "a truncated file decodes only when the cut falls between sections" =
+-- The header counts the sections, so a cut that falls after any complete node
+-- but before the end of the text is refused.  Only the missing final newline
+-- decodes, and it loses nothing.
+test "a truncated file is refused unless only the final newline is missing" =
   let n = S.length smallText
-  let headerEnd = optionOr 0 (S.indexOf "\n" smallText)
+  let cuts =
+    filter
+      (i => i < n - 1)
+      (nodeEnds smallText ++ tokenMiddles smallText ++ [0, 1])
   expectAll [
     labelFail
       "node ends tried"
       (expectAtLeast 100 (length (nodeEnds smallText))),
     labelFail
       "prefixes that decode"
-      (expectEqual [headerEnd, n - 1] (decodingPrefixes smallText)),
-    labelFail
-      "the header alone holds no section"
-      (expectEqual
-        (Some 0)
-        (map
-          (f => length f.ifSections)
-          (resultOption (decodeInterface (S.take headerEnd smallText))))),
+      (expectEqual [] (filter (i => decodes (S.take i smallText)) cuts)),
     labelFail
       "the missing newline loses nothing"
       (expectEqual

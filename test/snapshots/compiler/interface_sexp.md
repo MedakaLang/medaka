@@ -1,5 +1,5 @@
 # META
-source_lines=1501
+source_lines=1521
 stages=DESUGAR,MARK
 # SOURCE
 -- The scheme-level interface codec: every type a published scheme is built
@@ -90,12 +90,14 @@ stages=DESUGAR,MARK
 --   (sprow <ident> <name> <payload>)          one row: identity, owner
 --
 -- The whole file: top-level nodes, the header first, then the sections in order.
---   (medaka-interface <version> (sources ((<path> <hash>) ...)) (compiler <id>))
+--   (medaka-interface <version> (sources ((<path> <hash>) ...)) (compiler <id>)
+--     (sections <n>))
 --   (section (joins (<join> ...)) <interface>)   a join is a list of `atom` nodes
 --   (interface <field> x19)                   `PreludeInterface`, field order
 -- A section's joins are written in the order of their rendered text.  A header
--- whose version is not `formatVersion`, a missing, truncated or extra node, or
--- any component refusal is an `Err`, never a partial record.
+-- whose version is not `formatVersion`, a missing, truncated or extra node, a
+-- section count that differs from the nodes present, or any component refusal
+-- is an `Err`, never a partial record.
 import list.{mapAccumL, sortOn}
 import map as IdMap
 import map.{Map}
@@ -1316,11 +1318,12 @@ joinText j = renderSExp (joinNode j)
 pairAtoms : (String, String) -> SExp
 pairAtoms = pairSExp SAtom SAtom
 
-headerNode : InterfaceKey -> SExp
-headerNode key = tagged "medaka-interface" [
+headerNode : InterfaceKey -> Int -> SExp
+headerNode key count = tagged "medaka-interface" [
   intNode formatVersion,
   tagged "sources" [listSExp pairAtoms key.ikSources],
   tagged "compiler" [SAtom key.ikCompiler],
+  tagged "sections" [intNode count],
 ]
 
 joinNode : List Atom -> SExp
@@ -1372,7 +1375,10 @@ encodeInterface : PreludeInterfaceFile -> String
 encodeInterface f =
   stringJoin
       "\n"
-      (map renderSExp (headerNode f.ifKey :: map sectionNode f.ifSections))
+      (map
+        renderSExp
+        (headerNode f.ifKey (length f.ifSections)
+          :: map sectionNode f.ifSections))
     ++ "\n"
 
 decPairAtoms : Reader (String, String)
@@ -1473,35 +1479,49 @@ decSection path (SList [SAtom "section", js, i]) = do
   Ok InterfaceSection { isJoins = joins, isInterface = value }
 decSection path node = misfit path [("section", 2)] node
 
-decHeader : Reader InterfaceKey
-decHeader path (SList [SAtom "medaka-interface", v, SList [SAtom "sources", srcs], SList [SAtom "compiler", c]]) =
+-- The key and the number of section nodes the file claims to hold.
+decHeader : Reader (InterfaceKey, Int)
+decHeader path (SList [SAtom "medaka-interface", v, SList [SAtom "sources", srcs], SList [SAtom "compiler", c], SList [SAtom "sections", cnt]]) =
   do
     version <- atomInt (at path "medaka-interface" 1) v
     sources <- listOfSExp decPairAtoms (at path "sources" 1) srcs
     compiler <- expectAtom (at path "compiler" 1) c
+    count <- atomInt (at path "sections" 1) cnt
     if version == formatVersion then
-      Ok InterfaceKey {
-        ikFormat = version,
-        ikSources = sources,
-        ikCompiler = compiler,
-      }
+      Ok (
+        InterfaceKey {
+          ikFormat = version,
+          ikSources = sources,
+          ikCompiler = compiler,
+        },
+        count,
+      )
     else
       refuse
         (at path "medaka-interface" 1)
         v
         "format version \{version}, this compiler reads \{formatVersion}"
-decHeader path node = misfit path [("medaka-interface", 3)] node
+decHeader path node = misfit path [("medaka-interface", 4)] node
 
 -- The text is read as the items of one list, since a parse reads one node.
+-- The header's section count must equal the section nodes present, so a file
+-- cut after any complete node is refused.  A missing final newline alone loses
+-- nothing and still decodes.
 export
 decodeInterface : String -> Result SexpError PreludeInterfaceFile
 decodeInterface text = do
   top <- parseSExp ("(" ++ text ++ ")")
   match top
     SList (header :: sections) => do
-      key <- decHeader "header" header
+      (key, count) <- decHeader "header" header
       secs <- decList decSection "file" (SList sections)
-      Ok PreludeInterfaceFile { ifKey = key, ifSections = secs }
+      if length secs == count then
+        Ok PreludeInterfaceFile { ifKey = key, ifSections = secs }
+      else
+        refuse
+          "header/sections.1"
+          header
+          "header counts \{count} section(s), the file holds \{length secs}"
     _ => refuse "file" top "expected a header node"
 # DESUGAR
 (DUse false (UseGroup ("list") ((mem "mapAccumL" false) (mem "sortOn" false))))
@@ -1999,8 +2019,8 @@ decodeInterface text = do
 (DFunDef false "joinText" ((PVar "j")) (EApp (EVar "renderSExp") (EApp (EVar "joinNode") (EVar "j"))))
 (DTypeSig false "pairAtoms" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "SExp")))
 (DFunDef false "pairAtoms" () (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "SAtom")))
-(DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyCon "SExp")))
-(DFunDef false "headerNode" ((PVar "key")) (EApp (EApp (EVar "tagged") (ELit (LString "medaka-interface"))) (EListLit (EApp (EVar "intNode") (EVar "formatVersion")) (EApp (EApp (EVar "tagged") (ELit (LString "sources"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "pairAtoms")) (EFieldAccess (EVar "key") "ikSources")))) (EApp (EApp (EVar "tagged") (ELit (LString "compiler"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "key") "ikCompiler")))))))
+(DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "Int") (TyCon "SExp"))))
+(DFunDef false "headerNode" ((PVar "key") (PVar "count")) (EApp (EApp (EVar "tagged") (ELit (LString "medaka-interface"))) (EListLit (EApp (EVar "intNode") (EVar "formatVersion")) (EApp (EApp (EVar "tagged") (ELit (LString "sources"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "pairAtoms")) (EFieldAccess (EVar "key") "ikSources")))) (EApp (EApp (EVar "tagged") (ELit (LString "compiler"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "key") "ikCompiler")))) (EApp (EApp (EVar "tagged") (ELit (LString "sections"))) (EListLit (EApp (EVar "intNode") (EVar "count")))))))
 (DTypeSig false "joinNode" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "SExp")))
 (DFunDef false "joinNode" () (EApp (EVar "listSExp") (EVar "atomSExp")))
 (DTypeSig false "sectionNode" (TyFun (TyCon "InterfaceSection") (TyCon "SExp")))
@@ -2008,7 +2028,7 @@ decodeInterface text = do
 (DTypeSig false "interfaceNode" (TyFun (TyCon "PreludeInterface") (TyCon "SExp")))
 (DFunDef false "interfaceNode" ((PCon "PreludeInterface" (PVar "funNames") (PVar "dispatch") (PVar "ctors") (PVar "ctorPop") (PVar "recordPop") (PVar "classes") (PVar "funSlots") (PVar "funSlotsQual") (PVar "declared") (PVar "declaredQual") (PVar "methodSlots") (PVar "methodSlotsQual") (PVar "ctorEx") (PVar "anyEx") (PVar "externs") (PVar "tyvarNext") (PVar "effvarNext") (PVar "core") (PVar "standalone"))) (EApp (EApp (EVar "tagged") (ELit (LString "interface"))) (EListLit (EApp (EApp (EVar "ordMapSExp") (EVar "unitSExp")) (EVar "funNames")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EApp (EApp (EVar "pairSExp") (EVar "ifaceRefSExp")) (EVar "SAtom"))) (EVar "intNode"))) (EVar "dispatch")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "tabKeySExp")) (EApp (EApp (EApp (EVar "tripleSExp") (EVar "dataVisSExp")) (EApp (EVar "listSExp") (EVar "SAtom"))) (EApp (EVar "listSExp") (EVar "variantSExp"))))) (EVar "ctors")) (EApp (EApp (EVar "spellingPopSExp") (EVar "pubSchemeSExp")) (EVar "ctorPop")) (EApp (EApp (EVar "spellingPopSExp") (EVar "recordInfoSExp")) (EVar "recordPop")) (EApp (EVar "builtinClassesSExp") (EVar "classes")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EApp (EVar "listSExp") (EVar "predicateSlotSExp")))) (EVar "funSlots")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EApp (EVar "listSExp") (EVar "predicateSlotSExp")))) (EVar "funSlotsQual")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "cDeclaredPrefixSExp"))) (EVar "declared")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EVar "cDeclaredPrefixSExp"))) (EVar "declaredQual")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EApp (EVar "listSExp") (EVar "methodPredicateSlotSExp")))) (EVar "methodSlots")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EApp (EVar "listSExp") (EVar "methodPredicateSlotSExp")))) (EVar "methodSlotsQual")) (EApp (EApp (EVar "intMapSExp") (EVar "unitSExp")) (EVar "ctorEx")) (EApp (EVar "boolNode") (EVar "anyEx")) (EApp (EApp (EVar "ordMapSExp") (EApp (EApp (EVar "pairSExp") (EVar "surfaceTySExp")) (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "intNode"))))) (EVar "externs")) (EApp (EVar "intNode") (EVar "tyvarNext")) (EApp (EVar "intNode") (EVar "effvarNext")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "pubSchemeSExp"))) (EVar "core")) (EApp (EApp (EVar "ordMapSExp") (EVar "unitSExp")) (EVar "standalone")))))
 (DTypeSig true "encodeInterface" (TyFun (TyCon "PreludeInterfaceFile") (TyCon "String")))
-(DFunDef false "encodeInterface" ((PVar "f")) (EBinOp "++" (EApp (EApp (EVar "stringJoin") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "renderSExp")) (EBinOp "::" (EApp (EVar "headerNode") (EFieldAccess (EVar "f") "ifKey")) (EApp (EApp (EVar "map") (EVar "sectionNode")) (EFieldAccess (EVar "f") "ifSections"))))) (ELit (LString "\n"))))
+(DFunDef false "encodeInterface" ((PVar "f")) (EBinOp "++" (EApp (EApp (EVar "stringJoin") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "renderSExp")) (EBinOp "::" (EApp (EApp (EVar "headerNode") (EFieldAccess (EVar "f") "ifKey")) (EApp (EVar "length") (EFieldAccess (EVar "f") "ifSections"))) (EApp (EApp (EVar "map") (EVar "sectionNode")) (EFieldAccess (EVar "f") "ifSections"))))) (ELit (LString "\n"))))
 (DTypeSig false "decPairAtoms" (TyApp (TyCon "Reader") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "decPairAtoms" () (EApp (EApp (EVar "pairOfSExp") (EVar "expectAtom")) (EVar "expectAtom")))
 (DTypeSig false "decInterface" (TyApp (TyCon "Reader") (TyCon "PreludeInterface")))
@@ -2020,11 +2040,11 @@ decodeInterface text = do
 (DTypeSig false "decSection" (TyApp (TyCon "Reader") (TyCon "InterfaceSection")))
 (DFunDef false "decSection" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "section"))) (PVar "js") (PVar "i")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "decJoins") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "section"))) (ELit (LInt 1)))) (EVar "js"))) (ELam ((PVar "joins")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "decInterface") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "section"))) (ELit (LInt 2)))) (EVar "i"))) (ELam ((PVar "value")) (EApp (EVar "Ok") (ERecordCreate "InterfaceSection" ((fa "isJoins" (EVar "joins")) (fa "isInterface" (EVar "value"))))))))))
 (DFunDef false "decSection" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "section")) (ELit (LInt 2))))) (EVar "node")))
-(DTypeSig false "decHeader" (TyApp (TyCon "Reader") (TyCon "InterfaceKey")))
-(DFunDef false "decHeader" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "medaka-interface"))) (PVar "v") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sources"))) (PVar "srcs"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "compiler"))) (PVar "c")))))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "medaka-interface"))) (ELit (LInt 1)))) (EVar "v"))) (ELam ((PVar "version")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EVar "decPairAtoms")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "sources"))) (ELit (LInt 1)))) (EVar "srcs"))) (ELam ((PVar "sources")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "compiler"))) (ELit (LInt 1)))) (EVar "c"))) (ELam ((PVar "compiler")) (EIf (EBinOp "==" (EVar "version") (EVar "formatVersion")) (EApp (EVar "Ok") (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "version")) (fa "ikSources" (EVar "sources")) (fa "ikCompiler" (EVar "compiler"))))) (EApp (EApp (EApp (EVar "refuse") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "medaka-interface"))) (ELit (LInt 1)))) (EVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "format version ")) (EApp (EVar "display") (EVar "version"))) (ELit (LString ", this compiler reads "))) (EApp (EVar "display") (EVar "formatVersion"))) (ELit (LString ""))))))))))))
-(DFunDef false "decHeader" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "medaka-interface")) (ELit (LInt 3))))) (EVar "node")))
+(DTypeSig false "decHeader" (TyApp (TyCon "Reader") (TyTuple (TyCon "InterfaceKey") (TyCon "Int"))))
+(DFunDef false "decHeader" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "medaka-interface"))) (PVar "v") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sources"))) (PVar "srcs"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "compiler"))) (PVar "c"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sections"))) (PVar "cnt")))))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "medaka-interface"))) (ELit (LInt 1)))) (EVar "v"))) (ELam ((PVar "version")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EVar "decPairAtoms")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "sources"))) (ELit (LInt 1)))) (EVar "srcs"))) (ELam ((PVar "sources")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "compiler"))) (ELit (LInt 1)))) (EVar "c"))) (ELam ((PVar "compiler")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "sections"))) (ELit (LInt 1)))) (EVar "cnt"))) (ELam ((PVar "count")) (EIf (EBinOp "==" (EVar "version") (EVar "formatVersion")) (EApp (EVar "Ok") (ETuple (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "version")) (fa "ikSources" (EVar "sources")) (fa "ikCompiler" (EVar "compiler")))) (EVar "count"))) (EApp (EApp (EApp (EVar "refuse") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "medaka-interface"))) (ELit (LInt 1)))) (EVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "format version ")) (EApp (EVar "display") (EVar "version"))) (ELit (LString ", this compiler reads "))) (EApp (EVar "display") (EVar "formatVersion"))) (ELit (LString ""))))))))))))))
+(DFunDef false "decHeader" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "medaka-interface")) (ELit (LInt 4))))) (EVar "node")))
 (DTypeSig true "decodeInterface" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "PreludeInterfaceFile"))))
-(DFunDef false "decodeInterface" ((PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EVar "parseSExp") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "text")) (ELit (LString ")"))))) (ELam ((PVar "top")) (EMatch (EVar "top") (arm (PCon "SList" (PCons (PVar "header") (PVar "sections"))) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "decHeader") (ELit (LString "header"))) (EVar "header"))) (ELam ((PVar "key")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "decSection")) (ELit (LString "file"))) (EApp (EVar "SList") (EVar "sections")))) (ELam ((PVar "secs")) (EApp (EVar "Ok") (ERecordCreate "PreludeInterfaceFile" ((fa "ifKey" (EVar "key")) (fa "ifSections" (EVar "secs")))))))))) (arm PWild () (EApp (EApp (EApp (EVar "refuse") (ELit (LString "file"))) (EVar "top")) (ELit (LString "expected a header node"))))))))
+(DFunDef false "decodeInterface" ((PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EVar "parseSExp") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "text")) (ELit (LString ")"))))) (ELam ((PVar "top")) (EMatch (EVar "top") (arm (PCon "SList" (PCons (PVar "header") (PVar "sections"))) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "decHeader") (ELit (LString "header"))) (EVar "header"))) (ELam ((PTuple (PVar "key") (PVar "count"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "decSection")) (ELit (LString "file"))) (EApp (EVar "SList") (EVar "sections")))) (ELam ((PVar "secs")) (EIf (EBinOp "==" (EApp (EVar "length") (EVar "secs")) (EVar "count")) (EApp (EVar "Ok") (ERecordCreate "PreludeInterfaceFile" ((fa "ifKey" (EVar "key")) (fa "ifSections" (EVar "secs"))))) (EApp (EApp (EApp (EVar "refuse") (ELit (LString "header/sections.1"))) (EVar "header")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "header counts ")) (EApp (EVar "display") (EVar "count"))) (ELit (LString " section(s), the file holds "))) (EApp (EVar "display") (EApp (EVar "length") (EVar "secs")))) (ELit (LString "")))))))))) (arm PWild () (EApp (EApp (EApp (EVar "refuse") (ELit (LString "file"))) (EVar "top")) (ELit (LString "expected a header node"))))))))
 # MARK
 (DUse false (UseGroup ("list") ((mem "mapAccumL" false) (mem "sortOn" false))))
 (DUse false (UseAlias ("map") "IdMap"))
@@ -2521,8 +2541,8 @@ decodeInterface text = do
 (DFunDef false "joinText" ((PVar "j")) (EApp (EVar "renderSExp") (EApp (EVar "joinNode") (EVar "j"))))
 (DTypeSig false "pairAtoms" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "SExp")))
 (DFunDef false "pairAtoms" () (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "SAtom")))
-(DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyCon "SExp")))
-(DFunDef false "headerNode" ((PVar "key")) (EApp (EApp (EVar "tagged") (ELit (LString "medaka-interface"))) (EListLit (EApp (EVar "intNode") (EVar "formatVersion")) (EApp (EApp (EVar "tagged") (ELit (LString "sources"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "pairAtoms")) (EFieldAccess (EVar "key") "ikSources")))) (EApp (EApp (EVar "tagged") (ELit (LString "compiler"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "key") "ikCompiler")))))))
+(DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "Int") (TyCon "SExp"))))
+(DFunDef false "headerNode" ((PVar "key") (PVar "count")) (EApp (EApp (EVar "tagged") (ELit (LString "medaka-interface"))) (EListLit (EApp (EVar "intNode") (EVar "formatVersion")) (EApp (EApp (EVar "tagged") (ELit (LString "sources"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "pairAtoms")) (EFieldAccess (EVar "key") "ikSources")))) (EApp (EApp (EVar "tagged") (ELit (LString "compiler"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "key") "ikCompiler")))) (EApp (EApp (EVar "tagged") (ELit (LString "sections"))) (EListLit (EApp (EVar "intNode") (EDictApp "count")))))))
 (DTypeSig false "joinNode" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "SExp")))
 (DFunDef false "joinNode" () (EApp (EVar "listSExp") (EVar "atomSExp")))
 (DTypeSig false "sectionNode" (TyFun (TyCon "InterfaceSection") (TyCon "SExp")))
@@ -2530,7 +2550,7 @@ decodeInterface text = do
 (DTypeSig false "interfaceNode" (TyFun (TyCon "PreludeInterface") (TyCon "SExp")))
 (DFunDef false "interfaceNode" ((PCon "PreludeInterface" (PVar "funNames") (PVar "dispatch") (PVar "ctors") (PVar "ctorPop") (PVar "recordPop") (PVar "classes") (PVar "funSlots") (PVar "funSlotsQual") (PVar "declared") (PVar "declaredQual") (PVar "methodSlots") (PVar "methodSlotsQual") (PVar "ctorEx") (PVar "anyEx") (PVar "externs") (PVar "tyvarNext") (PVar "effvarNext") (PVar "core") (PVar "standalone"))) (EApp (EApp (EVar "tagged") (ELit (LString "interface"))) (EListLit (EApp (EApp (EVar "ordMapSExp") (EVar "unitSExp")) (EVar "funNames")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EApp (EApp (EVar "pairSExp") (EVar "ifaceRefSExp")) (EVar "SAtom"))) (EVar "intNode"))) (EVar "dispatch")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "tabKeySExp")) (EApp (EApp (EApp (EVar "tripleSExp") (EVar "dataVisSExp")) (EApp (EVar "listSExp") (EVar "SAtom"))) (EApp (EVar "listSExp") (EVar "variantSExp"))))) (EVar "ctors")) (EApp (EApp (EVar "spellingPopSExp") (EVar "pubSchemeSExp")) (EVar "ctorPop")) (EApp (EApp (EVar "spellingPopSExp") (EVar "recordInfoSExp")) (EVar "recordPop")) (EApp (EVar "builtinClassesSExp") (EVar "classes")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EApp (EVar "listSExp") (EVar "predicateSlotSExp")))) (EVar "funSlots")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EApp (EVar "listSExp") (EVar "predicateSlotSExp")))) (EVar "funSlotsQual")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "cDeclaredPrefixSExp"))) (EVar "declared")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EVar "cDeclaredPrefixSExp"))) (EVar "declaredQual")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EApp (EVar "listSExp") (EVar "methodPredicateSlotSExp")))) (EVar "methodSlots")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "pairAtoms")) (EApp (EVar "listSExp") (EVar "methodPredicateSlotSExp")))) (EVar "methodSlotsQual")) (EApp (EApp (EVar "intMapSExp") (EVar "unitSExp")) (EVar "ctorEx")) (EApp (EVar "boolNode") (EVar "anyEx")) (EApp (EApp (EVar "ordMapSExp") (EApp (EApp (EVar "pairSExp") (EVar "surfaceTySExp")) (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "intNode"))))) (EVar "externs")) (EApp (EVar "intNode") (EVar "tyvarNext")) (EApp (EVar "intNode") (EVar "effvarNext")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "pubSchemeSExp"))) (EVar "core")) (EApp (EApp (EVar "ordMapSExp") (EVar "unitSExp")) (EVar "standalone")))))
 (DTypeSig true "encodeInterface" (TyFun (TyCon "PreludeInterfaceFile") (TyCon "String")))
-(DFunDef false "encodeInterface" ((PVar "f")) (EBinOp "++" (EApp (EApp (EVar "stringJoin") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "renderSExp")) (EBinOp "::" (EApp (EVar "headerNode") (EFieldAccess (EVar "f") "ifKey")) (EApp (EApp (EMethodRef "map") (EVar "sectionNode")) (EFieldAccess (EVar "f") "ifSections"))))) (ELit (LString "\n"))))
+(DFunDef false "encodeInterface" ((PVar "f")) (EBinOp "++" (EApp (EApp (EVar "stringJoin") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "renderSExp")) (EBinOp "::" (EApp (EApp (EVar "headerNode") (EFieldAccess (EVar "f") "ifKey")) (EApp (EMethodRef "length") (EFieldAccess (EVar "f") "ifSections"))) (EApp (EApp (EMethodRef "map") (EVar "sectionNode")) (EFieldAccess (EVar "f") "ifSections"))))) (ELit (LString "\n"))))
 (DTypeSig false "decPairAtoms" (TyApp (TyCon "Reader") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "decPairAtoms" () (EApp (EApp (EVar "pairOfSExp") (EVar "expectAtom")) (EVar "expectAtom")))
 (DTypeSig false "decInterface" (TyApp (TyCon "Reader") (TyCon "PreludeInterface")))
@@ -2542,8 +2562,8 @@ decodeInterface text = do
 (DTypeSig false "decSection" (TyApp (TyCon "Reader") (TyCon "InterfaceSection")))
 (DFunDef false "decSection" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "section"))) (PVar "js") (PVar "i")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "decJoins") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "section"))) (ELit (LInt 1)))) (EVar "js"))) (ELam ((PVar "joins")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "decInterface") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "section"))) (ELit (LInt 2)))) (EVar "i"))) (ELam ((PVar "value")) (EApp (EVar "Ok") (ERecordCreate "InterfaceSection" ((fa "isJoins" (EVar "joins")) (fa "isInterface" (EVar "value"))))))))))
 (DFunDef false "decSection" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "section")) (ELit (LInt 2))))) (EVar "node")))
-(DTypeSig false "decHeader" (TyApp (TyCon "Reader") (TyCon "InterfaceKey")))
-(DFunDef false "decHeader" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "medaka-interface"))) (PVar "v") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sources"))) (PVar "srcs"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "compiler"))) (PVar "c")))))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "medaka-interface"))) (ELit (LInt 1)))) (EVar "v"))) (ELam ((PVar "version")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EVar "decPairAtoms")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "sources"))) (ELit (LInt 1)))) (EVar "srcs"))) (ELam ((PVar "sources")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "compiler"))) (ELit (LInt 1)))) (EVar "c"))) (ELam ((PVar "compiler")) (EIf (EBinOp "==" (EVar "version") (EVar "formatVersion")) (EApp (EVar "Ok") (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "version")) (fa "ikSources" (EVar "sources")) (fa "ikCompiler" (EVar "compiler"))))) (EApp (EApp (EApp (EVar "refuse") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "medaka-interface"))) (ELit (LInt 1)))) (EVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "format version ")) (EApp (EMethodRef "display") (EVar "version"))) (ELit (LString ", this compiler reads "))) (EApp (EMethodRef "display") (EVar "formatVersion"))) (ELit (LString ""))))))))))))
-(DFunDef false "decHeader" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "medaka-interface")) (ELit (LInt 3))))) (EVar "node")))
+(DTypeSig false "decHeader" (TyApp (TyCon "Reader") (TyTuple (TyCon "InterfaceKey") (TyCon "Int"))))
+(DFunDef false "decHeader" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "medaka-interface"))) (PVar "v") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sources"))) (PVar "srcs"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "compiler"))) (PVar "c"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sections"))) (PVar "cnt")))))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "medaka-interface"))) (ELit (LInt 1)))) (EVar "v"))) (ELam ((PVar "version")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EVar "decPairAtoms")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "sources"))) (ELit (LInt 1)))) (EVar "srcs"))) (ELam ((PVar "sources")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "compiler"))) (ELit (LInt 1)))) (EVar "c"))) (ELam ((PVar "compiler")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "sections"))) (ELit (LInt 1)))) (EVar "cnt"))) (ELam ((PVar "count")) (EIf (EBinOp "==" (EVar "version") (EVar "formatVersion")) (EApp (EVar "Ok") (ETuple (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "version")) (fa "ikSources" (EVar "sources")) (fa "ikCompiler" (EVar "compiler")))) (EDictApp "count"))) (EApp (EApp (EApp (EVar "refuse") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "medaka-interface"))) (ELit (LInt 1)))) (EVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "format version ")) (EApp (EMethodRef "display") (EVar "version"))) (ELit (LString ", this compiler reads "))) (EApp (EMethodRef "display") (EVar "formatVersion"))) (ELit (LString ""))))))))))))))
+(DFunDef false "decHeader" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "medaka-interface")) (ELit (LInt 4))))) (EVar "node")))
 (DTypeSig true "decodeInterface" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "PreludeInterfaceFile"))))
-(DFunDef false "decodeInterface" ((PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "parseSExp") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "text")) (ELit (LString ")"))))) (ELam ((PVar "top")) (EMatch (EVar "top") (arm (PCon "SList" (PCons (PVar "header") (PVar "sections"))) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "decHeader") (ELit (LString "header"))) (EVar "header"))) (ELam ((PVar "key")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "decSection")) (ELit (LString "file"))) (EApp (EVar "SList") (EVar "sections")))) (ELam ((PVar "secs")) (EApp (EVar "Ok") (ERecordCreate "PreludeInterfaceFile" ((fa "ifKey" (EVar "key")) (fa "ifSections" (EVar "secs")))))))))) (arm PWild () (EApp (EApp (EApp (EVar "refuse") (ELit (LString "file"))) (EVar "top")) (ELit (LString "expected a header node"))))))))
+(DFunDef false "decodeInterface" ((PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "parseSExp") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "text")) (ELit (LString ")"))))) (ELam ((PVar "top")) (EMatch (EVar "top") (arm (PCon "SList" (PCons (PVar "header") (PVar "sections"))) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "decHeader") (ELit (LString "header"))) (EVar "header"))) (ELam ((PTuple (PVar "key") (PVar "count"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "decSection")) (ELit (LString "file"))) (EApp (EVar "SList") (EVar "sections")))) (ELam ((PVar "secs")) (EIf (EBinOp "==" (EApp (EMethodRef "length") (EVar "secs")) (EDictApp "count")) (EApp (EVar "Ok") (ERecordCreate "PreludeInterfaceFile" ((fa "ifKey" (EVar "key")) (fa "ifSections" (EVar "secs"))))) (EApp (EApp (EApp (EVar "refuse") (ELit (LString "header/sections.1"))) (EVar "header")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "header counts ")) (EApp (EMethodRef "display") (EDictApp "count"))) (ELit (LString " section(s), the file holds "))) (EApp (EMethodRef "display") (EApp (EMethodRef "length") (EVar "secs")))) (ELit (LString "")))))))))) (arm PWild () (EApp (EApp (EApp (EVar "refuse") (ELit (LString "file"))) (EVar "top")) (ELit (LString "expected a header node"))))))))
