@@ -1,5 +1,5 @@
 # META
-source_lines=95
+source_lines=102
 stages=DESUGAR,MARK
 # SOURCE
 -- Source-keyed memoization of `desugar (parsePrelude src)` (#2234, S-1).
@@ -90,6 +90,13 @@ export
 desugaredPreludeKey : String -> Int
 desugaredPreludeKey src = fst (desugaredPreludeEntry src)
 
+-- The generation pair of the two prelude texts: the key the prelude caches and
+-- a drive's `diPreludeKey` are keyed by.
+export
+preludeGeneration : String -> String -> (Int, Int)
+preludeGeneration rsrc csrc =
+  (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
+
 desugaredPreludeEntry : String -> (Int, List Decl)
 desugaredPreludeEntry src = match lookupAssoc src !desugarCacheRef
   Some (Minted gen decls) => (gen, decls)
@@ -117,6 +124,8 @@ desugaredPreludeEntry src = match lookupAssoc src !desugarCacheRef
 (DFunDef false "desugaredPrelude" ((PVar "src")) (EApp (EVar "snd") (EApp (EVar "desugaredPreludeEntry") (EVar "src"))))
 (DTypeSig true "desugaredPreludeKey" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "desugaredPreludeKey" ((PVar "src")) (EApp (EVar "fst") (EApp (EVar "desugaredPreludeEntry") (EVar "src"))))
+(DTypeSig true "preludeGeneration" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "preludeGeneration" ((PVar "rsrc") (PVar "csrc")) (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))
 (DTypeSig false "desugaredPreludeEntry" (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "desugaredPreludeEntry" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "desugarCacheRef"))) (arm (PCon "Some" (PCon "Minted" (PVar "gen") (PVar "decls"))) () (ETuple (EVar "gen") (EVar "decls"))) (arm (PCon "Some" (PCon "Pending" (PVar "decode"))) () (EMatch (EApp (EVar "decode") (ELit LUnit)) (arm (PCon "Some" (PVar "decls")) () (EApp (EApp (EVar "noteDesugaredPrelude") (EVar "src")) (EVar "decls"))) (arm (PCon "None") () (EApp (EApp (EVar "noteDesugaredPrelude") (EVar "src")) (EApp (EVar "desugar") (EApp (EVar "parsePrelude") (EVar "src"))))))) (arm (PCon "None") () (EApp (EApp (EVar "noteDesugaredPrelude") (EVar "src")) (EApp (EVar "desugar") (EApp (EVar "parsePrelude") (EVar "src")))))))
 # MARK
@@ -139,5 +148,7 @@ desugaredPreludeEntry src = match lookupAssoc src !desugarCacheRef
 (DFunDef false "desugaredPrelude" ((PVar "src")) (EApp (EVar "snd") (EApp (EVar "desugaredPreludeEntry") (EVar "src"))))
 (DTypeSig true "desugaredPreludeKey" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "desugaredPreludeKey" ((PVar "src")) (EApp (EVar "fst") (EApp (EVar "desugaredPreludeEntry") (EVar "src"))))
+(DTypeSig true "preludeGeneration" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "preludeGeneration" ((PVar "rsrc") (PVar "csrc")) (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))
 (DTypeSig false "desugaredPreludeEntry" (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "desugaredPreludeEntry" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "desugarCacheRef"))) (arm (PCon "Some" (PCon "Minted" (PVar "gen") (PVar "decls"))) () (ETuple (EVar "gen") (EVar "decls"))) (arm (PCon "Some" (PCon "Pending" (PVar "decode"))) () (EMatch (EApp (EVar "decode") (ELit LUnit)) (arm (PCon "Some" (PVar "decls")) () (EApp (EApp (EVar "noteDesugaredPrelude") (EVar "src")) (EVar "decls"))) (arm (PCon "None") () (EApp (EApp (EVar "noteDesugaredPrelude") (EVar "src")) (EApp (EVar "desugar") (EApp (EVar "parsePrelude") (EVar "src"))))))) (arm (PCon "None") () (EApp (EApp (EVar "noteDesugaredPrelude") (EVar "src")) (EApp (EVar "desugar") (EApp (EVar "parsePrelude") (EVar "src")))))))

@@ -14,12 +14,11 @@ import types.publish.{CheckedProgram(..), TcReport(..)}
 import types.program_facts.{ProgramFacts, factsOfChecked}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar, desugarIn, mapProg}
-import frontend.desugar_cache.{desugaredPrelude}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import driver.build_cmd.{
   loadPreludeElab,
   loadPreludeInterface,
   preludeCompilerEnv,
-  preludeGeneration,
   shippedInputs,
 }
 import driver.front_gate.{

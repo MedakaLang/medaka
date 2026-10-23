@@ -86,6 +86,13 @@ export
 desugaredPreludeKey : String -> Int
 desugaredPreludeKey src = fst (desugaredPreludeEntry src)
 
+-- The generation pair of the two prelude texts: the key the prelude caches and
+-- a drive's `diPreludeKey` are keyed by.
+export
+preludeGeneration : String -> String -> (Int, Int)
+preludeGeneration rsrc csrc =
+  (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
+
 desugaredPreludeEntry : String -> (Int, List Decl)
 desugaredPreludeEntry src = match lookupAssoc src !desugarCacheRef
   Some (Minted gen decls) => (gen, decls)

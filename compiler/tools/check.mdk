@@ -35,7 +35,7 @@ import frontend.resolve.{
   importedCtorDecls,
 }
 import frontend.exhaust.{exhaustToLinesWith}
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import types.typecheck.{
   defaultDriveInputs,
   checkOneToLinesWithRuntimeK,
@@ -119,7 +119,7 @@ cleanReport rsrc csrc runtimeP coreP raw desugared =
   let schemes =
     checkOneToLinesWithRuntimeK
       defaultDriveInputs
-      (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+      (Some (preludeGeneration rsrc csrc))
       (desugaredPrelude rsrc)
       (desugaredPrelude csrc)
       desugared
