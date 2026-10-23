@@ -6,8 +6,7 @@
 -- every field, no compaction) is equal for the original and the decoded value.
 -- The same dump counts which constructors the corpora reach.
 import test.{
-  Expectation, expectAll, expectEach, expectEqual, expectTrue, pass, fail,
-  labelFail
+  Expectation, expectAll, expectEach, expectEqual, expectTrue, fail, labelFail
 }
 import test_process.{underRoot}
 import frontend.ast.*
@@ -18,7 +17,7 @@ import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude}
 import frontend.parser.{parseLocatedResult}
 import list.{filter, sort}
-import support.sexp_value.{SExp(..), SexpError, renderSExp, cursorOf}
+import support.sexp_value.{SExp(..), SexpError(..), renderSExp, cursorOf}
 import types.publish.{CheckedProgram(..), TcReport(..)}
 import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
 import string as S
@@ -71,33 +70,41 @@ filterIdx i (x :: rest) (j :: js)
   | i == j = x :: filterIdx (i + 1) rest js
   | otherwise = filterIdx (i + 1) rest (j :: js)
 
-hasSuffix : String -> String -> Bool
-hasSuffix suffix s = S.endsWith suffix s
-
 mdkFiles : String -> List String -> List String
 mdkFiles dir names =
-  sort (map (n => "\{dir}/\{n}") (filter (hasSuffix ".mdk") names))
+  sort (map (n => "\{dir}/\{n}") (filter (S.endsWith ".mdk") names))
 
 listMdk : String -> <Env "MEDAKA_ROOT", FileRead> List String
 listMdk rel = match listDir (underRoot rel)
-  Ok names => mdkFiles rel names
-  Err _ => []
+  Ok names => match mdkFiles rel names
+    [] => panic "no fixtures under \{rel}"
+    files => files
+  Err e => panic "cannot list \{rel}: \{e}"
 
-desugared : String -> Option (List Decl)
-desugared src = match parseLocatedResult src
-  Ok ds => Some (desugar ds)
-  Err _ => None
+-- The corpora fail on a file they cannot read or parse: a moved fixture
+-- directory must not shrink them to nothing.
+parsed : String -> String -> List Decl
+parsed rel src = match parseLocatedResult src
+  Ok ds => ds
+  Err _ => panic "\{rel} does not parse"
 
-fileText : String -> <Env "MEDAKA_ROOT", FileRead> Option String
+fileText : String -> <Env "MEDAKA_ROOT", FileRead> String
 fileText rel = match readFile (underRoot rel)
-  Ok t => Some t
-  Err _ => None
+  Ok t => t
+  Err e => panic "cannot read \{rel}: \{e}"
+
+-- What a drive elaborated: core's trees, each module's, and the evidence rows.
+data Elaborated = Elaborated {
+  elCore : List Decl,
+  elMods : List (String, List Decl),
+  elEvidence : List EvEntry,
+}
 
 -- The elaborated trees of the modules and the evidence the drive produced.
 elaborated : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  Option (List Decl, List (String, List Decl), List EvEntry)
+  Option Elaborated
 elaborated rt core mods =
   let (_, report, _) =
     elaborateModulesWithReport defaultDriveInputs False None rt core mods
@@ -105,71 +112,77 @@ elaborated rt core mods =
     None => None
     Some c =>
       map
-        ((coreTrees, userTrees) => (coreTrees, userTrees, c.cpEvidence))
+        ((coreTrees, userTrees) => Elaborated {
+          elCore = coreTrees,
+          elMods = userTrees,
+          elEvidence = c.cpEvidence,
+        })
         c.cpTrees
 
 -- The runtime and core declarations every drive starts from.
-preludeDecls : Unit ->
-  <Env "MEDAKA_ROOT", FileRead> Option (List Decl, List Decl)
-preludeDecls _ = match (
-  fileText "stdlib/runtime.mdk",
-  fileText "stdlib/core.mdk",
+preludeDecls : Unit -> <Env "MEDAKA_ROOT", FileRead> (List Decl, List Decl)
+preludeDecls _ = (
+  desugaredPrelude (fileText "stdlib/runtime.mdk"),
+  desugaredPrelude (fileText "stdlib/core.mdk"),
 )
-  (Some rsrc, Some csrc) => Some (desugaredPrelude rsrc, desugaredPrelude csrc)
-  _ => None
 
--- Core elaborated with no user module: the shape the prelude file will hold.
+-- Core elaborated with no user module: the shape the prelude file holds.
 coreSample : Unit -> <Env "MEDAKA_ROOT", FileRead> Option Sample
-coreSample _ = match preludeDecls ()
-  None => None
-  Some (rt, core) => map coreOf (elaborated rt core [])
+coreSample _ =
+  let (rt, core) = preludeDecls ()
+  map coreOf (elaborated rt core [])
 
-coreOf : (List Decl, List (String, List Decl), List EvEntry) -> Sample
-coreOf (coreTrees, _, ev) =
-  Sample { smLabel = "core", smDecls = coreTrees, smEvidence = ev }
+coreOf : Elaborated -> Sample
+coreOf e = Sample {
+  smLabel = "core",
+  smDecls = e.elCore,
+  smEvidence = e.elEvidence,
+}
 
 stdlibSamples : Unit -> <Env "MEDAKA_ROOT", FileRead> List Sample
 stdlibSamples _ = flatMap stdlibSample (listMdk "stdlib")
 
 stdlibSample : String -> <Env "MEDAKA_ROOT", FileRead> List Sample
-stdlibSample rel = match fileText rel
-  None => []
-  Some src => match desugared src
-    None => []
-    Some ds =>
-      parsedSample rel src
-        ++ [Sample { smLabel = rel, smDecls = ds, smEvidence = [] }]
+stdlibSample rel =
+  let src = fileText rel
+  parsedSample rel src
+    ++ [
+      Sample {
+        smLabel = rel,
+        smDecls = desugar (parsed rel src),
+        smEvidence = [],
+      },
+    ]
 
 -- The parser's own output, before desugar removes the sugar.
 parsedSample : String -> String -> List Sample
-parsedSample rel src = match parseLocatedResult src
-  Ok ds =>
-    [Sample { smLabel = "\{rel} (parsed)", smDecls = ds, smEvidence = [] }]
-  Err _ => []
+parsedSample rel src = [
+  Sample {
+    smLabel = "\{rel} (parsed)",
+    smDecls = parsed rel src,
+    smEvidence = [],
+  },
+]
 
 -- A fixture elaborated against the real prelude as the module "main".
 engineSample : List Decl ->
   List Decl ->
   String ->
   <Env "MEDAKA_ROOT", FileRead> List Sample
-engineSample rt core rel = match fileText rel
-  None => []
-  Some src => match desugared src
-    None => []
-    Some ds =>
-      parsedSample rel src
-        ++ (match elaborated rt core [("main", ds)]
-          Some (_, [(_, trees)], ev) =>
-            [Sample { smLabel = rel, smDecls = trees, smEvidence = ev }]
-          _ => [])
+engineSample rt core rel =
+  let src = fileText rel
+  parsedSample rel src
+    ++ (match elaborated rt core [("main", desugar (parsed rel src))]
+      Some (Elaborated { elMods = [(_, trees)], elEvidence = ev, ... }) =>
+        [Sample { smLabel = rel, smDecls = trees, smEvidence = ev }]
+      _ => [])
 
 engineSamples : Unit -> <Env "MEDAKA_ROOT", FileRead> List Sample
-engineSamples _ = match preludeDecls ()
-  None => []
-  Some (rt, core) =>
-    flatMap
-      (engineSample rt core)
-      (pickSeeded sampleSeed sampleSize (listMdk fixtureDir))
+engineSamples _ =
+  let (rt, core) = preludeDecls ()
+  flatMap
+    (engineSample rt core)
+    (pickSeeded sampleSeed sampleSize (listMdk fixtureDir))
 
 -- The parser's output for every fixture of the directories that spell out
 -- syntax, which is where the sugar the desugared corpora no longer hold lives.
@@ -177,9 +190,7 @@ parsedDirs : List String
 parsedDirs = ["test/construct_fixtures", "test/parse_fixtures", fixtureDir]
 
 parsedFile : String -> <Env "MEDAKA_ROOT", FileRead> List Sample
-parsedFile rel = match fileText rel
-  None => []
-  Some src => parsedSample rel src
+parsedFile rel = parsedSample rel (fileText rel)
 
 parsedSamples : Unit -> <Env "MEDAKA_ROOT", FileRead> List Sample
 parsedSamples _ = flatMap parsedFile (flatMap listMdk parsedDirs)
@@ -296,11 +307,15 @@ cornerSource = stringJoin "\n" [
 ]
 
 cornerSamples : List Sample
-cornerSamples = match desugared cornerSource
-  None => []
-  Some ds =>
-    parsedSample "corners" cornerSource
-      ++ [Sample { smLabel = "corners", smDecls = ds, smEvidence = [] }]
+cornerSamples =
+  parsedSample "corners" cornerSource
+    ++ [
+      Sample {
+        smLabel = "corners",
+        smDecls = desugar (parsed "corners" cornerSource),
+        smEvidence = [],
+      },
+    ]
 
 -- Constructors no source text yields: annotate, the marker and resolve build
 -- them after the trees this test reaches, the wide-literal lowering builds
@@ -363,7 +378,7 @@ test "a seeded sample of the engine fixtures, elaborated, round-trips" = expectA
       (expectTrue
         (length
             (filter
-              (s => not (hasSuffix "(parsed)" s.smLabel))
+              (s => not (S.endsWith "(parsed)" s.smLabel))
               (engineSamples ()))
           >= sampleSize / 2)),
     expectAll (map roundTrips (engineSamples ())),
@@ -382,12 +397,22 @@ test "the corpora reach every constructor the codec handles" =
 
 -- ── fail closed ────────────────────────────────────────────────────────────
 
-refusal : Result SexpError a -> Expectation
-refusal (Err _) = pass
-refusal (Ok _) = fail "decoded a malformed input"
+-- A refusal of one class: the path and message the codec reports for it.
+refusedWith : String -> String -> Result SexpError a -> Expectation
+refusedWith path what (Err e) = expectEqual (path, what) (e.sePath, e.seWhat)
+refusedWith _ _ (Ok _) = fail "decoded a malformed input"
+
+malformedIn : String -> Result SexpError a -> Expectation
+malformedIn path r = refusedWith path "malformed or truncated encoding" r
+
+trailing : Result SexpError a -> Expectation
+trailing r = refusedWith "" "trailing text after the encoded value" r
 
 refused : String -> Expectation
-refused text = labelFail text (refusal (decodeDecls text))
+refused text = labelFail text (malformedIn "decls" (decodeDecls text))
+
+refusedTrailing : String -> Expectation
+refusedTrailing text = labelFail text (trailing (decodeDecls text))
 
 test "a refused read is an Err, never a partial value" = expectAll [
   labelFail "empty list" (expectEqual (Ok 0) (map length (decodeDecls "()"))),
@@ -397,8 +422,8 @@ test "a refused read is an Err, never a partial value" = expectAll [
   refused "(x)",
   refused "(0)",
   refused "((0))",
-  refused "() ()",
-  refused "()x",
+  refusedTrailing "() ()",
+  refusedTrailing "()x",
   refused "(",
   refused "",
   refused "((0 t",
@@ -415,7 +440,7 @@ test "truncating a real encoding at any of several offsets is an Err" =
           (k =>
             labelFail
               "cut at \{intToString k}"
-              (refusal (decodeDecls (S.take k text))))
+              (malformedIn "decls" (decodeDecls (S.take k text))))
           [0, 1, 2, 10, 100, n / 3, n / 2, n - 2, n - 1])
 
 test "a wrong tag or a trailing node in a real encoding is an Err" =
@@ -424,27 +449,30 @@ test "a wrong tag or a trailing node in a real encoding is an Err" =
     Some s =>
       let text = declsText s.smDecls
       expectAll [
-        labelFail "trailing node" (refusal (decodeDecls (text ++ " ()"))),
-        labelFail "trailing atom" (refusal (decodeDecls (text ++ " 1"))),
+        labelFail "trailing node" (trailing (decodeDecls (text ++ " ()"))),
+        labelFail "trailing atom" (trailing (decodeDecls (text ++ " 1"))),
         labelFail
           "first tag out of range"
-          (refusal
+          (malformedIn
+            "decls"
             (decodeDecls ("((999" ++ S.sliceClamped 3 (S.length text) text))),
         labelFail
           "first tag not an integer"
-          (refusal
+          (malformedIn
+            "decls"
             (decodeDecls ("((zz" ++ S.sliceClamped 3 (S.length text) text))),
       ]
 
 test "evidence rows refuse the same malformed input" =
-  let refusedEv = text => labelFail text (refusal (decodeEvEntries text))
+  let refusedEv =
+    text => labelFail text (malformedIn "evidence" (decodeEvEntries text))
   expectAll [
     refusedEv "((1))",
     refusedEv "((1 (9)))",
     refusedEv "((1 (9 a)))",
     refusedEv "((x (0 0)))",
     refusedEv "((1 (0 0))",
-    refusedEv "((1 (0 0))) ()",
+    labelFail "((1 (0 0))) ()" (trailing (decodeEvEntries "((1 (0 0))) ()")),
   ]
 
 test "readDecls leaves what follows its list for the caller" =

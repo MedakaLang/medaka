@@ -1343,6 +1343,7 @@ headerNode key count digest = tagged "medaka-interface" [
 ]
 
 -- What the digest covers: the file's text after its first line.
+export
 bodyOf : String -> String
 bodyOf text = match S.indexOf "\n" text
   Some i => S.drop (i + 1) text

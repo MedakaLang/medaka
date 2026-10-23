@@ -401,14 +401,18 @@ census confirms the drain from the outside.
 **The prelude's elaborated trees (`stdlib/core.mdke`).** `medaka interface show <file.mdke>` prints
 the header (format, source hashes, compiler identity), the declaration, evidence and binder counts,
 the id counters and the digest; `interface verify` is `fresh` only when `core.mdki` and `core.mdke`
-both are, and names a bad `.mdke` as `stale: elaborated trees (.mdke) <component>`. A stale
-`core.mdke` (header mismatch, truncation, unknown format, bad digest) makes `run`, `build` and `test`
-elaborate core as before and print one stderr line per verb invocation, `prelude trees stale:
-elaborating stdlib/core.mdk (<component>)`; a missing file, or `MEDAKA_NO_INTERFACE=1`, is silent.
-Under `--json`, `run` and `build` carry the line as the envelope's `stalePreludeTrees` field
-(routed like `staleBinary`, §4) and print it as prose on a non-envelope exit. `MEDAKA_STRICT=1`
-exits 1 on the stale line for `run`, `build` and `test`. An emitter child never prints the line
-and never exits on it.
+both are and the counters describe the rows, and names a bad `.mdke` as `stale: elaborated trees
+(.mdke) <component>`. The digest covers the counters line. A stale `core.mdke` (header mismatch,
+truncation, unknown format, bad digest, counters that do not describe the rows) makes `run`,
+`build`, `test`, `check-policy`, `manifest` and `repl` elaborate core as before and print one
+stderr line per verb invocation, `prelude trees stale: elaborating stdlib/core.mdk (<component>)`.
+A fresh `core.mdke` beside a `core.mdki` that does not load is the same stale verdict, because the
+tree arm needs both: the component is `interface` for a missing `core.mdki` and `interface
+<component>` (`compiler`, `file`, `format`, `sources`) for a stale one. A missing `core.mdke`, or
+`MEDAKA_NO_INTERFACE=1`, is silent. Under `--json`, `run` and `build` carry the line as the
+envelope's `stalePreludeTrees` field (routed like `staleBinary`, §4) and print it as prose on a
+non-envelope exit. `MEDAKA_STRICT=1` exits 1 on the stale line for each of those verbs. An emitter
+child never prints the line and never exits on it.
 
 ✅ **DRAINED by S-5.** `check --types` under `--json` used to be a silent drop: `medaka check
 --types ok.mdk` printed `main : Unit`; `medaka check --json --types ok.mdk` printed the same

@@ -1,5 +1,5 @@
 # META
-source_lines=1623
+source_lines=1624
 stages=DESUGAR,MARK
 # SOURCE
 -- The scheme-level interface codec: every type a published scheme is built
@@ -1347,6 +1347,7 @@ headerNode key count digest = tagged "medaka-interface" [
 ]
 
 -- What the digest covers: the file's text after its first line.
+export
 bodyOf : String -> String
 bodyOf text = match S.indexOf "\n" text
   Some i => S.drop (i + 1) text
@@ -2127,7 +2128,7 @@ decodeParsed _ top = refuse "file" top "expected a header node"
 (DFunDef false "sha256Hex" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256") (EApp (EVar "encodeUtf8") (EVar "text")))))
 (DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "SExp")))))
 (DFunDef false "headerNode" ((PVar "key") (PVar "count") (PVar "digest")) (EApp (EApp (EVar "tagged") (ELit (LString "medaka-interface"))) (EListLit (EApp (EVar "intNode") (EVar "formatVersion")) (EApp (EApp (EVar "tagged") (ELit (LString "sources"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "pairAtoms")) (EFieldAccess (EVar "key") "ikSources")))) (EApp (EApp (EVar "tagged") (ELit (LString "compiler"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "key") "ikCompiler")))) (EApp (EApp (EVar "tagged") (ELit (LString "sections"))) (EListLit (EApp (EVar "intNode") (EVar "count")))) (EApp (EApp (EVar "tagged") (ELit (LString "digest"))) (EListLit (EApp (EVar "SAtom") (EVar "digest")))))))
-(DTypeSig false "bodyOf" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig true "bodyOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "bodyOf" ((PVar "text")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text"))) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig false "joinNode" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "SExp")))
 (DFunDef false "joinNode" () (EApp (EVar "listSExp") (EVar "atomSExp")))
@@ -2675,7 +2676,7 @@ decodeParsed _ top = refuse "file" top "expected a header node"
 (DFunDef false "sha256Hex" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256") (EApp (EVar "encodeUtf8") (EVar "text")))))
 (DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "SExp")))))
 (DFunDef false "headerNode" ((PVar "key") (PVar "count") (PVar "digest")) (EApp (EApp (EVar "tagged") (ELit (LString "medaka-interface"))) (EListLit (EApp (EVar "intNode") (EVar "formatVersion")) (EApp (EApp (EVar "tagged") (ELit (LString "sources"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "pairAtoms")) (EFieldAccess (EVar "key") "ikSources")))) (EApp (EApp (EVar "tagged") (ELit (LString "compiler"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "key") "ikCompiler")))) (EApp (EApp (EVar "tagged") (ELit (LString "sections"))) (EListLit (EApp (EVar "intNode") (EDictApp "count")))) (EApp (EApp (EVar "tagged") (ELit (LString "digest"))) (EListLit (EApp (EVar "SAtom") (EVar "digest")))))))
-(DTypeSig false "bodyOf" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig true "bodyOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "bodyOf" ((PVar "text")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text"))) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig false "joinNode" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "SExp")))
 (DFunDef false "joinNode" () (EApp (EVar "listSExp") (EVar "atomSExp")))

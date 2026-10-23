@@ -89,6 +89,7 @@ sexpInt n = SAtom (intToString n)
 sexpString : String -> SExp
 sexpString s = SAtom s
 
+export
 sexpBool : Bool -> SExp
 sexpBool b = SAtom (if b then "t" else "f")
 
@@ -115,6 +116,7 @@ sexpEvId : EvId -> SExp
 sexpEvId (EvId "" n) = sexpInt n
 sexpEvId (EvId m n) = SList [SAtom m, sexpInt n]
 
+export
 sexpBinderId : BinderId -> SExp
 sexpBinderId (BinderId "" n) = sexpInt n
 sexpBinderId (BinderId m n) = SList [SAtom m, sexpInt n]
@@ -133,6 +135,7 @@ readInt cur = cursorInt cur
 readString : SexpCursor -> String
 readString cur = cursorAtom cur
 
+export
 readBool : SexpCursor -> Bool
 readBool cur =
   let c = cursorChar cur
@@ -195,6 +198,7 @@ readEvId cur =
   else
     EvId "" (readInt cur)
 
+export
 readBinderId : SexpCursor -> BinderId
 readBinderId cur =
   if cursorPeek cur == 40 then

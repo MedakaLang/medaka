@@ -305,6 +305,24 @@ preludeInterfaceKey coreName inputs =
     ]
     inputs.pnCompiler
 
+-- The inputs a prelude is read for by the running binary: the compiler
+-- identity is its own build fingerprint.
+export
+shippedInputs : String -> String -> String -> PreludeInputs
+shippedInputs stdlibDir rsrc csrc = PreludeInputs {
+  pnStdlibDir = stdlibDir,
+  pnRuntimeSrc = rsrc,
+  pnCoreSrc = csrc,
+  pnCompiler = buildFingerprint (),
+}
+
+-- The generation the desugar cache gives the two prelude texts, the pair the
+-- prelude caches and a drive's `diPreludeKey` are keyed by.
+export
+preludeGeneration : String -> String -> (Int, Int)
+preludeGeneration rsrc csrc =
+  (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
+
 -- The stale component a file that does not decode names: its format version
 -- when that is what was refused, else the file itself.
 export
@@ -411,8 +429,25 @@ readPreludeTrees decode inputs
           match (keysMatch
             key
             (elabKeyOf (preludeInterfaceKey "core.mdk" inputs)))
-            None => (TVLoaded, value)
+            None => withInterface decode inputs value
             Some component => (TVStale component, None)
+
+-- A fresh trees file is only a hit beside an interface that loads: the tree arm
+-- joins the trees to the interface's cache, so the loss of either one is the
+-- loss of the lever.  The component names the interface file.
+withInterface : Bool ->
+  PreludeInputs ->
+  Option PreludeElab ->
+  <IO> (TreesVerdict, Option PreludeElab)
+withInterface decode inputs value =
+  match (if decode then
+    loadPreludeInterface inputs
+  else
+    readPreludeInterface inputs)
+    PVLoaded _ => (TVLoaded, value)
+    PVMissing => (TVStale "interface", None)
+    PVStale component => (TVStale "interface \{component}", None)
+    PVDisabled => (TVDisabled, None)
 
 -- The verdict of this process's load of the trees, with the inputs it was for.
 preludeTreesRef : Ref (Option (PreludeInputs, TreesVerdict))
@@ -429,10 +464,7 @@ loadPreludeElab inputs = match !preludeTreesRef
     let _ = match value
       Some pe =>
         seedPreludeElab
-          (
-            desugaredPreludeKey inputs.pnRuntimeSrc,
-            desugaredPreludeKey inputs.pnCoreSrc,
-          )
+          (preludeGeneration inputs.pnRuntimeSrc inputs.pnCoreSrc)
           pe
       None => ()
     preludeTreesRef := Some (inputs, verdict)
@@ -452,12 +484,7 @@ withHeldPrelude : List Decl -> DriveInputs -> DriveInputs
 withHeldPrelude coreDecls inputs = match !preludeTreesRef
   Some (held, _) =>
     if length coreDecls == length (desugaredPrelude held.pnCoreSrc) then
-      keyedInputs
-        (
-          desugaredPreludeKey held.pnRuntimeSrc,
-          desugaredPreludeKey held.pnCoreSrc,
-        )
-        inputs
+      keyedInputs (preludeGeneration held.pnRuntimeSrc held.pnCoreSrc) inputs
     else
       inputs
   None => inputs

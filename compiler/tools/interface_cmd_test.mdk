@@ -368,10 +368,6 @@ test "a stale prelude interface prints one line on the check family and changes 
 -- A spawned write runs in a fresh process, where core's counters are the
 -- values the format promises.
 
-failed : Result String a -> Bool
-failed (Err _) = True
-failed (Ok _) = False
-
 writeArgv : String -> <Env "MEDAKA_ROOT", Env "MEDAKA"> List String
 writeArgv dir = [
   "MEDAKA_STRICT=",
@@ -401,7 +397,7 @@ exitOf : Result String (Int, String, String) -> Int
 exitOf (Ok (code, _, _)) = code
 exitOf (Err _) = -1
 
-test "the writer leaves a fresh pair holding core's counters, the same bytes twice" = withStagedStdlib
+test "the writer leaves a fresh pair whose counters describe its rows, the same bytes twice" = withStagedStdlib
   (dir => match runCommandBatch "env" 1 [writeArgv dir]
     [first] =>
       let a = readFile "\{dir}/core.mdke"
@@ -410,24 +406,26 @@ test "the writer leaves a fresh pair holding core's counters, the same bytes twi
       match (a, b)
         (Ok ta, Ok tb) => match readElabFile ta
           Err f => fail "did not read: \{renderElabFault f}"
-          Ok (_, pe) => expectAll [
+          Ok (key, pe) => expectAll [
             labelFail "first write exit" (expectEqual 0 (exitOf first)),
             labelFail "second write exit" (expectEqual [0] (map exitOf second)),
             labelFail "determinism" (expectEqual (sha256Hex ta) (sha256Hex tb)),
             labelFail "both files fresh" (expectEqual "fresh" (verifyOut dir)),
             labelFail
-              "K, L, N, B0"
-              (expectEqual
-                (2220, 12, 899, 0)
-                (
-                  pe.peEvCounter,
-                  pe.peLocalCounter,
-                  pe.peBinderCount,
-                  pe.peBinderBase,
-                )),
+              "the file is what its own value encodes to"
+              (expectEqual ta (encodeElabFile key pe)),
             labelFail
-              "evidence rows a tree references"
-              (expectEqual 983 (length pe.peEvidence)),
+              "the evidence counter is above the kept rows"
+              (expectTrue
+                (pe.peEvCounter > 0
+                  && length pe.peEvidence > 0
+                  && length pe.peEvidence <= pe.peEvCounter)),
+            labelFail
+              "the binder count is the rows'"
+              (expectEqual (length pe.peBinders) pe.peBinderCount),
+            labelFail
+              "a fresh process hands out core's binder ordinals from 0"
+              (expectEqual 0 pe.peBinderBase),
           ]
         _ => fail "core.mdke was not written"
     _ => fail "write run failed")
@@ -444,10 +442,10 @@ test "a core with a type error writes neither file and exits 1" = withStagedStdl
             labelFail "exit code" (expectEqual 1 (exitOf run)),
             labelFail
               "no interface file"
-              (expectTrue (failed (readFile "\{dir}/core.mdki"))),
+              (expectTrue (isErr (readFile "\{dir}/core.mdki"))),
             labelFail
               "no elaborated file"
-              (expectTrue (failed (readFile "\{dir}/core.mdke"))),
+              (expectTrue (isErr (readFile "\{dir}/core.mdke"))),
           ]
           _ => fail "write run failed")
 
@@ -486,6 +484,34 @@ verdictOfText : String ->
 verdictOfText dir edited =
   map (_ => verifyOut dir) (writeFile "\{dir}/core.mdke" edited)
 
+-- [fresh] with its evidence counter changed by [change] and, when [redigest],
+-- the digest recomputed over the edited covered text.
+counterEdited : String -> (Int -> Int) -> Bool -> Result String String
+counterEdited fresh change redigest = match (
+  readElabFile fresh,
+  S.indexOf "\n" fresh,
+)
+  (Ok (_, pe), Some i) =>
+    let covered = S.drop (i + 1) fresh
+    let k = pe.peEvCounter
+    let edited = S.replace "(counters \{k} " "(counters \{change k} " covered
+    let header = S.take i fresh
+    Ok (if redigest then
+      "\{S.replace (sha256Hex covered) (sha256Hex edited) header}\n\{edited}"
+    else
+      "\{header}\n\{edited}")
+  _ => Err "the fresh file did not read"
+
+-- What `verify` prints for [dir] once [fresh]'s evidence counter is lowered by one.
+verdictOfCounter : String ->
+  String ->
+  Bool ->
+  <Exec, IO, FileWrite, Env "MEDAKA_ROOT", Env "MEDAKA"> Result String String
+verdictOfCounter dir fresh redigest =
+  match counterEdited fresh (k => k - 1) redigest
+    Ok edited => verdictOfText dir edited
+    Err e => Err e
+
 test "verify names the component of a header edit, a truncation and an empty elaborated file" = withStagedStdlib
   (dir => match runCommandBatch "env" 1 [writeArgv dir]
     [_] => match readFile "\{dir}/core.mdke"
@@ -495,6 +521,8 @@ test "verify names the component of a header edit, a truncation and an empty ela
           verdictOfText dir (S.replace "(compiler " "(compiler 0" fresh)
         let truncated = verdictOfText dir (S.take (S.length fresh / 2) fresh)
         let empty = verdictOfText dir ""
+        let counters = verdictOfCounter dir fresh False
+        let counterDigested = verdictOfCounter dir fresh True
         expectAll [
           labelFail
             "compiler field edited"
@@ -507,5 +535,13 @@ test "verify names the component of a header edit, a truncation and an empty ela
           labelFail
             "empty"
             (expectEqual (Ok "stale: elaborated trees (.mdke) file") empty),
+          labelFail
+            "counter lowered under the old digest"
+            (expectEqual (Ok "stale: elaborated trees (.mdke) file") counters),
+          labelFail
+            "counter lowered under a recomputed digest"
+            (expectEqual
+              (Ok "stale: elaborated trees (.mdke) file")
+              counterDigested),
         ]
     _ => fail "write run failed")

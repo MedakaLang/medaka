@@ -132,7 +132,7 @@ test "the reader keeps its verdicts on quoted atoms and stray bytes" = expectAll
       (failure "nested open" (parseSExp "((")),
   ]
 
--- A decoder reading `(point 3 -4 "a b" (x y))` straight off the bytes.
+-- A decoder reading `(point 3 -4 "a\nb c" (x y))` straight off the bytes.
 test "the cursor reads values off the bytes" =
   let cur = cursorOf " ( point 3 -4 \"a\\nb c\" (x y) ) "
   let _ = cursorOpen cur

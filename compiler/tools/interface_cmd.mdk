@@ -237,23 +237,32 @@ writeAllAtomically (files@((first, _) :: _)) =
     Ok (out, _) =>
       let dir = S.trim out
       let staged =
-        map (f => (joinPath dir (baseName (fst f)), fst f, snd f)) files
+        map
+          (f => Staged {
+            stStaging = joinPath dir (baseName (fst f)),
+            stTarget = fst f,
+            stText = snd f,
+          })
+          files
       let result = do
         _ <- traverse stageFile staged
         traverse moveFile staged
-      let _ = map ((staging, _, _) => removeFile staging) staged
+      let _ = map (st => removeFile st.stStaging) staged
       let _ = removeDir dir
       map (_ => ()) result
 
-stageFile : (String, String, String) -> <IO> Result String Unit
-stageFile (staging, _, text) = match writeFile staging text
-  Err e => Err "cannot write `\{staging}`: \{e}"
+-- One text on its way to its target through a staging file.
+data Staged = Staged { stStaging : String, stTarget : String, stText : String }
+
+stageFile : Staged -> <IO> Result String Unit
+stageFile st = match writeFile st.stStaging st.stText
+  Err e => Err "cannot write `\{st.stStaging}`: \{e}"
   Ok _ => Ok ()
 
-moveFile : (String, String, String) -> <IO> Result String Unit
-moveFile (staging, path, _) = match rename staging path
+moveFile : Staged -> <IO> Result String Unit
+moveFile st = match rename st.stStaging st.stTarget
   Ok _ => Ok ()
-  Err e => Err "cannot move `\{staging}` to `\{path}`: \{e}"
+  Err e => Err "cannot move `\{st.stStaging}` to `\{st.stTarget}`: \{e}"
 
 failWith : String -> <IO> Unit
 -- The same two lines as `entries/entry_support.mdk`'s `failWith`; a tool cannot import an entry.
@@ -325,7 +334,7 @@ showElabLines digest key pe =
       "compiler \{key.ikCompiler}",
       "decls \{length pe.peDecls}",
       "evidence \{length pe.peEvidence}",
-      "binders \{pe.peBinderCount}",
+      "binder rows \{length pe.peBinders}",
       "K \{pe.peEvCounter}",
       "L \{pe.peLocalCounter}",
       "N \{pe.peBinderCount}",
