@@ -43,7 +43,7 @@ run_hello.load.located	1
 run_hello.parse.prescan	3
 run_hello.read.source	1
 run_hello.typecheck.drive	1
-run_hello.typecheck.module	2
+run_hello.typecheck.module	1
 build_hello.exit	0
 build_hello.desugar	3
 build_hello.exhaust.guards	1
@@ -55,7 +55,7 @@ build_hello.load.located	1
 build_hello.parse.prescan	3
 build_hello.read.source	1
 build_hello.typecheck.drive	1
-build_hello.typecheck.module	2
+build_hello.typecheck.module	1
 test_probe.exit	0
 test_probe.desugar	17
 test_probe.exhaust.guards	7
@@ -68,7 +68,7 @@ test_probe.load.located	2
 test_probe.parse.prescan	15
 test_probe.read.source	13
 test_probe.typecheck.drive	2
-test_probe.typecheck.module	14
+test_probe.typecheck.module	13
 lint_probe.exit	0
 lint_probe.exhaust.oracle	1
 lint_probe.lex.pairs	50
@@ -96,7 +96,7 @@ run_bad.load.located	1
 run_bad.parse.prescan	3
 run_bad.read.source	1
 run_bad.typecheck.drive	1
-run_bad.typecheck.module	2
+run_bad.typecheck.module	1
 build_bad.exit	1
 build_bad.desugar	3
 build_bad.exhaust.guards	1
@@ -108,7 +108,7 @@ build_bad.load.located	1
 build_bad.parse.prescan	3
 build_bad.read.source	1
 build_bad.typecheck.drive	1
-build_bad.typecheck.module	2
+build_bad.typecheck.module	1
 check_vm.exit	0
 check_vm.desugar	3
 check_vm.exhaust.guards	1
@@ -130,7 +130,7 @@ run_vm.load.located	1
 run_vm.parse.prescan	3
 run_vm.read.source	1
 run_vm.typecheck.drive	1
-run_vm.typecheck.module	2
+run_vm.typecheck.module	1
 build_vm.exit	0
 build_vm.desugar	3
 build_vm.exhaust.guards	1
@@ -142,7 +142,7 @@ build_vm.load.located	1
 build_vm.parse.prescan	3
 build_vm.read.source	1
 build_vm.typecheck.drive	1
-build_vm.typecheck.module	2
+build_vm.typecheck.module	1
 check_vmm.exit	0
 check_vmm.desugar	4
 check_vmm.exhaust.guards	3
@@ -166,7 +166,7 @@ run_vmm.parse.prescan	4
 run_vmm.read.source	2
 run_vmm.resolve	2
 run_vmm.typecheck.drive	1
-run_vmm.typecheck.module	3
+run_vmm.typecheck.module	2
 build_vmm.exit	0
 build_vmm.desugar	4
 build_vmm.exhaust.guards	2
@@ -179,7 +179,7 @@ build_vmm.parse.prescan	4
 build_vmm.read.source	2
 build_vmm.resolve	2
 build_vmm.typecheck.drive	1
-build_vmm.typecheck.module	3
+build_vmm.typecheck.module	2
 run_async.exit	0
 run_async.desugar	12
 run_async.exhaust.guards	10
@@ -191,7 +191,7 @@ run_async.parse.prescan	12
 run_async.read.source	10
 run_async.resolve	10
 run_async.typecheck.drive	1
-run_async.typecheck.module	11
+run_async.typecheck.module	10
 build_async.exit	0
 build_async.desugar	12
 build_async.exhaust.guards	10
@@ -204,7 +204,7 @@ build_async.parse.prescan	12
 build_async.read.source	10
 build_async.resolve	10
 build_async.typecheck.drive	1
-build_async.typecheck.module	11
+build_async.typecheck.module	10
 checkpolicy_hello.exit	1
 checkpolicy_hello.desugar	3
 checkpolicy_hello.exhaust.guards	1
@@ -252,7 +252,7 @@ build_json_hello.load.located	1
 build_json_hello.parse.prescan	3
 build_json_hello.read.source	2
 build_json_hello.typecheck.drive	1
-build_json_hello.typecheck.module	2
+build_json_hello.typecheck.module	1
 repl_one_line.exit	0
 repl_one_line.desugar	3
 repl_one_line.exhaust.oracle	2
@@ -319,7 +319,7 @@ test_tonly_native.load.located	2
 test_tonly_native.parse.prescan	14
 test_tonly_native.read.source	12
 test_tonly_native.typecheck.drive	1
-test_tonly_native.typecheck.module	7
+test_tonly_native.typecheck.module	6
 test_doc_native.exit	0
 test_doc_native.desugar	9
 test_doc_native.exhaust.guards	3
@@ -332,7 +332,7 @@ test_doc_native.load.located	1
 test_doc_native.parse.prescan	6
 test_doc_native.read.source	3
 test_doc_native.typecheck.drive	2
-test_doc_native.typecheck.module	4
+test_doc_native.typecheck.module	3
 lsp.a_references.exit	0
 lsp.a_references.desugar	10
 lsp.a_references.exhaust.guards	8

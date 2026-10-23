@@ -25,7 +25,12 @@
 -- The body is never built as an `SExp`: the cursor readers of
 -- `frontend.ast_codec` and the binder reader below take it off the bytes.
 
-import frontend.ast.{BinderId(..), Decl, EvEntry(..), EvId(..)}
+import frontend.ast.{
+  Arm(..), BinderId(..), Decl(..), DoStmt(..), EvEntry(..), EvId(..), EvTable,
+  Expr(..), FieldAssign(..), FunClause(..), Guard(..), GuardArm(..),
+  IfaceMethod(..), ImplMethod(..), InterpPart(..), LetBind(..),
+  MethodDefault(..), Pat(..), RecPatField(..), Section(..)
+}
 import frontend.ast_codec.{declsSExp, evEntriesSExp, readDecls, readEvEntries}
 import list.{reverse}
 import string as S
@@ -39,9 +44,10 @@ import support.util.{splitOnChar}
 import types.evidence_coverage.{EvidenceFault(..), evidenceFaults}
 import types.interface_sexp.{InterfaceFault(..), sha256Hex}
 import types.prelude_interface.{InterfaceKey(..)}
+import types.route_key.{setPreludeEvidence}
 import types.runtime_types.{
-  BinderRow(..), RuntimeType(..), binderOrdinal, runtimeTypeName,
-  runtimeTypeFromName
+  BinderRow(..), BinderTypeTable, RuntimeType(..), addBinderRow, binderOrdinal,
+  runtimeTypeName, runtimeTypeFromName
 }
 
 -- ── the value ───────────────────────────────────────────────────────────────
@@ -357,18 +363,248 @@ decodeBody h body =
               },
             )
 
+-- The key a file's header claims, after its version, header and digest are
+-- checked, without decoding the body: what a process that will not take the
+-- trees itself needs to say whether they are fresh.
+export
+readElabKey : String -> Result InterfaceFault InterfaceKey
+readElabKey text = match S.indexOf "\n" text
+  None => refuse "file" "no header line"
+  Some i => match parseSExp (S.take i text)
+    Err e => failure e
+    Ok node => match declaredVersion node
+      Some v if v /= formatVersion => Err (WrongFormat v)
+      _ => match headerOf node
+        Err e => failure e
+        Ok h =>
+          if sha256Hex (S.drop (i + 1) text) /= h.hDigest then
+            refuse "header/digest" "the body does not match the digest"
+          else
+            Ok h.hKey
+
+-- ── binder relocation ───────────────────────────────────────────────────────
+-- The file's binder ordinals are the writer's; a reading process minted its own
+-- for core when it desugared it, and every table it publishes is keyed by those.
+-- The value is moved onto them by one offset: the reader's first core ordinal
+-- less the file's.  Desugar mints core's ordinals in one contiguous run, so the
+-- reader's core holds exactly the file's count of them from its first.
+
+-- [decls] with [f] applied to every binder id they carry, minted or not.
+mapBinders : (BinderId -> BinderId) -> List Decl -> List Decl
+mapBinders f decls = map (relocDecl f) decls
+
+-- A minted ordinal moved by [offset]; an unminted id stays unminted.
+relocId : Int -> BinderId -> BinderId
+relocId offset (BinderId m i) =
+  if i < 0 then BinderId m i else BinderId m (i + offset)
+
+relocDecl : (BinderId -> BinderId) -> Decl -> Decl
+relocDecl o (DFunDef pub n ps e site bid) =
+  DFunDef pub n (map (relocPat o) ps) (relocExpr o e) site (o bid)
+relocDecl o (DLetGroup pub binds) = DLetGroup pub (map (relocBind o) binds)
+relocDecl o (d@(DInterface { methods, ... })) =
+  DInterface { d | methods = map (relocIfaceMethod o) methods }
+relocDecl o (d@(DImpl { methods, ... })) =
+  DImpl { d | methods = map (relocImplMethod o) methods }
+relocDecl o (DProp pub name params body) =
+  DProp pub name params (relocExpr o body)
+relocDecl o (DTest pub name body) = DTest pub name (relocExpr o body)
+relocDecl o (DAttrib attrs d) = DAttrib attrs (relocDecl o d)
+relocDecl _ d = d
+
+relocIfaceMethod : (BinderId -> BinderId) -> IfaceMethod -> IfaceMethod
+relocIfaceMethod o (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
+  IfaceMethod
+    n
+    ty
+    (Some (MethodDefault (map (relocPat o) ps) (relocExpr o e)))
+    mloc
+relocIfaceMethod _ m = m
+
+relocImplMethod : (BinderId -> BinderId) -> ImplMethod -> ImplMethod
+relocImplMethod o (ImplMethod n ps e) =
+  ImplMethod n (map (relocPat o) ps) (relocExpr o e)
+
+relocBind : (BinderId -> BinderId) -> LetBind -> LetBind
+relocBind o (LetBind n clauses site bid) =
+  LetBind n (map (relocClause o) clauses) site (o bid)
+
+relocClause : (BinderId -> BinderId) -> FunClause -> FunClause
+relocClause o (FunClause ps b) = FunClause (map (relocPat o) ps) (relocExpr o b)
+
+relocPat : (BinderId -> BinderId) -> Pat -> Pat
+relocPat o (PVar n l bid) = PVar n l (o bid)
+relocPat o (PAs n l bid p) = PAs n l (o bid) (relocPat o p)
+relocPat o (PCon c ps) = PCon c (map (relocPat o) ps)
+relocPat o (PCons h t) = PCons (relocPat o h) (relocPat o t)
+relocPat o (PTuple ps) = PTuple (map (relocPat o) ps)
+relocPat o (PList ps) = PList (map (relocPat o) ps)
+relocPat o (PRec c fields open) = PRec c (map (relocField o) fields) open
+relocPat _ p = p
+
+relocField : (BinderId -> BinderId) -> RecPatField -> RecPatField
+relocField o (RecPatField n l bid sub) =
+  RecPatField n l (o bid) (map (relocPat o) sub)
+
+relocExpr : (BinderId -> BinderId) -> Expr -> Expr
+relocExpr o (ELam ps b) = ELam (map (relocPat o) ps) (relocExpr o b)
+relocExpr o (ELet l r p e1 e2) =
+  ELet l r (relocPat o p) (relocExpr o e1) (relocExpr o e2)
+relocExpr o (ELetGroup bs e2) =
+  ELetGroup (map (relocBind o) bs) (relocExpr o e2)
+relocExpr o (EMatch e0 arms) = EMatch (relocExpr o e0) (map (relocArm o) arms)
+relocExpr o (EGuards arms) = EGuards (map (relocGuardArm o) arms)
+relocExpr o (EBlock stmts) = EBlock (map (relocStmt o) stmts)
+relocExpr o (EDo d stmts) = EDo d (map (relocStmt o) stmts)
+relocExpr o (ELoc l x) = ELoc l (relocExpr o x)
+relocExpr o (EDoOrigin l x) = EDoOrigin l (relocExpr o x)
+relocExpr o (EApp a b) = EApp (relocExpr o a) (relocExpr o b)
+relocExpr o (EIf c t el) = EIf (relocExpr o c) (relocExpr o t) (relocExpr o el)
+relocExpr o (EBinOp op a b r) = EBinOp op (relocExpr o a) (relocExpr o b) r
+relocExpr o (EUnOp op a r) = EUnOp op (relocExpr o a) r
+relocExpr o (EInfix op a b) = EInfix op (relocExpr o a) (relocExpr o b)
+relocExpr o (EFieldAccess x n r) = EFieldAccess (relocExpr o x) n r
+relocExpr o (ERecordCreate n fs) = ERecordCreate n (map (relocAssign o) fs)
+relocExpr o (ERecordUpdate x fs r) =
+  ERecordUpdate (relocExpr o x) (map (relocAssign o) fs) r
+relocExpr o (EVariantUpdate c x fs) =
+  EVariantUpdate c (relocExpr o x) (map (relocAssign o) fs)
+relocExpr o (EArrayLit es) = EArrayLit (map (relocExpr o) es)
+relocExpr o (EListLit es) = EListLit (map (relocExpr o) es)
+relocExpr o (ETuple es) = ETuple (map (relocExpr o) es)
+relocExpr o (EIndex x i) = EIndex (relocExpr o x) (relocExpr o i)
+relocExpr o (ERangeList lo hi incl) =
+  ERangeList (relocExpr o lo) (relocExpr o hi) incl
+relocExpr o (ERangeArray lo hi incl) =
+  ERangeArray (relocExpr o lo) (relocExpr o hi) incl
+relocExpr o (ESlice x lo hi incl) =
+  ESlice (relocExpr o x) (relocExpr o lo) (relocExpr o hi) incl
+relocExpr o (EAnnot x t) = EAnnot (relocExpr o x) t
+relocExpr o (EHeadAnnot x t) = EHeadAnnot (relocExpr o x) t
+relocExpr o (EStringInterp parts) = EStringInterp (map (relocInterp o) parts)
+relocExpr o (ESection (SecRight op x)) = ESection (SecRight op (relocExpr o x))
+relocExpr o (ESection (SecLeft x op)) = ESection (SecLeft (relocExpr o x) op)
+relocExpr o (EMapLit n kvs) =
+  EMapLit n (map ((k, v) => (relocExpr o k, relocExpr o v)) kvs)
+relocExpr o (ESetLit n es) = ESetLit n (map (relocExpr o) es)
+relocExpr o (EAsPat n x) = EAsPat n (relocExpr o x)
+relocExpr _ e = e
+
+relocArm : (BinderId -> BinderId) -> Arm -> Arm
+relocArm o (Arm p gs b) =
+  Arm (relocPat o p) (map (relocGuard o) gs) (relocExpr o b)
+
+relocGuard : (BinderId -> BinderId) -> Guard -> Guard
+relocGuard o (GBool e) = GBool (relocExpr o e)
+relocGuard o (GBind p e) = GBind (relocPat o p) (relocExpr o e)
+
+relocGuardArm : (BinderId -> BinderId) -> GuardArm -> GuardArm
+relocGuardArm o (GuardArm gs b) =
+  GuardArm (map (relocGuard o) gs) (relocExpr o b)
+
+relocStmt : (BinderId -> BinderId) -> DoStmt -> DoStmt
+relocStmt o (DoExpr e) = DoExpr (relocExpr o e)
+relocStmt o (DoBind p e) = DoBind (relocPat o p) (relocExpr o e)
+relocStmt o (DoLet m r p e site) = DoLet m r (relocPat o p) (relocExpr o e) site
+relocStmt o (DoAssign x e) = DoAssign x (relocExpr o e)
+relocStmt o (DoFieldAssign x fs e) = DoFieldAssign x fs (relocExpr o e)
+
+relocAssign : (BinderId -> BinderId) -> FieldAssign -> FieldAssign
+relocAssign o (FieldAssign n v) = FieldAssign n (relocExpr o v)
+
+relocInterp : (BinderId -> BinderId) -> InterpPart -> InterpPart
+relocInterp o (InterpExpr e) = InterpExpr (relocExpr o e)
+relocInterp _ p = p
+
+-- The first minted binder ordinal of [decls] and how many there are, or a
+-- count of -1 when the minted ordinals are not one contiguous run.  The walk
+-- that relocates is the census: [note] hands every id back unchanged.
+binderSpan : List Decl -> (Int, Int)
+binderSpan decls =
+  let lo = Ref (0 - 1)
+  let hi = Ref (0 - 1)
+  let count = Ref 0
+  let note =
+    bid => match bid
+      BinderId _ i if i >= 0 =>
+        let _ = if lo.value < 0 || i < lo.value then lo := i
+        let _ = if i > hi.value then hi := i
+        count := count.value + 1
+        bid
+      _ => bid
+  let _ = mapBinders note decls
+  if hi.value - lo.value + 1 == count.value then
+    (lo.value, count.value)
+  else
+    (lo.value, 0 - 1)
+
+relocated : Int -> PreludeElab -> PreludeElab
+relocated offset pe =
+  if offset == 0 then
+    pe
+  else
+    { pe |
+      peDecls = mapBinders (relocId offset) pe.peDecls,
+      peBinders =
+        map (row => { row | brId = relocId offset row.brId }) pe.peBinders,
+      peBinderBase = pe.peBinderBase + offset,
+    }
+
 -- ── the process cache ───────────────────────────────────────────────────────
 
--- One value for one compiler generation, the pair `preludeCacheHit` keys by.
-preludeElabCacheRef : Ref (Option ((Int, Int), PreludeElab))
+-- One value for one compiler generation, the pair `preludeCacheHit` keys by, and
+-- whether its binders are already the generation's own (relocated).
+preludeElabCacheRef : Ref (Option ((Int, Int), PreludeElab, Bool))
 preludeElabCacheRef = Ref None
 
+-- Holding a value also indexes its evidence as the process's prelude segment
+-- (`types/route_key.mdk`), whose ids every later drive mints past.
 export
 seedPreludeElab : (Int, Int) -> PreludeElab -> Unit
-seedPreludeElab generation pe = preludeElabCacheRef := Some (generation, pe)
+seedPreludeElab generation pe =
+  let _ = setPreludeEvidence pe.peEvCounter pe.peEvidence
+  preludeElabCacheRef := Some (generation, pe, False)
 
 export
 preludeElabHit : (Int, Int) -> Option PreludeElab
 preludeElabHit generation = match !preludeElabCacheRef
-  Some (seen, pe) if seen == generation => Some pe
+  Some (seen, pe, _) if seen == generation => Some pe
   _ => None
+
+-- The value of [generation] with its binders moved onto [core]'s, the process's
+-- own desugar of that generation's core; `None` when nothing is held for it or
+-- [core]'s binders are not a run of the file's count.
+export
+preludeElabFor : (Int, Int) -> List Decl -> Option PreludeElab
+preludeElabFor generation core = match !preludeElabCacheRef
+  Some (seen, pe, True) if seen == generation => Some pe
+  Some (seen, pe, False) if seen == generation =>
+    let (first, count) = binderSpan core
+    if count /= pe.peBinderCount then
+      None
+    else
+      let moved = relocated (first - pe.peBinderBase) pe
+      preludeElabCacheRef := Some (generation, moved, True)
+      Some moved
+  _ => None
+
+-- A tree-arm drive's published evidence and binder rows, with the rows of the
+-- shipped trees it continued from joined to them.  Every id the drive minted is
+-- past the shipped ones, so neither table already holds one of them.
+export
+withShippedRows : Option PreludeElab ->
+  EvTable ->
+  BinderTypeTable ->
+  (EvTable, BinderTypeTable)
+withShippedRows None evidence binders = (evidence, binders)
+withShippedRows (Some pe) evidence binders = (
+  pe.peEvidence ++ evidence,
+  fold (acc row => addBinderRow row acc) binders pe.peBinders,
+)
+
+-- The evidence and local-abstraction counters of the value this process holds,
+-- if any: every drive of the process starts its interners past them.
+export
+heldPreludeCounters : Unit -> Option (Int, Int)
+heldPreludeCounters _ =
+  map ((_, pe, _) => (pe.peEvCounter, pe.peLocalCounter)) !preludeElabCacheRef

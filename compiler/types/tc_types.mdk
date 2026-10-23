@@ -969,7 +969,9 @@ public export data TraceSink = TraceSink {
 -- target profile's `IO` grants and name (`""` for none), carried as data so this
 -- module need not import `types.target_profile`, and the run `markModules`
 -- returned when the drive checks the trees it marked (`None` otherwise): the mint
--- keeps that run's base and cell arrays.
+-- keeps that run's base and cell arrays.  [diPreludeKey] is the desugar-cache
+-- generation pair of the two prelude trees the drive is handed, when its driver
+-- knows it: the tree arm continues from the prelude's shipped trees only under it.
 public export data DriveInputs = DriveInputs {
   diStdlibOwned : OrdMap Unit,
   diFlatEntryIsStdlib : Bool,
@@ -977,6 +979,7 @@ public export data DriveInputs = DriveInputs {
   diIoJoinGrants : List (String, EffParamTy),
   diProfileName : String,
   diMarked : Option GraphRun,
+  diPreludeKey : Option (Int, Int),
 }
 
 -- What a drive hands back to its caller, as plain data frozen at the drive's end

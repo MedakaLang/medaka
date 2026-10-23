@@ -179,13 +179,15 @@ test "every refusal is an Err of the right class" = match coreElab ()
           (S.take 9 (verdict (readElabFile (withBody text "()\n"))))),
     ]
 
+-- The held value's evidence counter is 0, so the prelude segment it installs
+-- covers no ordinal any later drive of this process mints.
 test "the process cache hits only on its own generation" =
   let pe = PreludeElab {
     peDecls = [],
     peEvidence = [],
     peBinders = [],
-    peEvCounter = 7,
-    peLocalCounter = 1,
+    peEvCounter = 0,
+    peLocalCounter = 7,
     peBinderCount = 0,
     peBinderBase = 0,
   }
@@ -194,11 +196,13 @@ test "the process cache hits only on its own generation" =
   expectAll [
     labelFail
       "empty before a seed"
-      (expectEqual None (map (p => p.peEvCounter) before)),
+      (expectEqual None (map (p => p.peLocalCounter) before)),
     labelFail
       "same generation"
-      (expectEqual (Some 7) (map (p => p.peEvCounter) (preludeElabHit (1, 2)))),
+      (expectEqual
+        (Some 7)
+        (map (p => p.peLocalCounter) (preludeElabHit (1, 2)))),
     labelFail
       "other generation"
-      (expectEqual None (map (p => p.peEvCounter) (preludeElabHit (1, 3)))),
+      (expectEqual None (map (p => p.peLocalCounter) (preludeElabHit (1, 3)))),
   ]
