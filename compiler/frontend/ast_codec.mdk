@@ -22,7 +22,7 @@ import list.{splitAt}
 import support.sexp_value.{
   SExp(..), SexpCursor, SexpError(..), cursorAdvance, cursorAtEnd, cursorAtom,
   cursorClose, cursorFail, cursorFailed, cursorInt, cursorList, cursorOf,
-  cursorOffset, cursorOpen, cursorPeek, cursorChar
+  cursorOffset, cursorOpen, cursorPeek, cursorChar, isOpenByte
 }
 
 -- ── entry points ────────────────────────────────────────────────────────────
@@ -121,6 +121,16 @@ sexpBinderId : BinderId -> SExp
 sexpBinderId (BinderId "" n) = sexpInt n
 sexpBinderId (BinderId m n) = SList [SAtom m, sexpInt n]
 
+-- The bare atoms `t`, `f` and `z`.
+isTrueChar : Int -> Bool
+isTrueChar c = c == 116
+
+isFalseChar : Int -> Bool
+isFalseChar c = c == 102
+
+isPlaceholderChar : Int -> Bool
+isPlaceholderChar c = c == 122
+
 -- Big-endian bytes as the number they spell.
 wordOf : List Int -> Int
 wordOf bytes = fold (acc b => acc * 256 + b) 0 bytes
@@ -139,7 +149,12 @@ export
 readBool : SexpCursor -> Bool
 readBool cur =
   let c = cursorChar cur
-  if c == 116 then True else if c == 102 then False else cursorFail cur False
+  if isTrueChar c then
+    True
+  else if isFalseChar c then
+    False
+  else
+    cursorFail cur False
 
 readFloat : SexpCursor -> Float
 readFloat cur =
@@ -173,7 +188,7 @@ readPair fa fb cur =
 
 readLoc : SexpCursor -> Loc
 readLoc cur =
-  if cursorPeek cur == 40 then
+  if isOpenByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     let f = readString cur
     let a = readInt cur
@@ -182,14 +197,14 @@ readLoc cur =
     let d = readInt cur
     let _ = cursorClose cur
     Loc f a b c d
-  else if cursorChar cur == 122 then
+  else if isPlaceholderChar (cursorChar cur) then
     Loc "" 1 0 1 0
   else
     cursorFail cur dfltLoc
 
 readEvId : SexpCursor -> EvId
 readEvId cur =
-  if cursorPeek cur == 40 then
+  if isOpenByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     let m = readString cur
     let n = readInt cur
@@ -201,7 +216,7 @@ readEvId cur =
 export
 readBinderId : SexpCursor -> BinderId
 readBinderId cur =
-  if cursorPeek cur == 40 then
+  if isOpenByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     let m = readString cur
     let n = readInt cur
@@ -210,50 +225,398 @@ readBinderId cur =
   else
     BinderId "" (readInt cur)
 
+-- A value of a type with several constructors is `(k field...)` or the bare
+-- `k`; [tagged] reads the first, [bare] the second. `readExpr` and `readPat`
+-- spell the same shell out: the call through two closures costs them +10% of
+-- the prelude's decode, and +2.8% with those two inline.
+readTagged : (Int -> SexpCursor -> a) ->
+  (Int -> SexpCursor -> a) ->
+  SexpCursor ->
+  a
+readTagged tagged bare cur =
+  if isOpenByte (cursorPeek cur) then
+    let _ = cursorAdvance cur
+    let v = tagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    bare (cursorInt cur) cur
+
+-- The reader for a form the type has no constructor for.
+refuse : a -> Int -> SexpCursor -> a
+refuse dflt _ cur = cursorFail cur dflt
+
+-- ── tags ───────────────────────────────────────────────────────────────────
+-- Constructor numbers. The writers use these names; a reader clause matches the
+-- same number as a literal, because a top-level `Int` is a forced global read
+-- on every use (+45% decode as a guard chain). `ast_codec_test`'s round trips pin
+-- the pairing.
+tagAtom : Int -> SExp
+tagAtom n = SAtom (intToString n)
+
+-- Lit
+tagLInt : Int
+tagLInt = 0
+tagLFloat : Int
+tagLFloat = 1
+tagLU64 : Int
+tagLU64 = 2
+tagLI64 : Int
+tagLI64 = 3
+tagLString : Int
+tagLString = 4
+tagLChar : Int
+tagLChar = 5
+tagLBool : Int
+tagLBool = 6
+tagLUnit : Int
+tagLUnit = 7
+
+-- TyConOrigin
+tagOriginUnresolved : Int
+tagOriginUnresolved = 0
+tagOriginBuiltin : Int
+tagOriginBuiltin = 1
+tagOriginModule : Int
+tagOriginModule = 2
+
+-- Ty
+tagTyCon : Int
+tagTyCon = 0
+tagTyVar : Int
+tagTyVar = 1
+tagTyApp : Int
+tagTyApp = 2
+tagTyFun : Int
+tagTyFun = 3
+tagTyTuple : Int
+tagTyTuple = 4
+tagTyEffect : Int
+tagTyEffect = 5
+tagTyConstrained : Int
+tagTyConstrained = 6
+tagTyNamed : Int
+tagTyNamed = 7
+tagTyQual : Int
+tagTyQual = 8
+tagTyRow : Int
+tagTyRow = 9
+tagTyAuth : Int
+tagTyAuth = 10
+
+-- EffParamTy
+tagEPTop : Int
+tagEPTop = 0
+tagEPLit : Int
+tagEPLit = 1
+tagEPName : Int
+tagEPName = 2
+tagEPSet : Int
+tagEPSet = 3
+tagEPProduct : Int
+tagEPProduct = 4
+
+-- KindAnn
+tagKindType : Int
+tagKindType = 0
+tagKindEffect : Int
+tagKindEffect = 1
+tagKindAuthority : Int
+tagKindAuthority = 2
+tagKindArrow : Int
+tagKindArrow = 3
+
+-- Route
+tagRNone : Int
+tagRNone = 0
+tagRKey : Int
+tagRKey = 1
+tagRDict : Int
+tagRDict = 2
+tagRDictFwd : Int
+tagRDictFwd = 3
+tagRLocal : Int
+tagRLocal = 4
+tagRScalar : Int
+tagRScalar = 5
+tagRProj : Int
+tagRProj = 6
+
+-- EvVal
+tagEvOne : Int
+tagEvOne = 0
+tagEvMany : Int
+tagEvMany = 1
+tagEvMethod : Int
+tagEvMethod = 2
+tagEvLit : Int
+tagEvLit = 3
+tagEvHead : Int
+tagEvHead = 4
+
+-- Addr
+tagALocal : Int
+tagALocal = 0
+tagAGlobal : Int
+tagAGlobal = 1
+
+-- Pat
+tagPVar : Int
+tagPVar = 0
+tagPWild : Int
+tagPWild = 1
+tagPLit : Int
+tagPLit = 2
+tagPCon : Int
+tagPCon = 3
+tagPCons : Int
+tagPCons = 4
+tagPTuple : Int
+tagPTuple = 5
+tagPList : Int
+tagPList = 6
+tagPAs : Int
+tagPAs = 7
+tagPRng : Int
+tagPRng = 8
+tagPRec : Int
+tagPRec = 9
+
+-- Guard
+tagGBool : Int
+tagGBool = 0
+tagGBind : Int
+tagGBind = 1
+
+-- DoStmt
+tagDoExpr : Int
+tagDoExpr = 0
+tagDoBind : Int
+tagDoBind = 1
+tagDoLet : Int
+tagDoLet = 2
+tagDoAssign : Int
+tagDoAssign = 3
+tagDoFieldAssign : Int
+tagDoFieldAssign = 4
+
+-- InterpPart
+tagInterpStr : Int
+tagInterpStr = 0
+tagInterpExpr : Int
+tagInterpExpr = 1
+
+-- Section
+tagSecBare : Int
+tagSecBare = 0
+tagSecRight : Int
+tagSecRight = 1
+tagSecLeft : Int
+tagSecLeft = 2
+
+-- Expr
+tagELit : Int
+tagELit = 0
+tagEVar : Int
+tagEVar = 1
+tagEApp : Int
+tagEApp = 2
+tagELam : Int
+tagELam = 3
+tagELet : Int
+tagELet = 4
+tagEMatch : Int
+tagEMatch = 5
+tagEIf : Int
+tagEIf = 6
+tagEBinOp : Int
+tagEBinOp = 7
+tagEUnOp : Int
+tagEUnOp = 8
+tagEInfix : Int
+tagEInfix = 9
+tagEFieldAccess : Int
+tagEFieldAccess = 10
+tagETuple : Int
+tagETuple = 11
+tagEListLit : Int
+tagEListLit = 12
+tagEArrayLit : Int
+tagEArrayLit = 13
+tagERangeList : Int
+tagERangeList = 14
+tagERangeArray : Int
+tagERangeArray = 15
+tagESlice : Int
+tagESlice = 16
+tagELetGroup : Int
+tagELetGroup = 17
+tagESection : Int
+tagESection = 18
+tagEIndex : Int
+tagEIndex = 19
+tagEAnnot : Int
+tagEAnnot = 20
+tagEHeadAnnot : Int
+tagEHeadAnnot = 21
+tagEBlock : Int
+tagEBlock = 22
+tagEDo : Int
+tagEDo = 23
+tagEStringInterp : Int
+tagEStringInterp = 24
+tagEGuards : Int
+tagEGuards = 25
+tagERecordCreate : Int
+tagERecordCreate = 26
+tagERecordUpdate : Int
+tagERecordUpdate = 27
+tagEVariantUpdate : Int
+tagEVariantUpdate = 28
+tagEMapLit : Int
+tagEMapLit = 29
+tagESetLit : Int
+tagESetLit = 30
+tagEAsPat : Int
+tagEAsPat = 31
+tagEMethodRef : Int
+tagEMethodRef = 32
+tagEDictApp : Int
+tagEDictApp = 33
+tagEVarAt : Int
+tagEVarAt = 34
+tagEVarId : Int
+tagEVarId = 35
+tagEMethodAt : Int
+tagEMethodAt = 36
+tagEDictAt : Int
+tagEDictAt = 37
+tagELoc : Int
+tagELoc = 38
+tagEDoOrigin : Int
+tagEDoOrigin = 39
+tagENumLit : Int
+tagENumLit = 40
+tagEWideLit : Int
+tagEWideLit = 41
+
+-- UsePath
+tagUseName : Int
+tagUseName = 0
+tagUseGroup : Int
+tagUseGroup = 1
+tagUseWild : Int
+tagUseWild = 2
+tagUseAlias : Int
+tagUseAlias = 3
+
+-- DataVis
+tagVisPrivate : Int
+tagVisPrivate = 0
+tagVisAbstract : Int
+tagVisAbstract = 1
+tagVisPublic : Int
+tagVisPublic = 2
+
+-- ConPayload
+tagConPos : Int
+tagConPos = 0
+tagConNamed : Int
+tagConNamed = 1
+
+-- Attr
+tagAttrDeprecated : Int
+tagAttrDeprecated = 0
+tagAttrInline : Int
+tagAttrInline = 1
+tagAttrMustUse : Int
+tagAttrMustUse = 2
+tagAttrNoInline : Int
+tagAttrNoInline = 3
+
+-- Decl
+tagDTypeSig : Int
+tagDTypeSig = 0
+tagDExtern : Int
+tagDExtern = 1
+tagDFunDef : Int
+tagDFunDef = 2
+tagDData : Int
+tagDData = 3
+tagDUse : Int
+tagDUse = 4
+tagDEffect : Int
+tagDEffect = 5
+tagDProp : Int
+tagDProp = 6
+tagDTest : Int
+tagDTest = 7
+tagDInterface : Int
+tagDInterface = 8
+tagDImpl : Int
+tagDImpl = 9
+tagDTypeAlias : Int
+tagDTypeAlias = 10
+tagDNewtype : Int
+tagDNewtype = 11
+tagDLetGroup : Int
+tagDLetGroup = 12
+tagDAttrib : Int
+tagDAttrib = 13
+
 -- ── writers ────────────────────────────────────────────────────────────────
 
 sexpLit : Lit -> SExp
-sexpLit (LInt a0) = SList [SAtom "0", sexpInt a0]
-sexpLit (LFloat a0) = SList [SAtom "1", sexpFloat a0]
-sexpLit (LU64 a0 a1) = SList [SAtom "2", sexpInt a0, sexpInt a1]
-sexpLit (LI64 a0 a1) = SList [SAtom "3", sexpInt a0, sexpInt a1]
-sexpLit (LString a0) = SList [SAtom "4", sexpString a0]
-sexpLit (LChar a0) = SList [SAtom "5", sexpString a0]
-sexpLit (LBool a0) = SList [SAtom "6", sexpBool a0]
-sexpLit LUnit = SAtom "7"
+sexpLit (LInt a0) = SList [tagAtom tagLInt, sexpInt a0]
+sexpLit (LFloat a0) = SList [tagAtom tagLFloat, sexpFloat a0]
+sexpLit (LU64 a0 a1) = SList [tagAtom tagLU64, sexpInt a0, sexpInt a1]
+sexpLit (LI64 a0 a1) = SList [tagAtom tagLI64, sexpInt a0, sexpInt a1]
+sexpLit (LString a0) = SList [tagAtom tagLString, sexpString a0]
+sexpLit (LChar a0) = SList [tagAtom tagLChar, sexpString a0]
+sexpLit (LBool a0) = SList [tagAtom tagLBool, sexpBool a0]
+sexpLit LUnit = tagAtom tagLUnit
 
 sexpTyConOrigin : TyConOrigin -> SExp
-sexpTyConOrigin OriginUnresolved = SAtom "0"
-sexpTyConOrigin OriginBuiltin = SAtom "1"
-sexpTyConOrigin (OriginModule a0) = SList [SAtom "2", sexpString a0]
+sexpTyConOrigin OriginUnresolved = tagAtom tagOriginUnresolved
+sexpTyConOrigin OriginBuiltin = tagAtom tagOriginBuiltin
+sexpTyConOrigin (OriginModule a0) =
+  SList [tagAtom tagOriginModule, sexpString a0]
 
 sexpTy : Ty -> SExp
-sexpTy (TyCon { tyConName = a0, tyConLoc = a1, tyConOrigin = a2 }) =
-  SList [SAtom "0", sexpString a0, sexpOpt sexpLoc a1, sexpTyConOrigin a2]
-sexpTy (TyVar a0) = SList [SAtom "1", sexpString a0]
-sexpTy (TyApp a0 a1) = SList [SAtom "2", sexpTy a0, sexpTy a1]
-sexpTy (TyFun a0 a1) = SList [SAtom "3", sexpTy a0, sexpTy a1]
-sexpTy (TyTuple a0) = SList [SAtom "4", sexpList sexpTy a0]
+sexpTy (TyCon { tyConName = a0, tyConLoc = a1, tyConOrigin = a2 }) = SList [
+  tagAtom tagTyCon,
+  sexpString a0,
+  sexpOpt sexpLoc a1,
+  sexpTyConOrigin a2,
+]
+sexpTy (TyVar a0) = SList [tagAtom tagTyVar, sexpString a0]
+sexpTy (TyApp a0 a1) = SList [tagAtom tagTyApp, sexpTy a0, sexpTy a1]
+sexpTy (TyFun a0 a1) = SList [tagAtom tagTyFun, sexpTy a0, sexpTy a1]
+sexpTy (TyTuple a0) = SList [tagAtom tagTyTuple, sexpList sexpTy a0]
 sexpTy (TyEffect a0 a1 a2) = SList [
-  SAtom "5",
+  tagAtom tagTyEffect,
   sexpList sexpEffAtomTy a0,
   sexpList sexpString a1,
   sexpTy a2,
 ]
 sexpTy (TyConstrained a0 a1) =
-  SList [SAtom "6", sexpList sexpConstraint a0, sexpTy a1]
+  SList [tagAtom tagTyConstrained, sexpList sexpConstraint a0, sexpTy a1]
 sexpTy (TyNamed a0 a1 a2) =
-  SList [SAtom "7", sexpString a0, sexpTy a1, sexpOpt sexpEffAtomTy a2]
-sexpTy (TyQual a0 a1 a2) =
-  SList [SAtom "8", sexpTy a0, sexpList sexpEffParamTy a1, sexpOpt sexpLoc a2]
+  SList [tagAtom tagTyNamed, sexpString a0, sexpTy a1, sexpOpt sexpEffAtomTy a2]
+sexpTy (TyQual a0 a1 a2) = SList [
+  tagAtom tagTyQual,
+  sexpTy a0,
+  sexpList sexpEffParamTy a1,
+  sexpOpt sexpLoc a2,
+]
 sexpTy (TyRow a0 a1 a2) = SList [
-  SAtom "9",
+  tagAtom tagTyRow,
   sexpList sexpEffAtomTy a0,
   sexpList sexpString a1,
   sexpOpt sexpLoc a2,
 ]
 sexpTy (TyAuth a0 a1) =
-  SList [SAtom "10", sexpList sexpEffParamTy a0, sexpOpt sexpLoc a1]
+  SList [tagAtom tagTyAuth, sexpList sexpEffParamTy a0, sexpOpt sexpLoc a1]
 
 sexpEffAtomTy : EffAtomTy -> SExp
 sexpEffAtomTy (EffAtomTy { eatLabel = a0, eatOrigin = a1, eatParam = a2, eatLoc = a3, eatPattern = a4 }) = SList
@@ -266,106 +629,123 @@ sexpEffAtomTy (EffAtomTy { eatLabel = a0, eatOrigin = a1, eatParam = a2, eatLoc 
   ]
 
 sexpEffParamTy : EffParamTy -> SExp
-sexpEffParamTy EPTop = SAtom "0"
-sexpEffParamTy (EPLit a0) = SList [SAtom "1", sexpString a0]
-sexpEffParamTy (EPName a0) = SList [SAtom "2", sexpString a0]
-sexpEffParamTy (EPSet a0) = SList [SAtom "3", sexpList sexpString a0]
+sexpEffParamTy EPTop = tagAtom tagEPTop
+sexpEffParamTy (EPLit a0) = SList [tagAtom tagEPLit, sexpString a0]
+sexpEffParamTy (EPName a0) = SList [tagAtom tagEPName, sexpString a0]
+sexpEffParamTy (EPSet a0) = SList [tagAtom tagEPSet, sexpList sexpString a0]
 sexpEffParamTy (EPProduct a0) =
-  SList [SAtom "4", sexpList (sexpPair sexpString sexpEffParamTy) a0]
+  SList [tagAtom tagEPProduct, sexpList (sexpPair sexpString sexpEffParamTy) a0]
 
 sexpConstraint : Constraint -> SExp
 sexpConstraint (Constraint { constraintHead = a0, constraintArgs = a1, constraintOrigin = a2 }) =
   SList [sexpString a0, sexpList sexpTy a1, sexpTyConOrigin a2]
 
 sexpKindAnn : KindAnn -> SExp
-sexpKindAnn KindType = SAtom "0"
-sexpKindAnn KindEffect = SAtom "1"
+sexpKindAnn KindType = tagAtom tagKindType
+sexpKindAnn KindEffect = tagAtom tagKindEffect
 sexpKindAnn (KindAuthority a0 a1 a2 a3) = SList [
-  SAtom "2",
+  tagAtom tagKindAuthority,
   sexpString a0,
   sexpTyConOrigin a1,
   sexpBool a2,
   sexpOpt sexpLoc a3,
 ]
 sexpKindAnn (KindArrow a0 a1) =
-  SList [SAtom "3", sexpKindAnn a0, sexpKindAnn a1]
+  SList [tagAtom tagKindArrow, sexpKindAnn a0, sexpKindAnn a1]
 
 sexpRoute : Route -> SExp
-sexpRoute RNone = SAtom "0"
-sexpRoute (RKey a0 a1 a2) =
-  SList [SAtom "1", sexpString a0, sexpList sexpRoute a1, sexpList sexpRoute a2]
-sexpRoute (RDict a0) = SList [SAtom "2", sexpString a0]
-sexpRoute (RDictFwd a0) = SList [SAtom "3", sexpString a0]
+sexpRoute RNone = tagAtom tagRNone
+sexpRoute (RKey a0 a1 a2) = SList [
+  tagAtom tagRKey,
+  sexpString a0,
+  sexpList sexpRoute a1,
+  sexpList sexpRoute a2,
+]
+sexpRoute (RDict a0) = SList [tagAtom tagRDict, sexpString a0]
+sexpRoute (RDictFwd a0) = SList [tagAtom tagRDictFwd, sexpString a0]
 sexpRoute (RLocal a0 a1) =
-  SList [SAtom "4", sexpString a0, sexpList sexpRoute a1]
-sexpRoute (RScalar a0) = SList [SAtom "5", sexpString a0]
-sexpRoute (RProj a0 a1) = SList [SAtom "6", sexpRoute a0, sexpList sexpInt a1]
+  SList [tagAtom tagRLocal, sexpString a0, sexpList sexpRoute a1]
+sexpRoute (RScalar a0) = SList [tagAtom tagRScalar, sexpString a0]
+sexpRoute (RProj a0 a1) =
+  SList [tagAtom tagRProj, sexpRoute a0, sexpList sexpInt a1]
 
 sexpEvVal : EvVal -> SExp
-sexpEvVal (EvOne a0) = SList [SAtom "0", sexpRoute a0]
-sexpEvVal (EvMany a0) = SList [SAtom "1", sexpList sexpRoute a0]
+sexpEvVal (EvOne a0) = SList [tagAtom tagEvOne, sexpRoute a0]
+sexpEvVal (EvMany a0) = SList [tagAtom tagEvMany, sexpList sexpRoute a0]
 sexpEvVal (EvMethod a0 a1 a2 a3 a4) = SList [
-  SAtom "2",
+  tagAtom tagEvMethod,
   sexpString a0,
   sexpInt a1,
   sexpRoute a2,
   sexpList sexpRoute a3,
   sexpList sexpRoute a4,
 ]
-sexpEvVal (EvLit a0 a1) = SList [SAtom "3", sexpOpt sexpFloat a0, sexpRoute a1]
-sexpEvVal (EvHead a0) = SList [SAtom "4", sexpString a0]
+sexpEvVal (EvLit a0 a1) =
+  SList [tagAtom tagEvLit, sexpOpt sexpFloat a0, sexpRoute a1]
+sexpEvVal (EvHead a0) = SList [tagAtom tagEvHead, sexpString a0]
 
 sexpEvEntry : EvEntry -> SExp
 sexpEvEntry (EvEntry a0 a1) = SList [sexpEvId a0, sexpEvVal a1]
 
 sexpAddr : Addr -> SExp
-sexpAddr (ALocal a0 a1) = SList [SAtom "0", sexpInt a0, sexpInt a1]
-sexpAddr AGlobal = SAtom "1"
+sexpAddr (ALocal a0 a1) = SList [tagAtom tagALocal, sexpInt a0, sexpInt a1]
+sexpAddr AGlobal = tagAtom tagAGlobal
 
 sexpPat : Pat -> SExp
 sexpPat (PVar a0 a1 a2) =
-  SList [SAtom "0", sexpString a0, sexpLoc a1, sexpBinderId a2]
-sexpPat PWild = SAtom "1"
-sexpPat (PLit a0) = SList [SAtom "2", sexpLit a0]
-sexpPat (PCon a0 a1) = SList [SAtom "3", sexpString a0, sexpList sexpPat a1]
-sexpPat (PCons a0 a1) = SList [SAtom "4", sexpPat a0, sexpPat a1]
-sexpPat (PTuple a0) = SList [SAtom "5", sexpList sexpPat a0]
-sexpPat (PList a0) = SList [SAtom "6", sexpList sexpPat a0]
+  SList [tagAtom tagPVar, sexpString a0, sexpLoc a1, sexpBinderId a2]
+sexpPat PWild = tagAtom tagPWild
+sexpPat (PLit a0) = SList [tagAtom tagPLit, sexpLit a0]
+sexpPat (PCon a0 a1) =
+  SList [tagAtom tagPCon, sexpString a0, sexpList sexpPat a1]
+sexpPat (PCons a0 a1) = SList [tagAtom tagPCons, sexpPat a0, sexpPat a1]
+sexpPat (PTuple a0) = SList [tagAtom tagPTuple, sexpList sexpPat a0]
+sexpPat (PList a0) = SList [tagAtom tagPList, sexpList sexpPat a0]
 sexpPat (PAs a0 a1 a2 a3) =
-  SList [SAtom "7", sexpString a0, sexpLoc a1, sexpBinderId a2, sexpPat a3]
-sexpPat (PRng a0 a1 a2) = SList [SAtom "8", sexpLit a0, sexpLit a1, sexpBool a2]
-sexpPat (PRec a0 a1 a2) =
-  SList [SAtom "9", sexpString a0, sexpList sexpRecPatField a1, sexpBool a2]
+  SList [tagAtom tagPAs, sexpString a0, sexpLoc a1, sexpBinderId a2, sexpPat a3]
+sexpPat (PRng a0 a1 a2) =
+  SList [tagAtom tagPRng, sexpLit a0, sexpLit a1, sexpBool a2]
+sexpPat (PRec a0 a1 a2) = SList [
+  tagAtom tagPRec,
+  sexpString a0,
+  sexpList sexpRecPatField a1,
+  sexpBool a2,
+]
 
 sexpRecPatField : RecPatField -> SExp
 sexpRecPatField (RecPatField a0 a1 a2 a3) =
   SList [sexpString a0, sexpLoc a1, sexpBinderId a2, sexpOpt sexpPat a3]
 
 sexpGuard : Guard -> SExp
-sexpGuard (GBool a0) = SList [SAtom "0", sexpExpr a0]
-sexpGuard (GBind a0 a1) = SList [SAtom "1", sexpPat a0, sexpExpr a1]
+sexpGuard (GBool a0) = SList [tagAtom tagGBool, sexpExpr a0]
+sexpGuard (GBind a0 a1) = SList [tagAtom tagGBind, sexpPat a0, sexpExpr a1]
 
 sexpArm : Arm -> SExp
 sexpArm (Arm a0 a1 a2) = SList [sexpPat a0, sexpList sexpGuard a1, sexpExpr a2]
 
 sexpDoStmt : DoStmt -> SExp
-sexpDoStmt (DoExpr a0) = SList [SAtom "0", sexpExpr a0]
-sexpDoStmt (DoBind a0 a1) = SList [SAtom "1", sexpPat a0, sexpExpr a1]
+sexpDoStmt (DoExpr a0) = SList [tagAtom tagDoExpr, sexpExpr a0]
+sexpDoStmt (DoBind a0 a1) = SList [tagAtom tagDoBind, sexpPat a0, sexpExpr a1]
 sexpDoStmt (DoLet a0 a1 a2 a3 a4) = SList [
-  SAtom "2",
+  tagAtom tagDoLet,
   sexpBool a0,
   sexpBool a1,
   sexpPat a2,
   sexpExpr a3,
   sexpLoc a4,
 ]
-sexpDoStmt (DoAssign a0 a1) = SList [SAtom "3", sexpString a0, sexpExpr a1]
-sexpDoStmt (DoFieldAssign a0 a1 a2) =
-  SList [SAtom "4", sexpString a0, sexpList sexpString a1, sexpExpr a2]
+sexpDoStmt (DoAssign a0 a1) =
+  SList [tagAtom tagDoAssign, sexpString a0, sexpExpr a1]
+sexpDoStmt (DoFieldAssign a0 a1 a2) = SList [
+  tagAtom tagDoFieldAssign,
+  sexpString a0,
+  sexpList sexpString a1,
+  sexpExpr a2,
+]
 
 sexpInterpPart : InterpPart -> SExp
-sexpInterpPart (InterpStr a0) = SList [SAtom "0", sexpString a0]
-sexpInterpPart (InterpExpr a0) = SList [SAtom "1", sexpExpr a0]
+sexpInterpPart (InterpStr a0) = SList [tagAtom tagInterpStr, sexpString a0]
+sexpInterpPart (InterpExpr a0) = SList [tagAtom tagInterpExpr, sexpExpr a0]
 
 sexpGuardArm : GuardArm -> SExp
 sexpGuardArm (GuardArm a0 a1) = SList [sexpList sexpGuard a0, sexpExpr a1]
@@ -374,9 +754,11 @@ sexpFieldAssign : FieldAssign -> SExp
 sexpFieldAssign (FieldAssign a0 a1) = SList [sexpString a0, sexpExpr a1]
 
 sexpSection : Section -> SExp
-sexpSection (SecBare a0) = SList [SAtom "0", sexpString a0]
-sexpSection (SecRight a0 a1) = SList [SAtom "1", sexpString a0, sexpExpr a1]
-sexpSection (SecLeft a0 a1) = SList [SAtom "2", sexpExpr a0, sexpString a1]
+sexpSection (SecBare a0) = SList [tagAtom tagSecBare, sexpString a0]
+sexpSection (SecRight a0 a1) =
+  SList [tagAtom tagSecRight, sexpString a0, sexpExpr a1]
+sexpSection (SecLeft a0 a1) =
+  SList [tagAtom tagSecLeft, sexpExpr a0, sexpString a1]
 
 sexpFunClause : FunClause -> SExp
 sexpFunClause (FunClause a0 a1) = SList [sexpList sexpPat a0, sexpExpr a1]
@@ -386,84 +768,112 @@ sexpLetBind (LetBind a0 a1 a2 a3) =
   SList [sexpString a0, sexpList sexpFunClause a1, sexpLoc a2, sexpBinderId a3]
 
 sexpExpr : Expr -> SExp
-sexpExpr (ELit a0) = SList [SAtom "0", sexpLit a0]
-sexpExpr (EVar a0) = SList [SAtom "1", sexpString a0]
-sexpExpr (EApp a0 a1) = SList [SAtom "2", sexpExpr a0, sexpExpr a1]
-sexpExpr (ELam a0 a1) = SList [SAtom "3", sexpList sexpPat a0, sexpExpr a1]
+sexpExpr (ELit a0) = SList [tagAtom tagELit, sexpLit a0]
+sexpExpr (EVar a0) = SList [tagAtom tagEVar, sexpString a0]
+sexpExpr (EApp a0 a1) = SList [tagAtom tagEApp, sexpExpr a0, sexpExpr a1]
+sexpExpr (ELam a0 a1) =
+  SList [tagAtom tagELam, sexpList sexpPat a0, sexpExpr a1]
 sexpExpr (ELet a0 a1 a2 a3 a4) = SList [
-  SAtom "4",
+  tagAtom tagELet,
   sexpLoc a0,
   sexpBool a1,
   sexpPat a2,
   sexpExpr a3,
   sexpExpr a4,
 ]
-sexpExpr (EMatch a0 a1) = SList [SAtom "5", sexpExpr a0, sexpList sexpArm a1]
+sexpExpr (EMatch a0 a1) =
+  SList [tagAtom tagEMatch, sexpExpr a0, sexpList sexpArm a1]
 sexpExpr (EIf a0 a1 a2) =
-  SList [SAtom "6", sexpExpr a0, sexpExpr a1, sexpExpr a2]
-sexpExpr (EBinOp a0 a1 a2 a3) =
-  SList [SAtom "7", sexpString a0, sexpExpr a1, sexpExpr a2, sexpEvId a3]
+  SList [tagAtom tagEIf, sexpExpr a0, sexpExpr a1, sexpExpr a2]
+sexpExpr (EBinOp a0 a1 a2 a3) = SList [
+  tagAtom tagEBinOp,
+  sexpString a0,
+  sexpExpr a1,
+  sexpExpr a2,
+  sexpEvId a3,
+]
 sexpExpr (EUnOp a0 a1 a2) =
-  SList [SAtom "8", sexpString a0, sexpExpr a1, sexpEvId a2]
+  SList [tagAtom tagEUnOp, sexpString a0, sexpExpr a1, sexpEvId a2]
 sexpExpr (EInfix a0 a1 a2) =
-  SList [SAtom "9", sexpString a0, sexpExpr a1, sexpExpr a2]
+  SList [tagAtom tagEInfix, sexpString a0, sexpExpr a1, sexpExpr a2]
 sexpExpr (EFieldAccess a0 a1 a2) =
-  SList [SAtom "10", sexpExpr a0, sexpString a1, sexpEvId a2]
-sexpExpr (ETuple a0) = SList [SAtom "11", sexpList sexpExpr a0]
-sexpExpr (EListLit a0) = SList [SAtom "12", sexpList sexpExpr a0]
-sexpExpr (EArrayLit a0) = SList [SAtom "13", sexpList sexpExpr a0]
+  SList [tagAtom tagEFieldAccess, sexpExpr a0, sexpString a1, sexpEvId a2]
+sexpExpr (ETuple a0) = SList [tagAtom tagETuple, sexpList sexpExpr a0]
+sexpExpr (EListLit a0) = SList [tagAtom tagEListLit, sexpList sexpExpr a0]
+sexpExpr (EArrayLit a0) = SList [tagAtom tagEArrayLit, sexpList sexpExpr a0]
 sexpExpr (ERangeList a0 a1 a2) =
-  SList [SAtom "14", sexpExpr a0, sexpExpr a1, sexpBool a2]
+  SList [tagAtom tagERangeList, sexpExpr a0, sexpExpr a1, sexpBool a2]
 sexpExpr (ERangeArray a0 a1 a2) =
-  SList [SAtom "15", sexpExpr a0, sexpExpr a1, sexpBool a2]
+  SList [tagAtom tagERangeArray, sexpExpr a0, sexpExpr a1, sexpBool a2]
 sexpExpr (ESlice a0 a1 a2 a3) =
-  SList [SAtom "16", sexpExpr a0, sexpExpr a1, sexpExpr a2, sexpBool a3]
+  SList [tagAtom tagESlice, sexpExpr a0, sexpExpr a1, sexpExpr a2, sexpBool a3]
 sexpExpr (ELetGroup a0 a1) =
-  SList [SAtom "17", sexpList sexpLetBind a0, sexpExpr a1]
-sexpExpr (ESection a0) = SList [SAtom "18", sexpSection a0]
-sexpExpr (EIndex a0 a1) = SList [SAtom "19", sexpExpr a0, sexpExpr a1]
-sexpExpr (EAnnot a0 a1) = SList [SAtom "20", sexpExpr a0, sexpTy a1]
-sexpExpr (EHeadAnnot a0 a1) = SList [SAtom "21", sexpExpr a0, sexpTy a1]
-sexpExpr (EBlock a0) = SList [SAtom "22", sexpList sexpDoStmt a0]
-sexpExpr (EDo a0 a1) = SList [SAtom "23", sexpBool a0, sexpList sexpDoStmt a1]
-sexpExpr (EStringInterp a0) = SList [SAtom "24", sexpList sexpInterpPart a0]
-sexpExpr (EGuards a0) = SList [SAtom "25", sexpList sexpGuardArm a0]
+  SList [tagAtom tagELetGroup, sexpList sexpLetBind a0, sexpExpr a1]
+sexpExpr (ESection a0) = SList [tagAtom tagESection, sexpSection a0]
+sexpExpr (EIndex a0 a1) = SList [tagAtom tagEIndex, sexpExpr a0, sexpExpr a1]
+sexpExpr (EAnnot a0 a1) = SList [tagAtom tagEAnnot, sexpExpr a0, sexpTy a1]
+sexpExpr (EHeadAnnot a0 a1) =
+  SList [tagAtom tagEHeadAnnot, sexpExpr a0, sexpTy a1]
+sexpExpr (EBlock a0) = SList [tagAtom tagEBlock, sexpList sexpDoStmt a0]
+sexpExpr (EDo a0 a1) =
+  SList [tagAtom tagEDo, sexpBool a0, sexpList sexpDoStmt a1]
+sexpExpr (EStringInterp a0) =
+  SList [tagAtom tagEStringInterp, sexpList sexpInterpPart a0]
+sexpExpr (EGuards a0) = SList [tagAtom tagEGuards, sexpList sexpGuardArm a0]
 sexpExpr (ERecordCreate a0 a1) =
-  SList [SAtom "26", sexpString a0, sexpList sexpFieldAssign a1]
-sexpExpr (ERecordUpdate a0 a1 a2) =
-  SList [SAtom "27", sexpExpr a0, sexpList sexpFieldAssign a1, sexpEvId a2]
-sexpExpr (EVariantUpdate a0 a1 a2) =
-  SList [SAtom "28", sexpString a0, sexpExpr a1, sexpList sexpFieldAssign a2]
-sexpExpr (EMapLit a0 a1) =
-  SList [SAtom "29", sexpString a0, sexpList (sexpPair sexpExpr sexpExpr) a1]
+  SList [tagAtom tagERecordCreate, sexpString a0, sexpList sexpFieldAssign a1]
+sexpExpr (ERecordUpdate a0 a1 a2) = SList [
+  tagAtom tagERecordUpdate,
+  sexpExpr a0,
+  sexpList sexpFieldAssign a1,
+  sexpEvId a2,
+]
+sexpExpr (EVariantUpdate a0 a1 a2) = SList [
+  tagAtom tagEVariantUpdate,
+  sexpString a0,
+  sexpExpr a1,
+  sexpList sexpFieldAssign a2,
+]
+sexpExpr (EMapLit a0 a1) = SList [
+  tagAtom tagEMapLit,
+  sexpString a0,
+  sexpList (sexpPair sexpExpr sexpExpr) a1,
+]
 sexpExpr (ESetLit a0 a1) =
-  SList [SAtom "30", sexpString a0, sexpList sexpExpr a1]
-sexpExpr (EAsPat a0 a1) = SList [SAtom "31", sexpString a0, sexpExpr a1]
-sexpExpr (EMethodRef a0) = SList [SAtom "32", sexpString a0]
-sexpExpr (EDictApp a0) = SList [SAtom "33", sexpString a0]
-sexpExpr (EVarAt a0 a1) = SList [SAtom "34", sexpString a0, sexpAddr a1]
-sexpExpr (EVarId a0 a1) = SList [SAtom "35", sexpString a0, sexpInt a1]
+  SList [tagAtom tagESetLit, sexpString a0, sexpList sexpExpr a1]
+sexpExpr (EAsPat a0 a1) = SList [tagAtom tagEAsPat, sexpString a0, sexpExpr a1]
+sexpExpr (EMethodRef a0) = SList [tagAtom tagEMethodRef, sexpString a0]
+sexpExpr (EDictApp a0) = SList [tagAtom tagEDictApp, sexpString a0]
+sexpExpr (EVarAt a0 a1) = SList [tagAtom tagEVarAt, sexpString a0, sexpAddr a1]
+sexpExpr (EVarId a0 a1) = SList [tagAtom tagEVarId, sexpString a0, sexpInt a1]
 sexpExpr (EMethodAt a0 a1 a2) =
-  SList [SAtom "36", sexpString a0, sexpString a1, sexpEvId a2]
-sexpExpr (EDictAt a0 a1) = SList [SAtom "37", sexpString a0, sexpEvId a1]
-sexpExpr (ELoc a0 a1) = SList [SAtom "38", sexpLoc a0, sexpExpr a1]
-sexpExpr (EDoOrigin a0 a1) = SList [SAtom "39", sexpLoc a0, sexpExpr a1]
+  SList [tagAtom tagEMethodAt, sexpString a0, sexpString a1, sexpEvId a2]
+sexpExpr (EDictAt a0 a1) =
+  SList [tagAtom tagEDictAt, sexpString a0, sexpEvId a1]
+sexpExpr (ELoc a0 a1) = SList [tagAtom tagELoc, sexpLoc a0, sexpExpr a1]
+sexpExpr (EDoOrigin a0 a1) =
+  SList [tagAtom tagEDoOrigin, sexpLoc a0, sexpExpr a1]
 sexpExpr (ENumLit a0 a1 a2) =
-  SList [SAtom "40", sexpInt a0, sexpEvId a1, sexpString a2]
-sexpExpr (EWideLit a0 a1 a2 a3) =
-  SList [SAtom "41", sexpInt a0, sexpInt a1, sexpEvId a2, sexpString a3]
+  SList [tagAtom tagENumLit, sexpInt a0, sexpEvId a1, sexpString a2]
+sexpExpr (EWideLit a0 a1 a2 a3) = SList [
+  tagAtom tagEWideLit,
+  sexpInt a0,
+  sexpInt a1,
+  sexpEvId a2,
+  sexpString a3,
+]
 
 sexpUseMember : UseMember -> SExp
 sexpUseMember (UseMember a0 a1 a2 a3) =
   SList [sexpString a0, sexpBool a1, sexpLoc a2, sexpOpt sexpString a3]
 
 sexpUsePath : UsePath -> SExp
-sexpUsePath (UseName a0) = SList [SAtom "0", sexpList sexpString a0]
+sexpUsePath (UseName a0) = SList [tagAtom tagUseName, sexpList sexpString a0]
 sexpUsePath (UseGroup a0 a1) =
-  SList [SAtom "1", sexpList sexpString a0, sexpList sexpUseMember a1]
-sexpUsePath (UseWild a0) = SList [SAtom "2", sexpList sexpString a0]
+  SList [tagAtom tagUseGroup, sexpList sexpString a0, sexpList sexpUseMember a1]
+sexpUsePath (UseWild a0) = SList [tagAtom tagUseWild, sexpList sexpString a0]
 sexpUsePath (UseAlias a0 a1) =
-  SList [SAtom "3", sexpList sexpString a0, sexpString a1]
+  SList [tagAtom tagUseAlias, sexpList sexpString a0, sexpString a1]
 
 sexpPropParam : PropParam -> SExp
 sexpPropParam (PropParam a0 a1 a2) =
@@ -494,26 +904,27 @@ sexpImplMethod (ImplMethod a0 a1 a2) =
   SList [sexpString a0, sexpList sexpPat a1, sexpExpr a2]
 
 sexpDataVis : DataVis -> SExp
-sexpDataVis VisPrivate = SAtom "0"
-sexpDataVis VisAbstract = SAtom "1"
-sexpDataVis VisPublic = SAtom "2"
+sexpDataVis VisPrivate = tagAtom tagVisPrivate
+sexpDataVis VisAbstract = tagAtom tagVisAbstract
+sexpDataVis VisPublic = tagAtom tagVisPublic
 
 sexpField : Field -> SExp
 sexpField (Field a0 a1) = SList [sexpString a0, sexpTy a1]
 
 sexpConPayload : ConPayload -> SExp
-sexpConPayload (ConPos a0) = SList [SAtom "0", sexpList sexpTy a0]
+sexpConPayload (ConPos a0) = SList [tagAtom tagConPos, sexpList sexpTy a0]
 sexpConPayload (ConNamed a0 a1) =
-  SList [SAtom "1", sexpList sexpField a0, sexpBool a1]
+  SList [tagAtom tagConNamed, sexpList sexpField a0, sexpBool a1]
 
 sexpVariant : Variant -> SExp
 sexpVariant (Variant a0 a1) = SList [sexpString a0, sexpConPayload a1]
 
 sexpAttr : Attr -> SExp
-sexpAttr (AttrDeprecated a0) = SList [SAtom "0", sexpOpt sexpString a0]
-sexpAttr AttrInline = SAtom "1"
-sexpAttr AttrMustUse = SAtom "2"
-sexpAttr AttrNoInline = SAtom "3"
+sexpAttr (AttrDeprecated a0) =
+  SList [tagAtom tagAttrDeprecated, sexpOpt sexpString a0]
+sexpAttr AttrInline = tagAtom tagAttrInline
+sexpAttr AttrMustUse = tagAtom tagAttrMustUse
+sexpAttr AttrNoInline = tagAtom tagAttrNoInline
 
 sexpDeriveRef : DeriveRef -> SExp
 sexpDeriveRef (DeriveRef a0 a1) = SList [sexpString a0, sexpOpt sexpLoc a1]
@@ -534,10 +945,10 @@ sexpExternBind (ExternBind { ebHost = a0, ebSymbol = a1, ebLoc = a2 }) =
 
 sexpDecl : Decl -> SExp
 sexpDecl (DTypeSig a0 a1 a2 a3) =
-  SList [SAtom "0", sexpBool a0, sexpString a1, sexpTy a2, sexpLoc a3]
-sexpDecl (DExtern a0) = SList [SAtom "1", sexpExternDecl a0]
+  SList [tagAtom tagDTypeSig, sexpBool a0, sexpString a1, sexpTy a2, sexpLoc a3]
+sexpDecl (DExtern a0) = SList [tagAtom tagDExtern, sexpExternDecl a0]
 sexpDecl (DFunDef a0 a1 a2 a3 a4 a5) = SList [
-  SAtom "2",
+  tagAtom tagDFunDef,
   sexpBool a0,
   sexpString a1,
   sexpList sexpPat a2,
@@ -547,7 +958,7 @@ sexpDecl (DFunDef a0 a1 a2 a3 a4 a5) = SList [
 ]
 sexpDecl (DData { dataVis = a0, dataName = a1, dataParams = a2, dataParamKinds = a3, dataCtors = a4, dataCtorBinders = a5, dataDerives = a6, dataOrigin = a7, dataExtern = a8, dataNameLoc = a9 }) = SList
   [
-    SAtom "3",
+    tagAtom tagDData,
     sexpDataVis a0,
     sexpString a1,
     sexpList sexpString a2,
@@ -560,9 +971,9 @@ sexpDecl (DData { dataVis = a0, dataName = a1, dataParams = a2, dataParamKinds =
     sexpOpt sexpLoc a9,
   ]
 sexpDecl (DUse a0 a1 a2) =
-  SList [SAtom "4", sexpBool a0, sexpUsePath a1, sexpLoc a2]
+  SList [tagAtom tagDUse, sexpBool a0, sexpUsePath a1, sexpLoc a2]
 sexpDecl (DEffect a0 a1 a2 a3 a4 a5) = SList [
-  SAtom "5",
+  tagAtom tagDEffect,
   sexpBool a0,
   sexpString a1,
   sexpOpt sexpString a2,
@@ -571,17 +982,17 @@ sexpDecl (DEffect a0 a1 a2 a3 a4 a5) = SList [
   sexpOpt sexpLoc a5,
 ]
 sexpDecl (DProp a0 a1 a2 a3) = SList [
-  SAtom "6",
+  tagAtom tagDProp,
   sexpBool a0,
   sexpString a1,
   sexpList sexpPropParam a2,
   sexpExpr a3,
 ]
 sexpDecl (DTest a0 a1 a2) =
-  SList [SAtom "7", sexpBool a0, sexpString a1, sexpExpr a2]
+  SList [tagAtom tagDTest, sexpBool a0, sexpString a1, sexpExpr a2]
 sexpDecl (DInterface { pub = a0, def = a1, name = a2, typarams = a3, typaramKinds = a4, supers = a5, methods = a6, ifaceOrigin = a7, ifaceNameLoc = a8 }) = SList
   [
-    SAtom "8",
+    tagAtom tagDInterface,
     sexpBool a0,
     sexpBool a1,
     sexpString a2,
@@ -594,7 +1005,7 @@ sexpDecl (DInterface { pub = a0, def = a1, name = a2, typarams = a3, typaramKind
   ]
 sexpDecl (DImpl { pub = a0, iface = a1, tys = a2, reqs = a3, methods = a4, implOrigin = a5, implIfaceLoc = a6 }) = SList
   [
-    SAtom "9",
+    tagAtom tagDImpl,
     sexpBool a0,
     sexpString a1,
     sexpList sexpTy a2,
@@ -605,7 +1016,7 @@ sexpDecl (DImpl { pub = a0, iface = a1, tys = a2, reqs = a3, methods = a4, implO
   ]
 sexpDecl (DTypeAlias { tyAliasPub = a0, tyAliasName = a1, tyAliasParams = a2, tyAliasParamKinds = a3, tyAliasRhs = a4, tyAliasOrigin = a5, tyAliasNameLoc = a6 }) = SList
   [
-    SAtom "10",
+    tagAtom tagDTypeAlias,
     sexpBool a0,
     sexpString a1,
     sexpList sexpString a2,
@@ -616,7 +1027,7 @@ sexpDecl (DTypeAlias { tyAliasPub = a0, tyAliasName = a1, tyAliasParams = a2, ty
   ]
 sexpDecl (DNewtype { newtypePub = a0, newtypeName = a1, newtypeParams = a2, newtypeParamKinds = a3, newtypeCtor = a4, newtypeCtorBinders = a5, newtypeFieldTy = a6, newtypeDerives = a7, newtypeOrigin = a8, newtypeNameLoc = a9 }) = SList
   [
-    SAtom "11",
+    tagAtom tagDNewtype,
     sexpBool a0,
     sexpString a1,
     sexpList sexpString a2,
@@ -629,8 +1040,9 @@ sexpDecl (DNewtype { newtypePub = a0, newtypeName = a1, newtypeParams = a2, newt
     sexpOpt sexpLoc a9,
   ]
 sexpDecl (DLetGroup a0 a1) =
-  SList [SAtom "12", sexpBool a0, sexpList sexpLetBind a1]
-sexpDecl (DAttrib a0 a1) = SList [SAtom "13", sexpList sexpAttr a0, sexpDecl a1]
+  SList [tagAtom tagDLetGroup, sexpBool a0, sexpList sexpLetBind a1]
+sexpDecl (DAttrib a0 a1) =
+  SList [tagAtom tagDAttrib, sexpList sexpAttr a0, sexpDecl a1]
 
 -- ── placeholders for a refused read ────────────────────────────────────────
 -- A reader that refuses still has to return a value of its type; the cursor's
@@ -700,14 +1112,7 @@ dfltDecl = DTypeSig False "" dfltTy dfltLoc
 -- ── readers ────────────────────────────────────────────────────────────────
 
 readLit : SexpCursor -> Lit
-readLit cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readLitTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readLitBare (cursorInt cur) cur
+readLit cur = readTagged readLitTagged readLitBare cur
 
 readLitBare : Int -> SexpCursor -> Lit
 readLitBare 7 _ = LUnit
@@ -740,14 +1145,7 @@ readLitTagged 6 cur =
 readLitTagged _ cur = cursorFail cur dfltLit
 
 readTyConOrigin : SexpCursor -> TyConOrigin
-readTyConOrigin cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readTyConOriginTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readTyConOriginBare (cursorInt cur) cur
+readTyConOrigin cur = readTagged readTyConOriginTagged readTyConOriginBare cur
 
 readTyConOriginBare : Int -> SexpCursor -> TyConOrigin
 readTyConOriginBare 0 _ = OriginUnresolved
@@ -761,17 +1159,7 @@ readTyConOriginTagged 2 cur =
 readTyConOriginTagged _ cur = cursorFail cur dfltTyConOrigin
 
 readTy : SexpCursor -> Ty
-readTy cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readTyTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readTyBare (cursorInt cur) cur
-
-readTyBare : Int -> SexpCursor -> Ty
-readTyBare _ cur = cursorFail cur dfltTy
+readTy cur = readTagged readTyTagged (refuse dfltTy) cur
 
 readTyTagged : Int -> SexpCursor -> Ty
 readTyTagged 0 cur =
@@ -841,14 +1229,7 @@ readEffAtomTy cur =
   }
 
 readEffParamTy : SexpCursor -> EffParamTy
-readEffParamTy cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readEffParamTyTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readEffParamTyBare (cursorInt cur) cur
+readEffParamTy cur = readTagged readEffParamTyTagged readEffParamTyBare cur
 
 readEffParamTyBare : Int -> SexpCursor -> EffParamTy
 readEffParamTyBare 0 _ = EPTop
@@ -879,14 +1260,7 @@ readConstraint cur =
   Constraint { constraintHead = a0, constraintArgs = a1, constraintOrigin = a2 }
 
 readKindAnn : SexpCursor -> KindAnn
-readKindAnn cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readKindAnnTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readKindAnnBare (cursorInt cur) cur
+readKindAnn cur = readTagged readKindAnnTagged readKindAnnBare cur
 
 readKindAnnBare : Int -> SexpCursor -> KindAnn
 readKindAnnBare 0 _ = KindType
@@ -907,14 +1281,7 @@ readKindAnnTagged 3 cur =
 readKindAnnTagged _ cur = cursorFail cur dfltKindAnn
 
 readRoute : SexpCursor -> Route
-readRoute cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readRouteTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readRouteBare (cursorInt cur) cur
+readRoute cur = readTagged readRouteTagged readRouteBare cur
 
 readRouteBare : Int -> SexpCursor -> Route
 readRouteBare 0 _ = RNone
@@ -946,17 +1313,7 @@ readRouteTagged 6 cur =
 readRouteTagged _ cur = cursorFail cur dfltRoute
 
 readEvVal : SexpCursor -> EvVal
-readEvVal cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readEvValTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readEvValBare (cursorInt cur) cur
-
-readEvValBare : Int -> SexpCursor -> EvVal
-readEvValBare _ cur = cursorFail cur dfltEvVal
+readEvVal cur = readTagged readEvValTagged (refuse dfltEvVal) cur
 
 readEvValTagged : Int -> SexpCursor -> EvVal
 readEvValTagged 0 cur =
@@ -990,14 +1347,7 @@ readEvEntry cur =
   EvEntry a0 a1
 
 readAddr : SexpCursor -> Addr
-readAddr cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readAddrTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readAddrBare (cursorInt cur) cur
+readAddr cur = readTagged readAddrTagged readAddrBare cur
 
 readAddrBare : Int -> SexpCursor -> Addr
 readAddrBare 1 _ = AGlobal
@@ -1012,7 +1362,7 @@ readAddrTagged _ cur = cursorFail cur dfltAddr
 
 readPat : SexpCursor -> Pat
 readPat cur =
-  if cursorPeek cur == 40 then
+  if isOpenByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     let v = readPatTagged (cursorInt cur) cur
     let _ = cursorClose cur
@@ -1076,17 +1426,7 @@ readRecPatField cur =
   RecPatField a0 a1 a2 a3
 
 readGuard : SexpCursor -> Guard
-readGuard cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readGuardTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readGuardBare (cursorInt cur) cur
-
-readGuardBare : Int -> SexpCursor -> Guard
-readGuardBare _ cur = cursorFail cur dfltGuard
+readGuard cur = readTagged readGuardTagged (refuse dfltGuard) cur
 
 readGuardTagged : Int -> SexpCursor -> Guard
 readGuardTagged 0 cur =
@@ -1108,17 +1448,7 @@ readArm cur =
   Arm a0 a1 a2
 
 readDoStmt : SexpCursor -> DoStmt
-readDoStmt cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readDoStmtTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readDoStmtBare (cursorInt cur) cur
-
-readDoStmtBare : Int -> SexpCursor -> DoStmt
-readDoStmtBare _ cur = cursorFail cur dfltDoStmt
+readDoStmt cur = readTagged readDoStmtTagged (refuse dfltDoStmt) cur
 
 readDoStmtTagged : Int -> SexpCursor -> DoStmt
 readDoStmtTagged 0 cur =
@@ -1147,17 +1477,7 @@ readDoStmtTagged 4 cur =
 readDoStmtTagged _ cur = cursorFail cur dfltDoStmt
 
 readInterpPart : SexpCursor -> InterpPart
-readInterpPart cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readInterpPartTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readInterpPartBare (cursorInt cur) cur
-
-readInterpPartBare : Int -> SexpCursor -> InterpPart
-readInterpPartBare _ cur = cursorFail cur dfltInterpPart
+readInterpPart cur = readTagged readInterpPartTagged (refuse dfltInterpPart) cur
 
 readInterpPartTagged : Int -> SexpCursor -> InterpPart
 readInterpPartTagged 0 cur =
@@ -1185,17 +1505,7 @@ readFieldAssign cur =
   FieldAssign a0 a1
 
 readSection : SexpCursor -> Section
-readSection cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readSectionTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readSectionBare (cursorInt cur) cur
-
-readSectionBare : Int -> SexpCursor -> Section
-readSectionBare _ cur = cursorFail cur dfltSection
+readSection cur = readTagged readSectionTagged (refuse dfltSection) cur
 
 readSectionTagged : Int -> SexpCursor -> Section
 readSectionTagged 0 cur =
@@ -1231,16 +1541,13 @@ readLetBind cur =
 
 readExpr : SexpCursor -> Expr
 readExpr cur =
-  if cursorPeek cur == 40 then
+  if isOpenByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     let v = readExprTagged (cursorInt cur) cur
     let _ = cursorClose cur
     v
   else
-    readExprBare (cursorInt cur) cur
-
-readExprBare : Int -> SexpCursor -> Expr
-readExprBare _ cur = cursorFail cur dfltExpr
+    cursorFail cur dfltExpr
 
 readExprTagged : Int -> SexpCursor -> Expr
 readExprTagged 0 cur =
@@ -1432,17 +1739,7 @@ readUseMember cur =
   UseMember a0 a1 a2 a3
 
 readUsePath : SexpCursor -> UsePath
-readUsePath cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readUsePathTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readUsePathBare (cursorInt cur) cur
-
-readUsePathBare : Int -> SexpCursor -> UsePath
-readUsePathBare _ cur = cursorFail cur dfltUsePath
+readUsePath cur = readTagged readUsePathTagged (refuse dfltUsePath) cur
 
 readUsePathTagged : Int -> SexpCursor -> UsePath
 readUsePathTagged 0 cur =
@@ -1516,23 +1813,13 @@ readImplMethod cur =
   ImplMethod a0 a1 a2
 
 readDataVis : SexpCursor -> DataVis
-readDataVis cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readDataVisTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readDataVisBare (cursorInt cur) cur
+readDataVis cur = readTagged (refuse dfltDataVis) readDataVisBare cur
 
 readDataVisBare : Int -> SexpCursor -> DataVis
 readDataVisBare 0 _ = VisPrivate
 readDataVisBare 1 _ = VisAbstract
 readDataVisBare 2 _ = VisPublic
 readDataVisBare _ cur = cursorFail cur dfltDataVis
-
-readDataVisTagged : Int -> SexpCursor -> DataVis
-readDataVisTagged _ cur = cursorFail cur dfltDataVis
 
 readField : SexpCursor -> Field
 readField cur =
@@ -1543,17 +1830,7 @@ readField cur =
   Field a0 a1
 
 readConPayload : SexpCursor -> ConPayload
-readConPayload cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readConPayloadTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readConPayloadBare (cursorInt cur) cur
-
-readConPayloadBare : Int -> SexpCursor -> ConPayload
-readConPayloadBare _ cur = cursorFail cur dfltConPayload
+readConPayload cur = readTagged readConPayloadTagged (refuse dfltConPayload) cur
 
 readConPayloadTagged : Int -> SexpCursor -> ConPayload
 readConPayloadTagged 0 cur =
@@ -1574,14 +1851,7 @@ readVariant cur =
   Variant a0 a1
 
 readAttr : SexpCursor -> Attr
-readAttr cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readAttrTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readAttrBare (cursorInt cur) cur
+readAttr cur = readTagged readAttrTagged readAttrBare cur
 
 readAttrBare : Int -> SexpCursor -> Attr
 readAttrBare 1 _ = AttrInline
@@ -1624,17 +1894,7 @@ readExternBind cur =
   ExternBind { ebHost = a0, ebSymbol = a1, ebLoc = a2 }
 
 readDecl : SexpCursor -> Decl
-readDecl cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readDeclTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readDeclBare (cursorInt cur) cur
-
-readDeclBare : Int -> SexpCursor -> Decl
-readDeclBare _ cur = cursorFail cur dfltDecl
+readDecl cur = readTagged readDeclTagged (refuse dfltDecl) cur
 
 readDeclTagged : Int -> SexpCursor -> Decl
 readDeclTagged 0 cur =

@@ -23,28 +23,57 @@ bytesOf s = toList (stringToUtf8Bytes s)
 textOf : List Int -> String
 textOf bytes = stringFromUtf8Bytes (fromList bytes)
 
+-- The bytes the grammar gives a meaning. Each is a predicate rather than a
+-- constant: a top-level `Int` is a forced global read on every use, which
+-- costs +21% decode of the prelude, where a comparison inlines to an immediate.
+export
+isOpenByte : Int -> Bool
+isOpenByte b = b == 40
+
+export
+isCloseByte : Int -> Bool
+isCloseByte b = b == 41
+
+isQuoteByte : Int -> Bool
+isQuoteByte b = b == 34
+
+isSemiByte : Int -> Bool
+isSemiByte b = b == 59
+
+isBackslashByte : Int -> Bool
+isBackslashByte b = b == 92
+
+-- The values the predicates test, for the writer's escapes. Only the rare
+-- escaping path reads them.
+byteQuote : Int
+byteQuote = 34
+
+byteBackslash : Int
+byteBackslash = 92
+
 isWsByte : Int -> Bool
 isWsByte b = b == 32 || b == 10 || b == 9 || b == 13
 
 -- Bytes that end a bare atom or force quoting.
 isSpecialByte : Int -> Bool
-isSpecialByte b =
-  isWsByte b || b == 40 || b == 41 || b == 34 || b == 59 || b == 92
+isSpecialByte b = isWsByte b || isOpenByte b || isCloseByte b || isStrayByte b
 
 needsQuote : String -> Bool
 needsQuote s = s == "" || any isSpecialByte (bytesOf s)
 
 escapeByte : Int -> List Int
-escapeByte 92 = [92, 92]
-escapeByte 34 = [92, 34]
-escapeByte 10 = [92, 110]
-escapeByte 9 = [92, 116]
-escapeByte 13 = [92, 114]
-escapeByte b = [b]
+escapeByte b
+  | isBackslashByte b = [byteBackslash, byteBackslash]
+  | isQuoteByte b = [byteBackslash, byteQuote]
+  | b == 10 = [byteBackslash, 110]
+  | b == 9 = [byteBackslash, 116]
+  | b == 13 = [byteBackslash, 114]
+  | otherwise = [b]
 
 renderAtom : String -> String
 renderAtom s
-  | needsQuote s = textOf ([34] ++ flatMap escapeByte (bytesOf s) ++ [34])
+  | needsQuote s =
+    textOf ([byteQuote] ++ flatMap escapeByte (bytesOf s) ++ [byteQuote])
   | otherwise = s
 
 export
@@ -77,7 +106,7 @@ bareEnd b n p
 
 -- A bare atom may not run into a quote, `;` or `\`.
 isStrayByte : Int -> Bool
-isStrayByte b = b == 34 || b == 59 || b == 92
+isStrayByte b = isQuoteByte b || isSemiByte b || isBackslashByte b
 
 -- From just after an opening quote: the index of the closing quote and whether
 -- an escape occurred, or `(-1, _)` when the string never closes, or
@@ -87,9 +116,9 @@ scanQuote b n p esc
   | p >= n = (-1, esc)
   | otherwise =
     let c = byteBlockGetUnsafe p b
-    if c == 34 then
+    if isQuoteByte c then
       (p, esc)
-    else if c == 92 then
+    else if isBackslashByte c then
       if p + 1 >= n then
         (-1, esc)
       else if unescapeByte (byteBlockGetUnsafe (p + 1) b) < 0 then
@@ -101,19 +130,20 @@ scanQuote b n p esc
 
 -- The byte an escape letter stands for, or -1.
 unescapeByte : Int -> Int
-unescapeByte 92 = 92
-unescapeByte 34 = 34
-unescapeByte 110 = 10
-unescapeByte 116 = 9
-unescapeByte 114 = 13
-unescapeByte _ = -1
+unescapeByte b
+  | isBackslashByte b = b
+  | isQuoteByte b = b
+  | b == 110 = 10
+  | b == 116 = 9
+  | b == 114 = 13
+  | otherwise = -1
 
 unescapeGo : ByteBlock -> Int -> Int -> ByteBlock -> Int -> Int
 unescapeGo b i j out k
   | i >= j = k
   | otherwise =
     let c = byteBlockGetUnsafe i b
-    if c == 92 then
+    if isBackslashByte c then
       let _ =
         byteBlockSetUnsafe k (unescapeByte (byteBlockGetUnsafe (i + 1) b)) out
       unescapeGo b (i + 2) j out (k + 1)
@@ -140,9 +170,9 @@ readNode b n p0 =
     failAt p "unexpected end of input"
   else
     let c = byteBlockGetUnsafe p b
-    if c == 40 then
+    if isOpenByte c then
       readItems b n p (p + 1) []
-    else if c == 34 then match scanQuote b n (p + 1) False
+    else if isQuoteByte c then match scanQuote b n (p + 1) False
       (e, esc) =>
         if e >= 0 then
           Ok (SAtom (quotedText b (p + 1) e esc), e + 1)
@@ -150,9 +180,9 @@ readNode b n p0 =
           failAt p "unterminated string"
         else
           failAt (-2 - e) "bad escape"
-    else if c == 41 then
+    else if isCloseByte c then
       failAt p "unbalanced close paren"
-    else if c == 59 || c == 92 then
+    else if isSemiByte c || isBackslashByte c then
       failAt p "unexpected character outside a quoted atom"
     else
       let e = bareEnd b n p
@@ -171,7 +201,7 @@ readItems b n open p0 acc =
   let p = skipWsAt b n p0
   if p >= n then
     failAt open "unbalanced open paren"
-  else if byteBlockGetUnsafe p b == 41 then
+  else if isCloseByte (byteBlockGetUnsafe p b) then
     Ok (SList (reverse acc), p + 1)
   else match readNode b n p
     Err e => Err e
@@ -270,12 +300,12 @@ cursorAtEnd cur =
 export
 cursorOpen : SexpCursor -> Unit
 cursorOpen cur =
-  if cursorPeek cur == 40 then cursorAdvance cur else cursorFail cur ()
+  if isOpenByte (cursorPeek cur) then cursorAdvance cur else cursorFail cur ()
 
 export
 cursorClose : SexpCursor -> Unit
 cursorClose cur =
-  if cursorPeek cur == 41 then cursorAdvance cur else cursorFail cur ()
+  if isCloseByte (cursorPeek cur) then cursorAdvance cur else cursorFail cur ()
 
 -- [v], with the cursor left at [p].
 stopAt : SexpCursor -> Int -> a -> a
@@ -329,7 +359,7 @@ cursorAtom : SexpCursor -> String
 cursorAtom cur =
   let c = cursorPeek cur
   let p = cur.scPos.value
-  if c == 34 then match scanQuote cur.scBytes cur.scLen (p + 1) False
+  if isQuoteByte c then match scanQuote cur.scBytes cur.scLen (p + 1) False
     (e, esc) =>
       if e < 0 then
         cursorFail cur ""
@@ -371,7 +401,7 @@ cursorList f cur =
 cursorItems : (SexpCursor -> a) -> SexpCursor -> List a -> List a
 cursorItems f cur acc =
   let c = cursorPeek cur
-  if c == 41 then
+  if isCloseByte c then
     let _ = cursorAdvance cur
     reverse acc
   else if c < 0 then
