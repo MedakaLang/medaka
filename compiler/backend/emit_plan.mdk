@@ -6,6 +6,8 @@ import backend.emit_target.{Backend(..)}
 import frontend.ast.{Lit(..), Pat(..), hostRows}
 import ir.core_ir.{
   CProgram(..),
+  EntryFact(..),
+  MethodResultFact(..),
   CArm(..),
   CBind(..),
   CClause(..),
@@ -77,6 +79,8 @@ import backend.trmc_analysis.{
 -- three are empty on an LLVM plan.
 public export data EmitPlan = EmitPlan {
   target : Backend,
+  entryOutcome : Option EntryFact,
+  methodResults : OrdMap (OrdMap MethodResultFact),
   wasmOnlyReach : Option ReachUnits,
   lazyGlobals : List String,
   eagerReach : OrdMap (List String),
@@ -167,7 +171,7 @@ planOver : Backend ->
   List (String, (List (String, String), (List String, String))) ->
   CProgram ->
   EmitPlan
-planOver target reach ffiRows (CProgram groups ctorArs _ impls _ _) =
+planOver target reach ffiRows (CProgram groups ctorArs _ impls _ facts) =
   -- first entry wins on a repeated constructor name, as in both emitters' tables
   let ctors = omFromPairs (reverseL ctorArs) omEmpty
   let fns = filterList isTopFn groups
@@ -181,6 +185,8 @@ planOver target reach ffiRows (CProgram groups ctorArs _ impls _ _) =
     EvalBackend => (noDemand, [], [])
   EmitPlan {
     target = target,
+    entryOutcome = facts.factEntryOutcome,
+    methodResults = indexMethodResults facts.factMethodResults,
     wasmOnlyReach = reach,
     lazyGlobals = lazyGlobalNames groups,
     eagerReach = eagerReachMap groups,
@@ -196,6 +202,40 @@ planOver target reach ffiRows (CProgram groups ctorArs _ impls _ _) =
     hostKeys = keys,
     jsImports = js,
   }
+
+export
+planEntryMainIsUnit : EmitPlan -> Bool
+planEntryMainIsUnit plan = match plan.entryOutcome
+  Some outcome => outcome.entryMainIsUnit
+  None => False
+
+export
+planEntryMainIsFloat : EmitPlan -> Bool
+planEntryMainIsFloat plan = match plan.entryOutcome
+  Some outcome => outcome.entryMainIsFloat
+  None => False
+
+-- The two-level index preserves qualified interface identity without joining
+-- names. First declaration wins, matching declaration-table lookup order.
+export
+indexMethodResults : List MethodResultFact -> OrdMap (OrdMap MethodResultFact)
+indexMethodResults rows = fold insertMethodResult omEmpty (reverseL rows)
+
+insertMethodResult : OrdMap (OrdMap MethodResultFact) ->
+  MethodResultFact ->
+  OrdMap (OrdMap MethodResultFact)
+insertMethodResult acc row =
+  let methods = optionOr omEmpty (omLookup row.iface acc)
+  omInsert row.iface (omInsert row.method row methods) acc
+
+export
+lookupMethodResult : OrdMap (OrdMap MethodResultFact) ->
+  String ->
+  String ->
+  Option MethodResultFact
+lookupMethodResult index iface method = match omLookup iface index
+  Some methods => omLookup method methods
+  None => None
 
 -- does the TRMC verdict hold for top-level function [name]?
 export

@@ -136,8 +136,27 @@ public export data CheckedProgram = CheckedProgram {
   cpEvidence : EvTable,
   cpDispositions : DispositionTable,
   cpBinders : BinderTypeTable,
+  cpEntryOutcome : EntryOutcome,
   cpTrees : Option (List Decl, List (String, List Decl)),
   cpWeak : List LiveCell,
+}
+
+public export data EntryOutcome = EntryOutcome {
+  eoMainIsUnit : Bool,
+  eoMainIsFloat : Bool,
+  eoMainIsAsync : Bool,
+  eoMainAsyncPayloadIsUnit : Bool,
+  eoAutoPrint : Option EvId,
+}
+
+export
+noEntryOutcome : EntryOutcome
+noEntryOutcome = EntryOutcome {
+  eoMainIsUnit = False,
+  eoMainIsFloat = False,
+  eoMainIsAsync = False,
+  eoMainAsyncPayloadIsUnit = False,
+  eoAutoPrint = None,
 }
 
 public export data TcReport = TcReport {
@@ -146,9 +165,6 @@ public export data TcReport = TcReport {
   trResidual : List (String, TcDiag),
   trChecked : Option CheckedProgram,
   trEvidenceFaults : List EvidenceFault,
-  -- The evidence of an executing drive's auto-print of a value `main`: the
-  -- `Display` route the driver's printing wrap applies (driver/main_autoprint.mdk).
-  trAutoPrint : Option EvId,
 }
 
 -- ── deep zonk, freeze by copy ──────────────────────────────────────────────
@@ -351,6 +367,29 @@ graphReport : List ModDiags ->
   EntryTables ->
   TcReport
 graphReport perMod core residual evidence dispositions binders trees tables =
+  graphReportWithOutcome
+    noEntryOutcome
+    perMod
+    core
+    residual
+    evidence
+    dispositions
+    binders
+    trees
+    tables
+
+export
+graphReportWithOutcome : EntryOutcome ->
+  List ModDiags ->
+  List (String, PubScheme) ->
+  List (String, TcDiag) ->
+  (Unit -> EvTable) ->
+  DispositionTable ->
+  BinderTypeTable ->
+  Option (List Decl, List (String, List Decl)) ->
+  EntryTables ->
+  TcReport
+graphReportWithOutcome outcome perMod core residual evidence dispositions binders trees tables =
   let schemes = map (m => (fst m, modSchemes (snd m))) perMod
   let cells = graphCells (core :: map snd schemes)
   let judged =
@@ -366,6 +405,7 @@ graphReport perMod core residual evidence dispositions binders trees tables =
       cpEvidence = table,
       cpDispositions = dispositions,
       cpBinders = binders,
+      cpEntryOutcome = outcome,
       cpTrees = trees,
       cpWeak = cells,
     }
@@ -378,7 +418,6 @@ graphReport perMod core residual evidence dispositions binders trees tables =
     trEvidenceFaults = match judged
       Some (_, faults) => faults
       None => [],
-    trAutoPrint = None,
   }
 
 -- Every live cell of every row, read at graph end.

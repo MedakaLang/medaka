@@ -44,8 +44,11 @@ import ir.core_ir.{
   MethodEvidence(..),
   noImplSym,
   CTree(..),
+  DeclFacts(..),
   mkApp,
   noDeclFacts,
+  MethodResultFact(..),
+  EntryFact(..),
   synthBind,
 }
 import support.ordmap.{omLookup}
@@ -54,6 +57,7 @@ import backend.emit_plan.{
   JsImport(..),
   ReachUnits(..),
   buildEmitPlan,
+  lookupMethodResult,
   buildEmitPlanReached,
   isTrmcFn,
   isTrmcImpl,
@@ -123,6 +127,32 @@ test "the plan carries the target it was built with" = expectAll [
     (expectTrue (isWasm (buildEmitPlan WasmBackend (program mixed)).target)),
   labelFail "native" (expectFalse (isWasm (planOf mixed).target)),
 ]
+
+entryOutcomeProgram : CProgram
+entryOutcomeProgram =
+  let outcome = EntryFact {
+    entryMainIsUnit = False,
+    entryMainIsFloat = True,
+  }
+  CProgram [] [] [] [] [] { noDeclFacts | factEntryOutcome = Some outcome }
+
+planOutcomeExpectation : Backend -> Expectation
+planOutcomeExpectation target =
+  match (buildEmitPlan target entryOutcomeProgram).entryOutcome
+    Some outcome => expectAll [
+      expectFalse outcome.entryMainIsUnit,
+      expectTrue outcome.entryMainIsFloat,
+    ]
+    None => fail "the plan dropped its entry outcome"
+
+test "LLVM and Wasm plans preserve the entry outcome" =
+  expectEach
+    (map
+      (named => (
+        fst named,
+        planOutcomeExpectation (snd named),
+      ))
+      [("LLVM", LlvmBackend), ("Wasm", WasmBackend)])
 
 hasAll : List String -> List String -> Bool
 hasAll wanted have = all (w => any (== w) have) wanted
@@ -1074,3 +1104,40 @@ test "a wasm plan imports each reached js binding once, and only those" = expect
       "an extern with no js binding imports nothing"
       (expectEqual ([], []) (jsPlanOf [val "main" (call "cNeg" [int 1])])),
   ]
+
+test "method result plan index preserves qualified interface identity on both backends" =
+  let left = MethodResultFact {
+    iface = "left::Shared",
+    method = "pick",
+    returnsHead = True,
+    callbackPositions = [1],
+    valueArity = 2,
+  }
+  let right = MethodResultFact {
+    iface = "right::Shared",
+    method = "pick",
+    returnsHead = False,
+    callbackPositions = [],
+    valueArity = 1,
+  }
+  let cp =
+    CProgram [] [] [] [] [] { noDeclFacts | factMethodResults = [left, right] }
+  expectAll
+    (map
+      (backend =>
+        let plan = buildEmitPlan backend cp
+        expectAll [
+          expectEqual
+            (Some left)
+            (lookupMethodResult plan.methodResults "left::Shared" "pick"),
+          expectEqual
+            (Some right)
+            (lookupMethodResult plan.methodResults "right::Shared" "pick"),
+          expectEqual
+            None
+            (lookupMethodResult plan.methodResults "Shared" "pick"),
+          expectEqual
+            None
+            (lookupMethodResult plan.methodResults "left::Shared" "missing"),
+        ])
+      [LlvmBackend, WasmBackend])

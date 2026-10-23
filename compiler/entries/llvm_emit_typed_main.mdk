@@ -26,8 +26,6 @@ import frontend.desugar.{desugar}
 import types.typecheck.{
   defaultDriveInputs,
   elaborateModulesWithReport,
-  mainTypeIsUnit,
-  mainTypeIsFloat,
   checkedFfiExternTypeNames,
 }
 import types.private_mangle.{mangleUnitsEv}
@@ -36,8 +34,6 @@ import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmitWith,
-  returnsSelfTable,
-  selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
   externArities,
@@ -93,8 +89,7 @@ emitIsolation runtimePath pPath pPlusUPath =
 -- `main` is stamped, as every lowered binder is, so the emitter reaches the node.
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
-  let input =
-    makeEmitInput PreludeFreeRuntime [] [] [] [] [] False False 0 [] [] "" []
+  let input = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
   let mainId = BinderId "" 0
   let cp =
     CProgram
@@ -104,8 +99,10 @@ emitGapIsolation =
       []
       []
       DeclFacts {
+        factMethodResults = [],
         factRequires = [],
         factSupers = [],
+        factEntryOutcome = None,
         factBinders = [
           BinderRow {
             brId = mainId,
@@ -146,13 +143,9 @@ runEmit runtimeDecls preludeDecls userDecls =
   let input =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
-      (returnsSelfTable mangled)
-      (selfFnParamTable mangled)
       (methodIfaceTable mangled)
       (ctorFieldTypeNames mangled)
       (externArities runtimeDecls)
-      (mainTypeIsUnit outputs)
-      (mainTypeIsFloat outputs)
       0
       []
       []

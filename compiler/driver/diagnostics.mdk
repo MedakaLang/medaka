@@ -146,7 +146,7 @@ public export data Severity = SevError | SevWarning
 public export data Fix = Fix Loc String
 
 public export data Diag =
-  | Diag Severity String String (Option Loc) (Option String) (Option Fix)
+  Diag Severity String String (Option Loc) (Option String) (Option Fix)
 
 -- Smart constructor for a diagnostic with no structured help/fix (the common
 -- case) — keeps the ~15 plain construction sites terse.
@@ -1344,7 +1344,6 @@ undrivenReport = TcReport {
   trResidual = [],
   trChecked = None,
   trEvidenceFaults = [],
-  trAutoPrint = None,
 }
 
 -- resolve over runtime + core (prelude) + target

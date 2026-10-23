@@ -407,7 +407,7 @@ noImplSym = ImplSym "" "" ""
 -- impl/default entries, the method-context table and the declaration facts.
 -- Slice-1 programs carry an empty impl list.
 public export data CProgram =
-  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int)) DeclFacts
+  CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int)) DeclFacts
 
 -- The declaration facts a dictionary built at a site is held to
 -- (`core_validate.validateDispatchEvidence`): each instance's `requires` count,
@@ -425,15 +425,40 @@ public export data CProgram =
 -- table is a snapshot, so the program is self-contained: a consumer never reads
 -- the typechecker's published table.  `core_validate.validateBinderStamps` refuses
 -- a binder with no row and a function with no return type.
+-- Signature facts use declaration identity; callback positions count only value
+-- parameters, before dictionary passing adds leading parameters.
+public export data MethodResultFact = MethodResultFact {
+  iface : String,
+  method : String,
+  returnsHead : Bool,
+  callbackPositions : List Int,
+  valueArity : Int,
+} deriving (Eq, Debug)
+
+-- The entry properties physical emitters need. Lowering projects these from the
+-- typechecker's published outcome, so Core does not depend on its representation.
+public export data EntryFact = EntryFact {
+  entryMainIsUnit : Bool,
+  entryMainIsFloat : Bool,
+}
+
 public export data DeclFacts = DeclFacts {
   factRequires : List (String, Int),
   factSupers : List (String, Int),
   factBinders : List BinderRow,
+  factMethodResults : List MethodResultFact,
+  factEntryOutcome : Option EntryFact,
 }
 
 export
 noDeclFacts : DeclFacts
-noDeclFacts = DeclFacts { factRequires = [], factSupers = [], factBinders = [] }
+noDeclFacts = DeclFacts {
+  factRequires = [],
+  factSupers = [],
+  factBinders = [],
+  factMethodResults = [],
+  factEntryOutcome = None,
+}
 
 -- ── binder walk ──────────────────────────────────────────────────────────────
 -- One traversal of every binder in a program, in a fixed order, with the id each
@@ -511,6 +536,8 @@ withBinderRows rows (CProgram groups ctorArs ctorTypes impls mctx facts) = CProg
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factBinders = rows,
+    factMethodResults = facts.factMethodResults,
+    factEntryOutcome = facts.factEntryOutcome,
   }
 
 -- Every binder id of [prog], in walk order.

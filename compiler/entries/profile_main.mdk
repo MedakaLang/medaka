@@ -46,16 +46,12 @@ import types.typecheck.{
   defaultDriveInputs,
   checkOneToLinesWithRuntime,
   elaborateModulesWithReport,
-  mainTypeIsUnit,
-  mainTypeIsFloat,
   checkedFfiExternTypeNames,
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmitWith,
-  returnsSelfTable,
-  selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
   externArities,
@@ -269,7 +265,7 @@ runStaged on targetPath rsrc csrc tsrc =
   -- production emit driver uses — `elaborateModules`, then `mangleUnitsEv` over its
   -- output (#2809: entries/entry_support.runEmitWith,
   -- entries/llvm_emit_typed_main.runEmit, tools/snapshot.emitBoth). The eight
-  -- install* table-builders (returnsSelfTable, methodIfaceTable, …) read those
+  -- install* table-builders (methodIfaceTable, …) read those
   -- MANGLED decls for the same reason those drivers do: a table keyed on the
   -- pre-elaboration decl names cannot answer a lookup against a module-qualified
   -- tree, and the miss falls back to the emitter's bare-label first match — issue
@@ -302,13 +298,9 @@ runStaged on targetPath rsrc csrc tsrc =
   let input =
     makeEmitInput
       (runtimeDomain (externDecls rDecls))
-      (returnsSelfTable elaborated)
-      (selfFnParamTable elaborated)
       (methodIfaceTable elaborated)
       (ctorFieldTypeNames elaborated)
       (externArities rDecls)
-      (mainTypeIsUnit outputs)
-      (mainTypeIsFloat outputs)
       0
       []
       []
@@ -504,8 +496,6 @@ wasmStage on True outputs runtimeDecls live cprog declsOp =
     makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames live)
-      (mainTypeIsFloat outputs)
-      (mainTypeIsUnit outputs)
       []
   let tWe0 = now ()
   let aWe0 = allocSnap ()

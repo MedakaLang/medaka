@@ -171,8 +171,6 @@ import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmitWith,
   lowerProgramWithFacts,
-  returnsSelfTable,
-  selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
   externArities,
@@ -185,8 +183,6 @@ import types.typecheck.{
   checkOneToLinesWithRuntime,
   elaborateOneFacts,
   elaborateModulesWithReport,
-  mainTypeIsUnit,
-  mainTypeIsFloat,
   hadTypeErrors,
   hadMatchWarnings,
 }
@@ -645,22 +641,18 @@ emitBoth root sel runtimeDecls userDecls =
   let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
   let _ =
     if wants sel "LLVM" then
-      emitSection root "LLVM" (llvmOf outputs runtimeDecls allDecls cp)
+      emitSection root "LLVM" (llvmOf runtimeDecls allDecls cp)
   if wants sel "WASM" then
-    emitSection root "WASM" (wasmOf outputs runtimeDecls allDecls cp)
+    emitSection root "WASM" (wasmOf runtimeDecls allDecls cp)
 
-llvmOf : DriveOutputs -> List Decl -> List Decl -> CProgram -> String
-llvmOf outputs runtimeDecls allDecls cp =
+llvmOf : List Decl -> List Decl -> CProgram -> String
+llvmOf runtimeDecls allDecls cp =
   let input =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
-      (returnsSelfTable allDecls)
-      (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       (externArities runtimeDecls)
-      (mainTypeIsUnit outputs)
-      (mainTypeIsFloat outputs)
       0
       []
       []
@@ -669,14 +661,12 @@ llvmOf outputs runtimeDecls allDecls cp =
   let (text, gaps) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
   withGaps ";" text gaps
 
-wasmOf : DriveOutputs -> List Decl -> List Decl -> CProgram -> String
-wasmOf outputs runtimeDecls allDecls cp =
+wasmOf : List Decl -> List Decl -> CProgram -> String
+wasmOf runtimeDecls allDecls cp =
   let input =
     makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
-      False
-      (mainTypeIsUnit outputs)
       []
   let (text, gaps) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   withGaps ";;" text gaps

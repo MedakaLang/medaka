@@ -969,7 +969,7 @@ drainStampQueue : ModuleCtx -> List DrainFinding
 driveErrs : List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List TcDiag
 driveGraphK : DriveInputs -> GraphOut -> Bool -> Option String -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
 driveInputsFor : Option TargetProfile -> Bool -> List String -> DriveInputs
-driveOutputsNow : ModuleCtx -> DriveOutputs
+driveOutputsNow : ModuleCtx -> EntryOutcome -> DriveOutputs
 drivenEvidence : GraphCtx -> Unit -> List EvEntry
 dropFirst : Int -> List a -> List a
 dropGoalsSince : GraphCtx -> Int -> List GoalKind -> Unit
@@ -1016,12 +1016,12 @@ effectUndeterminedMsg : String -> String -> List String -> String
 effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
 elabModuleStamp : ModuleCtx -> String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl, ModuleCtx)
-elaborateModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow)
-elaborateModulesGraph : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), GraphCtx)
+elaborateModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts)
+elaborateModulesGraph : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), GraphCtx)
 elaborateModulesReport : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
-elaborateModulesWithReport : DriveInputs -> Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), TcReport, DriveOutputs)
-elaborateModulesWithReportGraph : DriveInputs -> Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> (((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), TcReport, DriveOutputs), GraphCtx)
-elaborateModulesWithSchemes : DriveInputs -> Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow), List (String, PubScheme), List (String, PubScheme))
+elaborateModulesWithReport : DriveInputs -> Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs)
+elaborateModulesWithReportGraph : DriveInputs -> Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> (((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs), GraphCtx)
+elaborateModulesWithSchemes : DriveInputs -> Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), List (String, PubScheme), List (String, PubScheme))
 elaborateOne : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOneFacts : DriveInputs -> List Decl -> List Decl -> (String, List Decl) -> (List Decl, ProgramFacts)
 elselessIfHelp : String
@@ -2016,11 +2016,8 @@ lowerRowLevels : Int -> EffRow -> Unit
 lowerToCurrent : ModuleCtx -> Mono -> Unit
 lowerTyvarLevel : Int -> Mono -> Unit
 mainAsyncPayloadIsUnit : DriveOutputs -> Bool
-mainAsyncPayloadIsUnitNow : GraphCtx -> Unit -> Bool
 mainBodySpan : List Decl -> Option Loc
-mainIsAsyncNow : GraphCtx -> Unit -> Bool
-mainIsFloatNow : GraphCtx -> Unit -> Bool
-mainIsUnitNow : ModuleCtx -> Unit -> Bool
+mainHasObligations : ModuleCtx -> Bool
 mainTypeIsAsync : DriveOutputs -> Bool
 mainTypeIsFloat : DriveOutputs -> Bool
 mainTypeIsUnit : DriveOutputs -> Bool
@@ -2528,6 +2525,7 @@ prePassModulePair : ModuleCtx -> List String -> (String, List Decl) -> (String, 
 predicateNodeKey : IfaceRef -> List Mono -> String
 predicateRequestArgsMatch : PredicateSlotArgs -> PredicateSlotArgs -> Bool
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
+predicateScalarRoute : String -> Mono -> Option Route
 predicateSlotArgs : List PredicateSlot -> List (List Mono)
 predicateSlotCSlots : List PredicateSlot -> List CSlot
 predicateSlotFromExpanded : Map String PredicateSlot -> (CSlot, List Mono) -> PredicateSlot
@@ -3159,7 +3157,7 @@ stampGroupClauses : ModuleMarking -> List String -> Map String (List (List Pat, 
 stampMethodArities : List (Ref (Option Int)) -> Int -> Unit
 stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
 stampOpRouteVal : SiteCtx -> Bool -> String -> ScopeId -> String -> Mono -> String -> Route
-stampPredicateOpRouteVal : SiteCtx -> String -> ScopeId -> String -> Mono -> String -> ClassPredicate -> Route
+stampPredicateOpRouteVal : SiteCtx -> String -> ScopeId -> String -> Mono -> ClassPredicate -> Route
 stampRoutes : List (Ref Route) -> Unit
 stampTailDecl : Map String Int -> Decl -> Decl
 stampTailDecls : Map String Int -> List Decl -> List Decl

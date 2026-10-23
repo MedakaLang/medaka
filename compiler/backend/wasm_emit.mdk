@@ -309,6 +309,8 @@ import backend.emit_plan.{
   TrmcVerdicts,
   isTrmcFn,
   isTrmcImpl,
+  planEntryMainIsUnit,
+  planEntryMainIsFloat,
 }
 import backend.emit_support.{
   bindEagerReach,
@@ -549,7 +551,7 @@ freshWasmEmit mode = WasmEmit {
 -- Declaration-derived facts are indexed once for each emission. The last field
 -- is the complete loaded runtime declaration domain.
 data WasmEmitInputData =
-  | WasmEmitInputData (OrdMap (List Int)) Bool (OrdMap (List (String, String), (List String, String))) Bool RuntimeExternDomain
+  | WasmEmitInputData (OrdMap (List Int)) (OrdMap (List (String, String), (List String, String))) RuntimeExternDomain
 
 export type WasmEmitInput = WasmEmitInputData
 
@@ -559,10 +561,9 @@ export type WasmEmitInput = WasmEmitInputData
 export
 makeWasmEmitInput : RuntimeExternDomain ->
   List (String, List String) ->
-  Bool ->
   WasmEmitInput
-makeWasmEmitInput domain ctorFieldTypes mainIsFloat =
-  makeWasmEmitInputFull domain ctorFieldTypes mainIsFloat False []
+makeWasmEmitInput domain ctorFieldTypes =
+  makeWasmEmitInputFull domain ctorFieldTypes []
 
 -- The full input: an index of USER-declared FFI extern names (name ->
 -- (host bindings, (paramTypeHeads, retTypeHead))), every host's, so a reference
@@ -573,28 +574,16 @@ makeWasmEmitInput domain ctorFieldTypes mainIsFloat =
 export
 makeWasmEmitInputFull : RuntimeExternDomain ->
   List (String, List String) ->
-  Bool ->
-  Bool ->
   List (String, (List (String, String), (List String, String))) ->
   WasmEmitInput
-makeWasmEmitInputFull domain ctorFieldTypes mainIsFloat mainIsUnit ffiExternRows =
+makeWasmEmitInputFull domain ctorFieldTypes ffiExternRows =
   WasmEmitInputData
     (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty)
-    mainIsFloat
     (omFromPairs (reverseL ffiExternRows) omEmpty)
-    mainIsUnit
     domain
 
 inputRuntimeExternsW : WasmEmitInput -> RuntimeExternDomain
-inputRuntimeExternsW (WasmEmitInputData _ _ _ _ names) = names
-
-inputMainIsFloat : WasmEmitInput -> Bool
-inputMainIsFloat (WasmEmitInputData _ isFloat _ _ _) = isFloat
-
--- The typechecker's verdict that `main` is Unit; False when the entry has no
--- typechecked program to ask, leaving the structural `mainBodyIsUnit` guess.
-inputMainIsUnit : WasmEmitInput -> Bool
-inputMainIsUnit (WasmEmitInputData _ _ _ isUnit _) = isUnit
+inputRuntimeExternsW (WasmEmitInputData _ _ names) = names
 
 -- ── program info threaded through the ref-mode emitter ───────────────────────
 -- WasmProgramIndex owns the declaration-derived function, value, constructor,
@@ -806,7 +795,7 @@ narrowByIfaceW iface entries =
 -- runtime extern families, as `DemandScope` resolves a name.
 ffiBindsOfW : Prog -> String -> Option (List (String, String))
 ffiBindsOfW prog name = match progInput prog
-  WasmEmitInputData _ _ ffiIndex _ _ => map fst (omLookup name ffiIndex)
+  WasmEmitInputData _ ffiIndex _ => map fst (omLookup name ffiIndex)
 
 isFfiExternW : Prog -> String -> Bool
 isFfiExternW prog name = isSome (ffiBindsOfW prog name)
@@ -1313,7 +1302,7 @@ floatFieldIndices (_ :: rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData ctorFloatIndex _ _ _ _ => match omLookup ctor ctorFloatIndex
+  WasmEmitInputData ctorFloatIndex _ _ => match omLookup ctor ctorFloatIndex
     Some idxs => containsInt idx idxs
     None => False
 
@@ -1449,13 +1438,13 @@ emitProgram input plan cp =
 
 -- The X-W.H1/H2 same-process input/state-isolation harnesses (`reemitInput` and
 -- peers, compiler/entries/wasm_emit_typed_main.mdk) deliberately re-emit ONE
--- lowered `CProgram` under MISMATCHED `WasmEmitInput` fields (P's real program
--- with U's ctor/method/mainIsFloat table) specifically to prove each field
+-- lowered `CProgram` under MISMATCHED inputs (P's real program with U's
+-- ctor/method tables) specifically to prove each field
 -- independently influences the physical plan (`P_NE_CTOR` etc). Such a
--- combination never occurs in a real compile (there sigs/ctors/methods/
--- mainIsFloat are always derived from the SAME decls as the program), can
+-- combination never occurs in a real compile (there sigs/ctors/methods are
+-- always derived from the SAME decls as the program), can
 -- legitimately desync a gating decision that reads the mismatched table (e.g.
--- `inputMainIsFloat` forcing a Float auto-print with no Float anywhere in the
+-- a plan forcing a Float auto-print with no Float anywhere in the
 -- program's own body), and is never assembled by wasm-tools -- so it is not
 -- this check's business, same reasoning as `emitProgramGaps` below. Exported
 -- for that harness ONLY; every real caller (build/run, every fixture-driven
@@ -3519,7 +3508,7 @@ emitRefInit prog plan groups =
   let valInit = flatMap (emitRefValInit prog) valBinds
   let initW7Used = w7ScopeClose (progEmit prog) initW7Outer
   let mainW7Outer = w7ScopeOpen (progEmit prog)
-  let mainLines = emitRefMain prog groups
+  let mainLines = emitRefMain prog plan groups
   let mainW7Used = w7ScopeClose (progEmit prog) mainW7Outer
   let valLocals = flatMap collectBindLocals valBinds
   let mainBodies = match findMain (progEmit prog) groups
@@ -3656,8 +3645,8 @@ emitRefForceFn prog _ = gapLP prog "value binding must be a nullary clause"
 -- import by the body's STATIC kind (Int vs Bool — the only printable scalar mains
 -- in this slice).  In ref-mode an Int/Bool result is an i31 immediate, so unbox via
 -- `i31.get_s` / `i31.get_u`.
-emitRefMain : Prog -> List CBind -> List String
-emitRefMain prog groups = match findMain (progEmit prog) groups
+emitRefMain : Prog -> EmitPlan -> List CBind -> List String
+emitRefMain prog plan groups = match findMain (progEmit prog) groups
   Some body =>
     let instrs = emitRefExpr prog [] 0 body
     -- A main stamped `Unit` is Unit whatever its body's shape, and one stamped
@@ -3666,11 +3655,11 @@ emitRefMain prog groups = match findMain (progEmit prog) groups
     -- binder `RTValue`).  The typechecker's Float hint overrides a body whose
     -- result is a polymorphic return (`main = fold (acc x => acc + x) 0.0 [..]`).
     let k =
-      if inputMainIsUnit (progInput prog)
+      if planEntryMainIsUnit plan
         || mainStamp prog == RTUnit
         || mainBodyIsUnit prog (cafBodies groups) body then
         WUnit
-      else if inputMainIsFloat (progInput prog) then
+      else if planEntryMainIsFloat plan then
         WFloat
       else
         stampPrintKind (mainPrintStamp prog body)

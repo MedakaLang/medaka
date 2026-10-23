@@ -77,12 +77,7 @@ runEmit inputs runtimeDecls coreDecls modules =
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
   let input =
-    makeWasmEmitInputFull
-      (runtimeDomain (externDecls runtimeDecls))
-      []
-      False
-      False
-      []
+    makeWasmEmitInputFull (runtimeDomain (externDecls runtimeDecls)) [] []
   let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
   let gaps = emitProgramGaps input (buildEmitPlan WasmBackend cp) cp
   printGaps gaps

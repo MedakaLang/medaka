@@ -56,6 +56,12 @@
 -- because it is written the same at each.  Every named function (a `CBind`) has
 -- a row too, and the row gives the type its body returns.
 --
+-- The scalar-binop check: a non-empty `CBinPrim` scalar tag is a positive fact
+-- from typecheck, so its operator must be one that can consume that tag. Arithmetic
+-- accepts the primitive numeric heads; comparison accepts exactly the tags its
+-- route stamper publishes. Other operators and unknown tags are refused before an
+-- emitter can reinterpret the string.
+--
 -- The extern check: a runtime extern whose catalog row gives the backend no
 -- lowering (`NotProvided`) is refused wherever the program references it
 -- freely.  A reference is free when no local binder in scope and no top-level
@@ -78,6 +84,7 @@ import ir.core_ir.{
   MethodEvidence(..),
   CProgram(..),
   DeclFacts(..),
+  MethodResultFact(..),
   CallMode(..),
   CallSite(..),
   noDeclFacts,
@@ -110,11 +117,12 @@ import ir.core_ir_lower.{
 }
 import ir.core_ir_sexp.{callModeSexp}
 import frontend.ast.{
-  Pat(..), Route(..), Decl(..), ExternDecl(..), Ty(..), Lit(..), BinderId(..)
+  Pat(..), Route(..), Decl(..), ExternDecl(..), Ty(..), Lit(..), BinderId(..),
+  isFixedIntHead, isBoxed64Head
 }
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
 import backend.emit_target.{Backend(..), backendName}
-import backend.emit_plan.{EmitPlan}
+import backend.emit_plan.{EmitPlan, indexMethodResults, lookupMethodResult}
 import backend.extern_catalog.{
   RuntimeExternDomain(..),
   Disposition(..),
@@ -132,6 +140,7 @@ import support.ordmap.{
   omInsert,
   omHasKey,
   omLookup,
+  omKeys,
 }
 import types.private_mangle.{dictTag, hashName}
 import support.util.{dedupBy, isNonEmptyL, joinWith, listLen, reverseL}
@@ -140,7 +149,7 @@ import support.util.{dedupBy, isNonEmptyL, joinWith, listLen, reverseL}
 -- the backend, the row's gap kind and reason, and the top-level binding the
 -- first reference sits in.
 public export data ExternFinding =
-  | ExternFinding String Backend GapKind String String
+  ExternFinding String Backend GapKind String String
 
 -- Defects are fatal in every emission mode; target extern findings may instead
 -- be recorded. The first failing validation family keeps its original order.
@@ -193,10 +202,12 @@ emissionDefects backend plan cp =
         () => validateRecords cp,
         () => validateBinderStamps cp,
         () =>
-          validateCalls cp
+          validateScalarOperators cp
+            ++ validateCalls cp
             ++ validateImplSymbols cp
             ++ validateMethodContexts cp
-            ++ validateDispatchEvidence cp,
+            ++ validateDispatchEvidence cp
+            ++ validateMethodResults plan cp,
         () => validateTails cp,
       ]
 
@@ -249,14 +260,14 @@ validateExterns : Backend -> List String -> CProgram -> List ExternFinding
 validateExterns backend runtimeExterns prog =
   let _ = refuseMissingRows runtimeExterns
   match walkProgram backend prog
-    Walk _ found _ _ _ _ => reverseL found
+    Walk _ found _ _ _ _ _ _ => reverseL found
 
 -- One line per record node whose ordinals the emitters cannot trust, in
 -- program order; empty for a well-stamped program.
 export
 validateRecords : CProgram -> List String
 validateRecords prog = match walkProgram LlvmBackend prog
-  Walk _ _ bad _ _ _ => reverseL bad
+  Walk _ _ bad _ _ _ _ _ => reverseL bad
 
 export
 renderRecordRefusal : List String -> String
@@ -268,7 +279,14 @@ export
 validateCalls : CProgram -> List String
 validateCalls (prog@(CProgram _ _ _ impls _ _)) =
   match walkProgram LlvmBackend prog
-    Walk _ _ _ bad _ _ => reverseL bad ++ splitGroupFaults impls omEmpty []
+    Walk _ _ _ _ bad _ _ _ => reverseL bad ++ splitGroupFaults impls omEmpty []
+
+-- One line per `CBinPrim` whose non-empty scalar tag is not licensed for its
+-- operator, in program order. An empty tag makes no scalar claim.
+export
+validateScalarOperators : CProgram -> List String
+validateScalarOperators prog = match walkProgram LlvmBackend prog
+  Walk _ _ _ bad _ _ _ _ => reverseL bad
 
 -- The entries of one method and route word are the clauses of one define, which
 -- takes one parameter count, so an entry whose value arity differs from the
@@ -289,13 +307,123 @@ splitGroupFaults ((ent@(CImplEntry method _ _ body)) :: rest) seen acc =
             :: acc)
     None => splitGroupFaults rest (omInsert key n seen) acc
 
+-- Signature facts are complete for every emitted method and preserve the plan's
+-- qualified keys. Callback positions are strictly increasing value positions.
+export
+validateMethodResults : EmitPlan -> CProgram -> List String
+validateMethodResults plan (prog@(CProgram _ _ _ impls _ facts)) =
+  let index = indexMethodResults facts.factMethodResults
+  let rowsBad = methodResultRows facts.factMethodResults omEmpty []
+  let keys idx =
+    flatMap
+      (iface =>
+        map
+          (m => ifaceMethodArityKey iface m)
+          (omKeys (optionOr omEmpty (omLookup iface idx))))
+      (omKeys idx)
+  let planBad =
+    if keys index == keys plan.methodResults
+      && all
+        (methodResultMatches plan.methodResults)
+        facts.factMethodResults then
+      []
+    else
+      ["method result: emit plan index disagrees with declaration facts"]
+  let refsBad = match walkProgram LlvmBackend prog
+    Walk _ _ _ _ _ _ _ bad => reverseL bad
+  rowsBad ++ planBad ++ refsBad ++ flatMap (entryMethodResult index) impls
+
+methodResultMatches : OrdMap (OrdMap MethodResultFact) ->
+  MethodResultFact ->
+  Bool
+methodResultMatches index row =
+  lookupMethodResult index row.iface row.method == Some row
+
+methodResultRows : List MethodResultFact ->
+  OrdMap (OrdMap Unit) ->
+  List String ->
+  List String
+methodResultRows [] _ bad = reverseL bad
+methodResultRows (row :: rest) seen bad =
+  let methods = optionOr omEmpty (omLookup row.iface seen)
+  let why =
+    if row.iface == "" || row.method == "" then
+      "empty interface or method key"
+    else if omHasKey row.method methods then
+      "duplicate qualified key"
+    else if row.valueArity < 0 then
+      "negative value arity"
+    else if not
+      (callbackPositionsValid row.valueArity (-1) row.callbackPositions) then
+      "invalid callback position"
+    else
+      ""
+  methodResultRows rest (omInsert
+    row.iface
+    (omInsert row.method () methods)
+    seen) (if why == "" then
+    bad
+  else
+    "method result: \{why} [\{row.iface}#\{row.method}]" :: bad)
+
+callbackPositionsValid : Int -> Int -> List Int -> Bool
+callbackPositionsValid _ _ [] = True
+callbackPositionsValid arity prev (n :: ns) =
+  n > prev && n < arity && callbackPositionsValid arity n ns
+
+entryMethodResult : OrdMap (OrdMap MethodResultFact) ->
+  CImplEntry ->
+  List String
+entryMethodResult index (CImplEntry method _ declared (CImplTagged _ _ iface _ _ _ _)) =
+  entryMethodResultFact index iface method declared
+entryMethodResult index (CImplEntry method _ declared (CImplDefault iface _ _ _ _ _ _)) =
+  entryMethodResultFact index iface method declared
+
+entryMethodResultFact : OrdMap (OrdMap MethodResultFact) ->
+  String ->
+  String ->
+  Int ->
+  List String
+entryMethodResultFact index iface method declared =
+  match lookupMethodResult index iface method
+    Some row =>
+      if row.valueArity == declared then
+        []
+      else
+        [
+          "method result: fact value arity \{intToString row.valueArity} disagrees with Core impl entry declared value arity \{intToString declared} [\{iface}#\{method}]",
+        ]
+    None => ["method result: missing declaration fact [\{iface}#\{method}]"]
+
+missingMethodResult : OrdMap (OrdMap MethodResultFact) ->
+  String ->
+  String ->
+  List String
+missingMethodResult index iface method =
+  match lookupMethodResult index iface method
+    Some _ => []
+    None => ["method result: missing declaration fact [\{iface}#\{method}]"]
+
+noteMethodResult : Ctx -> String -> String -> Walk -> Walk
+noteMethodResult _ _ "" w = w
+noteMethodResult (Ctx _ _ _ _ _ facts _) method iface (Walk seen found bad scalar calls ctxs evs results) =
+  Walk
+    seen
+    found
+    bad
+    scalar
+    calls
+    ctxs
+    evs
+    (missingMethodResult facts.efMethods iface method ++ results)
+
 -- One line per method occurrence or impl entry whose dictionaries disagree with
 -- the method's declared context (see the header), in program order.
 export
 validateMethodContexts : CProgram -> List String
 validateMethodContexts (prog@(CProgram _ _ _ impls mctx facts)) =
   match walkProgram LlvmBackend prog
-    Walk _ _ _ _ bad _ =>
+    Walk _ _ _ _ _ bad _ _ =>
       reverseL bad
         ++ flatMap
           (entryContextFaults
@@ -607,7 +735,7 @@ checkMissedNote backend =
 -- What `medaka build` checked the program against before lowering: the
 -- selected profile, and each runtime extern's declared labels.
 public export data CheckedTarget =
-  | CheckedTarget TargetProfile (OrdMap (List String))
+  CheckedTarget TargetProfile (OrdMap (List String))
 
 export
 checkedTargetOf : TargetProfile -> List Decl -> CheckedTarget
@@ -662,20 +790,24 @@ isProgramName top x = omHasKey x top || omHasKey ("core__" ++ x) top
 -- method occurrences whose routes contradict their declared context, each newest
 -- first.
 data Walk =
-  | Walk (OrdMap Unit) (List ExternFinding) (List String) (List String) (List String) (List String)
+  Walk (OrdMap Unit) (List ExternFinding) (List String) (List String) (List String) (List String) (List String) (List String)
 
 noFindings : Walk
-noFindings = Walk omEmpty [] [] [] [] []
+noFindings = Walk omEmpty [] [] [] [] [] [] []
 
 -- The backend, the program's own names, its defined arities, its method-context
 -- table, the leading `$dict` parameter count of each top-level binding, the
 -- dictionary facts, and the top-level binding being read.
 data Ctx =
-  | Ctx Backend (OrdMap Unit) ArityEnv (OrdMap Int) (OrdMap Int) EvFacts String
+  Ctx Backend (OrdMap Unit) ArityEnv (OrdMap Int) (OrdMap Int) EvFacts String
 
 -- What a dictionary built at a site is held to (`DeclFacts`): each instance's
 -- `requires` count and each interface's super count.
-data EvFacts = EvFacts { efRequires : OrdMap Int, efSupers : OrdMap Int }
+data EvFacts = EvFacts {
+  efRequires : OrdMap Int,
+  efSupers : OrdMap Int,
+  efMethods : OrdMap (OrdMap MethodResultFact),
+}
 
 walkProgram : Backend -> CProgram -> Walk
 walkProgram backend (prog@(CProgram groups ctors _ impls mctx facts)) =
@@ -691,6 +823,7 @@ walkProgram backend (prog@(CProgram groups ctors _ impls mctx facts)) =
       EvFacts {
         efRequires = omFromPairs facts.factRequires omEmpty,
         efSupers = omFromPairs facts.factSupers omEmpty,
+        efMethods = indexMethodResults facts.factMethodResults,
       }
       ""
   walkImpls ctx impls (walkBinds ctx groups noFindings)
@@ -750,7 +883,8 @@ walkE ctx scope (CMatch scrut arms) w =
 walkE ctx scope (CDecision scrut arms _) w =
   walkArms ctx scope arms (walkE ctx scope scrut w)
 walkE ctx scope (CIf c t f) w = walkList ctx scope [c, t, f] w
-walkE ctx scope (CBinPrim _ l r _ _) w = walkList ctx scope [l, r] w
+walkE ctx scope (CBinPrim op l r tag _) w =
+  walkList ctx scope [l, r] (noteScalarOperator ctx op tag w)
 walkE ctx scope (CUnOp _ x) w = walkE ctx scope x w
 walkE ctx scope (CTuple es) w = walkList ctx scope es w
 walkE ctx scope (CList es) w = walkList ctx scope es w
@@ -785,15 +919,62 @@ walkE ctx scope (node@(CMethod name (MethodEvidence iface _ _ _ meths))) w =
     ctx
     scope
     node
-    (noteMethodContext ctx name iface (listLen meths) w)
+    (noteMethodResult
+      ctx
+      name
+      iface
+      (noteMethodContext ctx name iface (listLen meths) w))
 walkE ctx scope (node@(CDict _ _)) w = noteEvidence ctx scope node w
+
+noteScalarOperator : Ctx -> String -> String -> Walk -> Walk
+noteScalarOperator _ _ "" w = w
+noteScalarOperator (Ctx _ _ _ _ _ _ binding) op tag (Walk seen found records scalar calls ctxs evs results) =
+  if scalarOperatorTagAllowed op tag then
+    Walk seen found records scalar calls ctxs evs results
+  else
+    Walk
+      seen
+      found
+      records
+      ("scalar binop: operator `\{op}` cannot carry scalar tag `\{tag}` [in \{binding}]"
+        :: scalar)
+      calls
+      ctxs
+      evs
+      results
+
+scalarOperatorTagAllowed : String -> String -> Bool
+scalarOperatorTagAllowed op tag =
+  if scalarArithmeticOperator op then
+    tag == "Int" || tag == "Float" || isFixedIntHead tag
+  else if scalarComparisonOperator op then
+    tag == "Int" || tag == "Char" || isBoxed64Head tag
+  else
+    False
+
+scalarArithmeticOperator : String -> Bool
+scalarArithmeticOperator "+" = True
+scalarArithmeticOperator "-" = True
+scalarArithmeticOperator "*" = True
+scalarArithmeticOperator "/" = True
+scalarArithmeticOperator "%" = True
+scalarArithmeticOperator _ = False
+
+scalarComparisonOperator : String -> Bool
+scalarComparisonOperator "==" = True
+scalarComparisonOperator "/=" = True
+scalarComparisonOperator "<" = True
+scalarComparisonOperator ">" = True
+scalarComparisonOperator "<=" = True
+scalarComparisonOperator ">=" = True
+scalarComparisonOperator _ = False
 
 -- One line per way a dispatch node's evidence fails to denote a dictionary its
 -- callee binds (see the header).
 export
 validateDispatchEvidence : CProgram -> List String
 validateDispatchEvidence prog = match walkProgram LlvmBackend prog
-  Walk _ _ _ _ _ bad => reverseL bad
+  Walk _ _ _ _ _ _ bad _ => reverseL bad
 
 -- The leading `$dict` parameters of each top-level binding's first clause.
 dictParamCounts : List CBind -> OrdMap Int -> OrdMap Int
@@ -803,12 +984,13 @@ dictParamCounts ((CBind name ((CClause pats _) :: _) _ _) :: rest) acc =
 dictParamCounts (_ :: rest) acc = dictParamCounts rest acc
 
 noteEvidence : Ctx -> CallScope -> CExpr -> Walk -> Walk
-noteEvidence (Ctx _ _ env _ dcounts facts binding) scope node (Walk seen found bad calls ctxs evs) =
+noteEvidence (Ctx _ _ env _ dcounts facts binding) scope node (Walk seen found bad scalar calls ctxs evs results) =
   let why = evidenceFaults env dcounts facts scope node
   Walk
     seen
     found
     bad
+    scalar
     calls
     ctxs
     (reverseL
@@ -816,6 +998,7 @@ noteEvidence (Ctx _ _ env _ dcounts facts binding) scope node (Walk seen found b
           (f => "dispatch evidence: \{headText node} \{f} [in \{binding}]")
           why)
       ++ evs)
+    results
 
 evidenceFaults : ArityEnv ->
   OrdMap Int ->
@@ -942,7 +1125,7 @@ givenRooted _ = False
 
 -- A method occurrence supplies one route per slot of its declared context.
 noteMethodContext : Ctx -> String -> String -> Int -> Walk -> Walk
-noteMethodContext (Ctx _ _ _ mctx _ _ binding) name iface n (w@(Walk seen found bad calls ctxs evs)) =
+noteMethodContext (Ctx _ _ _ mctx _ _ binding) name iface n (w@(Walk seen found bad scalar calls ctxs evs results)) =
   let k = declaredMethodContext mctx iface name
   if n == k then
     w
@@ -951,10 +1134,12 @@ noteMethodContext (Ctx _ _ _ mctx _ _ binding) name iface n (w@(Walk seen found 
       seen
       found
       bad
+      scalar
       calls
       ("method context: method \{name} supplies \{intToString n} method routes, `\{iface}` declares \{intToString k} [in \{binding}]"
         :: ctxs)
       evs
+      results
 
 -- A field access is stamped, or reads a `Ref` cell through `.value`, which is
 -- never stamped: an emitter reading a stamped `.value` as a record field would
@@ -1002,14 +1187,16 @@ fieldOrdinalText : CField -> String
 fieldOrdinalText (CField k o _) = "\{k}@\{intToString o}"
 
 noteRecordBad : Ctx -> String -> String -> Walk -> Walk
-noteRecordBad (Ctx _ _ _ _ _ _ binding) node why (Walk seen found bad calls ctxs evs) =
+noteRecordBad (Ctx _ _ _ _ _ _ binding) node why (Walk seen found bad scalar calls ctxs evs results) =
   Walk
     seen
     found
     ("record: \{node} \{why} [in \{binding}]" :: bad)
+    scalar
     calls
     ctxs
     evs
+    results
 
 -- The mode the head's defined arity gives the arguments, or the shape fault.
 noteCall : Ctx -> CallScope -> CExpr -> List CExpr -> CallSite -> Walk -> Walk
@@ -1041,8 +1228,16 @@ sameMode CallDynamic CallDynamic = True
 sameMode _ _ = False
 
 noteCallBad : Ctx -> String -> Walk -> Walk
-noteCallBad (Ctx _ _ _ _ _ _ binding) why (Walk seen found bad calls ctxs evs) =
-  Walk seen found bad ("call: \{why} [in \{binding}]" :: calls) ctxs evs
+noteCallBad (Ctx _ _ _ _ _ _ binding) why (Walk seen found bad scalar calls ctxs evs results) =
+  Walk
+    seen
+    found
+    bad
+    scalar
+    ("call: \{why} [in \{binding}]" :: calls)
+    ctxs
+    evs
+    results
 
 headText : CExpr -> String
 headText (CVar x _) = x
@@ -1052,7 +1247,7 @@ headText (CLam _ _) = "a lambda"
 headText _ = "an expression"
 
 noteVar : Ctx -> CallScope -> String -> Walk -> Walk
-noteVar (Ctx backend top _ _ _ _ binding) scope x (w@(Walk seen found bad calls ctxs evs)) =
+noteVar (Ctx backend top _ _ _ _ binding) scope x (w@(Walk seen found bad scalar calls ctxs evs results)) =
   if omHasKey x scope || omHasKey x seen then
     w
   else match unprovidedOn backend x
@@ -1065,9 +1260,11 @@ noteVar (Ctx backend top _ _ _ _ binding) scope x (w@(Walk seen found bad calls 
           (omInsert x () seen)
           (ExternFinding x backend kind why binding :: found)
           bad
+          scalar
           calls
           ctxs
           evs
+          results
 
 walkList : Ctx -> CallScope -> List CExpr -> Walk -> Walk
 walkList _ _ [] w = w

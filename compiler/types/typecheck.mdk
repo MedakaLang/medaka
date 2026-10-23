@@ -474,6 +474,7 @@ import types.tc_types.{
   ChainMemo(..),
   GraphDrive(..),
   ElabResult,
+  ElabFacts(..),
   MarkCtx(..),
   SpellCtx(..),
   BareLocals(..),
@@ -535,8 +536,15 @@ import types.publish.{
   freezeRows,
   freezeModDiags,
   freezeNewest,
-  graphReport,
+  EntryOutcome(..),
+  graphReportWithOutcome,
   ppPubScheme,
+}
+import types.entry_outcome.{
+  entryOutcomeNow,
+  mainIsAsyncNow,
+  mainAsyncPayloadIsUnitNow,
+  mainIsUnitNow,
 }
 import types.registry.{
   RegKey,
@@ -729,6 +737,7 @@ import types.runtime_types.{
   RuntimeType(..),
   runtimeTypeOf,
 }
+import types.runtime_ops.{arithmeticTag}
 import types.program_facts.{ProgramFacts, factsOfElab}
 import types.prelude_interface.{
   PreludeInterface,
@@ -4190,18 +4199,14 @@ dropGoalsSince gctx mark kinds =
 -- sites discovered during inference.  Same tuple shape/fields, same resolve/
 -- rewrite seam (resolveUnopSites / rewriteUnopExpr), one operand instead of two.
 
--- SHARED-FLOAT-RESIDUAL §3(C): arithmetic EBinOp sites whose operand type may
--- ground to a concrete primitive.  Recorded during inference (operand Mono + the
--- node's route ref); resolveArithSites zonks each Mono after the whole module is
--- inferred and, ONLY when it grounds to concrete Float, stamps RScalar "Float" so
--- lowering carries the scalar type into CBinPrim and the native emitter picks the
--- Float primitive without re-deriving the operand LTy structurally.  A still-
+-- Arithmetic EBinOp sites whose operand type may ground to a concrete primitive.
+-- Recorded during inference (operand Mono + the node's route ref);
+-- resolveArithSites reads each solved Mono after the whole module is inferred and
+-- stamps its supported scalar tag so lowering carries the result type into
+-- CBinPrim and the native emitter need not recover it from operand structure. A still-
 -- polymorphic (Num a) operand never grounds → stays RNone → today's dict path
 -- (mirrors resolveBinopSite's grounded-only guard, so dict-routed arithmetic is
--- untouched).  Int ARITHMETIC operands are left unstamped (RNone ⇒ the Int
--- primitive is the default anyway) to avoid perturbing every integer binop's IR;
--- `RScalar "Int"` exists, but only stampOpRouteVal mints it, on COMPARISON sites,
--- where the emitter's LTInt default cannot be trusted (#2356).
+-- untouched).
 
 -- Error-path BLOCKER B4 (audit finding D3): missing-impl dispatch obligations.
 -- `methodEntryHere` maps each interface method NAME → (iface, the iface's typarams,
@@ -9758,87 +9763,30 @@ envAtIfSome loc env = envAt loc env
 -- a module binding `main` is elaborated; reset at the top of elaborateModules so a
 -- prior run can't leak.  Type-level only → no emitted IR changes → fixpoint-safe.
 
--- Stage 2 query: did the last-elaborated `main` infer to an `Async`-headed type?
--- The head must be the stdlib `async` module's `Async`, by origin — a user type
--- that happens to be named `Async` is an ordinary value main.
 export
 mainTypeIsAsync : DriveOutputs -> Bool
-mainTypeIsAsync o = o.doMainIsAsync
+mainTypeIsAsync outputs = outputs.doEntryOutcome.eoMainIsAsync
 
--- `mainTypeIsAsync` of the live graph, for the drive's own auto-print judgment.
-mainIsAsyncNow : GraphCtx -> Unit -> Bool
-mainIsAsyncNow gctx _ = match gctx.mainSchemeRef.value
-  Some (Forall _ _ _ _ _ t) => match headMonoNode t
-    TCon "Async" (OriginModule "async") => True
-    _ => False
-  None => False
-
--- Stage 2 query: is the `Async` main's payload `Unit`?  The entry driver
--- (`runAsyncMain`) takes `Async e Unit`, so any other payload
--- is rejected with a diagnostic before the rewrite rather than by the driver's
--- unification failure.
 export
 mainAsyncPayloadIsUnit : DriveOutputs -> Bool
-mainAsyncPayloadIsUnit o = o.doMainAsyncPayloadIsUnit
+mainAsyncPayloadIsUnit outputs = outputs.doEntryOutcome.eoMainAsyncPayloadIsUnit
 
--- `mainAsyncPayloadIsUnit` of the live graph.
-mainAsyncPayloadIsUnitNow : GraphCtx -> Unit -> Bool
-mainAsyncPayloadIsUnitNow gctx _ = match gctx.mainSchemeRef.value
-  Some (Forall _ _ _ _ _ t) => match normalize t
-    TApp _ payload => match normalize payload
-      TCon "Unit" _ => True
-      _ => False
-    _ => False
-  None => False
-
--- Stage 3 query: is the last-elaborated `main` Unit-shaped, i.e. is there no
--- value for a driver to print?  True when its type (effects stripped at each
--- arrow) resolves to `Unit`, or is a type variable no interface constrains: a
--- `main` of type `a` for every `a` (`main = panic "boom"`) never produces a
--- value, and printing one would need a `Display` impl that no type selects.  A
--- CONSTRAINED variable (`main = empty`, `Monoid a => a`) is not Unit-shaped:
--- its ambiguity is a real error, reported by the auto-print obligation
--- (`autoPrintWanted`).
--- A `Scheme` carries no context, so the variable case reads the obligation
--- side-channel `ownContext` reads the `=>` from, keyed the same way; it
--- answers for the module last checked, the entry module on the paths that ask
--- about `main`'s shape.
--- Used by the emitters to suppress the auto-print of Unit-returning mains even
--- when no explicit `main : <IO> Unit` annotation is present — e.g.
--- `main = applyEff f 42` where `applyEff : (a -> <IO> b) -> a -> <IO> b` and
--- `f : Int -> <IO> Unit` — and by the auto-print wrap (driver/main_autoprint.mdk).
 export
 mainTypeIsUnit : DriveOutputs -> Bool
-mainTypeIsUnit o = o.doMainIsUnit
+mainTypeIsUnit outputs = outputs.doEntryOutcome.eoMainIsUnit
 
--- `mainTypeIsUnit` of the live graph and the last module checked.
-mainIsUnitNow : ModuleCtx -> Unit -> Bool
-mainIsUnitNow mctx _ = match mctx.mcGraph.mainSchemeRef.value
-  Some (Forall _ _ _ _ _ t) => match normalize t
-    TCon "Unit" _ => True
-    TVar _ =>
-      let id = optionOr 0 (omLookup "main" mctx.mcCells.schemeDefIdsRef.value)
-      match lookupSchemeObls "main" id mctx.mcCells.schemeObligationsRef.value
-        Some (_ :: _) => False
-        _ => True
-    _ => False
-  None => False
-
--- Stage 4 query: did the last-elaborated `main` infer to a bare Float return type?
--- Used by the LLVM/WasmGC emitters to render a bare Float value main correctly
--- even when a structural guess at `main`'s result can't see through a polymorphic
--- HOF's return type (e.g. `main = fold (acc x => acc + x) 0.0 [1.0, 2.0, 3.0]`).
 export
 mainTypeIsFloat : DriveOutputs -> Bool
-mainTypeIsFloat o = o.doMainIsFloat
+mainTypeIsFloat outputs = outputs.doEntryOutcome.eoMainIsFloat
 
--- `mainTypeIsFloat` of the live graph.
-mainIsFloatNow : GraphCtx -> Unit -> Bool
-mainIsFloatNow gctx _ = match gctx.mainSchemeRef.value
-  Some (Forall _ _ _ _ _ t) => match normalize t
-    TCon "Float" _ => True
+-- Whether the `main` binding recorded obligations remains inference-private; the
+-- publication module receives its Boolean answer rather than this side table.
+mainHasObligations : ModuleCtx -> Bool
+mainHasObligations mctx =
+  let id = optionOr 0 (omLookup "main" mctx.mcCells.schemeDefIdsRef.value)
+  match lookupSchemeObls "main" id mctx.mcCells.schemeObligationsRef.value
+    Some (_ :: _) => True
     _ => False
-  None => False
 
 -- ── non-exhaustive-match warning accumulator (the type-aware `check_match`) ──
 -- `inferMatch` pushes a warning here for every `match` whose non-guarded arms
@@ -29562,20 +29510,13 @@ binopBuiltinHead "append" tag = binopPrimitiveHead tag || tag == "List"
 binopBuiltinHead method tag =
   binopPrimitiveHead tag || isFixedIntHead tag && isCompareMethod method
 
--- SHARED-FLOAT-RESIDUAL §3(C): after the module is inferred, zonk each recorded
--- arithmetic operand mono; when it grounds to concrete Float, stamp RScalar
--- "Float" on the node's route so lowering carries it into CBinPrim and the native
--- emitter picks the Float primitive without reading the operands' structure.
--- Grounded-only, exactly like resolveBinopSite: a still-
+-- After the module is inferred, classify each recorded arithmetic operand mono and
+-- stamp the supported concrete scalar tag on the node's route. Grounded-only,
+-- exactly like resolveBinopSite: a still-
 -- polymorphic operand (headTyconMono None) is left untouched (RNone → dict path),
--- so polymorphic-Num arithmetic keeps routing through the runtime Num dict.  This
--- channel stamps Float and the unsigned heads with their own tag (Int is the
--- arithmetic primitive default already; leaving Int operands RNone avoids
--- perturbing every integer binop's emitted IR) — `RScalar "Int"` is
--- stampOpRouteVal's, on comparison sites.  Never overwrites a route another pass
--- already set (a comparison op has a different node/ref; an arithmetic route
--- starts RNone) — the guard is: stamp only if the site is still RNone AND grounds
--- to Float or an unsigned head.
+-- so polymorphic-Num arithmetic keeps routing through the runtime Num dict. Never
+-- overwrite a route another pass already set (a comparison op has a different
+-- node/ref; an arithmetic route starts RNone).
 resolveArithSites : List (Ref Route, Mono) -> Unit
 resolveArithSites [] = ()
 resolveArithSites ((dref, m) :: rest) =
@@ -29584,10 +29525,9 @@ resolveArithSites ((dref, m) :: rest) =
 
 resolveArithSite : Ref Route -> Mono -> Unit
 resolveArithSite dref m = match !dref
-  RNone => match headTyconNameMono m
-    Some "Float" => dref := RScalar "Float"
-    Some tag => if isFixedIntHead tag then dref := RScalar tag
-    _ => ()
+  RNone => match arithmeticTag m
+    Some tag => dref := RScalar tag
+    None => ()
   _ => ()
 
 -- EBinOp and EUnOp share ONE dict-route resolution family
@@ -29852,22 +29792,19 @@ stampOpRouteVal sx isBinop encl useScope method operandMono tag =
       None => RNone
 
 -- Exact Num arithmetic uses the predicate selected by the producer for both the
--- implementation word and its prerequisite routes.  Only the language primitive
--- Int/Float and unsigned U8/U16/U32/U64 heads bypass method dispatch; a user Num
--- impl for any other head, including String/Bool/Char, is selected through the
--- exact interface identity.
+-- implementation word and its prerequisite routes. Supported solved primitive
+-- heads bypass method dispatch; a user Num impl for any other head, including
+-- String/Bool/Char, is selected through the exact interface identity.
 stampPredicateOpRouteVal : SiteCtx ->
   String ->
   ScopeId ->
   String ->
   Mono ->
-  String ->
   ClassPredicate ->
   Route
-stampPredicateOpRouteVal sx encl useScope method operandMono tag predicate =
-  if tag == "Int" then
-    let route = RNone
-    let _ =
+stampPredicateOpRouteVal sx encl useScope method operandMono predicate =
+  match predicateScalarRoute method operandMono
+    Some route =>
       noteNumericPredicateTrace
         sx.sxModule.mcGraph
         NPTArithmetic
@@ -29877,36 +29814,19 @@ stampPredicateOpRouteVal sx encl useScope method operandMono tag predicate =
         None
         (Some route)
         []
-    route
-  else if tag == "Float" || isFixedIntHead tag && method /= "negate" then
-    -- a fixed-width head's binary arithmetic is a builtin too, stamped with its own
-    -- tag so every engine wraps the result at that width.  Its unary negation has no
-    -- tagged builtin, so it takes the head's `Num` impl like any other instance.
-    let route = RScalar tag
-    let _ =
-      noteNumericPredicateTrace
-        sx.sxModule.mcGraph
-        NPTArithmetic
-        predicate
-        useScope
-        sx.sxSite
-        None
-        (Some route)
-        []
-    route
-  else
-    let env = sx.sxModule.mcCells.bodyImplEnvRef.value
-    let goals = predicate.predicateArguments
-    match ieSelectRowByIface sx env predicate.predicateInterface goals
-      Some (row@(ImplRow _ _ selectedIface _ _ _ _)) =>
-        let reqs = implDictRoutesForRow sx encl useScope goals row
-        let key = rowRouteKey row
-        let route =
-          RKey
-            key
-            reqs
-            (selectedCallSupers sx method (Some row) encl useScope goals)
-        let _ =
+      route
+    None =>
+      let env = sx.sxModule.mcCells.bodyImplEnvRef.value
+      let goals = predicate.predicateArguments
+      match ieSelectRowByIface sx env predicate.predicateInterface goals
+        Some (row@(ImplRow _ _ selectedIface _ _ _ _)) =>
+          let reqs = implDictRoutesForRow sx encl useScope goals row
+          let key = rowRouteKey row
+          let route =
+            RKey
+              key
+              reqs
+              (selectedCallSupers sx method (Some row) encl useScope goals)
           noteNumericPredicateTrace
             sx.sxModule.mcGraph
             NPTArithmetic
@@ -29916,10 +29836,9 @@ stampPredicateOpRouteVal sx encl useScope method operandMono tag predicate =
             (Some selectedIface)
             (Some (RKey key [] []))
             reqs
-        route
-      None =>
-        let route = RNone
-        let _ =
+          route
+        None =>
+          let route = RNone
           noteNumericPredicateTrace
             sx.sxModule.mcGraph
             NPTArithmetic
@@ -29929,7 +29848,19 @@ stampPredicateOpRouteVal sx encl useScope method operandMono tag predicate =
             None
             (Some route)
             []
-        route
+          route
+
+predicateScalarRoute : String -> Mono -> Option Route
+predicateScalarRoute method operandMono = match arithmeticTag operandMono
+  -- Unary Int negation already has its dedicated primitive path and the unop
+  -- carrier does not publish a scalar annotation.
+  Some "Int" => Some (if method == "negate" then RNone else RScalar "Int")
+  Some "Float" => Some (RScalar "Float")
+  -- A fixed-width head's binary arithmetic is a builtin too, stamped with its
+  -- own tag so every engine wraps the result at that width. Its unary negation
+  -- takes the head's `Num` impl like any other instance.
+  Some scalar => if method == "negate" then None else Some (RScalar scalar)
+  None => None
 -- Gap #21 (CLOSED): element reqs are now forwarded unconditionally on both eval and
 -- emit paths.  The impl method `eq`/`compare` carries leading `$dict_*` params
 -- (resolveArgStamps runs on both paths); emitter applies them; eval's methodAtNarrow
@@ -32665,7 +32596,7 @@ rowRouteKey (ImplRow _ _ ir tys _ _ _) =
 -- side of this table now carries the same `HeadKey` the IMPL side (`keyEntryOf`
 -- via `headTyconTy`) does, and the two can be compared as identities instead of
 -- as spellings.  Extensionally unchanged: the two projections had identical
--- arms (see `monoHeadCon`'s obituary above `mainTypeIsAsync`).
+-- arms (see `monoHeadCon`'s obituary above `mainIsAsyncNow`).
 goalHeadCon : List Mono -> Option HeadKey
 goalHeadCon (g :: _) = headTyconMono g
 goalHeadCon [] = None
@@ -34218,8 +34149,8 @@ entailInst sx name m encl useScope tag (EKArg fullMono omitted) =
   (word, argImplDictRoutesForEncl sx encl useScope dictName tag subject goals)
 entailInst sx name m encl useScope tag (EKOp isBinop _) =
   (stampOpRouteVal sx isBinop encl useScope name m tag, [])
-entailInst sx name m encl useScope tag (EKPredicateOp _ _ predicate) =
-  (stampPredicateOpRouteVal sx encl useScope name m tag predicate, [])
+entailInst sx name m encl useScope _ (EKPredicateOp _ _ predicate) =
+  (stampPredicateOpRouteVal sx encl useScope name m predicate, [])
 
 -- A dictionary's super segment at the goal vector [goals]: one route per DIRECT
 -- super of [iface], in declaration order, each solved at that same goal by the whole
@@ -35629,7 +35560,8 @@ rewriteBinopExpr mctx idx (EBinOp op l r ev) = match evSiteRouteIn idx ev
   RNone => EBinOp op l r ev
   -- SHARED-FLOAT-RESIDUAL §3(C): an RScalar route is NOT a typeclass dispatch — it
   -- is the scalar-type tag typecheck stamped on a monomorphic binop
-  -- ("Float" on arithmetic, "Int" on comparison). Lowering does not read the
+  -- (its primitive head on arithmetic, an allowed comparison tag on comparison).
+  -- Lowering does not read the
   -- EBinOp's site id, so we carry the scalar type in a NODE by wrapping the binop
   -- in `EAnnot … (TyCon tag)`.  Eval ignores the
   -- annotation (`eval (EAnnot e _) = eval e`) and evaluates the binop dynamically
@@ -54379,7 +54311,7 @@ graphModuleWorker sel prev mid seed accData accAll prog =
 -- producer, but `checkJsonFile`'s multi-module arm (driver/diagnostics.mdk) had NONE:
 -- `analyzeProject` → `typecheckPassFull` → here, and nothing on that chain wrote it.
 -- Both directions of that hole are pinned:
---   * fresh process — the ref is `None`, `mainTypeIsUnit ()` answers False on `None`,
+--   * fresh process — the ref is `None`, `mainIsUnitNow` answers False on `None`,
 --     so W-MAIN-SHAPE FIRED on a clean Unit main (false positive on every
 --     `check --json` / MCP `medaka_check` of a multi-module project);
 --   * long-lived process (`medaka mcp`, `medaka lsp`) — the ref held whatever an
@@ -54754,7 +54686,7 @@ checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKe
   -- #2705: the graph-end drain for what the steps did not already drain (the entry
   -- module, and any module after the last recorded step) — see `chainGo`.
   let findings = checkGraphFinish lastCtx
-  let (wanted, _) =
+  let (wanted, autoPrint) =
     autoPrintWanted
       lastCtx
       valueMain
@@ -54774,8 +54706,10 @@ checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKe
   -- Built for the report, not installed: no lowering reads a check drive's table.
   let dispositions =
     buildDispositions lastCtx.mcGraph lastCtx.mcGraph.declEnvsRef.value
+  let outcome = entryOutcomeNow lastCtx (mainHasObligations lastCtx) autoPrint
   let report =
-    graphReport
+    graphReportWithOutcome
+      outcome
       perMod
       (publishedCore coreClosed coreContexts coreSchemes)
       []
@@ -54784,7 +54718,7 @@ checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKe
       lastCtx.mcGraph.graphRun.binderRows.value
       None
       entryTables
-  ((report, driveOutputsNow lastCtx), lastCtx.mcGraph)
+  ((report, driveOutputsNow lastCtx outcome), lastCtx.mcGraph)
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `driveGraphK GOutDiags`'s `foldModules` exactly:
@@ -55015,16 +54949,9 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
     -- test/run_check_agreement_fixtures/p0_17_missing_impl_method.mdk.
     restRows
 
--- The drive's answers to the post-drive questions, read once at its end (after the
--- drain, the tree arm's dictionary pass and the sticky rollback).  The invocation
--- view's schemes are re-minted copies, so no cell inference writes is reachable from
--- the result.  [mctx] is the record the drive ends in.
-driveOutputsNow : ModuleCtx -> DriveOutputs
-driveOutputsNow mctx = DriveOutputs {
-  doMainIsUnit = mainIsUnitNow mctx (),
-  doMainIsFloat = mainIsFloatNow mctx.mcGraph (),
-  doMainIsAsync = mainIsAsyncNow mctx.mcGraph (),
-  doMainAsyncPayloadIsUnit = mainAsyncPayloadIsUnitNow mctx.mcGraph (),
+driveOutputsNow : ModuleCtx -> EntryOutcome -> DriveOutputs
+driveOutputsNow mctx outcome = DriveOutputs {
+  doEntryOutcome = outcome,
   doHadTypeErrors = typeErrorsArmed mctx.mcGraph (),
   doHadMatchWarnings = matchWarningsNow mctx,
   doInvocationView = frozenInvocationView mctx.mcCells.invocationViewRef.value,
@@ -55139,6 +55066,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       perModRaw
       coreDecls
       modules
+  let outcome = entryOutcomeNow lastCtx (mainHasObligations lastCtx) autoPrint
   -- The graph is closed: the drain, its defaulting and the auto-print verdict
   -- have run, so the published rows are frozen now, once.
   let perMod =
@@ -55164,7 +55092,8 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       gdDispositions = dispositions,
       gdBinders = lastCtx.mcGraph.graphRun.binderRows.value,
       gdReport =
-        graphReport
+        graphReportWithOutcome
+          outcome
           perMod
           corePub
           []
@@ -55174,7 +55103,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
           None
           entryTables,
       gdGraph = lastCtx.mcGraph,
-      gdOutputs = driveOutputsNow lastCtx,
+      gdOutputs = driveOutputsNow lastCtx outcome,
     }
     GOutTrees =>
       -- The set `dictPass` prepends dict params for: the bare set plus every
@@ -55210,11 +55139,19 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
         gdEvTable = evidence,
         gdDispositions = dispositions,
         gdBinders = lastCtx.mcGraph.graphRun.binderRows.value,
-        gdReport = { graphReport perMod corePub residual (_ => evidence) dispositions lastCtx.mcGraph.graphRun.binderRows.value (Some (coreD, modulesOut)) entryTables |
-          trAutoPrint = autoPrint,
-        },
+        gdReport =
+          graphReportWithOutcome
+            outcome
+            perMod
+            corePub
+            residual
+            (_ => evidence)
+            dispositions
+            lastCtx.mcGraph.graphRun.binderRows.value
+            (Some (coreD, modulesOut))
+            entryTables,
         gdGraph = lastCtx.mcGraph,
-        gdOutputs = driveOutputsNow lastCtx,
+        gdOutputs = driveOutputsNow lastCtx outcome,
       }
 
 -- The prelude's published rows: the core pass's own when that pass closed core
@@ -55292,7 +55229,7 @@ autoPrintWanted mctx True executes findings perMod coreDecls modules =
     printlnIface decls,
   )
     (Some scheme, Some (mid, entry), Some iface) =>
-      if mainIsUnitNow mctx () then
+      if mainIsUnitNow mctx.mcGraph (mainHasObligations mctx) () then
         ([], None)
       else if mainIsAsyncNow mctx.mcGraph () then
         (asyncDriverFindings mctx executes mid entry scheme perMod, None)
@@ -56034,7 +55971,7 @@ elaborateModulesWithSchemes inputs valueMain runtimeDecls coreDecls0 modulesIn =
 
 -- `elaborateModulesWithSchemes` returning its drive's whole report and outputs
 -- beside the elaboration.  `executes` names the `async` driver of a caller that runs or
--- emits the trees: its report then carries the auto-print evidence (`trAutoPrint`).
+-- emits the trees: its checked program then carries the auto-print evidence.
 export
 elaborateModulesWithReport : DriveInputs ->
   Bool ->
@@ -56081,7 +56018,10 @@ elaborateModulesWithReportGraph inputs valueMain executes runtimeDecls coreDecls
         g.gdResidual,
         g.gdEvTable,
         g.gdDispositions,
-        g.gdBinders,
+        ElabFacts {
+          efBinders = g.gdBinders,
+          efEntryOutcome = g.gdOutputs.doEntryOutcome,
+        },
       ),
       g.gdReport,
       g.gdOutputs,

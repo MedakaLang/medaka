@@ -31,8 +31,6 @@ import backend.extern_catalog.{runtimeDomain}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{Decl(..)}
 import types.typecheck.{
-  mainTypeIsUnit,
-  mainTypeIsFloat,
   checkedFfiExternTypeNamesModules,
 }
 import types.tc_types.{DriveOutputs}
@@ -42,8 +40,6 @@ import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmitWith,
   lowerProgramEmitPinnedWith,
-  returnsSelfTable,
-  selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
   externArities,
@@ -60,7 +56,6 @@ import backend.llvm_emit.{
   withNoInlineFns,
 }
 import ir.dce.{dceFilter}
-import driver.main_autoprint.{mainIsWrapped}
 import entries.entry_support.{
   driveEmitLocated,
   stampSiteFiles,
@@ -142,7 +137,6 @@ emitTail : List (String, String, List Decl) ->
   <IO> Unit
 emitTail mods outputs facts runtimeDecls coreD modules1 =
   let half = emitHalfOfEnv
-  let wrapped = mainIsWrapped modules1
   let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2
   -- SOURCE DCE IS OFF in the prelude-object modes.  It is per-program by
@@ -158,13 +152,9 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
   let base =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
-      (returnsSelfTable allDecls)
-      (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       (externArities runtimeDecls)
-      (mainTypeIsUnit outputs || wrapped)
-      (mainTypeIsFloat outputs && not wrapped)
       half
       preludeBinds
       preludeImpls

@@ -301,7 +301,7 @@ ordKey n = lenKey "\{n}"
 -- A-1's greppability. A dispatch key whose positions can be rigid therefore
 -- carries the rigid positions OUTSIDE this type — see `dispKeyRender` below.
 public export data RegKey =
-  | RegKey (List TabKey) (List Int)
+  RegKey (List TabKey) (List Int)
   deriving (Eq, Ord, Debug)
 
 -- The one-identity case — by far the most common, and the shape the
@@ -663,7 +663,7 @@ sregMergeGo (k :: rest) acc = sregMergeGo rest (sregAddK k acc)
 -- The payload type is a parameter, so the elaborated payloads stay with the
 -- typechecker and this module reads none of its state.
 export data SpellingPop a =
-  | SpellingPop (OrdMap (List (Ident, String, a))) (OrdMap a) (List String)
+  SpellingPop (OrdMap (List (Ident, String, a))) (OrdMap a) (List String)
 
 export
 spEmpty : SpellingPop a

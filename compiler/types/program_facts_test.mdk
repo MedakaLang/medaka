@@ -2,15 +2,18 @@
 -- `factsNow` outside a bracket panics, and no verb observes a panic in-process, so
 -- the restore after a bracket stands in for that arm.
 
-import test.{expectEqual, expectAll, expectTrue, expectFalse}
-import frontend.ast.{EvId(..), EvVal(..), EvEntry(..), Route(..)}
+import test.{Expectation, expectEqual, expectAll, expectTrue, expectFalse, fail}
+import frontend.ast.{Decl, EvId(..), EvVal(..), EvEntry(..), Route(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import types.disposition.{emptyDispositionTable}
+import types.publish.{EntryOutcome(..)}
 import types.program_facts.{
   ProgramFacts(..),
   emptyFacts,
+  factsOfChecked,
   factsOfElab,
+  factsOfElabWith,
   withFacts,
   factsNow,
 }
@@ -19,7 +22,9 @@ import types.route_key.{
   evIndexOf,
   evSiteRouteIn,
 }
-import types.typecheck.{defaultDriveInputs, elaborateModules}
+import types.typecheck.{
+  defaultDriveInputs, elaborateModules, elaborateModulesWithReport
+}
 import support.util.{joinNl}
 
 routeFacts : ProgramFacts
@@ -27,6 +32,7 @@ routeFacts = ProgramFacts {
   pfEvidence = evIndexOf [EvEntry (EvId "m" 1) (EvOne (RScalar "Int"))],
   pfDispositions = Some emptyDispositionTable,
   pfBinders = None,
+  pfEntryOutcome = None,
 }
 
 isTyped : ProgramFacts -> Bool
@@ -89,3 +95,49 @@ indexSlots (EvIndex _ arr) = toList arr
 test "factsOfElab of a driven two-module program holds its method occurrences" =
   let slots = indexSlots twoModuleFacts.pfEvidence
   expectAll [expectTrue (any isMethodSlot slots)]
+
+entryOutcomePrelude : List Decl
+entryOutcomePrelude =
+  desugar
+    (parseLocated
+      (joinNl [
+        "interface Display a where",
+        "  display : a -> String",
+        "impl Display Int where",
+        "  display _ = \"int\"",
+        "println : Display a => a -> Unit",
+        "println x = let _ = display x in ()",
+      ]))
+
+outcomeFacts : (ProgramFacts, ProgramFacts)
+outcomeFacts =
+  let (elab, report, _) = elaborateModulesWithReport
+    defaultDriveInputs
+    True
+    (Some "runMain")
+    []
+    entryOutcomePrelude
+    [("entry", desugar (parseLocated "main = 1"))]
+  let (_, _, _, _, table, _, _) = elab
+  let checked = match report.trChecked
+    Some program => factsOfChecked program
+    None => emptyFacts
+  (checked, factsOfElabWith table elab)
+
+entryOutcomeExpectation : ProgramFacts -> Expectation
+entryOutcomeExpectation facts = match facts.pfEntryOutcome
+  Some outcome => expectAll [
+    expectFalse outcome.eoMainIsUnit,
+    expectFalse outcome.eoMainIsFloat,
+    expectFalse outcome.eoMainIsAsync,
+    expectFalse outcome.eoMainAsyncPayloadIsUnit,
+    expectTrue (isSome outcome.eoAutoPrint),
+  ]
+  None => fail "facts dropped their entry outcome"
+
+test "checked and elaborated facts preserve the selected entry outcome" =
+  let (checked, elaborated) = outcomeFacts
+  expectAll [
+    entryOutcomeExpectation checked,
+    entryOutcomeExpectation elaborated,
+  ]

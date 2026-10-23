@@ -17,6 +17,7 @@ import frontend.parser.{parse, parseLocated}
 import frontend.desugar.{desugar, desugarIn}
 import frontend.ast.{BinderId(..)}
 import types.typecheck.{defaultDriveInputs, elaborateModules}
+import types.tc_types.{ElabFacts(..)}
 import types.runtime_types.{
   BinderRow(..),
   RuntimeType(..),
@@ -37,7 +38,7 @@ rowsOf : List (String, List String) ->
 rowsOf modules = do
   rsrc <- readFile (underRoot "stdlib/runtime.mdk")
   csrc <- readFile (underRoot "stdlib/core.mdk")
-  let (_, _, _, _, _, _, binders) =
+  let (_, _, _, _, _, _, facts) =
     elaborateModules
       defaultDriveInputs
       (desugar (parse rsrc))
@@ -45,7 +46,7 @@ rowsOf modules = do
       (map
         (m => (fst m, desugarIn (fst m) (parseLocated (joinNl (snd m)))))
         modules)
-  Ok (values binders)
+  Ok (values facts.efBinders)
 
 -- The table holding exactly [rows].
 tableOf : List BinderRow -> BinderTypeTable

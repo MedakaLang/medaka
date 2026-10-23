@@ -35,6 +35,7 @@ import ir.core_ir.{
   CallMode(..),
   CallSite(..),
   DeclFacts(..),
+  MethodResultFact(..),
   noDeclFacts,
   programBinderIds,
 }
@@ -268,8 +269,18 @@ test "two occurrences of one binder id stay one binder" =
       []
       []
       DeclFacts {
+        factMethodResults = [
+          MethodResultFact {
+            iface = "left::I",
+            method = "m",
+            returnsHead = True,
+            callbackPositions = [1],
+            valueArity = 2,
+          },
+        ],
         factRequires = [],
         factSupers = [],
+        factEntryOutcome = None,
         factBinders = [
           BinderRow {
             brId = shared,

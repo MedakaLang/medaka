@@ -1,0 +1,3 @@
+-- A bare Float value main is printed by the driver wrap; the native backend
+-- must then see the wrapped Unit entry rather than the pre-wrap Float fact.
+main = 1.5

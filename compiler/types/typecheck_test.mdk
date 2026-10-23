@@ -63,7 +63,10 @@ import types.disposition.{
   dispositionRows,
   instIdMid,
 }
-import types.repr.{IfaceRef(..), Scheme(..), ppMono, ppScheme}
+import types.repr.{
+  IfaceRef(..), Mono(..), Scheme(..), Tyvar(..), ppMono, ppScheme
+}
+import types.runtime_ops.{arithmeticTag}
 import types.solver_contract.{SolverOutcome(..), Wanted(..)}
 import types.tc_types.{
   AssumptionTraceEntry(..),
@@ -177,8 +180,7 @@ data NumericTraceView = NumericTraceView {
   ntvGiven : Bool,
   ntvForwarded : Bool,
   ntvPrerequisites : List String,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 numericRouteView : Route -> String
 numericRouteView RNone = "none"
@@ -1111,7 +1113,7 @@ test "primitive arithmetic retains the Int and Float scalar routes" =
     expectEqual
       [
         ("binding:floatValue", ["Float"], "scalar:Float", "", []),
-        ("binding:intValue", ["Int"], "none", "", []),
+        ("binding:intValue", ["Int"], "scalar:Int", "", []),
       ]
       (map
         (view => (
@@ -1123,6 +1125,35 @@ test "primitive arithmetic retains the Int and Float scalar routes" =
         ))
         arithmetic),
   ]
+
+test "arithmetic tags cover solved primitives and preserve a generic Num operand" =
+  let generic = TVar (Ref (Unbound 9001 0))
+  let linkedInt = TVar (Ref (Link (TCon "Int" OriginBuiltin)))
+  expectEqual
+    [
+      Some "Int",
+      Some "Float",
+      Some "U8",
+      Some "U16",
+      Some "U32",
+      Some "U64",
+      Some "I32",
+      Some "I64",
+      None,
+      Some "Int",
+    ]
+    (map arithmeticTag [
+      TCon "Int" OriginBuiltin,
+      TCon "Float" OriginBuiltin,
+      TCon "U8" OriginBuiltin,
+      TCon "U16" OriginBuiltin,
+      TCon "U32" OriginBuiltin,
+      TCon "U64" OriginBuiltin,
+      TCon "I32" OriginBuiltin,
+      TCon "I64" OriginBuiltin,
+      generic,
+      linkedInt,
+    ])
 
 test "arithmetic keeps missing Num and explicit result mismatches loud" = expectAll
   [
@@ -1588,8 +1619,7 @@ data MethodWantedView = MethodWantedView {
   mwvArguments : List String,
   mwvDestinationShared : Bool,
   mwvScopeShared : Bool,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 data MethodOutcomeView =
   | MOVGiven EvidenceBinderId
@@ -2331,8 +2361,7 @@ test "ordinary return traces are fresh while cache hits replay no events" =
 data ReturnMemoRequestView = ReturnMemoRequestView {
   rmrvModules : List (String, List (String, String), List (String, String)),
   rmrvReturns : List MethodReturnMemoView,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 returnMemoModuleView : ModDiags ->
   (String, List (String, String), List (String, String))
@@ -2857,16 +2886,14 @@ data TraceView = TraceView {
   tvBinderOwner : String,
   tvSameScope : Bool,
   tvBinder : EvidenceBinderId,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 data RequestView = RequestView {
   rvTrace : List TraceView,
   rvErrors : Int,
   rvFrameCount : Int,
   rvFrameCapacity : Int,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 data ModuleTraceView = ModuleTraceView {
   mtvAssumptions : List TraceView,
@@ -2880,8 +2907,7 @@ data ContextView = ContextView {
   cvBinderModule : String,
   cvBinderOwner : String,
   cvSameScope : Bool,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 traceView : GraphCtx -> AssumptionTraceEntry -> TraceView
 traceView gctx entry =

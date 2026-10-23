@@ -24,6 +24,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import list.{take}
 import support.util.{dedup, listLen, joinNl, reverseL}
+import support.ordmap.{omEmpty}
 import frontend.marker.{declRefs}
 import map as BM
 import types.annotate.{annotateProgram}
@@ -40,6 +41,7 @@ import ir.core_ir.{
   MethodEvidence(..),
   CProgram(..),
   DeclFacts(..),
+  MethodResultFact(..),
   noDeclFacts,
   noImplSym,
   BinderSite(..),
@@ -59,13 +61,16 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
 }
 import backend.extern_catalog.{catalogRow, ledgerEntry, rowLlvm, rowWasm}
-import backend.core_validate.{validateForEmission, coreDefectMessage}
+import backend.core_validate.{
+  validateForEmission, coreDefectMessage, validateMethodResults
+}
 import backend.core_validate.{
   CheckedTarget, checkedTarget, checkedTargetOf, findingExtern, isUnprovidedOn,
   missingCatalogRows, missingRowsMessage, renderExternFinding,
   renderExternRefusalUnder, validateCalls, validateDispatchEvidence,
   validateExterns, validateImplSymbols, implSymbolCollision, dictTagCollision,
-  validateMethodContexts, validateRecords, validateTails, validateBinderStamps
+  validateMethodContexts, validateRecords, validateTails, validateBinderStamps,
+  validateScalarOperators
 }
 import backend.wasm_emit.{
   emitProgram as wasmStrict,
@@ -187,12 +192,7 @@ recordSrc =
 test "(e) record mode logs one event per refused extern, and no unbound-variable event" =
   let decls = grantWholeDomain (desugar (parse recordSrc))
   let input =
-    makeWasmEmitInputFull
-      PreludeFreeRuntime
-      (ctorFieldTypeNames decls)
-      False
-      False
-      []
+    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (_, events) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   let expected = map ("main\t" ++ _) (refusalLines WasmBackend recordSrc)
@@ -235,8 +235,7 @@ test "(f) llvm refuses assertSnapshot and lowers what wasm refuses" = expectEach
 llvmRecordEvents : Expectation
 llvmRecordEvents =
   let decls = grantWholeDomain (desugar (parse assertSnapshotSrc))
-  let input =
-    makeEmitInput PreludeFreeRuntime [] [] [] [] [] False False 0 [] [] "" []
+  let input = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (_, events) = llvmRecord input (buildEmitPlan LlvmBackend cp) cp
   expectEqual
@@ -368,12 +367,7 @@ ffiNoJsEvents checked =
   let ffiTypes =
     [("ffiAddInts", ([("c", "ffiAddInts")], (["Int", "Int"], "Int")))]
   let input =
-    makeWasmEmitInputFull
-      PreludeFreeRuntime
-      (ctorFieldTypeNames decls)
-      False
-      False
-      ffiTypes
+    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) ffiTypes
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   checkedTarget := checked
   let (_, events) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
@@ -415,6 +409,56 @@ unstamped body =
 
 zero : CExpr
 zero = CLit (LInt 0)
+
+scalarProgram : String -> String -> CProgram
+scalarProgram op tag = unstamped (CBinPrim op zero zero tag noDeclLoc)
+
+test "scalar binop validation accepts every published operator and tag shape" =
+  expectEach
+    (map
+      ((op, tag) => (
+        "\{op}@\{tag}",
+        expectEqual [] (validateScalarOperators (scalarProgram op tag)),
+      ))
+      [
+        ("+", "Int"),
+        ("/", "Float"),
+        ("%", "U8"),
+        ("*", "U16"),
+        ("-", "U32"),
+        ("+", "U64"),
+        ("/", "I32"),
+        ("%", "I64"),
+        ("==", "Int"),
+        ("<", "Char"),
+        (">=", "U64"),
+        ("/=", "I64"),
+        ("++", ""),
+      ])
+
+test "scalar binop validation rejects malformed operator and tag pairs" = expectEach
+  [
+    (
+      "an arithmetic tag on append",
+      expectEqual
+        ["scalar binop: operator `++` cannot carry scalar tag `Int` [in main]"]
+        (validateScalarOperators (scalarProgram "++" "Int")),
+    ),
+    (
+      "an unknown arithmetic tag",
+      expectEqual
+        [
+          "scalar binop: operator `+` cannot carry scalar tag `String` [in main]",
+        ]
+        (validateScalarOperators (scalarProgram "+" "String")),
+    ),
+    (
+      "an arithmetic-only tag on comparison",
+      expectEqual
+        ["scalar binop: operator `<` cannot carry scalar tag `Float` [in main]"]
+        (validateScalarOperators (scalarProgram "<" "Float")),
+    ),
+  ]
 
 test "(h) lowering stamps every record node, so a permuted program validates clean" = expectAll
   [
@@ -1172,9 +1216,11 @@ evidenceProg body =
     []
     []
     DeclFacts {
+      factMethodResults = [],
       factRequires = [("K", 0), ("S", 0)],
       factSupers = [("K", 0), ("S", 1)],
       factBinders = [],
+      factEntryOutcome = None,
     }
 
 evidenceOf : Route -> CExpr
@@ -1463,9 +1509,11 @@ dropBinderTable (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
   impls
   mctx
   DeclFacts {
+    factMethodResults = facts.factMethodResults,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factBinders = [],
+    factEntryOutcome = facts.factEntryOutcome,
   }
 
 restampBinder : String -> RuntimeType -> CProgram -> CProgram
@@ -1476,8 +1524,10 @@ restampBinder name ty (CProgram groups ctors ctorTypes impls mctx facts) = CProg
   impls
   mctx
   DeclFacts {
+    factMethodResults = facts.factMethodResults,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
+    factEntryOutcome = facts.factEntryOutcome,
     factBinders =
       map
         (row =>
@@ -1562,8 +1612,10 @@ intLetProg ty =
     []
     []
     DeclFacts {
+      factMethodResults = [],
       factRequires = [],
       factSupers = [],
+      factEntryOutcome = None,
       factBinders = [
         BinderRow {
           brId = bid,
@@ -1658,9 +1710,11 @@ editRows edit (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
   impls
   mctx
   DeclFacts {
+    factMethodResults = facts.factMethodResults,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factBinders = edit facts.factBinders,
+    factEntryOutcome = facts.factEntryOutcome,
   }
 
 test "(ad) a function whose row is missing or gives no return type is refused" = expectEach
@@ -1900,8 +1954,8 @@ emissionText route victim =
       runtimeDomain (externDecls (parse "extern zzEmissionMissingRow : Int"))
     else
       PreludeFreeRuntime
-  let li = makeEmitInput domain [] [] [] [] [] False False 0 [] [] "" []
-  let wi = makeWasmEmitInputFull domain [] False False []
+  let li = makeEmitInput domain [] [] [] 0 [] [] "" []
+  let wi = makeWasmEmitInputFull domain [] []
   match route
     "llvm-stats" => fst (llvmStats li plan cp)
     "llvm-strict" => llvmStrict li plan cp
@@ -2049,9 +2103,8 @@ test "gateway valid controls return module text and unavailable externs stay rec
   let cp = emissionVictim "not-provided"
   let lp = buildEmitPlan LlvmBackend cp
   let wp = buildEmitPlan WasmBackend cp
-  let li =
-    makeEmitInput PreludeFreeRuntime [] [] [] [] [] False False 0 [] [] "" []
-  let wi = makeWasmEmitInputFull PreludeFreeRuntime [] False False []
+  let li = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
+  let wi = makeWasmEmitInputFull PreludeFreeRuntime [] []
   let (_, le) = llvmRecord li lp cp
   let (_, we) = wasmRecord wi wp cp
   expectEach [
@@ -2133,3 +2186,172 @@ test "runtime domain projection unwraps attributed externs without dropping decl
         (joinNl (map coreDefectMessage validation.defects)),
     ),
   ]
+
+methodFactControl : CProgram
+methodFactControl =
+  lowered
+    """
+interface Chain c where
+  step : c -> (Int -> c) -> c
+impl Chain Int where
+  step x f = f x
+main = 1
+"""
+
+editMethodFacts : (List MethodResultFact -> List MethodResultFact) ->
+  CProgram ->
+  CProgram
+editMethodFacts edit (CProgram gs cs ts impls ms facts) = CProgram
+  gs
+  cs
+  ts
+  impls
+  ms
+  { facts | factMethodResults = edit facts.factMethodResults }
+
+methodFactFaults : CProgram -> List String
+methodFactFaults cp = validateMethodResults (buildEmitPlan LlvmBackend cp) cp
+
+test "method result facts validate before either backend emits" =
+  expectAll
+    (map
+      (backend =>
+        let plan = buildEmitPlan backend methodFactControl
+        expectAll [
+          expectEqual [] (validateMethodResults plan methodFactControl),
+          expectEqual
+            []
+            (map
+              coreDefectMessage
+              (validateForEmission
+                backend
+                PreludeFreeRuntime
+                plan
+                methodFactControl).defects),
+        ])
+      [LlvmBackend, WasmBackend])
+
+test "method result validation refuses a missing row and a missing plan key" =
+  let missing = editMethodFacts (_ => []) methodFactControl
+  let plan = buildEmitPlan LlvmBackend methodFactControl
+  expectAll [
+    expectTextContainsAll
+      ["method result", "missing declaration fact", "Chain#step"]
+      (joinNl (methodFactFaults missing)),
+    expectTextContainsAll
+      ["method result", "index disagrees"]
+      (joinNl
+        (validateMethodResults
+          { plan | methodResults = omEmpty }
+          methodFactControl)),
+  ]
+
+test "method result validation refuses malformed keys and callback positions" =
+  let row = MethodResultFact {
+    iface = "Chain",
+    method = "step",
+    returnsHead = True,
+    callbackPositions = [1],
+    valueArity = 2,
+  }
+  expectEach
+    (map
+      ((message, mutated) => (
+        message,
+        expectTextContainsAll
+          ["method result", message]
+          (joinNl
+            (methodFactFaults
+              (editMethodFacts (_ => [mutated]) methodFactControl))),
+      ))
+      [
+        ("empty interface or method key", { row | iface = "" }),
+        ("invalid callback position", { row | callbackPositions = [-1] }),
+        ("invalid callback position", { row | callbackPositions = [2] }),
+        ("invalid callback position", { row | callbackPositions = [1, 1] }),
+        ("negative value arity", { row | valueArity = -1 }),
+      ])
+
+test "method result validation refuses duplicate qualified keys" =
+  expectTextContainsAll
+    ["method result", "duplicate qualified key"]
+    (joinNl
+      (methodFactFaults
+        (editMethodFacts (rows => rows ++ rows) methodFactControl)))
+
+test "method result validation refuses a callback position lost from the plan" =
+  let changed = editMethodFacts (map withoutCallbackPositions) methodFactControl
+  let plan = buildEmitPlan LlvmBackend changed
+  expectTextContainsAll
+    ["method result", "index disagrees"]
+    (joinNl (validateMethodResults plan methodFactControl))
+
+test "method result validation refuses a fact arity above its Core impl entry" =
+  let changed =
+    editMethodFacts
+      (map (row => { row | callbackPositions = [2], valueArity = 3 }))
+      methodFactControl
+  let plan = buildEmitPlan LlvmBackend changed
+  expectTextContainsAll
+    [
+      "method result",
+      "fact value arity 3",
+      "Core impl entry declared value arity 2",
+      "Chain#step",
+    ]
+    (joinNl (validateMethodResults plan changed))
+
+withoutCallbackPositions : MethodResultFact -> MethodResultFact
+withoutCallbackPositions row = { row | callbackPositions = [] }
+
+methodOccurrence : String -> CProgram
+methodOccurrence iface =
+  CProgram
+    [
+      CBind
+        "main"
+        [CClause [] (CMethod "step" (MethodEvidence iface 2 RNone [] []))]
+        noDeclLoc
+        noBinderId,
+    ]
+    []
+    []
+    []
+    []
+    { noDeclFacts |
+      factMethodResults = [
+        MethodResultFact {
+          iface = "left::Chain",
+          method = "step",
+          returnsHead = True,
+          callbackPositions = [1],
+          valueArity = 2,
+        },
+      ],
+    }
+
+test "method result completeness checks qualified occurrences and permits standalone evidence" = expectAll
+  [
+    expectEqual [] (methodFactFaults (methodOccurrence "left::Chain")),
+    expectEqual [] (methodFactFaults (methodOccurrence "")),
+    expectTextContainsAll
+      ["missing declaration fact", "right::Chain#step"]
+      (joinNl (methodFactFaults (methodOccurrence "right::Chain"))),
+  ]
+
+test "missing method result facts are fatal for both backends" =
+  let cp = editMethodFacts (_ => []) methodFactControl
+  expectAll
+    (map
+      (backend =>
+        expectTextContainsAll
+          ["method result", "missing declaration fact"]
+          (joinNl
+            (map
+              coreDefectMessage
+              (validateForEmission
+                backend
+                PreludeFreeRuntime
+                (buildEmitPlan backend cp)
+                cp).defects)))
+      [LlvmBackend, WasmBackend])

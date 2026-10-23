@@ -33,6 +33,8 @@ import ir.core_ir.{
   ImplSym(..),
   CProgram(..),
   DeclFacts(..),
+  EntryFact(..),
+  MethodResultFact(..),
   noDeclFacts,
   CallMode(..),
   CallSite(..),
@@ -555,9 +557,44 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
   factBinders = [],
+  factMethodResults = [],
+  factEntryOutcome = None,
+}
+toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results])) = DeclFacts {
+  factRequires = map (toFactPair "rq") reqs,
+  factSupers = map (toFactPair "sp") sups,
+  factBinders = [],
+  factMethodResults = map toMethodResult results,
+  factEntryOutcome = None,
+}
+toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome])) = DeclFacts {
+  factRequires = map (toFactPair "rq") reqs,
+  factSupers = map (toFactPair "sp") sups,
+  factBinders = [],
+  factMethodResults = map toMethodResult results,
+  factEntryOutcome = Some (toEntryOutcome outcome),
 }
 toDeclFacts other =
   panic ("core_ir_sexp_parse: bad declaration facts: " ++ sexprToStr other)
+
+toMethodResult : SExp -> MethodResultFact
+toMethodResult (SList ((SAtom "mr") :: [iface, method, returnsHead, SList positions, arity])) = MethodResultFact {
+  iface = toStr iface,
+  method = toStr method,
+  returnsHead = toBool returnsHead,
+  callbackPositions = map toInt positions,
+  valueArity = toInt arity,
+}
+toMethodResult other =
+  panic ("core_ir_sexp_parse: bad method result fact: " ++ sexprToStr other)
+
+toEntryOutcome : SExp -> EntryFact
+toEntryOutcome (SList ((SAtom "entry") :: [unit, float])) = EntryFact {
+  entryMainIsUnit = toBool unit,
+  entryMainIsFloat = toBool float,
+}
+toEntryOutcome other =
+  panic ("core_ir_sexp_parse: bad entry outcome: " ++ sexprToStr other)
 
 toFactPair : String -> SExp -> (String, Int)
 toFactPair tag (row@(SList ((SAtom t) :: [key, n]))) =

@@ -777,7 +777,8 @@ echo "checking #1110 Mono.TCon mint set ..."
 #     side of the same rule. It finds the head whose two identities conflict so the
 #     otherwise-unreadable `Type mismatch: T vs T` can name the two modules. It is a
 #     READER, not a decider — nothing about acceptance goes through it.
-#   `TCon "Async" (OriginModule "async") => True`  — `mainTypeIsAsync` (async runtime
+#   `TCon "Async" (OriginModule "async") => True`  — `mainIsAsyncNow`
+#     (`compiler/types/entry_outcome.mdk`, async runtime
 #     review fix, #500): the `main : Async` driver rewrite must fire only for the
 #     stdlib `async` module's type, so this READS the origin against a literal —
 #     the bare-name match it replaced rewrote a user type named `Async` too.
@@ -805,9 +806,10 @@ tconFrom o n = TCon n o
 tconTupleHead n = TCon (tupleHeadTagTc n) OriginBuiltin
 tconUnresolved n = TCon n OriginUnresolved"
 # #2586: `Mono` and its renderers live in compiler/types/repr.mdk since the first
-# extraction; the declaration line is there, the mints and comparisons stay here.
-# One set over both files, so a `TCon` minted in either is graded.
-mono_tcon_actual=$(cat "$ROOT/compiler/types/typecheck.mdk" "$ROOT/compiler/types/repr.mdk" \
+# extraction; the declaration line is there, the mints stay in typecheck, and
+# `mainIsAsyncNow` reads its origin in entry_outcome.mdk. One set over all three
+# files, so every `TCon` mint or origin-binding pattern is graded.
+mono_tcon_actual=$(cat "$ROOT/compiler/types/typecheck.mdk" "$ROOT/compiler/types/repr.mdk" "$ROOT/compiler/types/entry_outcome.mdk" \
   | grep -wE 'TCon' \
   | sed 's/^[[:space:]]*//' \
   | grep -vE '^--' \
@@ -1370,8 +1372,8 @@ fi
 numeric_operator_required='  let _ = recordBinopGoals at.teDyn.dcModule op dref lt
 goalRequestOfKind mctx _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
 entailAssumVar mctx request m encl _ useScope (EKPredicateOp _ _ _) =
-entailInst sx name m encl useScope tag (EKPredicateOp _ _ predicate) =
-  (stampPredicateOpRouteVal sx encl useScope name m tag predicate, [])'
+entailInst sx name m encl useScope _ (EKPredicateOp _ _ predicate) =
+  (stampPredicateOpRouteVal sx encl useScope name m predicate, [])'
 printf '%s\n' "$numeric_operator_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: exact numeric operator predicate transport is missing: $required"

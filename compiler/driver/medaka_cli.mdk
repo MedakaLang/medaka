@@ -206,7 +206,7 @@ import types.typecheck.{
   lastInvocationOps,
   driveInputsFor,
 }
-import types.tc_types.{DriveInputs(..), DriveOutputs}
+import types.tc_types.{DriveInputs(..), DriveOutputs(..)}
 import driver.main_autoprint.{
   asyncMainShapeError,
   shouldAutoPrintMain,
@@ -1158,7 +1158,7 @@ checkTargetInputs : String -> String -> CheckDrive -> TargetInputs
 checkTargetInputs rsrc csrc drive =
   let core = desugaredPrelude csrc
   let printed =
-    if shouldAutoPrintMain drive.cdOutputs core drive.cdMods then
+    if shouldAutoPrintMain drive.cdOutputs.doEntryOutcome core drive.cdMods then
       lookupAssoc "println" drive.cdCoreSchemes
     else
       None
@@ -2854,11 +2854,8 @@ runRunCmd argv =
                   -- so widening here widens both in lockstep.  The
                   -- multi-module arm below keeps `projWarns` on the
                   -- coherence allowlist.
-                  let executed = executedFromReport
-                    front.foOutputs
-                    report
-                    "runAsyncMain"
-                    (coreD, modsD)
+                  let executed =
+                    executedFromReport report "runAsyncMain" (coreD, modsD)
                   match executed
                     Err msg => runAbort msg
                     Ok trees =>
@@ -2938,11 +2935,8 @@ runRunCmd argv =
                   let perfTCheck = now ()
                   let _ =
                     emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                  let executed = executedFromReport
-                    front.foOutputs
-                    report
-                    "runAsyncMain"
-                    (coreD, modsD)
+                  let executed =
+                    executedFromReport report "runAsyncMain" (coreD, modsD)
                   match executed
                     Err msg => runAbort msg
                     Ok trees =>
@@ -2982,7 +2976,7 @@ elaborateRun inputs rtD coreD modsD =
       rtD
       coreD
       modsD
-  let _ = match asyncMainShapeError outputs modsD
+  let _ = match asyncMainShapeError outputs.doEntryOutcome modsD
     Some msg => runAbort msg
     None => ()
   (analysis, report, outputs)

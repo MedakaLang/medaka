@@ -1,0 +1,22 @@
+-- Runtime facts for primitive operators.  This module reads only the solved
+-- type representation: it has no graph, evidence, or backend state.
+
+import types.repr.{Mono}
+import types.runtime_types.{RuntimeType(..), runtimeTypeOf}
+
+-- The scalar tag carried by a monomorphic arithmetic site, or `None` when the
+-- operand's solved type does not name one of the primitive arithmetic kinds.
+-- In particular, an unbound `Num a` variable stays `RTValue`, so its operation
+-- keeps the dictionary/runtime-dispatch path.
+export
+arithmeticTag : Mono -> Option String
+arithmeticTag mono = match runtimeTypeOf (_ _ => False) mono
+  RTInt => Some "Int"
+  RTFloat => Some "Float"
+  RTU64 => Some "U64"
+  RTI64 => Some "I64"
+  RTU32 => Some "U32"
+  RTI32 => Some "I32"
+  RTU16 => Some "U16"
+  RTU8 => Some "U8"
+  _ => None

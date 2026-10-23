@@ -188,17 +188,27 @@ scattered places, moved rather than reinvented:
 | reachable extern requirements | per-backend extern ladders |
 | target | `core_validate.Backend`, chosen by each emit entry; lowering is target-neutral (L4) |
 
-The two emit-input records converge into this one over time; the four facts
-`WasmEmitInput` lacks relative to `EmitInput` (`returnsSelf`, `selfFnParams`,
-`methodConstraintIfaces`) are the first to move. `mainIsUnit` already belongs
-to `WasmEmitInput`. This unit has no
-upstream dependency and is landable now. `wasmReachFilter`'s post-lower pruning
-is landed as the plan's wasm-only field `wasmOnlyReach` (`buildEmitPlanReached`,
-used by the two wasm modules entries). Native does not share it: whole mode emits
-`define internal`, so clang's GlobalDCE already drops the same functions and the
-pass would buy no measurable CPU time, and the prelude-object halves must be
-identity, since the prelude half has to define every symbol a program half may
-link against.
+Declaration method-result facts are produced in Core lowering as
+`CProgram`'s `factMethodResults` and indexed once in `EmitPlan.methodResults`;
+the native emitter reads the indexed return-head and callback-position rows.
+`methodConstraintIfaces` remains a separate declaration-introspection helper
+used by `compiler/types/typecheck_test.mdk`, not an emitter input. Checked entry
+behavior is carried as `factEntryOutcome` on `CProgram` and `entryOutcome` on
+`EmitPlan`; the plan accessors derive the main-is-Unit and main-is-Float
+decisions consumed by entry emission.
+
+Solved arithmetic tags are written after zonking to the resolved operator routes,
+then carried on `CBinPrim` through Core. For native arithmetic on concrete Int,
+the `Int` tag selects the existing overflow-checked Int lowering; it does not
+introduce a separate arithmetic implementation. These carriers replace
+entry-created result tables and emitter-side reconstruction hints.
+
+`wasmReachFilter`'s post-lower pruning is landed as the plan's wasm-only field
+`wasmOnlyReach` (`buildEmitPlanReached`, used by the two wasm modules entries).
+Native does not share it: whole mode emits `define internal`, so clang's
+GlobalDCE already drops the same functions and the pass would buy no measurable
+CPU time, and the prelude-object halves must be identity, since the prelude half
+has to define every symbol a program half may link against.
 
 ### R6. The Core validator
 

@@ -74,6 +74,8 @@ import ir.core_ir.{
   noImplSym,
   CProgram(..),
   DeclFacts(..),
+  EntryFact(..),
+  MethodResultFact(..),
   noDeclFacts,
   CallMode(..),
   CallSite(..),
@@ -205,8 +207,8 @@ lower (ERecordUpdate base fields ev) =
 lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
 lower (EBlock stmts) = CBlock (lowerStmts stmts)
--- SHARED-FLOAT-RESIDUAL §3(C): dictPass wraps a scalar-tagged binop (arithmetic
--- "Float" or comparison "Int") in `EAnnot (EBinOp …) (TyCon tag)`; a bare EBinOp
+-- dictPass wraps a scalar-tagged binop (primitive arithmetic or an allowed
+-- comparison tag) in `EAnnot (EBinOp …) (TyCon tag)`; a bare EBinOp
 -- carries no tag.  Read the tag into CBinPrim's scalar field so the emitter picks
 -- that type's primitive.  Must precede the transparent `EAnnot e _` strip below.
 lower (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag })) =
@@ -1085,7 +1087,18 @@ emitDeclFacts facts decls =
     factRequires = map (k => (k, optionOr 0 (omLookup k reqs))) (omKeys reqs),
     factSupers = map (w => (w, ifaceSuperCount w table)) words,
     factBinders = [],
+    factMethodResults = methodResultFacts decls,
+    factEntryOutcome = entryFact facts,
   }
+
+entryFact : ProgramFacts -> Option EntryFact
+entryFact facts =
+  map
+    (outcome => EntryFact {
+      entryMainIsUnit = outcome.eoMainIsUnit,
+      entryMainIsFloat = outcome.eoMainIsFloat,
+    })
+    facts.pfEntryOutcome
 
 withDeclFacts : DeclFacts -> CProgram -> CProgram
 withDeclFacts facts (CProgram groups ctorArs ctorTypes impls mctx _) =
@@ -1203,7 +1216,7 @@ finishLowering lowering table prog =
 -- each constructor's field count, each impl entry's value arity by method and
 -- route word (`entryArityKey`), and each method's least entry value arity.
 public export data ArityEnv =
-  | ArityEnv (OrdMap Int) (OrdMap Int) (OrdMap Int) (OrdMap Int)
+  ArityEnv (OrdMap Int) (OrdMap Int) (OrdMap Int) (OrdMap Int)
 
 -- The local binders in scope: `Some k` for a let-group function whose clauses
 -- take k parameters or a `let` of a k-parameter lambda, `None` for any other
@@ -3387,39 +3400,27 @@ leadingDictParams ((PVar x _ _) :: rest) =
   if startsWith "$dict" x then 1 + leadingDictParams rest else 0
 leadingDictParams _ = 0
 
--- ── returns-self table (native backend: method-call RESULT-type inference) ───
--- Per (interface, method): does the method's RESULT type mention an interface
--- type parameter?  This is the result-side analogue of `dispatchPositionsOf`'s
--- per-arg `tyMentions` (eval.mdk) — True for a container method whose result is
--- the self/container type (`map`/`ap`/`andThen` at a container impl all return
--- the container), False for a method returning a scalar/element/concrete type
--- (`compare : a -> a -> Ordering`).  The LLVM emitter reads it to statically type
--- a method-call result: a `returnsSelf` method dispatched (RKey) at type `T`
--- yields `tagToLTy T`, so a downstream `++`/`::` on that result picks the right
--- list/string instruction instead of falling to the `LTInt` default (the last
--- EMITTER-GAPS.md #3 residual: `ap@List` / `andThen@List`, whose `++` operand is
--- a CALL result like `map f xs` / `f x`, not a param).
+-- Declaration-derived results and callback positions, keyed by the qualified
+-- interface word. A method result uses only the head parameter; callbacks keep
+-- the signature's full parameter set, including non-head element parameters.
 export
-returnsSelfTable : List Decl -> List ((String, String), Bool)
-returnsSelfTable prog = flatMap ifaceReturnsSelfEntries prog
+methodResultFacts : List Decl -> List MethodResultFact
+methodResultFacts prog = flatMap ifaceMethodResultFacts prog
 
-ifaceReturnsSelfEntries : Decl -> List ((String, String), Bool)
--- #1037: an attribute on an `interface` must not delete it from this table either.
-ifaceReturnsSelfEntries (DAttrib _ d) = ifaceReturnsSelfEntries d
-ifaceReturnsSelfEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) =
-  map
-    (m => ifaceReturnsSelfEntry (ifaceWordOf o ifaceName) typeParams m)
-    methods
-ifaceReturnsSelfEntries _ = []
+ifaceMethodResultFacts : Decl -> List MethodResultFact
+ifaceMethodResultFacts (DAttrib _ d) = ifaceMethodResultFacts d
+ifaceMethodResultFacts (DInterface { name, ifaceOrigin, typarams, methods, ... }) =
+  map (methodResultFact (ifaceWordOf ifaceOrigin name) typarams) methods
+ifaceMethodResultFacts _ = []
 
-ifaceReturnsSelfEntry : String ->
-  List String ->
-  IfaceMethod ->
-  ((String, String), Bool)
-ifaceReturnsSelfEntry ifaceWord typeParams (IfaceMethod mname mty _ _) = (
-  (ifaceWord, mname),
-  tyMentionsParams (methodResultTy mty) (headParamOnly typeParams),
-)
+methodResultFact : String -> List String -> IfaceMethod -> MethodResultFact
+methodResultFact iface params (IfaceMethod method ty _ _) = MethodResultFact {
+  iface = iface,
+  method = method,
+  returnsHead = tyMentionsParams (methodResultTy ty) (headParamOnly params),
+  callbackPositions = selfFnPositions 0 (methodArgTys ty) params,
+  valueArity = listLen (methodArgTys ty),
+}
 
 -- Only the HEAD (first) interface type parameter — the one whose concrete
 -- instantiation names the impl's dispatch/head tag (`headTyconHead typeArgs`
@@ -3468,35 +3469,6 @@ tyMentionsParams (TyAuth _ _) _ = False
 tyMentionsParams (TyConstrained _ t) params = tyMentionsParams t params
 tyMentionsParams (TyNamed _ t _) params = tyMentionsParams t params
 tyMentionsParams (TyQual t _ _) params = tyMentionsParams t params
-
--- ── self-returning function-PARAM table (native backend) ────────────────────
--- Per (interface, method): the ARGUMENT positions whose type is a FUNCTION whose
--- RESULT mentions the interface/self type variable — i.e. a callback that yields
--- the container.  e.g. `andThen : m a -> (a -> m b) -> m b` has param 1 of type
--- `a -> m b`, a function returning self.  The emitter types the APPLICATION of
--- such a param (`f x`) as the container (`tagToLTy tag`), closing `andThen@List`
--- where the `++` LEFT operand `f x` is an indirect call the method-call
--- inference (returnsSelfTable) cannot reach.  Result-side analogue scoped to
--- function-typed params, not the whole-method result.
-export
-selfFnParamTable : List Decl -> List ((String, String), List Int)
-selfFnParamTable prog = flatMap ifaceSelfFnParamEntries prog
-
-ifaceSelfFnParamEntries : Decl -> List ((String, String), List Int)
--- #1037
-ifaceSelfFnParamEntries (DAttrib _ d) = ifaceSelfFnParamEntries d
-ifaceSelfFnParamEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) =
-  map
-    (m => ifaceSelfFnParamEntry (ifaceWordOf o ifaceName) typeParams m)
-    methods
-ifaceSelfFnParamEntries _ = []
-
-ifaceSelfFnParamEntry : String ->
-  List String ->
-  IfaceMethod ->
-  ((String, String), List Int)
-ifaceSelfFnParamEntry ifaceWord typeParams (IfaceMethod mname mty _ _) =
-  ((ifaceWord, mname), selfFnPositions 0 (methodArgTys mty) typeParams)
 
 -- the argument types of a method type (the a's of `a -> a -> … -> r`).
 methodArgTys : Ty -> List Ty

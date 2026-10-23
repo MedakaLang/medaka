@@ -1,5 +1,5 @@
 # META
-source_lines=677
+source_lines=704
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -411,7 +411,7 @@ noImplSym = ImplSym "" "" ""
 -- impl/default entries, the method-context table and the declaration facts.
 -- Slice-1 programs carry an empty impl list.
 public export data CProgram =
-  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int)) DeclFacts
+  CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int)) DeclFacts
 
 -- The declaration facts a dictionary built at a site is held to
 -- (`core_validate.validateDispatchEvidence`): each instance's `requires` count,
@@ -429,15 +429,40 @@ public export data CProgram =
 -- table is a snapshot, so the program is self-contained: a consumer never reads
 -- the typechecker's published table.  `core_validate.validateBinderStamps` refuses
 -- a binder with no row and a function with no return type.
+-- Signature facts use declaration identity; callback positions count only value
+-- parameters, before dictionary passing adds leading parameters.
+public export data MethodResultFact = MethodResultFact {
+  iface : String,
+  method : String,
+  returnsHead : Bool,
+  callbackPositions : List Int,
+  valueArity : Int,
+} deriving (Eq, Debug)
+
+-- The entry properties physical emitters need. Lowering projects these from the
+-- typechecker's published outcome, so Core does not depend on its representation.
+public export data EntryFact = EntryFact {
+  entryMainIsUnit : Bool,
+  entryMainIsFloat : Bool,
+}
+
 public export data DeclFacts = DeclFacts {
   factRequires : List (String, Int),
   factSupers : List (String, Int),
   factBinders : List BinderRow,
+  factMethodResults : List MethodResultFact,
+  factEntryOutcome : Option EntryFact,
 }
 
 export
 noDeclFacts : DeclFacts
-noDeclFacts = DeclFacts { factRequires = [], factSupers = [], factBinders = [] }
+noDeclFacts = DeclFacts {
+  factRequires = [],
+  factSupers = [],
+  factBinders = [],
+  factMethodResults = [],
+  factEntryOutcome = None,
+}
 
 -- ── binder walk ──────────────────────────────────────────────────────────────
 -- One traversal of every binder in a program, in a fixed order, with the id each
@@ -515,6 +540,8 @@ withBinderRows rows (CProgram groups ctorArs ctorTypes impls mctx facts) = CProg
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factBinders = rows,
+    factMethodResults = facts.factMethodResults,
+    factEntryOutcome = facts.factEntryOutcome,
   }
 
 -- Every binder id of [prog], in walk order.
@@ -735,9 +762,13 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DTypeSig true "noImplSym" (TyCon "ImplSym"))
 (DFunDef false "noImplSym" () (EApp (EApp (EApp (EVar "ImplSym") (ELit (LString ""))) (ELit (LString ""))) (ELit (LString ""))))
 (DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "DeclFacts")))) ())
-(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow")))))) ())
+(DData Public "MethodResultFact" () ((variant "MethodResultFact" (ConNamed (field "iface" (TyCon "String")) (field "method" (TyCon "String")) (field "returnsHead" (TyCon "Bool")) (field "callbackPositions" (TyApp (TyCon "List") (TyCon "Int"))) (field "valueArity" (TyCon "Int"))))) ())
+(DImpl true "Eq" ((TyCon "MethodResultFact")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) (PRec "MethodResultFact" ((rf "iface" (PVar "__b0")) (rf "method" (PVar "__b1")) (rf "returnsHead" (PVar "__b2")) (rf "callbackPositions" (PVar "__b3")) (rf "valueArity" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "eq") (EVar "__a4")) (EVar "__b4"))))))))
+(DImpl true "Debug" ((TyCon "MethodResultFact")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MethodResultFact {")) (ELit (LString " iface = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", method = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", returnsHead = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString ", callbackPositions = "))) (EApp (EVar "debug") (EVar "__a3"))) (ELit (LString ", valueArity = "))) (EApp (EVar "debug") (EVar "__a4"))) (ELit (LString " }"))))))))
+(DData Public "EntryFact" () ((variant "EntryFact" (ConNamed (field "entryMainIsUnit" (TyCon "Bool")) (field "entryMainIsFloat" (TyCon "Bool"))))) ())
+(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "factMethodResults" (TyApp (TyCon "List") (TyCon "MethodResultFact"))) (field "factEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact")))))) ())
 (DTypeSig true "noDeclFacts" (TyCon "DeclFacts"))
-(DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)))))
+(DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")))))
 (DTypeAlias true "BinderVisit" () (TyFun (TyCon "BinderSite") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))
 (DData Public "BinderSite" () ((variant "PatternBinder" (ConPos (TyApp (TyCon "Option") (TyCon "CExpr")))) (variant "FunctionBinder" (ConPos (TyApp (TyCon "List") (TyCon "CClause"))))) ())
 (DData Private "BinderPass" () ((variant "PatternPass" (ConPos)) (variant "FunctionPass" (ConPos))) ())
@@ -762,7 +793,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "mapProgramPass" ((PVar "pass") (PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "BinderWalk") (EVar "pass")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EApp (EVar "mapBindBinders") (EVar "w"))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "map") (EApp (EVar "mapEntryBinders") (EVar "w"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))))
 (DData Private "BinderWalk" () ((variant "BinderWalk" (ConPos (TyCon "BinderPass") (TyCon "BinderVisit")))) ())
 (DTypeSig true "withBinderRows" (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
-(DFunDef false "withBinderRows" ((PVar "rows") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (ERecordCreate "DeclFacts" ((fa "factRequires" (EFieldAccess (EVar "facts") "factRequires")) (fa "factSupers" (EFieldAccess (EVar "facts") "factSupers")) (fa "factBinders" (EVar "rows"))))))
+(DFunDef false "withBinderRows" ((PVar "rows") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (ERecordCreate "DeclFacts" ((fa "factRequires" (EFieldAccess (EVar "facts") "factRequires")) (fa "factSupers" (EFieldAccess (EVar "facts") "factSupers")) (fa "factBinders" (EVar "rows")) (fa "factMethodResults" (EFieldAccess (EVar "facts") "factMethodResults")) (fa "factEntryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome"))))))
 (DTypeSig true "programBinderIds" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "BinderId"))))
 (DFunDef false "programBinderIds" ((PVar "prog")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "mapProgramBinders") (ELam (PWild PWild (PVar "bid")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "seen")) (EBinOp "::" (EVar "bid") (EUnOp "!" (EVar "seen"))))) (DoExpr (EVar "bid"))))) (EVar "prog"))) (DoExpr (EApp (EVar "reverseL") (EUnOp "!" (EVar "seen"))))))
 (DTypeSig false "mapEntryBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
@@ -884,9 +915,13 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DTypeSig true "noImplSym" (TyCon "ImplSym"))
 (DFunDef false "noImplSym" () (EApp (EApp (EApp (EVar "ImplSym") (ELit (LString ""))) (ELit (LString ""))) (ELit (LString ""))))
 (DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "DeclFacts")))) ())
-(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow")))))) ())
+(DData Public "MethodResultFact" () ((variant "MethodResultFact" (ConNamed (field "iface" (TyCon "String")) (field "method" (TyCon "String")) (field "returnsHead" (TyCon "Bool")) (field "callbackPositions" (TyApp (TyCon "List") (TyCon "Int"))) (field "valueArity" (TyCon "Int"))))) ())
+(DImpl true "Eq" ((TyCon "MethodResultFact")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) (PRec "MethodResultFact" ((rf "iface" (PVar "__b0")) (rf "method" (PVar "__b1")) (rf "returnsHead" (PVar "__b2")) (rf "callbackPositions" (PVar "__b3")) (rf "valueArity" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EMethodRef "eq") (EVar "__a4")) (EVar "__b4"))))))))
+(DImpl true "Debug" ((TyCon "MethodResultFact")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MethodResultFact {")) (ELit (LString " iface = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", method = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", returnsHead = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString ", callbackPositions = "))) (EApp (EMethodRef "debug") (EVar "__a3"))) (ELit (LString ", valueArity = "))) (EApp (EMethodRef "debug") (EVar "__a4"))) (ELit (LString " }"))))))))
+(DData Public "EntryFact" () ((variant "EntryFact" (ConNamed (field "entryMainIsUnit" (TyCon "Bool")) (field "entryMainIsFloat" (TyCon "Bool"))))) ())
+(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "factMethodResults" (TyApp (TyCon "List") (TyCon "MethodResultFact"))) (field "factEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact")))))) ())
 (DTypeSig true "noDeclFacts" (TyCon "DeclFacts"))
-(DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)))))
+(DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")))))
 (DTypeAlias true "BinderVisit" () (TyFun (TyCon "BinderSite") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))
 (DData Public "BinderSite" () ((variant "PatternBinder" (ConPos (TyApp (TyCon "Option") (TyCon "CExpr")))) (variant "FunctionBinder" (ConPos (TyApp (TyCon "List") (TyCon "CClause"))))) ())
 (DData Private "BinderPass" () ((variant "PatternPass" (ConPos)) (variant "FunctionPass" (ConPos))) ())
@@ -911,7 +946,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "mapProgramPass" ((PVar "pass") (PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "BinderWalk") (EVar "pass")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapBindBinders") (EVar "w"))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapEntryBinders") (EVar "w"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))))
 (DData Private "BinderWalk" () ((variant "BinderWalk" (ConPos (TyCon "BinderPass") (TyCon "BinderVisit")))) ())
 (DTypeSig true "withBinderRows" (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
-(DFunDef false "withBinderRows" ((PVar "rows") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (ERecordCreate "DeclFacts" ((fa "factRequires" (EFieldAccess (EVar "facts") "factRequires")) (fa "factSupers" (EFieldAccess (EVar "facts") "factSupers")) (fa "factBinders" (EVar "rows"))))))
+(DFunDef false "withBinderRows" ((PVar "rows") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (ERecordCreate "DeclFacts" ((fa "factRequires" (EFieldAccess (EVar "facts") "factRequires")) (fa "factSupers" (EFieldAccess (EVar "facts") "factSupers")) (fa "factBinders" (EVar "rows")) (fa "factMethodResults" (EFieldAccess (EVar "facts") "factMethodResults")) (fa "factEntryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome"))))))
 (DTypeSig true "programBinderIds" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "BinderId"))))
 (DFunDef false "programBinderIds" ((PVar "prog")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "mapProgramBinders") (ELam (PWild PWild (PVar "bid")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "seen")) (EBinOp "::" (EVar "bid") (EUnOp "!" (EVar "seen"))))) (DoExpr (EVar "bid"))))) (EVar "prog"))) (DoExpr (EApp (EVar "reverseL") (EUnOp "!" (EVar "seen"))))))
 (DTypeSig false "mapEntryBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))

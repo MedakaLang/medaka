@@ -1,5 +1,5 @@
 # META
-source_lines=3467
+source_lines=3465
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -95,6 +95,8 @@ import types.publish.{
   ModDiags,
   PubScheme(..),
   TcReport,
+  EntryOutcome,
+  noEntryOutcome,
 }
 import types.disposition.{
   DispositionTable,
@@ -130,7 +132,7 @@ public export data ObligationSite = ObligationSite {
 -- param tyvar ids, quantified authority ids (the head's `Authority` params
 -- and the constructor's existentials), result, fields, field index
 public export data RecordInfo =
-  | RecordInfo (List Int) (List Int) Mono (List (String, Mono)) (OrdMap Mono)
+  RecordInfo (List Int) (List Int) Mono (List (String, Mono)) (OrdMap Mono)
 
 -- Kind of a data-type parameter, inferred from usage: KRow iff the param name
 -- appears in a field's effect-tail position (`<e>`), else KType.  Drives
@@ -637,7 +639,7 @@ public export data InstRef = InstRef String Int Int
 -- with no construct around it, so a conflict is located at the impl's interface
 -- name.  A synthesized impl (a derived one) has none.
 public export data ImplRow =
-  | ImplRow Int InstRef IfaceRef (List Ty) (List Require) (List String) (Option Loc)
+  ImplRow Int InstRef IfaceRef (List Ty) (List Require) (List String) (Option Loc)
 
 -- The registry.  `ieRows` is the POPULATION in build order (ordinal order across
 -- modules, `implDeclsWithReqs` order within one); the rest are INDEXES over it.
@@ -833,7 +835,7 @@ public export data ImplAcc = ImplAcc {
 -- beside the raw Ty when checking an impl body; separating those lookups would let
 -- same-named interfaces disagree on which graded scope elaborates the method.
 public export data CeRow =
-  | CeRow RegKey Int IfaceRef (List String) (List (String, Ty, List (String, List Kind))) (List Super) (List (List Kind)) (List String) (Option Loc)
+  CeRow RegKey Int IfaceRef (List String) (List (String, Ty, List (String, List Kind))) (List Super) (List (List Kind)) (List String) (Option Loc)
 
 -- The registry.  `ceRows` is the population in build order (ordinal order
 -- across modules, declaration order within one); `ceByKey` is the single
@@ -995,10 +997,7 @@ public export data DriveInputs = DriveInputs {
 -- (`lastInvocationOps`) starts its own counter there, so its ids cannot collide with
 -- an id the drive's schemes hold.
 public export data DriveOutputs = DriveOutputs {
-  doMainIsUnit : Bool,
-  doMainIsFloat : Bool,
-  doMainIsAsync : Bool,
-  doMainAsyncPayloadIsUnit : Bool,
+  doEntryOutcome : EntryOutcome,
   doHadTypeErrors : Bool,
   doHadMatchWarnings : Bool,
   doInvocationView : InvocationView,
@@ -1015,10 +1014,7 @@ public export data DriveOutputs = DriveOutputs {
 export
 emptyDriveOutputs : Unit -> DriveOutputs
 emptyDriveOutputs _ = DriveOutputs {
-  doMainIsUnit = False,
-  doMainIsFloat = False,
-  doMainIsAsync = False,
-  doMainAsyncPayloadIsUnit = False,
+  doEntryOutcome = noEntryOutcome,
   doHadTypeErrors = False,
   doHadMatchWarnings = False,
   doInvocationView = InvocationView [] [] [],
@@ -1157,8 +1153,7 @@ public export data NumAnchorTestObservation = NumAnchorTestObservation {
   natoIface : String,
   natoSchemeBody : String,
   natoDeclaredType : String,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 public export data MethodRowTestObservation = MethodRowTestObservation {
   mrtoSchemeIds : List Int,
@@ -1184,8 +1179,7 @@ public export data MethodRowTestObservation = MethodRowTestObservation {
   mrtoAttributedParamIface : String,
   mrtoAttributedParamTyparams : List String,
   mrtoNumAnchors : List NumAnchorTestObservation,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 -- B-2.2-f (#1113): how many of a constrained callee's slots were PRESENT BEFORE
 -- `expandSupersPairs`' transitive super expansion APPENDED any.
@@ -1471,7 +1465,7 @@ public export data CrossRun = CrossRun {
 -- / realize_recursive_dict_apps (Phase 115/136).
 -- #2549 M2: the 5th field is this application's evidence id — see `pdaEv`.
 public export data RecDictApp =
-  | RecDictApp (Ref (List Route)) String String Mono ScopeId EvId
+  RecDictApp (Ref (List Route)) String String Mono ScopeId EvId
 
 -- The construct that demands a value join's alternatives agree.
 public export data JoinContext =
@@ -1572,8 +1566,7 @@ public export data MethodReturnMemoView = MethodReturnMemoView {
   mrmvOutcome : String,
   mrmvPrerequisites : List (String, List String),
   mrmvEvidence : String,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 -- #2095: the classification of one solved route, over every family `entail` and the
 -- return family answer — not a solver concept, a reading of the `Route` shape the
@@ -1855,7 +1848,7 @@ public export data Interners = Interners {
 -- function binder the declared parameter count its return type is read after,
 -- and whether the binder's function has a declared type signature.
 public export data PendingBinder =
-  | PendingBinder BinderId String Mono (Option Int) Bool
+  PendingBinder BinderId String Mono (Option Int) Bool
 
 -- What a rung declares it can soundly read out of the one environment.  This is the
 -- eligibility half of `GivenMatch`, and the only place the two interact.
@@ -2080,7 +2073,7 @@ public export data ModuleCells = ModuleCells {
 -- path is a value passed down one walk, never shared between walks.  The walk's
 -- `WalkMemo` is the one part every branch of the walk shares.
 public export data ReqWalk =
-  | ReqWalk (List (IfaceRef, List Mono, Int)) Int WalkMemo
+  ReqWalk (List (IfaceRef, List Mono, Int)) Int WalkMemo
 
 -- The goals one walk has already followed, so a goal its `requires` reach along
 -- many paths (`Tag (Wrap a) requires Tag a, Tag2 a` and its twin) is followed once
@@ -2148,7 +2141,7 @@ public export data ReqStep =
 -- imports.  Written once per module, right after its data environment is
 -- built; a drive's caller reads it through `DriveOutputs` (`lastInvocationOps`).
 public export data InvocationView =
-  | InvocationView (List Scheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
+  InvocationView (List Scheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
 
 -- The variables one signature binds: its row tails (and row-kinded type
 -- arguments) and its authority binders, each name to one fresh cell shared by
@@ -2514,7 +2507,7 @@ public export data ExistentialScope = ExistentialScope (List (Ref Authvar)) Int
 -- One record instantiation's substitution: its type params and its
 -- authorities, applied together to any field on demand.
 public export data RecordSubst =
-  | RecordSubst (List (Int, Mono)) (List (Int, Authority))
+  RecordSubst (List (Int, Mono)) (List (Int, Authority))
 
 -- One explicit description of a numeric-defaulting boundary.  Member and local-group
 -- boundaries carry the just-exited HM level used by BOTH defaulting and ambiguity
@@ -2588,7 +2581,7 @@ public export data ArmedGuard = ArmedGuard {
 -- The sixth field answers whether a use of a name that takes no dictionary
 -- needs a grant identity (`mintGrantOnly`).
 public export data ArgRw =
-  | ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String)) (String -> EvId -> Unit) (String -> Bool)
+  ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String)) (String -> EvId -> Unit) (String -> Bool)
 
 -- ══ S2-DECL (d): The choice, by cardinality of the admitted set (#2188) ═══════
 --
@@ -2741,7 +2734,7 @@ public export data MStep k g s = MVar k | MKids (List (g, s)) | MOk | MFail
 -- diagnostic against the span's OWN file, which today only the single-file
 -- `checkCoherence` path does.
 public export data CohScan =
-  | CohScan (Option (String, Option Loc)) (Option (String, Option Loc))
+  CohScan (Option (String, Option Loc)) (Option (String, Option Loc))
 
 -- #1559 A-3.7: Which sweep is running, threaded as a value instead of inferred from
 -- the shape of the module ids.  `cohSoftInScope` used to answer "am I the per-module
@@ -2792,7 +2785,7 @@ public export data CohSweep = CohSweepOwn | CohSweepGlobal
 -- may choose that short word or the impl's canonical key; eval and both emitters
 -- accept both aliases.  Re-keying this table by identity is still a separate change.
 public export data KeyEntry =
-  | KeyEntry (List String) (Option HeadKey) Ty String String (List Ty) (List Require) Int
+  KeyEntry (List String) (Option HeadKey) Ty String String (List Ty) (List Require) Int
 
 -- Caller-supplied policy for the UNDETERMINED arm of routeOf (the constraint var is
 -- pinned by NEITHER an argument nor the result).  KeepNone (the nested element-dict
@@ -2908,7 +2901,7 @@ public export data MethodGrantUse =
 -- declare.  They use `mregAppendK`, not `mregAddK`, because within one bucket
 -- the FORWARD declaration order is semantic (`findMatchingImplReqsU`).
 public export data ImplUniverse =
-  | ImplUniverse (MultiRegistry (List Ty, List Require)) (MultiRegistry (List Ty, List Require))
+  ImplUniverse (MultiRegistry (List Ty, List Require)) (MultiRegistry (List Ty, List Require))
 
 -- What an undetermined goal's counted candidates decide (DICT-SEMANTICS §3, §4.2
 -- OD3).  None leaves the goal no instance.  One is the instance.  So is one that
@@ -3253,9 +3246,14 @@ public export data GraphDrive = GraphDrive {
 -- renames the trees, so a caller that lowers mangled trees lowers against the
 -- table that call returns.
 -- #1112 A-3: the sixth component is the whole-graph per-method DISPOSITION
--- TABLE (`compiler/types/disposition.mdk`).  The seventh is the BINDER-TYPE
--- table the elaboration produced.  `program_facts.factsOfElab` reads all three.
-export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable, BinderTypeTable)
+-- TABLE (`compiler/types/disposition.mdk`).  The seventh bundles the BINDER-TYPE
+-- table and selected entry outcome the elaboration produced.
+public export data ElabFacts = ElabFacts {
+  efBinders : BinderTypeTable,
+  efEntryOutcome : EntryOutcome,
+}
+
+export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable, ElabFacts)
 
 -- E4/E6: prePass a module rewriting ARG-position method occurrences to EMethodAt
 -- (argNames) AND `=>`-constrained-fn occurrences to EDictAt (dictNames); both
@@ -3485,7 +3483,7 @@ public export data ModuleMarking = ModuleMarking {
 (DUse false (UseGroup ("types" "solver_contract") ((mem "ClassPredicate" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "HeadKey" true) (mem "MultiRegistry" false) (mem "SpellingPop" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeCursor" true) (mem "ScopeStore" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "ModDiags" false) (mem "PubScheme" true) (mem "TcReport" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "ModDiags" false) (mem "PubScheme" true) (mem "TcReport" false) (mem "EntryOutcome" false) (mem "noEntryOutcome" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderTypeTable" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
@@ -3520,9 +3518,9 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "TcConfig" () ((variant "TcConfig" (ConNamed (field "tcIoJoin" (TyApp (TyCon "List") (TyCon "Atom"))) (field "tcIoJoinProfile" (TyCon "String")) (field "tcStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "tcFlatEntryIsStdlib" (TyCon "Bool")) (field "tcKey" (TyCon "String"))))) ())
 (DData Public "TraceSink" () ((variant "TraceSink" (ConNamed (field "tsAssumptionEnabled" (TyCon "Bool")) (field "tsAssumptionEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry")))) (field "tsNumericPredicateEnabled" (TyCon "Bool")) (field "tsNumericPredicateEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry")))) (field "tsMethodReturnEnabled" (TyCon "Bool")) (field "tsMethodReturnEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry")))) (field "tsEvidenceObservationEnabled" (TyCon "Bool")) (field "tsEvidenceObservationEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))))) ())
 (DData Public "DriveInputs" () ((variant "DriveInputs" (ConNamed (field "diStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "diFlatEntryIsStdlib" (TyCon "Bool")) (field "diTrace" (TyApp (TyCon "Option") (TyCon "TraceSink"))) (field "diIoJoinGrants" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))) (field "diProfileName" (TyCon "String")) (field "diMarked" (TyApp (TyCon "Option") (TyCon "GraphRun")))))) ())
-(DData Public "DriveOutputs" () ((variant "DriveOutputs" (ConNamed (field "doMainIsUnit" (TyCon "Bool")) (field "doMainIsFloat" (TyCon "Bool")) (field "doMainIsAsync" (TyCon "Bool")) (field "doMainAsyncPayloadIsUnit" (TyCon "Bool")) (field "doHadTypeErrors" (TyCon "Bool")) (field "doHadMatchWarnings" (TyCon "Bool")) (field "doInvocationView" (TyCon "InvocationView")) (field "doGrantsEnabled" (TyCon "Bool")) (field "doEffectDomains" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))) (field "doStickyDiags" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "doIfaceExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "doFfiAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl")))) (field "doOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "doEffvarNext" (TyCon "Int"))))) ())
+(DData Public "DriveOutputs" () ((variant "DriveOutputs" (ConNamed (field "doEntryOutcome" (TyCon "EntryOutcome")) (field "doHadTypeErrors" (TyCon "Bool")) (field "doHadMatchWarnings" (TyCon "Bool")) (field "doInvocationView" (TyCon "InvocationView")) (field "doGrantsEnabled" (TyCon "Bool")) (field "doEffectDomains" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))) (field "doStickyDiags" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "doIfaceExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "doFfiAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl")))) (field "doOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "doEffvarNext" (TyCon "Int"))))) ())
 (DTypeSig true "emptyDriveOutputs" (TyFun (TyCon "Unit") (TyCon "DriveOutputs")))
-(DFunDef false "emptyDriveOutputs" (PWild) (ERecordCreate "DriveOutputs" ((fa "doMainIsUnit" (EVar "False")) (fa "doMainIsFloat" (EVar "False")) (fa "doMainIsAsync" (EVar "False")) (fa "doMainAsyncPayloadIsUnit" (EVar "False")) (fa "doHadTypeErrors" (EVar "False")) (fa "doHadMatchWarnings" (EVar "False")) (fa "doInvocationView" (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit))) (fa "doGrantsEnabled" (EVar "False")) (fa "doEffectDomains" (EListLit)) (fa "doStickyDiags" (EListLit)) (fa "doIfaceExports" (EVar "omEmpty")) (fa "doFfiAliases" (EListLit)) (fa "doOrdIndex" (EVar "omEmpty")) (fa "doEffvarNext" (ELit (LInt 0))))))
+(DFunDef false "emptyDriveOutputs" (PWild) (ERecordCreate "DriveOutputs" ((fa "doEntryOutcome" (EVar "noEntryOutcome")) (fa "doHadTypeErrors" (EVar "False")) (fa "doHadMatchWarnings" (EVar "False")) (fa "doInvocationView" (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit))) (fa "doGrantsEnabled" (EVar "False")) (fa "doEffectDomains" (EListLit)) (fa "doStickyDiags" (EListLit)) (fa "doIfaceExports" (EVar "omEmpty")) (fa "doFfiAliases" (EListLit)) (fa "doOrdIndex" (EVar "omEmpty")) (fa "doEffvarNext" (ELit (LInt 0))))))
 (DData Public "Windowed" ("a") ((variant "Windowed" (ConNamed (field "items" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyVar "a")))) (field "n" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DData Public "CSlot" () ((variant "CSlot" (ConNamed (field "csIface" (TyCon "IfaceRef")) (field "csId" (TyCon "Int"))))) ())
 (DData Public "PredicateSlotArgs" () ((variant "PSArgsUnknown" (ConPos)) (variant "PSArgsKnown" (ConPos (TyApp (TyCon "List") (TyCon "Mono"))))) ())
@@ -3663,7 +3661,8 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCtx" (TyCon "GraphCtx")) (field "csModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "ChainMemo" () ((variant "ChainMemo" (ConNamed (field "chKey" (TyCon "String")) (field "chSteps" (TyApp (TyCon "List") (TyCon "ChainStep"))) (field "chReplayed" (TyCon "Int"))))) ())
 (DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport")) (field "gdGraph" (TyCon "GraphCtx")) (field "gdOutputs" (TyCon "DriveOutputs"))))) ())
-(DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "BinderTypeTable")))
+(DData Public "ElabFacts" () ((variant "ElabFacts" (ConNamed (field "efBinders" (TyCon "BinderTypeTable")) (field "efEntryOutcome" (TyCon "EntryOutcome"))))) ())
+(DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "ElabFacts")))
 (DData Public "MarkCtx" () ((variant "MarkCtx" (ConNamed (field "mcRp" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcAn" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcSm" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DData Public "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "List") (TyCon "String"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
 (DData Public "BareLocals" () ((variant "BareLocals" (ConNamed (field "blAll" (TyCon "Bool")) (field "blSet" (TyApp (TyCon "List") (TyCon "String")))))) ())
@@ -3689,7 +3688,7 @@ public export data ModuleMarking = ModuleMarking {
 (DUse false (UseGroup ("types" "solver_contract") ((mem "ClassPredicate" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "HeadKey" true) (mem "MultiRegistry" false) (mem "SpellingPop" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeCursor" true) (mem "ScopeStore" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "ModDiags" false) (mem "PubScheme" true) (mem "TcReport" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "ModDiags" false) (mem "PubScheme" true) (mem "TcReport" false) (mem "EntryOutcome" false) (mem "noEntryOutcome" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderTypeTable" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
@@ -3724,9 +3723,9 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "TcConfig" () ((variant "TcConfig" (ConNamed (field "tcIoJoin" (TyApp (TyCon "List") (TyCon "Atom"))) (field "tcIoJoinProfile" (TyCon "String")) (field "tcStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "tcFlatEntryIsStdlib" (TyCon "Bool")) (field "tcKey" (TyCon "String"))))) ())
 (DData Public "TraceSink" () ((variant "TraceSink" (ConNamed (field "tsAssumptionEnabled" (TyCon "Bool")) (field "tsAssumptionEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry")))) (field "tsNumericPredicateEnabled" (TyCon "Bool")) (field "tsNumericPredicateEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry")))) (field "tsMethodReturnEnabled" (TyCon "Bool")) (field "tsMethodReturnEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry")))) (field "tsEvidenceObservationEnabled" (TyCon "Bool")) (field "tsEvidenceObservationEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))))) ())
 (DData Public "DriveInputs" () ((variant "DriveInputs" (ConNamed (field "diStdlibOwned" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "diFlatEntryIsStdlib" (TyCon "Bool")) (field "diTrace" (TyApp (TyCon "Option") (TyCon "TraceSink"))) (field "diIoJoinGrants" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))) (field "diProfileName" (TyCon "String")) (field "diMarked" (TyApp (TyCon "Option") (TyCon "GraphRun")))))) ())
-(DData Public "DriveOutputs" () ((variant "DriveOutputs" (ConNamed (field "doMainIsUnit" (TyCon "Bool")) (field "doMainIsFloat" (TyCon "Bool")) (field "doMainIsAsync" (TyCon "Bool")) (field "doMainAsyncPayloadIsUnit" (TyCon "Bool")) (field "doHadTypeErrors" (TyCon "Bool")) (field "doHadMatchWarnings" (TyCon "Bool")) (field "doInvocationView" (TyCon "InvocationView")) (field "doGrantsEnabled" (TyCon "Bool")) (field "doEffectDomains" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))) (field "doStickyDiags" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "doIfaceExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "doFfiAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl")))) (field "doOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "doEffvarNext" (TyCon "Int"))))) ())
+(DData Public "DriveOutputs" () ((variant "DriveOutputs" (ConNamed (field "doEntryOutcome" (TyCon "EntryOutcome")) (field "doHadTypeErrors" (TyCon "Bool")) (field "doHadMatchWarnings" (TyCon "Bool")) (field "doInvocationView" (TyCon "InvocationView")) (field "doGrantsEnabled" (TyCon "Bool")) (field "doEffectDomains" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))) (field "doStickyDiags" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "doIfaceExports" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "doFfiAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl")))) (field "doOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "doEffvarNext" (TyCon "Int"))))) ())
 (DTypeSig true "emptyDriveOutputs" (TyFun (TyCon "Unit") (TyCon "DriveOutputs")))
-(DFunDef false "emptyDriveOutputs" (PWild) (ERecordCreate "DriveOutputs" ((fa "doMainIsUnit" (EVar "False")) (fa "doMainIsFloat" (EVar "False")) (fa "doMainIsAsync" (EVar "False")) (fa "doMainAsyncPayloadIsUnit" (EVar "False")) (fa "doHadTypeErrors" (EVar "False")) (fa "doHadMatchWarnings" (EVar "False")) (fa "doInvocationView" (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit))) (fa "doGrantsEnabled" (EVar "False")) (fa "doEffectDomains" (EListLit)) (fa "doStickyDiags" (EListLit)) (fa "doIfaceExports" (EVar "omEmpty")) (fa "doFfiAliases" (EListLit)) (fa "doOrdIndex" (EVar "omEmpty")) (fa "doEffvarNext" (ELit (LInt 0))))))
+(DFunDef false "emptyDriveOutputs" (PWild) (ERecordCreate "DriveOutputs" ((fa "doEntryOutcome" (EVar "noEntryOutcome")) (fa "doHadTypeErrors" (EVar "False")) (fa "doHadMatchWarnings" (EVar "False")) (fa "doInvocationView" (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit))) (fa "doGrantsEnabled" (EVar "False")) (fa "doEffectDomains" (EListLit)) (fa "doStickyDiags" (EListLit)) (fa "doIfaceExports" (EVar "omEmpty")) (fa "doFfiAliases" (EListLit)) (fa "doOrdIndex" (EVar "omEmpty")) (fa "doEffvarNext" (ELit (LInt 0))))))
 (DData Public "Windowed" ("a") ((variant "Windowed" (ConNamed (field "items" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyVar "a")))) (field "n" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DData Public "CSlot" () ((variant "CSlot" (ConNamed (field "csIface" (TyCon "IfaceRef")) (field "csId" (TyCon "Int"))))) ())
 (DData Public "PredicateSlotArgs" () ((variant "PSArgsUnknown" (ConPos)) (variant "PSArgsKnown" (ConPos (TyApp (TyCon "List") (TyCon "Mono"))))) ())
@@ -3867,7 +3866,8 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCtx" (TyCon "GraphCtx")) (field "csModule" (TyCon "ModuleCtx"))))) ())
 (DData Public "ChainMemo" () ((variant "ChainMemo" (ConNamed (field "chKey" (TyCon "String")) (field "chSteps" (TyApp (TyCon "List") (TyCon "ChainStep"))) (field "chReplayed" (TyCon "Int"))))) ())
 (DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport")) (field "gdGraph" (TyCon "GraphCtx")) (field "gdOutputs" (TyCon "DriveOutputs"))))) ())
-(DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "BinderTypeTable")))
+(DData Public "ElabFacts" () ((variant "ElabFacts" (ConNamed (field "efBinders" (TyCon "BinderTypeTable")) (field "efEntryOutcome" (TyCon "EntryOutcome"))))) ())
+(DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "ElabFacts")))
 (DData Public "MarkCtx" () ((variant "MarkCtx" (ConNamed (field "mcRp" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcAn" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcSm" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DData Public "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "List") (TyCon "String"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
 (DData Public "BareLocals" () ((variant "BareLocals" (ConNamed (field "blAll" (TyCon "Bool")) (field "blSet" (TyApp (TyCon "List") (TyCon "String")))))) ())

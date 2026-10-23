@@ -24,6 +24,8 @@ import ir.core_ir.{
   ImplSym(..),
   CProgram(..),
   DeclFacts(..),
+  EntryFact(..),
+  MethodResultFact(..),
   CallMode(..),
   CallSite(..),
   CTree(..),
@@ -349,15 +351,47 @@ cprogramToSexpWith m (prog@(CProgram binds ctorArities ctorToType impls mctx fac
 tablesSexp : List (String, Int) -> DeclFacts -> Option String -> List String
 tablesSexp rows facts (Some binders) =
   [slist (map methodContextPairSexp rows), declFactsSexp facts, binders]
-tablesSexp rows facts None = match (rows, facts.factRequires, facts.factSupers)
-  ([], [], []) => []
-  (_, [], []) => [slist (map methodContextPairSexp rows)]
+tablesSexp rows facts None = match (
+  rows,
+  facts.factRequires,
+  facts.factSupers,
+  facts.factMethodResults,
+  facts.factEntryOutcome,
+)
+  ([], [], [], [], None) => []
+  (_, [], [], [], None) => [slist (map methodContextPairSexp rows)]
   _ => [slist (map methodContextPairSexp rows), declFactsSexp facts]
 
 declFactsSexp : DeclFacts -> String
-declFactsSexp facts = node "facts" [
-  slist (map (factPairSexp "rq") facts.factRequires),
-  slist (map (factPairSexp "sp") facts.factSupers),
+declFactsSexp facts =
+  node
+    "facts"
+    ([
+        slist (map (factPairSexp "rq") facts.factRequires),
+        slist (map (factPairSexp "sp") facts.factSupers),
+      ]
+      ++ (if isEmpty facts.factMethodResults
+        && isNone facts.factEntryOutcome then
+        []
+      else
+        [slist (map methodResultSexp facts.factMethodResults)])
+      ++ (match facts.factEntryOutcome
+        Some outcome => [entryOutcomeSexp outcome]
+        None => []))
+
+entryOutcomeSexp : EntryFact -> String
+entryOutcomeSexp outcome = node "entry" [
+  boolStr outcome.entryMainIsUnit,
+  boolStr outcome.entryMainIsFloat,
+]
+
+methodResultSexp : MethodResultFact -> String
+methodResultSexp row = node "mr" [
+  escStr row.iface,
+  escStr row.method,
+  boolStr row.returnsHead,
+  slist (map intToString row.callbackPositions),
+  intToString row.valueArity,
 ]
 
 factPairSexp : String -> (String, Int) -> String
