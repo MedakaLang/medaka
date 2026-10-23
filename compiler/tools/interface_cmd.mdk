@@ -5,9 +5,11 @@
    diagnostics arm under each named target profile, and only a module that
    checks clean under all of them leaves a file.  It also elaborates the module
    once through the tree arm and writes the elaborated trees beside the
-   interface (`<module>.mdke`, the format of `types.prelude_elab`).  `show`
-   prints a file's header and what it holds.  `verify` compares the key each
-   file was written under with the key its module has now. -}
+   interface (`<module>.mdke`, the format of `types.prelude_elab`), and the
+   desugared declarations those trees came from (`<module>.mdkd`, the format
+   of `types.prelude_decls`).  `show` prints a file's header and what it
+   holds.  `verify` compares the key each file was written under with the key
+   its module has now. -}
 
 import args.{
   ArgSpec, FlagSpec, spec, switch, valueList, withStrictDash, parseArgs, flag,
@@ -34,7 +36,11 @@ import types.interface_sexp.{
 }
 import types.prelude_elab.{
   PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile, elabKeyOf,
-  elabDigestOf, renderElabFault
+  elabDigestOf, renderElabFault, readElabKey
+}
+import types.prelude_decls.{
+  PreludeDecls(..), preludeDeclsOf, encodeDeclsFile, readDeclsFile, declsKeyOf,
+  readDeclsKey, renderDeclsFault
 }
 import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
@@ -53,19 +59,20 @@ interfaceHelpText = stringConcat [
   "\n",
   "Usage:\n",
   "  medaka interface write  <module.mdk> [--target <profile>]...\n",
-  "  medaka interface show   <file.mdki|file.mdke>\n",
+  "  medaka interface show   <file.mdki|file.mdke|file.mdkd>\n",
   "  medaka interface verify <module.mdk>\n",
   "\n",
   "  write   type-checks the module (the prelude's core, with runtime.mdk beside\n",
   "          it) under each --target profile and writes <module>.mdki beside it.\n",
   "          Without --target the profiles are the full IO join and\n",
   "          wasmgc/browser-worker.  It also writes <module>.mdke, the module\n",
-  "          elaborated once with no user module.  A module with a type error\n",
-  "          leaves no file.\n",
+  "          elaborated once with no user module, and <module>.mdkd, the\n",
+  "          desugared declarations of runtime.mdk and the module.  A module\n",
+  "          with a type error leaves no file.\n",
   "  show    prints the header and every published row of a .mdki, or the\n",
-  "          header and counts of a .mdke.\n",
+  "          header and counts of a .mdke or .mdkd.\n",
   "  verify  prints `fresh`, `stale: <component>` or `missing`; exit 0 only on\n",
-  "          `fresh`, which needs both files fresh.\n",
+  "          `fresh`, which needs all three files fresh.\n",
   "\n",
   "  -h, --help  prints this help.\n",
 ]
@@ -106,6 +113,10 @@ interfacePath modulePath = modulePath ++ "i"
 -- The elaborated trees are named for the module the same way.
 elabPath : String -> String
 elabPath modulePath = modulePath ++ "e"
+
+-- The desugared declarations are named for the module the same way.
+declsPath : String -> String
+declsPath modulePath = modulePath ++ "d"
 
 runtimePathOf : String -> String
 runtimePathOf modulePath = joinPath (dirOf modulePath) "runtime.mdk"
@@ -202,12 +213,24 @@ elaborateCore runtimeSrc coreSrc =
         else
           Ok (preludeElabOf trees c.cpEvidence (map snd (entries c.cpBinders)))
 
--- Both files for [modulePath]: the interface file, and the elaborated trees
--- under the same key.  A type error shows as the interface check's diagnostic.
+-- The desugared trees the elaboration ran on, with their binder counters.  Core
+-- is the process's first minting, so its first ordinal is the elaboration's.
+declsOf : String -> String -> PreludeElab -> Result String PreludeDecls
+declsOf runtimeSrc coreSrc elab = do
+  pd <- preludeDeclsOf (desugaredPrelude runtimeSrc) (desugaredPrelude coreSrc)
+  if pd.pdCoreBase == elab.peBinderBase then
+    Ok pd
+  else
+    Err
+      "medaka interface write: the desugared core and its elaboration disagree on the first binder ordinal"
+
+-- The three files for [modulePath]: the interface file, the elaborated trees
+-- under the same key, and the desugared declarations the trees came from.  A
+-- type error shows as the interface check's diagnostic.
 export
 buildBoth : String ->
   List String ->
-  <IO> Result String (PreludeInterfaceFile, PreludeElab)
+  <IO> Result String (PreludeInterfaceFile, PreludeElab, PreludeDecls)
 buildBoth modulePath targets = match (
   readPreludeFile (runtimePathOf modulePath),
   readPreludeFile modulePath,
@@ -216,7 +239,10 @@ buildBoth modulePath targets = match (
     let elab = elaborateCore runtimeSrc coreSrc
     match buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
       Err e => Err e
-      Ok file => map (e => (file, e)) elab
+      Ok file => do
+        e <- elab
+        pd <- declsOf runtimeSrc coreSrc e
+        Ok (file, e, pd)
   (Err e, _) => Err e
   (_, Err e) => Err e
 
@@ -274,14 +300,16 @@ writeCmd modulePath targets
       "medaka interface write: this binary carries no build fingerprint (an unstamped build), so a file it wrote could not be told from another unstamped compiler's; build with `make medaka`"
   | otherwise = match buildBoth modulePath targets
     Err e => failWith e
-    Ok (file, elab) => match writeAllAtomically [
+    Ok (file, elab, decls) => match writeAllAtomically [
+      (declsPath modulePath, encodeDeclsFile (declsKeyOf file.ifKey) decls),
       (elabPath modulePath, encodeElabFile (elabKeyOf file.ifKey) elab),
       (interfacePath modulePath, encodeInterface file),
     ]
       Err e => failWith "medaka interface write: \{e}"
       Ok _ =>
         let _ = putStrLn "wrote \{interfacePath modulePath}"
-        putStrLn "wrote \{elabPath modulePath}"
+        let _ = putStrLn "wrote \{elabPath modulePath}"
+        putStrLn "wrote \{declsPath modulePath}"
 
 -- ── show ────────────────────────────────────────────────────────────────────
 
@@ -316,9 +344,38 @@ showCmd : String -> <IO> Unit
 showCmd path
   | S.endsWith ".mdk" path =
     failWith
-      "medaka interface show: `\{path}` is a source file; show takes the `.mdki` or `.mdke` that `medaka interface write` wrote beside it (`\{interfacePath path}`, `\{elabPath path}`)"
+      "medaka interface show: `\{path}` is a source file; show takes the `.mdki`, `.mdke` or `.mdkd` that `medaka interface write` wrote beside it (`\{interfacePath path}`, `\{elabPath path}`, `\{declsPath path}`)"
   | S.endsWith ".mdke" path = showElabFile path
+  | S.endsWith ".mdkd" path = showDeclsFile path
   | otherwise = showFile path
+
+-- The header and counts of a desugared-declarations file; [digest] is the
+-- file's own.
+export
+showDeclsLines : String -> InterfaceKey -> PreludeDecls -> List String
+showDeclsLines digest key pd =
+  ["format \{key.ikFormat}"]
+    ++ map (s => "source \{fst s} sha256 \{snd s}") key.ikSources
+    ++ [
+      "compiler \{key.ikCompiler}",
+      "runtime decls \{length pd.pdRuntime}",
+      "core decls \{length pd.pdCore}",
+      "binders \{pd.pdRuntimeBinders + pd.pdCoreBinders}",
+      "Nr \{pd.pdRuntimeBinders}",
+      "B0r \{pd.pdRuntimeBase}",
+      "Nc \{pd.pdCoreBinders}",
+      "B0c \{pd.pdCoreBase}",
+      "digest \{digest}",
+    ]
+
+showDeclsFile : String -> <IO> Unit
+showDeclsFile path = match readFile path
+  Err e => failWith "medaka interface show: cannot read `\{path}`: \{e}"
+  Ok text => match readDeclsFile text
+    Err fault =>
+      failWith "medaka interface show: `\{path}`: \{renderDeclsFault fault}"
+    Ok (key, pd) =>
+      putStrLn (joinNl (showDeclsLines (elabDigestOf text) key pd))
 
 -- The header and counts of an elaborated-trees file; [digest] is the file's own.
 export
@@ -392,21 +449,33 @@ interfaceVerdictOf modulePath = match readFile (interfacePath modulePath)
     Err fault => Stale (faultComponent fault)
     Ok (f, _) => againstSources modulePath (k => k) f.ifKey
 
+-- A file framed like the elaborated trees stands on its header alone: the
+-- version, the header and the digest are checked, the body is not decoded.
 elabVerdictOf : String -> <IO> Verdict
 elabVerdictOf modulePath = match readFile (elabPath modulePath)
   Err _ => Missing
-  Ok text => match readElabFile text
+  Ok text => match readElabKey text
     Err fault => Stale (faultComponent fault)
-    Ok (key, _) => againstSources modulePath elabKeyOf key
+    Ok key => againstSources modulePath elabKeyOf key
 
--- How [modulePath]'s two files stand against the module's sources now: fresh
--- only when both are, and a stale or missing elaborated-trees file is named as
--- such.
+declsVerdictOf : String -> <IO> Verdict
+declsVerdictOf modulePath = match readFile (declsPath modulePath)
+  Err _ => Missing
+  Ok text => match readDeclsKey text
+    Err fault => Stale (faultComponent fault)
+    Ok key => againstSources modulePath declsKeyOf key
+
+-- How [modulePath]'s three files stand against the module's sources now: fresh
+-- only when all are, and a stale or missing elaborated-trees or declarations
+-- file is named as such.
 export
 verdictOf : String -> <IO> Verdict
 verdictOf modulePath = match interfaceVerdictOf modulePath
   Fresh => match elabVerdictOf modulePath
-    Fresh => Fresh
+    Fresh => match declsVerdictOf modulePath
+      Fresh => Fresh
+      Missing => Stale "declarations (.mdkd) missing"
+      Stale component => Stale "declarations (.mdkd) \{component}"
     Missing => Stale "elaborated trees (.mdke) missing"
     Stale component => Stale "elaborated trees (.mdke) \{component}"
   other => other
