@@ -12,13 +12,16 @@ import test_process.{underRoot, withScratchDir, medakaBin}
 import list.{zipWith}
 import string as S
 import tools.interface_cmd.{
-  buildInterfaceFile, showLines, verdictOf, verdictText
+  buildInterfaceFile, buildBoth, showLines, verdictOf, verdictText
+}
+import types.prelude_elab.{
+  PreludeElab(..), encodeElabFile, elabKeyOf, readElabFile, renderElabFault
 }
 import driver.build_cmd.{
   readPreludeInterface, PreludeInputs(..), PreludeVerdict(..)
 }
 import types.interface_sexp.{
-  PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface,
+  PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface, sha256Hex,
   decodeInterface, formatVersion
 }
 import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}
@@ -63,27 +66,39 @@ withStagedStdlib body = withScratchDir (dir => match (
 test "verify reads fresh, then stale: sources after an edit, and missing without a file" = withStagedStdlib
   (dir =>
     let scratchCore = "\{dir}/core.mdk"
-    match buildInterfaceFile scratchCore []
+    match buildBoth scratchCore []
       Err e => fail e
-      Ok file =>
+      Ok (file, elab) =>
         let before = verdictText (verdictOf scratchCore)
         match writeFile "\{scratchCore}i" (encodeInterface file)
           Err e => fail e
           Ok _ =>
-            let fresh = verdictText (verdictOf scratchCore)
-            match readFile scratchCore
+            let onlyInterface = verdictText (verdictOf scratchCore)
+            let elabText = encodeElabFile (elabKeyOf file.ifKey) elab
+            match writeFile "\{scratchCore}e" elabText
               Err e => fail e
-              Ok text => match writeFile scratchCore (text ++ " ")
-                Err e => fail e
-                Ok _ => expectAll [
-                  labelFail "no file yet" (expectEqual "missing" before),
-                  labelFail "file just written" (expectEqual "fresh" fresh),
-                  labelFail
-                    "source edited"
-                    (expectEqual
-                      "stale: sources"
-                      (verdictText (verdictOf scratchCore))),
-                ])
+              Ok _ =>
+                let fresh = verdictText (verdictOf scratchCore)
+                match readFile scratchCore
+                  Err e => fail e
+                  Ok text => match writeFile scratchCore (text ++ " ")
+                    Err e => fail e
+                    Ok _ => expectAll [
+                      labelFail "no file yet" (expectEqual "missing" before),
+                      labelFail
+                        "interface only"
+                        (expectEqual
+                          "stale: elaborated trees (.mdke) missing"
+                          onlyInterface),
+                      labelFail
+                        "both files just written"
+                        (expectEqual "fresh" fresh),
+                      labelFail
+                        "source edited"
+                        (expectEqual
+                          "stale: sources"
+                          (verdictText (verdictOf scratchCore))),
+                    ])
 
 verdictName : PreludeVerdict -> String
 verdictName (PVLoaded _) = "loaded"
@@ -347,3 +362,119 @@ test "a stale prelude interface prints one line on the check family and changes 
                   (expectEqual (0, "") (checkRef.runCode, checkRef.runErr))
                 :: zipWith caseVerdict cases runs)
           other => fail "reference runs failed: \{debug other}")
+
+-- ── the elaborated trees, through the built binary ─────────────────────────
+--
+-- A spawned write runs in a fresh process, where core's counters are the
+-- values the format promises.
+
+failed : Result String a -> Bool
+failed (Err _) = True
+failed (Ok _) = False
+
+writeArgv : String -> <Env "MEDAKA_ROOT", Env "MEDAKA"> List String
+writeArgv dir = [
+  "MEDAKA_STRICT=",
+  "MEDAKA_NO_INTERFACE=",
+  medakaBin,
+  "interface",
+  "write",
+  "\{dir}/core.mdk",
+]
+
+-- What the built binary's `interface verify` prints for [dir]'s core; the
+-- file's compiler identity is the binary's own, not this test process's.
+verifyOut : String -> <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> String
+verifyOut dir = match runCommandBatch "env" 1 [
+  [
+    "MEDAKA_STRICT=",
+    medakaBin,
+    "interface",
+    "verify",
+    "\{dir}/core.mdk",
+  ],
+]
+  [Ok (_, out, _)] => S.trim out
+  _ => "the verify run failed"
+
+exitOf : Result String (Int, String, String) -> Int
+exitOf (Ok (code, _, _)) = code
+exitOf (Err _) = -1
+
+test "the writer leaves a fresh pair holding core's counters, the same bytes twice" = withStagedStdlib
+  (dir => match runCommandBatch "env" 1 [writeArgv dir]
+    [first] =>
+      let a = readFile "\{dir}/core.mdke"
+      let second = runCommandBatch "env" 1 [writeArgv dir]
+      let b = readFile "\{dir}/core.mdke"
+      match (a, b)
+        (Ok ta, Ok tb) => match readElabFile ta
+          Err f => fail "did not read: \{renderElabFault f}"
+          Ok (_, pe) => expectAll [
+            labelFail "first write exit" (expectEqual 0 (exitOf first)),
+            labelFail "second write exit" (expectEqual [0] (map exitOf second)),
+            labelFail "determinism" (expectEqual (sha256Hex ta) (sha256Hex tb)),
+            labelFail "both files fresh" (expectEqual "fresh" (verifyOut dir)),
+            labelFail
+              "K, L, N, B0"
+              (expectEqual
+                (2220, 12, 899, 0)
+                (
+                  pe.peEvCounter,
+                  pe.peLocalCounter,
+                  pe.peBinderCount,
+                  pe.peBinderBase,
+                )),
+            labelFail
+              "evidence rows a tree references"
+              (expectEqual 983 (length pe.peEvidence)),
+          ]
+        _ => fail "core.mdke was not written"
+    _ => fail "write run failed")
+
+test "a core with a type error writes neither file and exits 1" = withStagedStdlib
+  (dir =>
+    let broken = "\nbadBinding : Int\nbadBinding = \"x\"\n"
+    match readFile "\{dir}/core.mdk"
+      Err e => fail e
+      Ok text => match writeFile "\{dir}/core.mdk" (text ++ broken)
+        Err e => fail e
+        Ok _ => match runCommandBatch "env" 1 [writeArgv dir]
+          [run] => expectAll [
+            labelFail "exit code" (expectEqual 1 (exitOf run)),
+            labelFail
+              "no interface file"
+              (expectTrue (failed (readFile "\{dir}/core.mdki"))),
+            labelFail
+              "no elaborated file"
+              (expectTrue (failed (readFile "\{dir}/core.mdke"))),
+          ]
+          _ => fail "write run failed")
+
+test "two concurrent writes both succeed and leave a fresh pair" = withStagedStdlib
+  (dir => match runCommandBatch "env" 2 [writeArgv dir, writeArgv dir]
+    runs => expectAll [
+      labelFail "both exit 0" (expectEqual [0, 0] (map exitOf runs)),
+      labelFail "fresh" (expectEqual "fresh" (verifyOut dir)),
+    ])
+
+test "a missing or stale elaborated file makes verify name it" = withStagedStdlib
+  (dir => match runCommandBatch "env" 1 [writeArgv dir]
+    [_] =>
+      let fresh = verifyOut dir
+      let _ = removeFile "\{dir}/core.mdke"
+      let missing = verifyOut dir
+      match writeFile "\{dir}/core.mdke" "(medaka-elab 99)\n"
+        Err e => fail e
+        Ok _ => expectAll [
+          labelFail "both written" (expectEqual "fresh" fresh),
+          labelFail
+            "mdke removed"
+            (expectEqual "stale: elaborated trees (.mdke) missing" missing),
+          labelFail
+            "mdke of another format"
+            (expectEqual
+              "stale: elaborated trees (.mdke) format"
+              (verifyOut dir)),
+        ]
+    _ => fail "write run failed")

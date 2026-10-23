@@ -169,6 +169,29 @@ test "the cursor fails closed and stays put" =
     expectFalse (cursorAtEnd cur),
   ]
 
+-- The least `Int` is -4611686018427387904: its magnitude is not an `Int`, so
+-- the reader carries the sum below zero.
+test "the cursor reads the whole Int range and refuses past it" =
+  let least = cursorOf "-4611686018427387904"
+  let most = cursorOf "4611686018427387903"
+  let pastLeast = cursorOf "-4611686018427387905"
+  let pastMost = cursorOf "4611686018427387904"
+  let huge = cursorOf "99999999999999999999"
+  let a = cursorInt least
+  let b = cursorInt most
+  expectAll [
+    expectEqual intMinBound a,
+    expectEqual intMaxBound b,
+    expectFalse (cursorFailed least),
+    expectFalse (cursorFailed most),
+    expectEqual 0 (cursorInt pastLeast),
+    expectTrue (cursorFailed pastLeast),
+    expectEqual 0 (cursorInt pastMost),
+    expectTrue (cursorFailed pastMost),
+    expectEqual 0 (cursorInt huge),
+    expectTrue (cursorFailed huge),
+  ]
+
 test "a one-byte atom reads as its byte and a longer one is refused" =
   let ok = cursorOf " t f "
   let first = cursorChar ok

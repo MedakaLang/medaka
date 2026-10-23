@@ -459,6 +459,12 @@ inlang-frontend-parser-test:
 inlang-frontend-ast-codec-test:
 	./medaka test compiler/frontend/ast_codec_test.mdk
 
+## compiler/types/prelude_elab.mdk is outside every entry's import closure
+## until a verb reads the file ([W-MODULE-BLIND]); its sibling is the only
+## thing that typechecks and runs it.
+inlang-types-prelude-elab-test:
+	./medaka test compiler/types/prelude_elab_test.mdk
+
 ## S-the-libraries-nobody-runs (#2984-adjacent): `gzip/`'s whole
 ## in-language suite (lib + main) has no floor gate of any kind, and a
 ## directory target already grades every assertion in it with one exit

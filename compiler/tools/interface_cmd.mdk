@@ -3,9 +3,11 @@
 
    `write` is the prelude's judge: it type-checks the module on the
    diagnostics arm under each named target profile, and only a module that
-   checks clean under all of them leaves a file.  `show` prints a file's header
-   and every published row.  `verify` compares the key a file was written
-   under with the key its module has now. -}
+   checks clean under all of them leaves a file.  It also elaborates the module
+   once through the tree arm and writes the elaborated trees beside the
+   interface (`<module>.mdke`, the format of `types.prelude_elab`).  `show`
+   prints a file's header and what it holds.  `verify` compares the key each
+   file was written under with the key its module has now. -}
 
 import args.{
   ArgSpec, FlagSpec, spec, switch, valueList, withStrictDash, parseArgs, flag,
@@ -13,12 +15,14 @@ import args.{
 }
 import io.{runCommandOk}
 import list.{zip}
+import map.{entries}
 import string as S
 import driver.build_cmd.{
   PreludeInputs(..), readPreludeFile, preludeInterfaceKey, faultComponent
 }
 import driver.diagnostics.{analyzeFrom, ppDiagCliSrc, diagIsError}
 import driver.front_gate.{cliStdlibExports}
+import frontend.desugar_cache.{desugaredPrelude}
 import frontend.parser.{parseLocated}
 import support.path.{dirOf, baseName, joinPath}
 import support.stage_count.{stageExit}
@@ -28,11 +32,17 @@ import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface,
   readInterface, renderFault, mergeSections
 }
+import types.prelude_elab.{
+  PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile, elabKeyOf,
+  elabDigestOf, renderElabFault
+}
 import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
 }
-import types.publish.{ppPubScheme}
+import types.publish.{ppPubScheme, CheckedProgram(..), TcReport(..)}
 import types.target_profile.{TargetProfile, lookupProfile, selectedProfile}
+import types.tc_types.{DriveOutputs(..)}
+import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
 
 -- ── help ────────────────────────────────────────────────────────────────────
 
@@ -43,16 +53,19 @@ interfaceHelpText = stringConcat [
   "\n",
   "Usage:\n",
   "  medaka interface write  <module.mdk> [--target <profile>]...\n",
-  "  medaka interface show   <file.mdki>\n",
+  "  medaka interface show   <file.mdki|file.mdke>\n",
   "  medaka interface verify <module.mdk>\n",
   "\n",
   "  write   type-checks the module (the prelude's core, with runtime.mdk beside\n",
   "          it) under each --target profile and writes <module>.mdki beside it.\n",
   "          Without --target the profiles are the full IO join and\n",
-  "          wasmgc/browser-worker.  A module with a type error leaves no file.\n",
-  "  show    prints the header and every published row.\n",
+  "          wasmgc/browser-worker.  It also writes <module>.mdke, the module\n",
+  "          elaborated once with no user module.  A module with a type error\n",
+  "          leaves no file.\n",
+  "  show    prints the header and every published row of a .mdki, or the\n",
+  "          header and counts of a .mdke.\n",
   "  verify  prints `fresh`, `stale: <component>` or `missing`; exit 0 only on\n",
-  "          `fresh`.\n",
+  "          `fresh`, which needs both files fresh.\n",
   "\n",
   "  -h, --help  prints this help.\n",
 ]
@@ -89,6 +102,10 @@ inputsOf modulePath runtimeSrc coreSrc = PreludeInputs {
 -- The interface file is named for the module it was built from.
 interfacePath : String -> String
 interfacePath modulePath = modulePath ++ "i"
+
+-- The elaborated trees are named for the module the same way.
+elabPath : String -> String
+elabPath modulePath = modulePath ++ "e"
 
 runtimePathOf : String -> String
 runtimePathOf modulePath = joinPath (dirOf modulePath) "runtime.mdk"
@@ -140,6 +157,15 @@ buildInterfaceFile : String ->
 buildInterfaceFile modulePath targets = do
   runtimeSrc <- readPreludeFile (runtimePathOf modulePath)
   coreSrc <- readPreludeFile modulePath
+  buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
+
+-- `buildInterfaceFile` over prelude texts already read.
+buildInterfaceFileFrom : String ->
+  String ->
+  String ->
+  List String ->
+  <IO> Result String PreludeInterfaceFile
+buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets = do
   profiles <- traverse profileOfTarget (if isEmpty targets then
     defaultTargets
   else
@@ -151,25 +177,83 @@ buildInterfaceFile modulePath targets = do
     ifSections = mergeSections (flatMap (d => d) drives),
   }
 
--- The text goes into a fresh directory beside the target and is renamed over
--- it, so a reader never sees a half-written file.  `mktemp -d` makes the
--- directory atomically, so concurrent writers, even of the same module, never
--- share a staging file; the directory is removed on every path.
-writeAtomically : String -> String -> <IO> Result String Unit
-writeAtomically path text =
-  match runCommandOk "mktemp" ["-d", "\{path}.new.XXXXXX"]
-    Err e => Err "cannot make a staging directory beside `\{path}`: \{e}"
+-- The elaborated trees of [coreSrc] under [runtimeSrc], with no user module:
+-- the value `types.prelude_elab` holds.  This must be the process's first
+-- drive, because the evidence and local-name counters it records start from the
+-- process's own, which is zero only before any drive.
+elaborateCore : String -> String -> Result String PreludeElab
+elaborateCore runtimeSrc coreSrc =
+  let (_, report, outputs) =
+    elaborateModulesWithReport
+      defaultDriveInputs
+      False
+      None
+      (desugaredPrelude runtimeSrc)
+      (desugaredPrelude coreSrc)
+      []
+  match report.trChecked
+    None =>
+      Err "medaka interface write: the elaboration left no checked program"
+    Some c => match c.cpTrees
+      None => Err "medaka interface write: the elaboration left no trees"
+      Some (trees, _) =>
+        if outputs.doHadTypeErrors then
+          Err "medaka interface write: the elaboration had type errors"
+        else
+          Ok (preludeElabOf trees c.cpEvidence (map snd (entries c.cpBinders)))
+
+-- Both files for [modulePath]: the interface file, and the elaborated trees
+-- under the same key.  The loc state is reset before the prelude is parsed so
+-- no span of an earlier parse is written into the trees.  A type error shows as
+-- the interface check's diagnostic.
+export
+buildBoth : String ->
+  List String ->
+  <IO> Result String (PreludeInterfaceFile, PreludeElab)
+buildBoth modulePath targets =
+  let _ = parseLocated ""
+  match (
+    readPreludeFile (runtimePathOf modulePath),
+    readPreludeFile modulePath,
+  )
+    (Ok runtimeSrc, Ok coreSrc) =>
+      let elab = elaborateCore runtimeSrc coreSrc
+      match buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
+        Err e => Err e
+        Ok file => map (e => (file, e)) elab
+    (Err e, _) => Err e
+    (_, Err e) => Err e
+
+-- Each text goes into a staging directory beside the first target and is then
+-- renamed over its target, so a reader never sees a half-written file and a
+-- write that fails before the renames leaves every target as it was.  `mktemp
+-- -d` makes the directory atomically, so concurrent writers, even of the same
+-- module, never share a staging file; the directory is removed on every path.
+writeAllAtomically : List (String, String) -> <IO> Result String Unit
+writeAllAtomically [] = Ok ()
+writeAllAtomically (files@((first, _) :: _)) =
+  match runCommandOk "mktemp" ["-d", "\{first}.new.XXXXXX"]
+    Err e => Err "cannot make a staging directory beside `\{first}`: \{e}"
     Ok (out, _) =>
       let dir = S.trim out
-      let staging = joinPath dir (baseName path)
-      let result = match writeFile staging text
-        Err e => Err "cannot write `\{staging}`: \{e}"
-        Ok _ => match rename staging path
-          Ok _ => Ok ()
-          Err e => Err "cannot move `\{staging}` to `\{path}`: \{e}"
-      let _ = removeFile staging
+      let staged =
+        map (f => (joinPath dir (baseName (fst f)), fst f, snd f)) files
+      let result = do
+        _ <- traverse stageFile staged
+        traverse moveFile staged
+      let _ = map ((staging, _, _) => removeFile staging) staged
       let _ = removeDir dir
-      result
+      map (_ => ()) result
+
+stageFile : (String, String, String) -> <IO> Result String Unit
+stageFile (staging, _, text) = match writeFile staging text
+  Err e => Err "cannot write `\{staging}`: \{e}"
+  Ok _ => Ok ()
+
+moveFile : (String, String, String) -> <IO> Result String Unit
+moveFile (staging, path, _) = match rename staging path
+  Ok _ => Ok ()
+  Err e => Err "cannot move `\{staging}` to `\{path}`: \{e}"
 
 failWith : String -> <IO> Unit
 -- The same two lines as `entries/entry_support.mdk`'s `failWith`; a tool cannot import an entry.
@@ -183,12 +267,16 @@ writeCmd modulePath targets
   | buildFingerprint () == "" =
     failWith
       "medaka interface write: this binary carries no build fingerprint (an unstamped build), so a file it wrote could not be told from another unstamped compiler's; build with `make medaka`"
-  | otherwise = match buildInterfaceFile modulePath targets
+  | otherwise = match buildBoth modulePath targets
     Err e => failWith e
-    Ok file =>
-      match writeAtomically (interfacePath modulePath) (encodeInterface file)
-        Err e => failWith "medaka interface write: \{e}"
-        Ok _ => putStrLn "wrote \{interfacePath modulePath}"
+    Ok (file, elab) => match writeAllAtomically [
+      (elabPath modulePath, encodeElabFile (elabKeyOf file.ifKey) elab),
+      (interfacePath modulePath, encodeInterface file),
+    ]
+      Err e => failWith "medaka interface write: \{e}"
+      Ok _ =>
+        let _ = putStrLn "wrote \{interfacePath modulePath}"
+        putStrLn "wrote \{elabPath modulePath}"
 
 -- ── show ────────────────────────────────────────────────────────────────────
 
@@ -223,8 +311,35 @@ showCmd : String -> <IO> Unit
 showCmd path
   | S.endsWith ".mdk" path =
     failWith
-      "medaka interface show: `\{path}` is a source file; show takes the `.mdki` that `medaka interface write` wrote beside it (`\{interfacePath path}`)"
+      "medaka interface show: `\{path}` is a source file; show takes the `.mdki` or `.mdke` that `medaka interface write` wrote beside it (`\{interfacePath path}`, `\{elabPath path}`)"
+  | S.endsWith ".mdke" path = showElabFile path
   | otherwise = showFile path
+
+-- The header and counts of an elaborated-trees file; [digest] is the file's own.
+export
+showElabLines : String -> InterfaceKey -> PreludeElab -> List String
+showElabLines digest key pe =
+  ["format \{key.ikFormat}"]
+    ++ map (s => "source \{fst s} sha256 \{snd s}") key.ikSources
+    ++ [
+      "compiler \{key.ikCompiler}",
+      "decls \{length pe.peDecls}",
+      "evidence \{length pe.peEvidence}",
+      "binders \{pe.peBinderCount}",
+      "K \{pe.peEvCounter}",
+      "L \{pe.peLocalCounter}",
+      "N \{pe.peBinderCount}",
+      "B0 \{pe.peBinderBase}",
+      "digest \{digest}",
+    ]
+
+showElabFile : String -> <IO> Unit
+showElabFile path = match readFile path
+  Err e => failWith "medaka interface show: cannot read `\{path}`: \{e}"
+  Ok text => match readElabFile text
+    Err fault =>
+      failWith "medaka interface show: `\{path}`: \{renderElabFault fault}"
+    Ok (key, pe) => putStrLn (joinNl (showElabLines (elabDigestOf text) key pe))
 
 showFile : String -> <IO> Unit
 showFile path = match readFile path
@@ -244,26 +359,52 @@ verdictText Fresh = "fresh"
 verdictText (Stale component) = "stale: \{component}"
 verdictText Missing = "missing"
 
--- How [modulePath]'s interface file stands against the module's sources now.
-export
-verdictOf : String -> <IO> Verdict
-verdictOf modulePath = match readFile (interfacePath modulePath)
+-- How a file written under [stored] stands against [modulePath]'s sources now,
+-- once [shape] has put the current key in the file's own format.
+againstSources : String ->
+  (InterfaceKey -> InterfaceKey) ->
+  InterfaceKey ->
+  <IO> Verdict
+againstSources modulePath shape stored = match (
+  readFile (runtimePathOf modulePath),
+  readFile modulePath,
+)
+  (Ok runtimeSrc, Ok coreSrc) =>
+    match (keysMatch
+      stored
+      (shape
+        (preludeInterfaceKey
+          (baseName modulePath)
+          (inputsOf modulePath runtimeSrc coreSrc))))
+      None => Fresh
+      Some component => Stale component
+  _ => Stale "sources"
+
+interfaceVerdictOf : String -> <IO> Verdict
+interfaceVerdictOf modulePath = match readFile (interfacePath modulePath)
   Err _ => Missing
   Ok text => match readInterface text
     Err fault => Stale (faultComponent fault)
-    Ok (f, _) => match (
-      readFile (runtimePathOf modulePath),
-      readFile modulePath,
-    )
-      (Ok runtimeSrc, Ok coreSrc) =>
-        match (keysMatch
-          f.ifKey
-          (preludeInterfaceKey
-            (baseName modulePath)
-            (inputsOf modulePath runtimeSrc coreSrc)))
-          None => Fresh
-          Some component => Stale component
-      _ => Stale "sources"
+    Ok (f, _) => againstSources modulePath (k => k) f.ifKey
+
+elabVerdictOf : String -> <IO> Verdict
+elabVerdictOf modulePath = match readFile (elabPath modulePath)
+  Err _ => Missing
+  Ok text => match readElabFile text
+    Err fault => Stale (faultComponent fault)
+    Ok (key, _) => againstSources modulePath elabKeyOf key
+
+-- How [modulePath]'s two files stand against the module's sources now: fresh
+-- only when both are, and a stale or missing elaborated-trees file is named as
+-- such.
+export
+verdictOf : String -> <IO> Verdict
+verdictOf modulePath = match interfaceVerdictOf modulePath
+  Fresh => match elabVerdictOf modulePath
+    Fresh => Fresh
+    Missing => Stale "elaborated trees (.mdke) missing"
+    Stale component => Stale "elaborated trees (.mdke) \{component}"
+  other => other
 
 verifyCmd : String -> <IO> Unit
 verifyCmd modulePath =
