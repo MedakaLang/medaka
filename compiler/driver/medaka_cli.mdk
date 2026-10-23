@@ -633,7 +633,7 @@ usage _ =
       "  medaka manifest <file.mdk> [--fn name]  Emit the verified capability manifest as TOML\n",
       "  medaka gate list [<selector>...] [--json]  Query the gate registry (test/gates.toml)\n",
       "  medaka gate run [<selector>...] [--dry-run]  Run the selected gates\n",
-      "  medaka interface write|show|verify <module.mdk>  Write, show or verify the prelude interface file\n",
+      "  medaka interface write|verify <module.mdk>, show <file.mdki>  Write, show or verify the prelude interface file\n",
       "  medaka help               Show this message\n",
       "  medaka --version          Show the compiler version\n"
     ])

@@ -244,7 +244,14 @@ showLines digest f =
       (zip [1..=total] f.ifSections)
 
 showCmd : String -> <IO> Unit
-showCmd path = match readFile path
+showCmd path
+  | S.endsWith ".mdk" path =
+    failWith
+      "medaka interface show: `\{path}` is a source file; show takes the `.mdki` that `medaka interface write` wrote beside it (`\{interfacePath path}`)"
+  | otherwise = showFile path
+
+showFile : String -> <IO> Unit
+showFile path = match readFile path
   Err e => failWith "medaka interface show: cannot read `\{path}`: \{e}"
   Ok text => match decodeInterface text
     Err e =>
@@ -320,7 +327,8 @@ writeArgs argv = match parseArgs writeSpec argv
 export
 runInterfaceCmd : List String -> <IO> Unit
 runInterfaceCmd [] =
-  failWith "usage: medaka interface <write|show|verify> <module.mdk>"
+  failWith
+    "usage: medaka interface write|verify <module.mdk>, medaka interface show <file.mdki>"
 runInterfaceCmd ("write" :: rest) = writeArgs rest
 runInterfaceCmd ("show" :: rest) =
   oneModule (plainSpec "interface show") rest showCmd
