@@ -95,7 +95,7 @@ for sym in WGapMode WasmEmit freshWasmEmit emitProgramRecord; do
     exit 1
   }
 done
-has_wasm_pin '| Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit FnCtx' || {
+has_wasm_pin 'Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit FnCtx' || {
   echo "FAIL wasm typed index ratchet: Prog must retain its index fields plus WasmEmit and the per-function FnCtx"
   exit 1
 }
