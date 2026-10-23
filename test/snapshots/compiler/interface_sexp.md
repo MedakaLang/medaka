@@ -1,5 +1,5 @@
 # META
-source_lines=1624
+source_lines=1640
 stages=DESUGAR,MARK
 # SOURCE
 -- The scheme-level interface codec: every type a published scheme is built
@@ -1600,6 +1600,22 @@ readInterface text = match parseSExp ("(" ++ text ++ ")")
     Some v if v /= formatVersion => Err (WrongFormat v)
     _ => mapErr Malformed (decodeParsed (bodyOf text) top)
 
+-- The key a file's header line claims, read off that line alone: the sections
+-- are neither decoded nor digested, so a fresh key says the file was written
+-- for these sources by this compiler, not that its body is whole.
+export
+readInterfaceKey : String -> Result InterfaceFault InterfaceKey
+readInterfaceKey text =
+  let line = match S.indexOf "\n" text
+    Some i => S.take i text
+    None => text
+  match parseSExp line
+    Err e => Err (Malformed e)
+    Ok header => match declaredVersion (SList [header])
+      Some v if v /= formatVersion => Err (WrongFormat v)
+      _ =>
+        mapErr Malformed (map ((key, _, _) => key) (decHeader "header" header))
+
 -- The version the first node declares, when it declares one.
 declaredVersion : SExp -> Option Int
 declaredVersion (SList ((SList ((SAtom "medaka-interface") :: v :: _)) :: _)) =
@@ -2168,6 +2184,8 @@ decodeParsed _ top = refuse "file" top "expected a header node"
 (DFunDef false "renderFault" ((PCon "Malformed" (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "e") "sePath"))) (ELit (LString ": "))) (EApp (EVar "display") (EFieldAccess (EVar "e") "seWhat"))) (ELit (LString ""))))
 (DTypeSig true "readInterface" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "PreludeInterfaceFile") (TyCon "String")))))
 (DFunDef false "readInterface" ((PVar "text")) (EMatch (EApp (EVar "parseSExp") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "text")) (ELit (LString ")")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "Malformed") (EVar "e")))) (arm (PCon "Ok" (PVar "top")) () (EMatch (EApp (EVar "declaredVersion") (EVar "top")) (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "/=" (EVar "v") (EVar "formatVersion")))) (EApp (EVar "Err") (EApp (EVar "WrongFormat") (EVar "v")))) (arm PWild () (EApp (EApp (EVar "mapErr") (EVar "Malformed")) (EApp (EApp (EVar "decodeParsed") (EApp (EVar "bodyOf") (EVar "text"))) (EVar "top"))))))))
+(DTypeSig true "readInterfaceKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey"))))
+(DFunDef false "readInterfaceKey" ((PVar "text")) (EBlock (DoLet false false (PVar "line") (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EVar "S.take") (EVar "i")) (EVar "text"))) (arm (PCon "None") () (EVar "text")))) (DoExpr (EMatch (EApp (EVar "parseSExp") (EVar "line")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "Malformed") (EVar "e")))) (arm (PCon "Ok" (PVar "header")) () (EMatch (EApp (EVar "declaredVersion") (EApp (EVar "SList") (EListLit (EVar "header")))) (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "/=" (EVar "v") (EVar "formatVersion")))) (EApp (EVar "Err") (EApp (EVar "WrongFormat") (EVar "v")))) (arm PWild () (EApp (EApp (EVar "mapErr") (EVar "Malformed")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "key") PWild PWild)) (EVar "key"))) (EApp (EApp (EVar "decHeader") (ELit (LString "header"))) (EVar "header")))))))))))
 (DTypeSig false "declaredVersion" (TyFun (TyCon "SExp") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "declaredVersion" ((PCon "SList" (PCons (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "medaka-interface"))) (PCons (PVar "v") PWild))) PWild))) (EMatch (EApp (EApp (EVar "atomInt") (ELit (LString ""))) (EVar "v")) (arm (PCon "Ok" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "Err" PWild) () (EVar "None"))))
 (DFunDef false "declaredVersion" (PWild) (EVar "None"))
@@ -2716,6 +2734,8 @@ decodeParsed _ top = refuse "file" top "expected a header node"
 (DFunDef false "renderFault" ((PCon "Malformed" (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "e") "sePath"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "e") "seWhat"))) (ELit (LString ""))))
 (DTypeSig true "readInterface" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "PreludeInterfaceFile") (TyCon "String")))))
 (DFunDef false "readInterface" ((PVar "text")) (EMatch (EApp (EVar "parseSExp") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "text")) (ELit (LString ")")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "Malformed") (EVar "e")))) (arm (PCon "Ok" (PVar "top")) () (EMatch (EApp (EVar "declaredVersion") (EVar "top")) (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "/=" (EVar "v") (EVar "formatVersion")))) (EApp (EVar "Err") (EApp (EVar "WrongFormat") (EVar "v")))) (arm PWild () (EApp (EApp (EVar "mapErr") (EVar "Malformed")) (EApp (EApp (EVar "decodeParsed") (EApp (EVar "bodyOf") (EVar "text"))) (EVar "top"))))))))
+(DTypeSig true "readInterfaceKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey"))))
+(DFunDef false "readInterfaceKey" ((PVar "text")) (EBlock (DoLet false false (PVar "line") (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EVar "S.take") (EVar "i")) (EVar "text"))) (arm (PCon "None") () (EVar "text")))) (DoExpr (EMatch (EApp (EVar "parseSExp") (EVar "line")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "Malformed") (EVar "e")))) (arm (PCon "Ok" (PVar "header")) () (EMatch (EApp (EVar "declaredVersion") (EApp (EVar "SList") (EListLit (EVar "header")))) (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "/=" (EVar "v") (EVar "formatVersion")))) (EApp (EVar "Err") (EApp (EVar "WrongFormat") (EVar "v")))) (arm PWild () (EApp (EApp (EVar "mapErr") (EVar "Malformed")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "key") PWild PWild)) (EVar "key"))) (EApp (EApp (EVar "decHeader") (ELit (LString "header"))) (EVar "header")))))))))))
 (DTypeSig false "declaredVersion" (TyFun (TyCon "SExp") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "declaredVersion" ((PCon "SList" (PCons (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "medaka-interface"))) (PCons (PVar "v") PWild))) PWild))) (EMatch (EApp (EApp (EVar "atomInt") (ELit (LString ""))) (EVar "v")) (arm (PCon "Ok" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "Err" PWild) () (EVar "None"))))
 (DFunDef false "declaredVersion" (PWild) (EVar "None"))

@@ -1,5 +1,5 @@
 # META
-source_lines=4858
+source_lines=4851
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -80,9 +80,10 @@ import driver.loader.{
   readSource,
 }
 import driver.build_cmd.{
-  readPreludeFile, envOr, defaultMedakaRoot, loadPreludeInterface,
+  readPreludeSources, envOr, defaultMedakaRoot, loadPreludeInterface,
   loadPreludeElab, preludeTreesLine, treesLoaded, withHeldPrelude, TreesVerdict,
-  PreludeInputs, shippedInputs
+  PreludeInputs, shippedInputs, preludeDeclsLine, preludeDeclsVerdict,
+  reportStaleLine
 }
 import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
@@ -313,85 +314,82 @@ runTestUnderProfile : List Engine ->
   Option String ->
   <IO> Bool
 runTestUnderProfile engines runtimeP coreP target roots cases filterOpt =
-  match readPreludeFile runtimeP
+  match readPreludeSources (dirOf runtimeP)
     Err e =>
       let _ = ePutStrLn e
       False
-    Ok rsrc => match readPreludeFile coreP
+    Ok (rsrc, csrc) => match readSource target
       Err e =>
         let _ = ePutStrLn e
         False
-      Ok csrc => match readSource target
+      -- A FILE-LEVEL parse error in the target must surface as the SAME located
+      -- `file:L:C:` diagnostic `medaka check` prints — not the unlocated
+      -- `panic "parse error"` the memoized `targetDesugared`/`targetRaw` below
+      -- would raise (issue #892).  Gate on the non-panicking `parseTargetResult`
+      -- first (the same parse `check` uses) and, on failure, render the structured
+      -- `ParseError` through the shared `parseErrDiag`/`ppDiagCliSrc` machinery,
+      -- returning False so the caller exits nonzero — accumulate-and-report, not
+      -- panic.  (Issue #55 fixed parse errors in an individual doctest EXAMPLE;
+      -- this covers a parse error in the module SOURCE itself.)
+      Ok tsrc => match parseTargetResult tsrc
         Err e =>
-          let _ = ePutStrLn e
+          let _ = ePutStrLn (ppDiagCliSrc tsrc target (parseErrDiag target e))
           False
-        -- A FILE-LEVEL parse error in the target must surface as the SAME located
-        -- `file:L:C:` diagnostic `medaka check` prints — not the unlocated
-        -- `panic "parse error"` the memoized `targetDesugared`/`targetRaw` below
-        -- would raise (issue #892).  Gate on the non-panicking `parseTargetResult`
-        -- first (the same parse `check` uses) and, on failure, render the structured
-        -- `ParseError` through the shared `parseErrDiag`/`ppDiagCliSrc` machinery,
-        -- returning False so the caller exits nonzero — accumulate-and-report, not
-        -- panic.  (Issue #55 fixed parse errors in an individual doctest EXAMPLE;
-        -- this covers a parse error in the module SOURCE itself.)
-        Ok tsrc => match parseTargetResult tsrc
-          Err e =>
-            let _ = ePutStrLn (ppDiagCliSrc tsrc target (parseErrDiag target e))
-            False
-          Ok _ =>
-            let userDecls = targetDesugared tsrc
-            let exempt = typecheckExempt target userDecls tsrc
-            let _ = exemptNotice exempt target userDecls
-            match pinIndexForTarget target userDecls
-              Err err =>
-                let _ = ePutStrLn err
-                False
-              Ok (file, index) =>
-                let _ =
-                  holdTestPrelude
-                    True
-                    (shippedInputs (dirOf runtimeP) rsrc csrc)
-                -- S-1/#2234 (F-converge): the prelude halves go through the
-                -- content-keyed `desugaredPrelude` memo; only the USER source is
-                -- parsed+desugared fresh here.
-                driveAll
-                  engines
-                  (desugaredPrelude rsrc)
-                  (desugaredPrelude csrc)
-                  rsrc
-                  csrc
-                  (dirOf runtimeP)
-                  target
-                  tsrc
-                  roots
-                  cases
-                  filterOpt
-                  userDecls
-                  exempt
-                  file
-                  index
+        Ok _ =>
+          let userDecls = targetDesugared tsrc
+          let exempt = typecheckExempt target userDecls tsrc
+          let _ = exemptNotice exempt target userDecls
+          match pinIndexForTarget target userDecls
+            Err err =>
+              let _ = ePutStrLn err
+              False
+            Ok (file, index) =>
+              let _ =
+                holdTestPrelude True (shippedInputs (dirOf runtimeP) rsrc csrc)
+              -- S-1/#2234 (F-converge): the prelude halves go through the
+              -- content-keyed `desugaredPrelude` memo; only the USER source is
+              -- parsed+desugared fresh here.
+              driveAll
+                engines
+                (desugaredPrelude rsrc)
+                (desugaredPrelude csrc)
+                rsrc
+                csrc
+                (dirOf runtimeP)
+                target
+                tsrc
+                roots
+                cases
+                filterOpt
+                userDecls
+                exempt
+                file
+                index
 
 -- Hold the prelude's interface and elaborated trees for this process, so the
 -- drives built by `testDriveInputs` skip core's pass.  [report] is the verb's
--- own process: it prints the trees' verdict once, a stop under MEDAKA_STRICT; a
--- props worker, spawned by that process, prints nothing.
+-- own process: it prints the trees' and the declarations' verdicts once, a stop
+-- under MEDAKA_STRICT; a props worker, spawned by that process, prints nothing.
 holdTestPrelude : Bool -> PreludeInputs -> <IO> Unit
 holdTestPrelude report inputs =
   let _ = loadPreludeInterface inputs
   let first = not (treesLoaded ())
   let verdict = loadPreludeElab inputs
-  if report && first then reportTestTrees verdict
+  if report && first then
+    let _ = reportTestTrees verdict
+    reportTestLine (preludeDeclsLine (preludeDeclsVerdict inputs))
 
 -- The line a stale file earns, once per process because the load is.
 reportTestTrees : TreesVerdict -> <IO> Unit
-reportTestTrees verdict = match preludeTreesLine verdict
-  Some msg =>
-    if envOr "MEDAKA_STRICT" "" /= "" then
+reportTestTrees verdict = reportTestLine (preludeTreesLine verdict)
+
+reportTestLine : Option String -> <IO> Unit
+reportTestLine =
+  reportStaleLine
+    (msg =>
       let _ = ePutStrLn msg
-      stageExit 1
-    else
-      ePutStrLn msg
-  None => ()
+      stageExit 1)
+    None
 
 -- A drive's inputs: keyed for the shipped trees when [coreDecls] are core's.
 testDriveInputs : List Decl -> DriveInputs
@@ -3061,28 +3059,23 @@ runEvalPropsWorker : String -> List PropRequest -> <IO> Unit
 runEvalPropsWorker target requests =
   let nonce = startEvalPropWorker ()
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let runtimePath = joinPath root "stdlib/runtime.mdk"
-  let corePath = joinPath root "stdlib/core.mdk"
   let stdlibDir = joinPath root "stdlib"
-  match readPreludeFile runtimePath
-    Err message => evalWorkerDie "could not read runtime prelude: \{message}"
-    Ok runtimeSrc => match readPreludeFile corePath
-      Err message => evalWorkerDie "could not read core prelude: \{message}"
-      Ok coreSrc => match readSource target
-        Err message =>
-          evalWorkerDie "could not read property target: \{message}"
-        Ok tsrc => match parseTargetResult tsrc
-          Err _ => evalWorkerDie "could not parse property target"
-          Ok _ =>
-            runEvalPropsWorkerSource
-              target
-              nonce
-              requests
-              runtimeSrc
-              coreSrc
-              stdlibDir
-              tsrc
-              (targetDesugared tsrc)
+  match readPreludeSources stdlibDir
+    Err message => evalWorkerDie "could not read the prelude: \{message}"
+    Ok (runtimeSrc, coreSrc) => match readSource target
+      Err message => evalWorkerDie "could not read property target: \{message}"
+      Ok tsrc => match parseTargetResult tsrc
+        Err _ => evalWorkerDie "could not parse property target"
+        Ok _ =>
+          runEvalPropsWorkerSource
+            target
+            nonce
+            requests
+            runtimeSrc
+            coreSrc
+            stdlibDir
+            tsrc
+            (targetDesugared tsrc)
 
 evalWorkerDie : String -> <IO> Unit
 evalWorkerDie message = do
@@ -4865,7 +4858,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("tools" "target_parse") ((mem "parseTargetResult" false) (mem "targetRaw" false) (mem "targetDesugared" false) (mem "targetExamples" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "loadPreludeInterface" false) (mem "loadPreludeElab" false) (mem "preludeTreesLine" false) (mem "treesLoaded" false) (mem "withHeldPrelude" false) (mem "TreesVerdict" false) (mem "PreludeInputs" false) (mem "shippedInputs" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeSources" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "loadPreludeInterface" false) (mem "loadPreludeElab" false) (mem "preludeTreesLine" false) (mem "treesLoaded" false) (mem "withHeldPrelude" false) (mem "TreesVerdict" false) (mem "PreludeInputs" false) (mem "shippedInputs" false) (mem "preludeDeclsLine" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesWithReport" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" false))))
@@ -4906,11 +4899,13 @@ testFilesReport _ _ acc = acc
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
 (DFunDef false "runTest" ((PVar "engines") (PVar "runtimeP") (PVar "coreP") (PVar "target") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "target")) (arm (PCon "Err" (PVar "m")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (ELit (LString "error: ")) (EVar "m")))) (DoExpr (EVar "False")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestUnderProfile") (EVar "engines")) (EVar "runtimeP")) (EVar "coreP")) (EVar "target")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")))))
 (DTypeSig false "runTestUnderProfile" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
-(DFunDef false "runTestUnderProfile" ((PVar "engines") (PVar "runtimeP") (PVar "coreP") (PVar "target") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EMatch (EApp (EVar "readPreludeFile") (EVar "runtimeP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "coreP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseTargetResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "targetDesugared") (EVar "tsrc"))) (DoLet false false (PVar "exempt") (EApp (EApp (EApp (EVar "typecheckExempt") (EVar "target")) (EVar "userDecls")) (EVar "tsrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "exemptNotice") (EVar "exempt")) (EVar "target")) (EVar "userDecls"))) (DoExpr (EMatch (EApp (EApp (EVar "pinIndexForTarget") (EVar "target")) (EVar "userDecls")) (arm (PCon "Err" (PVar "err")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "err"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "file") (PVar "index"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "holdTestPrelude") (EVar "True")) (EApp (EApp (EApp (EVar "shippedInputs") (EApp (EVar "dirOf") (EVar "runtimeP"))) (EVar "rsrc")) (EVar "csrc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveAll") (EVar "engines")) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "dirOf") (EVar "runtimeP"))) (EVar "target")) (EVar "tsrc")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")) (EVar "userDecls")) (EVar "exempt")) (EVar "file")) (EVar "index")))))))))))))))))
+(DFunDef false "runTestUnderProfile" ((PVar "engines") (PVar "runtimeP") (PVar "coreP") (PVar "target") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EMatch (EApp (EVar "readPreludeSources") (EApp (EVar "dirOf") (EVar "runtimeP"))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "rsrc") (PVar "csrc"))) () (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseTargetResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "targetDesugared") (EVar "tsrc"))) (DoLet false false (PVar "exempt") (EApp (EApp (EApp (EVar "typecheckExempt") (EVar "target")) (EVar "userDecls")) (EVar "tsrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "exemptNotice") (EVar "exempt")) (EVar "target")) (EVar "userDecls"))) (DoExpr (EMatch (EApp (EApp (EVar "pinIndexForTarget") (EVar "target")) (EVar "userDecls")) (arm (PCon "Err" (PVar "err")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "err"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "file") (PVar "index"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "holdTestPrelude") (EVar "True")) (EApp (EApp (EApp (EVar "shippedInputs") (EApp (EVar "dirOf") (EVar "runtimeP"))) (EVar "rsrc")) (EVar "csrc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveAll") (EVar "engines")) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "dirOf") (EVar "runtimeP"))) (EVar "target")) (EVar "tsrc")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")) (EVar "userDecls")) (EVar "exempt")) (EVar "file")) (EVar "index")))))))))))))))
 (DTypeSig false "holdTestPrelude" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "holdTestPrelude" ((PVar "report") (PVar "inputs")) (EBlock (DoLet false false PWild (EApp (EVar "loadPreludeInterface") (EVar "inputs"))) (DoLet false false (PVar "first") (EApp (EVar "not") (EApp (EVar "treesLoaded") (ELit LUnit)))) (DoLet false false (PVar "verdict") (EApp (EVar "loadPreludeElab") (EVar "inputs"))) (DoExpr (EIf (EBinOp "&&" (EVar "report") (EVar "first")) (EApp (EVar "reportTestTrees") (EVar "verdict")) (ELit LUnit)))))
+(DFunDef false "holdTestPrelude" ((PVar "report") (PVar "inputs")) (EBlock (DoLet false false PWild (EApp (EVar "loadPreludeInterface") (EVar "inputs"))) (DoLet false false (PVar "first") (EApp (EVar "not") (EApp (EVar "treesLoaded") (ELit LUnit)))) (DoLet false false (PVar "verdict") (EApp (EVar "loadPreludeElab") (EVar "inputs"))) (DoExpr (EIf (EBinOp "&&" (EVar "report") (EVar "first")) (EBlock (DoLet false false PWild (EApp (EVar "reportTestTrees") (EVar "verdict"))) (DoExpr (EApp (EVar "reportTestLine") (EApp (EVar "preludeDeclsLine") (EApp (EVar "preludeDeclsVerdict") (EVar "inputs")))))) (ELit LUnit)))))
 (DTypeSig false "reportTestTrees" (TyFun (TyCon "TreesVerdict") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "reportTestTrees" ((PVar "verdict")) (EMatch (EApp (EVar "preludeTreesLine") (EVar "verdict")) (arm (PCon "Some" (PVar "msg")) () (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EApp (EVar "ePutStrLn") (EVar "msg")))) (arm (PCon "None") () (ELit LUnit))))
+(DFunDef false "reportTestTrees" ((PVar "verdict")) (EApp (EVar "reportTestLine") (EApp (EVar "preludeTreesLine") (EVar "verdict"))))
+(DTypeSig false "reportTestLine" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "reportTestLine" () (EApp (EApp (EVar "reportStaleLine") (ELam ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))) (EVar "None")))
 (DTypeSig false "testDriveInputs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DriveInputs")))
 (DFunDef false "testDriveInputs" ((PVar "coreDecls")) (EApp (EApp (EVar "withHeldPrelude") (EVar "coreDecls")) (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))))
 (DTypeSig false "pinIndexForTarget" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "PinIndex")))))))
@@ -5214,7 +5209,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "workerProtocolRows" ((PList) PWild) (EListLit))
 (DFunDef false "workerProtocolRows" ((PCons (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases")) (PVar "rest")) (PVar "message")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "eval"))) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EVar "message")) (EVar "seed")) (EVar "cases")) (EApp (EApp (EVar "workerProtocolRows") (EVar "rest")) (EVar "message"))))
 (DTypeSig true "runEvalPropsWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "runEvalPropsWorker" ((PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "startEvalPropWorker") (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "runtimePath") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "runtimePath")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read runtime prelude: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "runtimeSrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read core prelude: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "coreSrc")) () (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read property target: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseTargetResult") (EVar "tsrc")) (arm (PCon "Err" PWild) () (EApp (EVar "evalWorkerDie") (ELit (LString "could not parse property target")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPropsWorkerSource") (EVar "target")) (EVar "nonce")) (EVar "requests")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "tsrc")) (EApp (EVar "targetDesugared") (EVar "tsrc"))))))))))))))
+(DFunDef false "runEvalPropsWorker" ((PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "startEvalPropWorker") (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "stdlibDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeSources") (EVar "stdlibDir")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read the prelude: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "runtimeSrc") (PVar "coreSrc"))) () (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read property target: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseTargetResult") (EVar "tsrc")) (arm (PCon "Err" PWild) () (EApp (EVar "evalWorkerDie") (ELit (LString "could not parse property target")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPropsWorkerSource") (EVar "target")) (EVar "nonce")) (EVar "requests")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "tsrc")) (EApp (EVar "targetDesugared") (EVar "tsrc"))))))))))))
 (DTypeSig false "evalWorkerDie" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "evalWorkerDie" ((PVar "message")) (ELet false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test --props-worker: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString "")))) (EApp (EVar "stageExit") (ELit (LInt 1)))))
 (DTypeSig false "runEvalPropsWorkerSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit")))))))))))
@@ -5528,7 +5523,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("tools" "target_parse") ((mem "parseTargetResult" false) (mem "targetRaw" false) (mem "targetDesugared" false) (mem "targetExamples" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "loadPreludeInterface" false) (mem "loadPreludeElab" false) (mem "preludeTreesLine" false) (mem "treesLoaded" false) (mem "withHeldPrelude" false) (mem "TreesVerdict" false) (mem "PreludeInputs" false) (mem "shippedInputs" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeSources" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "loadPreludeInterface" false) (mem "loadPreludeElab" false) (mem "preludeTreesLine" false) (mem "treesLoaded" false) (mem "withHeldPrelude" false) (mem "TreesVerdict" false) (mem "PreludeInputs" false) (mem "shippedInputs" false) (mem "preludeDeclsLine" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesWithReport" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" false))))
@@ -5569,11 +5564,13 @@ testFilesReport _ _ acc = acc
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
 (DFunDef false "runTest" ((PVar "engines") (PVar "runtimeP") (PVar "coreP") (PVar "target") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "target")) (arm (PCon "Err" (PVar "m")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (ELit (LString "error: ")) (EVar "m")))) (DoExpr (EVar "False")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestUnderProfile") (EVar "engines")) (EVar "runtimeP")) (EVar "coreP")) (EVar "target")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")))))
 (DTypeSig false "runTestUnderProfile" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
-(DFunDef false "runTestUnderProfile" ((PVar "engines") (PVar "runtimeP") (PVar "coreP") (PVar "target") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EMatch (EApp (EVar "readPreludeFile") (EVar "runtimeP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "coreP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseTargetResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "targetDesugared") (EVar "tsrc"))) (DoLet false false (PVar "exempt") (EApp (EApp (EApp (EVar "typecheckExempt") (EVar "target")) (EVar "userDecls")) (EVar "tsrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "exemptNotice") (EVar "exempt")) (EVar "target")) (EVar "userDecls"))) (DoExpr (EMatch (EApp (EApp (EVar "pinIndexForTarget") (EVar "target")) (EVar "userDecls")) (arm (PCon "Err" (PVar "err")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "err"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "file") (PVar "index"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "holdTestPrelude") (EVar "True")) (EApp (EApp (EApp (EVar "shippedInputs") (EApp (EVar "dirOf") (EVar "runtimeP"))) (EVar "rsrc")) (EVar "csrc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveAll") (EVar "engines")) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "dirOf") (EVar "runtimeP"))) (EVar "target")) (EVar "tsrc")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")) (EVar "userDecls")) (EVar "exempt")) (EVar "file")) (EMethodRef "index")))))))))))))))))
+(DFunDef false "runTestUnderProfile" ((PVar "engines") (PVar "runtimeP") (PVar "coreP") (PVar "target") (PVar "roots") (PVar "cases") (PVar "filterOpt")) (EMatch (EApp (EVar "readPreludeSources") (EApp (EVar "dirOf") (EVar "runtimeP"))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "rsrc") (PVar "csrc"))) () (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseTargetResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "targetDesugared") (EVar "tsrc"))) (DoLet false false (PVar "exempt") (EApp (EApp (EApp (EVar "typecheckExempt") (EVar "target")) (EVar "userDecls")) (EVar "tsrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "exemptNotice") (EVar "exempt")) (EVar "target")) (EVar "userDecls"))) (DoExpr (EMatch (EApp (EApp (EVar "pinIndexForTarget") (EVar "target")) (EVar "userDecls")) (arm (PCon "Err" (PVar "err")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "err"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "file") (PVar "index"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "holdTestPrelude") (EVar "True")) (EApp (EApp (EApp (EVar "shippedInputs") (EApp (EVar "dirOf") (EVar "runtimeP"))) (EVar "rsrc")) (EVar "csrc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveAll") (EVar "engines")) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "dirOf") (EVar "runtimeP"))) (EVar "target")) (EVar "tsrc")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt")) (EVar "userDecls")) (EVar "exempt")) (EVar "file")) (EMethodRef "index")))))))))))))))
 (DTypeSig false "holdTestPrelude" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "holdTestPrelude" ((PVar "report") (PVar "inputs")) (EBlock (DoLet false false PWild (EApp (EVar "loadPreludeInterface") (EVar "inputs"))) (DoLet false false (PVar "first") (EApp (EVar "not") (EApp (EVar "treesLoaded") (ELit LUnit)))) (DoLet false false (PVar "verdict") (EApp (EVar "loadPreludeElab") (EVar "inputs"))) (DoExpr (EIf (EBinOp "&&" (EVar "report") (EVar "first")) (EApp (EVar "reportTestTrees") (EVar "verdict")) (ELit LUnit)))))
+(DFunDef false "holdTestPrelude" ((PVar "report") (PVar "inputs")) (EBlock (DoLet false false PWild (EApp (EVar "loadPreludeInterface") (EVar "inputs"))) (DoLet false false (PVar "first") (EApp (EVar "not") (EApp (EVar "treesLoaded") (ELit LUnit)))) (DoLet false false (PVar "verdict") (EApp (EVar "loadPreludeElab") (EVar "inputs"))) (DoExpr (EIf (EBinOp "&&" (EVar "report") (EVar "first")) (EBlock (DoLet false false PWild (EApp (EVar "reportTestTrees") (EVar "verdict"))) (DoExpr (EApp (EVar "reportTestLine") (EApp (EVar "preludeDeclsLine") (EApp (EVar "preludeDeclsVerdict") (EVar "inputs")))))) (ELit LUnit)))))
 (DTypeSig false "reportTestTrees" (TyFun (TyCon "TreesVerdict") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "reportTestTrees" ((PVar "verdict")) (EMatch (EApp (EVar "preludeTreesLine") (EVar "verdict")) (arm (PCon "Some" (PVar "msg")) () (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EApp (EVar "ePutStrLn") (EVar "msg")))) (arm (PCon "None") () (ELit LUnit))))
+(DFunDef false "reportTestTrees" ((PVar "verdict")) (EApp (EVar "reportTestLine") (EApp (EVar "preludeTreesLine") (EVar "verdict"))))
+(DTypeSig false "reportTestLine" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "reportTestLine" () (EApp (EApp (EVar "reportStaleLine") (ELam ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))) (EVar "None")))
 (DTypeSig false "testDriveInputs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DriveInputs")))
 (DFunDef false "testDriveInputs" ((PVar "coreDecls")) (EApp (EApp (EVar "withHeldPrelude") (EVar "coreDecls")) (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))))
 (DTypeSig false "pinIndexForTarget" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "PinIndex")))))))
@@ -5877,7 +5874,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "workerProtocolRows" ((PList) PWild) (EListLit))
 (DFunDef false "workerProtocolRows" ((PCons (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases")) (PVar "rest")) (PVar "message")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "eval"))) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EVar "message")) (EVar "seed")) (EVar "cases")) (EApp (EApp (EVar "workerProtocolRows") (EVar "rest")) (EVar "message"))))
 (DTypeSig true "runEvalPropsWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "runEvalPropsWorker" ((PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "startEvalPropWorker") (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "runtimePath") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "runtimePath")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read runtime prelude: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "runtimeSrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read core prelude: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "coreSrc")) () (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read property target: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseTargetResult") (EVar "tsrc")) (arm (PCon "Err" PWild) () (EApp (EVar "evalWorkerDie") (ELit (LString "could not parse property target")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPropsWorkerSource") (EVar "target")) (EVar "nonce")) (EVar "requests")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "tsrc")) (EApp (EVar "targetDesugared") (EVar "tsrc"))))))))))))))
+(DFunDef false "runEvalPropsWorker" ((PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "startEvalPropWorker") (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "stdlibDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeSources") (EVar "stdlibDir")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read the prelude: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "runtimeSrc") (PVar "coreSrc"))) () (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read property target: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseTargetResult") (EVar "tsrc")) (arm (PCon "Err" PWild) () (EApp (EVar "evalWorkerDie") (ELit (LString "could not parse property target")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPropsWorkerSource") (EVar "target")) (EVar "nonce")) (EVar "requests")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "tsrc")) (EApp (EVar "targetDesugared") (EVar "tsrc"))))))))))))
 (DTypeSig false "evalWorkerDie" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "evalWorkerDie" ((PVar "message")) (ELet false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test --props-worker: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString "")))) (EApp (EVar "stageExit") (ELit (LInt 1)))))
 (DTypeSig false "runEvalPropsWorkerSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit")))))))))))

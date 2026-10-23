@@ -2781,14 +2781,15 @@ export
 pendingStaleNotice : Ref (Option String)
 pendingStaleNotice = Ref None
 
--- The stale-trees line `run` prints when it elaborates `core.mdk` because
--- `stdlib/core.mdke` did not load, deferred the same way.
+-- The stale lines `run` prints for the prelude's shipped files (`core.mdke`,
+-- `core.mdkd`), deferred the same way: each is the envelope field it lands in
+-- and the line, in the order they were staged.
 export
-pendingTreesNotice : Ref (Option String)
-pendingTreesNotice = Ref None
+pendingPreludeNotices : Ref (List (String, String))
+pendingPreludeNotices = Ref []
 
 -- The extra top-level envelope fields the deferred notices amount to: the
--- two staleness verdicts staged above, plus whatever `MEDAKA_PERF=1` buffered into
+-- staleness verdicts staged above, plus whatever `MEDAKA_PERF=1` buffered into
 -- `support.timer`'s sink (verbatim `[perf]` lines — the identical strings the
 -- consumer would have seen on stderr, just inside the document).  Empty when
 -- neither fired ⇒ the envelope is byte-identical to today's.
@@ -2798,13 +2799,12 @@ runEnvelopeFields _ =
   let staleF = match !pendingStaleNotice
     None => []
     Some msg => [("staleBinary", JString msg)]
-  let treesF = match !pendingTreesNotice
-    None => []
-    Some msg => [("stalePreludeTrees", JString msg)]
+  let preludeF =
+    map ((field, msg) => (field, JString msg)) !pendingPreludeNotices
   let perfF = match takePerfSink ()
     [] => []
     ls => [("perf", JArray (arrayFromList (map (l => JString l) ls)))]
-  staleF ++ treesF ++ perfF
+  staleF ++ preludeF ++ perfF
 
 -- Emit the ONE `run --json` envelope on stderr — or nothing at all when there
 -- is nothing to say (no diagnostics AND no notices), which keeps a clean run on

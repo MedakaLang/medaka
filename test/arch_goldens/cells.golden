@@ -1,5 +1,5 @@
 backend.core_validate	1
-driver.build_cmd	3
+driver.build_cmd	4
 driver.diagnostics	4
 driver.loader	1
 entries.playground_main	1

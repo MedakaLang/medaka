@@ -1596,6 +1596,22 @@ readInterface text = match parseSExp ("(" ++ text ++ ")")
     Some v if v /= formatVersion => Err (WrongFormat v)
     _ => mapErr Malformed (decodeParsed (bodyOf text) top)
 
+-- The key a file's header line claims, read off that line alone: the sections
+-- are neither decoded nor digested, so a fresh key says the file was written
+-- for these sources by this compiler, not that its body is whole.
+export
+readInterfaceKey : String -> Result InterfaceFault InterfaceKey
+readInterfaceKey text =
+  let line = match S.indexOf "\n" text
+    Some i => S.take i text
+    None => text
+  match parseSExp line
+    Err e => Err (Malformed e)
+    Ok header => match declaredVersion (SList [header])
+      Some v if v /= formatVersion => Err (WrongFormat v)
+      _ =>
+        mapErr Malformed (map ((key, _, _) => key) (decHeader "header" header))
+
 -- The version the first node declares, when it declares one.
 declaredVersion : SExp -> Option Int
 declaredVersion (SList ((SList ((SAtom "medaka-interface") :: v :: _)) :: _)) =

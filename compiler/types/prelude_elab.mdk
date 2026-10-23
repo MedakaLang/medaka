@@ -477,7 +477,10 @@ readElabKey text = map ((h, _) => h.hKey) (checkedFile text)
 -- less the file's.  Desugar mints core's ordinals in one contiguous run, so the
 -- reader's core holds exactly the file's count of them from its first.
 
--- [decls] with [f] applied to every binder id they carry, minted or not.
+-- [decls] with [f] applied to every binder id they carry, minted or not.  The
+-- walkers name every constructor, so one added to the AST is a non-exhaustive
+-- match here until it is placed: the arms that carry no binder hand their node
+-- back unchanged.
 mapBinders : (BinderId -> BinderId) -> List Decl -> List Decl
 mapBinders f decls = map (relocDecl f) decls
 
@@ -498,7 +501,13 @@ relocDecl o (DProp pub name params body) =
   DProp pub name params (relocExpr o body)
 relocDecl o (DTest pub name body) = DTest pub name (relocExpr o body)
 relocDecl o (DAttrib attrs d) = DAttrib attrs (relocDecl o d)
-relocDecl _ d = d
+relocDecl _ (d@(DTypeSig _ _ _ _)) = d
+relocDecl _ (d@(DExtern _)) = d
+relocDecl _ (d@(DData {  })) = d
+relocDecl _ (d@(DUse _ _ _)) = d
+relocDecl _ (d@(DEffect _ _ _ _ _ _)) = d
+relocDecl _ (d@(DTypeAlias {  })) = d
+relocDecl _ (d@(DNewtype {  })) = d
 
 relocIfaceMethod : (BinderId -> BinderId) -> IfaceMethod -> IfaceMethod
 relocIfaceMethod o (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
@@ -507,7 +516,7 @@ relocIfaceMethod o (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
     ty
     (Some (MethodDefault (map (relocPat o) ps) (relocExpr o e)))
     mloc
-relocIfaceMethod _ m = m
+relocIfaceMethod _ (m@(IfaceMethod _ _ None _)) = m
 
 relocImplMethod : (BinderId -> BinderId) -> ImplMethod -> ImplMethod
 relocImplMethod o (ImplMethod n ps e) =
@@ -528,7 +537,9 @@ relocPat o (PCons h t) = PCons (relocPat o h) (relocPat o t)
 relocPat o (PTuple ps) = PTuple (map (relocPat o) ps)
 relocPat o (PList ps) = PList (map (relocPat o) ps)
 relocPat o (PRec c fields open) = PRec c (map (relocField o) fields) open
-relocPat _ p = p
+relocPat _ PWild = PWild
+relocPat _ (p@(PLit _)) = p
+relocPat _ (p@(PRng _ _ _)) = p
 
 relocField : (BinderId -> BinderId) -> RecPatField -> RecPatField
 relocField o (RecPatField n l bid sub) =
@@ -576,7 +587,17 @@ relocExpr o (EMapLit n kvs) =
   EMapLit n (map ((k, v) => (relocExpr o k, relocExpr o v)) kvs)
 relocExpr o (ESetLit n es) = ESetLit n (map (relocExpr o) es)
 relocExpr o (EAsPat n x) = EAsPat n (relocExpr o x)
-relocExpr _ e = e
+relocExpr _ (e@(ELit _)) = e
+relocExpr _ (e@(EVar _)) = e
+relocExpr _ (e@(ESection (SecBare _))) = e
+relocExpr _ (e@(EMethodRef _)) = e
+relocExpr _ (e@(EDictApp _)) = e
+relocExpr _ (e@(EVarAt _ _)) = e
+relocExpr _ (e@(EVarId _ _)) = e
+relocExpr _ (e@(EMethodAt _ _ _)) = e
+relocExpr _ (e@(EDictAt _ _)) = e
+relocExpr _ (e@(ENumLit _ _ _)) = e
+relocExpr _ (e@(EWideLit _ _ _ _)) = e
 
 relocArm : (BinderId -> BinderId) -> Arm -> Arm
 relocArm o (Arm p gs b) =
@@ -602,7 +623,7 @@ relocAssign o (FieldAssign n v) = FieldAssign n (relocExpr o v)
 
 relocInterp : (BinderId -> BinderId) -> InterpPart -> InterpPart
 relocInterp o (InterpExpr e) = InterpExpr (relocExpr o e)
-relocInterp _ p = p
+relocInterp _ (p@(InterpStr _)) = p
 
 -- The first minted binder ordinal of [decls] and how many there are, or a
 -- count of -1 when the minted ordinals are not one contiguous run.  The walk

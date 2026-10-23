@@ -198,7 +198,9 @@ staleLine : String -> String
 staleLine component =
   "prelude interface stale: checking stdlib/core.mdk (\{component})\n"
 
--- A scratch root holding the real prelude and [mdki] as its `core.mdki`.
+-- A scratch root holding the real prelude and [mdki] as its `core.mdki`, with
+-- the real `core.mdkd` beside it, so a row speaks for the interface alone: a
+-- missing `core.mdkd` beside a fresh header earns a line of its own.
 stageRoot : String -> Option String -> <IO> Result String Unit
 stageRoot root mdki = do
   _ <- makeDir root
@@ -206,7 +208,9 @@ stageRoot root mdki = do
   _ <- copyInto "\{root}/stdlib" "runtime.mdk"
   _ <- copyInto "\{root}/stdlib" "core.mdk"
   match mdki
-    Some text => writeFile "\{root}/stdlib/core.mdki" text
+    Some text => do
+      _ <- copyInto "\{root}/stdlib" "core.mdkd"
+      writeFile "\{root}/stdlib/core.mdki" text
     None => Ok ()
 
 -- [text] with its key changed and its digest recomputed.

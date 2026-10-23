@@ -108,12 +108,17 @@ renderDeclsFault (WrongFormat v) =
 renderDeclsFault (Malformed e) =
   "\{e.sePath}: \{e.seWhat} (prelude declarations)"
 
+-- The key a file's header claims and the bytes its digest covers, after its
+-- version, header and digest are checked, without decoding them.
+export
+readDeclsFramed : String -> Result InterfaceFault (InterfaceKey, String)
+readDeclsFramed text = checkedFramed "medaka-decls" declsFormatVersion text
+
 -- The key a file's header claims, after its version, header and digest are
 -- checked, without decoding the body.
 export
 readDeclsKey : String -> Result InterfaceFault InterfaceKey
-readDeclsKey text =
-  map fst (checkedFramed "medaka-decls" declsFormatVersion text)
+readDeclsKey text = map fst (readDeclsFramed text)
 
 -- The value of a file, or why it is refused: the version first, then the
 -- header, then the digest, then the counters line, then the body.  The key is
@@ -121,20 +126,21 @@ readDeclsKey text =
 export
 readDeclsFile : String -> Result InterfaceFault (InterfaceKey, PreludeDecls)
 readDeclsFile text = do
-  (key, covered) <- checkedFramed "medaka-decls" declsFormatVersion text
-  decodeCovered key covered
+  (key, covered) <- readDeclsFramed text
+  pd <- decodeDeclsBody covered
+  Ok (key, pd)
 
-decodeCovered : InterfaceKey ->
-  String ->
-  Result InterfaceFault (InterfaceKey, PreludeDecls)
-decodeCovered key covered = match S.indexOf "\n" covered
+-- The value of the bytes a file's digest covers (`readDeclsFramed`): the
+-- counters line, then the two trees.
+export
+decodeDeclsBody : String -> Result InterfaceFault PreludeDecls
+decodeDeclsBody covered = match S.indexOf "\n" covered
   None => refuse "counters" "no counters line"
   Some j => match parseSExp (S.take j covered)
     Err e => failure e
     Ok node => match countersOf node
       Err e => failure e
-      Ok (rn, rb, cn, cb) =>
-        decodeBody key (rn, rb, cn, cb) (S.drop (j + 1) covered)
+      Ok counters => decodeBody counters (S.drop (j + 1) covered)
 
 countersOf : SExp -> Result SexpError (Int, Int, Int, Int)
 countersOf (SList [SAtom "counters", a, b, c, d]) = do
@@ -149,11 +155,10 @@ countersOf _ = Err SexpError {
   seWhat = "expected a counters line of four numbers",
 }
 
-decodeBody : InterfaceKey ->
-  (Int, Int, Int, Int) ->
+decodeBody : (Int, Int, Int, Int) ->
   String ->
-  Result InterfaceFault (InterfaceKey, PreludeDecls)
-decodeBody key (rn, rb, cn, cb) body
+  Result InterfaceFault PreludeDecls
+decodeBody (rn, rb, cn, cb) body
   | rn < 0 || rb < 0 || cn < 0 || cb < 0 =
     refuse "counters" "a counter is negative"
   | otherwise =
@@ -164,17 +169,14 @@ decodeBody key (rn, rb, cn, cb) body
         Err e => failure e
         Ok core =>
           if cursorAtEnd cur then
-            Ok (
-              key,
-              PreludeDecls {
-                pdRuntime = runtime,
-                pdCore = core,
-                pdRuntimeBinders = rn,
-                pdRuntimeBase = rb,
-                pdCoreBinders = cn,
-                pdCoreBase = cb,
-              },
-            )
+            Ok PreludeDecls {
+              pdRuntime = runtime,
+              pdCore = core,
+              pdRuntimeBinders = rn,
+              pdRuntimeBase = rb,
+              pdCoreBinders = cn,
+              pdCoreBase = cb,
+            }
           else
             failure SexpError {
               seOffset = cursorOffset cur,

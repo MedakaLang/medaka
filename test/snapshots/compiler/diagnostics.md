@@ -2785,14 +2785,15 @@ export
 pendingStaleNotice : Ref (Option String)
 pendingStaleNotice = Ref None
 
--- The stale-trees line `run` prints when it elaborates `core.mdk` because
--- `stdlib/core.mdke` did not load, deferred the same way.
+-- The stale lines `run` prints for the prelude's shipped files (`core.mdke`,
+-- `core.mdkd`), deferred the same way: each is the envelope field it lands in
+-- and the line, in the order they were staged.
 export
-pendingTreesNotice : Ref (Option String)
-pendingTreesNotice = Ref None
+pendingPreludeNotices : Ref (List (String, String))
+pendingPreludeNotices = Ref []
 
 -- The extra top-level envelope fields the deferred notices amount to: the
--- two staleness verdicts staged above, plus whatever `MEDAKA_PERF=1` buffered into
+-- staleness verdicts staged above, plus whatever `MEDAKA_PERF=1` buffered into
 -- `support.timer`'s sink (verbatim `[perf]` lines — the identical strings the
 -- consumer would have seen on stderr, just inside the document).  Empty when
 -- neither fired ⇒ the envelope is byte-identical to today's.
@@ -2802,13 +2803,12 @@ runEnvelopeFields _ =
   let staleF = match !pendingStaleNotice
     None => []
     Some msg => [("staleBinary", JString msg)]
-  let treesF = match !pendingTreesNotice
-    None => []
-    Some msg => [("stalePreludeTrees", JString msg)]
+  let preludeF =
+    map ((field, msg) => (field, JString msg)) !pendingPreludeNotices
   let perfF = match takePerfSink ()
     [] => []
     ls => [("perf", JArray (arrayFromList (map (l => JString l) ls)))]
-  staleF ++ treesF ++ perfF
+  staleF ++ preludeF ++ perfF
 
 -- Emit the ONE `run --json` envelope on stderr — or nothing at all when there
 -- is nothing to say (no diagnostics AND no notices), which keeps a clean run on
@@ -3831,10 +3831,10 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "cjAllToJsonWith" ((PVar "extra") (PVar "triples")) (EApp (EVar "stringify") (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "files")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (EVar "cjTriple")) (EVar "triples")))))) (EVar "extra")))))
 (DTypeSig true "pendingStaleNotice" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "pendingStaleNotice" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "pendingTreesNotice" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "pendingTreesNotice" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "pendingPreludeNotices" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "pendingPreludeNotices" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "runEnvelopeFields" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
-(DFunDef false "runEnvelopeFields" (PWild) (EBlock (DoLet false false (PVar "staleF") (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "staleBinary")) (EApp (EVar "JString") (EVar "msg"))))))) (DoLet false false (PVar "treesF") (EMatch (EUnOp "!" (EVar "pendingTreesNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "stalePreludeTrees")) (EApp (EVar "JString") (EVar "msg"))))))) (DoLet false false (PVar "perfF") (EMatch (EApp (EVar "takePerfSink") (ELit LUnit)) (arm (PList) () (EListLit)) (arm (PVar "ls") () (EListLit (ETuple (ELit (LString "perf")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EApp (EVar "JString") (EVar "l")))) (EVar "ls"))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "staleF") (EVar "treesF")) (EVar "perfF")))))
+(DFunDef false "runEnvelopeFields" (PWild) (EBlock (DoLet false false (PVar "staleF") (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "staleBinary")) (EApp (EVar "JString") (EVar "msg"))))))) (DoLet false false (PVar "preludeF") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "field") (PVar "msg"))) (ETuple (EVar "field") (EApp (EVar "JString") (EVar "msg"))))) (EUnOp "!" (EVar "pendingPreludeNotices")))) (DoLet false false (PVar "perfF") (EMatch (EApp (EVar "takePerfSink") (ELit LUnit)) (arm (PList) () (EListLit)) (arm (PVar "ls") () (EListLit (ETuple (ELit (LString "perf")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EApp (EVar "JString") (EVar "l")))) (EVar "ls"))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "staleF") (EVar "preludeF")) (EVar "perfF")))))
 (DTypeSig true "flushRunEnvelope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("Stderr") (Some "e") (TyCon "Unit"))))
 (DFunDef false "flushRunEnvelope" ((PVar "triples")) (EMatch (ETuple (EVar "triples") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm (PTuple (PVar "ts") (PVar "extra")) () (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "cjAllToJsonWith") (EVar "extra")) (EVar "ts"))))))
 (DTypeSig true "readDiagSrc" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
@@ -4305,10 +4305,10 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "cjAllToJsonWith" ((PVar "extra") (PVar "triples")) (EApp (EVar "stringify") (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "files")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (EVar "cjTriple")) (EVar "triples")))))) (EVar "extra")))))
 (DTypeSig true "pendingStaleNotice" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "pendingStaleNotice" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "pendingTreesNotice" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "pendingTreesNotice" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "pendingPreludeNotices" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "pendingPreludeNotices" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "runEnvelopeFields" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
-(DFunDef false "runEnvelopeFields" (PWild) (EBlock (DoLet false false (PVar "staleF") (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "staleBinary")) (EApp (EVar "JString") (EVar "msg"))))))) (DoLet false false (PVar "treesF") (EMatch (EUnOp "!" (EVar "pendingTreesNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "stalePreludeTrees")) (EApp (EVar "JString") (EVar "msg"))))))) (DoLet false false (PVar "perfF") (EMatch (EApp (EVar "takePerfSink") (ELit LUnit)) (arm (PList) () (EListLit)) (arm (PVar "ls") () (EListLit (ETuple (ELit (LString "perf")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EApp (EVar "JString") (EVar "l")))) (EVar "ls"))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "staleF") (EVar "treesF")) (EVar "perfF")))))
+(DFunDef false "runEnvelopeFields" (PWild) (EBlock (DoLet false false (PVar "staleF") (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "staleBinary")) (EApp (EVar "JString") (EVar "msg"))))))) (DoLet false false (PVar "preludeF") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "field") (PVar "msg"))) (ETuple (EVar "field") (EApp (EVar "JString") (EVar "msg"))))) (EUnOp "!" (EVar "pendingPreludeNotices")))) (DoLet false false (PVar "perfF") (EMatch (EApp (EVar "takePerfSink") (ELit LUnit)) (arm (PList) () (EListLit)) (arm (PVar "ls") () (EListLit (ETuple (ELit (LString "perf")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EApp (EVar "JString") (EVar "l")))) (EVar "ls"))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "staleF") (EVar "preludeF")) (EVar "perfF")))))
 (DTypeSig true "flushRunEnvelope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("Stderr") (Some "e") (TyCon "Unit"))))
 (DFunDef false "flushRunEnvelope" ((PVar "triples")) (EMatch (ETuple (EVar "triples") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm (PTuple (PVar "ts") (PVar "extra")) () (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "cjAllToJsonWith") (EVar "extra")) (EVar "ts"))))))
 (DTypeSig true "readDiagSrc" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
