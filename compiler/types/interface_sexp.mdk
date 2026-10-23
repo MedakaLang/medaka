@@ -85,15 +85,16 @@
 --   (pop <map> <map> (<name> ...))            rows, floor, collided spellings
 --   (sprow <ident> <name> <payload>)          one row: identity, owner
 --
--- The whole file: top-level nodes, the header first, then the sections in order.
+-- The whole file: the header on its own first line, then one line per section.
 --   (medaka-interface <version> (sources ((<path> <hash>) ...)) (compiler <id>)
 --     (sections <n>) (digest <hex>))
 --   (section (joins (<join> ...)) <interface>)   a join is a list of `atom` nodes
 --   (interface <field> x19)                   `PreludeInterface`, field order
--- `digest` is the SHA-256, in lower-case hex, of the canonical text of the
--- `sources`, `compiler` and `sections` nodes and then each section node, joined
--- by single newlines; the header key hashes source files, so only the digest
--- sees a byte changed inside a section.
+-- `digest` is the SHA-256, in lower-case hex, of the file's bytes after the
+-- header line, the newline that ends it excluded: every section line with its
+-- own newline.  The reader hashes those bytes as they are, so no section is
+-- decoded and rendered again to be checked; the header key hashes source files,
+-- so only the digest sees a byte changed inside a section.
 -- A section's joins are written in the order of their rendered text.  A header
 -- whose version is not `formatVersion` (read before the header's shape), a
 -- digest that differs from the nodes present, a missing, truncated or extra
@@ -1282,7 +1283,7 @@ public export data PreludeInterfaceFile = PreludeInterfaceFile {
 
 export
 formatVersion : Int
-formatVersion = 1
+formatVersion = 2
 
 export
 sectionsOfCache : List (List (List Atom), PreludeInterface) ->
@@ -1327,32 +1328,31 @@ joinText j = renderSExp (joinNode j)
 pairAtoms : (String, String) -> SExp
 pairAtoms = pairSExp SAtom SAtom
 
-headerFields : InterfaceKey -> Int -> List SExp
-headerFields key count = [
-  tagged "sources" [listSExp pairAtoms key.ikSources],
-  tagged "compiler" [SAtom key.ikCompiler],
-  tagged "sections" [intNode count],
-]
-
 -- The SHA-256 of a text, in lower-case hex.
 export
 sha256Hex : String -> String
 sha256Hex text = Hex.encode (sha256 (encodeUtf8 text))
 
--- The digest of the nodes the header and the sections hold, as canonical text.
-digestOf : List SExp -> String
-digestOf nodes = sha256Hex (stringJoin "\n" (map renderSExp nodes))
+headerNode : InterfaceKey -> Int -> String -> SExp
+headerNode key count digest = tagged "medaka-interface" [
+  intNode formatVersion,
+  tagged "sources" [listSExp pairAtoms key.ikSources],
+  tagged "compiler" [SAtom key.ikCompiler],
+  tagged "sections" [intNode count],
+  tagged "digest" [SAtom digest],
+]
 
-headerNode : InterfaceKey -> Int -> List SExp -> SExp
-headerNode key count sections =
-  let fields = headerFields key count
-  tagged
-    "medaka-interface"
-    (intNode formatVersion
-      :: fields ++ [tagged "digest" [SAtom (digestOf (fields ++ sections))]])
+-- What the digest covers: the file's text after its first line.
+bodyOf : String -> String
+bodyOf text = match S.indexOf "\n" text
+  Some i => S.drop (i + 1) text
+  None => ""
 
 joinNode : List Atom -> SExp
 joinNode = listSExp atomSExp
+
+sectionLine : InterfaceSection -> String
+sectionLine s = renderSExp (sectionNode s) ++ "\n"
 
 sectionNode : InterfaceSection -> SExp
 sectionNode s = tagged "section" [
@@ -1429,13 +1429,9 @@ encodeInterface : PreludeInterfaceFile -> String
 encodeInterface f =
   match flatMap (s => interfaceFaults s.isInterface) f.ifSections
     [] =>
-      let sections = map sectionNode f.ifSections
-      stringJoin
-          "\n"
-          (map
-            renderSExp
-            (headerNode f.ifKey (length f.ifSections) sections :: sections))
-        ++ "\n"
+      let body = stringJoin "" (map sectionLine f.ifSections)
+      let header = headerNode f.ifKey (length f.ifSections) (sha256Hex body)
+      "\{renderSExp header}\n\{body}"
     faults => panic "interface row is not frozen: \{debug faults}"
 
 decPairAtoms : Reader (String, String)
@@ -1536,10 +1532,9 @@ decSection path (SList [SAtom "section", js, i]) = do
   Ok InterfaceSection { isJoins = joins, isInterface = value }
 decSection path node = misfit path [("section", 2)] node
 
--- The key, the number of section nodes the file claims to hold, the digest it
--- claims and the canonical text of the header nodes the digest covers.  The
--- version is read before the shape.
-decHeader : Reader (InterfaceKey, Int, String, List SExp)
+-- The key, the number of section nodes the file claims to hold and the digest
+-- it claims.  The version is read before the shape.
+decHeader : Reader (InterfaceKey, Int, String)
 decHeader path (SList ((SAtom "medaka-interface") :: v :: rest)) = do
   version <- atomInt (at path "medaka-interface" 1) v
   if version == formatVersion then match rest
@@ -1557,11 +1552,6 @@ decHeader path (SList ((SAtom "medaka-interface") :: v :: rest)) = do
           },
           count,
           claimed,
-          [
-            SList [SAtom "sources", srcs],
-            SList [SAtom "compiler", c],
-            SList [SAtom "sections", cnt],
-          ],
         )
     _ =>
       misfit
@@ -1576,14 +1566,14 @@ decHeader path (SList ((SAtom "medaka-interface") :: v :: rest)) = do
 decHeader path node = misfit path [("medaka-interface", 5)] node
 
 -- The text is read as the items of one list, since a parse reads one node.
--- The header's section count must equal the section nodes present, so a file
--- cut after any complete node is refused.  A missing final newline alone loses
--- nothing and still decodes.
+-- The header's section count must equal the section nodes present, and the
+-- digest must match the bytes after the header line, so a file cut anywhere,
+-- its final newline included, is refused.
 export
 decodeInterface : String -> Result SexpError PreludeInterfaceFile
 decodeInterface text = do
   top <- parseSExp ("(" ++ text ++ ")")
-  map fst (decodeParsed top)
+  map fst (decodeParsed (bodyOf text) top)
 
 -- Why a file did not decode: its header declares a format version other than
 -- the one this compiler reads, or it is malformed in some other way.
@@ -1603,7 +1593,7 @@ readInterface text = match parseSExp ("(" ++ text ++ ")")
   Err e => Err (Malformed e)
   Ok top => match declaredVersion top
     Some v if v /= formatVersion => Err (WrongFormat v)
-    _ => mapErr Malformed (decodeParsed top)
+    _ => mapErr Malformed (decodeParsed (bodyOf text) top)
 
 -- The version the first node declares, when it declares one.
 declaredVersion : SExp -> Option Int
@@ -1613,11 +1603,11 @@ declaredVersion (SList ((SList ((SAtom "medaka-interface") :: v :: _)) :: _)) =
     Err _ => None
 declaredVersion _ = None
 
-decodeParsed : SExp -> Result SexpError (PreludeInterfaceFile, String)
-decodeParsed (SList (header :: sections)) = do
-  (key, count, claimed, fields) <- decHeader "header" header
+decodeParsed : String -> SExp -> Result SexpError (PreludeInterfaceFile, String)
+decodeParsed body (SList (header :: sections)) = do
+  (key, count, claimed) <- decHeader "header" header
   secs <- decList decSection "file" (SList sections)
-  let found = digestOf (fields ++ sections)
+  let found = sha256Hex body
   if length secs /= count then
     refuse
       "header/sections.1"
@@ -1630,4 +1620,4 @@ decodeParsed (SList (header :: sections)) = do
       "digest \{S.take 12 claimed} expected, \{S.take 12 found} found"
   else
     Ok (PreludeInterfaceFile { ifKey = key, ifSections = secs }, claimed)
-decodeParsed top = refuse "file" top "expected a header node"
+decodeParsed _ top = refuse "file" top "expected a header node"
