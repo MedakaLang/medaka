@@ -215,7 +215,7 @@ ratchet_producer_files() {
         if ratchet_name_live_in "$1" "$ROOT/$f"; then
           echo "$f"
         fi
-      done | sort
+      done | LC_ALL=C sort
 }
 
 # Self-check (#1222): the helper must see an UNTRACKED violating file. Runs against
