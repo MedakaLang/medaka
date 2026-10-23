@@ -53534,15 +53534,18 @@ restoreGraphCtx cur cross run externs = GraphCtx { cur |
 -- scope frames and goals stay in the run core was checked in, and its schemes reach
 -- inference as fresh cells.  [marked] is the drive's `diMarked`: a run whose cells
 -- were minted before the drive, which the miss's continuation keeps as the mint did.
+-- The interface's extern catalog is the one [runtimeDecls] alone build, not the
+-- process's union, which holds whatever runtimes earlier drives declared.
 -- Returns the bindings inference reads, the prelude's published rows and the module
 -- record to continue from, whose `mcGraph` is the graph record.
 checkCoreMemoized : ModuleCtx ->
   Option GraphRun ->
   Option (Int, Int) ->
   List Decl ->
+  List Decl ->
   List (String, Scheme) ->
   (ModuleBindings, List (String, PubScheme), ModuleCtx)
-checkCoreMemoized prev marked key coreDecls runtimeSeed =
+checkCoreMemoized prev marked key runtimeDecls coreDecls runtimeSeed =
   let gctx = prev.mcGraph
   let join = gctx.config.value.tcIoJoin
   let cached = match key
@@ -53567,7 +53570,7 @@ checkCoreMemoized prev marked key coreDecls runtimeSeed =
         freezeInterface
           gctx.crossRun
           gctx.graphRun
-          gctx.builtinExternNamesRef.value
+          (externSigsToMap runtimeDecls omEmpty)
           (publishCore (coreOwnContexts coreCtx) coreSchemes.mbSchemes)
           (omMapValues (_ => ()) coreSchemes.mbStandaloneSchemes)
       let _ = match key
@@ -53584,6 +53587,8 @@ checkCoreMemoized prev marked key coreDecls runtimeSeed =
 -- record is not carried: the diagnostics worker seeds each module from its own
 -- decls (`seedCheckRun`), and `cmCheckWorker` seeds its first module from this
 -- blank record, an empty oracle (the one core was checked from) and no warning.
+-- The interface's externs join the drive's catalog, whose own rows lose to them on
+-- a collision, so a hit leaves the catalog a miss would and never shrinks it.
 continueFromInterface : GraphCtx ->
   GraphRun ->
   PreludeInterface ->
@@ -53597,7 +53602,8 @@ continueFromInterface gctx run pi =
   let restored = GraphCtx { gctx |
     crossRun = cross,
     graphRun = run,
-    builtinExternNamesRef = Ref pi.piExternNames,
+    builtinExternNamesRef =
+      Ref (IdMap.union pi.piExternNames gctx.builtinExternNamesRef.value),
   }
   (bindings, corePub, initialModuleCtx restored)
 
@@ -53809,6 +53815,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
           initial
           inputs.diMarked
           preludeKey
+          runtimeDecls
           coreDecls
           runtimeSeed
       -- The graph record the drive continues from, with the interface thawed into
