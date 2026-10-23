@@ -459,9 +459,8 @@ inlang-frontend-parser-test:
 inlang-frontend-ast-codec-test:
 	./medaka test compiler/frontend/ast_codec_test.mdk
 
-## compiler/types/prelude_elab.mdk is outside every entry's import closure
-## until a verb reads the file ([W-MODULE-BLIND]); its sibling is the only
-## thing that typechecks and runs it.
+## compiler/types/prelude_elab.mdk is imported by types.typecheck and
+## driver.build_cmd; this step runs its own sibling test by name.
 inlang-types-prelude-elab-test:
 	./medaka test compiler/types/prelude_elab_test.mdk
 

@@ -27,7 +27,9 @@
 import list.{take}
 import support.util.{stringTrim, joinWith, joinNl, lookupAssoc}
 import string.{words, contains, startsWith, endsWith, split}
-import frontend.desugar_cache.{desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.ast.{Decl}
+import types.tc_types.{DriveInputs(..)}
 import types.interface_sexp.{
   InterfaceSection, InterfaceFault(..), readInterface, cacheOfSections,
   formatVersion, sha256Hex
@@ -435,6 +437,33 @@ loadPreludeElab inputs = match !preludeTreesRef
       None => ()
     preludeTreesRef := Some (inputs, verdict)
     verdict
+
+-- Whether this process has made its load of the trees.
+export
+treesLoaded : Unit -> Bool
+treesLoaded () = isSome !preludeTreesRef
+
+-- [inputs] for a drive over [coreDecls], keyed for the tree arm when this
+-- process holds the shipped prelude and [coreDecls] are all of core: a drive
+-- whose prelude had a shadowed function dropped (`dropShadowedExp`) is not the
+-- core the trees were written for.
+export
+withHeldPrelude : List Decl -> DriveInputs -> DriveInputs
+withHeldPrelude coreDecls inputs = match !preludeTreesRef
+  Some (held, _) =>
+    if length coreDecls == length (desugaredPrelude held.pnCoreSrc) then
+      keyedInputs
+        (
+          desugaredPreludeKey held.pnRuntimeSrc,
+          desugaredPreludeKey held.pnCoreSrc,
+        )
+        inputs
+    else
+      inputs
+  None => inputs
+
+keyedInputs : (Int, Int) -> DriveInputs -> DriveInputs
+keyedInputs key inputs = { inputs | diPreludeKey = Some key }
 
 -- The verdict alone, for a verb that reports it while its children take the trees.
 export
