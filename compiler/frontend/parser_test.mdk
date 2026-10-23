@@ -4,7 +4,7 @@
    binary-operator ladder: precedence, associativity, and an operator whose
    right operand fails. -}
 
-import frontend.ast.{Expr(..), Decl(..), Attr(..)}
+import frontend.ast.{Expr(..), Decl(..), Attr(..), Loc(..)}
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.parser.{
   PR(..),
@@ -16,6 +16,9 @@ import frontend.parser.{
   runP,
   renderFail,
   parseResult,
+  parse,
+  parseLocated,
+  ParseError,
   parseErrorMessage,
   parseErrorLine,
   parseErrorCol,
@@ -424,3 +427,35 @@ test "a top-level `bind` after a wrapped extern's clauses is its own declaration
     "c f_impl; 3 decls"
     (externBindsText
       "extern f : String ->\n  Int ->\n  <FFI \"c\"> String\n  bind c \"f_impl\"\n\nbind : Int -> Int\nbind x = x\n")
+
+-- A non-located parse must not read the span offsets of the last located one.
+
+locText : Expr -> String
+locText (ELoc (Loc _ a b c d) _) = "\{a}:\{b}-\{c}:\{d}"
+locText _ = "no loc"
+
+bodyLocText : List Decl -> String
+bodyLocText [DFunDef _ _ _ e _ _] = locText e
+bodyLocText _ = "not one definition"
+
+resultLocText : Result ParseError (List Decl) -> String
+resultLocText (Ok ds) = bodyLocText ds
+resultLocText (Err _) = "error"
+
+afterLocated : String -> String
+afterLocated userSrc =
+  let _ = parseLocated userSrc
+  bodyLocText (parse "x = y\n")
+
+afterLocatedResult : String -> String
+afterLocatedResult userSrc =
+  let _ = parseLocated userSrc
+  resultLocText (parseResult "x = y\n")
+
+test "parse spans do not depend on the located parse before it" =
+  expectEqual (afterLocated "longname = 1\nb = 2\n") (afterLocated "q = 0\n")
+
+test "parseResult spans do not depend on the located parse before it" =
+  expectEqual
+    (afterLocatedResult "longname = 1\nb = 2\n")
+    (afterLocatedResult "q = 0\n")

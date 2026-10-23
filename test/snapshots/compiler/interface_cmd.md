@@ -1,5 +1,5 @@
 # META
-source_lines=470
+source_lines=466
 stages=DESUGAR,MARK
 # SOURCE
 {- interface_cmd.mdk: `medaka interface write|show|verify`, the driver for the
@@ -207,26 +207,22 @@ elaborateCore runtimeSrc coreSrc =
           Ok (preludeElabOf trees c.cpEvidence (map snd (entries c.cpBinders)))
 
 -- Both files for [modulePath]: the interface file, and the elaborated trees
--- under the same key.  The loc state is reset before the prelude is parsed so
--- no span of an earlier parse is written into the trees.  A type error shows as
--- the interface check's diagnostic.
+-- under the same key.  A type error shows as the interface check's diagnostic.
 export
 buildBoth : String ->
   List String ->
   <IO> Result String (PreludeInterfaceFile, PreludeElab)
-buildBoth modulePath targets =
-  let _ = parseLocated ""
-  match (
-    readPreludeFile (runtimePathOf modulePath),
-    readPreludeFile modulePath,
-  )
-    (Ok runtimeSrc, Ok coreSrc) =>
-      let elab = elaborateCore runtimeSrc coreSrc
-      match buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
-        Err e => Err e
-        Ok file => map (e => (file, e)) elab
-    (Err e, _) => Err e
-    (_, Err e) => Err e
+buildBoth modulePath targets = match (
+  readPreludeFile (runtimePathOf modulePath),
+  readPreludeFile modulePath,
+)
+  (Ok runtimeSrc, Ok coreSrc) =>
+    let elab = elaborateCore runtimeSrc coreSrc
+    match buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
+      Err e => Err e
+      Ok file => map (e => (file, e)) elab
+  (Err e, _) => Err e
+  (_, Err e) => Err e
 
 -- Each text goes into a staging directory beside the first target and is then
 -- renamed over its target, so a reader never sees a half-written file and a
@@ -524,7 +520,7 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "elaborateCore" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeElab")))))
 (DFunDef false "elaborateCore" ((PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple PWild (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EVar "defaultDriveInputs")) (EVar "False")) (EVar "None")) (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (EListLit))) (DoExpr (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration left no checked program")))) (arm (PCon "Some" (PVar "c")) () (EMatch (EFieldAccess (EVar "c") "cpTrees") (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration left no trees")))) (arm (PCon "Some" (PTuple (PVar "trees") PWild)) () (EIf (EFieldAccess (EVar "outputs") "doHadTypeErrors") (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration had type errors"))) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "preludeElabOf") (EVar "trees")) (EFieldAccess (EVar "c") "cpEvidence")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "entries") (EFieldAccess (EVar "c") "cpBinders")))))))))))))
 (DTypeSig true "buildBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "PreludeInterfaceFile") (TyCon "PreludeElab")))))))
-(DFunDef false "buildBoth" ((PVar "modulePath") (PVar "targets")) (EBlock (DoLet false false PWild (EApp (EVar "parseLocated") (ELit (LString "")))) (DoExpr (EMatch (ETuple (EApp (EVar "readPreludeFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readPreludeFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EVar "elaborateCore") (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "buildInterfaceFileFrom") (EVar "modulePath")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "file")) () (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EVar "file") (EVar "e")))) (EVar "elab"))))))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))))
+(DFunDef false "buildBoth" ((PVar "modulePath") (PVar "targets")) (EMatch (ETuple (EApp (EVar "readPreludeFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readPreludeFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EVar "elaborateCore") (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "buildInterfaceFileFrom") (EVar "modulePath")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "file")) () (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EVar "file") (EVar "e")))) (EVar "elab"))))))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig false "writeAllAtomically" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "writeAllAtomically" ((PList)) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "writeAllAtomically" ((PAs "files" (PCons (PTuple (PVar "first") PWild) PWild))) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "first"))) (ELit (LString ".new.XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot make a staging directory beside `")) (EApp (EVar "display") (EVar "first"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "S.trim") (EVar "out"))) (DoLet false false (PVar "staged") (EApp (EApp (EVar "map") (ELam ((PVar "f")) (ERecordCreate "Staged" ((fa "stStaging" (EApp (EApp (EVar "joinPath") (EVar "dir")) (EApp (EVar "baseName") (EApp (EVar "fst") (EVar "f"))))) (fa "stTarget" (EApp (EVar "fst") (EVar "f"))) (fa "stText" (EApp (EVar "snd") (EVar "f"))))))) (EVar "files"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "traverse") (EVar "stageFile")) (EVar "staged"))) (ELam (PWild) (EApp (EApp (EVar "traverse") (EVar "moveFile")) (EVar "staged"))))) (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PVar "st")) (EApp (EVar "removeFile") (EFieldAccess (EVar "st") "stStaging")))) (EVar "staged"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "dir"))) (DoExpr (EApp (EApp (EVar "map") (ELam (PWild) (ELit LUnit))) (EVar "result")))))))
@@ -630,7 +626,7 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "elaborateCore" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeElab")))))
 (DFunDef false "elaborateCore" ((PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple PWild (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EVar "defaultDriveInputs")) (EVar "False")) (EVar "None")) (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (EListLit))) (DoExpr (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration left no checked program")))) (arm (PCon "Some" (PVar "c")) () (EMatch (EFieldAccess (EVar "c") "cpTrees") (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration left no trees")))) (arm (PCon "Some" (PTuple (PVar "trees") PWild)) () (EIf (EFieldAccess (EVar "outputs") "doHadTypeErrors") (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration had type errors"))) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "preludeElabOf") (EVar "trees")) (EFieldAccess (EVar "c") "cpEvidence")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "entries") (EFieldAccess (EVar "c") "cpBinders")))))))))))))
 (DTypeSig true "buildBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "PreludeInterfaceFile") (TyCon "PreludeElab")))))))
-(DFunDef false "buildBoth" ((PVar "modulePath") (PVar "targets")) (EBlock (DoLet false false PWild (EApp (EVar "parseLocated") (ELit (LString "")))) (DoExpr (EMatch (ETuple (EApp (EVar "readPreludeFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readPreludeFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EVar "elaborateCore") (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "buildInterfaceFileFrom") (EVar "modulePath")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "file")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EVar "file") (EVar "e")))) (EVar "elab"))))))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))))
+(DFunDef false "buildBoth" ((PVar "modulePath") (PVar "targets")) (EMatch (ETuple (EApp (EVar "readPreludeFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readPreludeFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EVar "elaborateCore") (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "buildInterfaceFileFrom") (EVar "modulePath")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "file")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EVar "file") (EVar "e")))) (EVar "elab"))))))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig false "writeAllAtomically" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "writeAllAtomically" ((PList)) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "writeAllAtomically" ((PAs "files" (PCons (PTuple (PVar "first") PWild) PWild))) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "first"))) (ELit (LString ".new.XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot make a staging directory beside `")) (EApp (EMethodRef "display") (EVar "first"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "S.trim") (EVar "out"))) (DoLet false false (PVar "staged") (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (ERecordCreate "Staged" ((fa "stStaging" (EApp (EApp (EVar "joinPath") (EVar "dir")) (EApp (EVar "baseName") (EApp (EVar "fst") (EVar "f"))))) (fa "stTarget" (EApp (EVar "fst") (EVar "f"))) (fa "stText" (EApp (EVar "snd") (EVar "f"))))))) (EVar "files"))) (DoLet false false (PVar "result") (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EMethodRef "traverse") (EVar "stageFile")) (EVar "staged"))) (ELam (PWild) (EApp (EApp (EMethodRef "traverse") (EVar "moveFile")) (EVar "staged"))))) (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PVar "st")) (EApp (EVar "removeFile") (EFieldAccess (EVar "st") "stStaging")))) (EVar "staged"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "dir"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam (PWild) (ELit LUnit))) (EVar "result")))))))

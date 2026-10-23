@@ -1,5 +1,5 @@
 # META
-source_lines=6833
+source_lines=6841
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -255,6 +255,11 @@ setLocStateWith src lineStarts offs =
   locSrcRef := src
   locLineStartsRef := lineStarts
   locOffsRef := offs
+
+-- The state no located parse has touched.  The non-located entry points restore
+-- it, so what they produce is a function of their source alone.
+resetLocState : Unit -> Unit
+resetLocState _ = setLocStateWith "" (arrayFromList [0]) (arrayFromList [])
 
 -- start char offset of token `i` (0 when out of range / unset).
 tokOffsetAt : Int -> Int
@@ -5901,7 +5906,7 @@ parse src =
   match firstLexError toks 0
     Some (_, msg) => panic msg
     None =>
-      guardOffsRef := arrayFromList []
+      resetLocState ()
       resultDecls toks (runP parseProgram toks 0)
 
 -- Position-populating parse entry for B.10.2b (LSP).  Sets the loc-state refs
@@ -6484,7 +6489,9 @@ semicolonMsg =
 export
 parseResult : String -> Result ParseError (List Decl)
 parseResult src = match tokenizeWithOffsets src
-  (tokList, offList) => parseResultWith src tokList offList
+  (tokList, offList) =>
+    resetLocState ()
+    parseResultWith src tokList offList
 
 -- `parseResult` over an ALREADY-tokenized stream: `tokList` and `offPairs` must
 -- be `tokenizeWithOffsetPairs src` (its pair starts are `tokenizeWithOffsets`'s
@@ -6495,6 +6502,7 @@ parseResultPairs : String ->
   List (Int, Int) ->
   Result ParseError (List Decl)
 parseResultPairs src tokList offPairs =
+  resetLocState ()
   parseResultWith src tokList (map fst offPairs)
 
 -- Non-panicking located parse: the `parseResult` of `parseLocated`.  Sets the
@@ -6888,6 +6896,8 @@ parseResultWith src tokList offList =
 (DFunDef false "setLocState" ((PVar "src") (PVar "offs")) (EApp (EApp (EApp (EVar "setLocStateWith") (EVar "src")) (EApp (EVar "lineStartsOf") (EVar "src"))) (EVar "offs")))
 (DTypeSig false "setLocStateWith" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Unit")))))
 (DFunDef false "setLocStateWith" ((PVar "src") (PVar "lineStarts") (PVar "offs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "guardOffsRef")) (EApp (EVar "arrayFromList") (EListLit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locSrcRef")) (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locLineStartsRef")) (EVar "lineStarts"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locOffsRef")) (EVar "offs")))))
+(DTypeSig false "resetLocState" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DFunDef false "resetLocState" (PWild) (EApp (EApp (EApp (EVar "setLocStateWith") (ELit (LString ""))) (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 0))))) (EApp (EVar "arrayFromList") (EListLit))))
 (DTypeSig false "tokOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "tokOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EUnOp "!" (EVar "locOffsRef"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
 (DTypeSig false "tokEndOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
@@ -8656,7 +8666,7 @@ parseResultWith src tokList offList =
 (DFunDef false "resultDecls" (PWild (PCon "PFatal" PWild PWild)) (EApp (EVar "panic") (ELit (LString "parse error"))))
 (DFunDef false "resultDecls" ((PVar "toks") (PCon "POk" (PVar "ds") (PVar "pos"))) (EIf (EApp (EVar "isEofTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "ds") (EIf (EVar "otherwise") (EApp (EVar "panic") (ELit (LString "parse error"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "parse" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "parse" ((PVar "src")) (EBlock (DoLet false false (PVar "toks") (EApp (EVar "arrayFromList") (EApp (EVar "tokenize") (EVar "src")))) (DoExpr (EMatch (EApp (EApp (EVar "firstLexError") (EVar "toks")) (ELit (LInt 0))) (arm (PCon "Some" (PTuple PWild (PVar "msg"))) () (EApp (EVar "panic") (EVar "msg"))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "guardOffsRef")) (EApp (EVar "arrayFromList") (EListLit)))) (DoExpr (EApp (EApp (EVar "resultDecls") (EVar "toks")) (EApp (EApp (EApp (EVar "runP") (EVar "parseProgram")) (EVar "toks")) (ELit (LInt 0)))))))))))
+(DFunDef false "parse" ((PVar "src")) (EBlock (DoLet false false (PVar "toks") (EApp (EVar "arrayFromList") (EApp (EVar "tokenize") (EVar "src")))) (DoExpr (EMatch (EApp (EApp (EVar "firstLexError") (EVar "toks")) (ELit (LInt 0))) (arm (PCon "Some" (PTuple PWild (PVar "msg"))) () (EApp (EVar "panic") (EVar "msg"))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EVar "resetLocState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "resultDecls") (EVar "toks")) (EApp (EApp (EApp (EVar "runP") (EVar "parseProgram")) (EVar "toks")) (ELit (LInt 0)))))))))))
 (DTypeSig true "parseLocated" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "parseLocated" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offPairs")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setLocState") (EVar "src")) (EApp (EVar "arrayFromList") (EVar "offPairs")))) (DoLet false false (PVar "toks") (EApp (EVar "arrayFromList") (EVar "tokList"))) (DoExpr (EApp (EApp (EVar "resultDecls") (EVar "toks")) (EApp (EApp (EApp (EVar "runP") (EVar "parseProgram")) (EVar "toks")) (ELit (LInt 0)))))))))
 (DData Public "ParseError" () ((variant "ParseError" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "String")))) ())
@@ -8785,9 +8795,9 @@ parseResultWith src tokList offList =
 (DTypeSig false "semicolonMsg" (TyCon "String"))
 (DFunDef false "semicolonMsg" () (ELit (LString "Medaka has no statement terminator `;`; write each statement on its own line")))
 (DTypeSig true "parseResult" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "parseResult" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsets") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offList")) () (EApp (EApp (EApp (EVar "parseResultWith") (EVar "src")) (EVar "tokList")) (EVar "offList")))))
+(DFunDef false "parseResult" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsets") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offList")) () (EBlock (DoExpr (EApp (EVar "resetLocState") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "parseResultWith") (EVar "src")) (EVar "tokList")) (EVar "offList")))))))
 (DTypeSig true "parseResultPairs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "parseResultPairs" ((PVar "src") (PVar "tokList") (PVar "offPairs")) (EApp (EApp (EApp (EVar "parseResultWith") (EVar "src")) (EVar "tokList")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "offPairs"))))
+(DFunDef false "parseResultPairs" ((PVar "src") (PVar "tokList") (PVar "offPairs")) (EBlock (DoExpr (EApp (EVar "resetLocState") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "parseResultWith") (EVar "src")) (EVar "tokList")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "offPairs"))))))
 (DTypeSig true "parseLocatedResult" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "parseLocatedResult" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offPairs")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setLocState") (EVar "src")) (EApp (EVar "arrayFromList") (EVar "offPairs")))) (DoExpr (EApp (EApp (EApp (EVar "parseResultWith") (EVar "src")) (EVar "tokList")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "offPairs"))))))))
 (DData Private "PrescanHits" () ((variant "PrescanHits" (ConNamed (field "phLex" (TyCon "Int")) (field "phBangEq" (TyCon "Int")) (field "phMut" (TyCon "Int")) (field "phRecord" (TyCon "Int")) (field "phCtxKw" (TyCon "Int")) (field "phFunction" (TyCon "Int")) (field "phInlineLet" (TyCon "Int")) (field "phCaseOf" (TyCon "Int")) (field "phBacktick" (TyCon "Int")) (field "phWith" (TyCon "Int")) (field "phMatchWith" (TyCon "Int")) (field "phStarStar" (TyCon "Int")) (field "phForLoop" (TyCon "Int")) (field "phHsSig" (TyCon "Int")) (field "phBlockComment" (TyCon "Int")) (field "phBraceBlock" (TyCon "Int")) (field "phForeignKw" (TyCon "Int"))))) ())
@@ -8864,6 +8874,8 @@ parseResultWith src tokList offList =
 (DFunDef false "setLocState" ((PVar "src") (PVar "offs")) (EApp (EApp (EApp (EVar "setLocStateWith") (EVar "src")) (EApp (EVar "lineStartsOf") (EVar "src"))) (EVar "offs")))
 (DTypeSig false "setLocStateWith" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Unit")))))
 (DFunDef false "setLocStateWith" ((PVar "src") (PVar "lineStarts") (PVar "offs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "guardOffsRef")) (EApp (EVar "arrayFromList") (EListLit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locSrcRef")) (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locLineStartsRef")) (EVar "lineStarts"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locOffsRef")) (EVar "offs")))))
+(DTypeSig false "resetLocState" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DFunDef false "resetLocState" (PWild) (EApp (EApp (EApp (EVar "setLocStateWith") (ELit (LString ""))) (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 0))))) (EApp (EVar "arrayFromList") (EListLit))))
 (DTypeSig false "tokOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "tokOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EUnOp "!" (EVar "locOffsRef"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
 (DTypeSig false "tokEndOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
@@ -10632,7 +10644,7 @@ parseResultWith src tokList offList =
 (DFunDef false "resultDecls" (PWild (PCon "PFatal" PWild PWild)) (EApp (EVar "panic") (ELit (LString "parse error"))))
 (DFunDef false "resultDecls" ((PVar "toks") (PCon "POk" (PVar "ds") (PVar "pos"))) (EIf (EApp (EVar "isEofTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "ds") (EIf (EVar "otherwise") (EApp (EVar "panic") (ELit (LString "parse error"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "parse" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "parse" ((PVar "src")) (EBlock (DoLet false false (PVar "toks") (EApp (EVar "arrayFromList") (EApp (EVar "tokenize") (EVar "src")))) (DoExpr (EMatch (EApp (EApp (EVar "firstLexError") (EVar "toks")) (ELit (LInt 0))) (arm (PCon "Some" (PTuple PWild (PVar "msg"))) () (EApp (EVar "panic") (EVar "msg"))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "guardOffsRef")) (EApp (EVar "arrayFromList") (EListLit)))) (DoExpr (EApp (EApp (EVar "resultDecls") (EVar "toks")) (EApp (EApp (EApp (EVar "runP") (EVar "parseProgram")) (EVar "toks")) (ELit (LInt 0)))))))))))
+(DFunDef false "parse" ((PVar "src")) (EBlock (DoLet false false (PVar "toks") (EApp (EVar "arrayFromList") (EApp (EVar "tokenize") (EVar "src")))) (DoExpr (EMatch (EApp (EApp (EVar "firstLexError") (EVar "toks")) (ELit (LInt 0))) (arm (PCon "Some" (PTuple PWild (PVar "msg"))) () (EApp (EVar "panic") (EVar "msg"))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EVar "resetLocState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "resultDecls") (EVar "toks")) (EApp (EApp (EApp (EVar "runP") (EVar "parseProgram")) (EVar "toks")) (ELit (LInt 0)))))))))))
 (DTypeSig true "parseLocated" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "parseLocated" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offPairs")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setLocState") (EVar "src")) (EApp (EVar "arrayFromList") (EVar "offPairs")))) (DoLet false false (PVar "toks") (EApp (EVar "arrayFromList") (EVar "tokList"))) (DoExpr (EApp (EApp (EVar "resultDecls") (EVar "toks")) (EApp (EApp (EApp (EVar "runP") (EVar "parseProgram")) (EVar "toks")) (ELit (LInt 0)))))))))
 (DData Public "ParseError" () ((variant "ParseError" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "String")))) ())
@@ -10761,9 +10773,9 @@ parseResultWith src tokList offList =
 (DTypeSig false "semicolonMsg" (TyCon "String"))
 (DFunDef false "semicolonMsg" () (ELit (LString "Medaka has no statement terminator `;`; write each statement on its own line")))
 (DTypeSig true "parseResult" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "parseResult" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsets") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offList")) () (EApp (EApp (EApp (EVar "parseResultWith") (EVar "src")) (EVar "tokList")) (EVar "offList")))))
+(DFunDef false "parseResult" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsets") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offList")) () (EBlock (DoExpr (EApp (EVar "resetLocState") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "parseResultWith") (EVar "src")) (EVar "tokList")) (EVar "offList")))))))
 (DTypeSig true "parseResultPairs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "parseResultPairs" ((PVar "src") (PVar "tokList") (PVar "offPairs")) (EApp (EApp (EApp (EVar "parseResultWith") (EVar "src")) (EVar "tokList")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "offPairs"))))
+(DFunDef false "parseResultPairs" ((PVar "src") (PVar "tokList") (PVar "offPairs")) (EBlock (DoExpr (EApp (EVar "resetLocState") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "parseResultWith") (EVar "src")) (EVar "tokList")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "offPairs"))))))
 (DTypeSig true "parseLocatedResult" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "parseLocatedResult" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "tokList") (PVar "offPairs")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setLocState") (EVar "src")) (EApp (EVar "arrayFromList") (EVar "offPairs")))) (DoExpr (EApp (EApp (EApp (EVar "parseResultWith") (EVar "src")) (EVar "tokList")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "offPairs"))))))))
 (DData Private "PrescanHits" () ((variant "PrescanHits" (ConNamed (field "phLex" (TyCon "Int")) (field "phBangEq" (TyCon "Int")) (field "phMut" (TyCon "Int")) (field "phRecord" (TyCon "Int")) (field "phCtxKw" (TyCon "Int")) (field "phFunction" (TyCon "Int")) (field "phInlineLet" (TyCon "Int")) (field "phCaseOf" (TyCon "Int")) (field "phBacktick" (TyCon "Int")) (field "phWith" (TyCon "Int")) (field "phMatchWith" (TyCon "Int")) (field "phStarStar" (TyCon "Int")) (field "phForLoop" (TyCon "Int")) (field "phHsSig" (TyCon "Int")) (field "phBlockComment" (TyCon "Int")) (field "phBraceBlock" (TyCon "Int")) (field "phForeignKw" (TyCon "Int"))))) ())
