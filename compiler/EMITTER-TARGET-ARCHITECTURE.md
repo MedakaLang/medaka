@@ -182,7 +182,7 @@ scattered places, moved rather than reinvented:
 | Field | Today |
 |---|---|
 | reachability roots and edges | `ir/dce.mdk` (pre-lower) and `backend/wasm_reach.mdk` (post-lower, Wasm only) |
-| lazy/eager global classification | `emit_support.eagerReachMap` / `lazyGlobalNames`, computed once by `backend/emit_plan.mdk`'s `buildEmitPlan` and read by both backends |
+| global initialization order and lazy/eager partition | `EmitPlan.globalInit` carries `valueOrder` and `eagerOrder`, produced once by `backend/global_plan.mdk`; dependencies precede users, ties use a source-prioritized ready queue over SCCs (members in source order), and lazy names are filtered from that order without re-sorting |
 | TRMC eligibility and groups | `backend/trmc_analysis.mdk`'s predicates, computed once by `buildEmitPlan` (`EmitPlan.trmc`, `EmitPlan.dispGroups`) and read by both backends |
 | linkage map and injectivity | `private_mangle`; of the three X-L.H guards, the module-symbol guard runs in `private_mangle.mangleUnits`, and the impl-symbol and dict-tag guards are `core_validate` arms (`validateImplSymbolInjectivity`, `validateDictTags`) each emitter runs before it writes any text |
 | reachable extern requirements | per-backend extern ladders |

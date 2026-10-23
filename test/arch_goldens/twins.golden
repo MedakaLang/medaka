@@ -82,9 +82,6 @@ staticEntryDictRoutes
 strBytes
 strBytesGo
 takeRoutes
-topoValGo
-topoValVisit
-topoValVisitDeps
 u64Op
 unboxU64
 unprovidedExtern

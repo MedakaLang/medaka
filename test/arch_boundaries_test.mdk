@@ -663,6 +663,16 @@ topCount bodies =
 test "arch_boundaries: llvm/wasm twins match twins.golden" =
   pin "twins.golden" (twinNames loadModules)
 
+test "arch_boundaries: global order has one shared authority" =
+  let forbidden = [
+    "orderedValBinds", "topoSortValBinds", "topoValGo", "topoValVisit",
+    "topoValVisitDeps"
+  ]
+  let names =
+    toList (namesOf loadModules "backend.llvm_emit")
+      ++ toList (namesOf loadModules "backend.wasm_emit")
+  expectEqual [] (filter (n => S.has n (S.fromList names)) forbidden)
+
 test "arch_boundaries: identical-body names match dupbodies.golden" =
   let idx = definitionIndex loadModules
   -- The count of names defined in two or more modules is information only and

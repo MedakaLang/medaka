@@ -1,5 +1,5 @@
 # META
-source_lines=704
+source_lines=706
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -211,6 +211,7 @@ valGlobalNames (_ :: rest) = valGlobalNames rest
 -- to a constructor / not-emitted name never becomes a graph node.  Membership is
 -- tested against an OrdMap SET (`nameSet`), never a `List` — a `List` here would be
 -- O(V) per edge = O(V*E), the exact quadratic #553 warns against.
+export
 eagerCalleesMap : OrdMap Unit -> List CBind -> OrdMap (List String)
 eagerCalleesMap _ [] = omEmpty
 eagerCalleesMap nameSet (b :: rest) =
@@ -496,6 +497,7 @@ clausesHaveMethod ((CClause _ body) :: rest) =
 
 -- the set of bind names that dispatch eagerly in their own body (the taint SOURCES,
 -- alongside cycle membership computed during the fold).
+export
 methodTaintSet : List CBind -> OrdMap Unit
 methodTaintSet [] = omEmpty
 methodTaintSet (b :: rest) =
@@ -778,7 +780,7 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DFunDef false "valGlobalNames" ((PList)) (EListLit))
 (DFunDef false "valGlobalNames" ((PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)) PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "name") (EApp (EVar "valGlobalNames") (EVar "rest"))))
 (DFunDef false "valGlobalNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "valGlobalNames") (EVar "rest")))
-(DTypeSig false "eagerCalleesMap" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
+(DTypeSig true "eagerCalleesMap" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "eagerCalleesMap" (PWild (PList)) (EVar "omEmpty"))
 (DFunDef false "eagerCalleesMap" ((PVar "nameSet") (PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameSet")))) (EApp (EVar "bindEagerCallees") (EVar "b")))) (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "rest"))))
 (DTypeSig true "eagerReachMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))
@@ -879,7 +881,7 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DTypeSig false "clausesHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
 (DFunDef false "clausesHaveMethod" ((PList)) (EVar "False"))
 (DFunDef false "clausesHaveMethod" ((PCons (PCon "CClause" PWild (PVar "body")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "body")) (EApp (EVar "clausesHaveMethod") (EVar "rest"))))
-(DTypeSig false "methodTaintSet" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DTypeSig true "methodTaintSet" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "methodTaintSet" ((PList)) (EVar "omEmpty"))
 (DFunDef false "methodTaintSet" ((PCons (PVar "b") (PVar "rest"))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "methodTaintSet") (EVar "rest"))) (DoExpr (EIf (EApp (EVar "bindDirectMethod") (EVar "b")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (ELit LUnit)) (EVar "m")) (EVar "m")))))
 (DTypeSig false "lengthGt1" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
@@ -1015,7 +1017,7 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DFunDef false "valGlobalNames" ((PList)) (EListLit))
 (DFunDef false "valGlobalNames" ((PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)) PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "name") (EApp (EVar "valGlobalNames") (EVar "rest"))))
 (DFunDef false "valGlobalNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "valGlobalNames") (EVar "rest")))
-(DTypeSig false "eagerCalleesMap" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
+(DTypeSig true "eagerCalleesMap" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "eagerCalleesMap" (PWild (PList)) (EVar "omEmpty"))
 (DFunDef false "eagerCalleesMap" ((PVar "nameSet") (PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameSet")))) (EApp (EVar "bindEagerCallees") (EVar "b")))) (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "rest"))))
 (DTypeSig true "eagerReachMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))
@@ -1116,7 +1118,7 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DTypeSig false "clausesHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
 (DFunDef false "clausesHaveMethod" ((PList)) (EVar "False"))
 (DFunDef false "clausesHaveMethod" ((PCons (PCon "CClause" PWild (PVar "body")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "body")) (EApp (EVar "clausesHaveMethod") (EVar "rest"))))
-(DTypeSig false "methodTaintSet" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DTypeSig true "methodTaintSet" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "methodTaintSet" ((PList)) (EVar "omEmpty"))
 (DFunDef false "methodTaintSet" ((PCons (PVar "b") (PVar "rest"))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "methodTaintSet") (EVar "rest"))) (DoExpr (EIf (EApp (EVar "bindDirectMethod") (EVar "b")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (ELit LUnit)) (EVar "m")) (EVar "m")))))
 (DTypeSig false "lengthGt1" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
