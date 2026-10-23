@@ -20,10 +20,11 @@ import set as S
 import string.{
   capitalize, countOccurrences, endsWith, fromChars, split, toChars, isAlphaNum,
   isSpace, join, lines, replace, startsWith, stripPrefix, stripSuffix, trim,
-  trimLeft, unlines, words
+  trimLeft, unlines, words, indexOf
 }
 import test.{
-  Expectation, expectAll, expectAtLeast, expectEqual, expectGolden, fail, pass
+  Expectation, expectAll, expectAtLeast, expectEqual, expectGolden, fail, pass,
+  expectEach, expectLessThan
 }
 import test_process.{underRoot}
 
@@ -578,6 +579,36 @@ moduleBodies ls =
         Some (ob, od) => M.set n ("\{ob}\n\{b}", od || d || fileExempt) acc)
     (M.fromList [])
     (segmentLines ls)
+
+outputAfterRenderer : String -> String -> String -> <IO> Expectation
+outputAfterRenderer moduleName functionName output =
+  let source = optionOr [] (lookup moduleName loadModules)
+  match M.get functionName (moduleBodies source)
+    None => fail "missing \{moduleName}.\{functionName}"
+    Some (body, _) => match (
+      indexOf "let wat = emitProgram input plan reached" body,
+      indexOf output body,
+    )
+      (Some renderer, Some marker) => expectLessThan marker renderer
+      _ => fail "missing renderer or \{output} in \{moduleName}.\{functionName}"
+
+test "arch_boundaries: public Wasm compositions validate before markers and stats" = expectEach
+  [
+    (
+      "playground WAT marker",
+      outputAfterRenderer
+        "entries.playground_main"
+        "runEmit"
+        "emitWatMarker warnTriples",
+    ),
+    (
+      "modules stats",
+      outputAfterRenderer
+        "entries.wasm_emit_modules_main"
+        "emitTail"
+        "if statsEnabled ()",
+    ),
+  ]
 
 type DefRow = (String, String, Bool)
 

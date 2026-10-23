@@ -1086,7 +1086,7 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 --
 -- Tail contexts contain labels and slots belonging to their own define.
 data DefScope =
-  | DefScope Int (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option TailDefine)
+  DefScope Int (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option TailDefine)
 
 -- Start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 --
@@ -8963,7 +8963,7 @@ dictOperand e env d = match omLookup d env
 -- dispatch positions, arity, and the clauses (patterns + body) in source order
 -- (leftmost-first — the priority the decision tree preserves).
 data ImplGroup =
-  | ImplGroup String String String String (List Int) Int (List (List Pat, CExpr)) String
+  ImplGroup String String String String (List Int) Int (List (List Pat, CExpr)) String
 
 -- #2726: the gensym scope of an impl group — its OWN emitted symbol, prefixed so
 -- the marker reads as what it is (`impl:List_eq`) and can never be confused with
@@ -14854,8 +14854,14 @@ emitProgramMain e plan groups =
   -- lazy (the compiler's own case).  A SAFE global's whole eager reach is SAFE (the
   -- taint is downward-closed over reads), so this prologue never calls a force fn.
   -- LAZY globals are initialised on first use by their @mdk_force_<x> defines below.
-  let _ =
-    emitTopGlobals e (orderedValBinds plan (safeValBinds e (valBinds groups)))
+  let bindMap = bindNameMap groups
+  let eagerBinds =
+    map
+      (name => match omLookup name bindMap
+        Some b => b
+        None => panic ("internal error: global init: membership: " ++ name))
+      plan.globalInit.eagerOrder
+  let _ = emitTopGlobals e eagerBinds
   let (mv, mty) = emitExpr e omEmpty mainRhs
   -- A Unit-returning `main` produces output ONLY through explicit print calls (or
   -- a panic); never auto-print its `()` result.  Detected by `main`'s own stamp

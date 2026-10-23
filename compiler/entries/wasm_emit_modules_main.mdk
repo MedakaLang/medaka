@@ -100,6 +100,7 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
       ffiRows
   let lowered = lowerProgramEmitWith facts allDecls
   let (plan, reached) = buildEmitPlanReached ffiRows lowered
+  let wat = emitProgram input plan reached
   -- MEDAKA_STATS reporting hook: the counts come from the plan, so the ratio is the
   -- reach filter's own notion of reachable.  Off by default, so ordinary emission
   -- stays byte-identical.
@@ -110,4 +111,4 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
         ("wasm-reach-kept-units", units.kept),
       ]
       None => ()
-  putStr (emitProgram input plan reached)
+  putStr wat

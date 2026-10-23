@@ -551,7 +551,7 @@ freshWasmEmit mode = WasmEmit {
 -- Declaration-derived facts are indexed once for each emission. The last field
 -- is the complete loaded runtime declaration domain.
 data WasmEmitInputData =
-  | WasmEmitInputData (OrdMap (List Int)) (OrdMap (List (String, String), (List String, String))) RuntimeExternDomain
+  WasmEmitInputData (OrdMap (List Int)) (OrdMap (List (String, String), (List String, String))) RuntimeExternDomain
 
 export type WasmEmitInput = WasmEmitInputData
 
@@ -647,7 +647,7 @@ topRow rows (CBind name _ _ bid) =
     None => []
 
 data Prog =
-  | Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit FnCtx
+  Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit FnCtx
 
 -- What is true of the ONE function whose body is being emitted: the TMC loop
 -- or dispatch-group context its tail leaves redirect to, its first-clause site
@@ -1535,7 +1535,8 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
   -- (W6) also force ref-mode: a String is a boxed (ref eq) $str struct.  W8 RNG /
   -- hash externs produce/consume (ref eq) i31 values, so they force ref-mode too.
   let useRef =
-    useClos
+    isNonEmptyList plan.lazyGlobals
+      || useClos
       || programUsesAdt groups ctorArs
       || isNonEmptyList impls
       || !emit.useStr
@@ -2464,7 +2465,7 @@ emitScalarInit : WasmEmit ->
   List CBind ->
   List String
 emitScalarInit emit plan fnNames valNames groups =
-  let valBinds = topoSortValBinds plan (filterList isValBind groups)
+  let valBinds = plannedValBinds plan groups
   let valInit = flatMap (emitScalarValInit emit fnNames valNames) valBinds
   let mainLines = emitScalarMain emit fnNames valNames groups
   let valLocals = flatMap collectBindLocals valBinds
@@ -3500,10 +3501,7 @@ emitRefInit prog plan groups =
   -- global's whole eager reach is SAFE (the taint is downward-closed over reads), so this
   -- prologue never calls a $force fn.  LAZY globals are initialised on first use by their
   -- $force_<name> defines (emitRefForceFns); they are excluded from the eager set here.
-  let valBinds =
-    filterList
-      (b => not (isLazyGlobalW prog (bindName b)))
-      (topoSortValBinds plan (filterList isValBind groups))
+  let valBinds = plannedValBinds plan groups
   let initW7Outer = w7ScopeOpen (progEmit prog)
   let valInit = flatMap (emitRefValInit prog) valBinds
   let initW7Used = w7ScopeClose (progEmit prog) initW7Outer
@@ -12210,3 +12208,12 @@ ptag _ = "?"
 -- the W3 scope wall: any out-of-slice node lands here (an explicit hard stop).
 gap : String -> a
 gap msg = panic ("wasm_emit gap — " ++ msg)
+
+plannedValBinds : EmitPlan -> List CBind -> List CBind
+plannedValBinds plan groups =
+  let binds = bindNameMap groups
+  map
+    (n => match omLookup n binds
+      Some b => b
+      None => panic ("internal error: global init: membership: " ++ n))
+    plan.globalInit.eagerOrder
