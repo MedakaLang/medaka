@@ -5,7 +5,7 @@
 -- program, and the real prelude stays under its size bound.
 import test.{
   Expectation, expectTrue, expectEqual, expectAll, expectEach, expectAtLeast,
-  expectAtMost, labelFail, fail
+  expectAtMost, labelFail, fail, pass
 }
 import list.{zip, indexed, drop, sort}
 import string as S
@@ -443,3 +443,69 @@ test "the encoded core interface does not depend on the program driven with it" 
 test "the encoded real prelude is under 512 KB" = match realText 61
   Err e => fail e
   Ok text => expectAtMost 524288 (S.byteLength text)
+
+-- ── 8. the format ───────────────────────────────────────────────────────────
+
+-- A core with one data type, one interface with one impl, and three
+-- bindings; the extern is there so the runtime half is not empty.
+tinyPrelude : (List Decl, List Decl)
+tinyPrelude = (
+  desugar (parse "extern readLine : Unit -> <Stdin> String\n"),
+  desugar
+    (parse
+      (stringJoin "\n" [
+        "data Option a = None | Some a",
+        "interface Sized a where",
+        "  size : a -> Int",
+        "impl Sized (Option a) where",
+        "  size None = 0",
+        "  size (Some _) = 1",
+        "idf x = x",
+        "sizeOf : Option a -> Int",
+        "sizeOf o = size o",
+        "withIo : (Unit -> <IO | e> String) -> <IO | e> String",
+        "withIo f = f ()",
+        "",
+      ])),
+)
+
+-- Two joins that give the same text, so the one section lists both.
+tinyText : String
+tinyText = encodeInterface PreludeInterfaceFile {
+  ifKey = InterfaceKey {
+    ikFormat = formatVersion,
+    ikSources = [("core.mdk", "ab12")],
+    ikCompiler = "medaka 0 (sha x)",
+  },
+  ifSections =
+    mergeSections
+      (driveUnder 71 allGrants tinyPrelude "x = 1"
+        ++ driveUnder 72 stdinOnly tinyPrelude "x = 1"),
+}
+
+tinyFixture : String
+tinyFixture = underRoot "test/interface_fixtures/tiny.mdki"
+
+-- INTERFACE_FIXTURE_WRITE=1 rewrites the fixture instead of comparing.
+test "the tiny interface file matches its fixture and round-trips" =
+  match getEnv "INTERFACE_FIXTURE_WRITE"
+    Some "1" => match writeFile tinyFixture tinyText
+      Ok _ => pass
+      Err e => fail "could not write \{tinyFixture}: \{e}"
+    _ => match readFile tinyFixture
+      Err e => fail "no fixture \{tinyFixture}: \{e}"
+      Ok golden => expectAll [
+        labelFail "encoding equals the fixture" (expectEqual golden tinyText),
+        labelFail
+          "one section, two joins"
+          (expectEqual
+            (Some [2])
+            (map
+              (f => map (s => length s.isJoins) f.ifSections)
+              (resultOption (decodeInterface golden)))),
+        labelFail
+          "decode then encode returns the fixture"
+          (expectEqual
+            (Some golden)
+            (map encodeInterface (resultOption (decodeInterface golden)))),
+      ]
