@@ -308,9 +308,9 @@ compiler/tools/prop_runner_test.mdk"
 # `unresolved` and reads that atom back, so it reproduces an origin a frozen row
 # already held and acquires none. `frontend/ast_codec.mdk` and its sibling test do
 # the same for the elaborated tree: they name the constructor to write and read it.
-originun_allowed="compiler/frontend/ast_codec.mdk
+originun_allowed="compiler/frontend/ast.mdk
+compiler/frontend/ast_codec.mdk
 compiler/frontend/ast_codec_test.mdk
-compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
 compiler/tools/native_props_test.mdk
 compiler/tools/prop_plan.mdk
