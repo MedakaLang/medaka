@@ -2247,7 +2247,13 @@ test "method result validation refuses a missing row and a missing plan key" =
   ]
 
 test "method result validation refuses malformed keys and callback positions" =
-  let row = MethodResultFact "Chain" "step" True [1] 2
+  let row = MethodResultFact {
+    iface = "Chain",
+    method = "step",
+    returnsHead = True,
+    callbackPositions = [1],
+    valueArity = 2,
+  }
   expectEach
     (map
       ((message, mutated) => (
@@ -2313,7 +2319,15 @@ methodOccurrence iface =
     []
     []
     { noDeclFacts |
-      factMethodResults = [MethodResultFact "left::Chain" "step" True [1] 2],
+      factMethodResults = [
+        MethodResultFact {
+          iface = "left::Chain",
+          method = "step",
+          returnsHead = True,
+          callbackPositions = [1],
+          valueArity = 2,
+        },
+      ],
     }
 
 test "method result completeness checks qualified occurrences and permits standalone evidence" = expectAll

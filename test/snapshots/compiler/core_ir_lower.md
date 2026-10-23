@@ -1,5 +1,5 @@
 # META
-source_lines=3974
+source_lines=3977
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1098,7 +1098,10 @@ emitDeclFacts facts decls =
 entryFact : ProgramFacts -> Option EntryFact
 entryFact facts =
   map
-    (outcome => EntryFact outcome.eoMainIsUnit outcome.eoMainIsFloat)
+    (outcome => EntryFact {
+      entryMainIsUnit = outcome.eoMainIsUnit,
+      entryMainIsFloat = outcome.eoMainIsFloat,
+    })
     facts.pfEntryOutcome
 
 withDeclFacts : DeclFacts -> CProgram -> CProgram
@@ -4340,7 +4343,7 @@ nodeTag _ = "?"
 (DTypeSig false "emitDeclFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DeclFacts"))))
 (DFunDef false "emitDeclFacts" ((PVar "facts") (PVar "decls")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EVar "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EVar "methodResultFacts") (EVar "decls"))) (fa "factEntryOutcome" (EApp (EVar "entryFact") (EVar "facts"))))))))
 (DTypeSig false "entryFact" (TyFun (TyCon "ProgramFacts") (TyApp (TyCon "Option") (TyCon "EntryFact"))))
-(DFunDef false "entryFact" ((PVar "facts")) (EApp (EApp (EVar "map") (ELam ((PVar "outcome")) (EApp (EApp (EVar "EntryFact") (EFieldAccess (EVar "outcome") "eoMainIsUnit")) (EFieldAccess (EVar "outcome") "eoMainIsFloat")))) (EFieldAccess (EVar "facts") "pfEntryOutcome")))
+(DFunDef false "entryFact" ((PVar "facts")) (EApp (EApp (EVar "map") (ELam ((PVar "outcome")) (ERecordCreate "EntryFact" ((fa "entryMainIsUnit" (EFieldAccess (EVar "outcome") "eoMainIsUnit")) (fa "entryMainIsFloat" (EFieldAccess (EVar "outcome") "eoMainIsFloat")))))) (EFieldAccess (EVar "facts") "pfEntryOutcome")))
 (DTypeSig false "withDeclFacts" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "withDeclFacts" ((PVar "facts") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))
 (DTypeSig false "stampBinders" (TyFun (TyCon "Lowering") (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyFun (TyCon "CProgram") (TyCon "CProgram")))))
@@ -5653,7 +5656,7 @@ nodeTag _ = "?"
 (DTypeSig false "emitDeclFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DeclFacts"))))
 (DFunDef false "emitDeclFacts" ((PVar "facts") (PVar "decls")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EVar "methodResultFacts") (EVar "decls"))) (fa "factEntryOutcome" (EApp (EVar "entryFact") (EVar "facts"))))))))
 (DTypeSig false "entryFact" (TyFun (TyCon "ProgramFacts") (TyApp (TyCon "Option") (TyCon "EntryFact"))))
-(DFunDef false "entryFact" ((PVar "facts")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "outcome")) (EApp (EApp (EVar "EntryFact") (EFieldAccess (EVar "outcome") "eoMainIsUnit")) (EFieldAccess (EVar "outcome") "eoMainIsFloat")))) (EFieldAccess (EVar "facts") "pfEntryOutcome")))
+(DFunDef false "entryFact" ((PVar "facts")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "outcome")) (ERecordCreate "EntryFact" ((fa "entryMainIsUnit" (EFieldAccess (EVar "outcome") "eoMainIsUnit")) (fa "entryMainIsFloat" (EFieldAccess (EVar "outcome") "eoMainIsFloat")))))) (EFieldAccess (EVar "facts") "pfEntryOutcome")))
 (DTypeSig false "withDeclFacts" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "withDeclFacts" ((PVar "facts") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))
 (DTypeSig false "stampBinders" (TyFun (TyCon "Lowering") (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyFun (TyCon "CProgram") (TyCon "CProgram")))))

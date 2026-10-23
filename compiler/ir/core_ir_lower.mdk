@@ -1094,7 +1094,10 @@ emitDeclFacts facts decls =
 entryFact : ProgramFacts -> Option EntryFact
 entryFact facts =
   map
-    (outcome => EntryFact outcome.eoMainIsUnit outcome.eoMainIsFloat)
+    (outcome => EntryFact {
+      entryMainIsUnit = outcome.eoMainIsUnit,
+      entryMainIsFloat = outcome.eoMainIsFloat,
+    })
     facts.pfEntryOutcome
 
 withDeclFacts : DeclFacts -> CProgram -> CProgram

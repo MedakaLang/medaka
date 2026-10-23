@@ -1106,8 +1106,20 @@ test "a wasm plan imports each reached js binding once, and only those" = expect
   ]
 
 test "method result plan index preserves qualified interface identity on both backends" =
-  let left = MethodResultFact "left::Shared" "pick" True [1] 2
-  let right = MethodResultFact "right::Shared" "pick" False [] 1
+  let left = MethodResultFact {
+    iface = "left::Shared",
+    method = "pick",
+    returnsHead = True,
+    callbackPositions = [1],
+    valueArity = 2,
+  }
+  let right = MethodResultFact {
+    iface = "right::Shared",
+    method = "pick",
+    returnsHead = False,
+    callbackPositions = [],
+    valueArity = 1,
+  }
   let cp =
     CProgram [] [] [] [] [] { noDeclFacts | factMethodResults = [left, right] }
   expectAll

@@ -72,8 +72,20 @@ resultFacts source =
 test "method results mention only the head interface parameter" =
   expectEqual
     [
-      MethodResultFact "Ix" "whole" True [] 1,
-      MethodResultFact "Ix" "element" False [] 1,
+      MethodResultFact {
+        iface = "Ix",
+        method = "whole",
+        returnsHead = True,
+        callbackPositions = [],
+        valueArity = 1,
+      },
+      MethodResultFact {
+        iface = "Ix",
+        method = "element",
+        returnsHead = False,
+        callbackPositions = [],
+        valueArity = 1,
+      },
     ]
     (resultFacts
       """
@@ -84,7 +96,15 @@ interface Ix c v where
 
 test "callback facts count value parameters and retain non-head results" =
   expectEqual
-    [MethodResultFact "Chain" "step" True [1, 2] 3]
+    [
+      MethodResultFact {
+        iface = "Chain",
+        method = "step",
+        returnsHead = True,
+        callbackPositions = [1, 2],
+        valueArity = 3,
+      },
+    ]
     (resultFacts
       """
 interface Chain c v where
@@ -107,8 +127,20 @@ test "same-spelled interfaces retain distinct qualified result facts" =
       (parse "interface Shared c where\n  pick : c -> Int")
   expectEqual
     [
-      MethodResultFact "left::Shared" "pick" True [] 1,
-      MethodResultFact "right::Shared" "pick" False [] 1,
+      MethodResultFact {
+        iface = "left::Shared",
+        method = "pick",
+        returnsHead = True,
+        callbackPositions = [],
+        valueArity = 1,
+      },
+      MethodResultFact {
+        iface = "right::Shared",
+        method = "pick",
+        returnsHead = False,
+        callbackPositions = [],
+        valueArity = 1,
+      },
     ]
     (methodResultFacts (left ++ right))
 

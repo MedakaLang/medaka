@@ -29805,16 +29805,15 @@ stampPredicateOpRouteVal : SiteCtx ->
 stampPredicateOpRouteVal sx encl useScope method operandMono predicate =
   match predicateScalarRoute method operandMono
     Some route =>
-      let _ =
-        noteNumericPredicateTrace
-          sx.sxModule.mcGraph
-          NPTArithmetic
-          predicate
-          useScope
-          sx.sxSite
-          None
-          (Some route)
-          []
+      noteNumericPredicateTrace
+        sx.sxModule.mcGraph
+        NPTArithmetic
+        predicate
+        useScope
+        sx.sxSite
+        None
+        (Some route)
+        []
       route
     None =>
       let env = sx.sxModule.mcCells.bodyImplEnvRef.value
@@ -29828,29 +29827,27 @@ stampPredicateOpRouteVal sx encl useScope method operandMono predicate =
               key
               reqs
               (selectedCallSupers sx method (Some row) encl useScope goals)
-          let _ =
-            noteNumericPredicateTrace
-              sx.sxModule.mcGraph
-              NPTArithmetic
-              predicate
-              useScope
-              sx.sxSite
-              (Some selectedIface)
-              (Some (RKey key [] []))
-              reqs
+          noteNumericPredicateTrace
+            sx.sxModule.mcGraph
+            NPTArithmetic
+            predicate
+            useScope
+            sx.sxSite
+            (Some selectedIface)
+            (Some (RKey key [] []))
+            reqs
           route
         None =>
           let route = RNone
-          let _ =
-            noteNumericPredicateTrace
-              sx.sxModule.mcGraph
-              NPTArithmetic
-              predicate
-              useScope
-              sx.sxSite
-              None
-              (Some route)
-              []
+          noteNumericPredicateTrace
+            sx.sxModule.mcGraph
+            NPTArithmetic
+            predicate
+            useScope
+            sx.sxSite
+            None
+            (Some route)
+            []
           route
 
 predicateScalarRoute : String -> Mono -> Option Route

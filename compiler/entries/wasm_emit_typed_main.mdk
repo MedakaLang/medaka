@@ -1307,7 +1307,15 @@ implSelfProgram tag base depth =
       (CLit (LInt base))
       recurse
   withMethodResultFacts
-    [MethodResultFact tag "walk" False [] 2]
+    [
+      MethodResultFact {
+        iface = tag,
+        method = "walk",
+        returnsHead = False,
+        callbackPositions = [],
+        valueArity = 2,
+      },
+    ]
     (cprogram
       [synthBind "main" [CClause [] (CLit (LInt depth))]]
       [(tag, 0)]
@@ -1444,7 +1452,15 @@ defaultStateCall tag = mkApp (CMethod
 defaultStateProgram : String -> Int -> CProgram
 defaultStateProgram tag bodyConstant =
   cprogramWithMethodResultFacts
-    [MethodResultFact "DefaultFace" "synthDefault" False [] 1]
+    [
+      MethodResultFact {
+        iface = "DefaultFace",
+        method = "synthDefault",
+        returnsHead = False,
+        callbackPositions = [],
+        valueArity = 1,
+      },
+    ]
     [
       synthBind "defaultRequestOne" [
         CClause [PVar "one" defaultStateLoc noBinderId] (defaultStateCall tag),
@@ -1483,7 +1499,15 @@ defaultStateProgramU = defaultStateProgram "UDefault" 29
 defaultStateCensusProgramU : CProgram
 defaultStateCensusProgramU =
   cprogramWithMethodResultFacts
-    [MethodResultFact "DefaultFace" "synthDefault" False [] 1]
+    [
+      MethodResultFact {
+        iface = "DefaultFace",
+        method = "synthDefault",
+        returnsHead = False,
+        callbackPositions = [],
+        valueArity = 1,
+      },
+    ]
     [
       synthBind "defaultRequestOne" [
         CClause

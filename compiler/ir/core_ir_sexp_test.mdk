@@ -269,7 +269,15 @@ test "two occurrences of one binder id stay one binder" =
       []
       []
       DeclFacts {
-        factMethodResults = [MethodResultFact "left::I" "m" True [1] 2],
+        factMethodResults = [
+          MethodResultFact {
+            iface = "left::I",
+            method = "m",
+            returnsHead = True,
+            callbackPositions = [1],
+            valueArity = 2,
+          },
+        ],
         factRequires = [],
         factSupers = [],
         factEntryOutcome = None,
