@@ -478,3 +478,34 @@ test "a missing or stale elaborated file makes verify name it" = withStagedStdli
               (verifyOut dir)),
         ]
     _ => fail "write run failed")
+
+-- What `verify` prints for [dir] after its fresh core.mdke is replaced by [edited].
+verdictOfText : String ->
+  String ->
+  <Exec, IO, FileWrite, Env "MEDAKA_ROOT", Env "MEDAKA"> Result String String
+verdictOfText dir edited =
+  map (_ => verifyOut dir) (writeFile "\{dir}/core.mdke" edited)
+
+test "verify names the component of a header edit, a truncation and an empty elaborated file" = withStagedStdlib
+  (dir => match runCommandBatch "env" 1 [writeArgv dir]
+    [_] => match readFile "\{dir}/core.mdke"
+      Err e => fail e
+      Ok fresh =>
+        let header =
+          verdictOfText dir (S.replace "(compiler " "(compiler 0" fresh)
+        let truncated = verdictOfText dir (S.take (S.length fresh / 2) fresh)
+        let empty = verdictOfText dir ""
+        expectAll [
+          labelFail
+            "compiler field edited"
+            (expectEqual
+              (Ok "stale: elaborated trees (.mdke) compiler")
+              header),
+          labelFail
+            "truncated"
+            (expectEqual (Ok "stale: elaborated trees (.mdke) file") truncated),
+          labelFail
+            "empty"
+            (expectEqual (Ok "stale: elaborated trees (.mdke) file") empty),
+        ]
+    _ => fail "write run failed")
