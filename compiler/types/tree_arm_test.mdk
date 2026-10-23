@@ -1,0 +1,188 @@
+-- Several tree-arm drives in one process, some continuing from the prelude's
+-- shipped trees (`stdlib/core.mdke`) and some elaborating core in-process.
+--
+-- The user module is desugared before core, so the process's core binders do
+-- not start where the writer's did and the shipped trees are relocated onto
+-- them.  Its `where` locals are spelled like core's own (`go`, `concatRev`),
+-- `go` is a constrained local abstraction, and it dispatches `compare` at
+-- `Float`, which reaches core's private `compareNaN` and `floatSignBit`.
+import test.{
+  expectAll, expectAtLeast, expectEqual, expectNotEqual, expectTrue, fail,
+  labelFail
+}
+import test_process.{underRoot}
+import string as S
+import frontend.ast.{Decl, EvEntry(..), EvId(..)}
+import frontend.ast_codec.{declsSExp}
+import frontend.desugar.{desugarIn}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.parser.{parseLocated}
+import support.sexp_value.{SExp(..)}
+import support.util.{joinNl, splitOnChar}
+import list.{reverse}
+import map.{entries}
+import driver.build_cmd.{
+  PreludeInputs(..), TreesVerdict(..), loadPreludeElab, loadPreludeInterface
+}
+import eval.eval.{evalModulesOutputFacts}
+import types.prelude_elab.{PreludeElab(..), preludeElabFor, readElabKey}
+import types.program_facts.{factsOfChecked}
+import types.publish.{CheckedProgram(..), TcReport(..)}
+import types.runtime_types.{BinderRow(..), binderRowIn}
+import types.tc_types.{DriveInputs(..)}
+import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
+
+userSrc : String
+userSrc = joinNl [
+  "export signs : List Float -> List Ordering",
+  "signs xs = concatRev (go xs) []",
+  "  where",
+  "    go ys = map (y => compare y (fromInt 0)) ys",
+  "    concatRev a b = fold (acc x => x :: acc) b a",
+  "",
+  "main = println (signs [1.5, 0.0 - 2.5, 0.0, 0.0 / 0.0])",
+  "",
+]
+
+-- Desugared at first use, before anything in this process desugars core.
+userMods : List (String, List Decl)
+userMods = [("signs", desugarIn "signs" (parseLocated userSrc))]
+
+-- One drive's checked program: the elaborated trees and the published tables.
+drive : Bool -> (String, String) -> Option CheckedProgram
+drive shipped (rsrc, csrc) =
+  let inputs =
+    if shipped then
+      { defaultDriveInputs |
+        diPreludeKey = Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc),
+      }
+    else
+      defaultDriveInputs
+  let (_, report, _) =
+    elaborateModulesWithReport
+      inputs
+      False
+      None
+      (desugaredPrelude rsrc)
+      (desugaredPrelude csrc)
+      userMods
+  report.trChecked
+
+-- What the checked program prints.
+output : CheckedProgram -> String
+output c = match c.cpTrees
+  Some (core, mods) => evalModulesOutputFacts (factsOfChecked c) core mods
+  None => "(no trees)"
+
+-- The suffix of every `<name>$<k>$lb` atom in [decls].
+localSuffixes : List Decl -> List Int
+localSuffixes decls = suffixesIn (declsSExp decls)
+
+suffixesIn : SExp -> List Int
+suffixesIn (SAtom s)
+  | S.endsWith "$lb" s = match reverse (splitOnChar '$' s)
+    _ :: k :: _ => match stringToInt k
+      Some n => [n]
+      None => []
+    _ => []
+  | otherwise = []
+suffixesIn (SList items) = flatMap suffixesIn items
+
+-- The two prelude texts, the trees' verdict and the value held for them.
+loaded : Unit -> <IO> Option ((String, String), TreesVerdict, PreludeElab)
+loaded _ =
+  let _ = userMods
+  match (
+    readFile (underRoot "stdlib/runtime.mdk"),
+    readFile (underRoot "stdlib/core.mdk"),
+    readFile (underRoot "stdlib/core.mdke"),
+  )
+    (Ok rsrc, Ok csrc, Ok trees) => match readElabKey trees
+      Err _ => None
+      Ok key =>
+        let inputs = PreludeInputs {
+          pnStdlibDir = underRoot "stdlib",
+          pnRuntimeSrc = rsrc,
+          pnCoreSrc = csrc,
+          pnCompiler = key.ikCompiler,
+        }
+        let _ = loadPreludeInterface inputs
+        let verdict = loadPreludeElab inputs
+        let generation = (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
+        map
+          (pe => ((rsrc, csrc), verdict, pe))
+          (preludeElabFor generation (desugaredPrelude csrc))
+    _ => None
+
+isLoaded : TreesVerdict -> Bool
+isLoaded TVLoaded = True
+isLoaded _ = False
+
+-- An evidence row is the prelude's (module "", below the counter) or the
+-- drive's own (at or past it).
+rowSplit : Int -> EvEntry -> Bool
+rowSplit k (EvEntry (EvId m i) _) = m == "" && i < k || i >= k
+
+-- Only the shipped trees' rows are below the counter: every drive of a process
+-- holding them mints past it.
+belowCounter : Int -> EvEntry -> Bool
+belowCounter k (EvEntry (EvId _ i) _) = i < k
+
+test "drives continuing from the shipped trees agree with in-process ones" =
+  match loaded ()
+    None => fail "the shipped trees did not load"
+    Some (srcs, verdict, pe) => match (
+      drive True srcs,
+      drive False srcs,
+      drive True srcs,
+    )
+      (Some on1, Some off, Some on2) =>
+        let k = pe.peEvCounter
+        let userTrees = match on2.cpTrees
+          Some (_, mods) => flatMap snd mods
+          None => []
+        let coreRows = pe.peBinders
+        let rowAgrees =
+          row => match (
+            binderRowIn (Some on2.cpBinders) row.brId,
+            binderRowIn (Some off.cpBinders) row.brId,
+          )
+            (Some a, Some b) =>
+              a.brName == row.brName
+                && b.brName == row.brName
+                && a.brType == b.brType
+            _ => False
+        let userLocals = localSuffixes userTrees
+        expectAll [
+          labelFail "the file loaded" (expectTrue (isLoaded verdict)),
+          labelFail
+            "core was desugared after the user module, so its binders moved"
+            (expectNotEqual 0 pe.peBinderBase),
+          labelFail
+            "on, off and on again print the same"
+            (expectEqual (output off, output off) (output on1, output on2)),
+          labelFail
+            "the keyed drives took the shipped trees, the unkeyed one did not"
+            (expectEqual
+              (True, False, True)
+              (
+                any (belowCounter k) on1.cpEvidence,
+                any (belowCounter k) off.cpEvidence,
+                any (belowCounter k) on2.cpEvidence,
+              )),
+          labelFail
+            "every evidence row is the prelude's or past its counter"
+            (expectTrue (all (rowSplit k) on2.cpEvidence)),
+          labelFail
+            "every core binder answers with its own spelling, and as in-process"
+            (expectTrue (all rowAgrees coreRows)),
+          labelFail
+            "the user module has local abstractions"
+            (expectTrue (length userLocals > 0)),
+          labelFail
+            "no user local abstraction is below the prelude's counter"
+            (expectAtLeast
+              pe.peLocalCounter
+              (fold (acc n => min acc n) 1000000 userLocals)),
+        ]
+      _ => fail "a drive published no checked program"

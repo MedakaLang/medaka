@@ -1,5 +1,5 @@
 # META
-source_lines=374
+source_lines=610
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's elaborated trees as a value, an on-disk file and a process
@@ -29,7 +29,12 @@ stages=DESUGAR,MARK
 -- The body is never built as an `SExp`: the cursor readers of
 -- `frontend.ast_codec` and the binder reader below take it off the bytes.
 
-import frontend.ast.{BinderId(..), Decl, EvEntry(..), EvId(..)}
+import frontend.ast.{
+  Arm(..), BinderId(..), Decl(..), DoStmt(..), EvEntry(..), EvId(..), EvTable,
+  Expr(..), FieldAssign(..), FunClause(..), Guard(..), GuardArm(..),
+  IfaceMethod(..), ImplMethod(..), InterpPart(..), LetBind(..),
+  MethodDefault(..), Pat(..), RecPatField(..), Section(..)
+}
 import frontend.ast_codec.{declsSExp, evEntriesSExp, readDecls, readEvEntries}
 import list.{reverse}
 import string as S
@@ -43,9 +48,10 @@ import support.util.{splitOnChar}
 import types.evidence_coverage.{EvidenceFault(..), evidenceFaults}
 import types.interface_sexp.{InterfaceFault(..), sha256Hex}
 import types.prelude_interface.{InterfaceKey(..)}
+import types.route_key.{setPreludeEvidence}
 import types.runtime_types.{
-  BinderRow(..), RuntimeType(..), binderOrdinal, runtimeTypeName,
-  runtimeTypeFromName
+  BinderRow(..), BinderTypeTable, RuntimeType(..), addBinderRow, binderOrdinal,
+  runtimeTypeName, runtimeTypeFromName
 }
 
 -- ── the value ───────────────────────────────────────────────────────────────
@@ -361,23 +367,253 @@ decodeBody h body =
               },
             )
 
+-- The key a file's header claims, after its version, header and digest are
+-- checked, without decoding the body: what a process that will not take the
+-- trees itself needs to say whether they are fresh.
+export
+readElabKey : String -> Result InterfaceFault InterfaceKey
+readElabKey text = match S.indexOf "\n" text
+  None => refuse "file" "no header line"
+  Some i => match parseSExp (S.take i text)
+    Err e => failure e
+    Ok node => match declaredVersion node
+      Some v if v /= formatVersion => Err (WrongFormat v)
+      _ => match headerOf node
+        Err e => failure e
+        Ok h =>
+          if sha256Hex (S.drop (i + 1) text) /= h.hDigest then
+            refuse "header/digest" "the body does not match the digest"
+          else
+            Ok h.hKey
+
+-- ── binder relocation ───────────────────────────────────────────────────────
+-- The file's binder ordinals are the writer's; a reading process minted its own
+-- for core when it desugared it, and every table it publishes is keyed by those.
+-- The value is moved onto them by one offset: the reader's first core ordinal
+-- less the file's.  Desugar mints core's ordinals in one contiguous run, so the
+-- reader's core holds exactly the file's count of them from its first.
+
+-- [decls] with [f] applied to every binder id they carry, minted or not.
+mapBinders : (BinderId -> BinderId) -> List Decl -> List Decl
+mapBinders f decls = map (relocDecl f) decls
+
+-- A minted ordinal moved by [offset]; an unminted id stays unminted.
+relocId : Int -> BinderId -> BinderId
+relocId offset (BinderId m i) =
+  if i < 0 then BinderId m i else BinderId m (i + offset)
+
+relocDecl : (BinderId -> BinderId) -> Decl -> Decl
+relocDecl o (DFunDef pub n ps e site bid) =
+  DFunDef pub n (map (relocPat o) ps) (relocExpr o e) site (o bid)
+relocDecl o (DLetGroup pub binds) = DLetGroup pub (map (relocBind o) binds)
+relocDecl o (d@(DInterface { methods, ... })) =
+  DInterface { d | methods = map (relocIfaceMethod o) methods }
+relocDecl o (d@(DImpl { methods, ... })) =
+  DImpl { d | methods = map (relocImplMethod o) methods }
+relocDecl o (DProp pub name params body) =
+  DProp pub name params (relocExpr o body)
+relocDecl o (DTest pub name body) = DTest pub name (relocExpr o body)
+relocDecl o (DAttrib attrs d) = DAttrib attrs (relocDecl o d)
+relocDecl _ d = d
+
+relocIfaceMethod : (BinderId -> BinderId) -> IfaceMethod -> IfaceMethod
+relocIfaceMethod o (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
+  IfaceMethod
+    n
+    ty
+    (Some (MethodDefault (map (relocPat o) ps) (relocExpr o e)))
+    mloc
+relocIfaceMethod _ m = m
+
+relocImplMethod : (BinderId -> BinderId) -> ImplMethod -> ImplMethod
+relocImplMethod o (ImplMethod n ps e) =
+  ImplMethod n (map (relocPat o) ps) (relocExpr o e)
+
+relocBind : (BinderId -> BinderId) -> LetBind -> LetBind
+relocBind o (LetBind n clauses site bid) =
+  LetBind n (map (relocClause o) clauses) site (o bid)
+
+relocClause : (BinderId -> BinderId) -> FunClause -> FunClause
+relocClause o (FunClause ps b) = FunClause (map (relocPat o) ps) (relocExpr o b)
+
+relocPat : (BinderId -> BinderId) -> Pat -> Pat
+relocPat o (PVar n l bid) = PVar n l (o bid)
+relocPat o (PAs n l bid p) = PAs n l (o bid) (relocPat o p)
+relocPat o (PCon c ps) = PCon c (map (relocPat o) ps)
+relocPat o (PCons h t) = PCons (relocPat o h) (relocPat o t)
+relocPat o (PTuple ps) = PTuple (map (relocPat o) ps)
+relocPat o (PList ps) = PList (map (relocPat o) ps)
+relocPat o (PRec c fields open) = PRec c (map (relocField o) fields) open
+relocPat _ p = p
+
+relocField : (BinderId -> BinderId) -> RecPatField -> RecPatField
+relocField o (RecPatField n l bid sub) =
+  RecPatField n l (o bid) (map (relocPat o) sub)
+
+relocExpr : (BinderId -> BinderId) -> Expr -> Expr
+relocExpr o (ELam ps b) = ELam (map (relocPat o) ps) (relocExpr o b)
+relocExpr o (ELet l r p e1 e2) =
+  ELet l r (relocPat o p) (relocExpr o e1) (relocExpr o e2)
+relocExpr o (ELetGroup bs e2) =
+  ELetGroup (map (relocBind o) bs) (relocExpr o e2)
+relocExpr o (EMatch e0 arms) = EMatch (relocExpr o e0) (map (relocArm o) arms)
+relocExpr o (EGuards arms) = EGuards (map (relocGuardArm o) arms)
+relocExpr o (EBlock stmts) = EBlock (map (relocStmt o) stmts)
+relocExpr o (EDo d stmts) = EDo d (map (relocStmt o) stmts)
+relocExpr o (ELoc l x) = ELoc l (relocExpr o x)
+relocExpr o (EDoOrigin l x) = EDoOrigin l (relocExpr o x)
+relocExpr o (EApp a b) = EApp (relocExpr o a) (relocExpr o b)
+relocExpr o (EIf c t el) = EIf (relocExpr o c) (relocExpr o t) (relocExpr o el)
+relocExpr o (EBinOp op a b r) = EBinOp op (relocExpr o a) (relocExpr o b) r
+relocExpr o (EUnOp op a r) = EUnOp op (relocExpr o a) r
+relocExpr o (EInfix op a b) = EInfix op (relocExpr o a) (relocExpr o b)
+relocExpr o (EFieldAccess x n r) = EFieldAccess (relocExpr o x) n r
+relocExpr o (ERecordCreate n fs) = ERecordCreate n (map (relocAssign o) fs)
+relocExpr o (ERecordUpdate x fs r) =
+  ERecordUpdate (relocExpr o x) (map (relocAssign o) fs) r
+relocExpr o (EVariantUpdate c x fs) =
+  EVariantUpdate c (relocExpr o x) (map (relocAssign o) fs)
+relocExpr o (EArrayLit es) = EArrayLit (map (relocExpr o) es)
+relocExpr o (EListLit es) = EListLit (map (relocExpr o) es)
+relocExpr o (ETuple es) = ETuple (map (relocExpr o) es)
+relocExpr o (EIndex x i) = EIndex (relocExpr o x) (relocExpr o i)
+relocExpr o (ERangeList lo hi incl) =
+  ERangeList (relocExpr o lo) (relocExpr o hi) incl
+relocExpr o (ERangeArray lo hi incl) =
+  ERangeArray (relocExpr o lo) (relocExpr o hi) incl
+relocExpr o (ESlice x lo hi incl) =
+  ESlice (relocExpr o x) (relocExpr o lo) (relocExpr o hi) incl
+relocExpr o (EAnnot x t) = EAnnot (relocExpr o x) t
+relocExpr o (EHeadAnnot x t) = EHeadAnnot (relocExpr o x) t
+relocExpr o (EStringInterp parts) = EStringInterp (map (relocInterp o) parts)
+relocExpr o (ESection (SecRight op x)) = ESection (SecRight op (relocExpr o x))
+relocExpr o (ESection (SecLeft x op)) = ESection (SecLeft (relocExpr o x) op)
+relocExpr o (EMapLit n kvs) =
+  EMapLit n (map ((k, v) => (relocExpr o k, relocExpr o v)) kvs)
+relocExpr o (ESetLit n es) = ESetLit n (map (relocExpr o) es)
+relocExpr o (EAsPat n x) = EAsPat n (relocExpr o x)
+relocExpr _ e = e
+
+relocArm : (BinderId -> BinderId) -> Arm -> Arm
+relocArm o (Arm p gs b) =
+  Arm (relocPat o p) (map (relocGuard o) gs) (relocExpr o b)
+
+relocGuard : (BinderId -> BinderId) -> Guard -> Guard
+relocGuard o (GBool e) = GBool (relocExpr o e)
+relocGuard o (GBind p e) = GBind (relocPat o p) (relocExpr o e)
+
+relocGuardArm : (BinderId -> BinderId) -> GuardArm -> GuardArm
+relocGuardArm o (GuardArm gs b) =
+  GuardArm (map (relocGuard o) gs) (relocExpr o b)
+
+relocStmt : (BinderId -> BinderId) -> DoStmt -> DoStmt
+relocStmt o (DoExpr e) = DoExpr (relocExpr o e)
+relocStmt o (DoBind p e) = DoBind (relocPat o p) (relocExpr o e)
+relocStmt o (DoLet m r p e site) = DoLet m r (relocPat o p) (relocExpr o e) site
+relocStmt o (DoAssign x e) = DoAssign x (relocExpr o e)
+relocStmt o (DoFieldAssign x fs e) = DoFieldAssign x fs (relocExpr o e)
+
+relocAssign : (BinderId -> BinderId) -> FieldAssign -> FieldAssign
+relocAssign o (FieldAssign n v) = FieldAssign n (relocExpr o v)
+
+relocInterp : (BinderId -> BinderId) -> InterpPart -> InterpPart
+relocInterp o (InterpExpr e) = InterpExpr (relocExpr o e)
+relocInterp _ p = p
+
+-- The first minted binder ordinal of [decls] and how many there are, or a
+-- count of -1 when the minted ordinals are not one contiguous run.  The walk
+-- that relocates is the census: [note] hands every id back unchanged.
+binderSpan : List Decl -> (Int, Int)
+binderSpan decls =
+  let lo = Ref (0 - 1)
+  let hi = Ref (0 - 1)
+  let count = Ref 0
+  let note =
+    bid => match bid
+      BinderId _ i if i >= 0 =>
+        let _ = if lo.value < 0 || i < lo.value then lo := i
+        let _ = if i > hi.value then hi := i
+        count := count.value + 1
+        bid
+      _ => bid
+  let _ = mapBinders note decls
+  if hi.value - lo.value + 1 == count.value then
+    (lo.value, count.value)
+  else
+    (lo.value, 0 - 1)
+
+relocated : Int -> PreludeElab -> PreludeElab
+relocated offset pe =
+  if offset == 0 then
+    pe
+  else
+    { pe |
+      peDecls = mapBinders (relocId offset) pe.peDecls,
+      peBinders =
+        map (row => { row | brId = relocId offset row.brId }) pe.peBinders,
+      peBinderBase = pe.peBinderBase + offset,
+    }
+
 -- ── the process cache ───────────────────────────────────────────────────────
 
--- One value for one compiler generation, the pair `preludeCacheHit` keys by.
-preludeElabCacheRef : Ref (Option ((Int, Int), PreludeElab))
+-- One value for one compiler generation, the pair `preludeCacheHit` keys by, and
+-- whether its binders are already the generation's own (relocated).
+preludeElabCacheRef : Ref (Option ((Int, Int), PreludeElab, Bool))
 preludeElabCacheRef = Ref None
 
+-- Holding a value also indexes its evidence as the process's prelude segment
+-- (`types/route_key.mdk`), whose ids every later drive mints past.
 export
 seedPreludeElab : (Int, Int) -> PreludeElab -> Unit
-seedPreludeElab generation pe = preludeElabCacheRef := Some (generation, pe)
+seedPreludeElab generation pe =
+  let _ = setPreludeEvidence pe.peEvCounter pe.peEvidence
+  preludeElabCacheRef := Some (generation, pe, False)
 
 export
 preludeElabHit : (Int, Int) -> Option PreludeElab
 preludeElabHit generation = match !preludeElabCacheRef
-  Some (seen, pe) if seen == generation => Some pe
+  Some (seen, pe, _) if seen == generation => Some pe
   _ => None
+
+-- The value of [generation] with its binders moved onto [core]'s, the process's
+-- own desugar of that generation's core; `None` when nothing is held for it or
+-- [core]'s binders are not a run of the file's count.
+export
+preludeElabFor : (Int, Int) -> List Decl -> Option PreludeElab
+preludeElabFor generation core = match !preludeElabCacheRef
+  Some (seen, pe, True) if seen == generation => Some pe
+  Some (seen, pe, False) if seen == generation =>
+    let (first, count) = binderSpan core
+    if count /= pe.peBinderCount then
+      None
+    else
+      let moved = relocated (first - pe.peBinderBase) pe
+      preludeElabCacheRef := Some (generation, moved, True)
+      Some moved
+  _ => None
+
+-- A tree-arm drive's published evidence and binder rows, with the rows of the
+-- shipped trees it continued from joined to them.  Every id the drive minted is
+-- past the shipped ones, so neither table already holds one of them.
+export
+withShippedRows : Option PreludeElab ->
+  EvTable ->
+  BinderTypeTable ->
+  (EvTable, BinderTypeTable)
+withShippedRows None evidence binders = (evidence, binders)
+withShippedRows (Some pe) evidence binders = (
+  pe.peEvidence ++ evidence,
+  fold (acc row => addBinderRow row acc) binders pe.peBinders,
+)
+
+-- The evidence and local-abstraction counters of the value this process holds,
+-- if any: every drive of the process starts its interners past them.
+export
+heldPreludeCounters : Unit -> Option (Int, Int)
+heldPreludeCounters _ =
+  map ((_, pe, _) => (pe.peEvCounter, pe.peLocalCounter)) !preludeElabCacheRef
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "Decl" false) (mem "EvEntry" true) (mem "EvId" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "BinderId" true) (mem "Decl" true) (mem "DoStmt" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Section" true))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "evEntriesSExp" false) (mem "readDecls" false) (mem "readEvEntries" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseAlias ("string") "S"))
@@ -386,7 +622,8 @@ preludeElabHit generation = match !preludeElabCacheRef
 (DUse false (UseGroup ("types" "evidence_coverage") ((mem "EvidenceFault" true) (mem "evidenceFaults" false))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceFault" true) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false) (mem "runtimeTypeFromName" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "setPreludeEvidence" false))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "BinderTypeTable" false) (mem "RuntimeType" true) (mem "addBinderRow" false) (mem "binderOrdinal" false) (mem "runtimeTypeName" false) (mem "runtimeTypeFromName" false))))
 (DData Public "PreludeElab" () ((variant "PreludeElab" (ConNamed (field "peDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "peEvidence" (TyApp (TyCon "List") (TyCon "EvEntry"))) (field "peBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "peEvCounter" (TyCon "Int")) (field "peLocalCounter" (TyCon "Int")) (field "peBinderCount" (TyCon "Int")) (field "peBinderBase" (TyCon "Int"))))) ())
 (DTypeSig true "preludeElabOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyCon "PreludeElab")))))
 (DFunDef false "preludeElabOf" ((PVar "decls") (PVar "evidence") (PVar "binders")) (ERecordCreate "PreludeElab" ((fa "peDecls" (EVar "decls")) (fa "peEvidence" (EApp (EApp (EVar "referencedRows") (EVar "decls")) (EVar "evidence"))) (fa "peBinders" (EVar "binders")) (fa "peEvCounter" (EApp (EVar "evidenceHighWater") (EVar "evidence"))) (fa "peLocalCounter" (EApp (EVar "localHighWater") (EApp (EVar "declsSExp") (EVar "decls")))) (fa "peBinderCount" (EApp (EVar "length") (EVar "binders"))) (fa "peBinderBase" (EApp (EVar "binderBase") (EVar "binders"))))))
@@ -457,14 +694,113 @@ preludeElabHit generation = match !preludeElabCacheRef
 (DFunDef false "readElabFile" ((PVar "text")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (ELit (LString "file"))) (ELit (LString "no header line")))) (arm (PCon "Some" (PVar "i")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "i")) (EVar "text"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EMatch (EApp (EVar "declaredVersion") (EVar "node")) (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "/=" (EVar "v") (EVar "formatVersion")))) (EApp (EVar "Err") (EApp (EVar "WrongFormat") (EVar "v")))) (arm PWild () (EMatch (EApp (EVar "headerOf") (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "h")) () (EBlock (DoLet false false (PVar "body") (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text"))) (DoExpr (EIf (EBinOp "/=" (EApp (EVar "sha256Hex") (EVar "body")) (EFieldAccess (EVar "h") "hDigest")) (EApp (EApp (EVar "refuse") (ELit (LString "header/digest"))) (ELit (LString "the body does not match the digest"))) (EApp (EApp (EVar "decodeBody") (EVar "h")) (EVar "body"))))))))))))))
 (DTypeSig false "decodeBody" (TyFun (TyCon "Header") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeElab"))))))
 (DFunDef false "decodeBody" ((PVar "h") (PVar "body")) (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "body"))) (DoExpr (EMatch (EApp (EVar "readDecls") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "decls")) () (EMatch (EApp (EVar "readEvEntries") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "evidence")) () (EBlock (DoLet false false (PVar "binders") (EApp (EApp (EVar "cursorList") (EVar "readBinder")) (EVar "cur"))) (DoExpr (EIf (EApp (EVar "cursorFailed") (EVar "cur")) (EApp (EApp (EVar "refuse") (ELit (LString "binders"))) (ELit (LString "malformed or truncated encoding"))) (EIf (EApp (EVar "not") (EApp (EVar "cursorAtEnd") (EVar "cur"))) (EApp (EVar "failure") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (ELit (LString "trailing text after the binder rows")))))) (EBlock (DoLet false false (PTuple (PVar "k") (PVar "l") (PVar "n") (PVar "b")) (EFieldAccess (EVar "h") "hCounters")) (DoExpr (EIf (EBinOp "||" (EBinOp "/=" (EVar "n") (EApp (EVar "length") (EVar "binders"))) (EBinOp "/=" (EVar "b") (EApp (EVar "binderBase") (EVar "binders")))) (EApp (EApp (EVar "refuse") (ELit (LString "header/counters"))) (ELit (LString "the binder count or base disagrees with the rows"))) (EApp (EVar "Ok") (ETuple (EFieldAccess (EVar "h") "hKey") (ERecordCreate "PreludeElab" ((fa "peDecls" (EVar "decls")) (fa "peEvidence" (EVar "evidence")) (fa "peBinders" (EVar "binders")) (fa "peEvCounter" (EVar "k")) (fa "peLocalCounter" (EVar "l")) (fa "peBinderCount" (EVar "n")) (fa "peBinderBase" (EVar "b"))))))))))))))))))))
-(DTypeSig false "preludeElabCacheRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "PreludeElab")))))
+(DTypeSig true "readElabKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey"))))
+(DFunDef false "readElabKey" ((PVar "text")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (ELit (LString "file"))) (ELit (LString "no header line")))) (arm (PCon "Some" (PVar "i")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "i")) (EVar "text"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EMatch (EApp (EVar "declaredVersion") (EVar "node")) (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "/=" (EVar "v") (EVar "formatVersion")))) (EApp (EVar "Err") (EApp (EVar "WrongFormat") (EVar "v")))) (arm PWild () (EMatch (EApp (EVar "headerOf") (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "h")) () (EIf (EBinOp "/=" (EApp (EVar "sha256Hex") (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text"))) (EFieldAccess (EVar "h") "hDigest")) (EApp (EApp (EVar "refuse") (ELit (LString "header/digest"))) (ELit (LString "the body does not match the digest"))) (EApp (EVar "Ok") (EFieldAccess (EVar "h") "hKey"))))))))))))
+(DTypeSig false "mapBinders" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "mapBinders" ((PVar "f") (PVar "decls")) (EApp (EApp (EVar "map") (EApp (EVar "relocDecl") (EVar "f"))) (EVar "decls")))
+(DTypeSig false "relocId" (TyFun (TyCon "Int") (TyFun (TyCon "BinderId") (TyCon "BinderId"))))
+(DFunDef false "relocId" ((PVar "offset") (PCon "BinderId" (PVar "m") (PVar "i"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EApp (EVar "BinderId") (EVar "m")) (EVar "i")) (EApp (EApp (EVar "BinderId") (EVar "m")) (EBinOp "+" (EVar "i") (EVar "offset")))))
+(DTypeSig false "relocDecl" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "relocDecl" ((PVar "o") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))) (EVar "site")) (EApp (EVar "o") (EVar "bid"))))
+(DFunDef false "relocDecl" ((PVar "o") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EVar "relocBind") (EVar "o"))) (EVar "binds"))))
+(DFunDef false "relocDecl" ((PVar "o") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "relocIfaceMethod") (EVar "o"))) (EVar "methods"))))))
+(DFunDef false "relocDecl" ((PVar "o") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "relocImplMethod") (EVar "o"))) (EVar "methods"))))))
+(DFunDef false "relocDecl" ((PVar "o") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "body"))))
+(DFunDef false "relocDecl" ((PVar "o") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "body"))))
+(DFunDef false "relocDecl" ((PVar "o") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "relocDecl") (EVar "o")) (EVar "d"))))
+(DFunDef false "relocDecl" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "relocIfaceMethod" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
+(DFunDef false "relocIfaceMethod" ((PVar "o") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))) (EVar "mloc")))
+(DFunDef false "relocIfaceMethod" (PWild (PVar "m")) (EVar "m"))
+(DTypeSig false "relocImplMethod" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
+(DFunDef false "relocImplMethod" ((PVar "o") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DTypeSig false "relocBind" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
+(DFunDef false "relocBind" ((PVar "o") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "relocClause") (EVar "o"))) (EVar "clauses"))) (EVar "site")) (EApp (EVar "o") (EVar "bid"))))
+(DTypeSig false "relocClause" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "FunClause") (TyCon "FunClause"))))
+(DFunDef false "relocClause" ((PVar "o") (PCon "FunClause" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "FunClause") (EApp (EApp (EVar "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DTypeSig false "relocPat" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Pat") (TyCon "Pat"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PVar" (PVar "n") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EVar "PVar") (EVar "n")) (EVar "l")) (EApp (EVar "o") (EVar "bid"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PAs" (PVar "n") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "n")) (EVar "l")) (EApp (EVar "o") (EVar "bid"))) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EVar "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "h"))) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "t"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EVar "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EVar "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PRec" (PVar "c") (PVar "fields") (PVar "open"))) (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EApp (EApp (EVar "map") (EApp (EVar "relocField") (EVar "o"))) (EVar "fields"))) (EVar "open")))
+(DFunDef false "relocPat" (PWild (PVar "p")) (EVar "p"))
+(DTypeSig false "relocField" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))
+(DFunDef false "relocField" ((PVar "o") (PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PVar "sub"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EApp (EVar "o") (EVar "bid"))) (EApp (EApp (EVar "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "sub"))))
+(DTypeSig false "relocExpr" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ELam" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "ELam") (EApp (EApp (EVar "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ELet" (PVar "l") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "l")) (EVar "r")) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e1"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e2"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ELetGroup" (PVar "bs") (PVar "e2"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EVar "relocBind") (EVar "o"))) (EVar "bs"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e2"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EMatch" (PVar "e0") (PVar "arms"))) (EApp (EApp (EVar "EMatch") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EVar "relocArm") (EVar "o"))) (EVar "arms"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EApp (EVar "relocGuardArm") (EVar "o"))) (EVar "arms"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EApp (EVar "relocStmt") (EVar "o"))) (EVar "stmts"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "map") (EApp (EVar "relocStmt") (EVar "o"))) (EVar "stmts"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ELoc" (PVar "l") (PVar "x"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EDoOrigin" (PVar "l") (PVar "x"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EApp" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "a"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EApp (EVar "EIf") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "c"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "t"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "el"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "a"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))) (EVar "r")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EUnOp" (PVar "op") (PVar "a") (PVar "r"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "a"))) (EVar "r")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EInfix" (PVar "op") (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "a"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EFieldAccess" (PVar "x") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EVar "n")) (EVar "r")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "relocAssign") (EVar "o"))) (EVar "fs"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ERecordUpdate" (PVar "x") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EApp (EApp (EVar "map") (EApp (EVar "relocAssign") (EVar "o"))) (EVar "fs"))) (EVar "r")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EVariantUpdate" (PVar "c") (PVar "x") (PVar "fs"))) (EApp (EApp (EApp (EVar "EVariantUpdate") (EVar "c")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EApp (EApp (EVar "map") (EApp (EVar "relocAssign") (EVar "o"))) (EVar "fs"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EApp (EVar "relocExpr") (EVar "o"))) (EVar "es"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EVar "map") (EApp (EVar "relocExpr") (EVar "o"))) (EVar "es"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EVar "map") (EApp (EVar "relocExpr") (EVar "o"))) (EVar "es"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EIndex" (PVar "x") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "i"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "lo"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "lo"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ESlice" (PVar "x") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "lo"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EAnnot" (PVar "x") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EVar "t")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EHeadAnnot" (PVar "x") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EVar "t")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EApp (EVar "relocInterp") (EVar "o"))) (EVar "parts"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ESection" (PCon "SecRight" (PVar "op") (PVar "x")))) (EApp (EVar "ESection") (EApp (EApp (EVar "SecRight") (EVar "op")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x")))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ESection" (PCon "SecLeft" (PVar "x") (PVar "op")))) (EApp (EVar "ESection") (EApp (EApp (EVar "SecLeft") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EVar "op"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "k")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "v"))))) (EVar "kvs"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "relocExpr") (EVar "o"))) (EVar "es"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EAsPat" (PVar "n") (PVar "x"))) (EApp (EApp (EVar "EAsPat") (EVar "n")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))))
+(DFunDef false "relocExpr" (PWild (PVar "e")) (EVar "e"))
+(DTypeSig false "relocArm" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Arm") (TyCon "Arm"))))
+(DFunDef false "relocArm" ((PVar "o") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "b"))) (EApp (EApp (EApp (EVar "Arm") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EApp (EApp (EVar "map") (EApp (EVar "relocGuard") (EVar "o"))) (EVar "gs"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DTypeSig false "relocGuard" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Guard") (TyCon "Guard"))))
+(DFunDef false "relocGuard" ((PVar "o") (PCon "GBool" (PVar "e"))) (EApp (EVar "GBool") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DFunDef false "relocGuard" ((PVar "o") (PCon "GBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "GBind") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DTypeSig false "relocGuardArm" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm"))))
+(DFunDef false "relocGuardArm" ((PVar "o") (PCon "GuardArm" (PVar "gs") (PVar "b"))) (EApp (EApp (EVar "GuardArm") (EApp (EApp (EVar "map") (EApp (EVar "relocGuard") (EVar "o"))) (EVar "gs"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DTypeSig false "relocStmt" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "DoStmt") (TyCon "DoStmt"))))
+(DFunDef false "relocStmt" ((PVar "o") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DFunDef false "relocStmt" ((PVar "o") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DFunDef false "relocStmt" ((PVar "o") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))) (EVar "site")))
+(DFunDef false "relocStmt" ((PVar "o") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DFunDef false "relocStmt" ((PVar "o") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DTypeSig false "relocAssign" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign"))))
+(DFunDef false "relocAssign" ((PVar "o") (PCon "FieldAssign" (PVar "n") (PVar "v"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "v"))))
+(DTypeSig false "relocInterp" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart"))))
+(DFunDef false "relocInterp" ((PVar "o") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DFunDef false "relocInterp" (PWild (PVar "p")) (EVar "p"))
+(DTypeSig false "binderSpan" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "binderSpan" ((PVar "decls")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "Ref") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))) (DoLet false false (PVar "hi") (EApp (EVar "Ref") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))) (DoLet false false (PVar "count") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "note") (ELam ((PVar "bid")) (EMatch (EVar "bid") (arm (PCon "BinderId" PWild (PVar "i")) ((GBool (EBinOp ">=" (EVar "i") (ELit (LInt 0))))) (EBlock (DoLet false false PWild (EIf (EBinOp "||" (EBinOp "<" (EFieldAccess (EVar "lo") "value") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EFieldAccess (EVar "lo") "value"))) (EApp (EApp (EVar "setRef") (EVar "lo")) (EVar "i")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp ">" (EVar "i") (EFieldAccess (EVar "hi") "value")) (EApp (EApp (EVar "setRef") (EVar "hi")) (EVar "i")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (EBinOp "+" (EFieldAccess (EVar "count") "value") (ELit (LInt 1))))) (DoExpr (EVar "bid")))) (arm PWild () (EVar "bid"))))) (DoLet false false PWild (EApp (EApp (EVar "mapBinders") (EVar "note")) (EVar "decls"))) (DoExpr (EIf (EBinOp "==" (EBinOp "+" (EBinOp "-" (EFieldAccess (EVar "hi") "value") (EFieldAccess (EVar "lo") "value")) (ELit (LInt 1))) (EFieldAccess (EVar "count") "value")) (ETuple (EFieldAccess (EVar "lo") "value") (EFieldAccess (EVar "count") "value")) (ETuple (EFieldAccess (EVar "lo") "value") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))))))
+(DTypeSig false "relocated" (TyFun (TyCon "Int") (TyFun (TyCon "PreludeElab") (TyCon "PreludeElab"))))
+(DFunDef false "relocated" ((PVar "offset") (PVar "pe")) (EIf (EBinOp "==" (EVar "offset") (ELit (LInt 0))) (EVar "pe") (ERecordUpdate (EVar "pe") ((fa "peDecls" (EApp (EApp (EVar "mapBinders") (EApp (EVar "relocId") (EVar "offset"))) (EFieldAccess (EVar "pe") "peDecls"))) (fa "peBinders" (EApp (EApp (EVar "map") (ELam ((PVar "row")) (ERecordUpdate (EVar "row") ((fa "brId" (EApp (EApp (EVar "relocId") (EVar "offset")) (EFieldAccess (EVar "row") "brId"))))))) (EFieldAccess (EVar "pe") "peBinders"))) (fa "peBinderBase" (EBinOp "+" (EFieldAccess (EVar "pe") "peBinderBase") (EVar "offset")))))))
+(DTypeSig false "preludeElabCacheRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "PreludeElab") (TyCon "Bool")))))
 (DFunDef false "preludeElabCacheRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "seedPreludeElab" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "PreludeElab") (TyCon "Unit"))))
-(DFunDef false "seedPreludeElab" ((PVar "generation") (PVar "pe")) (EApp (EApp (EVar "setRef") (EVar "preludeElabCacheRef")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "pe")))))
+(DFunDef false "seedPreludeElab" ((PVar "generation") (PVar "pe")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setPreludeEvidence") (EFieldAccess (EVar "pe") "peEvCounter")) (EFieldAccess (EVar "pe") "peEvidence"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeElabCacheRef")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "pe") (EVar "False")))))))
 (DTypeSig true "preludeElabHit" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "PreludeElab"))))
-(DFunDef false "preludeElabHit" ((PVar "generation")) (EMatch (EUnOp "!" (EVar "preludeElabCacheRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EApp (EVar "Some") (EVar "pe"))) (arm PWild () (EVar "None"))))
+(DFunDef false "preludeElabHit" ((PVar "generation")) (EMatch (EUnOp "!" (EVar "preludeElabCacheRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") PWild)) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EApp (EVar "Some") (EVar "pe"))) (arm PWild () (EVar "None"))))
+(DTypeSig true "preludeElabFor" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "PreludeElab")))))
+(DFunDef false "preludeElabFor" ((PVar "generation") (PVar "core")) (EMatch (EUnOp "!" (EVar "preludeElabCacheRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") (PCon "True"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EApp (EVar "Some") (EVar "pe"))) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") (PCon "False"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EBlock (DoLet false false (PTuple (PVar "first") (PVar "count")) (EApp (EVar "binderSpan") (EVar "core"))) (DoExpr (EIf (EBinOp "/=" (EVar "count") (EFieldAccess (EVar "pe") "peBinderCount")) (EVar "None") (EBlock (DoLet false false (PVar "moved") (EApp (EApp (EVar "relocated") (EBinOp "-" (EVar "first") (EFieldAccess (EVar "pe") "peBinderBase"))) (EVar "pe"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeElabCacheRef")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "moved") (EVar "True"))))) (DoExpr (EApp (EVar "Some") (EVar "moved")))))))) (arm PWild () (EVar "None"))))
+(DTypeSig true "withShippedRows" (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyFun (TyCon "EvTable") (TyFun (TyCon "BinderTypeTable") (TyTuple (TyCon "EvTable") (TyCon "BinderTypeTable"))))))
+(DFunDef false "withShippedRows" ((PCon "None") (PVar "evidence") (PVar "binders")) (ETuple (EVar "evidence") (EVar "binders")))
+(DFunDef false "withShippedRows" ((PCon "Some" (PVar "pe")) (PVar "evidence") (PVar "binders")) (ETuple (EBinOp "++" (EFieldAccess (EVar "pe") "peEvidence") (EVar "evidence")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "row")) (EApp (EApp (EVar "addBinderRow") (EVar "row")) (EVar "acc")))) (EVar "binders")) (EFieldAccess (EVar "pe") "peBinders"))))
+(DTypeSig true "heldPreludeCounters" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "heldPreludeCounters" (PWild) (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "pe") PWild)) (ETuple (EFieldAccess (EVar "pe") "peEvCounter") (EFieldAccess (EVar "pe") "peLocalCounter")))) (EUnOp "!" (EVar "preludeElabCacheRef"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "Decl" false) (mem "EvEntry" true) (mem "EvId" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "BinderId" true) (mem "Decl" true) (mem "DoStmt" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Section" true))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "evEntriesSExp" false) (mem "readDecls" false) (mem "readEvEntries" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseAlias ("string") "S"))
@@ -473,7 +809,8 @@ preludeElabHit generation = match !preludeElabCacheRef
 (DUse false (UseGroup ("types" "evidence_coverage") ((mem "EvidenceFault" true) (mem "evidenceFaults" false))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceFault" true) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false) (mem "runtimeTypeFromName" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "setPreludeEvidence" false))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "BinderTypeTable" false) (mem "RuntimeType" true) (mem "addBinderRow" false) (mem "binderOrdinal" false) (mem "runtimeTypeName" false) (mem "runtimeTypeFromName" false))))
 (DData Public "PreludeElab" () ((variant "PreludeElab" (ConNamed (field "peDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "peEvidence" (TyApp (TyCon "List") (TyCon "EvEntry"))) (field "peBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "peEvCounter" (TyCon "Int")) (field "peLocalCounter" (TyCon "Int")) (field "peBinderCount" (TyCon "Int")) (field "peBinderBase" (TyCon "Int"))))) ())
 (DTypeSig true "preludeElabOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyCon "PreludeElab")))))
 (DFunDef false "preludeElabOf" ((PVar "decls") (PVar "evidence") (PVar "binders")) (ERecordCreate "PreludeElab" ((fa "peDecls" (EVar "decls")) (fa "peEvidence" (EApp (EApp (EVar "referencedRows") (EVar "decls")) (EVar "evidence"))) (fa "peBinders" (EVar "binders")) (fa "peEvCounter" (EApp (EVar "evidenceHighWater") (EVar "evidence"))) (fa "peLocalCounter" (EApp (EVar "localHighWater") (EApp (EVar "declsSExp") (EVar "decls")))) (fa "peBinderCount" (EApp (EMethodRef "length") (EVar "binders"))) (fa "peBinderBase" (EApp (EVar "binderBase") (EVar "binders"))))))
@@ -544,9 +881,108 @@ preludeElabHit generation = match !preludeElabCacheRef
 (DFunDef false "readElabFile" ((PVar "text")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (ELit (LString "file"))) (ELit (LString "no header line")))) (arm (PCon "Some" (PVar "i")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "i")) (EVar "text"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EMatch (EApp (EVar "declaredVersion") (EVar "node")) (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "/=" (EVar "v") (EVar "formatVersion")))) (EApp (EVar "Err") (EApp (EVar "WrongFormat") (EVar "v")))) (arm PWild () (EMatch (EApp (EVar "headerOf") (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "h")) () (EBlock (DoLet false false (PVar "body") (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text"))) (DoExpr (EIf (EBinOp "/=" (EApp (EVar "sha256Hex") (EVar "body")) (EFieldAccess (EVar "h") "hDigest")) (EApp (EApp (EVar "refuse") (ELit (LString "header/digest"))) (ELit (LString "the body does not match the digest"))) (EApp (EApp (EVar "decodeBody") (EVar "h")) (EVar "body"))))))))))))))
 (DTypeSig false "decodeBody" (TyFun (TyCon "Header") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeElab"))))))
 (DFunDef false "decodeBody" ((PVar "h") (PVar "body")) (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "body"))) (DoExpr (EMatch (EApp (EVar "readDecls") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "decls")) () (EMatch (EApp (EVar "readEvEntries") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "evidence")) () (EBlock (DoLet false false (PVar "binders") (EApp (EApp (EVar "cursorList") (EVar "readBinder")) (EVar "cur"))) (DoExpr (EIf (EApp (EVar "cursorFailed") (EVar "cur")) (EApp (EApp (EVar "refuse") (ELit (LString "binders"))) (ELit (LString "malformed or truncated encoding"))) (EIf (EApp (EVar "not") (EApp (EVar "cursorAtEnd") (EVar "cur"))) (EApp (EVar "failure") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (ELit (LString "trailing text after the binder rows")))))) (EBlock (DoLet false false (PTuple (PVar "k") (PVar "l") (PVar "n") (PVar "b")) (EFieldAccess (EVar "h") "hCounters")) (DoExpr (EIf (EBinOp "||" (EBinOp "/=" (EVar "n") (EApp (EMethodRef "length") (EVar "binders"))) (EBinOp "/=" (EVar "b") (EApp (EVar "binderBase") (EVar "binders")))) (EApp (EApp (EVar "refuse") (ELit (LString "header/counters"))) (ELit (LString "the binder count or base disagrees with the rows"))) (EApp (EVar "Ok") (ETuple (EFieldAccess (EVar "h") "hKey") (ERecordCreate "PreludeElab" ((fa "peDecls" (EVar "decls")) (fa "peEvidence" (EVar "evidence")) (fa "peBinders" (EVar "binders")) (fa "peEvCounter" (EVar "k")) (fa "peLocalCounter" (EVar "l")) (fa "peBinderCount" (EVar "n")) (fa "peBinderBase" (EVar "b"))))))))))))))))))))
-(DTypeSig false "preludeElabCacheRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "PreludeElab")))))
+(DTypeSig true "readElabKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey"))))
+(DFunDef false "readElabKey" ((PVar "text")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (ELit (LString "file"))) (ELit (LString "no header line")))) (arm (PCon "Some" (PVar "i")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "i")) (EVar "text"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EMatch (EApp (EVar "declaredVersion") (EVar "node")) (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "/=" (EVar "v") (EVar "formatVersion")))) (EApp (EVar "Err") (EApp (EVar "WrongFormat") (EVar "v")))) (arm PWild () (EMatch (EApp (EVar "headerOf") (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "h")) () (EIf (EBinOp "/=" (EApp (EVar "sha256Hex") (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text"))) (EFieldAccess (EVar "h") "hDigest")) (EApp (EApp (EVar "refuse") (ELit (LString "header/digest"))) (ELit (LString "the body does not match the digest"))) (EApp (EVar "Ok") (EFieldAccess (EVar "h") "hKey"))))))))))))
+(DTypeSig false "mapBinders" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "mapBinders" ((PVar "f") (PVar "decls")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocDecl") (EVar "f"))) (EVar "decls")))
+(DTypeSig false "relocId" (TyFun (TyCon "Int") (TyFun (TyCon "BinderId") (TyCon "BinderId"))))
+(DFunDef false "relocId" ((PVar "offset") (PCon "BinderId" (PVar "m") (PVar "i"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EApp (EVar "BinderId") (EVar "m")) (EVar "i")) (EApp (EApp (EVar "BinderId") (EVar "m")) (EBinOp "+" (EVar "i") (EVar "offset")))))
+(DTypeSig false "relocDecl" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "relocDecl" ((PVar "o") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))) (EVar "site")) (EApp (EVar "o") (EVar "bid"))))
+(DFunDef false "relocDecl" ((PVar "o") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocBind") (EVar "o"))) (EVar "binds"))))
+(DFunDef false "relocDecl" ((PVar "o") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "relocIfaceMethod") (EVar "o"))) (EVar "methods"))))))
+(DFunDef false "relocDecl" ((PVar "o") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "relocImplMethod") (EVar "o"))) (EVar "methods"))))))
+(DFunDef false "relocDecl" ((PVar "o") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "body"))))
+(DFunDef false "relocDecl" ((PVar "o") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "body"))))
+(DFunDef false "relocDecl" ((PVar "o") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "relocDecl") (EVar "o")) (EVar "d"))))
+(DFunDef false "relocDecl" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "relocIfaceMethod" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
+(DFunDef false "relocIfaceMethod" ((PVar "o") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))) (EVar "mloc")))
+(DFunDef false "relocIfaceMethod" (PWild (PVar "m")) (EVar "m"))
+(DTypeSig false "relocImplMethod" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
+(DFunDef false "relocImplMethod" ((PVar "o") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DTypeSig false "relocBind" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
+(DFunDef false "relocBind" ((PVar "o") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocClause") (EVar "o"))) (EVar "clauses"))) (EVar "site")) (EApp (EVar "o") (EVar "bid"))))
+(DTypeSig false "relocClause" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "FunClause") (TyCon "FunClause"))))
+(DFunDef false "relocClause" ((PVar "o") (PCon "FunClause" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "FunClause") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DTypeSig false "relocPat" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Pat") (TyCon "Pat"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PVar" (PVar "n") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EVar "PVar") (EVar "n")) (EVar "l")) (EApp (EVar "o") (EVar "bid"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PAs" (PVar "n") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "n")) (EVar "l")) (EApp (EVar "o") (EVar "bid"))) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "h"))) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "t"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PRec" (PVar "c") (PVar "fields") (PVar "open"))) (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocField") (EVar "o"))) (EVar "fields"))) (EVar "open")))
+(DFunDef false "relocPat" (PWild (PVar "p")) (EVar "p"))
+(DTypeSig false "relocField" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))
+(DFunDef false "relocField" ((PVar "o") (PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PVar "sub"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EApp (EVar "o") (EVar "bid"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocPat") (EVar "o"))) (EMethodRef "sub"))))
+(DTypeSig false "relocExpr" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ELam" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "ELam") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ELet" (PVar "l") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "l")) (EVar "r")) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e1"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e2"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ELetGroup" (PVar "bs") (PVar "e2"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocBind") (EVar "o"))) (EVar "bs"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e2"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EMatch" (PVar "e0") (PVar "arms"))) (EApp (EApp (EVar "EMatch") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocArm") (EVar "o"))) (EVar "arms"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocGuardArm") (EVar "o"))) (EVar "arms"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocStmt") (EVar "o"))) (EVar "stmts"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocStmt") (EVar "o"))) (EVar "stmts"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ELoc" (PVar "l") (PVar "x"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EDoOrigin" (PVar "l") (PVar "x"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EApp" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "a"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EApp (EVar "EIf") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "c"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "t"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "el"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "a"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))) (EVar "r")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EUnOp" (PVar "op") (PVar "a") (PVar "r"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "a"))) (EVar "r")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EInfix" (PVar "op") (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "a"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EFieldAccess" (PVar "x") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EVar "n")) (EVar "r")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocAssign") (EVar "o"))) (EVar "fs"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ERecordUpdate" (PVar "x") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocAssign") (EVar "o"))) (EVar "fs"))) (EVar "r")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EVariantUpdate" (PVar "c") (PVar "x") (PVar "fs"))) (EApp (EApp (EApp (EVar "EVariantUpdate") (EVar "c")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocAssign") (EVar "o"))) (EVar "fs"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocExpr") (EVar "o"))) (EVar "es"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocExpr") (EVar "o"))) (EVar "es"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocExpr") (EVar "o"))) (EVar "es"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EIndex" (PVar "x") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "i"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "lo"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "lo"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ESlice" (PVar "x") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "lo"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EAnnot" (PVar "x") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EVar "t")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EHeadAnnot" (PVar "x") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EVar "t")))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocInterp") (EVar "o"))) (EVar "parts"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ESection" (PCon "SecRight" (PVar "op") (PVar "x")))) (EApp (EVar "ESection") (EApp (EApp (EVar "SecRight") (EVar "op")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x")))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ESection" (PCon "SecLeft" (PVar "x") (PVar "op")))) (EApp (EVar "ESection") (EApp (EApp (EVar "SecLeft") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))) (EVar "op"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "k")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "v"))))) (EVar "kvs"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocExpr") (EVar "o"))) (EVar "es"))))
+(DFunDef false "relocExpr" ((PVar "o") (PCon "EAsPat" (PVar "n") (PVar "x"))) (EApp (EApp (EVar "EAsPat") (EVar "n")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "x"))))
+(DFunDef false "relocExpr" (PWild (PVar "e")) (EVar "e"))
+(DTypeSig false "relocArm" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Arm") (TyCon "Arm"))))
+(DFunDef false "relocArm" ((PVar "o") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "b"))) (EApp (EApp (EApp (EVar "Arm") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocGuard") (EVar "o"))) (EVar "gs"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DTypeSig false "relocGuard" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Guard") (TyCon "Guard"))))
+(DFunDef false "relocGuard" ((PVar "o") (PCon "GBool" (PVar "e"))) (EApp (EVar "GBool") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DFunDef false "relocGuard" ((PVar "o") (PCon "GBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "GBind") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DTypeSig false "relocGuardArm" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm"))))
+(DFunDef false "relocGuardArm" ((PVar "o") (PCon "GuardArm" (PVar "gs") (PVar "b"))) (EApp (EApp (EVar "GuardArm") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocGuard") (EVar "o"))) (EVar "gs"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "b"))))
+(DTypeSig false "relocStmt" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "DoStmt") (TyCon "DoStmt"))))
+(DFunDef false "relocStmt" ((PVar "o") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DFunDef false "relocStmt" ((PVar "o") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DFunDef false "relocStmt" ((PVar "o") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))) (EVar "site")))
+(DFunDef false "relocStmt" ((PVar "o") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DFunDef false "relocStmt" ((PVar "o") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DTypeSig false "relocAssign" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign"))))
+(DFunDef false "relocAssign" ((PVar "o") (PCon "FieldAssign" (PVar "n") (PVar "v"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "v"))))
+(DTypeSig false "relocInterp" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart"))))
+(DFunDef false "relocInterp" ((PVar "o") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EApp (EVar "relocExpr") (EVar "o")) (EVar "e"))))
+(DFunDef false "relocInterp" (PWild (PVar "p")) (EVar "p"))
+(DTypeSig false "binderSpan" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "binderSpan" ((PVar "decls")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "Ref") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))) (DoLet false false (PVar "hi") (EApp (EVar "Ref") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))) (DoLet false false (PVar "count") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "note") (ELam ((PVar "bid")) (EMatch (EVar "bid") (arm (PCon "BinderId" PWild (PVar "i")) ((GBool (EBinOp ">=" (EVar "i") (ELit (LInt 0))))) (EBlock (DoLet false false PWild (EIf (EBinOp "||" (EBinOp "<" (EFieldAccess (EVar "lo") "value") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EFieldAccess (EVar "lo") "value"))) (EApp (EApp (EVar "setRef") (EVar "lo")) (EVar "i")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp ">" (EVar "i") (EFieldAccess (EVar "hi") "value")) (EApp (EApp (EVar "setRef") (EVar "hi")) (EVar "i")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (EBinOp "+" (EFieldAccess (EDictApp "count") "value") (ELit (LInt 1))))) (DoExpr (EVar "bid")))) (arm PWild () (EVar "bid"))))) (DoLet false false PWild (EApp (EApp (EVar "mapBinders") (EVar "note")) (EVar "decls"))) (DoExpr (EIf (EBinOp "==" (EBinOp "+" (EBinOp "-" (EFieldAccess (EVar "hi") "value") (EFieldAccess (EVar "lo") "value")) (ELit (LInt 1))) (EFieldAccess (EDictApp "count") "value")) (ETuple (EFieldAccess (EVar "lo") "value") (EFieldAccess (EDictApp "count") "value")) (ETuple (EFieldAccess (EVar "lo") "value") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))))))
+(DTypeSig false "relocated" (TyFun (TyCon "Int") (TyFun (TyCon "PreludeElab") (TyCon "PreludeElab"))))
+(DFunDef false "relocated" ((PVar "offset") (PVar "pe")) (EIf (EBinOp "==" (EVar "offset") (ELit (LInt 0))) (EVar "pe") (ERecordUpdate (EVar "pe") ((fa "peDecls" (EApp (EApp (EVar "mapBinders") (EApp (EVar "relocId") (EVar "offset"))) (EFieldAccess (EVar "pe") "peDecls"))) (fa "peBinders" (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (ERecordUpdate (EVar "row") ((fa "brId" (EApp (EApp (EVar "relocId") (EVar "offset")) (EFieldAccess (EVar "row") "brId"))))))) (EFieldAccess (EVar "pe") "peBinders"))) (fa "peBinderBase" (EBinOp "+" (EFieldAccess (EVar "pe") "peBinderBase") (EVar "offset")))))))
+(DTypeSig false "preludeElabCacheRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "PreludeElab") (TyCon "Bool")))))
 (DFunDef false "preludeElabCacheRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "seedPreludeElab" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "PreludeElab") (TyCon "Unit"))))
-(DFunDef false "seedPreludeElab" ((PVar "generation") (PVar "pe")) (EApp (EApp (EVar "setRef") (EVar "preludeElabCacheRef")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "pe")))))
+(DFunDef false "seedPreludeElab" ((PVar "generation") (PVar "pe")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setPreludeEvidence") (EFieldAccess (EVar "pe") "peEvCounter")) (EFieldAccess (EVar "pe") "peEvidence"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeElabCacheRef")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "pe") (EVar "False")))))))
 (DTypeSig true "preludeElabHit" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "PreludeElab"))))
-(DFunDef false "preludeElabHit" ((PVar "generation")) (EMatch (EUnOp "!" (EVar "preludeElabCacheRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EApp (EVar "Some") (EVar "pe"))) (arm PWild () (EVar "None"))))
+(DFunDef false "preludeElabHit" ((PVar "generation")) (EMatch (EUnOp "!" (EVar "preludeElabCacheRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") PWild)) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EApp (EVar "Some") (EVar "pe"))) (arm PWild () (EVar "None"))))
+(DTypeSig true "preludeElabFor" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "PreludeElab")))))
+(DFunDef false "preludeElabFor" ((PVar "generation") (PVar "core")) (EMatch (EUnOp "!" (EVar "preludeElabCacheRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") (PCon "True"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EApp (EVar "Some") (EVar "pe"))) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "pe") (PCon "False"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "generation")))) (EBlock (DoLet false false (PTuple (PVar "first") (PVar "count")) (EApp (EVar "binderSpan") (EVar "core"))) (DoExpr (EIf (EBinOp "/=" (EDictApp "count") (EFieldAccess (EVar "pe") "peBinderCount")) (EVar "None") (EBlock (DoLet false false (PVar "moved") (EApp (EApp (EVar "relocated") (EBinOp "-" (EVar "first") (EFieldAccess (EVar "pe") "peBinderBase"))) (EVar "pe"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeElabCacheRef")) (EApp (EVar "Some") (ETuple (EVar "generation") (EVar "moved") (EVar "True"))))) (DoExpr (EApp (EVar "Some") (EVar "moved")))))))) (arm PWild () (EVar "None"))))
+(DTypeSig true "withShippedRows" (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyFun (TyCon "EvTable") (TyFun (TyCon "BinderTypeTable") (TyTuple (TyCon "EvTable") (TyCon "BinderTypeTable"))))))
+(DFunDef false "withShippedRows" ((PCon "None") (PVar "evidence") (PVar "binders")) (ETuple (EVar "evidence") (EVar "binders")))
+(DFunDef false "withShippedRows" ((PCon "Some" (PVar "pe")) (PVar "evidence") (PVar "binders")) (ETuple (EBinOp "++" (EFieldAccess (EVar "pe") "peEvidence") (EVar "evidence")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "row")) (EApp (EApp (EVar "addBinderRow") (EVar "row")) (EVar "acc")))) (EVar "binders")) (EFieldAccess (EVar "pe") "peBinders"))))
+(DTypeSig true "heldPreludeCounters" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "heldPreludeCounters" (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "pe") PWild)) (ETuple (EFieldAccess (EVar "pe") "peEvCounter") (EFieldAccess (EVar "pe") "peLocalCounter")))) (EUnOp "!" (EVar "preludeElabCacheRef"))))

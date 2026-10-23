@@ -1,6 +1,6 @@
 backend.core_validate	1
-driver.build_cmd	2
-driver.diagnostics	3
+driver.build_cmd	3
+driver.diagnostics	4
 driver.loader	1
 entries.playground_main	1
 eval.eval	16
@@ -25,5 +25,6 @@ tools.test_cmd	1
 types.prelude_elab	1
 types.prelude_interface	1
 types.program_facts	1
+types.route_key	1
 types.target_profile	1
 types.typecheck	3

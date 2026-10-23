@@ -44,6 +44,10 @@ import driver.build_cmd.{
   loadPreludeInterface,
   PreludeInputs(..),
   preludeStaleLine,
+  TreesVerdict,
+  checkPreludeElab,
+  loadPreludeElab,
+  preludeTreesLine,
 }
 import support.util.{
   reverseL,
@@ -118,7 +122,7 @@ import frontend.parser.{
   Positions,
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
-import frontend.desugar_cache.{desugaredPrelude}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import frontend.desugar.{desugarIn}
 import tools.target_parse.{targetDesugared}
 import driver.loader.{
@@ -171,6 +175,7 @@ import driver.diagnostics.{
   cjAllToJson,
   flushRunEnvelope,
   pendingStaleNotice,
+  pendingTreesNotice,
   readDiagSrc,
   codeKind,
   optField,
@@ -245,7 +250,7 @@ import tools.test_cmd.{
   runEvalPropsWorker,
 }
 import tools.prop_runner.{seedPropRng, PropRequest(..)}
-import tools.doctest.{Engine}
+import tools.doctest.{Engine(..)}
 import tools.repl.{initSession, replLoop}
 import tools.lsp.{runServer}
 import tools.mcp.{runMcpServer}
@@ -496,6 +501,38 @@ seedCheckPrelude stdlibDir rsrc csrc =
   let _ = loadPreludeInterface (shippedInputs stdlibDir rsrc csrc)
   ()
 
+-- A tree-arm verb's report of the prelude's elaborated trees, made once by the
+-- verb's own process: one stderr line when `stdlib/core.mdke` is stale, a stop
+-- under MEDAKA_STRICT (through [stop]), and nothing for a missing, disabled or
+-- loaded file.  [deferred] (`run --json`, C4) stages the line for the envelope.
+reportTrees : Bool -> (String -> <IO> Unit) -> TreesVerdict -> <IO> Unit
+reportTrees deferred stop verdict = match preludeTreesLine verdict
+  None => ()
+  Some msg =>
+    if envOr "MEDAKA_STRICT" "" /= "" then
+      stop msg
+    else if deferred then
+      pendingTreesNotice := Some msg
+    else
+      ePutStrLn msg
+
+-- `run`'s prelude: hold the interface and the elaborated trees beside `core.mdk`,
+-- so its drive skips core's pass, and report the trees' verdict.
+takeShippedPrelude : Bool -> String -> String -> String -> <IO> Unit
+takeShippedPrelude jsonMode stdlibDir rsrc csrc =
+  let inputs = shippedInputs stdlibDir rsrc csrc
+  let _ = loadPreludeInterface inputs
+  reportTrees jsonMode runAbort (loadPreludeElab inputs)
+
+-- The trees' verdict for a verb whose emitter children take them (`build`,
+-- `test`), read without decoding them; the children print nothing.
+reportChildTrees : String -> String -> String -> <IO> Unit
+reportChildTrees stdlibDir rsrc csrc =
+  reportTrees
+    False
+    dieMsg
+    (checkPreludeElab (shippedInputs stdlibDir rsrc csrc))
+
 -- Is this argv `medaka run … --json …`?  The predicate is deliberately the
 -- BYTE-IDENTICAL one `runRunCmd` uses to compute its own `jsonMode`
 -- (`runFlagGiven "--json"` over the whole post-verb argv, program passthrough args
@@ -506,15 +543,21 @@ runJsonInvocation : List String -> Bool
 runJsonInvocation ("run" :: rest) = runFlagGiven "--json" rest
 runJsonInvocation _ = False
 
--- Print a deferred staleness notice as prose and clear it.  Called from every
+-- Print the deferred staleness notices as prose and clear them.  Called from every
 -- exit that is NOT the envelope: `run`'s error arms (via `runAbort`) and
 -- `dispatchSub`'s `--help`.  A no-op whenever nothing was deferred.
 flushStaleNoticeProse : Unit -> <IO> Unit
-flushStaleNoticeProse _ = match !pendingStaleNotice
-  None => ()
-  Some msg =>
-    pendingStaleNotice := None
-    ePutStrLn msg
+flushStaleNoticeProse _ =
+  let _ = match !pendingStaleNotice
+    None => ()
+    Some msg =>
+      pendingStaleNotice := None
+      ePutStrLn msg
+  match !pendingTreesNotice
+    None => ()
+    Some msg =>
+      pendingTreesNotice := None
+      ePutStrLn msg
 
 -- `run`'s error exit: report `msg` and leave with 1, first flushing BOTH
 -- deferred notices as prose — the staleness verdict and, under `--json`, the
@@ -1490,11 +1533,12 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
         Err msg =>
           let _ = println (cjBuildFailedJson input msg)
           stageExit 1
-        Ok _ => match readPreludeFile corePath
+        Ok rsrc => match readPreludeFile corePath
           Err msg =>
             let _ = println (cjBuildFailedJson input msg)
             stageExit 1
-          Ok _ =>
+          Ok csrc =>
+            let trees = jsonTreesNotice target stdlibDir rsrc csrc
             let medaka = envOr "MEDAKA" "medaka"
             let cc = envOr "CC" "clang"
             let keepIrCli = flag "--keep-ir" a
@@ -1522,25 +1566,60 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
               -- with the status line this channel never prints.
               Ok rep => match rep.diagEnvelope
                 Some (entry, envelope) =>
-                  println (envelopeWithNotes entry rep.notes envelope)
+                  println
+                    (withTreesField
+                      trees
+                      (envelopeWithNotes entry rep.notes envelope))
                 None =>
                   let _ =
                     println
-                      (cjBuildFailedJson
-                        input
-                        "error: the emitter wrote no diagnostics envelope; an emitter built from an older medaka does not write one")
+                      (withTreesField
+                        trees
+                        (cjBuildFailedJson
+                          input
+                          "error: the emitter wrote no diagnostics envelope; an emitter built from an older medaka does not write one"))
                   stageExit 1
               Err rep => match rep.diagEnvelope
                 -- The front end refused the program.
                 Some (_, envelope) =>
-                  let _ = println envelope
+                  let _ = println (withTreesField trees envelope)
                   stageExit 1
                 -- A build-stage FAILURE already carried its notes: they are
                 -- part of the rendered message, exactly as the plain CLI
                 -- prints them, inside the one R-BUILD-FAILED diagnostic.
                 None =>
-                  let _ = println (cjBuildFailedJson input (ppBuildReport rep))
+                  let _ =
+                    println
+                      (withTreesField
+                        trees
+                        (cjBuildFailedJson input (ppBuildReport rep)))
                   stageExit 1
+
+-- `build --json`'s stale-trees line, carried in its envelope rather than as
+-- prose; under MEDAKA_STRICT it stops the verb, as a stale binary does, before
+-- any envelope exists.  Only a native build's emitter child takes the trees.
+jsonTreesNotice : BuildTarget ->
+  String ->
+  String ->
+  String ->
+  <IO> Option String
+jsonTreesNotice TWasm _ _ _ = None
+jsonTreesNotice TNative stdlibDir rsrc csrc =
+  let line =
+    preludeTreesLine (checkPreludeElab (shippedInputs stdlibDir rsrc csrc))
+  match line
+    Some msg if envOr "MEDAKA_STRICT" "" /= "" =>
+      let _ = dieMsg msg
+      None
+    _ => line
+
+-- [envelope] with a `stalePreludeTrees` field appended when [notice] holds one.
+withTreesField : Option String -> String -> String
+withTreesField None envelope = envelope
+withTreesField (Some msg) envelope = match parseJson envelope
+  Ok (JObject pairs) =>
+    stringify (jObject (toList pairs ++ [("stalePreludeTrees", JString msg)]))
+  _ => envelope
 
 -- The `{"files":[...]}` envelope for a target that could not be read at all —
 -- a file-not-found/unreadable-path diagnostic, unlocated (no source to point
@@ -2390,30 +2469,40 @@ runBuildPlainCmd a =
           Some o => o
           None => defaultOutPath target input
         let prelude = do
-          _ <- readPreludeFile (root ++ "/stdlib/runtime.mdk")
-          readPreludeFile (root ++ "/stdlib/core.mdk")
+          rsrc <- readPreludeFile (root ++ "/stdlib/runtime.mdk")
+          csrc <- readPreludeFile (root ++ "/stdlib/core.mdk")
+          Ok (rsrc, csrc)
         match prelude
           Err msg => dieMsg msg
-          Ok _ => match (runBuild
-            root
-            medaka
-            cc
-            target
-            inputAbs
-            outPath
-            keepIrCli
-            False
-            stampBuild
-            (Some GateAsk {
-              askAllowInternal = allowInternal,
-              askDiagJson = False,
-            }))
-            Ok rep =>
-              let perfTEmit = now ()
-              let _ = emitPhase perfOn "emit" (perfTEmit - perfT0) input
-              let _ = emitTotal perfOn (perfTEmit - perfT0)
-              println (ppBuildReport rep)
-            Err rep => dieMsg (ppBuildReport rep)
+          Ok (rsrc, csrc) =>
+            let _ = nativeTreesReport target root rsrc csrc
+            match (runBuild
+              root
+              medaka
+              cc
+              target
+              inputAbs
+              outPath
+              keepIrCli
+              False
+              stampBuild
+              (Some GateAsk {
+                askAllowInternal = allowInternal,
+                askDiagJson = False,
+              }))
+              Ok rep =>
+                let perfTEmit = now ()
+                let _ = emitPhase perfOn "emit" (perfTEmit - perfT0) input
+                let _ = emitTotal perfOn (perfTEmit - perfT0)
+                println (ppBuildReport rep)
+              Err rep => dieMsg (ppBuildReport rep)
+
+-- `build`'s report of the prelude's trees: only a native build's emitter child
+-- takes them.
+nativeTreesReport : BuildTarget -> String -> String -> String -> <IO> Unit
+nativeTreesReport TNative root rsrc csrc =
+  reportChildTrees (root ++ "/stdlib") rsrc csrc
+nativeTreesReport TWasm _ _ _ = ()
 
 -- `medaka build --json`'s own argument-parsing arm: a flag error still goes
 -- through `parseBuildArgs`, but a bad-args message is now the JSON envelope
@@ -2815,13 +2904,16 @@ runRunCmd argv =
       let rtD = desugaredPrelude rsrc
       let coreD = desugaredPrelude csrc
       let modsD = map desugarPair mods
+      let _ = takeShippedPrelude jsonMode stdlibDir rsrc csrc
       let trusted = projectTrustedMods target roots stdlibDir mods
       -- #2072: the FFI-stamp discriminator, handed to typecheck alongside the
       -- #1713 reference-trust set above.  Different predicate, deliberately: this
       -- one is stdlib-root ownership with no `allow-internal` opt-out.
       let (flatStdlib, ownedStdlib) =
         stdlibOwnership target roots stdlibDir mods
-      let inputs = driveInputsFor !selectedProfile flatStdlib ownedStdlib
+      let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
+        diPreludeKey = Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc),
+      }
       let perfTLoad = now ()
       let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
       -- One front-end run (`frontEnd`), the same raw-tree passes and resolve
@@ -3083,6 +3175,7 @@ runTestCmd argv0 =
             None => 100
           let filterOpt = flagValue "--filter" a
           let jsonMode = flag "--json" a
+          let _ = reportTestTrees engines
           match a.positionals
             [] =>
               if jsonMode then
@@ -3114,6 +3207,23 @@ runTestCmd argv0 =
                 stageExit 1
               else
                 runTestManyTargets engines cases filterOpt seedOpt targets
+
+-- `test`'s report of the prelude's trees, which its native engine's probe builds
+-- take; the prelude texts are read only to key the file.
+reportTestTrees : List Engine -> <IO> Unit
+reportTestTrees engines =
+  if any isNativeEngine engines then
+    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    match (
+      readFile (root ++ "/stdlib/runtime.mdk"),
+      readFile (root ++ "/stdlib/core.mdk"),
+    )
+      (Ok rsrc, Ok csrc) => reportChildTrees (root ++ "/stdlib") rsrc csrc
+      _ => ()
+
+isNativeEngine : Engine -> Bool
+isNativeEngine EngNative = True
+isNativeEngine EngInterp = False
 
 -- The supervisor sends a target followed by JSON-string encoded exact `(name,
 -- seed, cases)` triples. These are internal replay requests, so they do not share

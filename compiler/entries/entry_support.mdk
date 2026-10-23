@@ -14,7 +14,13 @@ import types.publish.{CheckedProgram(..), TcReport(..)}
 import types.program_facts.{ProgramFacts, factsOfChecked}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar, desugarIn, mapProg}
-import frontend.desugar_cache.{desugaredPrelude}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import driver.build_cmd.{
+  PreludeInputs(..),
+  loadPreludeElab,
+  loadPreludeInterface,
+  preludeCompilerEnv,
+}
 import driver.front_gate.{
   JsonFront(..),
   cliStdlibExports,
@@ -203,10 +209,33 @@ public export data EmitAsk = EmitAsk {
   askOwnership : (Bool, List String),
 }
 
--- The inputs of an emit's drive under [profile], with the graph's stdlib ownership.
+-- The inputs of an emit's drive under [profile], with the graph's stdlib ownership
+-- and the prelude key of the sources the graph's prelude decls were desugared from.
 emitDriveInputs : Option TargetProfile -> EmitAsk -> DriveInputs
-emitDriveInputs profile ask = match ask.askOwnership
-  (flatEntry, owned) => driveInputsFor profile flatEntry owned
+emitDriveInputs profile ask = match (ask.askOwnership, ask.askPreludeSrcs)
+  ((flatEntry, owned), (rsrc, csrc)) => { driveInputsFor profile flatEntry owned |
+    diPreludeKey = Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc),
+  }
+
+-- The prelude's interface and elaborated trees beside `core.mdk` in [stdlibDir],
+-- held for this process when the spawning `medaka` named its compiler identity
+-- (`preludeCompilerEnv`); with none, or with a file that does not load, the
+-- drive elaborates core as it always did.  This process prints nothing about
+-- either file: the verb that spawned it reports the verdict.
+holdShippedPrelude : String -> String -> String -> <IO> Unit
+holdShippedPrelude stdlibDir rsrc csrc = match getEnv preludeCompilerEnv
+  None => ()
+  Some "" => ()
+  Some id =>
+    let inputs = PreludeInputs {
+      pnStdlibDir = stdlibDir,
+      pnRuntimeSrc = rsrc,
+      pnCoreSrc = csrc,
+      pnCompiler = id,
+    }
+    let _ = loadPreludeInterface inputs
+    let _ = loadPreludeElab inputs
+    ()
 
 -- `driveModules` for a terminal that needs the loader's `(modId, path, decls)`
 -- triples and the route's ask (`runEmitAsked`) as well — the emit drivers do,
@@ -331,6 +360,7 @@ emitLoaded : (EmitAsk -> List (String, String, List Decl) -> List Decl -> List D
   List (String, List Decl) ->
   <IO> Unit
 emitLoaded runEmit srcs json coreP entry roots mods runtimeD coreD modsD =
+  let _ = holdShippedPrelude (dirOf coreP) (fst srcs) (snd srcs)
   let ownership =
     stdlibOwnership entry roots (dirOf coreP) (map dropPathTriple mods)
   let ask = EmitAsk {
