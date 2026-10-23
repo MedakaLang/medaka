@@ -161,9 +161,15 @@ binderLine : List BinderRow -> String
 binderLine rows = renderSExp (SList (map sexpBinder rows))
 
 headerNode : InterfaceKey -> String -> SExp
-headerNode key digest = SList [
-  SAtom "medaka-elab",
-  SAtom (intToString formatVersion),
+headerNode = framedHeader "medaka-elab" formatVersion
+
+-- The header line of a framed file: [tag], [version], the key's sources and
+-- compiler, and the digest of the bytes after the line.
+export
+framedHeader : String -> Int -> InterfaceKey -> String -> SExp
+framedHeader tag version key digest = SList [
+  SAtom tag,
+  SAtom (intToString version),
   SList [
     SAtom "sources",
     SList (map (s => SList [SAtom (fst s), SAtom (snd s)]) key.ikSources),
@@ -206,19 +212,22 @@ renderElabFault (WrongFormat v) =
   "elaborated-trees format version \{v}, this compiler reads \{formatVersion}"
 renderElabFault (Malformed e) = "\{e.sePath}: \{e.seWhat} (elaborated trees)"
 
+export
 refuse : String -> String -> Result InterfaceFault a
 refuse path what =
   Err (Malformed SexpError { seOffset = 0, sePath = path, seWhat = what })
 
+export
 failure : SexpError -> Result InterfaceFault a
 failure e = Err (Malformed e)
 
 -- The version the header declares, when it declares one.
-declaredVersion : SExp -> Option Int
-declaredVersion (SList ((SAtom "medaka-elab") :: v :: _)) = match atomInt "" v
-  Ok n => Some n
-  Err _ => None
-declaredVersion _ = None
+declaredVersion : String -> SExp -> Option Int
+declaredVersion tag (SList ((SAtom t) :: v :: _))
+  | t == tag = match atomInt "" v
+    Ok n => Some n
+    Err _ => None
+declaredVersion _ _ = None
 
 -- The key and the digest a header claims.
 data Header = Header { hKey : InterfaceKey, hDigest : String }
@@ -231,9 +240,9 @@ data Counters = Counters {
   cBinderBase : Int,
 }
 
-headerOf : SExp -> Result SexpError Header
-headerOf (SList [SAtom "medaka-elab", v, SList [SAtom "sources", srcs], SList [SAtom "compiler", c], SList [SAtom "digest", d]]) =
-  do
+headerOf : String -> SExp -> Result SexpError Header
+headerOf tag (SList [SAtom t, v, SList [SAtom "sources", srcs], SList [SAtom "compiler", c], SList [SAtom "digest", d]])
+  | t == tag = do
     version <- atomInt "header/version" v
     sources <- traverse sourceOf (listItems srcs)
     compiler <- expectAtom "header/compiler" c
@@ -246,10 +255,10 @@ headerOf (SList [SAtom "medaka-elab", v, SList [SAtom "sources", srcs], SList [S
       },
       hDigest = digest,
     }
-headerOf _ = Err SexpError {
+headerOf tag _ = Err SexpError {
   seOffset = 0,
   sePath = "header",
-  seWhat = "expected a medaka-elab header of five fields",
+  seWhat = "expected a \{tag} header of five fields",
 }
 
 countersOf : SExp -> Result SexpError Counters
@@ -310,13 +319,29 @@ readBinder cur =
 -- The header a file claims and the bytes its digest covers, after the version
 -- and the digest are checked and before any of the covered bytes is decoded.
 checkedFile : String -> Result InterfaceFault (Header, String)
-checkedFile text = match S.indexOf "\n" text
+checkedFile = checkedHeader "medaka-elab" formatVersion
+
+-- The key a file framed under [tag] at [version] claims and the bytes its
+-- digest covers, after the version and the digest are checked.
+export
+checkedFramed : String ->
+  Int ->
+  String ->
+  Result InterfaceFault (InterfaceKey, String)
+checkedFramed tag version text =
+  map ((h, covered) => (h.hKey, covered)) (checkedHeader tag version text)
+
+checkedHeader : String ->
+  Int ->
+  String ->
+  Result InterfaceFault (Header, String)
+checkedHeader tag version text = match S.indexOf "\n" text
   None => refuse "file" "no header line"
   Some i => match parseSExp (S.take i text)
     Err e => failure e
-    Ok node => match declaredVersion node
-      Some v if v /= formatVersion => Err (WrongFormat v)
-      _ => match headerOf node
+    Ok node => match declaredVersion tag node
+      Some v if v /= version => Err (WrongFormat v)
+      _ => match headerOf tag node
         Err e => failure e
         Ok h =>
           let covered = bodyOf text
@@ -582,6 +607,7 @@ relocInterp _ p = p
 -- The first minted binder ordinal of [decls] and how many there are, or a
 -- count of -1 when the minted ordinals are not one contiguous run.  The walk
 -- that relocates is the census: [note] hands every id back unchanged.
+export
 binderSpan : List Decl -> (Int, Int)
 binderSpan decls =
   let lo = Ref (0 - 1)
@@ -600,6 +626,11 @@ binderSpan decls =
     (lo.value, count.value)
   else
     (lo.value, 0 - 1)
+
+-- [decls] with every minted binder ordinal moved by [offset].
+export
+relocDecls : Int -> List Decl -> List Decl
+relocDecls offset decls = mapBinders (relocId offset) decls
 
 relocated : Int -> PreludeElab -> PreludeElab
 relocated offset pe =

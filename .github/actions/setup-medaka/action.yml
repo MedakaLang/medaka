@@ -243,11 +243,11 @@ runs:
         fi
         echo "artifact provenance OK: emitter stamp matches this checkout ($stamped)"
 
-    # stdlib/core.mdki and stdlib/core.mdke are gitignored and not shipped in the
+    # stdlib/core.mdki, core.mdke and core.mdkd are gitignored and not shipped in the
     # artifact: each is a pure function of stdlib/core.mdk, so re-deriving them here
-    # (a core check and a tree-arm elaboration of core) is never stale, whereas a
-    # shipped copy would have to be trusted like the stamp.
-    - name: Write stdlib/core.mdki and stdlib/core.mdke (derived from this checkout)
+    # (a core check, a tree-arm elaboration and a desugar of core) is never stale,
+    # whereas a shipped copy would have to be trusted like the stamp.
+    - name: Write stdlib/core.mdki, core.mdke and core.mdkd (derived from this checkout)
       if: inputs.binary == 'artifact'
       shell: bash
       run: |
