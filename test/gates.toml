@@ -273,7 +273,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_prose_classifier"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -291,7 +291,7 @@ link = "production"
 [[gate]]
 name = "build_cmd"
 area = "backend"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -308,7 +308,7 @@ link = "production"
 [[gate]]
 name = "lsp_harness"
 area = "tools"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -354,7 +354,7 @@ link = "production"
 [[gate]]
 name = "gzip/test/deflate_oracle"
 area = "engines"
-shard = "gates_5"
+shard = "gates_2"
 project = "gzip"
 tiers = ["merge"]
 cost = "cheap"
@@ -370,7 +370,7 @@ link = "production"
 [[gate]]
 name = "gzip/test/inflate_oracle"
 area = "engines"
-shard = "gates_3"
+shard = "gates_2"
 project = "gzip"
 tiers = ["merge"]
 cost = "cheap"
@@ -386,7 +386,7 @@ link = "production"
 [[gate]]
 name = "parsec/test/check"
 area = "engines"
-shard = "gates_3"
+shard = "gates_2"
 project = "parsec"
 tiers = ["merge"]
 cost = "cheap"
@@ -540,7 +540,7 @@ link = "production"
 [[gate]]
 name = "pds/test/atsyntax_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_5"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -595,7 +595,7 @@ link = "production"
 [[gate]]
 name = "pds/test/constant_time_public_key"
 area = "engines"
-shard = "gates_3"
+shard = "gates_5"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -627,7 +627,7 @@ link = "production"
 [[gate]]
 name = "pds/test/constant_time_signing"
 area = "engines"
-shard = "gates_2"
+shard = "gates_1"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -686,7 +686,7 @@ link = "production"
 [[gate]]
 name = "pds/test/ecdsa_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_2"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -702,7 +702,7 @@ link = "production"
 [[gate]]
 name = "pds/test/encodings_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_6"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -734,7 +734,7 @@ link = "production"
 [[gate]]
 name = "pds/test/hmac_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -771,7 +771,7 @@ link = "production"
 [[gate]]
 name = "pds/test/lexjson_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_6"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -803,7 +803,7 @@ link = "production"
 [[gate]]
 name = "pds/test/opaque_field_scalar"
 area = "engines"
-shard = "gates_3"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -904,7 +904,7 @@ link = "production"
 [[gate]]
 name = "pds/test/rfc6979_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_2"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -920,7 +920,7 @@ link = "production"
 [[gate]]
 name = "pds/test/scalar_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -936,7 +936,7 @@ link = "production"
 [[gate]]
 name = "pds/test/secp256k1_point_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_5"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -1032,7 +1032,7 @@ link = "production"
 [[gate]]
 name = "pds/test/trust_boundary_guards"
 area = "engines"
-shard = "gates_3"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -1048,7 +1048,7 @@ link = "production"
 [[gate]]
 name = "pds/test/vector_provenance"
 area = "engines"
-shard = "gates_3"
+shard = "gates_2"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -1096,7 +1096,7 @@ link = "production"
 [[gate]]
 name = "sqlite/test/index_write_oracle"
 area = "engines"
-shard = "gates_5"
+shard = "gates_6"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1201,7 +1201,7 @@ link = "production"
 [[gate]]
 name = "bootstrap_eval"
 area = "eval"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1217,7 +1217,7 @@ link = "production"
 [[gate]]
 name = "bootstrap_lex"
 area = "frontend"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1249,7 +1249,7 @@ link = "production"
 [[gate]]
 name = "bootstrap_typecheck"
 area = "types"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1313,7 +1313,7 @@ link = "production"
 [[gate]]
 name = "check_build_oracles_for_consistency"
 area = "types"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1473,7 +1473,7 @@ link = "production"
 [[gate]]
 name = "cross_project_deps"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1505,7 +1505,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_call_arity"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1538,7 +1538,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_check_cli_modules"
 area = "types"
-shard = "gates_5"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1586,7 +1586,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_check_policy"
 area = "types"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1602,7 +1602,7 @@ link = "production"
 [[gate]]
 name = "target_fixtures"
 area = "types"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1634,7 +1634,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_check_wrapper_callers"
 area = "types"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1650,7 +1650,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_ci_guard_failsafe"
 area = "soundness"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1666,7 +1666,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_codemod"
 area = "tools"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -1749,7 +1749,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_dict_semantics_permute"
 area = "infra"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -1765,7 +1765,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_argtag_matrix"
 area = "soundness"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -1781,7 +1781,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_dispatch_shape"
 area = "eval"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1797,7 +1797,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_doc"
 area = "tools"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1813,7 +1813,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_doc_stdlib_reference"
 area = "tools"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1829,7 +1829,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_stdlib_conventions"
 area = "tools"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1845,7 +1845,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_effect_polarity"
 area = "infra"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1925,7 +1925,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_error_quality_baseline"
 area = "diagnostics"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1941,7 +1941,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_eval_scaling"
 area = "eval"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -1957,7 +1957,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_eval"
 area = "eval"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2021,7 +2021,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_fmt"
 area = "frontend"
-shard = "gates_6"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2037,7 +2037,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_fmt_write_safety"
 area = "frontend"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2053,7 +2053,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_iface_order"
 area = "infra"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2085,7 +2085,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_index_oob"
 area = "infra"
-shard = "gates_1"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2101,7 +2101,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_index"
 area = "infra"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2149,7 +2149,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_ir_size"
 area = "infra"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2165,7 +2165,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_let_refute"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2181,7 +2181,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_lint_cache"
 area = "tools"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2197,7 +2197,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_lint_multi"
 area = "tools"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2297,7 +2297,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_llvm"
 area = "backend"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2329,7 +2329,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_llvm_typed_ir"
 area = "backend"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2345,7 +2345,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_llvm_typed"
 area = "backend"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2377,7 +2377,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_mcp"
 area = "tools"
-shard = "gates_8"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2457,7 +2457,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_parse_error_loc"
 area = "frontend"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2489,7 +2489,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_perf_stage_census"
 area = "infra"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2513,7 +2513,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_ported"
 area = "infra"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2529,7 +2529,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_preflight_base"
 area = "infra"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2577,7 +2577,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_project_enrolment"
 area = "soundness"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2593,7 +2593,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_reach_fail_open"
 area = "infra"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2609,7 +2609,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_references_scaling"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -2625,7 +2625,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_references_tool"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2673,7 +2673,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_run_check_agreement"
 area = "infra"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 # Measured 183-292s per run; the cheap class's 300s kill timeout sits inside that spread.
@@ -2690,7 +2690,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_run_entry_subdir"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2706,7 +2706,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_run_stdout_flush"
 area = "infra"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2738,7 +2738,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_shadow_semantics"
 area = "infra"
-shard = "gates_2"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2754,7 +2754,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_slice_oob"
 area = "infra"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2770,7 +2770,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_snapshot_bless"
 area = "frontend"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2786,7 +2786,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_snapshot_frontend"
 area = "frontend"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2802,7 +2802,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_snapshot_wasm_input"
 area = "frontend"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2818,7 +2818,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_source_bytes"
 area = "infra"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2850,7 +2850,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_stage_ir_scaling"
 area = "infra"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge", "nightly/STAGE_IR_TIER=full"]
 cost = "heavy"
@@ -2882,7 +2882,7 @@ link = "production"
 [[gate]]
 name = "run_command_sigchld"
 area = "backend"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2898,7 +2898,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_test_typecheck"
 area = "infra"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3042,7 +3042,7 @@ link = "production"
 [[gate]]
 name = "effect_param_domain"
 area = "infra"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3058,7 +3058,7 @@ link = "production"
 [[gate]]
 name = "effect_product_domain"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3074,7 +3074,7 @@ link = "production"
 [[gate]]
 name = "effect_set_domain"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3122,7 +3122,7 @@ link = "production"
 [[gate]]
 name = "manifest_emit"
 area = "infra"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3653,7 +3653,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_closure_alloc"
 area = "backend"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3685,7 +3685,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_emitted_code_floor"
 area = "infra"
-shard = "gates_7"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3755,7 +3755,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_cli_reject_floor"
 area = "cli"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3829,7 +3829,7 @@ link = "production"
 [[gate]]
 name = "pds/test/lib_boundary"
 area = "engines"
-shard = "gates_3"
+shard = "gates_6"
 project = "pds"
 tiers = ["merge"]
 cost = "cheap"
@@ -3855,7 +3855,7 @@ link = "production"
 [[gate]]
 name = "pds/test/deploy_config_lint"
 area = "engines"
-shard = "gates_3"
+shard = "gates_2"
 project = "pds"
 tiers = ["merge"]
 cost = "cheap"
@@ -3881,7 +3881,7 @@ link = "production"
 [[gate]]
 name = "dist_install_smoke"
 area = "infra"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 # `nightly`: nightly.yml's macos-smoke job also runs it, on macOS (#2533).
 tiers = ["merge", "nightly"]
@@ -3959,7 +3959,7 @@ pinned_gates = []
 [[gate]]
 name = "diff_compiler_catch_all_census"
 area = "types"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3980,7 +3980,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_partition_stability"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3996,7 +3996,7 @@ link = "production"
 [[gate]]
 name = "arch_boundaries"
 area = "types"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -4012,7 +4012,7 @@ link = "production"
 [[gate]]
 name = "stage_counts"
 area = "types"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
