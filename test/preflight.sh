@@ -1637,7 +1637,7 @@ while IFS= read -r f; do
   # test/gates.toml; the `stdlib/*` blast-radius arm above adds only
   # `diff_compiler_*`, which does not match this gate's name.
   case "$f" in
-    compiler/types/prelude_interface.mdk|compiler/types/interface_sexp.mdk|compiler/types/typecheck.mdk|compiler/support/sexp_value.mdk|compiler/driver/loader.mdk|compiler/driver/diagnostics.mdk|compiler/driver/build_cmd.mdk|compiler/driver/medaka_cli.mdk|compiler/tools/interface_cmd.mdk|stdlib/core.mdk|stdlib/runtime.mdk|test/build_native_medaka.sh|test/diff_interface_onoff.sh) add 'diff_interface_onoff' ;;
+    compiler/types/prelude_interface.mdk|compiler/types/interface_sexp.mdk|compiler/types/typecheck.mdk|compiler/support/sexp_value.mdk|compiler/driver/loader.mdk|compiler/driver/diagnostics.mdk|compiler/driver/build_cmd.mdk|compiler/driver/medaka_cli.mdk|compiler/tools/interface_cmd.mdk|stdlib/core.mdk|stdlib/runtime.mdk|test/build_native_medaka.sh|test/diff_interface_onoff.sh|compiler/types/prelude_elab.mdk|compiler/frontend/ast_codec.mdk|compiler/tools/test_cmd.mdk|compiler/entries/llvm_emit_modules_main.mdk|compiler/entries/entry_support.mdk|compiler/types/route_key.mdk|compiler/types/evidence_coverage.mdk) add 'diff_interface_onoff' ;;
   esac
 done < "$CHANGED_PATHS"
 

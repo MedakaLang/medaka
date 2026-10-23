@@ -969,7 +969,9 @@ public export data TraceSink = TraceSink {
 -- target profile's `IO` grants and name (`""` for none), carried as data so this
 -- module need not import `types.target_profile`, and the run `markModules`
 -- returned when the drive checks the trees it marked (`None` otherwise): the mint
--- keeps that run's base and cell arrays.
+-- keeps that run's base and cell arrays.  [diPreludeKey] is the desugar-cache
+-- generation pair of the two prelude trees the drive is handed, when its driver
+-- knows it: the tree arm continues from the prelude's shipped trees only under it.
 public export data DriveInputs = DriveInputs {
   diStdlibOwned : OrdMap Unit,
   diFlatEntryIsStdlib : Bool,
@@ -977,6 +979,7 @@ public export data DriveInputs = DriveInputs {
   diIoJoinGrants : List (String, EffParamTy),
   diProfileName : String,
   diMarked : Option GraphRun,
+  diPreludeKey : Option (Int, Int),
 }
 
 -- What a drive hands back to its caller, as plain data frozen at the drive's end
@@ -3143,8 +3146,9 @@ public export data PreludePreamble = PreludePreamble {
 -- (`driveGraphK`): the same preamble, the same per-module worker, the same
 -- graph-end drain.  The selection names the three points where the two output
 -- contracts genuinely part company — the promotion-eligible seed, the core pass
--- (the tree arm needs core's marked decls back, so it cannot continue from the
--- prelude interface), and whether the marked trees are dict-passed and published.
+-- (the tree arm needs core's dict-passed decls back, so it continues from the
+-- prelude interface only when the shipped trees are held too), and whether the
+-- marked trees are dict-passed and published.
 --   * `GOutDiags` — per-module diagnostics and schemes.  What `check`, the LSP,
 --     the playground, MCP and `medaka test`'s gate consume.
 --   * `GOutTrees` — the same diagnostics PLUS the elaborated, dict-passed trees,

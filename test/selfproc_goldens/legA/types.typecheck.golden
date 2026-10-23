@@ -929,7 +929,7 @@ dictParamsGo : String -> Int -> Int -> List Pat
 dictPass : ModuleCtx -> EvIndex -> String -> List String -> List Decl -> List Decl
 dictPassDecl : ModuleCtx -> EvIndex -> Map String Unit -> List String -> Decl -> Decl
 dictPassLetBind : ModuleCtx -> Map String Unit -> LetBind -> LetBind
-dictPassModulesIfEnabled : ModuleCtx -> List String -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+dictPassModulesIfEnabled : ModuleCtx -> List String -> Bool -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 dictPassModulesScoped : ModuleCtx -> EvIndex -> List String -> List ((String, String), List PredicateSlot) -> Map String (Map String Unit) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
 dictVarSatisfiesIface : ModuleCtx -> String -> Int -> List (String, Mono) -> Bool
 directExternSigs : List Decl -> List (String, Ty)
@@ -3255,6 +3255,8 @@ topAbsorbs : String -> Expr -> Expr
 topGrantIds : GraphCtx -> String -> String -> List Int
 topRouteV : SiteCtx -> String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route
 transitiveImporters : Map String (Map String Unit) -> String -> List (String, List Decl) -> List (String, List Decl)
+treeArmElab : DriveInputs -> List Decl -> Option PreludeElab
+treeArmHit : DriveInputs -> List Decl -> GraphCtx -> Option (PreludeElab, PreludeInterface)
 tupleArgElems : Expr -> Option (List Expr)
 tupleCallHintFor : ModuleCtx -> Mono -> Option (String, Option (Loc, String))
 tupleCallShapeHint : Expr -> Expr -> Mono -> Option (String, Option (Loc, String))

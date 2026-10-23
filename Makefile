@@ -454,6 +454,16 @@ inlang-frontend-resolve-test:
 inlang-frontend-parser-test:
 	./medaka test compiler/frontend/parser_test.mdk
 
+## compiler/frontend/ast_codec.mdk is imported only by types.prelude_elab; this
+## step runs its own sibling test by name.
+inlang-frontend-ast-codec-test:
+	./medaka test compiler/frontend/ast_codec_test.mdk
+
+## compiler/types/prelude_elab.mdk is imported by types.typecheck and
+## driver.build_cmd; this step runs its own sibling test by name.
+inlang-types-prelude-elab-test:
+	./medaka test compiler/types/prelude_elab_test.mdk
+
 ## S-the-libraries-nobody-runs (#2984-adjacent): `gzip/`'s whole
 ## in-language suite (lib + main) has no floor gate of any kind, and a
 ## directory target already grades every assertion in it with one exit

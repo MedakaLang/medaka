@@ -1,5 +1,5 @@
 # META
-source_lines=2370
+source_lines=2523
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -31,13 +31,18 @@ stages=DESUGAR,MARK
 import list.{take}
 import support.util.{stringTrim, joinWith, joinNl, lookupAssoc}
 import string.{words, contains, startsWith, endsWith, split}
-import frontend.desugar_cache.{desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.ast.{Decl}
+import types.tc_types.{DriveInputs(..)}
 import types.interface_sexp.{
   InterfaceSection, InterfaceFault(..), readInterface, cacheOfSections,
   formatVersion, sha256Hex
 }
 import types.prelude_interface.{
   InterfaceKey, interfaceKeyOf, keysMatch, seedPreludeInterface
+}
+import types.prelude_elab.{
+  PreludeElab, elabKeyOf, readElabFile, readElabKey, seedPreludeElab
 }
 import support.stage_count.{forwardStageLines}
 import io.{runCommandOk}
@@ -304,6 +309,24 @@ preludeInterfaceKey coreName inputs =
     ]
     inputs.pnCompiler
 
+-- The inputs a prelude is read for by the running binary: the compiler
+-- identity is its own build fingerprint.
+export
+shippedInputs : String -> String -> String -> PreludeInputs
+shippedInputs stdlibDir rsrc csrc = PreludeInputs {
+  pnStdlibDir = stdlibDir,
+  pnRuntimeSrc = rsrc,
+  pnCoreSrc = csrc,
+  pnCompiler = buildFingerprint (),
+}
+
+-- The generation the desugar cache gives the two prelude texts, the pair the
+-- prelude caches and a drive's `diPreludeKey` are keyed by.
+export
+preludeGeneration : String -> String -> (Int, Int)
+preludeGeneration rsrc csrc =
+  (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
+
 -- The stale component a file that does not decode names: its format version
 -- when that is what was refused, else the file itself.
 export
@@ -367,6 +390,123 @@ lastPreludeStaleLine : Unit -> Option String
 lastPreludeStaleLine _ = match !preludeVerdictRef
   Some (_, verdict) => preludeStaleLine verdict
   None => None
+
+-- ---- the prelude's elaborated trees ----
+-- `<stdlib>/core.mdke`, written beside `core.mdki` by the same `medaka interface
+-- write`, holds core's elaborated, dict-passed trees.  A process that loads it
+-- holds them, and a tree-arm drive that also hits the interface skips core's
+-- pass; any other verdict leaves the drives to elaborate `core.mdk`.
+public export data TreesVerdict =
+  | TVLoaded
+  | TVMissing
+  | TVStale String
+  | TVDisabled
+
+-- The environment variable an emitter child reads the compiler identity from.
+-- The child is built without one, so the `medaka` that spawns it hands over its
+-- own: the two are built together, and the files were written by that `medaka`.
+export
+preludeCompilerEnv : String
+preludeCompilerEnv = "MEDAKA_PRELUDE_COMPILER"
+
+-- How `<stdlibDir>/core.mdke` stands against [inputs], with its value when
+-- [decode] asks for it.  Without, only the header and the digest are read: a
+-- verb whose own process takes no trees reports the verdict and nothing more.
+readPreludeTrees : Bool ->
+  PreludeInputs ->
+  <IO> (TreesVerdict, Option PreludeElab)
+readPreludeTrees decode inputs
+  | envOr "MEDAKA_NO_INTERFACE" "" /= "" = (TVDisabled, None)
+  | otherwise = match readFile (joinPath inputs.pnStdlibDir "core.mdke")
+    Err _ => (TVMissing, None)
+    Ok text =>
+      let read =
+        if decode then
+          map (kv => (fst kv, Some (snd kv))) (readElabFile text)
+        else
+          map (k => (k, None)) (readElabKey text)
+      match read
+        Err fault => (TVStale (faultComponent fault), None)
+        Ok (key, _) if inputs.pnCompiler == "" || key.ikCompiler == "" =>
+          (TVStale "compiler", None)
+        Ok (key, value) =>
+          match (keysMatch
+            key
+            (elabKeyOf (preludeInterfaceKey "core.mdk" inputs)))
+            None => withInterface decode inputs value
+            Some component => (TVStale component, None)
+
+-- A fresh trees file is only a hit beside an interface that loads: the tree arm
+-- joins the trees to the interface's cache, so the loss of either one is the
+-- loss of the lever.  The component names the interface file.
+withInterface : Bool ->
+  PreludeInputs ->
+  Option PreludeElab ->
+  <IO> (TreesVerdict, Option PreludeElab)
+withInterface decode inputs value =
+  match (if decode then
+    loadPreludeInterface inputs
+  else
+    readPreludeInterface inputs)
+    PVLoaded _ => (TVLoaded, value)
+    PVMissing => (TVStale "interface", None)
+    PVStale component => (TVStale "interface \{component}", None)
+    PVDisabled => (TVDisabled, None)
+
+-- The verdict of this process's load of the trees, with the inputs it was for.
+preludeTreesRef : Ref (Option (PreludeInputs, TreesVerdict))
+preludeTreesRef = Ref None
+
+-- `readPreludeTrees`, once per process per input, holding the trees on a load
+-- under the generation the desugar cache gives the two texts.
+export
+loadPreludeElab : PreludeInputs -> <IO> TreesVerdict
+loadPreludeElab inputs = match !preludeTreesRef
+  Some (seen, verdict) if seen == inputs => verdict
+  _ =>
+    let (verdict, value) = readPreludeTrees True inputs
+    let _ = match value
+      Some pe =>
+        seedPreludeElab
+          (preludeGeneration inputs.pnRuntimeSrc inputs.pnCoreSrc)
+          pe
+      None => ()
+    preludeTreesRef := Some (inputs, verdict)
+    verdict
+
+-- Whether this process has made its load of the trees.
+export
+treesLoaded : Unit -> Bool
+treesLoaded () = isSome !preludeTreesRef
+
+-- [inputs] for a drive over [coreDecls], keyed for the tree arm when this
+-- process holds the shipped prelude and [coreDecls] are all of core: a drive
+-- whose prelude had a shadowed function dropped (`dropShadowedExp`) is not the
+-- core the trees were written for.
+export
+withHeldPrelude : List Decl -> DriveInputs -> DriveInputs
+withHeldPrelude coreDecls inputs = match !preludeTreesRef
+  Some (held, _) =>
+    if length coreDecls == length (desugaredPrelude held.pnCoreSrc) then
+      keyedInputs (preludeGeneration held.pnRuntimeSrc held.pnCoreSrc) inputs
+    else
+      inputs
+  None => inputs
+
+keyedInputs : (Int, Int) -> DriveInputs -> DriveInputs
+keyedInputs key inputs = { inputs | diPreludeKey = Some key }
+
+-- The verdict alone, for a verb that reports it while its children take the trees.
+export
+checkPreludeElab : PreludeInputs -> <IO> TreesVerdict
+checkPreludeElab inputs = fst (readPreludeTrees False inputs)
+
+-- The one line a tree-arm verb prints for [verdict], if any.
+export
+preludeTreesLine : TreesVerdict -> Option String
+preludeTreesLine (TVStale component) =
+  Some "prelude trees stale: elaborating stdlib/core.mdk (\{component})"
+preludeTreesLine _ = None
 
 -- ---- the trailing-Unit auto-print trim ----
 -- The interpreter auto-prints main's Unit as a trailing "()\n"; the emitter's
@@ -1133,11 +1273,16 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
       (emitProg0, emitArgs0)
     else
       withEmitHalf "program" emitProg0 emitArgs0
-  let (emitProg, emitArgs) =
+  let (emitProg2, emitArgs2) =
     if strictEmit then
       withStrictEmit emitProg1 emitArgs1
     else
       (emitProg1, emitArgs1)
+  let (emitProg, emitArgs) =
+    if useNative then
+      withPreludeCompiler emitProg2 emitArgs2
+    else
+      (emitProg2, emitArgs2)
   -- `[perf] emit-ir`: the emitter subprocess alone.  The CLI's single `emit` row
   -- (medaka_cli.mdk) covers this WHOLE function and is deliberately kept as the
   -- total; these sub-rows decompose it (emit-ir + rt-obj + clang) so a slow build
@@ -2198,6 +2343,14 @@ withEmitHalf half prog args =
 withStrictEmit : String -> List String -> (String, List String)
 withStrictEmit prog args = ("env", ["MEDAKA_STRICT=1", prog] ++ args)
 
+-- The same idiom for the native emitter's compiler identity
+-- (`preludeCompilerEnv`): the child takes the prelude's shipped trees only under
+-- it.  A binary with no identity of its own hands none over.
+withPreludeCompiler : String -> List String -> (String, List String)
+withPreludeCompiler prog args = match buildFingerprint ()
+  "" => (prog, args)
+  id => ("env", ["\{preludeCompilerEnv}=\{id}", prog] ++ args)
+
 -- Run the emitter child, handing it the selected target profile and the
 -- front-end gate request by the same `env` idiom.  The child checks the program
 -- against that profile before it lowers anything
@@ -2376,9 +2529,12 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false) (mem "split" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "seedPreludeInterface" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "seedPreludeElab" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "forwardStageLines" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
@@ -2428,6 +2584,10 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "preludeSourceHash" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "preludeSourceHashesRef"))) (arm (PCon "Some" (PVar "h")) () (EVar "h")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "h") (EApp (EVar "sha256Hex") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeSourceHashesRef")) (EApp (EApp (EVar "take") (ELit (LInt 4))) (EBinOp "::" (ETuple (EVar "src") (EVar "h")) (EUnOp "!" (EVar "preludeSourceHashesRef")))))) (DoExpr (EVar "h"))))))
 (DTypeSig true "preludeInterfaceKey" (TyFun (TyCon "String") (TyFun (TyCon "PreludeInputs") (TyCon "InterfaceKey"))))
 (DFunDef false "preludeInterfaceKey" ((PVar "coreName") (PVar "inputs")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "formatVersion")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnRuntimeSrc"))) (ETuple (EVar "coreName") (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnCoreSrc"))))) (EFieldAccess (EVar "inputs") "pnCompiler")))
+(DTypeSig true "shippedInputs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PreludeInputs")))))
+(DFunDef false "shippedInputs" ((PVar "stdlibDir") (PVar "rsrc") (PVar "csrc")) (ERecordCreate "PreludeInputs" ((fa "pnStdlibDir" (EVar "stdlibDir")) (fa "pnRuntimeSrc" (EVar "rsrc")) (fa "pnCoreSrc" (EVar "csrc")) (fa "pnCompiler" (EApp (EVar "buildFingerprint") (ELit LUnit))))))
+(DTypeSig true "preludeGeneration" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "preludeGeneration" ((PVar "rsrc") (PVar "csrc")) (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))
 (DTypeSig true "faultComponent" (TyFun (TyCon "InterfaceFault") (TyCon "String")))
 (DFunDef false "faultComponent" ((PCon "WrongFormat" PWild)) (ELit (LString "format")))
 (DFunDef false "faultComponent" ((PCon "Malformed" PWild)) (ELit (LString "file")))
@@ -2442,6 +2602,28 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "preludeStaleLine" (PWild) (EVar "None"))
 (DTypeSig true "lastPreludeStaleLine" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "lastPreludeStaleLine" (PWild) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple PWild (PVar "verdict"))) () (EApp (EVar "preludeStaleLine") (EVar "verdict"))) (arm (PCon "None") () (EVar "None"))))
+(DData Public "TreesVerdict" () ((variant "TVLoaded" (ConPos)) (variant "TVMissing" (ConPos)) (variant "TVStale" (ConPos (TyCon "String"))) (variant "TVDisabled" (ConPos))) ())
+(DTypeSig true "preludeCompilerEnv" (TyCon "String"))
+(DFunDef false "preludeCompilerEnv" () (ELit (LString "MEDAKA_PRELUDE_COMPILER")))
+(DTypeSig false "readPreludeTrees" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab")))))))
+(DFunDef false "readPreludeTrees" ((PVar "decode") (PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "TVDisabled") (EVar "None")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (ELit (LString "core.mdke")))) (arm (PCon "Err" PWild) () (ETuple (EVar "TVMissing") (EVar "None"))) (arm (PCon "Ok" (PVar "text")) () (EBlock (DoLet false false (PVar "read") (EIf (EVar "decode") (EApp (EApp (EVar "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EVar "kv")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "kv")))))) (EApp (EVar "readElabFile") (EVar "text"))) (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EVar "None")))) (EApp (EVar "readElabKey") (EVar "text"))))) (DoExpr (EMatch (EVar "read") (arm (PCon "Err" (PVar "fault")) () (ETuple (EApp (EVar "TVStale") (EApp (EVar "faultComponent") (EVar "fault"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) ((GBool (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "key") "ikCompiler") (ELit (LString "")))))) (ETuple (EApp (EVar "TVStale") (ELit (LString "compiler"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "value"))) () (EMatch (EApp (EApp (EVar "keysMatch") (EVar "key")) (EApp (EVar "elabKeyOf") (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "withInterface") (EVar "decode")) (EVar "inputs")) (EVar "value"))) (arm (PCon "Some" (PVar "component")) () (ETuple (EApp (EVar "TVStale") (EVar "component")) (EVar "None")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "withInterface" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyEffect ("IO") None (TyTuple (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab"))))))))
+(DFunDef false "withInterface" ((PVar "decode") (PVar "inputs") (PVar "value")) (EMatch (EIf (EVar "decode") (EApp (EVar "loadPreludeInterface") (EVar "inputs")) (EApp (EVar "readPreludeInterface") (EVar "inputs"))) (arm (PCon "PVLoaded" PWild) () (ETuple (EVar "TVLoaded") (EVar "value"))) (arm (PCon "PVMissing") () (ETuple (EApp (EVar "TVStale") (ELit (LString "interface"))) (EVar "None"))) (arm (PCon "PVStale" (PVar "component")) () (ETuple (EApp (EVar "TVStale") (EBinOp "++" (EBinOp "++" (ELit (LString "interface ")) (EApp (EVar "display") (EVar "component"))) (ELit (LString "")))) (EVar "None"))) (arm (PCon "PVDisabled") () (ETuple (EVar "TVDisabled") (EVar "None")))))
+(DTypeSig false "preludeTreesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "TreesVerdict")))))
+(DFunDef false "preludeTreesRef" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "loadPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
+(DFunDef false "loadPreludeElab" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "value")) (EApp (EApp (EVar "readPreludeTrees") (EVar "True")) (EVar "inputs"))) (DoLet false false PWild (EMatch (EVar "value") (arm (PCon "Some" (PVar "pe")) () (EApp (EApp (EVar "seedPreludeElab") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (EFieldAccess (EVar "inputs") "pnCoreSrc"))) (EVar "pe"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeTreesRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EVar "verdict"))))))
+(DTypeSig true "treesLoaded" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DFunDef false "treesLoaded" ((PLit LUnit)) (EApp (EVar "isSome") (EUnOp "!" (EVar "preludeTreesRef"))))
+(DTypeSig true "withHeldPrelude" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "DriveInputs") (TyCon "DriveInputs"))))
+(DFunDef false "withHeldPrelude" ((PVar "coreDecls") (PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "held") PWild)) () (EIf (EBinOp "==" (EApp (EVar "length") (EVar "coreDecls")) (EApp (EVar "length") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "held") "pnCoreSrc")))) (EApp (EApp (EVar "keyedInputs") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "held") "pnRuntimeSrc")) (EFieldAccess (EVar "held") "pnCoreSrc"))) (EVar "inputs")) (EVar "inputs"))) (arm (PCon "None") () (EVar "inputs"))))
+(DTypeSig false "keyedInputs" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "DriveInputs") (TyCon "DriveInputs"))))
+(DFunDef false "keyedInputs" ((PVar "key") (PVar "inputs")) (ERecordUpdate (EVar "inputs") ((fa "diPreludeKey" (EApp (EVar "Some") (EVar "key"))))))
+(DTypeSig true "checkPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
+(DFunDef false "checkPreludeElab" ((PVar "inputs")) (EApp (EVar "fst") (EApp (EApp (EVar "readPreludeTrees") (EVar "False")) (EVar "inputs"))))
+(DTypeSig true "preludeTreesLine" (TyFun (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "preludeTreesLine" ((PCon "TVStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude trees stale: elaborating stdlib/core.mdk (")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ")")))))
+(DFunDef false "preludeTreesLine" (PWild) (EVar "None"))
 (DTypeSig false "stripTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripTrailingUnit" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")) (ELit (LString "()\n")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
@@ -2551,7 +2733,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "runBuildNativeRoots" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "BuildProfile") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))))))))))
 (DFunDef false "runBuildNativeRoots" ((PVar "root") (PVar "medaka") (PVar "cc") (PVar "inputAbs") (PVar "outPath") (PVar "tmpDir") (PVar "keepIrCli") (PVar "extraRoots") (PVar "strictEmit") (PVar "quietEmitStderr") (PVar "stampBuild") (PVar "profile")) (EBlock (DoLet false false (PVar "held") (EUnOp "!" (EVar "selectedProfile"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "None"))) (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildNativeRootsGo") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "inputAbs")) (EVar "outPath")) (EVar "tmpDir")) (EVar "keepIrCli")) (EVar "extraRoots")) (EVar "strictEmit")) (EVar "quietEmitStderr")) (EVar "stampBuild")) (EVar "profile")) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "held"))) (DoExpr (EVar "res"))))
 (DTypeSig false "runBuildNativeRootsGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "BuildProfile") (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))))))))))))
-(DFunDef false "runBuildNativeRootsGo" ((PVar "root") (PVar "medaka") (PVar "cc") (PVar "inputAbs") (PVar "outPath") (PVar "tmpDir") (PVar "keepIrCli") (PVar "extraRoots") (PVar "strictEmit") (PVar "quietEmitStderr") (PVar "stampBuild") (PVar "profile") (PVar "frontGate")) (EBlock (DoLet false false (PVar "emitter") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler/entries/llvm_emit_modules_main.mdk")))) (DoLet false false (PVar "runtimeP") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/runtime.mdk")))) (DoLet false false (PVar "preludeP") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/core.mdk")))) (DoLet false false (PVar "rtC") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "runtime/medaka_rt.c")))) (DoLet false false (PVar "compilerDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler")))) (DoLet false false (PVar "stdlibDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (DoLet false false (PVar "inputRoots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "inputAbs"))) (EVar "extraRoots"))) (DoLet false false (PVar "llPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "program.ll")))) (DoLet false false (PVar "emitArgsBase") (EBinOp "++" (EBinOp "++" (EListLit (EVar "runtimeP") (EVar "preludeP") (EVar "inputAbs")) (EVar "inputRoots")) (EListLit (EVar "compilerDir") (EVar "stdlibDir")))) (DoLet false false (PVar "emitter2") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_EMITTER"))) (EVar "defaultMedakaEmitter"))) (DoLet false false (PVar "useNative") (EBinOp "/=" (EVar "emitter2") (ELit (LString "")))) (DoLet false false (PVar "emitProg0") (EIf (EVar "useNative") (EVar "emitter2") (EVar "medaka"))) (DoLet false false (PVar "emitArgs0") (EIf (EVar "useNative") (EVar "emitArgsBase") (EBinOp "::" (ELit (LString "run")) (EBinOp "::" (EVar "emitter") (EVar "emitArgsBase"))))) (DoLet false false (PTuple (PVar "emitProg1") (PVar "emitArgs1")) (EIf (EBinOp "==" (EApp (EVar "preludeObjOf") (ELit LUnit)) (ELit (LString ""))) (ETuple (EVar "emitProg0") (EVar "emitArgs0")) (EApp (EApp (EApp (EVar "withEmitHalf") (ELit (LString "program"))) (EVar "emitProg0")) (EVar "emitArgs0")))) (DoLet false false (PTuple (PVar "emitProg") (PVar "emitArgs")) (EIf (EVar "strictEmit") (EApp (EApp (EVar "withStrictEmit") (EVar "emitProg1")) (EVar "emitArgs1")) (ETuple (EVar "emitProg1") (EVar "emitArgs1")))) (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "tEmit0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "diagPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "diag.json")))) (DoLet false false (PVar "emitRes") (EApp (EApp (EApp (EApp (EVar "runEmitterFor") (EVar "frontGate")) (EVar "diagPath")) (EVar "emitProg")) (EVar "emitArgs"))) (DoLet false false (PVar "tEmit1") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "emit-ir"))) (EBinOp "-" (EVar "tEmit1") (EVar "tEmit0"))) (EVar "inputAbs"))) (DoExpr (EMatch (EVar "emitRes") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not run the emitter `")) (EApp (EVar "display") (EVar "emitProg"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "irRaw") (PVar "emitRaw"))) () (EBlock (DoLet false false (PVar "emitErr") (EApp (EVar "forwardStageLines") (EVar "emitRaw"))) (DoLet false false (PVar "envelope") (EApp (EApp (EVar "askedEnvelope") (EVar "frontGate")) (EVar "diagPath"))) (DoExpr (EIf (EBinOp "==" (EVar "code") (EVar "emitDiagExitCode")) (EApp (EApp (EVar "refusedWith") (EVar "envelope")) (EApp (EVar "dropTrailingNewline") (EVar "emitErr"))) (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: emitter failed compiling ")) (EApp (EVar "display") (EVar "inputAbs"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "emitErr"))) (ELit (LString "")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "forwardEmitterStderr") (EVar "quietEmitStderr")) (EVar "emitErr"))) (DoLet false false (PVar "ir") (EApp (EVar "stripTrailingUnit") (EVar "irRaw"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "ir")) (ELit (LInt 0))) (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: emitter produced empty IR for ")) (EApp (EVar "display") (EVar "inputAbs"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "emitErr"))) (ELit (LString "")))) (EIf (EApp (EVar "isNone") (EApp (EVar "probeClang") (EVar "cc"))) (EApp (EVar "buildErr") (EApp (EVar "clangMissingError") (EVar "cc"))) (EMatch (EApp (EApp (EVar "writeFile") (EVar "llPath")) (EBinOp "++" (EVar "programModuleName") (EVar "ir"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (ELit (LString "error: could not write IR: ")) (EVar "e")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "ffiRoot") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "inputAbs")))) (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clangLink") (EVar "cc")) (EVar "rtC")) (EVar "llPath")) (EVar "outPath")) (EVar "inputAbs")) (EVar "tmpDir")) (EVar "ffiRoot")) (EApp (EVar "readForeignLibs") (EVar "ffiRoot"))) (EVar "stampBuild")) (EVar "profile"))) (DoLet false false (PTuple (PVar "keptIr") (PVar "keepNotes")) (EIf (EApp (EVar "effectiveKeepIr") (EVar "keepIrCli")) (EApp (EApp (EVar "keepIrOutcome") (EBinOp "++" (EVar "outPath") (ELit (LString ".ll")))) (EVar "ir")) (ETuple (EVar "None") (EListLit)))) (DoExpr (EApp (EApp (EVar "withEnvelopeOk") (EVar "envelope")) (EApp (EApp (EApp (EApp (EVar "withBuildNotes") (EVar "keptIr")) (ELit (LString ""))) (EVar "keepNotes")) (EVar "res"))))))))))))))))))))
+(DFunDef false "runBuildNativeRootsGo" ((PVar "root") (PVar "medaka") (PVar "cc") (PVar "inputAbs") (PVar "outPath") (PVar "tmpDir") (PVar "keepIrCli") (PVar "extraRoots") (PVar "strictEmit") (PVar "quietEmitStderr") (PVar "stampBuild") (PVar "profile") (PVar "frontGate")) (EBlock (DoLet false false (PVar "emitter") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler/entries/llvm_emit_modules_main.mdk")))) (DoLet false false (PVar "runtimeP") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/runtime.mdk")))) (DoLet false false (PVar "preludeP") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/core.mdk")))) (DoLet false false (PVar "rtC") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "runtime/medaka_rt.c")))) (DoLet false false (PVar "compilerDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler")))) (DoLet false false (PVar "stdlibDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (DoLet false false (PVar "inputRoots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "inputAbs"))) (EVar "extraRoots"))) (DoLet false false (PVar "llPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "program.ll")))) (DoLet false false (PVar "emitArgsBase") (EBinOp "++" (EBinOp "++" (EListLit (EVar "runtimeP") (EVar "preludeP") (EVar "inputAbs")) (EVar "inputRoots")) (EListLit (EVar "compilerDir") (EVar "stdlibDir")))) (DoLet false false (PVar "emitter2") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_EMITTER"))) (EVar "defaultMedakaEmitter"))) (DoLet false false (PVar "useNative") (EBinOp "/=" (EVar "emitter2") (ELit (LString "")))) (DoLet false false (PVar "emitProg0") (EIf (EVar "useNative") (EVar "emitter2") (EVar "medaka"))) (DoLet false false (PVar "emitArgs0") (EIf (EVar "useNative") (EVar "emitArgsBase") (EBinOp "::" (ELit (LString "run")) (EBinOp "::" (EVar "emitter") (EVar "emitArgsBase"))))) (DoLet false false (PTuple (PVar "emitProg1") (PVar "emitArgs1")) (EIf (EBinOp "==" (EApp (EVar "preludeObjOf") (ELit LUnit)) (ELit (LString ""))) (ETuple (EVar "emitProg0") (EVar "emitArgs0")) (EApp (EApp (EApp (EVar "withEmitHalf") (ELit (LString "program"))) (EVar "emitProg0")) (EVar "emitArgs0")))) (DoLet false false (PTuple (PVar "emitProg2") (PVar "emitArgs2")) (EIf (EVar "strictEmit") (EApp (EApp (EVar "withStrictEmit") (EVar "emitProg1")) (EVar "emitArgs1")) (ETuple (EVar "emitProg1") (EVar "emitArgs1")))) (DoLet false false (PTuple (PVar "emitProg") (PVar "emitArgs")) (EIf (EVar "useNative") (EApp (EApp (EVar "withPreludeCompiler") (EVar "emitProg2")) (EVar "emitArgs2")) (ETuple (EVar "emitProg2") (EVar "emitArgs2")))) (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "tEmit0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "diagPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "diag.json")))) (DoLet false false (PVar "emitRes") (EApp (EApp (EApp (EApp (EVar "runEmitterFor") (EVar "frontGate")) (EVar "diagPath")) (EVar "emitProg")) (EVar "emitArgs"))) (DoLet false false (PVar "tEmit1") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "emit-ir"))) (EBinOp "-" (EVar "tEmit1") (EVar "tEmit0"))) (EVar "inputAbs"))) (DoExpr (EMatch (EVar "emitRes") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not run the emitter `")) (EApp (EVar "display") (EVar "emitProg"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "irRaw") (PVar "emitRaw"))) () (EBlock (DoLet false false (PVar "emitErr") (EApp (EVar "forwardStageLines") (EVar "emitRaw"))) (DoLet false false (PVar "envelope") (EApp (EApp (EVar "askedEnvelope") (EVar "frontGate")) (EVar "diagPath"))) (DoExpr (EIf (EBinOp "==" (EVar "code") (EVar "emitDiagExitCode")) (EApp (EApp (EVar "refusedWith") (EVar "envelope")) (EApp (EVar "dropTrailingNewline") (EVar "emitErr"))) (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: emitter failed compiling ")) (EApp (EVar "display") (EVar "inputAbs"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "emitErr"))) (ELit (LString "")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "forwardEmitterStderr") (EVar "quietEmitStderr")) (EVar "emitErr"))) (DoLet false false (PVar "ir") (EApp (EVar "stripTrailingUnit") (EVar "irRaw"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "ir")) (ELit (LInt 0))) (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: emitter produced empty IR for ")) (EApp (EVar "display") (EVar "inputAbs"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "emitErr"))) (ELit (LString "")))) (EIf (EApp (EVar "isNone") (EApp (EVar "probeClang") (EVar "cc"))) (EApp (EVar "buildErr") (EApp (EVar "clangMissingError") (EVar "cc"))) (EMatch (EApp (EApp (EVar "writeFile") (EVar "llPath")) (EBinOp "++" (EVar "programModuleName") (EVar "ir"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (ELit (LString "error: could not write IR: ")) (EVar "e")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "ffiRoot") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "inputAbs")))) (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clangLink") (EVar "cc")) (EVar "rtC")) (EVar "llPath")) (EVar "outPath")) (EVar "inputAbs")) (EVar "tmpDir")) (EVar "ffiRoot")) (EApp (EVar "readForeignLibs") (EVar "ffiRoot"))) (EVar "stampBuild")) (EVar "profile"))) (DoLet false false (PTuple (PVar "keptIr") (PVar "keepNotes")) (EIf (EApp (EVar "effectiveKeepIr") (EVar "keepIrCli")) (EApp (EApp (EVar "keepIrOutcome") (EBinOp "++" (EVar "outPath") (ELit (LString ".ll")))) (EVar "ir")) (ETuple (EVar "None") (EListLit)))) (DoExpr (EApp (EApp (EVar "withEnvelopeOk") (EVar "envelope")) (EApp (EApp (EApp (EApp (EVar "withBuildNotes") (EVar "keptIr")) (ELit (LString ""))) (EVar "keepNotes")) (EVar "res"))))))))))))))))))))
 (DTypeSig false "runBuildWasm" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))))))
 (DFunDef false "runBuildWasm" ((PVar "root") (PVar "medaka") (PVar "inputAbs") (PVar "outPath") (PVar "keepIrCli") (PVar "quietEmitStderr") (PVar "frontGate")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not create a scratch directory for the build: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildWasmIn") (EVar "root")) (EVar "medaka")) (EVar "inputAbs")) (EVar "outPath")) (EVar "tmpDir")) (EVar "keepIrCli")) (EVar "quietEmitStderr")) (EVar "frontGate"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "res"))))))
 (DTypeSig false "runBuildWasmIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))))))
@@ -2637,6 +2819,8 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "withEmitHalf" ((PVar "half") (PVar "prog") (PVar "args")) (ETuple (ELit (LString "env")) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_EMIT_HALF=")) (EApp (EVar "display") (EVar "half"))) (ELit (LString ""))) (EVar "prog")) (EVar "args"))))
 (DTypeSig false "withStrictEmit" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "withStrictEmit" ((PVar "prog") (PVar "args")) (ETuple (ELit (LString "env")) (EBinOp "++" (EListLit (ELit (LString "MEDAKA_STRICT=1")) (EVar "prog")) (EVar "args"))))
+(DTypeSig false "withPreludeCompiler" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "withPreludeCompiler" ((PVar "prog") (PVar "args")) (EMatch (EApp (EVar "buildFingerprint") (ELit LUnit)) (arm (PLit (LString "")) () (ETuple (EVar "prog") (EVar "args"))) (arm (PVar "id") () (ETuple (ELit (LString "env")) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "preludeCompilerEnv"))) (ELit (LString "="))) (EApp (EVar "display") (EVar "id"))) (ELit (LString ""))) (EVar "prog")) (EVar "args"))))))
 (DTypeSig false "runEmitterFor" (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))))
 (DFunDef false "runEmitterFor" ((PVar "frontGate") (PVar "diagPath") (PVar "prog") (PVar "args")) (EBlock (DoLet false false (PVar "profileSet") (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "Some" (PVar "p")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "targetProfileEnv"))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "ackPath") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "diagPath"))) (ELit (LString "gate.ack")))) (DoLet false false (PVar "gateSet") (EMatch (EVar "frontGate") (arm (PCon "Some" (PVar "ask")) () (EApp (EApp (EApp (EVar "gateAssignments") (EVar "ask")) (EVar "diagPath")) (EVar "ackPath"))) (arm (PCon "None") () (EVar "noGateAssignments")))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "profileSet") (EVar "gateSet")) (EListLit (EVar "prog"))) (EVar "args")))) (DoExpr (EMatch (ETuple (EVar "frontGate") (EVar "res")) (arm (PTuple (PCon "Some" PWild) (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild))) () (EIf (EApp (EVar "fileExists") (EVar "ackPath")) (EVar "res") (EApp (EVar "Err") (ELit (LString "emitter did not run the front-end gate; rebuild it with `make medaka`"))))) (arm PWild () (EVar "res"))))))
 (DTypeSig true "emitPreludeObj" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))
@@ -2651,9 +2835,12 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false) (mem "split" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "seedPreludeInterface" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "seedPreludeElab" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "forwardStageLines" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
@@ -2703,6 +2890,10 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "preludeSourceHash" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "preludeSourceHashesRef"))) (arm (PCon "Some" (PVar "h")) () (EVar "h")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "h") (EApp (EVar "sha256Hex") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeSourceHashesRef")) (EApp (EApp (EVar "take") (ELit (LInt 4))) (EBinOp "::" (ETuple (EVar "src") (EVar "h")) (EUnOp "!" (EVar "preludeSourceHashesRef")))))) (DoExpr (EVar "h"))))))
 (DTypeSig true "preludeInterfaceKey" (TyFun (TyCon "String") (TyFun (TyCon "PreludeInputs") (TyCon "InterfaceKey"))))
 (DFunDef false "preludeInterfaceKey" ((PVar "coreName") (PVar "inputs")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "formatVersion")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnRuntimeSrc"))) (ETuple (EVar "coreName") (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnCoreSrc"))))) (EFieldAccess (EVar "inputs") "pnCompiler")))
+(DTypeSig true "shippedInputs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PreludeInputs")))))
+(DFunDef false "shippedInputs" ((PVar "stdlibDir") (PVar "rsrc") (PVar "csrc")) (ERecordCreate "PreludeInputs" ((fa "pnStdlibDir" (EVar "stdlibDir")) (fa "pnRuntimeSrc" (EVar "rsrc")) (fa "pnCoreSrc" (EVar "csrc")) (fa "pnCompiler" (EApp (EVar "buildFingerprint") (ELit LUnit))))))
+(DTypeSig true "preludeGeneration" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "preludeGeneration" ((PVar "rsrc") (PVar "csrc")) (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))
 (DTypeSig true "faultComponent" (TyFun (TyCon "InterfaceFault") (TyCon "String")))
 (DFunDef false "faultComponent" ((PCon "WrongFormat" PWild)) (ELit (LString "format")))
 (DFunDef false "faultComponent" ((PCon "Malformed" PWild)) (ELit (LString "file")))
@@ -2717,6 +2908,28 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "preludeStaleLine" (PWild) (EVar "None"))
 (DTypeSig true "lastPreludeStaleLine" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "lastPreludeStaleLine" (PWild) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple PWild (PVar "verdict"))) () (EApp (EVar "preludeStaleLine") (EVar "verdict"))) (arm (PCon "None") () (EVar "None"))))
+(DData Public "TreesVerdict" () ((variant "TVLoaded" (ConPos)) (variant "TVMissing" (ConPos)) (variant "TVStale" (ConPos (TyCon "String"))) (variant "TVDisabled" (ConPos))) ())
+(DTypeSig true "preludeCompilerEnv" (TyCon "String"))
+(DFunDef false "preludeCompilerEnv" () (ELit (LString "MEDAKA_PRELUDE_COMPILER")))
+(DTypeSig false "readPreludeTrees" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab")))))))
+(DFunDef false "readPreludeTrees" ((PVar "decode") (PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "TVDisabled") (EVar "None")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (ELit (LString "core.mdke")))) (arm (PCon "Err" PWild) () (ETuple (EVar "TVMissing") (EVar "None"))) (arm (PCon "Ok" (PVar "text")) () (EBlock (DoLet false false (PVar "read") (EIf (EVar "decode") (EApp (EApp (EMethodRef "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EVar "kv")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "kv")))))) (EApp (EVar "readElabFile") (EVar "text"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EVar "None")))) (EApp (EVar "readElabKey") (EVar "text"))))) (DoExpr (EMatch (EVar "read") (arm (PCon "Err" (PVar "fault")) () (ETuple (EApp (EVar "TVStale") (EApp (EVar "faultComponent") (EVar "fault"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) ((GBool (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "key") "ikCompiler") (ELit (LString "")))))) (ETuple (EApp (EVar "TVStale") (ELit (LString "compiler"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "value"))) () (EMatch (EApp (EApp (EVar "keysMatch") (EVar "key")) (EApp (EVar "elabKeyOf") (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "withInterface") (EVar "decode")) (EVar "inputs")) (EVar "value"))) (arm (PCon "Some" (PVar "component")) () (ETuple (EApp (EVar "TVStale") (EVar "component")) (EVar "None")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "withInterface" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyEffect ("IO") None (TyTuple (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab"))))))))
+(DFunDef false "withInterface" ((PVar "decode") (PVar "inputs") (PVar "value")) (EMatch (EIf (EVar "decode") (EApp (EVar "loadPreludeInterface") (EVar "inputs")) (EApp (EVar "readPreludeInterface") (EVar "inputs"))) (arm (PCon "PVLoaded" PWild) () (ETuple (EVar "TVLoaded") (EVar "value"))) (arm (PCon "PVMissing") () (ETuple (EApp (EVar "TVStale") (ELit (LString "interface"))) (EVar "None"))) (arm (PCon "PVStale" (PVar "component")) () (ETuple (EApp (EVar "TVStale") (EBinOp "++" (EBinOp "++" (ELit (LString "interface ")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString "")))) (EVar "None"))) (arm (PCon "PVDisabled") () (ETuple (EVar "TVDisabled") (EVar "None")))))
+(DTypeSig false "preludeTreesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "TreesVerdict")))))
+(DFunDef false "preludeTreesRef" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "loadPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
+(DFunDef false "loadPreludeElab" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "value")) (EApp (EApp (EVar "readPreludeTrees") (EVar "True")) (EVar "inputs"))) (DoLet false false PWild (EMatch (EVar "value") (arm (PCon "Some" (PVar "pe")) () (EApp (EApp (EVar "seedPreludeElab") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (EFieldAccess (EVar "inputs") "pnCoreSrc"))) (EVar "pe"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeTreesRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EVar "verdict"))))))
+(DTypeSig true "treesLoaded" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DFunDef false "treesLoaded" ((PLit LUnit)) (EApp (EVar "isSome") (EUnOp "!" (EVar "preludeTreesRef"))))
+(DTypeSig true "withHeldPrelude" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "DriveInputs") (TyCon "DriveInputs"))))
+(DFunDef false "withHeldPrelude" ((PVar "coreDecls") (PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "held") PWild)) () (EIf (EBinOp "==" (EApp (EMethodRef "length") (EVar "coreDecls")) (EApp (EMethodRef "length") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "held") "pnCoreSrc")))) (EApp (EApp (EVar "keyedInputs") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "held") "pnRuntimeSrc")) (EFieldAccess (EVar "held") "pnCoreSrc"))) (EVar "inputs")) (EVar "inputs"))) (arm (PCon "None") () (EVar "inputs"))))
+(DTypeSig false "keyedInputs" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "DriveInputs") (TyCon "DriveInputs"))))
+(DFunDef false "keyedInputs" ((PVar "key") (PVar "inputs")) (ERecordUpdate (EVar "inputs") ((fa "diPreludeKey" (EApp (EVar "Some") (EVar "key"))))))
+(DTypeSig true "checkPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
+(DFunDef false "checkPreludeElab" ((PVar "inputs")) (EApp (EVar "fst") (EApp (EApp (EVar "readPreludeTrees") (EVar "False")) (EVar "inputs"))))
+(DTypeSig true "preludeTreesLine" (TyFun (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "preludeTreesLine" ((PCon "TVStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude trees stale: elaborating stdlib/core.mdk (")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ")")))))
+(DFunDef false "preludeTreesLine" (PWild) (EVar "None"))
 (DTypeSig false "stripTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripTrailingUnit" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")) (ELit (LString "()\n")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
@@ -2826,7 +3039,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "runBuildNativeRoots" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "BuildProfile") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))))))))))
 (DFunDef false "runBuildNativeRoots" ((PVar "root") (PVar "medaka") (PVar "cc") (PVar "inputAbs") (PVar "outPath") (PVar "tmpDir") (PVar "keepIrCli") (PVar "extraRoots") (PVar "strictEmit") (PVar "quietEmitStderr") (PVar "stampBuild") (PVar "profile")) (EBlock (DoLet false false (PVar "held") (EUnOp "!" (EVar "selectedProfile"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "None"))) (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildNativeRootsGo") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "inputAbs")) (EVar "outPath")) (EVar "tmpDir")) (EVar "keepIrCli")) (EVar "extraRoots")) (EVar "strictEmit")) (EVar "quietEmitStderr")) (EVar "stampBuild")) (EVar "profile")) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "held"))) (DoExpr (EVar "res"))))
 (DTypeSig false "runBuildNativeRootsGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "BuildProfile") (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))))))))))))
-(DFunDef false "runBuildNativeRootsGo" ((PVar "root") (PVar "medaka") (PVar "cc") (PVar "inputAbs") (PVar "outPath") (PVar "tmpDir") (PVar "keepIrCli") (PVar "extraRoots") (PVar "strictEmit") (PVar "quietEmitStderr") (PVar "stampBuild") (PVar "profile") (PVar "frontGate")) (EBlock (DoLet false false (PVar "emitter") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler/entries/llvm_emit_modules_main.mdk")))) (DoLet false false (PVar "runtimeP") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/runtime.mdk")))) (DoLet false false (PVar "preludeP") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/core.mdk")))) (DoLet false false (PVar "rtC") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "runtime/medaka_rt.c")))) (DoLet false false (PVar "compilerDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler")))) (DoLet false false (PVar "stdlibDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (DoLet false false (PVar "inputRoots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "inputAbs"))) (EVar "extraRoots"))) (DoLet false false (PVar "llPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "program.ll")))) (DoLet false false (PVar "emitArgsBase") (EBinOp "++" (EBinOp "++" (EListLit (EVar "runtimeP") (EVar "preludeP") (EVar "inputAbs")) (EVar "inputRoots")) (EListLit (EVar "compilerDir") (EVar "stdlibDir")))) (DoLet false false (PVar "emitter2") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_EMITTER"))) (EVar "defaultMedakaEmitter"))) (DoLet false false (PVar "useNative") (EBinOp "/=" (EVar "emitter2") (ELit (LString "")))) (DoLet false false (PVar "emitProg0") (EIf (EVar "useNative") (EVar "emitter2") (EVar "medaka"))) (DoLet false false (PVar "emitArgs0") (EIf (EVar "useNative") (EVar "emitArgsBase") (EBinOp "::" (ELit (LString "run")) (EBinOp "::" (EVar "emitter") (EVar "emitArgsBase"))))) (DoLet false false (PTuple (PVar "emitProg1") (PVar "emitArgs1")) (EIf (EBinOp "==" (EApp (EVar "preludeObjOf") (ELit LUnit)) (ELit (LString ""))) (ETuple (EVar "emitProg0") (EVar "emitArgs0")) (EApp (EApp (EApp (EVar "withEmitHalf") (ELit (LString "program"))) (EVar "emitProg0")) (EVar "emitArgs0")))) (DoLet false false (PTuple (PVar "emitProg") (PVar "emitArgs")) (EIf (EVar "strictEmit") (EApp (EApp (EVar "withStrictEmit") (EVar "emitProg1")) (EVar "emitArgs1")) (ETuple (EVar "emitProg1") (EVar "emitArgs1")))) (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "tEmit0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "diagPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "diag.json")))) (DoLet false false (PVar "emitRes") (EApp (EApp (EApp (EApp (EVar "runEmitterFor") (EVar "frontGate")) (EVar "diagPath")) (EVar "emitProg")) (EVar "emitArgs"))) (DoLet false false (PVar "tEmit1") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "emit-ir"))) (EBinOp "-" (EVar "tEmit1") (EVar "tEmit0"))) (EVar "inputAbs"))) (DoExpr (EMatch (EVar "emitRes") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not run the emitter `")) (EApp (EMethodRef "display") (EVar "emitProg"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "irRaw") (PVar "emitRaw"))) () (EBlock (DoLet false false (PVar "emitErr") (EApp (EVar "forwardStageLines") (EVar "emitRaw"))) (DoLet false false (PVar "envelope") (EApp (EApp (EVar "askedEnvelope") (EVar "frontGate")) (EVar "diagPath"))) (DoExpr (EIf (EBinOp "==" (EVar "code") (EVar "emitDiagExitCode")) (EApp (EApp (EVar "refusedWith") (EVar "envelope")) (EApp (EVar "dropTrailingNewline") (EVar "emitErr"))) (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: emitter failed compiling ")) (EApp (EMethodRef "display") (EVar "inputAbs"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "emitErr"))) (ELit (LString "")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "forwardEmitterStderr") (EVar "quietEmitStderr")) (EVar "emitErr"))) (DoLet false false (PVar "ir") (EApp (EVar "stripTrailingUnit") (EVar "irRaw"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "ir")) (ELit (LInt 0))) (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: emitter produced empty IR for ")) (EApp (EMethodRef "display") (EVar "inputAbs"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "emitErr"))) (ELit (LString "")))) (EIf (EApp (EVar "isNone") (EApp (EVar "probeClang") (EVar "cc"))) (EApp (EVar "buildErr") (EApp (EVar "clangMissingError") (EVar "cc"))) (EMatch (EApp (EApp (EVar "writeFile") (EVar "llPath")) (EBinOp "++" (EVar "programModuleName") (EVar "ir"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (ELit (LString "error: could not write IR: ")) (EVar "e")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "ffiRoot") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "inputAbs")))) (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clangLink") (EVar "cc")) (EVar "rtC")) (EVar "llPath")) (EVar "outPath")) (EVar "inputAbs")) (EVar "tmpDir")) (EVar "ffiRoot")) (EApp (EVar "readForeignLibs") (EVar "ffiRoot"))) (EVar "stampBuild")) (EVar "profile"))) (DoLet false false (PTuple (PVar "keptIr") (PVar "keepNotes")) (EIf (EApp (EVar "effectiveKeepIr") (EVar "keepIrCli")) (EApp (EApp (EVar "keepIrOutcome") (EBinOp "++" (EVar "outPath") (ELit (LString ".ll")))) (EVar "ir")) (ETuple (EVar "None") (EListLit)))) (DoExpr (EApp (EApp (EVar "withEnvelopeOk") (EVar "envelope")) (EApp (EApp (EApp (EApp (EVar "withBuildNotes") (EVar "keptIr")) (ELit (LString ""))) (EVar "keepNotes")) (EVar "res"))))))))))))))))))))
+(DFunDef false "runBuildNativeRootsGo" ((PVar "root") (PVar "medaka") (PVar "cc") (PVar "inputAbs") (PVar "outPath") (PVar "tmpDir") (PVar "keepIrCli") (PVar "extraRoots") (PVar "strictEmit") (PVar "quietEmitStderr") (PVar "stampBuild") (PVar "profile") (PVar "frontGate")) (EBlock (DoLet false false (PVar "emitter") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler/entries/llvm_emit_modules_main.mdk")))) (DoLet false false (PVar "runtimeP") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/runtime.mdk")))) (DoLet false false (PVar "preludeP") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/core.mdk")))) (DoLet false false (PVar "rtC") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "runtime/medaka_rt.c")))) (DoLet false false (PVar "compilerDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler")))) (DoLet false false (PVar "stdlibDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (DoLet false false (PVar "inputRoots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "inputAbs"))) (EVar "extraRoots"))) (DoLet false false (PVar "llPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "program.ll")))) (DoLet false false (PVar "emitArgsBase") (EBinOp "++" (EBinOp "++" (EListLit (EVar "runtimeP") (EVar "preludeP") (EVar "inputAbs")) (EVar "inputRoots")) (EListLit (EVar "compilerDir") (EVar "stdlibDir")))) (DoLet false false (PVar "emitter2") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_EMITTER"))) (EVar "defaultMedakaEmitter"))) (DoLet false false (PVar "useNative") (EBinOp "/=" (EVar "emitter2") (ELit (LString "")))) (DoLet false false (PVar "emitProg0") (EIf (EVar "useNative") (EVar "emitter2") (EVar "medaka"))) (DoLet false false (PVar "emitArgs0") (EIf (EVar "useNative") (EVar "emitArgsBase") (EBinOp "::" (ELit (LString "run")) (EBinOp "::" (EVar "emitter") (EVar "emitArgsBase"))))) (DoLet false false (PTuple (PVar "emitProg1") (PVar "emitArgs1")) (EIf (EBinOp "==" (EApp (EVar "preludeObjOf") (ELit LUnit)) (ELit (LString ""))) (ETuple (EVar "emitProg0") (EVar "emitArgs0")) (EApp (EApp (EApp (EVar "withEmitHalf") (ELit (LString "program"))) (EVar "emitProg0")) (EVar "emitArgs0")))) (DoLet false false (PTuple (PVar "emitProg2") (PVar "emitArgs2")) (EIf (EVar "strictEmit") (EApp (EApp (EVar "withStrictEmit") (EVar "emitProg1")) (EVar "emitArgs1")) (ETuple (EVar "emitProg1") (EVar "emitArgs1")))) (DoLet false false (PTuple (PVar "emitProg") (PVar "emitArgs")) (EIf (EVar "useNative") (EApp (EApp (EVar "withPreludeCompiler") (EVar "emitProg2")) (EVar "emitArgs2")) (ETuple (EVar "emitProg2") (EVar "emitArgs2")))) (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "tEmit0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "diagPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "diag.json")))) (DoLet false false (PVar "emitRes") (EApp (EApp (EApp (EApp (EVar "runEmitterFor") (EVar "frontGate")) (EVar "diagPath")) (EVar "emitProg")) (EVar "emitArgs"))) (DoLet false false (PVar "tEmit1") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "emit-ir"))) (EBinOp "-" (EVar "tEmit1") (EVar "tEmit0"))) (EVar "inputAbs"))) (DoExpr (EMatch (EVar "emitRes") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not run the emitter `")) (EApp (EMethodRef "display") (EVar "emitProg"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "irRaw") (PVar "emitRaw"))) () (EBlock (DoLet false false (PVar "emitErr") (EApp (EVar "forwardStageLines") (EVar "emitRaw"))) (DoLet false false (PVar "envelope") (EApp (EApp (EVar "askedEnvelope") (EVar "frontGate")) (EVar "diagPath"))) (DoExpr (EIf (EBinOp "==" (EVar "code") (EVar "emitDiagExitCode")) (EApp (EApp (EVar "refusedWith") (EVar "envelope")) (EApp (EVar "dropTrailingNewline") (EVar "emitErr"))) (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: emitter failed compiling ")) (EApp (EMethodRef "display") (EVar "inputAbs"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "emitErr"))) (ELit (LString "")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "forwardEmitterStderr") (EVar "quietEmitStderr")) (EVar "emitErr"))) (DoLet false false (PVar "ir") (EApp (EVar "stripTrailingUnit") (EVar "irRaw"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "ir")) (ELit (LInt 0))) (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: emitter produced empty IR for ")) (EApp (EMethodRef "display") (EVar "inputAbs"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "emitErr"))) (ELit (LString "")))) (EIf (EApp (EVar "isNone") (EApp (EVar "probeClang") (EVar "cc"))) (EApp (EVar "buildErr") (EApp (EVar "clangMissingError") (EVar "cc"))) (EMatch (EApp (EApp (EVar "writeFile") (EVar "llPath")) (EBinOp "++" (EVar "programModuleName") (EVar "ir"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (ELit (LString "error: could not write IR: ")) (EVar "e")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "ffiRoot") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "inputAbs")))) (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clangLink") (EVar "cc")) (EVar "rtC")) (EVar "llPath")) (EVar "outPath")) (EVar "inputAbs")) (EVar "tmpDir")) (EVar "ffiRoot")) (EApp (EVar "readForeignLibs") (EVar "ffiRoot"))) (EVar "stampBuild")) (EVar "profile"))) (DoLet false false (PTuple (PVar "keptIr") (PVar "keepNotes")) (EIf (EApp (EVar "effectiveKeepIr") (EVar "keepIrCli")) (EApp (EApp (EVar "keepIrOutcome") (EBinOp "++" (EVar "outPath") (ELit (LString ".ll")))) (EVar "ir")) (ETuple (EVar "None") (EListLit)))) (DoExpr (EApp (EApp (EVar "withEnvelopeOk") (EVar "envelope")) (EApp (EApp (EApp (EApp (EVar "withBuildNotes") (EVar "keptIr")) (ELit (LString ""))) (EVar "keepNotes")) (EVar "res"))))))))))))))))))))
 (DTypeSig false "runBuildWasm" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))))))
 (DFunDef false "runBuildWasm" ((PVar "root") (PVar "medaka") (PVar "inputAbs") (PVar "outPath") (PVar "keepIrCli") (PVar "quietEmitStderr") (PVar "frontGate")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not create a scratch directory for the build: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildWasmIn") (EVar "root")) (EVar "medaka")) (EVar "inputAbs")) (EVar "outPath")) (EVar "tmpDir")) (EVar "keepIrCli")) (EVar "quietEmitStderr")) (EVar "frontGate"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "res"))))))
 (DTypeSig false "runBuildWasmIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))))))
@@ -2912,6 +3125,8 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "withEmitHalf" ((PVar "half") (PVar "prog") (PVar "args")) (ETuple (ELit (LString "env")) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_EMIT_HALF=")) (EApp (EMethodRef "display") (EVar "half"))) (ELit (LString ""))) (EVar "prog")) (EVar "args"))))
 (DTypeSig false "withStrictEmit" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "withStrictEmit" ((PVar "prog") (PVar "args")) (ETuple (ELit (LString "env")) (EBinOp "++" (EListLit (ELit (LString "MEDAKA_STRICT=1")) (EVar "prog")) (EVar "args"))))
+(DTypeSig false "withPreludeCompiler" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "withPreludeCompiler" ((PVar "prog") (PVar "args")) (EMatch (EApp (EVar "buildFingerprint") (ELit LUnit)) (arm (PLit (LString "")) () (ETuple (EVar "prog") (EVar "args"))) (arm (PVar "id") () (ETuple (ELit (LString "env")) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "preludeCompilerEnv"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EVar "id"))) (ELit (LString ""))) (EVar "prog")) (EVar "args"))))))
 (DTypeSig false "runEmitterFor" (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))))
 (DFunDef false "runEmitterFor" ((PVar "frontGate") (PVar "diagPath") (PVar "prog") (PVar "args")) (EBlock (DoLet false false (PVar "profileSet") (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "Some" (PVar "p")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "targetProfileEnv"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "ackPath") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "diagPath"))) (ELit (LString "gate.ack")))) (DoLet false false (PVar "gateSet") (EMatch (EVar "frontGate") (arm (PCon "Some" (PVar "ask")) () (EApp (EApp (EApp (EVar "gateAssignments") (EVar "ask")) (EVar "diagPath")) (EVar "ackPath"))) (arm (PCon "None") () (EVar "noGateAssignments")))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "profileSet") (EVar "gateSet")) (EListLit (EVar "prog"))) (EVar "args")))) (DoExpr (EMatch (ETuple (EVar "frontGate") (EVar "res")) (arm (PTuple (PCon "Some" PWild) (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild))) () (EIf (EApp (EVar "fileExists") (EVar "ackPath")) (EVar "res") (EApp (EVar "Err") (ELit (LString "emitter did not run the front-end gate; rebuild it with `make medaka`"))))) (arm PWild () (EVar "res"))))))
 (DTypeSig true "emitPreludeObj" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))

@@ -1,0 +1,10 @@
+-- The constrained `otherwise` of `core_private_name_nullary_xmod.mdk`.
+export interface Speak a where
+  speak : a -> String
+
+export impl Speak Int where
+  speak x = "int \{x}"
+
+export
+otherwise : Speak a => a -> String
+otherwise x = speak x

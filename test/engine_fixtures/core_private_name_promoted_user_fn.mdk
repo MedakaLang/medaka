@@ -1,0 +1,12 @@
+-- REGRESSION GUARD (#4392): an unsignatured user fn that dispatches a method is
+-- promoted to a constrained fn; it shares its bare name with a core PRIVATE fn
+-- (`compareNaN`, unconstrained).  Core's definition must not gain a dict parameter
+-- its own call sites never supply.  Expected: (int 3, Lt, Gt, Gt).
+interface Speak a where
+  speak : a -> String
+impl Speak Int where
+  speak x = "int \{x}"
+compareNaN x = speak x
+nan : Float
+nan = 0.0 / 0.0
+main = (compareNaN 3, compare nan 1.0, compare 1.0 nan, compare 2.0 1.0)

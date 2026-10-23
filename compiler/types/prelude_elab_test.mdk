@@ -1,0 +1,301 @@
+-- Sibling test for `compiler/types/prelude_elab.mdk`.
+--
+-- The rows elaborate core in this process, so their id counters are whatever
+-- the test process's earlier drives left: they pin the round trip, the
+-- refusals and the cache, not the counter values.  The writer's rows, where a
+-- fresh process gives core's counters their promised values, are in
+-- `compiler/tools/interface_cmd_test.mdk`.
+import test.{expectAll, expectEqual, expectTrue, fail, labelFail}
+import test_process.{underRoot}
+import frontend.ast.{Decl, EvEntry(..), EvId(..), EvVal(..)}
+import frontend.desugar_cache.{desugaredPrelude}
+import string as S
+import support.sexp_value.{SexpError(..)}
+import types.interface_sexp.{InterfaceFault(..), sha256Hex}
+import types.prelude_elab.{
+  PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile, elabKeyOf,
+  seedPreludeElab, preludeElabHit, formatVersion
+}
+import types.prelude_interface.{InterfaceKey(..), interfaceKeyOf, keysMatch}
+import types.publish.{CheckedProgram(..), TcReport(..)}
+import types.runtime_types.{BinderRow(..)}
+import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
+import map.{entries}
+
+testKey : InterfaceKey
+testKey =
+  interfaceKeyOf
+    formatVersion
+    [("runtime.mdk", "aa"), ("core.mdk", "bb")]
+    "compiler-x"
+
+-- Core elaborated with no user module, as the writer does it.
+coreElab : Unit -> <Env "MEDAKA_ROOT", FileRead> Option PreludeElab
+coreElab _ = match (
+  readFile (underRoot "stdlib/runtime.mdk"),
+  readFile (underRoot "stdlib/core.mdk"),
+)
+  (Ok rsrc, Ok csrc) =>
+    let (_, report, _) =
+      elaborateModulesWithReport
+        defaultDriveInputs
+        False
+        None
+        (desugaredPrelude rsrc)
+        (desugaredPrelude csrc)
+        []
+    match report.trChecked
+      None => None
+      Some c =>
+        map
+          ((trees, _) =>
+            preludeElabOf trees c.cpEvidence (map snd (entries c.cpBinders)))
+          c.cpTrees
+  _ => None
+
+-- How a read ended, as text: the fault class and path, or `ok`.
+verdict : Result InterfaceFault a -> String
+verdict (Ok _) = "ok"
+verdict (Err f) = faultText f
+
+faultText : InterfaceFault -> String
+faultText (WrongFormat v) = "format \{v}"
+faultText (Malformed e) = "malformed \{e.sePath}"
+
+-- The file with its header's digest rewritten to match [body] after the first
+-- line, so only the body is wrong.
+withBody : String -> String -> String
+withBody file extra = match S.indexOf "\n" file
+  None => file
+  Some i =>
+    let header = S.take i file
+    let body = S.drop (i + 1) file ++ extra
+    let claimed =
+      S.take
+        64
+        (S.drop
+          (S.length "(digest " + optionOr 0 (S.indexOf "(digest " header))
+          header)
+    "\{S.replace claimed (sha256Hex body) header}\n\{body}"
+
+-- Why a read refused, as the fault's own text, or `ok`.
+why : Result InterfaceFault a -> String
+why (Ok _) = "ok"
+why (Err (WrongFormat v)) = "format \{v}"
+why (Err (Malformed e)) = "\{e.sePath}: \{e.seWhat}"
+
+-- The highest ordinal of module `""` among [rows].
+topRow : List EvEntry -> Int
+topRow rows = fold (acc (EvEntry (EvId _ i) _) => max acc i) 0 rows
+
+test "the real core value round-trips byte for byte and keeps what it holds" =
+  match coreElab ()
+    None => fail "could not elaborate core"
+    Some pe =>
+      let text = encodeElabFile testKey pe
+      match readElabFile text
+        Err f => fail "the file did not read: \{faultText f}"
+        Ok (key, back) => expectAll [
+          labelFail
+            "encode, read, encode"
+            (expectEqual text (encodeElabFile key back)),
+          labelFail
+            "the key is the one written"
+            (expectEqual None (keysMatch (elabKeyOf testKey) key)),
+          labelFail
+            "the counters"
+            (expectEqual
+              (
+                pe.peEvCounter,
+                pe.peLocalCounter,
+                pe.peBinderCount,
+                pe.peBinderBase,
+              )
+              (
+                back.peEvCounter,
+                back.peLocalCounter,
+                back.peBinderCount,
+                back.peBinderBase,
+              )),
+          labelFail
+            "every referenced evidence row is below the counter"
+            (expectTrue
+              (all
+                ((EvEntry (EvId m i) _) => m == "" && i < pe.peEvCounter)
+                back.peEvidence)),
+          labelFail
+            "binders"
+            (expectEqual (length pe.peBinders) (length back.peBinders)),
+          labelFail
+            "decls"
+            (expectEqual (length pe.peDecls) (length back.peDecls)),
+          labelFail
+            "the rows a tree references are kept"
+            (expectTrue (length back.peEvidence > 0)),
+        ]
+
+test "every refusal is an Err of the right class" = match coreElab ()
+  None => fail "could not elaborate core"
+  Some pe =>
+    let text = encodeElabFile testKey pe
+    let n = S.length text
+    expectAll [
+      labelFail "intact" (expectEqual "ok" (verdict (readElabFile text))),
+      labelFail
+        "a digest that is not the body's"
+        (expectEqual
+          "malformed header/digest"
+          (verdict (readElabFile (S.replace "(digest " "(digest 0" text)))),
+      labelFail
+        "a body byte flipped"
+        (expectEqual
+          "malformed header/digest"
+          (verdict
+            (readElabFile
+              (S.take (n - 4) text ++ "x" ++ S.drop (n - 3) text)))),
+      labelFail
+        "cut inside the body"
+        (expectEqual
+          "malformed header/digest"
+          (verdict (readElabFile (S.take (n / 2) text)))),
+      labelFail
+        "cut inside the header"
+        (expectEqual
+          "malformed"
+          (S.take 9 (verdict (readElabFile (S.take 20 text))))),
+      labelFail
+        "empty"
+        (expectEqual "malformed file" (verdict (readElabFile ""))),
+      labelFail
+        "another format version"
+        (expectEqual
+          "format 99"
+          (verdict
+            (readElabFile
+              (S.replace
+                "(medaka-elab \{formatVersion} "
+                "(medaka-elab 99 "
+                text)))),
+      labelFail
+        "bytes after the binder rows, under a matching digest"
+        (expectEqual
+          "malformed"
+          (S.take 9 (verdict (readElabFile (withBody text "x\n"))))),
+      labelFail
+        "a second body line, under a matching digest"
+        (expectEqual
+          "malformed"
+          (S.take 9 (verdict (readElabFile (withBody text "()\n"))))),
+    ]
+
+test "counters that do not describe the rows are refused, each naming its class" =
+  match coreElab ()
+    None => fail "could not elaborate core"
+    Some pe => match pe.peEvidence
+      [] => fail "core kept no evidence rows"
+      (EvEntry _ v) :: _ =>
+        let top = topRow pe.peEvidence
+        let text = encodeElabFile testKey pe
+        let askWith = q => why (readElabFile (encodeElabFile testKey q))
+        expectAll [
+          labelFail
+            "intact"
+            (expectEqual "ok" (askWith { pe | peEvCounter = top + 1 })),
+          labelFail
+            "K at the highest row"
+            (expectEqual
+              "counters/evidence: an evidence row is at or above the evidence counter"
+              (askWith { pe | peEvCounter = top })),
+          labelFail
+            "a row at K"
+            (expectEqual
+              "counters/evidence: an evidence row is at or above the evidence counter"
+              (askWith { pe |
+                peEvidence = EvEntry (EvId "" (top + 1)) v :: pe.peEvidence,
+                peEvCounter = top + 1,
+              })),
+          labelFail
+            "a negative row ordinal"
+            (expectEqual
+              "counters/evidence: an evidence row has a negative ordinal"
+              (askWith { pe |
+                peEvidence = EvEntry (EvId "" (0 - 1)) v :: pe.peEvidence,
+              })),
+          labelFail
+            "two rows under one ordinal"
+            (expectEqual
+              "counters/evidence: two evidence rows share one ordinal"
+              (askWith { pe | peEvidence = pe.peEvidence ++ pe.peEvidence })),
+          labelFail
+            "a tree site at K"
+            (expectEqual
+              "counters/evidence: a tree site is at or above the evidence counter"
+              (askWith { pe | peEvidence = [], peEvCounter = 0 })),
+          labelFail
+            "K out of range"
+            (expectEqual
+              "counters/evidence: the evidence counter is out of range"
+              (askWith { pe | peEvCounter = 99999999 })),
+          labelFail
+            "L below a local name"
+            (expectEqual
+              "counters/local: the local-abstraction counter is not above every local name of the trees"
+              (askWith { pe | peLocalCounter = 0 })),
+          labelFail
+            "N off by one"
+            (expectEqual
+              "counters/binders: the binder count or base disagrees with the rows"
+              (askWith { pe | peBinderCount = pe.peBinderCount + 1 })),
+          labelFail
+            "K lowered in the header, digest left alone"
+            (expectEqual
+              "header/digest: the body does not match the digest"
+              (why
+                (readElabFile
+                  (S.replace
+                    "(counters \{pe.peEvCounter} "
+                    "(counters \{pe.peEvCounter - 1} "
+                    text)))),
+        ]
+
+-- The held value's evidence counter is 0, so the prelude segment it installs
+-- covers no ordinal any later drive of this process mints.
+test "the process cache hits only on its own generation" =
+  let pe = PreludeElab {
+    peDecls = [],
+    peEvidence = [],
+    peBinders = [],
+    peEvCounter = 0,
+    peLocalCounter = 7,
+    peBinderCount = 0,
+    peBinderBase = 0,
+  }
+  let before = preludeElabHit (1, 2)
+  let _ = seedPreludeElab (1, 2) pe
+  expectAll [
+    labelFail
+      "empty before a seed"
+      (expectEqual None (map (p => p.peLocalCounter) before)),
+    labelFail
+      "same generation"
+      (expectEqual
+        (Some 7)
+        (map (p => p.peLocalCounter) (preludeElabHit (1, 2)))),
+    labelFail
+      "other generation"
+      (expectEqual None (map (p => p.peLocalCounter) (preludeElabHit (1, 3)))),
+  ]
+
+test "a value whose rows do not fit its counter is not held" =
+  let row = EvEntry (EvId "" 5) (EvHead "T")
+  let bad = PreludeElab {
+    peDecls = [],
+    peEvidence = [row],
+    peBinders = [],
+    peEvCounter = 3,
+    peLocalCounter = 0,
+    peBinderCount = 0,
+    peBinderBase = 0,
+  }
+  let _ = seedPreludeElab (7, 8) bad
+  expectEqual None (map (p => p.peLocalCounter) (preludeElabHit (7, 8)))

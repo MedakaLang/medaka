@@ -1,5 +1,5 @@
 # META
-source_lines=644
+source_lines=706
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -73,8 +73,9 @@ import support.util.{joinWith, escStr}
 -- lives HERE because this module is the one below all three readers of a solved
 -- route -- `types/typecheck.mdk` (dict passing), `eval/eval.mdk` and
 -- `ir/core_ir_lower.mdk` -- and `frontend/ast.mdk` (the only lower module)
--- imports nothing and holds no state.  No cell holds the index: each reader is
--- handed the one its own elaboration built.
+-- imports nothing and holds no state.  No cell holds a drive's index: each reader
+-- is handed the one its own elaboration built.  The one cell here holds the
+-- prelude's segment, which is the same for every drive of a process.
 --
 -- A lookup that cannot be answered is an `Err` here, and a panic in the readers:
 --
@@ -109,14 +110,61 @@ import support.util.{joinWith, escStr}
 -- slots from it.
 public export data EvIndex = EvIndex Int (Array (Option EvEntry))
 
+-- The prelude's own segment, once a process holds the prelude's elaborated trees
+-- (`types/prelude_elab.mdk`): their rows indexed from ordinal 0 to the prelude's
+-- counter, built once.  Every drive of such a process mints its ids at or past
+-- that counter, so a table holding the prelude's rows beside a drive's is indexed
+-- as the segment plus the drive's own span.  One dense array over both would
+-- span every ordinal the process has minted, which grows with each drive of a
+-- long-lived process.
+preludeEvidenceRef : Ref (Option (Array (Option EvEntry)))
+preludeEvidenceRef = Ref None
+
+-- Index [rows] as the prelude's segment, below [counter].
+export
+setPreludeEvidence : Int -> EvTable -> Unit
+setPreludeEvidence counter rows =
+  let arr = arrayMake counter None
+  let _ = fillEvidence 0 arr rows
+  preludeEvidenceRef := Some arr
+
 -- The index of [entries]; two entries under one ordinal panic (`fillEvidence`).
+-- An entry below the prelude's counter is the segment's, and panics unless the
+-- segment holds it under the same module.
 export
 evIndexOf : EvTable -> EvIndex
-evIndexOf entries =
+evIndexOf entries = match !preludeEvidenceRef
+  None => denseIndexOf entries
+  Some seg => denseIndexOf (filter (aboveSegment seg) entries)
+
+-- [entries] less those the prelude's segment answers; all of them with no segment.
+-- A reader that judges the table rather than trusting it (`evidenceFaults`) indexes
+-- this and lets `evidenceLookup` answer the segment's range.
+export
+entriesAboveSegment : EvTable -> EvTable
+entriesAboveSegment entries = match !preludeEvidenceRef
+  None => entries
+  Some seg =>
+    filter
+      (e => match e
+        EvEntry (EvId _ i) _ => i >= arrayLength seg)
+      entries
+
+denseIndexOf : EvTable -> EvIndex
+denseIndexOf entries =
   let lo = evMinOrdinal entries
   let arr = arrayMake (evSlotCount entries lo - lo) None
   let _ = fillEvidence lo arr entries
   EvIndex lo arr
+
+aboveSegment : Array (Option EvEntry) -> EvEntry -> Bool
+aboveSegment seg (EvEntry (EvId m i) _)
+  | i >= arrayLength seg = True
+  | otherwise = match arrayGetUnsafe i seg
+    Some (EvEntry (EvId m2 _) _) if m2 == m => False
+    _ =>
+      panic
+        "evidence table: \{m}#\{intToString i} is below the prelude's counter but not the prelude's"
 
 -- one past the largest ordinal in [entries], at least [acc]
 evSlotCount : EvTable -> Int -> Int
@@ -164,11 +212,25 @@ evidenceLookup None what (EvId m i) =
   Err
     "evidence table: no elaboration has published one (looking up \{what} \{m}#\{intToString i})"
 evidenceLookup (Some (EvIndex lo arr)) what (EvId m i) =
-  if i < lo then
-    Err "evidence table: \{what} \{m}#\{intToString i} is from an earlier graph"
-  else if i - lo >= arrayLength arr then
+  match !preludeEvidenceRef
+    Some seg if i >= 0 && i < arrayLength seg => slotAnswer seg what m i i
+    _ =>
+      if i < lo then
+        Err
+          "evidence table: \{what} \{m}#\{intToString i} is from an earlier graph"
+      else
+        slotAnswer arr what m i (i - lo)
+
+slotAnswer : Array (Option EvEntry) ->
+  String ->
+  String ->
+  Int ->
+  Int ->
+  Result String EvVal
+slotAnswer arr what m i slot =
+  if slot >= arrayLength arr then
     neverPublished what m i
-  else match arrayGetUnsafe (i - lo) arr
+  else match arrayGetUnsafe slot arr
     None => neverPublished what m i
     Some (EvEntry (EvId m2 _) v) =>
       if m2 == m then
@@ -650,8 +712,18 @@ rkTyList =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false))))
 (DData Public "EvIndex" () ((variant "EvIndex" (ConPos (TyCon "Int") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry")))))) ())
+(DTypeSig false "preludeEvidenceRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))))))
+(DFunDef false "preludeEvidenceRef" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "setPreludeEvidence" (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "Unit"))))
+(DFunDef false "setPreludeEvidence" ((PVar "counter") (PVar "rows")) (EBlock (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EVar "counter")) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (ELit (LInt 0))) (EVar "arr")) (EVar "rows"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeEvidenceRef")) (EApp (EVar "Some") (EVar "arr"))))))
 (DTypeSig true "evIndexOf" (TyFun (TyCon "EvTable") (TyCon "EvIndex")))
-(DFunDef false "evIndexOf" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))
+(DFunDef false "evIndexOf" ((PVar "entries")) (EMatch (EUnOp "!" (EVar "preludeEvidenceRef")) (arm (PCon "None") () (EApp (EVar "denseIndexOf") (EVar "entries"))) (arm (PCon "Some" (PVar "seg")) () (EApp (EVar "denseIndexOf") (EApp (EApp (EVar "filter") (EApp (EVar "aboveSegment") (EVar "seg"))) (EVar "entries"))))))
+(DTypeSig true "entriesAboveSegment" (TyFun (TyCon "EvTable") (TyCon "EvTable")))
+(DFunDef false "entriesAboveSegment" ((PVar "entries")) (EMatch (EUnOp "!" (EVar "preludeEvidenceRef")) (arm (PCon "None") () (EVar "entries")) (arm (PCon "Some" (PVar "seg")) () (EApp (EApp (EVar "filter") (ELam ((PVar "e")) (EMatch (EVar "e") (arm (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) () (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "seg"))))))) (EVar "entries")))))
+(DTypeSig false "denseIndexOf" (TyFun (TyCon "EvTable") (TyCon "EvIndex")))
+(DFunDef false "denseIndexOf" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))
+(DTypeSig false "aboveSegment" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "EvEntry") (TyCon "Bool"))))
+(DFunDef false "aboveSegment" ((PVar "seg") (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild)) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "seg"))) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "seg")) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) PWild)) ((GBool (EBinOp "==" (EVar "m2") (EVar "m")))) (EVar "False")) (arm PWild () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is below the prelude's counter but not the prelude's")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "evSlotCount" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "evSlotCount" ((PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "evSlotCount") (EVar "rest")) (EApp (EApp (EVar "max") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))))
@@ -670,7 +742,9 @@ rkTyList =
 (DFunDef false "answerIn" ((PVar "idx") (PVar "what") (PVar "ev")) (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (EVar "what")) (EVar "ev")) (arm (PCon "Ok" (PVar "v")) () (EVar "v")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "evidenceLookup" (TyFun (TyApp (TyCon "Option") (TyCon "EvIndex")) (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "EvVal"))))))
 (DFunDef false "evidenceLookup" ((PCon "None") (PVar "what") (PCon "EvId" (PVar "m") (PVar "i"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up ")) (EApp (EVar "display") (EVar "what"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")")))))
-(DFunDef false "evidenceLookup" ((PCon "Some" (PCon "EvIndex" (PVar "lo") (PVar "arr"))) (PVar "what") (PCon "EvId" (PVar "m") (PVar "i"))) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "what"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is from an earlier graph")))) (EIf (EBinOp ">=" (EBinOp "-" (EVar "i") (EVar "lo")) (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i"))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Ok") (EVar "v")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EVar "display") (EVar "m2"))) (ELit (LString ""))))))))))
+(DFunDef false "evidenceLookup" ((PCon "Some" (PCon "EvIndex" (PVar "lo") (PVar "arr"))) (PVar "what") (PCon "EvId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "preludeEvidenceRef")) (arm (PCon "Some" (PVar "seg")) ((GBool (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "seg")))))) (EApp (EApp (EApp (EApp (EApp (EVar "slotAnswer") (EVar "seg")) (EVar "what")) (EVar "m")) (EVar "i")) (EVar "i"))) (arm PWild () (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "what"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is from an earlier graph")))) (EApp (EApp (EApp (EApp (EApp (EVar "slotAnswer") (EVar "arr")) (EVar "what")) (EVar "m")) (EVar "i")) (EBinOp "-" (EVar "i") (EVar "lo")))))))
+(DTypeSig false "slotAnswer" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "EvVal"))))))))
+(DFunDef false "slotAnswer" ((PVar "arr") (PVar "what") (PVar "m") (PVar "i") (PVar "slot")) (EIf (EBinOp ">=" (EVar "slot") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "slot")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i"))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Ok") (EVar "v")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EVar "display") (EVar "m2"))) (ELit (LString "")))))))))
 (DTypeSig true "evDictRoutesIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "evDictRoutesIn" ((PVar "idx") (PVar "ev")) (EApp (EVar "evRoutesOf") (EApp (EApp (EApp (EVar "answerIn") (EVar "idx")) (ELit (LString "dictionary application"))) (EVar "ev"))))
 (DTypeSig false "evRoutesOf" (TyFun (TyCon "EvVal") (TyApp (TyCon "List") (TyCon "Route"))))
@@ -759,8 +833,18 @@ rkTyList =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false))))
 (DData Public "EvIndex" () ((variant "EvIndex" (ConPos (TyCon "Int") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry")))))) ())
+(DTypeSig false "preludeEvidenceRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))))))
+(DFunDef false "preludeEvidenceRef" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "setPreludeEvidence" (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "Unit"))))
+(DFunDef false "setPreludeEvidence" ((PVar "counter") (PVar "rows")) (EBlock (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EVar "counter")) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (ELit (LInt 0))) (EVar "arr")) (EVar "rows"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeEvidenceRef")) (EApp (EVar "Some") (EVar "arr"))))))
 (DTypeSig true "evIndexOf" (TyFun (TyCon "EvTable") (TyCon "EvIndex")))
-(DFunDef false "evIndexOf" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))
+(DFunDef false "evIndexOf" ((PVar "entries")) (EMatch (EUnOp "!" (EVar "preludeEvidenceRef")) (arm (PCon "None") () (EApp (EVar "denseIndexOf") (EVar "entries"))) (arm (PCon "Some" (PVar "seg")) () (EApp (EVar "denseIndexOf") (EApp (EApp (EMethodRef "filter") (EApp (EVar "aboveSegment") (EVar "seg"))) (EVar "entries"))))))
+(DTypeSig true "entriesAboveSegment" (TyFun (TyCon "EvTable") (TyCon "EvTable")))
+(DFunDef false "entriesAboveSegment" ((PVar "entries")) (EMatch (EUnOp "!" (EVar "preludeEvidenceRef")) (arm (PCon "None") () (EVar "entries")) (arm (PCon "Some" (PVar "seg")) () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "e")) (EMatch (EVar "e") (arm (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) () (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "seg"))))))) (EVar "entries")))))
+(DTypeSig false "denseIndexOf" (TyFun (TyCon "EvTable") (TyCon "EvIndex")))
+(DFunDef false "denseIndexOf" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))
+(DTypeSig false "aboveSegment" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "EvEntry") (TyCon "Bool"))))
+(DFunDef false "aboveSegment" ((PVar "seg") (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild)) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "seg"))) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "seg")) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) PWild)) ((GBool (EBinOp "==" (EVar "m2") (EVar "m")))) (EVar "False")) (arm PWild () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is below the prelude's counter but not the prelude's")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "evSlotCount" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "evSlotCount" ((PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "evSlotCount") (EVar "rest")) (EApp (EApp (EMethodRef "max") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))))
@@ -779,7 +863,9 @@ rkTyList =
 (DFunDef false "answerIn" ((PVar "idx") (PVar "what") (PVar "ev")) (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (EVar "what")) (EVar "ev")) (arm (PCon "Ok" (PVar "v")) () (EVar "v")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "evidenceLookup" (TyFun (TyApp (TyCon "Option") (TyCon "EvIndex")) (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "EvVal"))))))
 (DFunDef false "evidenceLookup" ((PCon "None") (PVar "what") (PCon "EvId" (PVar "m") (PVar "i"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up ")) (EApp (EMethodRef "display") (EVar "what"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")")))))
-(DFunDef false "evidenceLookup" ((PCon "Some" (PCon "EvIndex" (PVar "lo") (PVar "arr"))) (PVar "what") (PCon "EvId" (PVar "m") (PVar "i"))) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "what"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is from an earlier graph")))) (EIf (EBinOp ">=" (EBinOp "-" (EVar "i") (EVar "lo")) (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i"))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Ok") (EVar "v")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EMethodRef "display") (EVar "m2"))) (ELit (LString ""))))))))))
+(DFunDef false "evidenceLookup" ((PCon "Some" (PCon "EvIndex" (PVar "lo") (PVar "arr"))) (PVar "what") (PCon "EvId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "preludeEvidenceRef")) (arm (PCon "Some" (PVar "seg")) ((GBool (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "seg")))))) (EApp (EApp (EApp (EApp (EApp (EVar "slotAnswer") (EVar "seg")) (EVar "what")) (EVar "m")) (EVar "i")) (EVar "i"))) (arm PWild () (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "what"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is from an earlier graph")))) (EApp (EApp (EApp (EApp (EApp (EVar "slotAnswer") (EVar "arr")) (EVar "what")) (EVar "m")) (EVar "i")) (EBinOp "-" (EVar "i") (EVar "lo")))))))
+(DTypeSig false "slotAnswer" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "EvVal"))))))))
+(DFunDef false "slotAnswer" ((PVar "arr") (PVar "what") (PVar "m") (PVar "i") (PVar "slot")) (EIf (EBinOp ">=" (EVar "slot") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "slot")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i"))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Ok") (EVar "v")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EMethodRef "display") (EVar "m2"))) (ELit (LString "")))))))))
 (DTypeSig true "evDictRoutesIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "evDictRoutesIn" ((PVar "idx") (PVar "ev")) (EApp (EVar "evRoutesOf") (EApp (EApp (EApp (EVar "answerIn") (EVar "idx")) (ELit (LString "dictionary application"))) (EVar "ev"))))
 (DTypeSig false "evRoutesOf" (TyFun (TyCon "EvVal") (TyApp (TyCon "List") (TyCon "Route"))))

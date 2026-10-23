@@ -1,0 +1,1790 @@
+-- A faithful, fail-closed codec for the elaborated AST and the evidence rows.
+--
+-- The writer produces an `SExp`; the reader consumes a `SexpCursor` straight
+-- off the bytes, so no intermediate `SExp` is built. The encoding is compact:
+-- a type's constructors are numbered in declaration order (`(k field...)`, or
+-- the bare `k` for a constructor with no fields); a type with one constructor
+-- is just its fields in a list; a placeholder `Loc` is `z`; an `EvId` or
+-- `BinderId` of module `""` is its bare ordinal; a `Bool` is `t` or `f`; a
+-- `Float` is the two 32-bit halves of its IEEE 754 bits as a pair, so NaN
+-- payloads and signed zeros survive.
+--
+-- Every writer match is exhaustive with no wildcard arm, so a new constructor
+-- in `frontend.ast` stops this module compiling until it is given a tag.
+-- A reader refuses an unknown tag, a bare tag that names a constructor with
+-- fields, a tagged form that names one without, truncation and a trailing
+-- node; the cursor records the first refusal and `readDecls` and
+-- `readEvEntries` turn it into an `Err` rather than a half-read value.
+
+import frontend.ast.*
+import array.{fromList}
+import list.{splitAt}
+import support.sexp_value.{
+  SExp(..), SexpCursor, SexpError(..), cursorAdvance, cursorAtEnd, cursorAtom,
+  cursorClose, cursorFail, cursorFailed, cursorInt, cursorList, cursorOf,
+  cursorOffset, cursorOpen, cursorPeek, cursorChar
+}
+
+-- ── entry points ────────────────────────────────────────────────────────────
+
+export
+declsSExp : List Decl -> SExp
+declsSExp ds = sexpList sexpDecl ds
+
+export
+evEntriesSExp : List EvEntry -> SExp
+evEntriesSExp es = sexpList sexpEvEntry es
+
+-- Reads one list of declarations; the caller decides what may follow it.
+export
+readDecls : SexpCursor -> Result SexpError (List Decl)
+readDecls cur = checked "decls" cur (cursorList readDecl cur)
+
+-- Reads one list of evidence rows; the caller decides what may follow it.
+export
+readEvEntries : SexpCursor -> Result SexpError (List EvEntry)
+readEvEntries cur = checked "evidence" cur (cursorList readEvEntry cur)
+
+-- The whole of `text` is one list of declarations.
+export
+decodeDecls : String -> Result SexpError (List Decl)
+decodeDecls text = decodeAll readDecls text
+
+-- The whole of `text` is one list of evidence rows.
+export
+decodeEvEntries : String -> Result SexpError (List EvEntry)
+decodeEvEntries text = decodeAll readEvEntries text
+
+decodeAll : (SexpCursor -> Result SexpError a) -> String -> Result SexpError a
+decodeAll reader text =
+  let cur = cursorOf text
+  match reader cur
+    Err e => Err e
+    Ok v =>
+      if cursorAtEnd cur then
+        Ok v
+      else
+        Err SexpError {
+          seOffset = cursorOffset cur,
+          sePath = "",
+          seWhat = "trailing text after the encoded value",
+        }
+
+checked : String -> SexpCursor -> a -> Result SexpError a
+checked path cur v =
+  if cursorFailed cur then
+    Err SexpError {
+      seOffset = cursorOffset cur,
+      sePath = path,
+      seWhat = "malformed or truncated encoding",
+    }
+  else
+    Ok v
+
+-- ── building blocks ────────────────────────────────────────────────────────
+
+sexpInt : Int -> SExp
+sexpInt n = SAtom (intToString n)
+
+sexpString : String -> SExp
+sexpString s = SAtom s
+
+export
+sexpBool : Bool -> SExp
+sexpBool b = SAtom (if b then "t" else "f")
+
+sexpFloat : Float -> SExp
+sexpFloat f = match splitAt 4 (toList (floatToBytes64 f))
+  (hi, lo) => SList [sexpInt (wordOf hi), sexpInt (wordOf lo)]
+
+sexpList : (a -> SExp) -> List a -> SExp
+sexpList f xs = SList (map f xs)
+
+sexpOpt : (a -> SExp) -> Option a -> SExp
+sexpOpt _ None = SList []
+sexpOpt f (Some x) = SList [f x]
+
+sexpPair : (a -> SExp) -> (b -> SExp) -> (a, b) -> SExp
+sexpPair fa fb (a, b) = SList [fa a, fb b]
+
+sexpLoc : Loc -> SExp
+sexpLoc (Loc "" 1 0 1 0) = SAtom "z"
+sexpLoc (Loc f a b c d) =
+  SList [SAtom f, sexpInt a, sexpInt b, sexpInt c, sexpInt d]
+
+sexpEvId : EvId -> SExp
+sexpEvId (EvId "" n) = sexpInt n
+sexpEvId (EvId m n) = SList [SAtom m, sexpInt n]
+
+export
+sexpBinderId : BinderId -> SExp
+sexpBinderId (BinderId "" n) = sexpInt n
+sexpBinderId (BinderId m n) = SList [SAtom m, sexpInt n]
+
+-- Big-endian bytes as the number they spell.
+wordOf : List Int -> Int
+wordOf bytes = fold (acc b => acc * 256 + b) 0 bytes
+
+-- The four big-endian bytes of a 32-bit number.
+bytesOfWord : Int -> List Int
+bytesOfWord w = [w / 16777216 % 256, w / 65536 % 256, w / 256 % 256, w % 256]
+
+readInt : SexpCursor -> Int
+readInt cur = cursorInt cur
+
+readString : SexpCursor -> String
+readString cur = cursorAtom cur
+
+export
+readBool : SexpCursor -> Bool
+readBool cur =
+  let c = cursorChar cur
+  if c == 116 then True else if c == 102 then False else cursorFail cur False
+
+readFloat : SexpCursor -> Float
+readFloat cur =
+  let _ = cursorOpen cur
+  let hi = cursorInt cur
+  let lo = cursorInt cur
+  let _ = cursorClose cur
+  if hi < 0 || hi > 4294967295 || lo < 0 || lo > 4294967295 then
+    cursorFail cur 0.0
+  else
+    bytesToFloat64 (fromList (bytesOfWord hi ++ bytesOfWord lo)) 0
+
+readOpt : (SexpCursor -> a) -> SexpCursor -> Option a
+readOpt f cur =
+  let _ = cursorOpen cur
+  if cursorPeek cur == 41 then
+    let _ = cursorAdvance cur
+    None
+  else
+    let v = f cur
+    let _ = cursorClose cur
+    Some v
+
+readPair : (SexpCursor -> a) -> (SexpCursor -> b) -> SexpCursor -> (a, b)
+readPair fa fb cur =
+  let _ = cursorOpen cur
+  let a = fa cur
+  let b = fb cur
+  let _ = cursorClose cur
+  (a, b)
+
+readLoc : SexpCursor -> Loc
+readLoc cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let f = readString cur
+    let a = readInt cur
+    let b = readInt cur
+    let c = readInt cur
+    let d = readInt cur
+    let _ = cursorClose cur
+    Loc f a b c d
+  else if cursorChar cur == 122 then
+    Loc "" 1 0 1 0
+  else
+    cursorFail cur dfltLoc
+
+readEvId : SexpCursor -> EvId
+readEvId cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let m = readString cur
+    let n = readInt cur
+    let _ = cursorClose cur
+    EvId m n
+  else
+    EvId "" (readInt cur)
+
+export
+readBinderId : SexpCursor -> BinderId
+readBinderId cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let m = readString cur
+    let n = readInt cur
+    let _ = cursorClose cur
+    BinderId m n
+  else
+    BinderId "" (readInt cur)
+
+-- ── writers ────────────────────────────────────────────────────────────────
+
+sexpLit : Lit -> SExp
+sexpLit (LInt a0) = SList [SAtom "0", sexpInt a0]
+sexpLit (LFloat a0) = SList [SAtom "1", sexpFloat a0]
+sexpLit (LU64 a0 a1) = SList [SAtom "2", sexpInt a0, sexpInt a1]
+sexpLit (LI64 a0 a1) = SList [SAtom "3", sexpInt a0, sexpInt a1]
+sexpLit (LString a0) = SList [SAtom "4", sexpString a0]
+sexpLit (LChar a0) = SList [SAtom "5", sexpString a0]
+sexpLit (LBool a0) = SList [SAtom "6", sexpBool a0]
+sexpLit LUnit = SAtom "7"
+
+sexpTyConOrigin : TyConOrigin -> SExp
+sexpTyConOrigin OriginUnresolved = SAtom "0"
+sexpTyConOrigin OriginBuiltin = SAtom "1"
+sexpTyConOrigin (OriginModule a0) = SList [SAtom "2", sexpString a0]
+
+sexpTy : Ty -> SExp
+sexpTy (TyCon { tyConName = a0, tyConLoc = a1, tyConOrigin = a2 }) =
+  SList [SAtom "0", sexpString a0, sexpOpt sexpLoc a1, sexpTyConOrigin a2]
+sexpTy (TyVar a0) = SList [SAtom "1", sexpString a0]
+sexpTy (TyApp a0 a1) = SList [SAtom "2", sexpTy a0, sexpTy a1]
+sexpTy (TyFun a0 a1) = SList [SAtom "3", sexpTy a0, sexpTy a1]
+sexpTy (TyTuple a0) = SList [SAtom "4", sexpList sexpTy a0]
+sexpTy (TyEffect a0 a1 a2) = SList [
+  SAtom "5",
+  sexpList sexpEffAtomTy a0,
+  sexpList sexpString a1,
+  sexpTy a2,
+]
+sexpTy (TyConstrained a0 a1) =
+  SList [SAtom "6", sexpList sexpConstraint a0, sexpTy a1]
+sexpTy (TyNamed a0 a1 a2) =
+  SList [SAtom "7", sexpString a0, sexpTy a1, sexpOpt sexpEffAtomTy a2]
+sexpTy (TyQual a0 a1 a2) =
+  SList [SAtom "8", sexpTy a0, sexpList sexpEffParamTy a1, sexpOpt sexpLoc a2]
+sexpTy (TyRow a0 a1 a2) = SList [
+  SAtom "9",
+  sexpList sexpEffAtomTy a0,
+  sexpList sexpString a1,
+  sexpOpt sexpLoc a2,
+]
+sexpTy (TyAuth a0 a1) =
+  SList [SAtom "10", sexpList sexpEffParamTy a0, sexpOpt sexpLoc a1]
+
+sexpEffAtomTy : EffAtomTy -> SExp
+sexpEffAtomTy (EffAtomTy { eatLabel = a0, eatOrigin = a1, eatParam = a2, eatLoc = a3, eatPattern = a4 }) = SList
+  [
+    sexpString a0,
+    sexpTyConOrigin a1,
+    sexpEffParamTy a2,
+    sexpOpt sexpLoc a3,
+    sexpBool a4,
+  ]
+
+sexpEffParamTy : EffParamTy -> SExp
+sexpEffParamTy EPTop = SAtom "0"
+sexpEffParamTy (EPLit a0) = SList [SAtom "1", sexpString a0]
+sexpEffParamTy (EPName a0) = SList [SAtom "2", sexpString a0]
+sexpEffParamTy (EPSet a0) = SList [SAtom "3", sexpList sexpString a0]
+sexpEffParamTy (EPProduct a0) =
+  SList [SAtom "4", sexpList (sexpPair sexpString sexpEffParamTy) a0]
+
+sexpConstraint : Constraint -> SExp
+sexpConstraint (Constraint { constraintHead = a0, constraintArgs = a1, constraintOrigin = a2 }) =
+  SList [sexpString a0, sexpList sexpTy a1, sexpTyConOrigin a2]
+
+sexpKindAnn : KindAnn -> SExp
+sexpKindAnn KindType = SAtom "0"
+sexpKindAnn KindEffect = SAtom "1"
+sexpKindAnn (KindAuthority a0 a1 a2 a3) = SList [
+  SAtom "2",
+  sexpString a0,
+  sexpTyConOrigin a1,
+  sexpBool a2,
+  sexpOpt sexpLoc a3,
+]
+sexpKindAnn (KindArrow a0 a1) =
+  SList [SAtom "3", sexpKindAnn a0, sexpKindAnn a1]
+
+sexpRoute : Route -> SExp
+sexpRoute RNone = SAtom "0"
+sexpRoute (RKey a0 a1 a2) =
+  SList [SAtom "1", sexpString a0, sexpList sexpRoute a1, sexpList sexpRoute a2]
+sexpRoute (RDict a0) = SList [SAtom "2", sexpString a0]
+sexpRoute (RDictFwd a0) = SList [SAtom "3", sexpString a0]
+sexpRoute (RLocal a0 a1) =
+  SList [SAtom "4", sexpString a0, sexpList sexpRoute a1]
+sexpRoute (RScalar a0) = SList [SAtom "5", sexpString a0]
+sexpRoute (RProj a0 a1) = SList [SAtom "6", sexpRoute a0, sexpList sexpInt a1]
+
+sexpEvVal : EvVal -> SExp
+sexpEvVal (EvOne a0) = SList [SAtom "0", sexpRoute a0]
+sexpEvVal (EvMany a0) = SList [SAtom "1", sexpList sexpRoute a0]
+sexpEvVal (EvMethod a0 a1 a2 a3 a4) = SList [
+  SAtom "2",
+  sexpString a0,
+  sexpInt a1,
+  sexpRoute a2,
+  sexpList sexpRoute a3,
+  sexpList sexpRoute a4,
+]
+sexpEvVal (EvLit a0 a1) = SList [SAtom "3", sexpOpt sexpFloat a0, sexpRoute a1]
+sexpEvVal (EvHead a0) = SList [SAtom "4", sexpString a0]
+
+sexpEvEntry : EvEntry -> SExp
+sexpEvEntry (EvEntry a0 a1) = SList [sexpEvId a0, sexpEvVal a1]
+
+sexpAddr : Addr -> SExp
+sexpAddr (ALocal a0 a1) = SList [SAtom "0", sexpInt a0, sexpInt a1]
+sexpAddr AGlobal = SAtom "1"
+
+sexpPat : Pat -> SExp
+sexpPat (PVar a0 a1 a2) =
+  SList [SAtom "0", sexpString a0, sexpLoc a1, sexpBinderId a2]
+sexpPat PWild = SAtom "1"
+sexpPat (PLit a0) = SList [SAtom "2", sexpLit a0]
+sexpPat (PCon a0 a1) = SList [SAtom "3", sexpString a0, sexpList sexpPat a1]
+sexpPat (PCons a0 a1) = SList [SAtom "4", sexpPat a0, sexpPat a1]
+sexpPat (PTuple a0) = SList [SAtom "5", sexpList sexpPat a0]
+sexpPat (PList a0) = SList [SAtom "6", sexpList sexpPat a0]
+sexpPat (PAs a0 a1 a2 a3) =
+  SList [SAtom "7", sexpString a0, sexpLoc a1, sexpBinderId a2, sexpPat a3]
+sexpPat (PRng a0 a1 a2) = SList [SAtom "8", sexpLit a0, sexpLit a1, sexpBool a2]
+sexpPat (PRec a0 a1 a2) =
+  SList [SAtom "9", sexpString a0, sexpList sexpRecPatField a1, sexpBool a2]
+
+sexpRecPatField : RecPatField -> SExp
+sexpRecPatField (RecPatField a0 a1 a2 a3) =
+  SList [sexpString a0, sexpLoc a1, sexpBinderId a2, sexpOpt sexpPat a3]
+
+sexpGuard : Guard -> SExp
+sexpGuard (GBool a0) = SList [SAtom "0", sexpExpr a0]
+sexpGuard (GBind a0 a1) = SList [SAtom "1", sexpPat a0, sexpExpr a1]
+
+sexpArm : Arm -> SExp
+sexpArm (Arm a0 a1 a2) = SList [sexpPat a0, sexpList sexpGuard a1, sexpExpr a2]
+
+sexpDoStmt : DoStmt -> SExp
+sexpDoStmt (DoExpr a0) = SList [SAtom "0", sexpExpr a0]
+sexpDoStmt (DoBind a0 a1) = SList [SAtom "1", sexpPat a0, sexpExpr a1]
+sexpDoStmt (DoLet a0 a1 a2 a3 a4) = SList [
+  SAtom "2",
+  sexpBool a0,
+  sexpBool a1,
+  sexpPat a2,
+  sexpExpr a3,
+  sexpLoc a4,
+]
+sexpDoStmt (DoAssign a0 a1) = SList [SAtom "3", sexpString a0, sexpExpr a1]
+sexpDoStmt (DoFieldAssign a0 a1 a2) =
+  SList [SAtom "4", sexpString a0, sexpList sexpString a1, sexpExpr a2]
+
+sexpInterpPart : InterpPart -> SExp
+sexpInterpPart (InterpStr a0) = SList [SAtom "0", sexpString a0]
+sexpInterpPart (InterpExpr a0) = SList [SAtom "1", sexpExpr a0]
+
+sexpGuardArm : GuardArm -> SExp
+sexpGuardArm (GuardArm a0 a1) = SList [sexpList sexpGuard a0, sexpExpr a1]
+
+sexpFieldAssign : FieldAssign -> SExp
+sexpFieldAssign (FieldAssign a0 a1) = SList [sexpString a0, sexpExpr a1]
+
+sexpSection : Section -> SExp
+sexpSection (SecBare a0) = SList [SAtom "0", sexpString a0]
+sexpSection (SecRight a0 a1) = SList [SAtom "1", sexpString a0, sexpExpr a1]
+sexpSection (SecLeft a0 a1) = SList [SAtom "2", sexpExpr a0, sexpString a1]
+
+sexpFunClause : FunClause -> SExp
+sexpFunClause (FunClause a0 a1) = SList [sexpList sexpPat a0, sexpExpr a1]
+
+sexpLetBind : LetBind -> SExp
+sexpLetBind (LetBind a0 a1 a2 a3) =
+  SList [sexpString a0, sexpList sexpFunClause a1, sexpLoc a2, sexpBinderId a3]
+
+sexpExpr : Expr -> SExp
+sexpExpr (ELit a0) = SList [SAtom "0", sexpLit a0]
+sexpExpr (EVar a0) = SList [SAtom "1", sexpString a0]
+sexpExpr (EApp a0 a1) = SList [SAtom "2", sexpExpr a0, sexpExpr a1]
+sexpExpr (ELam a0 a1) = SList [SAtom "3", sexpList sexpPat a0, sexpExpr a1]
+sexpExpr (ELet a0 a1 a2 a3 a4) = SList [
+  SAtom "4",
+  sexpLoc a0,
+  sexpBool a1,
+  sexpPat a2,
+  sexpExpr a3,
+  sexpExpr a4,
+]
+sexpExpr (EMatch a0 a1) = SList [SAtom "5", sexpExpr a0, sexpList sexpArm a1]
+sexpExpr (EIf a0 a1 a2) =
+  SList [SAtom "6", sexpExpr a0, sexpExpr a1, sexpExpr a2]
+sexpExpr (EBinOp a0 a1 a2 a3) =
+  SList [SAtom "7", sexpString a0, sexpExpr a1, sexpExpr a2, sexpEvId a3]
+sexpExpr (EUnOp a0 a1 a2) =
+  SList [SAtom "8", sexpString a0, sexpExpr a1, sexpEvId a2]
+sexpExpr (EInfix a0 a1 a2) =
+  SList [SAtom "9", sexpString a0, sexpExpr a1, sexpExpr a2]
+sexpExpr (EFieldAccess a0 a1 a2) =
+  SList [SAtom "10", sexpExpr a0, sexpString a1, sexpEvId a2]
+sexpExpr (ETuple a0) = SList [SAtom "11", sexpList sexpExpr a0]
+sexpExpr (EListLit a0) = SList [SAtom "12", sexpList sexpExpr a0]
+sexpExpr (EArrayLit a0) = SList [SAtom "13", sexpList sexpExpr a0]
+sexpExpr (ERangeList a0 a1 a2) =
+  SList [SAtom "14", sexpExpr a0, sexpExpr a1, sexpBool a2]
+sexpExpr (ERangeArray a0 a1 a2) =
+  SList [SAtom "15", sexpExpr a0, sexpExpr a1, sexpBool a2]
+sexpExpr (ESlice a0 a1 a2 a3) =
+  SList [SAtom "16", sexpExpr a0, sexpExpr a1, sexpExpr a2, sexpBool a3]
+sexpExpr (ELetGroup a0 a1) =
+  SList [SAtom "17", sexpList sexpLetBind a0, sexpExpr a1]
+sexpExpr (ESection a0) = SList [SAtom "18", sexpSection a0]
+sexpExpr (EIndex a0 a1) = SList [SAtom "19", sexpExpr a0, sexpExpr a1]
+sexpExpr (EAnnot a0 a1) = SList [SAtom "20", sexpExpr a0, sexpTy a1]
+sexpExpr (EHeadAnnot a0 a1) = SList [SAtom "21", sexpExpr a0, sexpTy a1]
+sexpExpr (EBlock a0) = SList [SAtom "22", sexpList sexpDoStmt a0]
+sexpExpr (EDo a0 a1) = SList [SAtom "23", sexpBool a0, sexpList sexpDoStmt a1]
+sexpExpr (EStringInterp a0) = SList [SAtom "24", sexpList sexpInterpPart a0]
+sexpExpr (EGuards a0) = SList [SAtom "25", sexpList sexpGuardArm a0]
+sexpExpr (ERecordCreate a0 a1) =
+  SList [SAtom "26", sexpString a0, sexpList sexpFieldAssign a1]
+sexpExpr (ERecordUpdate a0 a1 a2) =
+  SList [SAtom "27", sexpExpr a0, sexpList sexpFieldAssign a1, sexpEvId a2]
+sexpExpr (EVariantUpdate a0 a1 a2) =
+  SList [SAtom "28", sexpString a0, sexpExpr a1, sexpList sexpFieldAssign a2]
+sexpExpr (EMapLit a0 a1) =
+  SList [SAtom "29", sexpString a0, sexpList (sexpPair sexpExpr sexpExpr) a1]
+sexpExpr (ESetLit a0 a1) =
+  SList [SAtom "30", sexpString a0, sexpList sexpExpr a1]
+sexpExpr (EAsPat a0 a1) = SList [SAtom "31", sexpString a0, sexpExpr a1]
+sexpExpr (EMethodRef a0) = SList [SAtom "32", sexpString a0]
+sexpExpr (EDictApp a0) = SList [SAtom "33", sexpString a0]
+sexpExpr (EVarAt a0 a1) = SList [SAtom "34", sexpString a0, sexpAddr a1]
+sexpExpr (EVarId a0 a1) = SList [SAtom "35", sexpString a0, sexpInt a1]
+sexpExpr (EMethodAt a0 a1 a2) =
+  SList [SAtom "36", sexpString a0, sexpString a1, sexpEvId a2]
+sexpExpr (EDictAt a0 a1) = SList [SAtom "37", sexpString a0, sexpEvId a1]
+sexpExpr (ELoc a0 a1) = SList [SAtom "38", sexpLoc a0, sexpExpr a1]
+sexpExpr (EDoOrigin a0 a1) = SList [SAtom "39", sexpLoc a0, sexpExpr a1]
+sexpExpr (ENumLit a0 a1 a2) =
+  SList [SAtom "40", sexpInt a0, sexpEvId a1, sexpString a2]
+sexpExpr (EWideLit a0 a1 a2 a3) =
+  SList [SAtom "41", sexpInt a0, sexpInt a1, sexpEvId a2, sexpString a3]
+
+sexpUseMember : UseMember -> SExp
+sexpUseMember (UseMember a0 a1 a2 a3) =
+  SList [sexpString a0, sexpBool a1, sexpLoc a2, sexpOpt sexpString a3]
+
+sexpUsePath : UsePath -> SExp
+sexpUsePath (UseName a0) = SList [SAtom "0", sexpList sexpString a0]
+sexpUsePath (UseGroup a0 a1) =
+  SList [SAtom "1", sexpList sexpString a0, sexpList sexpUseMember a1]
+sexpUsePath (UseWild a0) = SList [SAtom "2", sexpList sexpString a0]
+sexpUsePath (UseAlias a0 a1) =
+  SList [SAtom "3", sexpList sexpString a0, sexpString a1]
+
+sexpPropParam : PropParam -> SExp
+sexpPropParam (PropParam a0 a1 a2) =
+  SList [sexpString a0, sexpLoc a1, sexpTy a2]
+
+sexpMethodDefault : MethodDefault -> SExp
+sexpMethodDefault (MethodDefault a0 a1) =
+  SList [sexpList sexpPat a0, sexpExpr a1]
+
+sexpIfaceMethod : IfaceMethod -> SExp
+sexpIfaceMethod (IfaceMethod a0 a1 a2 a3) = SList [
+  sexpString a0,
+  sexpTy a1,
+  sexpOpt sexpMethodDefault a2,
+  sexpOpt sexpLoc a3,
+]
+
+sexpSuper : Super -> SExp
+sexpSuper (Super { superHead = a0, superParams = a1, superOrigin = a2 }) =
+  SList [sexpString a0, sexpList sexpString a1, sexpTyConOrigin a2]
+
+sexpRequire : Require -> SExp
+sexpRequire (Require { requireHead = a0, requireArgs = a1, requireOrigin = a2 }) =
+  SList [sexpString a0, sexpList sexpTy a1, sexpTyConOrigin a2]
+
+sexpImplMethod : ImplMethod -> SExp
+sexpImplMethod (ImplMethod a0 a1 a2) =
+  SList [sexpString a0, sexpList sexpPat a1, sexpExpr a2]
+
+sexpDataVis : DataVis -> SExp
+sexpDataVis VisPrivate = SAtom "0"
+sexpDataVis VisAbstract = SAtom "1"
+sexpDataVis VisPublic = SAtom "2"
+
+sexpField : Field -> SExp
+sexpField (Field a0 a1) = SList [sexpString a0, sexpTy a1]
+
+sexpConPayload : ConPayload -> SExp
+sexpConPayload (ConPos a0) = SList [SAtom "0", sexpList sexpTy a0]
+sexpConPayload (ConNamed a0 a1) =
+  SList [SAtom "1", sexpList sexpField a0, sexpBool a1]
+
+sexpVariant : Variant -> SExp
+sexpVariant (Variant a0 a1) = SList [sexpString a0, sexpConPayload a1]
+
+sexpAttr : Attr -> SExp
+sexpAttr (AttrDeprecated a0) = SList [SAtom "0", sexpOpt sexpString a0]
+sexpAttr AttrInline = SAtom "1"
+sexpAttr AttrMustUse = SAtom "2"
+sexpAttr AttrNoInline = SAtom "3"
+
+sexpDeriveRef : DeriveRef -> SExp
+sexpDeriveRef (DeriveRef a0 a1) = SList [sexpString a0, sexpOpt sexpLoc a1]
+
+sexpExternDecl : ExternDecl -> SExp
+sexpExternDecl (ExternDecl { edPub = a0, edName = a1, edTy = a2, edLoc = a3, edBinds = a4 }) = SList
+  [
+    sexpBool a0,
+    sexpString a1,
+    sexpTy a2,
+    sexpLoc a3,
+    sexpList sexpExternBind a4,
+  ]
+
+sexpExternBind : ExternBind -> SExp
+sexpExternBind (ExternBind { ebHost = a0, ebSymbol = a1, ebLoc = a2 }) =
+  SList [sexpString a0, sexpString a1, sexpLoc a2]
+
+sexpDecl : Decl -> SExp
+sexpDecl (DTypeSig a0 a1 a2 a3) =
+  SList [SAtom "0", sexpBool a0, sexpString a1, sexpTy a2, sexpLoc a3]
+sexpDecl (DExtern a0) = SList [SAtom "1", sexpExternDecl a0]
+sexpDecl (DFunDef a0 a1 a2 a3 a4 a5) = SList [
+  SAtom "2",
+  sexpBool a0,
+  sexpString a1,
+  sexpList sexpPat a2,
+  sexpExpr a3,
+  sexpLoc a4,
+  sexpBinderId a5,
+]
+sexpDecl (DData { dataVis = a0, dataName = a1, dataParams = a2, dataParamKinds = a3, dataCtors = a4, dataCtorBinders = a5, dataDerives = a6, dataOrigin = a7, dataExtern = a8, dataNameLoc = a9 }) = SList
+  [
+    SAtom "3",
+    sexpDataVis a0,
+    sexpString a1,
+    sexpList sexpString a2,
+    sexpList (sexpOpt sexpKindAnn) a3,
+    sexpList sexpVariant a4,
+    sexpList (sexpList (sexpPair sexpString sexpKindAnn)) a5,
+    sexpList sexpDeriveRef a6,
+    sexpTyConOrigin a7,
+    sexpBool a8,
+    sexpOpt sexpLoc a9,
+  ]
+sexpDecl (DUse a0 a1 a2) =
+  SList [SAtom "4", sexpBool a0, sexpUsePath a1, sexpLoc a2]
+sexpDecl (DEffect a0 a1 a2 a3 a4 a5) = SList [
+  SAtom "5",
+  sexpBool a0,
+  sexpString a1,
+  sexpOpt sexpString a2,
+  sexpList (sexpPair sexpString sexpString) a3,
+  sexpTyConOrigin a4,
+  sexpOpt sexpLoc a5,
+]
+sexpDecl (DProp a0 a1 a2 a3) = SList [
+  SAtom "6",
+  sexpBool a0,
+  sexpString a1,
+  sexpList sexpPropParam a2,
+  sexpExpr a3,
+]
+sexpDecl (DTest a0 a1 a2) =
+  SList [SAtom "7", sexpBool a0, sexpString a1, sexpExpr a2]
+sexpDecl (DInterface { pub = a0, def = a1, name = a2, typarams = a3, typaramKinds = a4, supers = a5, methods = a6, ifaceOrigin = a7, ifaceNameLoc = a8 }) = SList
+  [
+    SAtom "8",
+    sexpBool a0,
+    sexpBool a1,
+    sexpString a2,
+    sexpList sexpString a3,
+    sexpList (sexpOpt sexpKindAnn) a4,
+    sexpList sexpSuper a5,
+    sexpList sexpIfaceMethod a6,
+    sexpTyConOrigin a7,
+    sexpOpt sexpLoc a8,
+  ]
+sexpDecl (DImpl { pub = a0, iface = a1, tys = a2, reqs = a3, methods = a4, implOrigin = a5, implIfaceLoc = a6 }) = SList
+  [
+    SAtom "9",
+    sexpBool a0,
+    sexpString a1,
+    sexpList sexpTy a2,
+    sexpList sexpRequire a3,
+    sexpList sexpImplMethod a4,
+    sexpTyConOrigin a5,
+    sexpOpt sexpLoc a6,
+  ]
+sexpDecl (DTypeAlias { tyAliasPub = a0, tyAliasName = a1, tyAliasParams = a2, tyAliasParamKinds = a3, tyAliasRhs = a4, tyAliasOrigin = a5, tyAliasNameLoc = a6 }) = SList
+  [
+    SAtom "10",
+    sexpBool a0,
+    sexpString a1,
+    sexpList sexpString a2,
+    sexpList (sexpOpt sexpKindAnn) a3,
+    sexpTy a4,
+    sexpTyConOrigin a5,
+    sexpOpt sexpLoc a6,
+  ]
+sexpDecl (DNewtype { newtypePub = a0, newtypeName = a1, newtypeParams = a2, newtypeParamKinds = a3, newtypeCtor = a4, newtypeCtorBinders = a5, newtypeFieldTy = a6, newtypeDerives = a7, newtypeOrigin = a8, newtypeNameLoc = a9 }) = SList
+  [
+    SAtom "11",
+    sexpBool a0,
+    sexpString a1,
+    sexpList sexpString a2,
+    sexpList (sexpOpt sexpKindAnn) a3,
+    sexpString a4,
+    sexpList (sexpPair sexpString sexpKindAnn) a5,
+    sexpTy a6,
+    sexpList sexpDeriveRef a7,
+    sexpTyConOrigin a8,
+    sexpOpt sexpLoc a9,
+  ]
+sexpDecl (DLetGroup a0 a1) =
+  SList [SAtom "12", sexpBool a0, sexpList sexpLetBind a1]
+sexpDecl (DAttrib a0 a1) = SList [SAtom "13", sexpList sexpAttr a0, sexpDecl a1]
+
+-- ── placeholders for a refused read ────────────────────────────────────────
+-- A reader that refuses still has to return a value of its type; the cursor's
+-- failure is what the caller reads, and the value is never used.
+
+dfltLoc : Loc
+dfltLoc = Loc "" 1 0 1 0
+
+dfltLit : Lit
+dfltLit = LUnit
+
+dfltTyConOrigin : TyConOrigin
+dfltTyConOrigin = OriginUnresolved
+
+dfltTy : Ty
+dfltTy =
+  TyCon { tyConName = "", tyConLoc = None, tyConOrigin = dfltTyConOrigin }
+
+dfltEffParamTy : EffParamTy
+dfltEffParamTy = EPTop
+
+dfltKindAnn : KindAnn
+dfltKindAnn = KindType
+
+dfltRoute : Route
+dfltRoute = RNone
+
+dfltEvVal : EvVal
+dfltEvVal = EvOne dfltRoute
+
+dfltAddr : Addr
+dfltAddr = AGlobal
+
+dfltPat : Pat
+dfltPat = PWild
+
+dfltGuard : Guard
+dfltGuard = GBool dfltExpr
+
+dfltDoStmt : DoStmt
+dfltDoStmt = DoExpr dfltExpr
+
+dfltInterpPart : InterpPart
+dfltInterpPart = InterpStr ""
+
+dfltSection : Section
+dfltSection = SecBare ""
+
+dfltExpr : Expr
+dfltExpr = ELit dfltLit
+
+dfltUsePath : UsePath
+dfltUsePath = UseName []
+
+dfltDataVis : DataVis
+dfltDataVis = VisPrivate
+
+dfltConPayload : ConPayload
+dfltConPayload = ConPos []
+
+dfltAttr : Attr
+dfltAttr = AttrInline
+
+dfltDecl : Decl
+dfltDecl = DTypeSig False "" dfltTy dfltLoc
+
+-- ── readers ────────────────────────────────────────────────────────────────
+
+readLit : SexpCursor -> Lit
+readLit cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readLitTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readLitBare (cursorInt cur) cur
+
+readLitBare : Int -> SexpCursor -> Lit
+readLitBare 7 _ = LUnit
+readLitBare _ cur = cursorFail cur dfltLit
+
+readLitTagged : Int -> SexpCursor -> Lit
+readLitTagged 0 cur =
+  let a0 = readInt cur
+  LInt a0
+readLitTagged 1 cur =
+  let a0 = readFloat cur
+  LFloat a0
+readLitTagged 2 cur =
+  let a0 = readInt cur
+  let a1 = readInt cur
+  LU64 a0 a1
+readLitTagged 3 cur =
+  let a0 = readInt cur
+  let a1 = readInt cur
+  LI64 a0 a1
+readLitTagged 4 cur =
+  let a0 = readString cur
+  LString a0
+readLitTagged 5 cur =
+  let a0 = readString cur
+  LChar a0
+readLitTagged 6 cur =
+  let a0 = readBool cur
+  LBool a0
+readLitTagged _ cur = cursorFail cur dfltLit
+
+readTyConOrigin : SexpCursor -> TyConOrigin
+readTyConOrigin cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readTyConOriginTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readTyConOriginBare (cursorInt cur) cur
+
+readTyConOriginBare : Int -> SexpCursor -> TyConOrigin
+readTyConOriginBare 0 _ = OriginUnresolved
+readTyConOriginBare 1 _ = OriginBuiltin
+readTyConOriginBare _ cur = cursorFail cur dfltTyConOrigin
+
+readTyConOriginTagged : Int -> SexpCursor -> TyConOrigin
+readTyConOriginTagged 2 cur =
+  let a0 = readString cur
+  OriginModule a0
+readTyConOriginTagged _ cur = cursorFail cur dfltTyConOrigin
+
+readTy : SexpCursor -> Ty
+readTy cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readTyTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readTyBare (cursorInt cur) cur
+
+readTyBare : Int -> SexpCursor -> Ty
+readTyBare _ cur = cursorFail cur dfltTy
+
+readTyTagged : Int -> SexpCursor -> Ty
+readTyTagged 0 cur =
+  let a0 = readString cur
+  let a1 = readOpt readLoc cur
+  let a2 = readTyConOrigin cur
+  TyCon { tyConName = a0, tyConLoc = a1, tyConOrigin = a2 }
+readTyTagged 1 cur =
+  let a0 = readString cur
+  TyVar a0
+readTyTagged 2 cur =
+  let a0 = readTy cur
+  let a1 = readTy cur
+  TyApp a0 a1
+readTyTagged 3 cur =
+  let a0 = readTy cur
+  let a1 = readTy cur
+  TyFun a0 a1
+readTyTagged 4 cur =
+  let a0 = cursorList readTy cur
+  TyTuple a0
+readTyTagged 5 cur =
+  let a0 = cursorList readEffAtomTy cur
+  let a1 = cursorList readString cur
+  let a2 = readTy cur
+  TyEffect a0 a1 a2
+readTyTagged 6 cur =
+  let a0 = cursorList readConstraint cur
+  let a1 = readTy cur
+  TyConstrained a0 a1
+readTyTagged 7 cur =
+  let a0 = readString cur
+  let a1 = readTy cur
+  let a2 = readOpt readEffAtomTy cur
+  TyNamed a0 a1 a2
+readTyTagged 8 cur =
+  let a0 = readTy cur
+  let a1 = cursorList readEffParamTy cur
+  let a2 = readOpt readLoc cur
+  TyQual a0 a1 a2
+readTyTagged 9 cur =
+  let a0 = cursorList readEffAtomTy cur
+  let a1 = cursorList readString cur
+  let a2 = readOpt readLoc cur
+  TyRow a0 a1 a2
+readTyTagged 10 cur =
+  let a0 = cursorList readEffParamTy cur
+  let a1 = readOpt readLoc cur
+  TyAuth a0 a1
+readTyTagged _ cur = cursorFail cur dfltTy
+
+readEffAtomTy : SexpCursor -> EffAtomTy
+readEffAtomTy cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = readTyConOrigin cur
+  let a2 = readEffParamTy cur
+  let a3 = readOpt readLoc cur
+  let a4 = readBool cur
+  let _ = cursorClose cur
+  EffAtomTy {
+    eatLabel = a0,
+    eatOrigin = a1,
+    eatParam = a2,
+    eatLoc = a3,
+    eatPattern = a4,
+  }
+
+readEffParamTy : SexpCursor -> EffParamTy
+readEffParamTy cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readEffParamTyTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readEffParamTyBare (cursorInt cur) cur
+
+readEffParamTyBare : Int -> SexpCursor -> EffParamTy
+readEffParamTyBare 0 _ = EPTop
+readEffParamTyBare _ cur = cursorFail cur dfltEffParamTy
+
+readEffParamTyTagged : Int -> SexpCursor -> EffParamTy
+readEffParamTyTagged 1 cur =
+  let a0 = readString cur
+  EPLit a0
+readEffParamTyTagged 2 cur =
+  let a0 = readString cur
+  EPName a0
+readEffParamTyTagged 3 cur =
+  let a0 = cursorList readString cur
+  EPSet a0
+readEffParamTyTagged 4 cur =
+  let a0 = cursorList (readPair readString readEffParamTy) cur
+  EPProduct a0
+readEffParamTyTagged _ cur = cursorFail cur dfltEffParamTy
+
+readConstraint : SexpCursor -> Constraint
+readConstraint cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = cursorList readTy cur
+  let a2 = readTyConOrigin cur
+  let _ = cursorClose cur
+  Constraint { constraintHead = a0, constraintArgs = a1, constraintOrigin = a2 }
+
+readKindAnn : SexpCursor -> KindAnn
+readKindAnn cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readKindAnnTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readKindAnnBare (cursorInt cur) cur
+
+readKindAnnBare : Int -> SexpCursor -> KindAnn
+readKindAnnBare 0 _ = KindType
+readKindAnnBare 1 _ = KindEffect
+readKindAnnBare _ cur = cursorFail cur dfltKindAnn
+
+readKindAnnTagged : Int -> SexpCursor -> KindAnn
+readKindAnnTagged 2 cur =
+  let a0 = readString cur
+  let a1 = readTyConOrigin cur
+  let a2 = readBool cur
+  let a3 = readOpt readLoc cur
+  KindAuthority a0 a1 a2 a3
+readKindAnnTagged 3 cur =
+  let a0 = readKindAnn cur
+  let a1 = readKindAnn cur
+  KindArrow a0 a1
+readKindAnnTagged _ cur = cursorFail cur dfltKindAnn
+
+readRoute : SexpCursor -> Route
+readRoute cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readRouteTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readRouteBare (cursorInt cur) cur
+
+readRouteBare : Int -> SexpCursor -> Route
+readRouteBare 0 _ = RNone
+readRouteBare _ cur = cursorFail cur dfltRoute
+
+readRouteTagged : Int -> SexpCursor -> Route
+readRouteTagged 1 cur =
+  let a0 = readString cur
+  let a1 = cursorList readRoute cur
+  let a2 = cursorList readRoute cur
+  RKey a0 a1 a2
+readRouteTagged 2 cur =
+  let a0 = readString cur
+  RDict a0
+readRouteTagged 3 cur =
+  let a0 = readString cur
+  RDictFwd a0
+readRouteTagged 4 cur =
+  let a0 = readString cur
+  let a1 = cursorList readRoute cur
+  RLocal a0 a1
+readRouteTagged 5 cur =
+  let a0 = readString cur
+  RScalar a0
+readRouteTagged 6 cur =
+  let a0 = readRoute cur
+  let a1 = cursorList readInt cur
+  RProj a0 a1
+readRouteTagged _ cur = cursorFail cur dfltRoute
+
+readEvVal : SexpCursor -> EvVal
+readEvVal cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readEvValTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readEvValBare (cursorInt cur) cur
+
+readEvValBare : Int -> SexpCursor -> EvVal
+readEvValBare _ cur = cursorFail cur dfltEvVal
+
+readEvValTagged : Int -> SexpCursor -> EvVal
+readEvValTagged 0 cur =
+  let a0 = readRoute cur
+  EvOne a0
+readEvValTagged 1 cur =
+  let a0 = cursorList readRoute cur
+  EvMany a0
+readEvValTagged 2 cur =
+  let a0 = readString cur
+  let a1 = readInt cur
+  let a2 = readRoute cur
+  let a3 = cursorList readRoute cur
+  let a4 = cursorList readRoute cur
+  EvMethod a0 a1 a2 a3 a4
+readEvValTagged 3 cur =
+  let a0 = readOpt readFloat cur
+  let a1 = readRoute cur
+  EvLit a0 a1
+readEvValTagged 4 cur =
+  let a0 = readString cur
+  EvHead a0
+readEvValTagged _ cur = cursorFail cur dfltEvVal
+
+readEvEntry : SexpCursor -> EvEntry
+readEvEntry cur =
+  let _ = cursorOpen cur
+  let a0 = readEvId cur
+  let a1 = readEvVal cur
+  let _ = cursorClose cur
+  EvEntry a0 a1
+
+readAddr : SexpCursor -> Addr
+readAddr cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readAddrTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readAddrBare (cursorInt cur) cur
+
+readAddrBare : Int -> SexpCursor -> Addr
+readAddrBare 1 _ = AGlobal
+readAddrBare _ cur = cursorFail cur dfltAddr
+
+readAddrTagged : Int -> SexpCursor -> Addr
+readAddrTagged 0 cur =
+  let a0 = readInt cur
+  let a1 = readInt cur
+  ALocal a0 a1
+readAddrTagged _ cur = cursorFail cur dfltAddr
+
+readPat : SexpCursor -> Pat
+readPat cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readPatTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readPatBare (cursorInt cur) cur
+
+readPatBare : Int -> SexpCursor -> Pat
+readPatBare 1 _ = PWild
+readPatBare _ cur = cursorFail cur dfltPat
+
+readPatTagged : Int -> SexpCursor -> Pat
+readPatTagged 0 cur =
+  let a0 = readString cur
+  let a1 = readLoc cur
+  let a2 = readBinderId cur
+  PVar a0 a1 a2
+readPatTagged 2 cur =
+  let a0 = readLit cur
+  PLit a0
+readPatTagged 3 cur =
+  let a0 = readString cur
+  let a1 = cursorList readPat cur
+  PCon a0 a1
+readPatTagged 4 cur =
+  let a0 = readPat cur
+  let a1 = readPat cur
+  PCons a0 a1
+readPatTagged 5 cur =
+  let a0 = cursorList readPat cur
+  PTuple a0
+readPatTagged 6 cur =
+  let a0 = cursorList readPat cur
+  PList a0
+readPatTagged 7 cur =
+  let a0 = readString cur
+  let a1 = readLoc cur
+  let a2 = readBinderId cur
+  let a3 = readPat cur
+  PAs a0 a1 a2 a3
+readPatTagged 8 cur =
+  let a0 = readLit cur
+  let a1 = readLit cur
+  let a2 = readBool cur
+  PRng a0 a1 a2
+readPatTagged 9 cur =
+  let a0 = readString cur
+  let a1 = cursorList readRecPatField cur
+  let a2 = readBool cur
+  PRec a0 a1 a2
+readPatTagged _ cur = cursorFail cur dfltPat
+
+readRecPatField : SexpCursor -> RecPatField
+readRecPatField cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = readLoc cur
+  let a2 = readBinderId cur
+  let a3 = readOpt readPat cur
+  let _ = cursorClose cur
+  RecPatField a0 a1 a2 a3
+
+readGuard : SexpCursor -> Guard
+readGuard cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readGuardTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readGuardBare (cursorInt cur) cur
+
+readGuardBare : Int -> SexpCursor -> Guard
+readGuardBare _ cur = cursorFail cur dfltGuard
+
+readGuardTagged : Int -> SexpCursor -> Guard
+readGuardTagged 0 cur =
+  let a0 = readExpr cur
+  GBool a0
+readGuardTagged 1 cur =
+  let a0 = readPat cur
+  let a1 = readExpr cur
+  GBind a0 a1
+readGuardTagged _ cur = cursorFail cur dfltGuard
+
+readArm : SexpCursor -> Arm
+readArm cur =
+  let _ = cursorOpen cur
+  let a0 = readPat cur
+  let a1 = cursorList readGuard cur
+  let a2 = readExpr cur
+  let _ = cursorClose cur
+  Arm a0 a1 a2
+
+readDoStmt : SexpCursor -> DoStmt
+readDoStmt cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readDoStmtTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readDoStmtBare (cursorInt cur) cur
+
+readDoStmtBare : Int -> SexpCursor -> DoStmt
+readDoStmtBare _ cur = cursorFail cur dfltDoStmt
+
+readDoStmtTagged : Int -> SexpCursor -> DoStmt
+readDoStmtTagged 0 cur =
+  let a0 = readExpr cur
+  DoExpr a0
+readDoStmtTagged 1 cur =
+  let a0 = readPat cur
+  let a1 = readExpr cur
+  DoBind a0 a1
+readDoStmtTagged 2 cur =
+  let a0 = readBool cur
+  let a1 = readBool cur
+  let a2 = readPat cur
+  let a3 = readExpr cur
+  let a4 = readLoc cur
+  DoLet a0 a1 a2 a3 a4
+readDoStmtTagged 3 cur =
+  let a0 = readString cur
+  let a1 = readExpr cur
+  DoAssign a0 a1
+readDoStmtTagged 4 cur =
+  let a0 = readString cur
+  let a1 = cursorList readString cur
+  let a2 = readExpr cur
+  DoFieldAssign a0 a1 a2
+readDoStmtTagged _ cur = cursorFail cur dfltDoStmt
+
+readInterpPart : SexpCursor -> InterpPart
+readInterpPart cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readInterpPartTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readInterpPartBare (cursorInt cur) cur
+
+readInterpPartBare : Int -> SexpCursor -> InterpPart
+readInterpPartBare _ cur = cursorFail cur dfltInterpPart
+
+readInterpPartTagged : Int -> SexpCursor -> InterpPart
+readInterpPartTagged 0 cur =
+  let a0 = readString cur
+  InterpStr a0
+readInterpPartTagged 1 cur =
+  let a0 = readExpr cur
+  InterpExpr a0
+readInterpPartTagged _ cur = cursorFail cur dfltInterpPart
+
+readGuardArm : SexpCursor -> GuardArm
+readGuardArm cur =
+  let _ = cursorOpen cur
+  let a0 = cursorList readGuard cur
+  let a1 = readExpr cur
+  let _ = cursorClose cur
+  GuardArm a0 a1
+
+readFieldAssign : SexpCursor -> FieldAssign
+readFieldAssign cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = readExpr cur
+  let _ = cursorClose cur
+  FieldAssign a0 a1
+
+readSection : SexpCursor -> Section
+readSection cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readSectionTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readSectionBare (cursorInt cur) cur
+
+readSectionBare : Int -> SexpCursor -> Section
+readSectionBare _ cur = cursorFail cur dfltSection
+
+readSectionTagged : Int -> SexpCursor -> Section
+readSectionTagged 0 cur =
+  let a0 = readString cur
+  SecBare a0
+readSectionTagged 1 cur =
+  let a0 = readString cur
+  let a1 = readExpr cur
+  SecRight a0 a1
+readSectionTagged 2 cur =
+  let a0 = readExpr cur
+  let a1 = readString cur
+  SecLeft a0 a1
+readSectionTagged _ cur = cursorFail cur dfltSection
+
+readFunClause : SexpCursor -> FunClause
+readFunClause cur =
+  let _ = cursorOpen cur
+  let a0 = cursorList readPat cur
+  let a1 = readExpr cur
+  let _ = cursorClose cur
+  FunClause a0 a1
+
+readLetBind : SexpCursor -> LetBind
+readLetBind cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = cursorList readFunClause cur
+  let a2 = readLoc cur
+  let a3 = readBinderId cur
+  let _ = cursorClose cur
+  LetBind a0 a1 a2 a3
+
+readExpr : SexpCursor -> Expr
+readExpr cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readExprTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readExprBare (cursorInt cur) cur
+
+readExprBare : Int -> SexpCursor -> Expr
+readExprBare _ cur = cursorFail cur dfltExpr
+
+readExprTagged : Int -> SexpCursor -> Expr
+readExprTagged 0 cur =
+  let a0 = readLit cur
+  ELit a0
+readExprTagged 1 cur =
+  let a0 = readString cur
+  EVar a0
+readExprTagged 2 cur =
+  let a0 = readExpr cur
+  let a1 = readExpr cur
+  EApp a0 a1
+readExprTagged 3 cur =
+  let a0 = cursorList readPat cur
+  let a1 = readExpr cur
+  ELam a0 a1
+readExprTagged 4 cur =
+  let a0 = readLoc cur
+  let a1 = readBool cur
+  let a2 = readPat cur
+  let a3 = readExpr cur
+  let a4 = readExpr cur
+  ELet a0 a1 a2 a3 a4
+readExprTagged 5 cur =
+  let a0 = readExpr cur
+  let a1 = cursorList readArm cur
+  EMatch a0 a1
+readExprTagged 6 cur =
+  let a0 = readExpr cur
+  let a1 = readExpr cur
+  let a2 = readExpr cur
+  EIf a0 a1 a2
+readExprTagged 7 cur =
+  let a0 = readString cur
+  let a1 = readExpr cur
+  let a2 = readExpr cur
+  let a3 = readEvId cur
+  EBinOp a0 a1 a2 a3
+readExprTagged 8 cur =
+  let a0 = readString cur
+  let a1 = readExpr cur
+  let a2 = readEvId cur
+  EUnOp a0 a1 a2
+readExprTagged 9 cur =
+  let a0 = readString cur
+  let a1 = readExpr cur
+  let a2 = readExpr cur
+  EInfix a0 a1 a2
+readExprTagged 10 cur =
+  let a0 = readExpr cur
+  let a1 = readString cur
+  let a2 = readEvId cur
+  EFieldAccess a0 a1 a2
+readExprTagged 11 cur =
+  let a0 = cursorList readExpr cur
+  ETuple a0
+readExprTagged 12 cur =
+  let a0 = cursorList readExpr cur
+  EListLit a0
+readExprTagged 13 cur =
+  let a0 = cursorList readExpr cur
+  EArrayLit a0
+readExprTagged 14 cur =
+  let a0 = readExpr cur
+  let a1 = readExpr cur
+  let a2 = readBool cur
+  ERangeList a0 a1 a2
+readExprTagged 15 cur =
+  let a0 = readExpr cur
+  let a1 = readExpr cur
+  let a2 = readBool cur
+  ERangeArray a0 a1 a2
+readExprTagged 16 cur =
+  let a0 = readExpr cur
+  let a1 = readExpr cur
+  let a2 = readExpr cur
+  let a3 = readBool cur
+  ESlice a0 a1 a2 a3
+readExprTagged 17 cur =
+  let a0 = cursorList readLetBind cur
+  let a1 = readExpr cur
+  ELetGroup a0 a1
+readExprTagged 18 cur =
+  let a0 = readSection cur
+  ESection a0
+readExprTagged 19 cur =
+  let a0 = readExpr cur
+  let a1 = readExpr cur
+  EIndex a0 a1
+readExprTagged 20 cur =
+  let a0 = readExpr cur
+  let a1 = readTy cur
+  EAnnot a0 a1
+readExprTagged 21 cur =
+  let a0 = readExpr cur
+  let a1 = readTy cur
+  EHeadAnnot a0 a1
+readExprTagged 22 cur =
+  let a0 = cursorList readDoStmt cur
+  EBlock a0
+readExprTagged 23 cur =
+  let a0 = readBool cur
+  let a1 = cursorList readDoStmt cur
+  EDo a0 a1
+readExprTagged 24 cur =
+  let a0 = cursorList readInterpPart cur
+  EStringInterp a0
+readExprTagged 25 cur =
+  let a0 = cursorList readGuardArm cur
+  EGuards a0
+readExprTagged 26 cur =
+  let a0 = readString cur
+  let a1 = cursorList readFieldAssign cur
+  ERecordCreate a0 a1
+readExprTagged 27 cur =
+  let a0 = readExpr cur
+  let a1 = cursorList readFieldAssign cur
+  let a2 = readEvId cur
+  ERecordUpdate a0 a1 a2
+readExprTagged 28 cur =
+  let a0 = readString cur
+  let a1 = readExpr cur
+  let a2 = cursorList readFieldAssign cur
+  EVariantUpdate a0 a1 a2
+readExprTagged 29 cur =
+  let a0 = readString cur
+  let a1 = cursorList (readPair readExpr readExpr) cur
+  EMapLit a0 a1
+readExprTagged 30 cur =
+  let a0 = readString cur
+  let a1 = cursorList readExpr cur
+  ESetLit a0 a1
+readExprTagged 31 cur =
+  let a0 = readString cur
+  let a1 = readExpr cur
+  EAsPat a0 a1
+readExprTagged 32 cur =
+  let a0 = readString cur
+  EMethodRef a0
+readExprTagged 33 cur =
+  let a0 = readString cur
+  EDictApp a0
+readExprTagged 34 cur =
+  let a0 = readString cur
+  let a1 = readAddr cur
+  EVarAt a0 a1
+readExprTagged 35 cur =
+  let a0 = readString cur
+  let a1 = readInt cur
+  EVarId a0 a1
+readExprTagged 36 cur =
+  let a0 = readString cur
+  let a1 = readString cur
+  let a2 = readEvId cur
+  EMethodAt a0 a1 a2
+readExprTagged 37 cur =
+  let a0 = readString cur
+  let a1 = readEvId cur
+  EDictAt a0 a1
+readExprTagged 38 cur =
+  let a0 = readLoc cur
+  let a1 = readExpr cur
+  ELoc a0 a1
+readExprTagged 39 cur =
+  let a0 = readLoc cur
+  let a1 = readExpr cur
+  EDoOrigin a0 a1
+readExprTagged 40 cur =
+  let a0 = readInt cur
+  let a1 = readEvId cur
+  let a2 = readString cur
+  ENumLit a0 a1 a2
+readExprTagged 41 cur =
+  let a0 = readInt cur
+  let a1 = readInt cur
+  let a2 = readEvId cur
+  let a3 = readString cur
+  EWideLit a0 a1 a2 a3
+readExprTagged _ cur = cursorFail cur dfltExpr
+
+readUseMember : SexpCursor -> UseMember
+readUseMember cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = readBool cur
+  let a2 = readLoc cur
+  let a3 = readOpt readString cur
+  let _ = cursorClose cur
+  UseMember a0 a1 a2 a3
+
+readUsePath : SexpCursor -> UsePath
+readUsePath cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readUsePathTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readUsePathBare (cursorInt cur) cur
+
+readUsePathBare : Int -> SexpCursor -> UsePath
+readUsePathBare _ cur = cursorFail cur dfltUsePath
+
+readUsePathTagged : Int -> SexpCursor -> UsePath
+readUsePathTagged 0 cur =
+  let a0 = cursorList readString cur
+  UseName a0
+readUsePathTagged 1 cur =
+  let a0 = cursorList readString cur
+  let a1 = cursorList readUseMember cur
+  UseGroup a0 a1
+readUsePathTagged 2 cur =
+  let a0 = cursorList readString cur
+  UseWild a0
+readUsePathTagged 3 cur =
+  let a0 = cursorList readString cur
+  let a1 = readString cur
+  UseAlias a0 a1
+readUsePathTagged _ cur = cursorFail cur dfltUsePath
+
+readPropParam : SexpCursor -> PropParam
+readPropParam cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = readLoc cur
+  let a2 = readTy cur
+  let _ = cursorClose cur
+  PropParam a0 a1 a2
+
+readMethodDefault : SexpCursor -> MethodDefault
+readMethodDefault cur =
+  let _ = cursorOpen cur
+  let a0 = cursorList readPat cur
+  let a1 = readExpr cur
+  let _ = cursorClose cur
+  MethodDefault a0 a1
+
+readIfaceMethod : SexpCursor -> IfaceMethod
+readIfaceMethod cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = readTy cur
+  let a2 = readOpt readMethodDefault cur
+  let a3 = readOpt readLoc cur
+  let _ = cursorClose cur
+  IfaceMethod a0 a1 a2 a3
+
+readSuper : SexpCursor -> Super
+readSuper cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = cursorList readString cur
+  let a2 = readTyConOrigin cur
+  let _ = cursorClose cur
+  Super { superHead = a0, superParams = a1, superOrigin = a2 }
+
+readRequire : SexpCursor -> Require
+readRequire cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = cursorList readTy cur
+  let a2 = readTyConOrigin cur
+  let _ = cursorClose cur
+  Require { requireHead = a0, requireArgs = a1, requireOrigin = a2 }
+
+readImplMethod : SexpCursor -> ImplMethod
+readImplMethod cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = cursorList readPat cur
+  let a2 = readExpr cur
+  let _ = cursorClose cur
+  ImplMethod a0 a1 a2
+
+readDataVis : SexpCursor -> DataVis
+readDataVis cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readDataVisTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readDataVisBare (cursorInt cur) cur
+
+readDataVisBare : Int -> SexpCursor -> DataVis
+readDataVisBare 0 _ = VisPrivate
+readDataVisBare 1 _ = VisAbstract
+readDataVisBare 2 _ = VisPublic
+readDataVisBare _ cur = cursorFail cur dfltDataVis
+
+readDataVisTagged : Int -> SexpCursor -> DataVis
+readDataVisTagged _ cur = cursorFail cur dfltDataVis
+
+readField : SexpCursor -> Field
+readField cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = readTy cur
+  let _ = cursorClose cur
+  Field a0 a1
+
+readConPayload : SexpCursor -> ConPayload
+readConPayload cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readConPayloadTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readConPayloadBare (cursorInt cur) cur
+
+readConPayloadBare : Int -> SexpCursor -> ConPayload
+readConPayloadBare _ cur = cursorFail cur dfltConPayload
+
+readConPayloadTagged : Int -> SexpCursor -> ConPayload
+readConPayloadTagged 0 cur =
+  let a0 = cursorList readTy cur
+  ConPos a0
+readConPayloadTagged 1 cur =
+  let a0 = cursorList readField cur
+  let a1 = readBool cur
+  ConNamed a0 a1
+readConPayloadTagged _ cur = cursorFail cur dfltConPayload
+
+readVariant : SexpCursor -> Variant
+readVariant cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = readConPayload cur
+  let _ = cursorClose cur
+  Variant a0 a1
+
+readAttr : SexpCursor -> Attr
+readAttr cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readAttrTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readAttrBare (cursorInt cur) cur
+
+readAttrBare : Int -> SexpCursor -> Attr
+readAttrBare 1 _ = AttrInline
+readAttrBare 2 _ = AttrMustUse
+readAttrBare 3 _ = AttrNoInline
+readAttrBare _ cur = cursorFail cur dfltAttr
+
+readAttrTagged : Int -> SexpCursor -> Attr
+readAttrTagged 0 cur =
+  let a0 = readOpt readString cur
+  AttrDeprecated a0
+readAttrTagged _ cur = cursorFail cur dfltAttr
+
+readDeriveRef : SexpCursor -> DeriveRef
+readDeriveRef cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = readOpt readLoc cur
+  let _ = cursorClose cur
+  DeriveRef a0 a1
+
+readExternDecl : SexpCursor -> ExternDecl
+readExternDecl cur =
+  let _ = cursorOpen cur
+  let a0 = readBool cur
+  let a1 = readString cur
+  let a2 = readTy cur
+  let a3 = readLoc cur
+  let a4 = cursorList readExternBind cur
+  let _ = cursorClose cur
+  ExternDecl { edPub = a0, edName = a1, edTy = a2, edLoc = a3, edBinds = a4 }
+
+readExternBind : SexpCursor -> ExternBind
+readExternBind cur =
+  let _ = cursorOpen cur
+  let a0 = readString cur
+  let a1 = readString cur
+  let a2 = readLoc cur
+  let _ = cursorClose cur
+  ExternBind { ebHost = a0, ebSymbol = a1, ebLoc = a2 }
+
+readDecl : SexpCursor -> Decl
+readDecl cur =
+  if cursorPeek cur == 40 then
+    let _ = cursorAdvance cur
+    let v = readDeclTagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    readDeclBare (cursorInt cur) cur
+
+readDeclBare : Int -> SexpCursor -> Decl
+readDeclBare _ cur = cursorFail cur dfltDecl
+
+readDeclTagged : Int -> SexpCursor -> Decl
+readDeclTagged 0 cur =
+  let a0 = readBool cur
+  let a1 = readString cur
+  let a2 = readTy cur
+  let a3 = readLoc cur
+  DTypeSig a0 a1 a2 a3
+readDeclTagged 1 cur =
+  let a0 = readExternDecl cur
+  DExtern a0
+readDeclTagged 2 cur =
+  let a0 = readBool cur
+  let a1 = readString cur
+  let a2 = cursorList readPat cur
+  let a3 = readExpr cur
+  let a4 = readLoc cur
+  let a5 = readBinderId cur
+  DFunDef a0 a1 a2 a3 a4 a5
+readDeclTagged 3 cur =
+  let a0 = readDataVis cur
+  let a1 = readString cur
+  let a2 = cursorList readString cur
+  let a3 = cursorList (readOpt readKindAnn) cur
+  let a4 = cursorList readVariant cur
+  let a5 = cursorList (cursorList (readPair readString readKindAnn)) cur
+  let a6 = cursorList readDeriveRef cur
+  let a7 = readTyConOrigin cur
+  let a8 = readBool cur
+  let a9 = readOpt readLoc cur
+  DData {
+    dataVis = a0,
+    dataName = a1,
+    dataParams = a2,
+    dataParamKinds = a3,
+    dataCtors = a4,
+    dataCtorBinders = a5,
+    dataDerives = a6,
+    dataOrigin = a7,
+    dataExtern = a8,
+    dataNameLoc = a9,
+  }
+readDeclTagged 4 cur =
+  let a0 = readBool cur
+  let a1 = readUsePath cur
+  let a2 = readLoc cur
+  DUse a0 a1 a2
+readDeclTagged 5 cur =
+  let a0 = readBool cur
+  let a1 = readString cur
+  let a2 = readOpt readString cur
+  let a3 = cursorList (readPair readString readString) cur
+  let a4 = readTyConOrigin cur
+  let a5 = readOpt readLoc cur
+  DEffect a0 a1 a2 a3 a4 a5
+readDeclTagged 6 cur =
+  let a0 = readBool cur
+  let a1 = readString cur
+  let a2 = cursorList readPropParam cur
+  let a3 = readExpr cur
+  DProp a0 a1 a2 a3
+readDeclTagged 7 cur =
+  let a0 = readBool cur
+  let a1 = readString cur
+  let a2 = readExpr cur
+  DTest a0 a1 a2
+readDeclTagged 8 cur =
+  let a0 = readBool cur
+  let a1 = readBool cur
+  let a2 = readString cur
+  let a3 = cursorList readString cur
+  let a4 = cursorList (readOpt readKindAnn) cur
+  let a5 = cursorList readSuper cur
+  let a6 = cursorList readIfaceMethod cur
+  let a7 = readTyConOrigin cur
+  let a8 = readOpt readLoc cur
+  DInterface {
+    pub = a0,
+    def = a1,
+    name = a2,
+    typarams = a3,
+    typaramKinds = a4,
+    supers = a5,
+    methods = a6,
+    ifaceOrigin = a7,
+    ifaceNameLoc = a8,
+  }
+readDeclTagged 9 cur =
+  let a0 = readBool cur
+  let a1 = readString cur
+  let a2 = cursorList readTy cur
+  let a3 = cursorList readRequire cur
+  let a4 = cursorList readImplMethod cur
+  let a5 = readTyConOrigin cur
+  let a6 = readOpt readLoc cur
+  DImpl {
+    pub = a0,
+    iface = a1,
+    tys = a2,
+    reqs = a3,
+    methods = a4,
+    implOrigin = a5,
+    implIfaceLoc = a6,
+  }
+readDeclTagged 10 cur =
+  let a0 = readBool cur
+  let a1 = readString cur
+  let a2 = cursorList readString cur
+  let a3 = cursorList (readOpt readKindAnn) cur
+  let a4 = readTy cur
+  let a5 = readTyConOrigin cur
+  let a6 = readOpt readLoc cur
+  DTypeAlias {
+    tyAliasPub = a0,
+    tyAliasName = a1,
+    tyAliasParams = a2,
+    tyAliasParamKinds = a3,
+    tyAliasRhs = a4,
+    tyAliasOrigin = a5,
+    tyAliasNameLoc = a6,
+  }
+readDeclTagged 11 cur =
+  let a0 = readBool cur
+  let a1 = readString cur
+  let a2 = cursorList readString cur
+  let a3 = cursorList (readOpt readKindAnn) cur
+  let a4 = readString cur
+  let a5 = cursorList (readPair readString readKindAnn) cur
+  let a6 = readTy cur
+  let a7 = cursorList readDeriveRef cur
+  let a8 = readTyConOrigin cur
+  let a9 = readOpt readLoc cur
+  DNewtype {
+    newtypePub = a0,
+    newtypeName = a1,
+    newtypeParams = a2,
+    newtypeParamKinds = a3,
+    newtypeCtor = a4,
+    newtypeCtorBinders = a5,
+    newtypeFieldTy = a6,
+    newtypeDerives = a7,
+    newtypeOrigin = a8,
+    newtypeNameLoc = a9,
+  }
+readDeclTagged 12 cur =
+  let a0 = readBool cur
+  let a1 = cursorList readLetBind cur
+  DLetGroup a0 a1
+readDeclTagged 13 cur =
+  let a0 = cursorList readAttr cur
+  let a1 = readDecl cur
+  DAttrib a0 a1
+readDeclTagged _ cur = cursorFail cur dfltDecl

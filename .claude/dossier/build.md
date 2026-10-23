@@ -5,6 +5,8 @@
 
 The prelude interface `stdlib/core.mdki` is rewritten by `make medaka` (and by CI's `setup-medaka`); its key is the hashes of `runtime.mdk` and `core.mdk` plus the compiler identity (the binary's baked fingerprint), not `.medaka.srcstamp`; a stale file makes the check family fall back to the core pass (exit 1 under `MEDAKA_STRICT=1`), and `MEDAKA_NO_INTERFACE=1` disables the load. `test/stage_counts_test.mdk` asserts it is `fresh`.
 
+The elaborated-prelude file `stdlib/core.mdke` is a second staleness surface with the same key: stale makes `run`/`build`/`test`/`check-policy`/`manifest`/`repl` elaborate core again, silently when missing and with one `prelude trees stale: …` stderr line per verb (exit 1 under `MEDAKA_STRICT=1`) otherwise; a fresh `core.mdke` beside a missing or stale `core.mdki` is the same stale line (component `interface …`), since the tree arm needs both files; the counters line is under the digest and is checked against the rows; the `medaka_emitter` child has no baked fingerprint, so it takes the compiler identity from `MEDAKA_PRELUDE_COMPILER`, set by the spawning `medaka`.
+
 ## [B-STDERR] Warning-on-stderr, both directions load-bearing
 
 Measured on a deliberately stale `medaka run`: stdout carries the program's value alone, exit 0,

@@ -59,3 +59,5 @@ __pycache__/
 # build_native_medaka.sh output: the prelude interface derived from stdlib/core.mdk by
 # `medaka interface write`; regenerable on every build, never checked in.
 /stdlib/*.mdki
+# The same call also writes the module's elaborated trees beside it.
+/stdlib/*.mdke

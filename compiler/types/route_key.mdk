@@ -69,8 +69,9 @@ import support.util.{joinWith, escStr}
 -- lives HERE because this module is the one below all three readers of a solved
 -- route -- `types/typecheck.mdk` (dict passing), `eval/eval.mdk` and
 -- `ir/core_ir_lower.mdk` -- and `frontend/ast.mdk` (the only lower module)
--- imports nothing and holds no state.  No cell holds the index: each reader is
--- handed the one its own elaboration built.
+-- imports nothing and holds no state.  No cell holds a drive's index: each reader
+-- is handed the one its own elaboration built.  The one cell here holds the
+-- prelude's segment, which is the same for every drive of a process.
 --
 -- A lookup that cannot be answered is an `Err` here, and a panic in the readers:
 --
@@ -105,14 +106,61 @@ import support.util.{joinWith, escStr}
 -- slots from it.
 public export data EvIndex = EvIndex Int (Array (Option EvEntry))
 
+-- The prelude's own segment, once a process holds the prelude's elaborated trees
+-- (`types/prelude_elab.mdk`): their rows indexed from ordinal 0 to the prelude's
+-- counter, built once.  Every drive of such a process mints its ids at or past
+-- that counter, so a table holding the prelude's rows beside a drive's is indexed
+-- as the segment plus the drive's own span.  One dense array over both would
+-- span every ordinal the process has minted, which grows with each drive of a
+-- long-lived process.
+preludeEvidenceRef : Ref (Option (Array (Option EvEntry)))
+preludeEvidenceRef = Ref None
+
+-- Index [rows] as the prelude's segment, below [counter].
+export
+setPreludeEvidence : Int -> EvTable -> Unit
+setPreludeEvidence counter rows =
+  let arr = arrayMake counter None
+  let _ = fillEvidence 0 arr rows
+  preludeEvidenceRef := Some arr
+
 -- The index of [entries]; two entries under one ordinal panic (`fillEvidence`).
+-- An entry below the prelude's counter is the segment's, and panics unless the
+-- segment holds it under the same module.
 export
 evIndexOf : EvTable -> EvIndex
-evIndexOf entries =
+evIndexOf entries = match !preludeEvidenceRef
+  None => denseIndexOf entries
+  Some seg => denseIndexOf (filter (aboveSegment seg) entries)
+
+-- [entries] less those the prelude's segment answers; all of them with no segment.
+-- A reader that judges the table rather than trusting it (`evidenceFaults`) indexes
+-- this and lets `evidenceLookup` answer the segment's range.
+export
+entriesAboveSegment : EvTable -> EvTable
+entriesAboveSegment entries = match !preludeEvidenceRef
+  None => entries
+  Some seg =>
+    filter
+      (e => match e
+        EvEntry (EvId _ i) _ => i >= arrayLength seg)
+      entries
+
+denseIndexOf : EvTable -> EvIndex
+denseIndexOf entries =
   let lo = evMinOrdinal entries
   let arr = arrayMake (evSlotCount entries lo - lo) None
   let _ = fillEvidence lo arr entries
   EvIndex lo arr
+
+aboveSegment : Array (Option EvEntry) -> EvEntry -> Bool
+aboveSegment seg (EvEntry (EvId m i) _)
+  | i >= arrayLength seg = True
+  | otherwise = match arrayGetUnsafe i seg
+    Some (EvEntry (EvId m2 _) _) if m2 == m => False
+    _ =>
+      panic
+        "evidence table: \{m}#\{intToString i} is below the prelude's counter but not the prelude's"
 
 -- one past the largest ordinal in [entries], at least [acc]
 evSlotCount : EvTable -> Int -> Int
@@ -160,11 +208,25 @@ evidenceLookup None what (EvId m i) =
   Err
     "evidence table: no elaboration has published one (looking up \{what} \{m}#\{intToString i})"
 evidenceLookup (Some (EvIndex lo arr)) what (EvId m i) =
-  if i < lo then
-    Err "evidence table: \{what} \{m}#\{intToString i} is from an earlier graph"
-  else if i - lo >= arrayLength arr then
+  match !preludeEvidenceRef
+    Some seg if i >= 0 && i < arrayLength seg => slotAnswer seg what m i i
+    _ =>
+      if i < lo then
+        Err
+          "evidence table: \{what} \{m}#\{intToString i} is from an earlier graph"
+      else
+        slotAnswer arr what m i (i - lo)
+
+slotAnswer : Array (Option EvEntry) ->
+  String ->
+  String ->
+  Int ->
+  Int ->
+  Result String EvVal
+slotAnswer arr what m i slot =
+  if slot >= arrayLength arr then
     neverPublished what m i
-  else match arrayGetUnsafe (i - lo) arr
+  else match arrayGetUnsafe slot arr
     None => neverPublished what m i
     Some (EvEntry (EvId m2 _) v) =>
       if m2 == m then

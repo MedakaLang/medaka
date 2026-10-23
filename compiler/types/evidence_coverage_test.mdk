@@ -16,6 +16,7 @@ import frontend.ast.{
 import list.{filter}
 import types.evidence_coverage.{EvShape(..), EvidenceFault(..), evidenceFaults}
 import types.publish.{graphReport, TcReport(..), noEntryTables}
+import types.route_key.{setPreludeEvidence}
 import types.disposition.{emptyDispositionTable}
 import types.runtime_types.{emptyBinderTypes}
 
@@ -119,3 +120,28 @@ test "the faults come back duplicates first, then sites in tree order" =
       trees
       (filter (e => ordinal e > 1) clean
         ++ [EvEntry (ev 2) (EvLit None RNone)]))
+
+-- The prelude's segment answers the ordinals below its counter and the table's
+-- own entries the rest.  The segment is process-wide, so the test empties it.
+test "the prelude's segment answers the ordinals below its counter" =
+  let segment = filter (e => ordinal e < 3) clean
+  let own = filter (e => ordinal e >= 3) clean
+  let _ = setPreludeEvidence 3 segment
+  let covered = evidenceFaults trees clean
+  let held = evidenceFaults trees own
+  let _ =
+    setPreludeEvidence
+      3
+      (map
+        (e => if ordinal e == 1 then EvEntry (EvId "n" 1) (EvMany []) else e)
+        segment)
+  let foreign = evidenceFaults trees own
+  let _ = setPreludeEvidence 0 []
+  expectEach [
+    ("a table holding the segment's rows passes", expectEqual [] covered),
+    ("a table without them passes", expectEqual [] held),
+    (
+      "a segment row of another module does not answer the site",
+      expectEqual [MissingEntry "m" 1 ShapeMany] foreign,
+    ),
+  ]

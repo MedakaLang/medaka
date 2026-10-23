@@ -1,0 +1,10 @@
+-- #4392: a user `=>`-constrained `otherwise` beside core's nullary `otherwise`,
+-- which core's own guards use.  Core is marked with its own signatures only, so
+-- its guards stay plain references.  Expected: (int 3, Lt).
+interface Speak a where
+  speak : a -> String
+impl Speak Int where
+  speak x = "int \{x}"
+otherwise : Speak a => a -> String
+otherwise x = speak x
+main = (otherwise 3, compare (0.0 / 0.0) 1.0)

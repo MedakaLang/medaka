@@ -746,6 +746,12 @@ import types.prelude_interface.{
   seedPreludeInterface,
   preludeCacheHit,
 }
+import types.prelude_elab.{
+  PreludeElab(..),
+  heldPreludeCounters,
+  preludeElabFor,
+  withShippedRows,
+}
 
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
 -- ONE program-global identity, NOT the identity of whichever module wrote it,
@@ -9868,6 +9874,7 @@ defaultDriveInputs = DriveInputs {
   diIoJoinGrants = ioJoinGrants None,
   diProfileName = "",
   diMarked = None,
+  diPreludeKey = None,
 }
 
 -- The drive inputs a driver builds from the profile it selected and the loader's
@@ -9898,6 +9905,7 @@ driveInputsFor profile flatEntry mods = DriveInputs {
     None => ""
     Some p => profileName p,
   diMarked = None,
+  diPreludeKey = None,
 }
 
 -- A sink with every gate off and fresh buffers; each `begin*` turns one gate on.
@@ -53726,6 +53734,16 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- which arm (or none) ran before.  It is what the core pass below runs against; each
   -- user module then overwrites it from its own decls (`checkModuleFullDiags` →
   -- `seedCheckRun`).
+  --
+  -- A process holding the prelude's elaborated trees (`types/prelude_elab.mdk`)
+  -- starts every lineage past the evidence ordinals and `$k$lb` suffixes those
+  -- trees carry, so no drive of it mints one again, whichever arm it takes.
+  let _ = match heldPreludeCounters ()
+    Some (k, l) =>
+      let lineage = interners.value.lineage
+      lineage.lnEvCounter := max lineage.lnEvCounter.value k
+      lineage.lnLocalAbs.lasCounter := max lineage.lnLocalAbs.lasCounter.value l
+    None => ()
   let gctx = mintGraphCtx inputs admitted
   let initial = initialModuleCtx gctx
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
@@ -53801,13 +53819,16 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   gctx.promotionHarvestRef := []
   -- The core pass.  The diags arm continues from the prelude interface, cached
   -- under the caller's prelude key (see `checkCoreMemoized`, which drains core's
-  -- stamping context before it freezes).  The tree arm cannot: it needs core's
-  -- MARKED decls back for `dictPassModulesIfEnabled`, and an interface holds no
-  -- `Decl`, so it runs the pass outright and drains only at graph end.
+  -- stamping context before it freezes).  The tree arm needs core's dict-passed
+  -- decls as well, which an interface does not hold: it continues from the
+  -- interface only when the process also holds the prelude's shipped trees for
+  -- the drive's key (`treeArmHit`), and otherwise runs the pass outright and
+  -- drains only at graph end.
   -- The prelude's published rows come back here only when this pass closed core
-  -- (the diags arm); the tree arm publishes them after its graph-end drain.  Both
-  -- arms return core's own contexts as a value.  The tree arm's snapshot is never
-  -- written to `CrossRun.coreSchemeObligationsRef`, which inference reads.
+  -- (the diags arm, and the tree arm's hit); otherwise the tree arm publishes them
+  -- after its graph-end drain.  Both arms return core's own contexts as a value.
+  -- The tree arm's snapshot is never written to
+  -- `CrossRun.coreSchemeObligationsRef`, which inference reads.
   let (coreSchemes, corePub, coreContexts, coreTree, coreCtx) = match sel
     GOutDiags =>
       let (bindings, published, coreCtx) =
@@ -53828,11 +53849,43 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
         [],
         coreCtx,
       )
-    GOutTrees =>
-      let (bindings, tree, coreCtx) =
-        elabModuleStamp initial "" runtimeSeed [] coreDecls coreDecls
-      (bindings, None, coreOwnContexts coreCtx, tree, coreCtx)
+    GOutTrees => match treeArmHit inputs coreDecls gctx
+      Some (pe, pi) =>
+        let (bindings, published, coreCtx) =
+          continueFromInterface gctx gctx.graphRun pi
+        interners := internersOf coreCtx.mcGraph
+        (
+          bindings,
+          Some published,
+          coreCtx.mcGraph.crossRun.coreSchemeObligationsRef.value,
+          pe.peDecls,
+          coreCtx,
+        )
+      None =>
+        let (bindings, tree, coreCtx) =
+          elabModuleStamp initial "" runtimeSeed [] coreDecls coreDecls
+        (bindings, None, coreOwnContexts coreCtx, tree, coreCtx)
   (runtimeSeed, coreSchemes, corePub, coreContexts, coreTree, ms, coreCtx)
+
+-- The prelude's shipped trees for a tree-arm drive (`types/prelude_elab.mdk`), moved
+-- onto the binders of [coreDecls], the drive's own desugar of core: held for the
+-- drive's prelude key, and only for a drive that checks no trees marked ahead of it.
+treeArmElab : DriveInputs -> List Decl -> Option PreludeElab
+treeArmElab inputs coreDecls = match (inputs.diMarked, inputs.diPreludeKey)
+  (None, Some k) => preludeElabFor k coreDecls
+  _ => None
+
+-- Those trees with the interface of the same key cached for the drive's IO join:
+-- a drive takes both or neither.
+treeArmHit : DriveInputs ->
+  List Decl ->
+  GraphCtx ->
+  Option (PreludeElab, PreludeInterface)
+treeArmHit inputs coreDecls gctx = do
+  k <- inputs.diPreludeKey
+  pi <- preludeCacheHit k gctx.config.value.tcIoJoin
+  pe <- treeArmElab inputs coreDecls
+  Some (pe, pi)
 
 -- `graphPreamble`'s `(runtimeSeed, coreSchemes, record)` projection, for the
 -- schemes-only driver (`checkModulesK`), which neither marks trees nor reads the mark
@@ -54996,8 +55049,9 @@ frozenInvocationView (InvocationView ctors pols kinds) =
 -- and is NOT done here.
 --
 -- `preludeKey` is the desugar-cache generation pair for the prelude interface (see
--- `checkCoreMemoized`); the tree arm ignores it, because it needs core's marked
--- decls back and an interface holds no `Decl`.  `valueMain` is the caller's
+-- `checkCoreMemoized`); the tree arm ignores it and reads the drive's own
+-- `diPreludeKey` (`treeArmHit`), since it also needs core's dict-passed decls,
+-- which an interface does not hold.  `valueMain` is the caller's
 -- value-main candidate and `executes` names the `async` driver of a caller that
 -- runs the trees, `None` for one that does not (`autoPrintWanted`).
 driveGraphK : DriveInputs ->
@@ -55124,8 +55178,18 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
             (ms.msBareDictNames ++ lastCtx.mcGraph.promotionHarvestRef.value))
           coreDecls
           modules
+      -- On a hit (`treeArmHit`: the core pass closed core) core's trees arrive
+      -- dict-passed, and core's evidence and binder rows join the drive's.
+      let shipped = match coreClosed
+        Some _ => treeArmElab inputs coreDecls
+        None => None
       let (coreD, modules3) =
-        dictPassModulesIfEnabled lastCtx dictNames coreTree modules2
+        dictPassModulesIfEnabled
+          lastCtx
+          dictNames
+          (isSome shipped)
+          coreTree
+          modules2
       -- `resolveAliasMethodSpellings` restores the origin name behind every
       -- alias-qualified method occurrence (`A.mth` -> `mth`) that inference kept.
       -- Only the user modules go through it: core imports nothing, so it holds no
@@ -55135,7 +55199,11 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       let residual =
         stickyDiagsInPushOrder lastCtx.mcGraph.typeErrorsStickyDiags.value
       -- read after `dictPass`, so it carries the `EMethodAt` nodes `dictPass` minted
-      let evidence = drivenEvidence lastCtx.mcGraph ()
+      let (evidence, binders) =
+        withShippedRows
+          shipped
+          (drivenEvidence lastCtx.mcGraph ())
+          lastCtx.mcGraph.graphRun.binderRows.value
       GraphDrive {
         gdPerMod = perMod,
         gdCoreSchemes = corePub,
@@ -55145,7 +55213,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
         gdResidual = residual,
         gdEvTable = evidence,
         gdDispositions = dispositions,
-        gdBinders = lastCtx.mcGraph.graphRun.binderRows.value,
+        gdBinders = binders,
         gdReport =
           graphReportWithOutcome
             outcome
@@ -55154,7 +55222,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
             residual
             (_ => evidence)
             dispositions
-            lastCtx.mcGraph.graphRun.binderRows.value
+            binders
             (Some (coreD, modulesOut))
             entryTables,
         gdGraph = lastCtx.mcGraph,
@@ -56152,24 +56220,25 @@ elaborateModulesReport inputs runtimeDecls coreDecls0 modulesIn =
 -- joint-discovered promoted-fn slots (unsignatured, so constrainedSigPredicateSlots misses
 -- them) carried across `freshModuleCtx` in the cross-module function carrier.
 -- [mctx] is the record the drive's last module left current, whose slot tables the
--- pass rewrites.
+-- pass rewrites.  [corePassed]: [core2] arrives dict-passed already (the prelude's
+-- shipped trees), so only the user modules are passed.
 dictPassModulesIfEnabled : ModuleCtx ->
   List String ->
+  Bool ->
   List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
-dictPassModulesIfEnabled mctx dictNames core2 modules2 =
+dictPassModulesIfEnabled mctx dictNames corePassed core2 modules2 =
   -- #2549 M2: index this sweep's solved evidence before anything reads a route
   -- out of it.  Here because `dictPass` is itself a reader (`bodyRDictNames`),
   -- and this is the Module arm's one funnel into it.
   let idx = evIndexOf (drivenEvidence mctx.mcGraph ())
-  let allModDecls = flatMap snd modules2
   let promotedQ =
     mctx.mcGraph.crossRun.crossModuleFunPredicateSlotsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
-  setFunPredicateSlots
-    mctx
-    (scopePredicateSlots promotedQ allMods (core2 ++ allModDecls))
+  -- core imports nothing, so its definitions take their dict parameters from core's
+  -- own signatures: a user fn sharing a bare name with a core private is another fn.
+  setFunPredicateSlots mctx (scopePredicateSlots [] omEmpty core2)
   -- 🚨 B-2.2-b1: THE SIDECAR IS CLEARED, NOT LEFT ALONE.  `f` shipped arguing that
   -- writing no companion here is "absence, which is correct"; it is not — FAIL-CLOSED
   -- REQUIRES WRITING `[]`.  No module record is minted
@@ -56183,7 +56252,11 @@ dictPassModulesIfEnabled mctx dictNames core2 modules2 =
     scopeMethodPredicateSlots
       mctx.mcGraph.crossRun.crossModuleMethodPredicateSlotsQualRef.value
       allMods
-  let core2' = dictPass mctx idx "" dictNames core2
+  let core2' =
+    if corePassed then
+      core2
+    else
+      dictPass mctx idx "" (constrainedSigNames core2) core2
   -- ONE reverse-reachability index for the whole run: `dictPassModulesScoped` asks the
   -- importer question once per module, and re-deriving it there re-walked the graph
   -- (twice — ids and decls) with a decl-list scan at every visited node.
@@ -57797,14 +57870,17 @@ beginModuleMarking mctx mid prog top seed =
     None =>
       panic
         "checkBodyImpl: Module arm entered with no mark sets (no driver preamble ran)"
-  let known =
-    dedup (ms.msBareDictNames ++ mctx.mcGraph.promotionHarvestRef.value)
-  let names =
-    known ++ aliasDictNames mctx.mcGraph known ms.msUnits [(mid, prog)]
+  -- Core imports nothing, so the dict names nameable in it are its own `=>`
+  -- signatures, the set its `dictPass` gives parameters to.  A user definition that
+  -- shares a bare name with a core one is a different definition.
+  let known = match mid
+    "" => constrainedSigNames prog
+    _ => dedup (ms.msBareDictNames ++ mctx.mcGraph.promotionHarvestRef.value)
+  let aliases = aliasDictNames mctx.mcGraph known ms.msUnits [(mid, prog)]
   mctx.mcCells.markingRef := Some ModuleMarking {
     mmCtx = moduleMarkCtx mctx.mcGraph ms mid prog seed.msImportedValues,
     mmTop = top,
-    mmDictSet = Ref (omFromNames names omEmpty),
+    mmDictSet = Ref (omFromNames (known ++ aliases) omEmpty),
     mmUserNames = omFromNames (declTopFnNames prog) seed.msImportedNames,
     mmExterns = omFromNames (declExternNames prog) seed.msImportedExterns,
   }

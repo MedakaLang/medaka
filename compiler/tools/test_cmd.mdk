@@ -77,7 +77,8 @@ import driver.loader.{
 }
 import driver.build_cmd.{
   readPreludeFile, envOr, defaultMedakaRoot, loadPreludeInterface,
-  PreludeInputs(..)
+  loadPreludeElab, preludeTreesLine, treesLoaded, withHeldPrelude, TreesVerdict,
+  PreludeInputs, shippedInputs
 }
 import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
@@ -87,7 +88,7 @@ import types.typecheck.{
   TcDiag(..),
   tcDiagGoalKey,
 }
-import types.tc_types.{DriveOutputs}
+import types.tc_types.{DriveInputs(..), DriveOutputs}
 import types.target_profile.{selectedProfile}
 import driver.main_autoprint.{valueMainCandidate}
 import types.private_mangle.{mangleCtorCollisionsPair}
@@ -342,13 +343,10 @@ runTestUnderProfile engines runtimeP coreP target roots cases filterOpt =
                 let _ = ePutStrLn err
                 False
               Ok (file, index) =>
-                let _ = loadPreludeInterface
-                  PreludeInputs {
-                    pnStdlibDir = dirOf runtimeP,
-                    pnRuntimeSrc = rsrc,
-                    pnCoreSrc = csrc,
-                    pnCompiler = buildFingerprint (),
-                  }
+                let _ =
+                  holdTestPrelude
+                    True
+                    (shippedInputs (dirOf runtimeP) rsrc csrc)
                 -- S-1/#2234 (F-converge): the prelude halves go through the
                 -- content-keyed `desugaredPrelude` memo; only the USER source is
                 -- parsed+desugared fresh here.
@@ -368,6 +366,33 @@ runTestUnderProfile engines runtimeP coreP target roots cases filterOpt =
                   exempt
                   file
                   index
+
+-- Hold the prelude's interface and elaborated trees for this process, so the
+-- drives built by `testDriveInputs` skip core's pass.  [report] is the verb's
+-- own process: it prints the trees' verdict once, a stop under MEDAKA_STRICT; a
+-- props worker, spawned by that process, prints nothing.
+holdTestPrelude : Bool -> PreludeInputs -> <IO> Unit
+holdTestPrelude report inputs =
+  let _ = loadPreludeInterface inputs
+  let first = not (treesLoaded ())
+  let verdict = loadPreludeElab inputs
+  if report && first then reportTestTrees verdict
+
+-- The line a stale file earns, once per process because the load is.
+reportTestTrees : TreesVerdict -> <IO> Unit
+reportTestTrees verdict = match preludeTreesLine verdict
+  Some msg =>
+    if envOr "MEDAKA_STRICT" "" /= "" then
+      let _ = ePutStrLn msg
+      stageExit 1
+    else
+      ePutStrLn msg
+  None => ()
+
+-- A drive's inputs: keyed for the shipped trees when [coreDecls] are core's.
+testDriveInputs : List Decl -> DriveInputs
+testDriveInputs coreDecls =
+  withHeldPrelude coreDecls (driveInputsFor !selectedProfile False [])
 
 pinIndexForTarget : String -> List Decl -> <IO> Result String (String, PinIndex)
 pinIndexForTarget target userDecls = do
@@ -842,7 +867,7 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
   let rawModules = desugaredModPairs mods
   let (elaborated, _, outputs) =
     elaborateModulesWithReport
-      (driveInputsFor !selectedProfile False [])
+      (testDriveInputs coreDecls)
       (valueMainCandidate coreDecls rawModules)
       None
       runtimeDecls
@@ -911,7 +936,7 @@ forceInjected rsrc csrc mods synthDecls =
   let injected = injectIntoLast synthDecls (desugaredModPairs mods)
   let elab =
     elaborateModules
-      (driveInputsFor !selectedProfile False [])
+      (testDriveInputs (desugaredPrelude csrc))
       (desugaredPrelude rsrc)
       (desugaredPrelude csrc)
       injected
@@ -1692,10 +1717,8 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
       dropShadowedExp (funNamesOf allUser) coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
-  let elab = elaborateModules (driveInputsFor
-    !selectedProfile
-    False
-    []) runtimeDecls livePrelude [
+  let elab = elaborateModules (testDriveInputs
+    livePrelude) runtimeDecls livePrelude [
     (rootId, allUser),
   ]
   let (coreE, modulesE, perModule, _, _, _, _) = elab
@@ -1905,11 +1928,7 @@ elaborateModulesMangled : List Decl ->
   ((List Decl, List (String, List Decl)), ProgramFacts, List (String, TcDiag))
 elaborateModulesMangled runtimeDecls coreDecls modules =
   let elab =
-    elaborateModules
-      (driveInputsFor !selectedProfile False [])
-      runtimeDecls
-      coreDecls
-      modules
+    elaborateModules (testDriveInputs coreDecls) runtimeDecls coreDecls modules
   match elab
     (coreE, modulesE, perModule, residual, _, _, _) => (
       mangleCtorCollisionsPair (coreE, modulesE),
@@ -3076,6 +3095,7 @@ runEvalPropsWorkerSource : String ->
   List Decl ->
   <IO> Unit
 runEvalPropsWorkerSource target nonce requests runtimeSrc coreSrc stdlibDir tsrc userDecls =
+  let _ = holdTestPrelude False (shippedInputs stdlibDir runtimeSrc coreSrc)
   let runtimeDecls = desugaredPrelude runtimeSrc
   let coreDecls = desugaredPrelude coreSrc
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
@@ -3412,11 +3432,7 @@ helperElabDiags : List Decl ->
   List (String, List Decl) ->
   List (String, TcDiag)
 helperElabDiags runtimeM rawCoreM rawM =
-  match (elaborateModules
-    (driveInputsFor !selectedProfile False [])
-    runtimeM
-    rawCoreM
-    rawM)
+  match elaborateModules (testDriveInputs rawCoreM) runtimeM rawCoreM rawM
     (_, _, perModule, residual, _, _, _) =>
       residual ++ perModuleErrors perModule []
 
