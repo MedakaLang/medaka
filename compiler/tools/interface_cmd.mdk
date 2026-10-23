@@ -15,7 +15,7 @@ import io.{runCommandOk}
 import list.{zip}
 import string as S
 import driver.build_cmd.{
-  readPreludeFile, preludeInterfaceKey, undecodedComponent
+  PreludeInputs(..), readPreludeFile, preludeInterfaceKey, faultComponent
 }
 import driver.diagnostics.{analyzeFrom, ppDiagCliSrc, diagIsError}
 import driver.front_gate.{cliStdlibExports}
@@ -26,7 +26,7 @@ import support.util.{joinNl, joinWith}
 import types.effect_rows.{Atom, renderAtom}
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface,
-  decodeInterface, mergeSections
+  readInterface, renderFault, mergeSections
 }
 import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
@@ -76,11 +76,15 @@ helpSwitch = switch ["--help", "-h"] "print this help"
 
 -- ── the key ─────────────────────────────────────────────────────────────────
 
--- The key a module is written under: the two prelude sources by their path
--- relative to the stdlib directory, hashed, and the compiler that checked them.
-keyOfSources : String -> String -> String -> InterfaceKey
-keyOfSources coreName runtimeSrc coreSrc =
-  preludeInterfaceKey coreName runtimeSrc coreSrc (buildFingerprint ())
+-- What [modulePath] is checked and keyed from: its directory as the stdlib, the
+-- two prelude texts, and the compiler running now.
+inputsOf : String -> String -> String -> PreludeInputs
+inputsOf modulePath runtimeSrc coreSrc = PreludeInputs {
+  pnStdlibDir = dirOf modulePath,
+  pnRuntimeSrc = runtimeSrc,
+  pnCoreSrc = coreSrc,
+  pnCompiler = buildFingerprint (),
+}
 
 -- The interface file is named for the module it was built from.
 interfacePath : String -> String
@@ -103,16 +107,16 @@ profileOfTarget name = map Some (lookupProfile name)
 -- leaves the prelude's interface in the process cache under the profile's IO
 -- join (a drive of the prelude's own text as the user file leaves none).
 -- Errors come back rendered.
-driveUnder : String ->
-  String ->
-  String ->
+driveUnder : PreludeInputs ->
   String ->
   Option TargetProfile ->
   <IO> Result String (List (List Atom, PreludeInterface))
-driveUnder stdlibDir modulePath runtimeSrc coreSrc profile =
+driveUnder inputs modulePath profile =
   let saved = !selectedProfile
   selectedProfile := profile
-  let exports = cliStdlibExports stdlibDir
+  let exports = cliStdlibExports inputs.pnStdlibDir
+  let runtimeSrc = inputs.pnRuntimeSrc
+  let coreSrc = inputs.pnCoreSrc
   let errors =
     filter
       diagIsError
@@ -127,20 +131,6 @@ driveUnder stdlibDir modulePath runtimeSrc coreSrc profile =
       sections => Ok (flatMap (s => map (j => (j, snd s)) (fst s)) sections)
     _ => Err (joinNl (map (ppDiagCliSrc coreSrc modulePath) errors))
 
--- Every profile's drives, or the first profile's error.
-driveAll : String ->
-  String ->
-  String ->
-  String ->
-  List (Option TargetProfile) ->
-  <IO> Result String (List (List Atom, PreludeInterface))
-driveAll _ _ _ _ [] = Ok []
-driveAll stdlibDir modulePath runtimeSrc coreSrc (p :: rest) =
-  match driveUnder stdlibDir modulePath runtimeSrc coreSrc p
-    Err e => Err e
-    Ok here =>
-      map (here ++ _) (driveAll stdlibDir modulePath runtimeSrc coreSrc rest)
-
 -- The file for [modulePath] checked under [targets] (profile names, "" for the
 -- full join; none given means the default targets).
 export
@@ -150,20 +140,16 @@ buildInterfaceFile : String ->
 buildInterfaceFile modulePath targets = do
   runtimeSrc <- readPreludeFile (runtimePathOf modulePath)
   coreSrc <- readPreludeFile modulePath
-  profiles <- resultList
-    (map profileOfTarget (if isEmpty targets then defaultTargets else targets))
-  let drive = driveAll (dirOf modulePath) modulePath runtimeSrc coreSrc
-  drives <- drive profiles
+  profiles <- traverse profileOfTarget (if isEmpty targets then
+    defaultTargets
+  else
+    targets)
+  let inputs = inputsOf modulePath runtimeSrc coreSrc
+  drives <- traverse (driveUnder inputs modulePath) profiles
   Ok PreludeInterfaceFile {
-    ifKey = keyOfSources (baseName modulePath) runtimeSrc coreSrc,
-    ifSections = mergeSections drives,
+    ifKey = preludeInterfaceKey (baseName modulePath) inputs,
+    ifSections = mergeSections (flatMap (d => d) drives),
   }
-
-resultList : List (Result String a) -> Result String (List a)
-resultList [] = Ok []
-resultList (r :: rest) = match r
-  Err e => Err e
-  Ok x => map (x :: _) (resultList rest)
 
 -- The text goes into a fresh directory beside the target and is renamed over
 -- it, so a reader never sees a half-written file.  `mktemp -d` makes the
@@ -209,16 +195,6 @@ writeCmd modulePath targets
 joinView : List Atom -> String
 joinView j = joinWith "," (map renderAtom j)
 
--- The digest the header carries, read off the file's first line.
-digestOfText : String -> String
-digestOfText text = match S.indexOf "(digest " text
-  None => "?"
-  Some i =>
-    let tail = S.drop (i + 8) text
-    match S.indexOf ")" tail
-      Some j => S.take j tail
-      None => "?"
-
 sectionLines : Int -> Int -> InterfaceSection -> List String
 sectionLines n total s =
   ["section \{n} of \{total}"]
@@ -253,10 +229,10 @@ showCmd path
 showFile : String -> <IO> Unit
 showFile path = match readFile path
   Err e => failWith "medaka interface show: cannot read `\{path}`: \{e}"
-  Ok text => match decodeInterface text
-    Err e =>
-      failWith "medaka interface show: `\{path}`: \{e.sePath}: \{e.seWhat}"
-    Ok f => putStrLn (joinNl (showLines (digestOfText text) f))
+  Ok text => match readInterface text
+    Err fault =>
+      failWith "medaka interface show: `\{path}`: \{renderFault fault}"
+    Ok (f, digest) => putStrLn (joinNl (showLines digest f))
 
 -- ── verify ──────────────────────────────────────────────────────────────────
 
@@ -273,13 +249,18 @@ export
 verdictOf : String -> <IO> Verdict
 verdictOf modulePath = match readFile (interfacePath modulePath)
   Err _ => Missing
-  Ok text => match decodeInterface text
-    Err e => Stale (undecodedComponent e.seWhat)
-    Ok f => match (readFile (runtimePathOf modulePath), readFile modulePath)
+  Ok text => match readInterface text
+    Err fault => Stale (faultComponent fault)
+    Ok (f, _) => match (
+      readFile (runtimePathOf modulePath),
+      readFile modulePath,
+    )
       (Ok runtimeSrc, Ok coreSrc) =>
         match (keysMatch
           f.ifKey
-          (keyOfSources (baseName modulePath) runtimeSrc coreSrc))
+          (preludeInterfaceKey
+            (baseName modulePath)
+            (inputsOf modulePath runtimeSrc coreSrc)))
           None => Fresh
           Some component => Stale component
       _ => Stale "sources"

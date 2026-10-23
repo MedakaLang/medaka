@@ -1334,10 +1334,14 @@ headerFields key count = [
   tagged "sections" [intNode count],
 ]
 
+-- The SHA-256 of a text, in lower-case hex.
+export
+sha256Hex : String -> String
+sha256Hex text = Hex.encode (sha256 (encodeUtf8 text))
+
 -- The digest of the nodes the header and the sections hold, as canonical text.
 digestOf : List SExp -> String
-digestOf nodes =
-  Hex.encode (sha256 (encodeUtf8 (stringJoin "\n" (map renderSExp nodes))))
+digestOf nodes = sha256Hex (stringJoin "\n" (map renderSExp nodes))
 
 headerNode : InterfaceKey -> Int -> List SExp -> SExp
 headerNode key count sections =
@@ -1579,21 +1583,51 @@ export
 decodeInterface : String -> Result SexpError PreludeInterfaceFile
 decodeInterface text = do
   top <- parseSExp ("(" ++ text ++ ")")
-  match top
-    SList (header :: sections) => do
-      (key, count, claimed, fields) <- decHeader "header" header
-      secs <- decList decSection "file" (SList sections)
-      let found = digestOf (fields ++ sections)
-      if length secs /= count then
-        refuse
-          "header/sections.1"
-          header
-          "header counts \{count} section(s), the file holds \{length secs}"
-      else if found /= claimed then
-        refuse
-          "header/digest.1"
-          header
-          "digest \{S.take 12 claimed} expected, \{S.take 12 found} found"
-      else
-        Ok PreludeInterfaceFile { ifKey = key, ifSections = secs }
-    _ => refuse "file" top "expected a header node"
+  map fst (decodeParsed top)
+
+-- Why a file did not decode: its header declares a format version other than
+-- the one this compiler reads, or it is malformed in some other way.
+-- lint-disable-next-line rule-clone-type
+public export data InterfaceFault = WrongFormat Int | Malformed SexpError
+
+export
+renderFault : InterfaceFault -> String
+renderFault (WrongFormat v) =
+  "format version \{v}, this compiler reads \{formatVersion}"
+renderFault (Malformed e) = "\{e.sePath}: \{e.seWhat}"
+
+-- The decoded file with the digest its header claims, or why it is refused.
+export
+readInterface : String -> Result InterfaceFault (PreludeInterfaceFile, String)
+readInterface text = match parseSExp ("(" ++ text ++ ")")
+  Err e => Err (Malformed e)
+  Ok top => match declaredVersion top
+    Some v if v /= formatVersion => Err (WrongFormat v)
+    _ => mapErr Malformed (decodeParsed top)
+
+-- The version the first node declares, when it declares one.
+declaredVersion : SExp -> Option Int
+declaredVersion (SList ((SList ((SAtom "medaka-interface") :: v :: _)) :: _)) =
+  match atomInt "" v
+    Ok n => Some n
+    Err _ => None
+declaredVersion _ = None
+
+decodeParsed : SExp -> Result SexpError (PreludeInterfaceFile, String)
+decodeParsed (SList (header :: sections)) = do
+  (key, count, claimed, fields) <- decHeader "header" header
+  secs <- decList decSection "file" (SList sections)
+  let found = digestOf (fields ++ sections)
+  if length secs /= count then
+    refuse
+      "header/sections.1"
+      header
+      "header counts \{count} section(s), the file holds \{length secs}"
+  else if found /= claimed then
+    refuse
+      "header/digest.1"
+      header
+      "digest \{S.take 12 claimed} expected, \{S.take 12 found} found"
+  else
+    Ok (PreludeInterfaceFile { ifKey = key, ifSections = secs }, claimed)
+decodeParsed top = refuse "file" top "expected a header node"

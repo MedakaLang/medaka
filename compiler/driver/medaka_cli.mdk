@@ -42,6 +42,7 @@ import driver.build_cmd.{
   defaultMedakaRoot,
   readPreludeFile,
   loadPreludeInterface,
+  PreludeInputs(..),
   preludeStaleLine,
 }
 import support.util.{
@@ -467,13 +468,22 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
     else
       ePutStrLn msg
 
+-- The inputs a prelude interface is read for by this binary.
+shippedInputs : String -> String -> String -> PreludeInputs
+shippedInputs stdlibDir rsrc csrc = PreludeInputs {
+  pnStdlibDir = stdlibDir,
+  pnRuntimeSrc = rsrc,
+  pnCoreSrc = csrc,
+  pnCompiler = buildFingerprint (),
+}
+
 -- The check family's prelude: load `<stdlibDir>/core.mdki` into the prelude
 -- cache, and report a stale file on stderr, once per process.  Under
 -- MEDAKA_STRICT a stale file stops the verb, as a stale binary does.  `run`
 -- and `build` do not call this: `run --json`'s machine channel is stderr.
 loadCheckPrelude : String -> String -> String -> <IO> Unit
 loadCheckPrelude stdlibDir rsrc csrc =
-  let verdict = loadPreludeInterface stdlibDir rsrc csrc (buildFingerprint ())
+  let verdict = loadPreludeInterface (shippedInputs stdlibDir rsrc csrc)
   match preludeStaleLine verdict
     None => ()
     Some msg =>
@@ -483,7 +493,7 @@ loadCheckPrelude stdlibDir rsrc csrc =
 -- stale file only means core is checked from source.
 seedCheckPrelude : String -> String -> String -> <IO> Unit
 seedCheckPrelude stdlibDir rsrc csrc =
-  let _ = loadPreludeInterface stdlibDir rsrc csrc (buildFingerprint ())
+  let _ = loadPreludeInterface (shippedInputs stdlibDir rsrc csrc)
   ()
 
 -- Is this argv `medaka run … --json …`?  The predicate is deliberately the

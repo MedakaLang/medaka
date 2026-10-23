@@ -76,7 +76,8 @@ import driver.loader.{
   readSource,
 }
 import driver.build_cmd.{
-  readPreludeFile, envOr, defaultMedakaRoot, loadPreludeInterface
+  readPreludeFile, envOr, defaultMedakaRoot, loadPreludeInterface,
+  PreludeInputs(..)
 }
 import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
@@ -341,12 +342,13 @@ runTestUnderProfile engines runtimeP coreP target roots cases filterOpt =
                 let _ = ePutStrLn err
                 False
               Ok (file, index) =>
-                let _ =
-                  loadPreludeInterface
-                    (dirOf runtimeP)
-                    rsrc
-                    csrc
-                    (buildFingerprint ())
+                let _ = loadPreludeInterface
+                  PreludeInputs {
+                    pnStdlibDir = dirOf runtimeP,
+                    pnRuntimeSrc = rsrc,
+                    pnCoreSrc = csrc,
+                    pnCompiler = buildFingerprint (),
+                  }
                 -- S-1/#2234 (F-converge): the prelude halves go through the
                 -- content-keyed `desugaredPrelude` memo; only the USER source is
                 -- parsed+desugared fresh here.

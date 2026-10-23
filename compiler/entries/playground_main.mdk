@@ -127,7 +127,7 @@ import json.{
   stringify,
 }
 import support.path.{dirOf, joinPath}
-import driver.build_cmd.{loadPreludeInterface}
+import driver.build_cmd.{loadPreludeInterface, PreludeInputs(..)}
 import support.char.{isIdentChar, isDigit}
 import entries.entry_support.{
   rootsOrDefault,
@@ -364,7 +364,12 @@ seedShippedInterface coreP rsrc csrc =
   match readFile (joinPath dir "compiler_fingerprint.txt")
     Err _ => ()
     Ok fp =>
-      let _ = loadPreludeInterface dir rsrc csrc (stringTrim fp)
+      let _ = loadPreludeInterface PreludeInputs {
+        pnStdlibDir = dir,
+        pnRuntimeSrc = rsrc,
+        pnCoreSrc = csrc,
+        pnCompiler = stringTrim fp,
+      }
       ()
 
 -- Single module: one unguarded `frontEnd` run over the located parse (correct
