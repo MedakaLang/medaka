@@ -42,8 +42,9 @@ import driver.build_cmd.{
   defaultMedakaRoot,
   readPreludeFile,
   loadPreludeInterface,
-  PreludeInputs(..),
+  preludeGeneration,
   preludeStaleLine,
+  shippedInputs,
   TreesVerdict,
   checkPreludeElab,
   loadPreludeElab,
@@ -122,7 +123,7 @@ import frontend.parser.{
   Positions,
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude}
 import frontend.desugar.{desugarIn}
 import tools.target_parse.{targetDesugared}
 import driver.loader.{
@@ -472,15 +473,6 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
       pendingStaleNotice := Some msg
     else
       ePutStrLn msg
-
--- The inputs a prelude interface is read for by this binary.
-shippedInputs : String -> String -> String -> PreludeInputs
-shippedInputs stdlibDir rsrc csrc = PreludeInputs {
-  pnStdlibDir = stdlibDir,
-  pnRuntimeSrc = rsrc,
-  pnCoreSrc = csrc,
-  pnCompiler = buildFingerprint (),
-}
 
 -- The check family's prelude: load `<stdlibDir>/core.mdki` into the prelude
 -- cache, and report a stale file on stderr, once per process.  Under
@@ -2912,7 +2904,7 @@ runRunCmd argv =
       let (flatStdlib, ownedStdlib) =
         stdlibOwnership target roots stdlibDir mods
       let inputs = { driveInputsFor !selectedProfile flatStdlib ownedStdlib |
-        diPreludeKey = Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc),
+        diPreludeKey = Some (preludeGeneration rsrc csrc),
       }
       let perfTLoad = now ()
       let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
@@ -3715,10 +3707,7 @@ analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
           modsD)
       FrontInput {
         fiInputs = { driveInputsFor !selectedProfile False [] |
-          diPreludeKey = Some (
-            desugaredPreludeKey rsrc,
-            desugaredPreludeKey csrc,
-          ),
+          diPreludeKey = Some (preludeGeneration rsrc csrc),
         },
         fiAllowInternal = False,
         fiTrusted = trusted,

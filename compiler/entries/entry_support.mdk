@@ -14,12 +14,13 @@ import types.publish.{CheckedProgram(..), TcReport(..)}
 import types.program_facts.{ProgramFacts, factsOfChecked}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar, desugarIn, mapProg}
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude}
 import driver.build_cmd.{
-  PreludeInputs(..),
   loadPreludeElab,
   loadPreludeInterface,
   preludeCompilerEnv,
+  preludeGeneration,
+  shippedInputs,
 }
 import driver.front_gate.{
   JsonFront(..),
@@ -214,7 +215,7 @@ public export data EmitAsk = EmitAsk {
 emitDriveInputs : Option TargetProfile -> EmitAsk -> DriveInputs
 emitDriveInputs profile ask = match (ask.askOwnership, ask.askPreludeSrcs)
   ((flatEntry, owned), (rsrc, csrc)) => { driveInputsFor profile flatEntry owned |
-    diPreludeKey = Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc),
+    diPreludeKey = Some (preludeGeneration rsrc csrc),
   }
 
 -- The prelude's interface and elaborated trees beside `core.mdk` in [stdlibDir],
@@ -227,12 +228,7 @@ holdShippedPrelude stdlibDir rsrc csrc = match getEnv preludeCompilerEnv
   None => ()
   Some "" => ()
   Some id =>
-    let inputs = PreludeInputs {
-      pnStdlibDir = stdlibDir,
-      pnRuntimeSrc = rsrc,
-      pnCoreSrc = csrc,
-      pnCompiler = id,
-    }
+    let inputs = { shippedInputs stdlibDir rsrc csrc | pnCompiler = id }
     let _ = loadPreludeInterface inputs
     let _ = loadPreludeElab inputs
     ()

@@ -1194,14 +1194,14 @@ else
   [ -n "$CLI_KEY" ] && cache_put "$CLI_KEY" "$OUT"
 fi
 
-# Re-derive stdlib/core.mdki on every stage-B path (skip, cache hit, real link): the
-# interface is a function of the prelude source, so a stale file must not survive a
-# build. Runs before the stamps so a failed write leaves no stamp vouching for the
-# build. Only the binary at $ROOT/medaka resolves $ROOT/stdlib as its root; the .mdki
-# matches no *.mdk glob, so the source fingerprints are unaffected.
+# Re-derive stdlib/core.mdki and stdlib/core.mdke on every stage-B path (skip, cache
+# hit, real link): both are functions of the prelude source, so a stale file must not
+# survive a build. Runs before the stamps so a failed write leaves no stamp vouching
+# for the build. Only the binary at $ROOT/medaka resolves $ROOT/stdlib as its root;
+# neither file matches a *.mdk glob, so the source fingerprints are unaffected.
 if [ "$CLI_STAMP_APPLIES" = "1" ]; then
   if ! "$OUT" interface write "$ROOT/stdlib/core.mdk" >"$WORK/iface.out" 2>&1; then
-    echo "FAIL: '$OUT interface write stdlib/core.mdk' failed, so stdlib/core.mdki is not fresh:"
+    echo "FAIL: '$OUT interface write stdlib/core.mdk' failed, so stdlib/core.mdki and stdlib/core.mdke are not fresh:"
     cat "$WORK/iface.out"; exit 1
   fi
 fi

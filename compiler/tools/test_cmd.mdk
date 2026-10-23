@@ -78,7 +78,7 @@ import driver.loader.{
 import driver.build_cmd.{
   readPreludeFile, envOr, defaultMedakaRoot, loadPreludeInterface,
   loadPreludeElab, preludeTreesLine, treesLoaded, withHeldPrelude, TreesVerdict,
-  PreludeInputs(..)
+  PreludeInputs, shippedInputs
 }
 import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
@@ -343,14 +343,10 @@ runTestUnderProfile engines runtimeP coreP target roots cases filterOpt =
                 let _ = ePutStrLn err
                 False
               Ok (file, index) =>
-                let _ = holdTestPrelude
-                  True
-                  PreludeInputs {
-                    pnStdlibDir = dirOf runtimeP,
-                    pnRuntimeSrc = rsrc,
-                    pnCoreSrc = csrc,
-                    pnCompiler = buildFingerprint (),
-                  }
+                let _ =
+                  holdTestPrelude
+                    True
+                    (shippedInputs (dirOf runtimeP) rsrc csrc)
                 -- S-1/#2234 (F-converge): the prelude halves go through the
                 -- content-keyed `desugaredPrelude` memo; only the USER source is
                 -- parsed+desugared fresh here.
@@ -3099,12 +3095,7 @@ runEvalPropsWorkerSource : String ->
   List Decl ->
   <IO> Unit
 runEvalPropsWorkerSource target nonce requests runtimeSrc coreSrc stdlibDir tsrc userDecls =
-  let _ = holdTestPrelude False PreludeInputs {
-    pnStdlibDir = stdlibDir,
-    pnRuntimeSrc = runtimeSrc,
-    pnCoreSrc = coreSrc,
-    pnCompiler = buildFingerprint (),
-  }
+  let _ = holdTestPrelude False (shippedInputs stdlibDir runtimeSrc coreSrc)
   let runtimeDecls = desugaredPrelude runtimeSrc
   let coreDecls = desugaredPrelude coreSrc
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]

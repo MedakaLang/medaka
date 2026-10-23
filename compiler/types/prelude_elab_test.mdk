@@ -7,7 +7,7 @@
 -- `compiler/tools/interface_cmd_test.mdk`.
 import test.{expectAll, expectEqual, expectTrue, fail, labelFail}
 import test_process.{underRoot}
-import frontend.ast.{Decl, EvEntry(..), EvId(..)}
+import frontend.ast.{Decl, EvEntry(..), EvId(..), EvVal(..)}
 import frontend.desugar_cache.{desugaredPrelude}
 import string as S
 import support.sexp_value.{SexpError(..)}
@@ -71,13 +71,22 @@ withBody file extra = match S.indexOf "\n" file
     let header = S.take i file
     let body = S.drop (i + 1) file ++ extra
     let claimed =
-      S.take 64 (S.drop (S.length "(digest " + digestAt header) header)
+      S.take
+        64
+        (S.drop
+          (S.length "(digest " + optionOr 0 (S.indexOf "(digest " header))
+          header)
     "\{S.replace claimed (sha256Hex body) header}\n\{body}"
 
-digestAt : String -> Int
-digestAt header = match S.indexOf "(digest " header
-  Some i => i
-  None => 0
+-- Why a read refused, as the fault's own text, or `ok`.
+why : Result InterfaceFault a -> String
+why (Ok _) = "ok"
+why (Err (WrongFormat v)) = "format \{v}"
+why (Err (Malformed e)) = "\{e.sePath}: \{e.seWhat}"
+
+-- The highest ordinal of module `""` among [rows].
+topRow : List EvEntry -> Int
+topRow rows = fold (acc (EvEntry (EvId _ i) _) => max acc i) 0 rows
 
 test "the real core value round-trips byte for byte and keeps what it holds" =
   match coreElab ()
@@ -121,7 +130,7 @@ test "the real core value round-trips byte for byte and keeps what it holds" =
             "decls"
             (expectEqual (length pe.peDecls) (length back.peDecls)),
           labelFail
-            "fewer rows than the table (only referenced ones are kept)"
+            "the rows a tree references are kept"
             (expectTrue (length back.peEvidence > 0)),
         ]
 
@@ -179,6 +188,76 @@ test "every refusal is an Err of the right class" = match coreElab ()
           (S.take 9 (verdict (readElabFile (withBody text "()\n"))))),
     ]
 
+test "counters that do not describe the rows are refused, each naming its class" =
+  match coreElab ()
+    None => fail "could not elaborate core"
+    Some pe => match pe.peEvidence
+      [] => fail "core kept no evidence rows"
+      (EvEntry _ v) :: _ =>
+        let top = topRow pe.peEvidence
+        let text = encodeElabFile testKey pe
+        let askWith = q => why (readElabFile (encodeElabFile testKey q))
+        expectAll [
+          labelFail
+            "intact"
+            (expectEqual "ok" (askWith { pe | peEvCounter = top + 1 })),
+          labelFail
+            "K at the highest row"
+            (expectEqual
+              "counters/evidence: an evidence row is at or above the evidence counter"
+              (askWith { pe | peEvCounter = top })),
+          labelFail
+            "a row at K"
+            (expectEqual
+              "counters/evidence: an evidence row is at or above the evidence counter"
+              (askWith { pe |
+                peEvidence = EvEntry (EvId "" (top + 1)) v :: pe.peEvidence,
+                peEvCounter = top + 1,
+              })),
+          labelFail
+            "a negative row ordinal"
+            (expectEqual
+              "counters/evidence: an evidence row has a negative ordinal"
+              (askWith { pe |
+                peEvidence = EvEntry (EvId "" (0 - 1)) v :: pe.peEvidence,
+              })),
+          labelFail
+            "two rows under one ordinal"
+            (expectEqual
+              "counters/evidence: two evidence rows share one ordinal"
+              (askWith { pe | peEvidence = pe.peEvidence ++ pe.peEvidence })),
+          labelFail
+            "a tree site at K"
+            (expectEqual
+              "counters/evidence: a tree site is at or above the evidence counter"
+              (askWith { pe | peEvidence = [], peEvCounter = 0 })),
+          labelFail
+            "K out of range"
+            (expectEqual
+              "counters/evidence: the evidence counter is out of range"
+              (askWith { pe | peEvCounter = 99999999 })),
+          labelFail
+            "L below a local name"
+            (expectEqual
+              "counters/local: the local-abstraction counter is not above every local name of the trees"
+              (askWith { pe | peLocalCounter = 0 })),
+          labelFail
+            "N off by one"
+            (expectEqual
+              "counters/binders: the binder count or base disagrees with the rows"
+              (askWith { pe | peBinderCount = pe.peBinderCount + 1 })),
+          labelFail
+            "K lowered in the header, digest left alone"
+            (expectEqual
+              "header/digest: the body does not match the digest"
+              (why
+                (readElabFile
+                  (S.replace
+                    "(counters \{pe.peEvCounter} "
+                    "(counters \{pe.peEvCounter - 1} "
+                    text)))),
+        ]
+
 -- The held value's evidence counter is 0, so the prelude segment it installs
 -- covers no ordinal any later drive of this process mints.
 test "the process cache hits only on its own generation" =
@@ -206,3 +285,17 @@ test "the process cache hits only on its own generation" =
       "other generation"
       (expectEqual None (map (p => p.peLocalCounter) (preludeElabHit (1, 3)))),
   ]
+
+test "a value whose rows do not fit its counter is not held" =
+  let row = EvEntry (EvId "" 5) (EvHead "T")
+  let bad = PreludeElab {
+    peDecls = [],
+    peEvidence = [row],
+    peBinders = [],
+    peEvCounter = 3,
+    peLocalCounter = 0,
+    peBinderCount = 0,
+    peBinderBase = 0,
+  }
+  let _ = seedPreludeElab (7, 8) bad
+  expectEqual None (map (p => p.peLocalCounter) (preludeElabHit (7, 8)))

@@ -18,8 +18,8 @@
 # `check-policy`, `manifest`) follows the check-family half, with its own
 # positive control (`run hello` typechecks one module fewer) and the fallback
 # rows: an altered, truncated, foreign-version, missing or disabled core.mdke in
-# a scratch MEDAKA_ROOT must give the disabled arm's output plus at most one
-# stale notice.
+# a scratch MEDAKA_ROOT, and a stale or incomplete core.mdki beside a fresh
+# core.mdke, must give the disabled arm's output plus at most one stale notice.
 #
 # Env: JOBS (parallelism, default 8), SEED (sample seed, default 20261022).
 set -u
@@ -126,6 +126,10 @@ fi
 # MEDAKA_NO_INTERFACE=1, arm b loads the files (with MEDAKA_STRICT=1 on arm b
 # only, so a stale file fails loudly rather than falling back to arm a's path).
 # Env: EWANT (engines entries, default 60), TWANT (sampled *_test.mdk, default 4).
+# A sampled *_test.mdk is one that provisions no oracle or toolchain of its own:
+# a test that builds under test/bin races with itself across the two arms and
+# depends on the machine's toolchain, which is a different question from parity.
+# The two arms of one probe run one after the other; probes run in parallel.
 # ---------------------------------------------------------------------------
 EWANT="${EWANT:-60}"
 TWANT="${TWANT:-4}"
@@ -217,7 +221,10 @@ fi
 [ "$erun" -gt 0 ] || fail "no engines entry ran; the corpora were not found"
 
 # test (native and --engines eval), check-policy, manifest, repl.
-find "$ROOT/test" -name '*_test.mdk' -type f | LC_ALL=C sort | sample "$TWANT" > "$OUT/tlist"
+find "$ROOT/test" -name '*_test.mdk' -type f | LC_ALL=C sort | while IFS= read -r f; do
+  grep -q -E 'test/bin|build_oracles|build_wasm_oracle' "$f" || echo "$f"
+done | sample "$TWANT" > "$OUT/tlist"
+echo "sampled tests: $(sed 's#.*/##' "$OUT/tlist" | tr '\n' ' ')"
 : > "$OUT/probes"
 for f in doc docimp props_doc arbitrary t_only test_probe; do
   echo "test_native_$f test $FIX/$f.mdk" >> "$OUT/probes"
@@ -239,18 +246,23 @@ printf '1 + 1\n' > "$OUT/repl.in"
 
 cat > "$OUT/mone.sh" <<'EOS'
 #!/bin/sh
-arm="$1"; name="$2"; shift 2
+name="$1"; shift
 cd "$FIX" || exit 99
-if [ "$arm" = a ]; then export MEDAKA_NO_INTERFACE=1; else export MEDAKA_STRICT=1; fi
-timeout 300 "$M" "$@" > "$OUT/m.$arm.$name.out" 2> "$OUT/m.$arm.$name.err" < "$OUT/repl.in"
-echo $? > "$OUT/m.$arm.$name.code"
+for arm in a b; do
+  if [ "$arm" = a ]; then
+    env MEDAKA_NO_INTERFACE=1 timeout 300 "$M" "$@" > "$OUT/m.$arm.$name.out" 2> "$OUT/m.$arm.$name.err" < "$OUT/repl.in"
+  else
+    env MEDAKA_STRICT=1 timeout 300 "$M" "$@" > "$OUT/m.$arm.$name.out" 2> "$OUT/m.$arm.$name.err" < "$OUT/repl.in"
+  fi
+  echo $? > "$OUT/m.$arm.$name.code"
+done
 EOS
 export FIX OUT
 mn=0
 : > "$OUT/mjobs"
 while IFS= read -r line; do
   mn=$((mn + 1))
-  printf 'a %s\nb %s\n' "$line" "$line" >> "$OUT/mjobs"
+  printf '%s\n' "$line" >> "$OUT/mjobs"
 done < "$OUT/probes"
 xargs -P "$JOBS" -L 1 sh "$OUT/mone.sh" < "$OUT/mjobs"
 mbad=0
@@ -349,7 +361,7 @@ fbrow truncated MEDAKA_ON=1
 fbcheck truncated file
 
 mkroot version
-sed -i '1s/^(medaka-elab 1 /(medaka-elab 9 /' "$FB/root.version/stdlib/core.mdke"
+sed -i '1s/^(medaka-elab [0-9]* /(medaka-elab 9 /' "$FB/root.version/stdlib/core.mdke"
 fbrow version MEDAKA_ON=1
 fbcheck version format
 
@@ -358,8 +370,28 @@ rm -f "$FB/root.missing/stdlib/core.mdke"
 fbrow missing MEDAKA_ON=1
 fbcheck missing ""
 
+# The tree arm needs the interface too: a core.mdki that does not load beside a
+# fresh core.mdke is a stale verdict, not a silent fallback.
+mkroot ifacecompiler
+sed -i '1s/(compiler \([0-9a-f]*\))/(compiler 0\1)/' "$FB/root.ifacecompiler/stdlib/core.mdki"
+fbrow ifacecompiler MEDAKA_ON=1
+fbcheck ifacecompiler "interface compiler"
+
+mkroot ifacenewline
+isz=$(wc -c < "$ROOT/stdlib/core.mdki")
+head -c $((isz - 1)) "$ROOT/stdlib/core.mdki" > "$FB/root.ifacenewline/stdlib/core.mdki"
+fbrow ifacenewline MEDAKA_ON=1
+fbcheck ifacenewline "interface file"
+
+mkroot ifacemissing
+rm -f "$FB/root.ifacemissing/stdlib/core.mdki"
+fbrow ifacemissing MEDAKA_ON=1
+fbcheck ifacemissing "interface"
+
 fbcheck disabled ""
 if cmp -s "$FB/root.header/stdlib/core.mdke" "$ROOT/stdlib/core.mdke"; then fail "fallback row header: the edit did not change the file"; fi
 if cmp -s "$FB/root.version/stdlib/core.mdke" "$ROOT/stdlib/core.mdke"; then fail "fallback row version: the edit did not change the file"; fi
-echo "fallback rows: header, truncated, version, missing, disabled ok"
+if cmp -s "$FB/root.ifacecompiler/stdlib/core.mdki" "$ROOT/stdlib/core.mdki"; then fail "fallback row ifacecompiler: the edit did not change the file"; fi
+if cmp -s "$FB/root.ifacenewline/stdlib/core.mdki" "$ROOT/stdlib/core.mdki"; then fail "fallback row ifacenewline: the edit did not change the file"; fi
+echo "fallback rows: header, truncated, version, missing, interface compiler/newline/missing, disabled ok"
 echo PASS

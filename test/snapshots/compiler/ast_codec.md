@@ -1,5 +1,5 @@
 # META
-source_lines=1786
+source_lines=1790
 stages=DESUGAR,MARK
 # SOURCE
 -- A faithful, fail-closed codec for the elaborated AST and the evidence rows.
@@ -93,6 +93,7 @@ sexpInt n = SAtom (intToString n)
 sexpString : String -> SExp
 sexpString s = SAtom s
 
+export
 sexpBool : Bool -> SExp
 sexpBool b = SAtom (if b then "t" else "f")
 
@@ -119,6 +120,7 @@ sexpEvId : EvId -> SExp
 sexpEvId (EvId "" n) = sexpInt n
 sexpEvId (EvId m n) = SList [SAtom m, sexpInt n]
 
+export
 sexpBinderId : BinderId -> SExp
 sexpBinderId (BinderId "" n) = sexpInt n
 sexpBinderId (BinderId m n) = SList [SAtom m, sexpInt n]
@@ -137,6 +139,7 @@ readInt cur = cursorInt cur
 readString : SexpCursor -> String
 readString cur = cursorAtom cur
 
+export
 readBool : SexpCursor -> Bool
 readBool cur =
   let c = cursorChar cur
@@ -199,6 +202,7 @@ readEvId cur =
   else
     EvId "" (readInt cur)
 
+export
 readBinderId : SexpCursor -> BinderId
 readBinderId cur =
   if cursorPeek cur == 40 then
@@ -1813,7 +1817,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DFunDef false "sexpInt" ((PVar "n")) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "n"))))
 (DTypeSig false "sexpString" (TyFun (TyCon "String") (TyCon "SExp")))
 (DFunDef false "sexpString" ((PVar "s")) (EApp (EVar "SAtom") (EVar "s")))
-(DTypeSig false "sexpBool" (TyFun (TyCon "Bool") (TyCon "SExp")))
+(DTypeSig true "sexpBool" (TyFun (TyCon "Bool") (TyCon "SExp")))
 (DFunDef false "sexpBool" ((PVar "b")) (EApp (EVar "SAtom") (EIf (EVar "b") (ELit (LString "t")) (ELit (LString "f")))))
 (DTypeSig false "sexpFloat" (TyFun (TyCon "Float") (TyCon "SExp")))
 (DFunDef false "sexpFloat" ((PVar "f")) (EMatch (EApp (EApp (EVar "splitAt") (ELit (LInt 4))) (EApp (EVar "toList") (EApp (EVar "floatToBytes64") (EVar "f")))) (arm (PTuple (PVar "hi") (PVar "lo")) () (EApp (EVar "SList") (EListLit (EApp (EVar "sexpInt") (EApp (EVar "wordOf") (EVar "hi"))) (EApp (EVar "sexpInt") (EApp (EVar "wordOf") (EVar "lo"))))))))
@@ -1830,7 +1834,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "sexpEvId" (TyFun (TyCon "EvId") (TyCon "SExp")))
 (DFunDef false "sexpEvId" ((PCon "EvId" (PLit (LString "")) (PVar "n"))) (EApp (EVar "sexpInt") (EVar "n")))
 (DFunDef false "sexpEvId" ((PCon "EvId" (PVar "m") (PVar "n"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EVar "m")) (EApp (EVar "sexpInt") (EVar "n")))))
-(DTypeSig false "sexpBinderId" (TyFun (TyCon "BinderId") (TyCon "SExp")))
+(DTypeSig true "sexpBinderId" (TyFun (TyCon "BinderId") (TyCon "SExp")))
 (DFunDef false "sexpBinderId" ((PCon "BinderId" (PLit (LString "")) (PVar "n"))) (EApp (EVar "sexpInt") (EVar "n")))
 (DFunDef false "sexpBinderId" ((PCon "BinderId" (PVar "m") (PVar "n"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EVar "m")) (EApp (EVar "sexpInt") (EVar "n")))))
 (DTypeSig false "wordOf" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
@@ -1841,7 +1845,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DFunDef false "readInt" ((PVar "cur")) (EApp (EVar "cursorInt") (EVar "cur")))
 (DTypeSig false "readString" (TyFun (TyCon "SexpCursor") (TyCon "String")))
 (DFunDef false "readString" ((PVar "cur")) (EApp (EVar "cursorAtom") (EVar "cur")))
-(DTypeSig false "readBool" (TyFun (TyCon "SexpCursor") (TyCon "Bool")))
+(DTypeSig true "readBool" (TyFun (TyCon "SexpCursor") (TyCon "Bool")))
 (DFunDef false "readBool" ((PVar "cur")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cursorChar") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 116))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LInt 102))) (EVar "False") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "False")))))))
 (DTypeSig false "readFloat" (TyFun (TyCon "SexpCursor") (TyCon "Float")))
 (DFunDef false "readFloat" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "hi") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "lo") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "hi") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (ELit (LInt 4294967295)))) (EBinOp "<" (EVar "lo") (ELit (LInt 0)))) (EBinOp ">" (EVar "lo") (ELit (LInt 4294967295)))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit (LFloat 0.0))) (EApp (EApp (EVar "bytesToFloat64") (EApp (EVar "fromList") (EBinOp "++" (EApp (EVar "bytesOfWord") (EVar "hi")) (EApp (EVar "bytesOfWord") (EVar "lo"))))) (ELit (LInt 0)))))))
@@ -1853,7 +1857,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DFunDef false "readLoc" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "f") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "c") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "d") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))) (EIf (EBinOp "==" (EApp (EVar "cursorChar") (EVar "cur")) (ELit (LInt 122))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLoc")))))
 (DTypeSig false "readEvId" (TyFun (TyCon "SexpCursor") (TyCon "EvId")))
 (DFunDef false "readEvId" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "EvId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
-(DTypeSig false "readBinderId" (TyFun (TyCon "SexpCursor") (TyCon "BinderId")))
+(DTypeSig true "readBinderId" (TyFun (TyCon "SexpCursor") (TyCon "BinderId")))
 (DFunDef false "readBinderId" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "BinderId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "BinderId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
 (DTypeSig false "sexpLit" (TyFun (TyCon "Lit") (TyCon "SExp")))
 (DFunDef false "sexpLit" ((PCon "LInt" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpInt") (EVar "a0")))))
@@ -2409,7 +2413,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DFunDef false "sexpInt" ((PVar "n")) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "n"))))
 (DTypeSig false "sexpString" (TyFun (TyCon "String") (TyCon "SExp")))
 (DFunDef false "sexpString" ((PVar "s")) (EApp (EVar "SAtom") (EVar "s")))
-(DTypeSig false "sexpBool" (TyFun (TyCon "Bool") (TyCon "SExp")))
+(DTypeSig true "sexpBool" (TyFun (TyCon "Bool") (TyCon "SExp")))
 (DFunDef false "sexpBool" ((PVar "b")) (EApp (EVar "SAtom") (EIf (EVar "b") (ELit (LString "t")) (ELit (LString "f")))))
 (DTypeSig false "sexpFloat" (TyFun (TyCon "Float") (TyCon "SExp")))
 (DFunDef false "sexpFloat" ((PVar "f")) (EMatch (EApp (EApp (EVar "splitAt") (ELit (LInt 4))) (EApp (EMethodRef "toList") (EApp (EVar "floatToBytes64") (EVar "f")))) (arm (PTuple (PVar "hi") (PVar "lo")) () (EApp (EVar "SList") (EListLit (EApp (EVar "sexpInt") (EApp (EVar "wordOf") (EVar "hi"))) (EApp (EVar "sexpInt") (EApp (EVar "wordOf") (EVar "lo"))))))))
@@ -2426,7 +2430,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "sexpEvId" (TyFun (TyCon "EvId") (TyCon "SExp")))
 (DFunDef false "sexpEvId" ((PCon "EvId" (PLit (LString "")) (PVar "n"))) (EApp (EVar "sexpInt") (EVar "n")))
 (DFunDef false "sexpEvId" ((PCon "EvId" (PVar "m") (PVar "n"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EVar "m")) (EApp (EVar "sexpInt") (EVar "n")))))
-(DTypeSig false "sexpBinderId" (TyFun (TyCon "BinderId") (TyCon "SExp")))
+(DTypeSig true "sexpBinderId" (TyFun (TyCon "BinderId") (TyCon "SExp")))
 (DFunDef false "sexpBinderId" ((PCon "BinderId" (PLit (LString "")) (PVar "n"))) (EApp (EVar "sexpInt") (EVar "n")))
 (DFunDef false "sexpBinderId" ((PCon "BinderId" (PVar "m") (PVar "n"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EVar "m")) (EApp (EVar "sexpInt") (EVar "n")))))
 (DTypeSig false "wordOf" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
@@ -2437,7 +2441,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DFunDef false "readInt" ((PVar "cur")) (EApp (EVar "cursorInt") (EVar "cur")))
 (DTypeSig false "readString" (TyFun (TyCon "SexpCursor") (TyCon "String")))
 (DFunDef false "readString" ((PVar "cur")) (EApp (EVar "cursorAtom") (EVar "cur")))
-(DTypeSig false "readBool" (TyFun (TyCon "SexpCursor") (TyCon "Bool")))
+(DTypeSig true "readBool" (TyFun (TyCon "SexpCursor") (TyCon "Bool")))
 (DFunDef false "readBool" ((PVar "cur")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cursorChar") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 116))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LInt 102))) (EVar "False") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "False")))))))
 (DTypeSig false "readFloat" (TyFun (TyCon "SexpCursor") (TyCon "Float")))
 (DFunDef false "readFloat" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "hi") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "lo") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "hi") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (ELit (LInt 4294967295)))) (EBinOp "<" (EVar "lo") (ELit (LInt 0)))) (EBinOp ">" (EVar "lo") (ELit (LInt 4294967295)))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit (LFloat 0.0))) (EApp (EApp (EVar "bytesToFloat64") (EApp (EVar "fromList") (EBinOp "++" (EApp (EVar "bytesOfWord") (EVar "hi")) (EApp (EVar "bytesOfWord") (EVar "lo"))))) (ELit (LInt 0)))))))
@@ -2449,7 +2453,7 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DFunDef false "readLoc" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "f") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "c") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "d") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))) (EIf (EBinOp "==" (EApp (EVar "cursorChar") (EVar "cur")) (ELit (LInt 122))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLoc")))))
 (DTypeSig false "readEvId" (TyFun (TyCon "SexpCursor") (TyCon "EvId")))
 (DFunDef false "readEvId" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "EvId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
-(DTypeSig false "readBinderId" (TyFun (TyCon "SexpCursor") (TyCon "BinderId")))
+(DTypeSig true "readBinderId" (TyFun (TyCon "SexpCursor") (TyCon "BinderId")))
 (DFunDef false "readBinderId" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "BinderId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "BinderId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
 (DTypeSig false "sexpLit" (TyFun (TyCon "Lit") (TyCon "SExp")))
 (DFunDef false "sexpLit" ((PCon "LInt" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpInt") (EVar "a0")))))
