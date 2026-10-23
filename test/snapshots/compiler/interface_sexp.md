@@ -1,5 +1,5 @@
 # META
-source_lines=1595
+source_lines=1599
 stages=DESUGAR,MARK
 # SOURCE
 -- The scheme-level interface codec: every type a published scheme is built
@@ -167,9 +167,8 @@ paramNode (PPrefix s) = tagged "prefix" [optNode s]
 paramNode (PPath s) = tagged "path" [optNode s]
 paramNode (PSet None) = tagged "set" [SAtom "none"]
 paramNode (PSet (Some members)) = tagged "set" [SList (map SAtom members)]
-paramNode (PProduct axes) = tagged "product" [
-  SList (map (axis => SList [SAtom (fst axis), paramNode (snd axis)]) axes),
-]
+paramNode (PProduct axes) =
+  tagged "product" [listSExp (pairSExp SAtom paramNode) axes]
 
 -- The printers below read zonked values only; a link reaching one is a zonk
 -- that did not run.
@@ -188,9 +187,8 @@ authNode (AVar cell) = match !cell
   ]
   ALink id _ _ => unzonked "the linked authority variable \{id}"
 authNode (AJoin members) = tagged "ajoin" [SList (map authNode members)]
-authNode (AProduct axes) = tagged "aproduct" [
-  SList (map (axis => SList [SAtom (fst axis), authNode (snd axis)]) axes),
-]
+authNode (AProduct axes) =
+  tagged "aproduct" [listSExp (pairSExp SAtom authNode) axes]
 
 labelNode : EffLabel -> SExp
 labelNode (EffLabel name origin) =
@@ -606,6 +604,20 @@ decList : (String -> SExp -> Result SexpError a) ->
   Result SexpError (List a)
 decList f path node = map snd (decEach (stateless f) emptyZonk path node)
 
+-- A two-element list holding a name and a value; [what] is the refusal's text
+-- for any other shape.
+decNamed : String ->
+  (ZState -> String -> SExp -> Dec a) ->
+  ZState ->
+  String ->
+  SExp ->
+  Dec (String, a)
+decNamed _ f z path (SList [n, x]) = do
+  name <- expectAtom "\{path}/0" n
+  (z1, v) <- f z "\{path}/1" x
+  Ok (z1, (name, v))
+decNamed what _ _ path node = refuse path node what
+
 -- A repeated id must be written as its first occurrence was.
 same : String -> SExp -> SExp -> a -> Result SexpError a
 same path node first v =
@@ -643,11 +655,15 @@ decParam path (SList [SAtom "product", axes]) =
 decParam path node = misfit path paramHeads node
 
 decParamAxis : String -> SExp -> Result SexpError (String, Param)
-decParamAxis path (SList [n, p]) = do
-  name <- expectAtom "\{path}/0" n
-  param <- decParam "\{path}/1" p
-  Ok (name, param)
-decParamAxis path node = refuse path node "expected an axis (NAME PARAM)"
+decParamAxis path node =
+  map
+    snd
+    (decNamed
+      "expected an axis (NAME PARAM)"
+      (stateless decParam)
+      emptyZonk
+      path
+      node)
 
 authHeads : List (String, Int)
 authHeads = [("const", 1), ("av", 5), ("ajoin", 1), ("aproduct", 1)]
@@ -677,11 +693,7 @@ decAuth z path (SList [SAtom "aproduct", axes]) =
 decAuth _ path node = misfit path authHeads node
 
 decAuthAxis : ZState -> String -> SExp -> Dec (String, Authority)
-decAuthAxis z path (SList [n, a]) = do
-  name <- expectAtom "\{path}/0" n
-  (z1, auth) <- decAuth z "\{path}/1" a
-  Ok (z1, (name, auth))
-decAuthAxis _ path node = refuse path node "expected an axis (NAME AUTH)"
+decAuthAxis = decNamed "expected an axis (NAME AUTH)" decAuth
 
 decLabel : String -> SExp -> Result SexpError EffLabel
 decLabel path (SList [SAtom "label", n, o]) = do
@@ -1139,11 +1151,7 @@ decDataVis path node =
   misfit path [("private", 0), ("abstract", 0), ("public", 0)] node
 
 decNamedMono : ZState -> String -> SExp -> Dec (String, Mono)
-decNamedMono z path (SList [n, m]) = do
-  name <- expectAtom "\{path}/0" n
-  (z1, m1) <- decMono z "\{path}/1" m
-  Ok (z1, (name, m1))
-decNamedMono _ path node = refuse path node "expected a pair (NAME MONO)"
+decNamedMono = decNamed "expected a pair (NAME MONO)" decMono
 
 decRecord : ZState -> String -> SExp -> Dec RecordInfo
 decRecord z path (SList [SAtom "record", ids, authIds, r, fs, ix]) = do
@@ -1303,7 +1311,7 @@ mergeSections drives =
   let joinsByText = fold addJoin omEmpty keyed
   map
     (k => InterfaceSection {
-      isJoins = sortedJoins (lookupOr [] (fst k) joinsByText),
+      isJoins = sortedJoins (optionOr [] (omLookup (fst k) joinsByText)),
       isInterface = snd (snd k),
     })
     (dedupBy fst keyed)
@@ -1311,12 +1319,8 @@ mergeSections drives =
 addJoin : OrdMap (List (List Atom)) ->
   (String, (List Atom, PreludeInterface)) ->
   OrdMap (List (List Atom))
-addJoin acc (text, (join, _)) = omInsert text (join :: lookupOr [] text acc) acc
-
-lookupOr : a -> String -> OrdMap a -> a
-lookupOr fallback key m = match omLookup key m
-  Some v => v
-  None => fallback
+addJoin acc (text, (join, _)) =
+  omInsert text (join :: optionOr [] (omLookup text acc)) acc
 
 sortedJoins : List (List Atom) -> List (List Atom)
 sortedJoins joins = dedupBy joinText (sortOn joinText joins)
@@ -1637,14 +1641,14 @@ decodeInterface text = do
 (DFunDef false "paramNode" ((PCon "PPath" (PVar "s"))) (EApp (EApp (EVar "tagged") (ELit (LString "path"))) (EListLit (EApp (EVar "optNode") (EVar "s")))))
 (DFunDef false "paramNode" ((PCon "PSet" (PCon "None"))) (EApp (EApp (EVar "tagged") (ELit (LString "set"))) (EListLit (EApp (EVar "SAtom") (ELit (LString "none"))))))
 (DFunDef false "paramNode" ((PCon "PSet" (PCon "Some" (PVar "members")))) (EApp (EApp (EVar "tagged") (ELit (LString "set"))) (EListLit (EApp (EVar "SList") (EApp (EApp (EVar "map") (EVar "SAtom")) (EVar "members"))))))
-(DFunDef false "paramNode" ((PCon "PProduct" (PVar "axes"))) (EApp (EApp (EVar "tagged") (ELit (LString "product"))) (EListLit (EApp (EVar "SList") (EApp (EApp (EVar "map") (ELam ((PVar "axis")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EApp (EVar "fst") (EVar "axis"))) (EApp (EVar "paramNode") (EApp (EVar "snd") (EVar "axis"))))))) (EVar "axes"))))))
+(DFunDef false "paramNode" ((PCon "PProduct" (PVar "axes"))) (EApp (EApp (EVar "tagged") (ELit (LString "product"))) (EListLit (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "paramNode"))) (EVar "axes")))))
 (DTypeSig false "unzonked" (TyFun (TyCon "String") (TyVar "a")))
 (DFunDef false "unzonked" ((PVar "what")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "interface_sexp: ")) (EApp (EVar "display") (EVar "what"))) (ELit (LString " reached the printer unzonked")))))
 (DTypeSig false "authNode" (TyFun (TyCon "Authority") (TyCon "SExp")))
 (DFunDef false "authNode" ((PCon "AConst" (PVar "p"))) (EApp (EApp (EVar "tagged") (ELit (LString "const"))) (EListLit (EApp (EVar "paramNode") (EVar "p")))))
 (DFunDef false "authNode" ((PCon "AVar" (PVar "cell"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "lvl") (PVar "top") (PVar "pat") (PVar "name")) () (EApp (EApp (EVar "tagged") (ELit (LString "av"))) (EListLit (EApp (EVar "intNode") (EVar "id")) (EApp (EVar "intNode") (EVar "lvl")) (EApp (EVar "paramNode") (EVar "top")) (EApp (EVar "boolNode") (EVar "pat")) (EApp (EVar "optNode") (EVar "name"))))) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EApp (EVar "unzonked") (EBinOp "++" (EBinOp "++" (ELit (LString "the linked authority variable ")) (EApp (EVar "display") (EVar "id"))) (ELit (LString "")))))))
 (DFunDef false "authNode" ((PCon "AJoin" (PVar "members"))) (EApp (EApp (EVar "tagged") (ELit (LString "ajoin"))) (EListLit (EApp (EVar "SList") (EApp (EApp (EVar "map") (EVar "authNode")) (EVar "members"))))))
-(DFunDef false "authNode" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EVar "tagged") (ELit (LString "aproduct"))) (EListLit (EApp (EVar "SList") (EApp (EApp (EVar "map") (ELam ((PVar "axis")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EApp (EVar "fst") (EVar "axis"))) (EApp (EVar "authNode") (EApp (EVar "snd") (EVar "axis"))))))) (EVar "axes"))))))
+(DFunDef false "authNode" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EVar "tagged") (ELit (LString "aproduct"))) (EListLit (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "authNode"))) (EVar "axes")))))
 (DTypeSig false "labelNode" (TyFun (TyCon "EffLabel") (TyCon "SExp")))
 (DFunDef false "labelNode" ((PCon "EffLabel" (PVar "name") (PVar "origin"))) (EApp (EApp (EVar "tagged") (ELit (LString "label"))) (EListLit (EApp (EVar "SAtom") (EVar "name")) (EApp (EVar "originNode") (EVar "origin")))))
 (DTypeSig false "atomNode" (TyFun (TyCon "Atom") (TyCon "SExp")))
@@ -1828,6 +1832,9 @@ decodeInterface text = do
 (DFunDef false "decItems" ((PVar "f") (PVar "z") (PVar "path") (PVar "i") (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "f") (EVar "z")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "i"))) (ELit (LString "")))) (EVar "x"))) (ELam ((PTuple (PVar "z1") (PVar "y"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EVar "decItems") (EVar "f")) (EVar "z1")) (EVar "path")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))) (ELam ((PTuple (PVar "z2") (PVar "ys"))) (EApp (EVar "Ok") (ETuple (EVar "z2") (EBinOp "::" (EVar "y") (EVar "ys")))))))))
 (DTypeSig false "decList" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a")))) (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "decList" ((PVar "f") (PVar "path") (PVar "node")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EApp (EApp (EVar "decEach") (EApp (EVar "stateless") (EVar "f"))) (EVar "emptyZonk")) (EVar "path")) (EVar "node"))))
+(DTypeSig false "decNamed" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyVar "a"))))) (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyTuple (TyCon "String") (TyVar "a")))))))))
+(DFunDef false "decNamed" (PWild (PVar "f") (PVar "z") (PVar "path") (PCon "SList" (PList (PVar "n") (PVar "x")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "/0")))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "f") (EVar "z")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "/1")))) (EVar "x"))) (ELam ((PTuple (PVar "z1") (PVar "v"))) (EApp (EVar "Ok") (ETuple (EVar "z1") (ETuple (EVar "name") (EVar "v")))))))))
+(DFunDef false "decNamed" ((PVar "what") PWild PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (EVar "what")))
 (DTypeSig false "same" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyFun (TyCon "SExp") (TyFun (TyVar "a") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a")))))))
 (DFunDef false "same" ((PVar "path") (PVar "node") (PVar "first") (PVar "v")) (EIf (EBinOp "==" (EVar "node") (EVar "first")) (EApp (EVar "Ok") (EVar "v")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "this id was written differently before")))))
 (DTypeSig false "decOpt" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "Option") (TyCon "String"))))))
@@ -1848,8 +1855,7 @@ decodeInterface text = do
 (DFunDef false "decParam" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "product"))) (PVar "axes")))) (EApp (EApp (EVar "map") (EVar "PProduct")) (EApp (EApp (EApp (EVar "decList") (EVar "decParamAxis")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "product"))) (ELit (LInt 1)))) (EVar "axes"))))
 (DFunDef false "decParam" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EVar "paramHeads")) (EVar "node")))
 (DTypeSig false "decParamAxis" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "String") (TyCon "Param"))))))
-(DFunDef false "decParamAxis" ((PVar "path") (PCon "SList" (PList (PVar "n") (PVar "p")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "/0")))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "decParam") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "/1")))) (EVar "p"))) (ELam ((PVar "param")) (EApp (EVar "Ok") (ETuple (EVar "name") (EVar "param"))))))))
-(DFunDef false "decParamAxis" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "expected an axis (NAME PARAM)"))))
+(DFunDef false "decParamAxis" ((PVar "path") (PVar "node")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EApp (EApp (EApp (EVar "decNamed") (ELit (LString "expected an axis (NAME PARAM)"))) (EApp (EVar "stateless") (EVar "decParam"))) (EVar "emptyZonk")) (EVar "path")) (EVar "node"))))
 (DTypeSig false "authHeads" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "authHeads" () (EListLit (ETuple (ELit (LString "const")) (ELit (LInt 1))) (ETuple (ELit (LString "av")) (ELit (LInt 5))) (ETuple (ELit (LString "ajoin")) (ELit (LInt 1))) (ETuple (ELit (LString "aproduct")) (ELit (LInt 1)))))
 (DTypeSig false "decAuth" (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyCon "Authority"))))))
@@ -1859,8 +1865,7 @@ decodeInterface text = do
 (DFunDef false "decAuth" ((PVar "z") (PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "aproduct"))) (PVar "axes")))) (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "fst") (EVar "r")) (EApp (EVar "AProduct") (EApp (EVar "snd") (EVar "r")))))) (EApp (EApp (EApp (EApp (EVar "decEach") (EVar "decAuthAxis")) (EVar "z")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "aproduct"))) (ELit (LInt 1)))) (EVar "axes"))))
 (DFunDef false "decAuth" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EVar "authHeads")) (EVar "node")))
 (DTypeSig false "decAuthAxis" (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyTuple (TyCon "String") (TyCon "Authority")))))))
-(DFunDef false "decAuthAxis" ((PVar "z") (PVar "path") (PCon "SList" (PList (PVar "n") (PVar "a")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "/0")))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decAuth") (EVar "z")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "/1")))) (EVar "a"))) (ELam ((PTuple (PVar "z1") (PVar "auth"))) (EApp (EVar "Ok") (ETuple (EVar "z1") (ETuple (EVar "name") (EVar "auth")))))))))
-(DFunDef false "decAuthAxis" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "expected an axis (NAME AUTH)"))))
+(DFunDef false "decAuthAxis" () (EApp (EApp (EVar "decNamed") (ELit (LString "expected an axis (NAME AUTH)"))) (EVar "decAuth")))
 (DTypeSig false "decLabel" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "EffLabel")))))
 (DFunDef false "decLabel" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "label"))) (PVar "n") (PVar "o")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "label"))) (ELit (LInt 1)))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "decOrigin") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "label"))) (ELit (LInt 2)))) (EVar "o"))) (ELam ((PVar "origin")) (EApp (EVar "Ok") (EApp (EApp (EVar "EffLabel") (EVar "name")) (EVar "origin"))))))))
 (DFunDef false "decLabel" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "label")) (ELit (LInt 2))))) (EVar "node")))
@@ -2031,8 +2036,7 @@ decodeInterface text = do
 (DFunDef false "decDataVis" (PWild (PCon "SAtom" (PLit (LString "public")))) (EApp (EVar "Ok") (EVar "VisPublic")))
 (DFunDef false "decDataVis" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "private")) (ELit (LInt 0))) (ETuple (ELit (LString "abstract")) (ELit (LInt 0))) (ETuple (ELit (LString "public")) (ELit (LInt 0))))) (EVar "node")))
 (DTypeSig false "decNamedMono" (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "decNamedMono" ((PVar "z") (PVar "path") (PCon "SList" (PList (PVar "n") (PVar "m")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "/0")))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decMono") (EVar "z")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "/1")))) (EVar "m"))) (ELam ((PTuple (PVar "z1") (PVar "m1"))) (EApp (EVar "Ok") (ETuple (EVar "z1") (ETuple (EVar "name") (EVar "m1")))))))))
-(DFunDef false "decNamedMono" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "expected a pair (NAME MONO)"))))
+(DFunDef false "decNamedMono" () (EApp (EApp (EVar "decNamed") (ELit (LString "expected a pair (NAME MONO)"))) (EVar "decMono")))
 (DTypeSig false "decRecord" (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyCon "RecordInfo"))))))
 (DFunDef false "decRecord" ((PVar "z") (PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "record"))) (PVar "ids") (PVar "authIds") (PVar "r") (PVar "fs") (PVar "ix")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "atomInt")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 1)))) (EVar "ids"))) (ELam ((PVar "ids1")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "atomInt")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 2)))) (EVar "authIds"))) (ELam ((PVar "authIds1")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decMono") (EVar "z")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 3)))) (EVar "r"))) (ELam ((PTuple (PVar "z1") (PVar "result"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "decEach") (EVar "decNamedMono")) (EVar "z1")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 4)))) (EVar "fs"))) (ELam ((PTuple (PVar "z2") (PVar "fields"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "decEach") (EVar "decNamedMono")) (EVar "z2")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 5)))) (EVar "ix"))) (ELam ((PTuple (PVar "z3") (PVar "pairs"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "keyed") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 5)))) (EVar "ix")) (EVar "pairs"))) (ELam ((PVar "index")) (EApp (EVar "Ok") (ETuple (EVar "z3") (EApp (EApp (EApp (EApp (EApp (EVar "RecordInfo") (EVar "ids1")) (EVar "authIds1")) (EVar "result")) (EVar "fields")) (EVar "index")))))))))))))))))
 (DFunDef false "decRecord" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "record")) (ELit (LInt 5))))) (EVar "node")))
@@ -2086,11 +2090,9 @@ decodeInterface text = do
 (DTypeSig true "cacheOfSections" (TyFun (TyApp (TyCon "List") (TyCon "InterfaceSection")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface")))))
 (DFunDef false "cacheOfSections" () (EApp (EVar "map") (ELam ((PVar "s")) (ETuple (EFieldAccess (EVar "s") "isJoins") (EFieldAccess (EVar "s") "isInterface")))))
 (DTypeSig true "mergeSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "List") (TyCon "InterfaceSection"))))
-(DFunDef false "mergeSections" ((PVar "drives")) (EBlock (DoLet false false (PVar "keyed") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "renderSExp") (EApp (EVar "interfaceNode") (EApp (EVar "snd") (EVar "d")))) (EVar "d")))) (EVar "drives"))) (DoLet false false (PVar "joinsByText") (EApp (EApp (EApp (EVar "fold") (EVar "addJoin")) (EVar "omEmpty")) (EVar "keyed"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ERecordCreate "InterfaceSection" ((fa "isJoins" (EApp (EVar "sortedJoins") (EApp (EApp (EApp (EVar "lookupOr") (EListLit)) (EApp (EVar "fst") (EVar "k"))) (EVar "joinsByText")))) (fa "isInterface" (EApp (EVar "snd") (EApp (EVar "snd") (EVar "k")))))))) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EVar "keyed"))))))
+(DFunDef false "mergeSections" ((PVar "drives")) (EBlock (DoLet false false (PVar "keyed") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "renderSExp") (EApp (EVar "interfaceNode") (EApp (EVar "snd") (EVar "d")))) (EVar "d")))) (EVar "drives"))) (DoLet false false (PVar "joinsByText") (EApp (EApp (EApp (EVar "fold") (EVar "addJoin")) (EVar "omEmpty")) (EVar "keyed"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ERecordCreate "InterfaceSection" ((fa "isJoins" (EApp (EVar "sortedJoins") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "fst") (EVar "k"))) (EVar "joinsByText"))))) (fa "isInterface" (EApp (EVar "snd") (EApp (EVar "snd") (EVar "k")))))))) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EVar "keyed"))))))
 (DTypeSig false "addJoin" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "addJoin" ((PVar "acc") (PTuple (PVar "text") (PTuple (PVar "join") PWild))) (EApp (EApp (EApp (EVar "omInsert") (EVar "text")) (EBinOp "::" (EVar "join") (EApp (EApp (EApp (EVar "lookupOr") (EListLit)) (EVar "text")) (EVar "acc")))) (EVar "acc")))
-(DTypeSig false "lookupOr" (TyFun (TyVar "a") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyVar "a")))))
-(DFunDef false "lookupOr" ((PVar "fallback") (PVar "key") (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "fallback"))))
+(DFunDef false "addJoin" ((PVar "acc") (PTuple (PVar "text") (PTuple (PVar "join") PWild))) (EApp (EApp (EApp (EVar "omInsert") (EVar "text")) (EBinOp "::" (EVar "join") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "text")) (EVar "acc"))))) (EVar "acc")))
 (DTypeSig false "sortedJoins" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "sortedJoins" ((PVar "joins")) (EApp (EApp (EVar "dedupBy") (EVar "joinText")) (EApp (EApp (EVar "sortOn") (EVar "joinText")) (EVar "joins"))))
 (DTypeSig false "joinText" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
@@ -2173,14 +2175,14 @@ decodeInterface text = do
 (DFunDef false "paramNode" ((PCon "PPath" (PVar "s"))) (EApp (EApp (EVar "tagged") (ELit (LString "path"))) (EListLit (EApp (EVar "optNode") (EVar "s")))))
 (DFunDef false "paramNode" ((PCon "PSet" (PCon "None"))) (EApp (EApp (EVar "tagged") (ELit (LString "set"))) (EListLit (EApp (EVar "SAtom") (ELit (LString "none"))))))
 (DFunDef false "paramNode" ((PCon "PSet" (PCon "Some" (PVar "members")))) (EApp (EApp (EVar "tagged") (ELit (LString "set"))) (EListLit (EApp (EVar "SList") (EApp (EApp (EMethodRef "map") (EVar "SAtom")) (EVar "members"))))))
-(DFunDef false "paramNode" ((PCon "PProduct" (PVar "axes"))) (EApp (EApp (EVar "tagged") (ELit (LString "product"))) (EListLit (EApp (EVar "SList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "axis")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EApp (EVar "fst") (EVar "axis"))) (EApp (EVar "paramNode") (EApp (EVar "snd") (EVar "axis"))))))) (EVar "axes"))))))
+(DFunDef false "paramNode" ((PCon "PProduct" (PVar "axes"))) (EApp (EApp (EVar "tagged") (ELit (LString "product"))) (EListLit (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "paramNode"))) (EVar "axes")))))
 (DTypeSig false "unzonked" (TyFun (TyCon "String") (TyVar "a")))
 (DFunDef false "unzonked" ((PVar "what")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "interface_sexp: ")) (EApp (EMethodRef "display") (EVar "what"))) (ELit (LString " reached the printer unzonked")))))
 (DTypeSig false "authNode" (TyFun (TyCon "Authority") (TyCon "SExp")))
 (DFunDef false "authNode" ((PCon "AConst" (PVar "p"))) (EApp (EApp (EVar "tagged") (ELit (LString "const"))) (EListLit (EApp (EVar "paramNode") (EVar "p")))))
 (DFunDef false "authNode" ((PCon "AVar" (PVar "cell"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "lvl") (PVar "top") (PVar "pat") (PVar "name")) () (EApp (EApp (EVar "tagged") (ELit (LString "av"))) (EListLit (EApp (EVar "intNode") (EVar "id")) (EApp (EVar "intNode") (EVar "lvl")) (EApp (EVar "paramNode") (EVar "top")) (EApp (EVar "boolNode") (EVar "pat")) (EApp (EVar "optNode") (EVar "name"))))) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EApp (EVar "unzonked") (EBinOp "++" (EBinOp "++" (ELit (LString "the linked authority variable ")) (EApp (EMethodRef "display") (EVar "id"))) (ELit (LString "")))))))
 (DFunDef false "authNode" ((PCon "AJoin" (PVar "members"))) (EApp (EApp (EVar "tagged") (ELit (LString "ajoin"))) (EListLit (EApp (EVar "SList") (EApp (EApp (EMethodRef "map") (EVar "authNode")) (EVar "members"))))))
-(DFunDef false "authNode" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EVar "tagged") (ELit (LString "aproduct"))) (EListLit (EApp (EVar "SList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "axis")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EApp (EVar "fst") (EVar "axis"))) (EApp (EVar "authNode") (EApp (EVar "snd") (EVar "axis"))))))) (EVar "axes"))))))
+(DFunDef false "authNode" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EVar "tagged") (ELit (LString "aproduct"))) (EListLit (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "authNode"))) (EVar "axes")))))
 (DTypeSig false "labelNode" (TyFun (TyCon "EffLabel") (TyCon "SExp")))
 (DFunDef false "labelNode" ((PCon "EffLabel" (PVar "name") (PVar "origin"))) (EApp (EApp (EVar "tagged") (ELit (LString "label"))) (EListLit (EApp (EVar "SAtom") (EVar "name")) (EApp (EVar "originNode") (EVar "origin")))))
 (DTypeSig false "atomNode" (TyFun (TyCon "Atom") (TyCon "SExp")))
@@ -2364,6 +2366,9 @@ decodeInterface text = do
 (DFunDef false "decItems" ((PVar "f") (PVar "z") (PVar "path") (PVar "i") (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "f") (EVar "z")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "i"))) (ELit (LString "")))) (EVar "x"))) (ELam ((PTuple (PVar "z1") (PVar "y"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EVar "decItems") (EVar "f")) (EVar "z1")) (EVar "path")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))) (ELam ((PTuple (PVar "z2") (PVar "ys"))) (EApp (EVar "Ok") (ETuple (EVar "z2") (EBinOp "::" (EVar "y") (EVar "ys")))))))))
 (DTypeSig false "decList" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a")))) (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "decList" ((PVar "f") (PVar "path") (PVar "node")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EApp (EApp (EVar "decEach") (EApp (EVar "stateless") (EVar "f"))) (EVar "emptyZonk")) (EVar "path")) (EVar "node"))))
+(DTypeSig false "decNamed" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyVar "a"))))) (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyTuple (TyCon "String") (TyVar "a")))))))))
+(DFunDef false "decNamed" (PWild (PVar "f") (PVar "z") (PVar "path") (PCon "SList" (PList (PVar "n") (PVar "x")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "/0")))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "f") (EVar "z")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "/1")))) (EVar "x"))) (ELam ((PTuple (PVar "z1") (PVar "v"))) (EApp (EVar "Ok") (ETuple (EVar "z1") (ETuple (EVar "name") (EVar "v")))))))))
+(DFunDef false "decNamed" ((PVar "what") PWild PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (EVar "what")))
 (DTypeSig false "same" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyFun (TyCon "SExp") (TyFun (TyVar "a") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a")))))))
 (DFunDef false "same" ((PVar "path") (PVar "node") (PVar "first") (PVar "v")) (EIf (EBinOp "==" (EVar "node") (EVar "first")) (EApp (EVar "Ok") (EVar "v")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "this id was written differently before")))))
 (DTypeSig false "decOpt" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "Option") (TyCon "String"))))))
@@ -2384,8 +2389,7 @@ decodeInterface text = do
 (DFunDef false "decParam" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "product"))) (PVar "axes")))) (EApp (EApp (EMethodRef "map") (EVar "PProduct")) (EApp (EApp (EApp (EVar "decList") (EVar "decParamAxis")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "product"))) (ELit (LInt 1)))) (EVar "axes"))))
 (DFunDef false "decParam" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EVar "paramHeads")) (EVar "node")))
 (DTypeSig false "decParamAxis" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "String") (TyCon "Param"))))))
-(DFunDef false "decParamAxis" ((PVar "path") (PCon "SList" (PList (PVar "n") (PVar "p")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "/0")))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "decParam") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "/1")))) (EVar "p"))) (ELam ((PVar "param")) (EApp (EVar "Ok") (ETuple (EVar "name") (EVar "param"))))))))
-(DFunDef false "decParamAxis" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "expected an axis (NAME PARAM)"))))
+(DFunDef false "decParamAxis" ((PVar "path") (PVar "node")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EApp (EApp (EApp (EVar "decNamed") (ELit (LString "expected an axis (NAME PARAM)"))) (EApp (EVar "stateless") (EVar "decParam"))) (EVar "emptyZonk")) (EVar "path")) (EVar "node"))))
 (DTypeSig false "authHeads" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "authHeads" () (EListLit (ETuple (ELit (LString "const")) (ELit (LInt 1))) (ETuple (ELit (LString "av")) (ELit (LInt 5))) (ETuple (ELit (LString "ajoin")) (ELit (LInt 1))) (ETuple (ELit (LString "aproduct")) (ELit (LInt 1)))))
 (DTypeSig false "decAuth" (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyCon "Authority"))))))
@@ -2395,8 +2399,7 @@ decodeInterface text = do
 (DFunDef false "decAuth" ((PVar "z") (PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "aproduct"))) (PVar "axes")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "fst") (EVar "r")) (EApp (EVar "AProduct") (EApp (EVar "snd") (EVar "r")))))) (EApp (EApp (EApp (EApp (EVar "decEach") (EVar "decAuthAxis")) (EVar "z")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "aproduct"))) (ELit (LInt 1)))) (EVar "axes"))))
 (DFunDef false "decAuth" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EVar "authHeads")) (EVar "node")))
 (DTypeSig false "decAuthAxis" (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyTuple (TyCon "String") (TyCon "Authority")))))))
-(DFunDef false "decAuthAxis" ((PVar "z") (PVar "path") (PCon "SList" (PList (PVar "n") (PVar "a")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "/0")))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decAuth") (EVar "z")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "/1")))) (EVar "a"))) (ELam ((PTuple (PVar "z1") (PVar "auth"))) (EApp (EVar "Ok") (ETuple (EVar "z1") (ETuple (EVar "name") (EVar "auth")))))))))
-(DFunDef false "decAuthAxis" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "expected an axis (NAME AUTH)"))))
+(DFunDef false "decAuthAxis" () (EApp (EApp (EVar "decNamed") (ELit (LString "expected an axis (NAME AUTH)"))) (EVar "decAuth")))
 (DTypeSig false "decLabel" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "EffLabel")))))
 (DFunDef false "decLabel" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "label"))) (PVar "n") (PVar "o")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "label"))) (ELit (LInt 1)))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "decOrigin") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "label"))) (ELit (LInt 2)))) (EVar "o"))) (ELam ((PVar "origin")) (EApp (EVar "Ok") (EApp (EApp (EVar "EffLabel") (EVar "name")) (EVar "origin"))))))))
 (DFunDef false "decLabel" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "label")) (ELit (LInt 2))))) (EVar "node")))
@@ -2567,8 +2570,7 @@ decodeInterface text = do
 (DFunDef false "decDataVis" (PWild (PCon "SAtom" (PLit (LString "public")))) (EApp (EVar "Ok") (EVar "VisPublic")))
 (DFunDef false "decDataVis" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "private")) (ELit (LInt 0))) (ETuple (ELit (LString "abstract")) (ELit (LInt 0))) (ETuple (ELit (LString "public")) (ELit (LInt 0))))) (EVar "node")))
 (DTypeSig false "decNamedMono" (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "decNamedMono" ((PVar "z") (PVar "path") (PCon "SList" (PList (PVar "n") (PVar "m")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "/0")))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decMono") (EVar "z")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "/1")))) (EVar "m"))) (ELam ((PTuple (PVar "z1") (PVar "m1"))) (EApp (EVar "Ok") (ETuple (EVar "z1") (ETuple (EVar "name") (EVar "m1")))))))))
-(DFunDef false "decNamedMono" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "expected a pair (NAME MONO)"))))
+(DFunDef false "decNamedMono" () (EApp (EApp (EVar "decNamed") (ELit (LString "expected a pair (NAME MONO)"))) (EVar "decMono")))
 (DTypeSig false "decRecord" (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyCon "RecordInfo"))))))
 (DFunDef false "decRecord" ((PVar "z") (PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "record"))) (PVar "ids") (PVar "authIds") (PVar "r") (PVar "fs") (PVar "ix")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "atomInt")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 1)))) (EVar "ids"))) (ELam ((PVar "ids1")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "atomInt")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 2)))) (EVar "authIds"))) (ELam ((PVar "authIds1")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decMono") (EVar "z")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 3)))) (EVar "r"))) (ELam ((PTuple (PVar "z1") (PVar "result"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "decEach") (EVar "decNamedMono")) (EVar "z1")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 4)))) (EVar "fs"))) (ELam ((PTuple (PVar "z2") (PVar "fields"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "decEach") (EVar "decNamedMono")) (EVar "z2")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 5)))) (EVar "ix"))) (ELam ((PTuple (PVar "z3") (PVar "pairs"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EDictApp "keyed") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "record"))) (ELit (LInt 5)))) (EVar "ix")) (EVar "pairs"))) (ELam ((PVar "index")) (EApp (EVar "Ok") (ETuple (EVar "z3") (EApp (EApp (EApp (EApp (EApp (EVar "RecordInfo") (EVar "ids1")) (EVar "authIds1")) (EVar "result")) (EVar "fields")) (EMethodRef "index")))))))))))))))))
 (DFunDef false "decRecord" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "record")) (ELit (LInt 5))))) (EVar "node")))
@@ -2622,11 +2624,9 @@ decodeInterface text = do
 (DTypeSig true "cacheOfSections" (TyFun (TyApp (TyCon "List") (TyCon "InterfaceSection")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface")))))
 (DFunDef false "cacheOfSections" () (EApp (EMethodRef "map") (ELam ((PVar "s")) (ETuple (EFieldAccess (EVar "s") "isJoins") (EFieldAccess (EVar "s") "isInterface")))))
 (DTypeSig true "mergeSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "List") (TyCon "InterfaceSection"))))
-(DFunDef false "mergeSections" ((PVar "drives")) (EBlock (DoLet false false (PVar "keyed") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "renderSExp") (EApp (EVar "interfaceNode") (EApp (EVar "snd") (EVar "d")))) (EVar "d")))) (EVar "drives"))) (DoLet false false (PVar "joinsByText") (EApp (EApp (EApp (EMethodRef "fold") (EVar "addJoin")) (EVar "omEmpty")) (EDictApp "keyed"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ERecordCreate "InterfaceSection" ((fa "isJoins" (EApp (EVar "sortedJoins") (EApp (EApp (EApp (EVar "lookupOr") (EListLit)) (EApp (EVar "fst") (EVar "k"))) (EVar "joinsByText")))) (fa "isInterface" (EApp (EVar "snd") (EApp (EVar "snd") (EVar "k")))))))) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EDictApp "keyed"))))))
+(DFunDef false "mergeSections" ((PVar "drives")) (EBlock (DoLet false false (PVar "keyed") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "renderSExp") (EApp (EVar "interfaceNode") (EApp (EVar "snd") (EVar "d")))) (EVar "d")))) (EVar "drives"))) (DoLet false false (PVar "joinsByText") (EApp (EApp (EApp (EMethodRef "fold") (EVar "addJoin")) (EVar "omEmpty")) (EDictApp "keyed"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ERecordCreate "InterfaceSection" ((fa "isJoins" (EApp (EVar "sortedJoins") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "fst") (EVar "k"))) (EVar "joinsByText"))))) (fa "isInterface" (EApp (EVar "snd") (EApp (EVar "snd") (EVar "k")))))))) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EDictApp "keyed"))))))
 (DTypeSig false "addJoin" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "addJoin" ((PVar "acc") (PTuple (PVar "text") (PTuple (PVar "join") PWild))) (EApp (EApp (EApp (EVar "omInsert") (EVar "text")) (EBinOp "::" (EVar "join") (EApp (EApp (EApp (EVar "lookupOr") (EListLit)) (EVar "text")) (EVar "acc")))) (EVar "acc")))
-(DTypeSig false "lookupOr" (TyFun (TyVar "a") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyVar "a")))))
-(DFunDef false "lookupOr" ((PVar "fallback") (PVar "key") (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "fallback"))))
+(DFunDef false "addJoin" ((PVar "acc") (PTuple (PVar "text") (PTuple (PVar "join") PWild))) (EApp (EApp (EApp (EVar "omInsert") (EVar "text")) (EBinOp "::" (EVar "join") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "text")) (EVar "acc"))))) (EVar "acc")))
 (DTypeSig false "sortedJoins" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "sortedJoins" ((PVar "joins")) (EApp (EApp (EVar "dedupBy") (EVar "joinText")) (EApp (EApp (EVar "sortOn") (EVar "joinText")) (EVar "joins"))))
 (DTypeSig false "joinText" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
