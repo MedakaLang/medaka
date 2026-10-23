@@ -38,7 +38,7 @@ import types.interface_sexp.{
   cDeclaredPrefixOfSExp, builtinClassesSExp, builtinClassesOfSExp,
   spellingPopSExp, spellingPopOfSExp, atomSExp, PreludeInterfaceFile(..),
   InterfaceSection(..), formatVersion, sectionsOfCache, cacheOfSections,
-  encodeInterface, decodeInterface
+  encodeInterface, decodeInterface, readInterface, sha256Hex
 }
 import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
@@ -1576,6 +1576,29 @@ headerOnly = encodeInterface (fileOf [])
 withSection : String -> String
 withSection field = "\{headerOnly}(section (joins ()) (interface \{field}))\n"
 
+-- The digest is the SHA-256 of the bytes after the header line, read as they
+-- stand, so a byte added after the last section changes it.
+test "the digest hashes the file's bytes after the header line" =
+  match preludeInterface
+    Err e => fail e
+    Ok pi =>
+      let good = encodeInterface (fileOf [([[ioUnit]], pi)])
+      let body = match S.indexOf "\n" good
+        Some i => S.drop (i + 1) good
+        None => ""
+      expectAll [
+        labelFail
+          "claimed digest"
+          (expectEqual
+            (Some (sha256Hex body))
+            (map snd (fromResult (readInterface good)))),
+        labelFail
+          "a changed body byte"
+          (expectEqual
+            None
+            (map snd (fromResult (readInterface (good ++ " "))))),
+      ]
+
 failureOf : String -> Option (String, String)
 failureOf text = refusal (decodeInterface text)
 
@@ -1604,10 +1627,10 @@ test "a malformed file is refused" = match preludeInterface
         expectEqual
           (Some (
             "header/medaka-interface.1",
-            "2: format version 2, this compiler reads 1",
+            "3: format version 3, this compiler reads 2",
           ))
           (failureOf
-            "(medaka-interface 2 (sources ()) (compiler c) (sections 0))\n"),
+            "(medaka-interface 3 (sources ()) (compiler c) (sections 0))\n"),
       ),
       (
         "truncated in the header",

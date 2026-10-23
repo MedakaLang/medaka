@@ -7,8 +7,8 @@
 -- per-join drives (`mergeSections`), the text does not depend on the user's
 -- program, and the real prelude stays under its size bound.
 import test.{
-  Expectation, expectTrue, expectEqual, expectAll, expectAtLeast, expectAtMost,
-  labelFail, fail, pass
+  Expectation, expectTrue, expectFalse, expectEqual, expectAll, expectAtLeast,
+  expectAtMost, labelFail, fail, pass
 }
 import list.{zip, indexed, drop, sort}
 import string as S
@@ -142,15 +142,12 @@ decodes text = match decodeInterface text
   Ok _ => True
   Err _ => False
 
--- The header counts the sections, so a cut that falls after any complete node
--- but before the end of the text is refused.  Only the missing final newline
--- decodes, and it loses nothing.
-test "a truncated file is refused unless only the final newline is missing" =
+-- The header counts the sections and the digest covers every byte after the
+-- header line, so a cut anywhere is refused, the final newline included.
+test "a truncated file is refused" =
   let n = S.length smallText
   let cuts =
-    filter
-      (i => i < n - 1)
-      (nodeEnds smallText ++ tokenMiddles smallText ++ [0, 1])
+    filter (i => i < n) (nodeEnds smallText ++ tokenMiddles smallText ++ [0, 1])
   expectAll [
     labelFail
       "node ends tried"
@@ -159,12 +156,8 @@ test "a truncated file is refused unless only the final newline is missing" =
       "prefixes that decode"
       (expectEqual [] (filter (i => decodes (S.take i smallText)) cuts)),
     labelFail
-      "the missing newline loses nothing"
-      (expectEqual
-        (Some smallText)
-        (map
-          encodeInterface
-          (fromResult (decodeInterface (S.take (n - 1) smallText))))),
+      "the missing newline is refused"
+      (expectFalse (decodes (S.take (n - 1) smallText))),
   ]
 
 -- ── 2. byte flips ───────────────────────────────────────────────────────────
@@ -182,7 +175,7 @@ flipAt : Int -> String -> String
 flipAt i text =
   S.take i text ++ flipped (S.take 1 (S.drop i text)) ++ S.drop (i + 1) text
 
--- The ten places a flip is tried at: [marker] found in the text, plus [offset].
+-- The places a flip is tried at: [marker] found in the text, plus [offset].
 flipSites : List (String, String, Int)
 flipSites = [
   ("first paren", "(medaka-interface", 0),
@@ -210,9 +203,25 @@ siteOffset text (_, marker, offset) = map (+ offset) (S.indexOf marker text)
 count : String -> List String -> Int
 count outcome outcomes = length (filter (== outcome) outcomes)
 
--- Every position of the small file, and the ten fixed places.
+-- Where the digest's coverage begins: the newline that ends the header line.
+-- A flip before it reads as a different key, which the loader compares with
+-- the compiler's own and finds stale.
+bodyStart : String -> Int
+bodyStart text = optionOr 0 (S.indexOf "\n" text)
+
+-- Every position of the small file from the end of its header line.
 tinyOutcomes : List String
-tinyOutcomes = map (flipOutcomeAt tinyText) [0..=S.length tinyText - 1]
+tinyOutcomes =
+  map (flipOutcomeAt tinyText) [bodyStart tinyText..=S.length tinyText - 1]
+
+-- The fixed places that lie in the body.
+bodySites : List (String, String, Int)
+bodySites =
+  filter
+    (site => match siteOffset smallText site
+      Some i => i >= bodyStart smallText
+      None => True)
+    flipSites
 
 siteOutcomes : List String
 siteOutcomes =
@@ -220,11 +229,11 @@ siteOutcomes =
     (site => match siteOffset smallText site
       Some i => [flipOutcomeAt smallText i]
       None => ["site absent"])
-    flipSites
+    bodySites
 
 -- The sources' hashes cover no byte of a section, so it is the digest that
 -- refuses a flip there.
-test "no flipped byte decodes to a different file" = expectAll [
+test "no flipped body byte decodes to a different file" = expectAll [
   labelFail "positions tried" (expectAtLeast 1000 (length tinyOutcomes)),
   labelFail
     "flips that change what the file says"
@@ -233,16 +242,22 @@ test "no flipped byte decodes to a different file" = expectAll [
     "most flips are refused"
     (expectAtLeast (length tinyOutcomes / 2) (count "Err" tinyOutcomes)),
   labelFail
-    "the ten fixed sites are refused"
-    (expectEqual (map (_ => "Err") flipSites) siteOutcomes),
+    "the fixed sites in the body are refused"
+    (expectAll [
+      labelFail "sites tried" (expectAtLeast 3 (length bodySites)),
+      expectEqual (map (_ => "Err") bodySites) siteOutcomes,
+    ]),
 ]
 
 -- A header under another version, whatever its shape, is refused for its version.
 test "a header of another version is refused for its version, not its shape" =
-  match decodeInterface "(medaka-interface 2 (sources ()))\n"
+  match decodeInterface "(medaka-interface \{formatVersion + 1} (sources ()))\n"
     Ok _ => fail "a later version decoded"
     Err e => expectAll [
-      labelFail "message" (expectTrue (S.contains "format version 2" e.seWhat)),
+      labelFail
+        "message"
+        (expectTrue
+          (S.contains "format version \{formatVersion + 1}" e.seWhat)),
       labelFail "path" (expectEqual "header/medaka-interface.1" e.sePath),
     ]
 
