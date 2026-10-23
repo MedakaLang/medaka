@@ -1603,7 +1603,8 @@ test "a malformed file is refused" = match preludeInterface
             "header/medaka-interface.1",
             "2: format version 2, this compiler reads 1",
           ))
-          (failureOf "(medaka-interface 2 (sources ()) (compiler c))\n"),
+          (failureOf
+            "(medaka-interface 2 (sources ()) (compiler c) (sections 0))\n"),
       ),
       (
         "truncated in the header",
@@ -1616,6 +1617,24 @@ test "a malformed file is refused" = match preludeInterface
         expectEqual
           (Some ("", "unbalanced open paren"))
           (failureOf "(medaka-interface 1 (sources ())"),
+      ),
+      (
+        "a header counting more sections than the file holds",
+        expectEqual
+          (Some (
+            "header/sections.1",
+            "medaka-interface: header counts 2 section(s), the file holds 1",
+          ))
+          (failureOf (S.replace "(sections 1)" "(sections 2)" good)),
+      ),
+      (
+        "a header counting fewer sections than the file holds",
+        expectEqual
+          (Some (
+            "header/sections.1",
+            "medaka-interface: header counts 0 section(s), the file holds 1",
+          ))
+          (failureOf (S.replace "(sections 1)" "(sections 0)" good)),
       ),
       (
         "trailing text",
