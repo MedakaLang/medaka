@@ -11,9 +11,7 @@ import args.{
   ArgSpec, FlagSpec, spec, switch, valueList, withStrictDash, parseArgs, flag,
   flagValues, unknownFlagMessage
 }
-import bytes.{encodeUtf8}
-import crypto.sha256.{sha256}
-import hex as Hex
+import io.{runCommandOk}
 import list.{zip}
 import string as S
 import driver.build_cmd.{
@@ -77,9 +75,6 @@ helpSwitch : FlagSpec
 helpSwitch = switch ["--help", "-h"] "print this help"
 
 -- ── the key ─────────────────────────────────────────────────────────────────
-
-sha256Of : String -> String
-sha256Of text = Hex.encode (sha256 (encodeUtf8 text))
 
 -- The key a module is written under: the two prelude sources by their path
 -- relative to the stdlib directory, hashed, and the compiler that checked them.
@@ -170,19 +165,25 @@ resultList (r :: rest) = match r
   Err e => Err e
   Ok x => map (x :: _) (resultList rest)
 
--- The text goes to a sibling file first and is renamed over the target, so a
--- reader never sees a half-written file.  The sibling's name carries the text's
--- own digest: a concurrent writer of the same module writes the same bytes.
+-- The text goes into a fresh directory beside the target and is renamed over
+-- it, so a reader never sees a half-written file.  `mktemp -d` makes the
+-- directory atomically, so concurrent writers, even of the same module, never
+-- share a staging file; the directory is removed on every path.
 writeAtomically : String -> String -> <IO> Result String Unit
 writeAtomically path text =
-  let staging = "\{path}.new.\{S.take 16 (sha256Of text)}"
-  match writeFile staging text
-    Err e => Err "cannot write `\{staging}`: \{e}"
-    Ok _ => match rename staging path
-      Ok _ => Ok ()
-      Err e =>
-        let _ = removeFile staging
-        Err "cannot move `\{staging}` to `\{path}`: \{e}"
+  match runCommandOk "mktemp" ["-d", "\{path}.new.XXXXXX"]
+    Err e => Err "cannot make a staging directory beside `\{path}`: \{e}"
+    Ok (out, _) =>
+      let dir = S.trim out
+      let staging = joinPath dir (baseName path)
+      let result = match writeFile staging text
+        Err e => Err "cannot write `\{staging}`: \{e}"
+        Ok _ => match rename staging path
+          Ok _ => Ok ()
+          Err e => Err "cannot move `\{staging}` to `\{path}`: \{e}"
+      let _ = removeFile staging
+      let _ = removeDir dir
+      result
 
 failWith : String -> <IO> Unit
 -- The same two lines as `entries/entry_support.mdk`'s `failWith`; a tool cannot import an entry.
