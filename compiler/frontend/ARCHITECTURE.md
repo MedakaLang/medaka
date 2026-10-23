@@ -12,6 +12,7 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 | Module | Owns | Entry points |
 |---|---|---|
 | `ast.mdk` | The surface (pre-desugar) AST nodes the parser builds; post-parse-only nodes are omitted by design | `Lit`, `Expr`, `Decl`, `Pat` |
+| `ast_codec.mdk` | The compact s-expression codec for elaborated declarations and evidence rows: an `SExp` writer and a cursor reader that fails closed; imports `ast` and `support/` only | `declsSExp`, `readDecls`, `decodeDecls`, `evEntriesSExp`, `decodeEvEntries` |
 | `lexer.mdk` | Tokenizer plus the INDENT/DEDENT/NEWLINE layout pass | `tokenize` |
 | `parser.mdk` | Monadic combinator parser over the token list; stratified operator ladder | `parse`, `parseLocated`, `parseResult` |
 | `desugar.mdk` | Lowers sugar (guards, sections, interpolation, comprehensions, do, `?`, deriving) to the core AST; runs after parse, before resolve; owns the shared `mapExpr`/`mapDecl` traversal | `desugar` |
