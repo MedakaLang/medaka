@@ -4024,3 +4024,19 @@ sources = ["compiler/*", "test/stage_counts_test.mdk"]
 corpus = ["test/stage_count_fixtures", "test/arch_goldens"]
 toolchain = []
 link = "production"
+
+[[gate]]
+name = "diff_interface_onoff"
+area = "types"
+shard = "gates_7"
+project = "compiler"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+migration = "shell:instrumentation"
+run = "test/diff_interface_onoff.sh"
+oracles = []
+sources = ["compiler/types/prelude_interface.mdk", "compiler/types/interface_sexp.mdk", "compiler/support/sexp_value.mdk", "compiler/driver/loader.mdk", "compiler/driver/diagnostics.mdk", "compiler/driver/build_cmd.mdk", "compiler/tools/interface_cmd.mdk", "stdlib/core.mdk", "stdlib/runtime.mdk", "test/build_native_medaka.sh", "test/diff_interface_onoff.sh"]
+corpus = []
+toolchain = []
+link = "production"
