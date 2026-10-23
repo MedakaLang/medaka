@@ -49,6 +49,7 @@ set of entries (#4141).
 | `gate_registry.mdk` | The `test/gates.toml` schema, reader, selector language and renderers | registry reader |
 | `gate_cost.mdk` | The reader for `test/gate_cost_baseline.json` | cost baseline |
 | `gate_pack.mdk` | The gate scheduler: bin packing and the budget governor | `balance`, `budget` |
+| `interface_cmd.mdk` | `medaka interface`: write, show and verify the prelude interface file | interface verbs |
 
 ## Laws that bind it
 - **A1** — `tools` may import any lower layer; only `driver` and `entries` import `tools`.

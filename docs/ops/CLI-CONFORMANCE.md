@@ -8,11 +8,11 @@ are decided; the table records which cells already obey them and which are open 
 
 ## 0. What this document is, and how to re-derive it
 
-`medaka` is sixteen verbs behind one binary. It is also the highest-frequency first-hour
+`medaka` is seventeen verbs behind one binary. It is also the highest-frequency first-hour
 surface in the project: a stranger types four or five `medaka` invocations before reading one
 line of `docs/spec/SYNTAX.md`, and cross-verb drift reads as slop immediately.
 
-This file is the **single normative source** for how those sixteen verbs handle arguments. It
+This file is the **single normative source** for how those seventeen verbs handle arguments. It
 ratifies four conventions (§1–§4), tabulates every verb against them (§5), re-derives every
 claim #2301's body made (§6), and records two dispositions so the next agent finds a ruling
 instead of re-deriving one (§7).
@@ -165,7 +165,7 @@ ok.mdk: FAIL no snapshot at ok.md …          # ran normally; --zzz never menti
 
 → **slice S-2** ✅ **DRAINED**, through ONE shared rejection helper (each verb supplies its name
 and its known-flag set; the helper owns the check, the wording and the exit code). Re-verified
-against the current binary: every one of the sixteen verbs now falls in the `REJECT-NAMED`
+against the current binary: every one of the seventeen verbs now falls in the `REJECT-NAMED`
 class, **`new` included** — ✅ **DRAINED by S-5**: `runNewCmd`'s arity-mismatch arm (0 or 2+
 args) now scans for a leading-dash token and C2-names it before falling back to the generic
 usage line, so `medaka new --zzz ok.mdk` (the census's own 2-positional probe shape) no longer
@@ -343,6 +343,7 @@ the pre-sprint baseline captured when it was first written; every cell below is 
 | `check-policy` | `medaka check-policy: unrecognized flag '--zzz…' (known: --allow, --fn)` | 1 | stderr | ✅ | 1 | ✅ |
 | `manifest` | `medaka manifest: unrecognized flag '--zzz…' (known: --fn)` | 1 | stderr | ✅ | 1 | ✅ |
 | `gate` | `medaka gate: unknown subcommand '--zzz…' (expected: list, run, verify, explain, reach, ci, balance, budget)` | 1 | stderr | ✅ | 1 | ✅ |
+| `interface` | `medaka interface: unknown subcommand '--zzz…' (expected: write, show, verify)`; per subcommand, `medaka interface write: unrecognized flag '--zzz…' (known: --target)` | 1 | stderr | ✅ | 1 | ✅ |
 | `repl` | `medaka repl: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ | 0 (starts a session) | — |
 | `lsp` | `medaka lsp: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ | 0 (starts the server) | — |
 | `mcp` | `medaka mcp: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ (an empty `ArgSpec`, the same shape as `lsp` and `repl`) | 0 (starts the server) | — |
@@ -395,6 +396,7 @@ census confirms the drain from the outside.
 | `fmt` | none | 1 | ✅ honestly rejected (`medaka fmt: unrecognized flag '--json' (known: …)`) |
 | `codemod` | none | 1 | ✅ honestly rejected |
 | `gate` | none | 1 | ✅ honestly rejected at top level — `--json` is a per-subcommand flag. `medaka gate list --json` emits the registry array on stdout, rc 0. (`gate run --json` writes the run report; `--dry-run` short-circuits before it, so it is not exercised by this probe.) |
+| `interface` | none | 1 | ✅ honestly rejected at top level — `--json` is not a flag of any `interface` subcommand. |
 
 ✅ **DRAINED by S-5.** `check --types` under `--json` used to be a silent drop: `medaka check
 --types ok.mdk` printed `main : Unit`; `medaka check --json --types ok.mdk` printed the same
@@ -407,8 +409,8 @@ documents it under `--types`.
 
 ### 5d. `--help` (C4) — probe `medaka <verb> --help`
 
-**Every one of the sixteen verbs answers `--help` on stdout with exit 0.** This column is
-fully conforming and is the CLI's best-behaved dimension. `dispatchSub` covers ten verbs
+**Every one of the seventeen verbs answers `--help` on stdout with exit 0.** This column is
+fully conforming and is the CLI's best-behaved dimension. `dispatchSub` covers twelve verbs
 centrally; `build`, `new`, `repl`, `lsp`, `mcp` special-case it internally (#1348).
 
 ### 5e. Help/parse-arm agreement — derived

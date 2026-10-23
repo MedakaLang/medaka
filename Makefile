@@ -293,6 +293,11 @@ inlang-tools-gate-cmd:
 inlang-tools-gate-cmd-test:
 	./medaka test compiler/tools/gate_cmd_test.mdk
 
+## `medaka interface`'s sibling: outside every entry's import closure
+## ([W-MODULE-BLIND]), and no gate script runs `medaka test` on compiler/tools/*.
+inlang-tools-interface-cmd-test:
+	./medaka test compiler/tools/interface_cmd_test.mdk
+
 inlang-tools-doc-test:
 	./medaka test compiler/tools/doc_test.mdk
 

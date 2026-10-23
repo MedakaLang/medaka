@@ -1,0 +1,90 @@
+-- Sibling test module for `compiler/tools/interface_cmd.mdk`.
+--
+-- The real stdlib's core is written under the default targets once per
+-- assertion that needs it; `show` is graded through `showLines`, which is the
+-- text the verb prints, and `verify` through `verdictOf`, which is what the
+-- verb prints the text of.
+import test.{
+  Expectation, expectAll, expectEqual, expectTrue, expectErrContains, fail,
+  labelFail
+}
+import test_process.{underRoot, withScratchDir}
+import string as S
+import tools.interface_cmd.{
+  buildInterfaceFile, showLines, verdictOf, verdictText
+}
+import types.interface_sexp.{
+  PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface
+}
+import types.prelude_interface.{PreludeInterface(..)}
+
+corePath : String
+corePath = underRoot "stdlib/core.mdk"
+
+rowLines : List String -> List String
+rowLines = filter (S.startsWith "  row ")
+
+test "show lists every published row of every section" =
+  match buildInterfaceFile corePath []
+    Err e => fail e
+    Ok file =>
+      let published =
+        sum (map (s => length s.isInterface.piCore) file.ifSections)
+      expectAll [
+        labelFail
+          "rows shown"
+          (expectEqual published (length (rowLines (showLines "d" file)))),
+        labelFail "core has rows" (expectTrue (published > 100)),
+        labelFail
+          "default targets give one or two sections"
+          (expectTrue (length file.ifSections >= 1)),
+      ]
+
+copyInto : String -> String -> <IO> Result String Unit
+copyInto dir name = match readFile (underRoot "stdlib/\{name}")
+  Err e => Err e
+  Ok text => writeFile "\{dir}/\{name}" text
+
+test "verify reads fresh, then stale: sources after an edit, and missing without a file" = withScratchDir
+  (dir => match (copyInto dir "runtime.mdk", copyInto dir "core.mdk")
+    (Ok _, Ok _) =>
+      let scratchCore = "\{dir}/core.mdk"
+      match buildInterfaceFile scratchCore []
+        Err e => fail e
+        Ok file =>
+          let before = verdictText (verdictOf scratchCore)
+          match writeFile "\{scratchCore}i" (encodeInterface file)
+            Err e => fail e
+            Ok _ =>
+              let fresh = verdictText (verdictOf scratchCore)
+              match readFile scratchCore
+                Err e => fail e
+                Ok text => match writeFile scratchCore (text ++ " ")
+                  Err e => fail e
+                  Ok _ => expectAll [
+                    labelFail "no file yet" (expectEqual "missing" before),
+                    labelFail "file just written" (expectEqual "fresh" fresh),
+                    labelFail
+                      "source edited"
+                      (expectEqual
+                        "stale: sources"
+                        (verdictText (verdictOf scratchCore))),
+                  ]
+    _ => fail "could not stage the scratch stdlib")
+
+test "a core with a type error is refused with its diagnostic" = withScratchDir
+  (dir => match (copyInto dir "runtime.mdk", copyInto dir "core.mdk")
+    (Ok _, Ok _) =>
+      let scratchCore = "\{dir}/core.mdk"
+      match readFile scratchCore
+        Err e => fail e
+        Ok text =>
+          match (writeFile
+            scratchCore
+            (text ++ "\nbadBinding : Int\nbadBinding = \"x\"\n"))
+            Err e => fail e
+            Ok _ =>
+              expectErrContains
+                "type mismatch"
+                (map (_ => ()) (buildInterfaceFile scratchCore []))
+    _ => fail "could not stage the scratch stdlib")
