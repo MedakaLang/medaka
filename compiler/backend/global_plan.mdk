@@ -1,0 +1,329 @@
+import ir.core_ir.{CProgram(..), CBind(..), CClause(..)}
+import backend.emit_support.{eagerCalleesMap, methodTaintSet}
+import support.scc.{tarjanSCCs}
+import support.ordmap.{
+  OrdMap, omEmpty, omInsert, omLookup, omHasKey, omFromNames, omKeys,
+  omMapValues
+}
+import support.util.{reverseL, filterList, listLen, maxI}
+import map as Q
+
+public export data GlobalInitPlan = GlobalInitPlan {
+  valueOrder : List String,
+  eagerOrder : List String,
+}
+
+data Components = Components {
+  ids : List String,
+  owners : OrdMap String,
+  members : OrdMap (List String),
+  sourceKeys : OrdMap Int,
+  dependencies : OrdMap (List String),
+}
+
+nameOf : CBind -> String
+nameOf (CBind name _ _ _) = name
+
+isValue : CBind -> Bool
+isValue (CBind name [CClause [] _] _ _) = name /= "main"
+isValue _ = False
+
+lookup : a -> String -> OrdMap a -> a
+lookup d name index = optionOr d (omLookup name index)
+
+owner : Components -> String -> String
+owner g name = lookup name name g.owners
+
+indexMembers : List (List String) -> OrdMap String -> OrdMap String
+indexMembers [] acc = acc
+indexMembers ([] :: rest) acc = indexMembers rest acc
+indexMembers ((head :: tail) :: rest) acc =
+  indexMembers rest (fold (m n => omInsert n head m) acc (head :: tail))
+
+sourceMembers : OrdMap String -> List String -> OrdMap (List String)
+sourceMembers owners names =
+  omMapValues
+    reverseL
+    (fold
+      (m n =>
+        let c = lookup n n owners
+        omInsert c (n :: lookup [] c m) m)
+      omEmpty
+      names)
+
+sourceKeys : OrdMap String -> List String -> Int -> OrdMap Int -> OrdMap Int
+sourceKeys _ [] _ acc = acc
+sourceKeys owners (n :: rest) rank acc =
+  let c = lookup n n owners
+  sourceKeys owners rest (rank + 1) (if omHasKey c acc then
+    acc
+  else
+    omInsert c rank acc)
+
+componentDeps : OrdMap String ->
+  OrdMap (List String) ->
+  List String ->
+  List String
+componentDeps owners adj members =
+  let same = match members
+    n :: _ => lookup n n owners
+    [] => ""
+  let targets =
+    fold
+      (acc n =>
+        fold
+          (seen dep =>
+            let c = lookup dep dep owners
+            if c == same then seen else omInsert c () seen)
+          acc
+          (lookup [] n adj))
+      omEmpty
+      members
+  omKeys targets
+
+components : List String -> List String -> OrdMap (List String) -> Components
+components names values adj =
+  let sccs = tarjanSCCs names adj
+  let owners = indexMembers sccs omEmpty
+  let ids =
+    filterMap
+      (s => match s
+        n :: _ => Some n
+        [] => None)
+      sccs
+  Components {
+    ids = ids,
+    owners = owners,
+    members = sourceMembers owners values,
+    sourceKeys = sourceKeys owners values 0 omEmpty,
+    dependencies =
+      fold
+        (m s => match s
+          n :: _ => omInsert n (componentDeps owners adj s) m
+          [] => m)
+        omEmpty
+        sccs,
+  }
+
+data QueueState = QueueState {
+  ready : Q.Map Int String,
+  counts : OrdMap Int,
+  users : OrdMap (List String),
+}
+
+queueState : Components -> QueueState
+queueState g =
+  fold
+    (q c =>
+      let deps = lookup [] c g.dependencies
+      let count = listLen deps
+      { q |
+        counts = omInsert c count q.counts,
+        ready =
+          if count == 0 then
+            Q.set (lookup 0 c g.sourceKeys) c q.ready
+          else
+            q.ready,
+        users = fold (m d => omInsert d (c :: lookup [] d m) m) q.users deps,
+      })
+    QueueState { ready = Q.Tip, counts = omEmpty, users = omEmpty }
+    g.ids
+
+release : Components -> QueueState -> String -> QueueState
+release g q c =
+  fold
+    (acc user =>
+      let count = lookup 0 user acc.counts - 1
+      { acc |
+        counts = omInsert user count acc.counts,
+        ready =
+          if count == 0 then
+            Q.set (lookup 0 user g.sourceKeys) user acc.ready
+          else
+            acc.ready,
+      })
+    q
+    (lookup [] c q.users)
+
+queueOrder : Components -> QueueState -> List String -> List String
+queueOrder g q rev = match Q.minView q.ready
+  None => reverseL rev
+  Some (_, c, rest) =>
+    let next = release g { q | ready = rest } c
+    queueOrder g next (fold (acc n => n :: acc) rev (lookup [] c g.members))
+
+export
+planGlobals : CProgram -> List String -> OrdMap (List String) -> GlobalInitPlan
+planGlobals (CProgram binds _ _ _ _ _) lazy reach =
+  let names = map nameOf (filterList isValue binds)
+  let universe = omFromNames names omEmpty
+  let adj =
+    fold
+      (m n =>
+        omInsert
+          n
+          (filterList (d => omHasKey d universe) (lookup [] n reach))
+          m)
+      omEmpty
+      names
+  let g = components names names adj
+  let order = queueOrder g (queueState g) []
+  let lazySet = omFromNames lazy omEmpty
+  GlobalInitPlan {
+    valueOrder = order,
+    eagerOrder = filterList (n => not (omHasKey n lazySet)) order,
+  }
+
+unique : List String -> OrdMap Unit -> Bool
+unique [] _ = True
+unique (n :: ns) seen = not (omHasKey n seen) && unique ns (omInsert n () seen)
+
+malformedValue : CBind -> Bool
+malformedValue (CBind _ clauses _ _) = match clauses
+  [] => True
+  [CClause [] _] => False
+  _ =>
+    any
+      (c => match c
+        CClause [] _ => True
+        _ => False)
+      clauses
+
+sameMembers : List String -> List String -> Bool
+sameMembers expected actual =
+  let names = omFromNames expected omEmpty
+  listLen expected == listLen actual
+    && unique actual omEmpty
+    && all (n => omHasKey n names) actual
+
+componentSequence : Components -> List String -> List String
+componentSequence _ [] = []
+componentSequence g (n :: ns) =
+  let c = owner g n
+  c :: sequenceRest g c ns
+
+sequenceRest : Components -> String -> List String -> List String
+sequenceRest _ _ [] = []
+sequenceRest g previous (n :: ns) =
+  let c = owner g n
+  if c == previous then sequenceRest g previous ns else c :: sequenceRest g c ns
+
+rankNames : List String -> Int -> OrdMap Int -> OrdMap Int
+rankNames [] _ acc = acc
+rankNames (n :: ns) rank acc = rankNames ns (rank + 1) (omInsert n rank acc)
+
+-- A dependency's maximum includes its own value rank; helper-only SCCs carry
+-- that maximum onward without occupying a position in the supplied order.
+data Summary = Summary {
+  dependencyRank : Int,
+  maximumRank : Int,
+  tainted : Bool,
+}
+
+summaries : Components ->
+  OrdMap (List String) ->
+  OrdMap Unit ->
+  List String ->
+  OrdMap Int ->
+  OrdMap Summary
+summaries g adj methods names ranks =
+  let cyclic =
+    fold
+      (m n =>
+        let c = owner g n
+        let self = any (== n) (lookup [] n adj)
+        let (count, loop) = lookup (0, False) c m
+        omInsert c (count + 1, loop || self || omHasKey n methods) m)
+      omEmpty
+      names
+  fold
+    (acc c =>
+      let (count, direct) = lookup (0, False) c cyclic
+      let (d, taint) =
+        fold
+          ((maximum, bad) dep => match omLookup dep acc
+            Some s => (maxI maximum s.maximumRank, bad || s.tainted)
+            None => (maximum, bad))
+          (-1, count > 1 || direct)
+          (lookup [] c g.dependencies)
+      omInsert
+        c
+        Summary {
+          dependencyRank = d,
+          maximumRank = maxI d (lookup (-1) c ranks),
+          tainted = taint,
+        }
+        acc)
+    omEmpty
+    g.ids
+
+dropSmaller : Int -> List (Int, Int) -> List (Int, Int)
+dropSmaller _ [] = []
+dropSmaller key ((k, r) :: rest) =
+  if k <= key then dropSmaller key rest else (k, r) :: rest
+
+-- The nearest earlier component with a larger source key must have run before
+-- this component became ready. The decreasing stack finds that witness once.
+priorityValid : Components ->
+  OrdMap Summary ->
+  List String ->
+  Int ->
+  List (Int, Int) ->
+  Bool
+priorityValid _ _ [] _ _ = True
+priorityValid g facts (c :: cs) rank stack =
+  let key = lookup 0 c g.sourceKeys
+  let smaller = dropSmaller key stack
+  let d = match omLookup c facts
+    Some s => s.dependencyRank
+    None => -1
+  let valid = match smaller
+    (_, earlier) :: _ => earlier <= d
+    [] => True
+  valid && priorityValid g facts cs (rank + 1) ((key, rank) :: smaller)
+
+export
+validateGlobalInit : CProgram -> List String -> GlobalInitPlan -> List String
+validateGlobalInit (CProgram binds _ _ _ _ _) lazy candidate =
+  let names = map nameOf binds
+  let values = map nameOf (filterList isValue binds)
+  if not (unique names omEmpty) then
+    ["global init: duplicate binding"]
+  else if any malformedValue binds
+    || not (sameMembers values candidate.valueOrder) then
+    ["global init: membership"]
+  else
+    let adj = eagerCalleesMap (omFromNames names omEmpty) binds
+    let g = components names values adj
+    let sequence = componentSequence g candidate.valueOrder
+    let contiguous = unique sequence omEmpty
+    let members =
+      if contiguous then flatMap (c => lookup [] c g.members) sequence else []
+    if not contiguous || members /= candidate.valueOrder then
+      ["global init: component order"]
+    else
+      let ranks = rankNames sequence 0 omEmpty
+      let facts = summaries g adj (methodTaintSet binds) names ranks
+      let isLazy n = match omLookup (owner g n) facts
+        Some s => s.tainted
+        None => False
+      let expectedLazy = filterList isLazy values
+      let lazySet = omFromNames expectedLazy omEmpty
+      if not (unique lazy omEmpty) || lazy /= expectedLazy then
+        if any (n => omHasKey n lazySet) candidate.eagerOrder then
+          ["global init: eager cycle / lazy partition"]
+        else
+          ["global init: lazy partition"]
+      else if any
+        (c => match omLookup c facts
+          Some s => s.dependencyRank >= lookup (-1) c ranks
+          None => True)
+        sequence then
+        ["global init: dependency order"]
+      else if not (priorityValid g facts sequence 0 []) then
+        ["global init: source priority"]
+      else if candidate.eagerOrder
+        /= filterList (n => not (omHasKey n lazySet)) candidate.valueOrder then
+        ["global init: lazy partition"]
+      else
+        []

@@ -1086,7 +1086,7 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 --
 -- Tail contexts contain labels and slots belonging to their own define.
 data DefScope =
-  | DefScope Int (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option TailDefine)
+  DefScope Int (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option TailDefine)
 
 -- Start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 --
@@ -1946,9 +1946,9 @@ lookupVarG e env x = match omLookup x env
 -- closes over `stmtsLoop`, defined later): the closure runs only at parse time,
 -- long after every global is initialised, so the load sees the real value — a
 -- gap-`0` here would bake a permanent null into the closure and crash.  (2) An
--- eager same-init forward ref: orderedValBinds topologically sorts eager
--- dependencies, so a surviving eager forward ref is either a genuine value cycle
--- or an edge the sort MISSED, and the cell still holds 0.
+-- eager same-init forward ref: the shared global-init plan orders eager
+-- dependencies, so a surviving forward ref is either a genuine value cycle
+-- or an edge the validator missed, and the cell still holds 0.
 -- ⚠️ This comment used to claim such refs are cycles that "none arise in
 -- practice" and that reading 0 "is exactly the interpreter's recursive-value
 -- semantics".  BOTH HALVES ARE FALSE (#553; corrected 2026-07-17).  `x = x + 1`
@@ -8963,7 +8963,7 @@ dictOperand e env d = match omLookup d env
 -- dispatch positions, arity, and the clauses (patterns + body) in source order
 -- (leftmost-first — the priority the decision tree preserves).
 data ImplGroup =
-  | ImplGroup String String String String (List Int) Int (List (List Pat, CExpr)) String
+  ImplGroup String String String String (List Int) Int (List (List Pat, CExpr)) String
 
 -- #2726: the gensym scope of an impl group — its OWN emitted symbol, prefixed so
 -- the marker reads as what it is (`impl:List_eq`) and can never be confused with
@@ -13343,82 +13343,6 @@ valBinds [] = []
 valBinds ((CBind "main" cs _ _) :: rest) = valBinds rest
 valBinds (b :: rest) = if isFnBind b then valBinds rest else b :: valBinds rest
 
--- value bindings ORDERED so a binding precedes the ones that reference it (E1b).
--- The init prologue computes each rhs once, eagerly, so a binding whose rhs reads
--- ANOTHER value global (`prog = andThen skip …`, `skip` defined later) must run
--- after that dependency or it captures the still-zero global cell — a null that
--- crashes at use.  Source order is NOT dependency order in general (the self-host
--- parser binds combinator values forward of their producers), so topologically
--- sort by intra-value-global references.  A genuine VALUE cycle (mutual recursion
--- through nullary globals — none arise in practice) keeps its members in source
--- order, the pre-existing behaviour (still caught by the forward-ref gap).
--- The plan's `eagerReach` was computed over the WHOLE program (functions included)
--- so the closure follows calls; `binds` is the nullary value bindings to be ordered.
-orderedValBinds : EmitPlan -> List CBind -> List CBind
--- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-orderedValBinds plan binds =
-  let rm = plan.eagerReach
-  -- #623: ONE name→bind map replaces the `all : List CBind` + `names : List
-  -- String` pair; `done`/`visiting` are sets, not lists; and `acc` is built by
-  -- PREPEND + one final reverse instead of `acc ++ [b]` per binding.  Every one
-  -- of those was a `List` used as a set (or an O(left) `++` inside a fold) over
-  -- the transitive reach sets #553 Stage B enlarged.  Output order unchanged.
-  let bm = bindNameMap binds
-  let (_, ordered) = topoValGo rm bm binds omEmpty []
-  reverseL ordered
-
--- DFS post-order: visit each binding's value-global dependencies first, appending
--- the binding after them.  `visiting` guards against cycles (a back-edge is
--- skipped — its target stays where source order placed it).  Returns the grown
--- (done-names, ordered-binds) accumulators.  `rm` is the eager-reachability map
--- (Stage B of #553): a binding's edges are the value globals it eagerly reaches
--- THROUGH calls, not merely the ones its own body names directly.
-topoValGo : OrdMap (List String) ->
-  OrdMap CBind ->
-  List CBind ->
-  OrdMap Unit ->
-  List CBind ->
-  (OrdMap Unit, List CBind)
-topoValGo _ _ [] done acc = (done, acc)
--- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-topoValGo rm bm (b :: rest) done acc =
-  let (done2, acc2) = topoValVisit rm bm b done acc omEmpty
-  topoValGo rm bm rest done2 acc2
-
-topoValVisit : OrdMap (List String) ->
-  OrdMap CBind ->
-  CBind ->
-  OrdMap Unit ->
-  List CBind ->
-  OrdMap Unit ->
-  (OrdMap Unit, List CBind)
-topoValVisit rm bm b done acc visiting
-  | omHasKey (bindName b) done = (done, acc)
-  | omHasKey (bindName b) visiting = (done, acc)
-  | otherwise =
-    let deps = filterList (n => omHasKey n bm) (dedupS (bindEagerReach rm b))
-    let (done2, acc2) =
-      topoValVisitDeps rm bm deps done acc (omInsert (bindName b) () visiting)
-    (omInsert (bindName b) () done2, b :: acc2)
-
-topoValVisitDeps : OrdMap (List String) ->
-  OrdMap CBind ->
-  List String ->
-  OrdMap Unit ->
-  List CBind ->
-  OrdMap Unit ->
-  (OrdMap Unit, List CBind)
-topoValVisitDeps _ _ [] done acc _ = (done, acc)
--- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-topoValVisitDeps rm bm (d :: rest) done acc visiting = match omLookup d bm
-  Some db =>
-    let (done2, acc2) = topoValVisit rm bm db done acc visiting
-    topoValVisitDeps rm bm rest done2 acc2 visiting
-  None => topoValVisitDeps rm bm rest done acc visiting
-
 -- the value-global names a binding's rhs references EAGERLY (at init time) — i.e.
 -- references NOT inside a lambda body — TRANSITIVELY through calls, are supplied by
 -- `bindEagerReach` (backend.emit_support, Stage B of #553), which the sort consumes
@@ -14854,8 +14778,14 @@ emitProgramMain e plan groups =
   -- lazy (the compiler's own case).  A SAFE global's whole eager reach is SAFE (the
   -- taint is downward-closed over reads), so this prologue never calls a force fn.
   -- LAZY globals are initialised on first use by their @mdk_force_<x> defines below.
-  let _ =
-    emitTopGlobals e (orderedValBinds plan (safeValBinds e (valBinds groups)))
+  let bindMap = bindNameMap groups
+  let eagerBinds =
+    map
+      (name => match omLookup name bindMap
+        Some b => b
+        None => panic ("internal error: global init: membership: " ++ name))
+      plan.globalInit.eagerOrder
+  let _ = emitTopGlobals e eagerBinds
   let (mv, mty) = emitExpr e omEmpty mainRhs
   -- A Unit-returning `main` produces output ONLY through explicit print calls (or
   -- a panic); never auto-print its `()` result.  Detected by `main`'s own stamp
@@ -14937,11 +14867,6 @@ emitTopGlobals _ ((CBind name _ _ _) :: _) =
       ++ "' unsupported (value bindings only)")
 
 -- ── #561 PR-A: lazy value-global force functions ─────────────────────────────
--- The SAFE (eager) value binds — those NOT classified lazy — kept on the byte-
--- identical init prologue.  When no global is lazy this is the identity on valBinds.
-safeValBinds : Emit -> List CBind -> List CBind
-safeValBinds e bs = filterList (b => not (isLazyGlobal e (bindName b))) bs
-
 -- the value binds classified LAZY — each emitted as an @mdk_force_<name> define.
 lazyValBinds : Emit -> List CBind -> List CBind
 lazyValBinds e bs = filterList (b => isLazyGlobal e (bindName b)) bs

@@ -6,7 +6,7 @@
 -- reaches the checked program exactly as the source spells it.
 
 import backend.extern_catalog.{RuntimeExternDomain(..), runtimeDomain}
-import frontend.ast.{externDecls, Decl(..), Attr(..)}
+import frontend.ast.{externDecls, Decl(..), Attr(..), Ty(..)}
 import backend.emit_target.{Backend(..), backendName}
 import test.{
   Expectation,
@@ -24,7 +24,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import list.{take}
 import support.util.{dedup, listLen, joinNl, reverseL}
-import support.ordmap.{omEmpty}
+import support.ordmap.{omEmpty, omInsert}
 import frontend.marker.{declRefs}
 import map as BM
 import types.annotate.{annotateProgram}
@@ -86,7 +86,8 @@ import backend.llvm_emit.{
   emitProgramGaps as llvmCensus,
   makeEmitInput,
 }
-import backend.emit_plan.{buildEmitPlan}
+import backend.emit_plan.{EmitPlan, buildEmitPlan}
+import backend.global_plan.{GlobalInitPlan(..)}
 
 import types.target_profile.{lookupProfile}
 import test_process.{underRoot, boundedVerbSeconds}
@@ -1890,7 +1891,57 @@ emissionVictim "F6" =
     emissionControl
 emissionVictim "not-provided" =
   replaceMain (CVar "assertSnapshot" AGlobal) emissionControl
-emissionVictim _ = emissionControl
+emissionVictim victim =
+  if contains "global-cycle" victim then
+    typedLowered "" """
+      x : Int
+      x = x + 1
+      main = x
+      """
+  else if contains "global-" victim then
+    let cp = typedLowered "" """
+      a = f 1
+      b = 5
+      c = 40
+      f n = c + n
+      main = a
+      """
+    if victim == "global-duplicate" then duplicateGlobal cp else cp
+  else
+    emissionControl
+
+duplicateGlobal : CProgram -> CProgram
+duplicateGlobal (CProgram binds cs ts impls ms facts) =
+  let renamed =
+    map
+      (b => match b
+        CBind "b" clauses loc bid => CBind "a" clauses loc bid
+        _ => b)
+      binds
+  CProgram renamed cs ts impls ms facts
+
+corruptGlobalPlan : String -> EmitPlan -> EmitPlan
+corruptGlobalPlan victim plan =
+  let order values eager = { plan |
+    globalInit = GlobalInitPlan { valueOrder = values, eagerOrder = eager },
+  }
+  match victim
+    "global-missing" => order ["c", "a"] ["c", "a"]
+    "global-unknown" => order ["b", "c", "unknown"] ["b", "c", "unknown"]
+    "global-repeat" => order ["b", "c", "c"] ["b", "c", "c"]
+    "global-main" => order ["b", "c", "main"] ["b", "c", "main"]
+    "global-function" => order ["b", "c", "f"] ["b", "c", "f"]
+    "global-dependency" => order ["a", "b", "c"] ["a", "b", "c"]
+    "global-paired-dependency" => { order ["a", "b", "c"] ["a", "b", "c"] |
+      eagerReach = omInsert "a" [] plan.eagerReach,
+    }
+    "global-priority" => order ["c", "a", "b"] ["c", "a", "b"]
+    "global-eager-missing" => order ["b", "c", "a"] ["c", "a"]
+    "global-cycle-eager" =>
+      { plan | globalInit = { plan.globalInit | eagerOrder = ["x"] } }
+    "global-cycle-paired" => { order ["x"] ["x"] | lazyGlobals = [] }
+    "global-cycle-repeat-lazy" => { plan | lazyGlobals = ["x", "x"] }
+    _ => plan
 
 emissionNeedle : String -> String
 emissionNeedle "F1" = "internal error: record:"
@@ -1903,7 +1954,27 @@ emissionNeedle "missing-domain" =
   "runtime extern 'zzEmissionMissingRow' has no row"
 emissionNeedle "not-provided" =
   "runtime extern 'assertSnapshot' is not available"
-emissionNeedle _ = "internal error: emit plan was built for"
+emissionNeedle "global-duplicate" = "global init: duplicate binding"
+emissionNeedle "global-dependency" = "global init: dependency order"
+emissionNeedle "global-paired-dependency" = "global init: dependency order"
+emissionNeedle "global-priority" = "global init: source priority"
+emissionNeedle "global-cycle-paired" = "global init: eager cycle"
+emissionNeedle "global-cycle-eager" = "global init: lazy partition"
+emissionNeedle "global-cycle-repeat-lazy" = "global init: lazy partition"
+emissionNeedle "global-eager-missing" = "global init: lazy partition"
+emissionNeedle victim =
+  if contains "global-" victim then
+    "global init: membership"
+  else
+    "internal error: emit plan was built for"
+
+globalVictims : List String
+globalVictims = [
+  "global-duplicate", "global-missing", "global-unknown", "global-repeat",
+  "global-main", "global-function", "global-dependency",
+  "global-paired-dependency", "global-priority", "global-eager-missing",
+  "global-cycle-eager", "global-cycle-paired", "global-cycle-repeat-lazy"
+]
 
 emissionRoutes : List String
 emissionRoutes = [
@@ -1913,13 +1984,32 @@ emissionRoutes = [
 
 publicRendererNames : List Decl -> List String
 publicRendererNames [] = []
-publicRendererNames ((DTypeSig True name _ _) :: rest) =
-  match stripPrefix "emitProgram" name
-    Some _ => name :: publicRendererNames rest
-    None => publicRendererNames rest
+publicRendererNames ((DTypeSig True name ty _) :: rest) =
+  let (args, result) = signatureParts ty
+  if any (typeMentions "EmitPlan") args
+    && any (typeMentions "CProgram") args
+    && typeMentions "String" result then
+    name :: publicRendererNames rest
+  else
+    publicRendererNames rest
 publicRendererNames ((DAttrib _ decl) :: rest) =
   publicRendererNames (decl :: rest)
 publicRendererNames (_ :: rest) = publicRendererNames rest
+
+signatureParts : Ty -> (List Ty, Ty)
+signatureParts (TyFun arg rest) =
+  let (args, result) = signatureParts rest
+  (arg :: args, result)
+signatureParts (TyConstrained _ ty) = signatureParts ty
+signatureParts ty = ([], ty)
+
+typeMentions : String -> Ty -> Bool
+typeMentions name (TyCon { tyConName = n }) = name == n
+typeMentions name (TyApp a b) = typeMentions name a || typeMentions name b
+typeMentions name (TyTuple ts) = any (typeMentions name) ts
+typeMentions name (TyEffect _ _ ty) = typeMentions name ty
+typeMentions name (TyConstrained _ ty) = typeMentions name ty
+typeMentions _ _ = False
 
 rendererRoute : String -> String
 rendererRoute "llvm-stats" = "llvm/emitProgramWithStats"
@@ -1943,12 +2033,15 @@ test "the emission gateway matrix covers every public renderer derived from both
     (Err e, _) => fail e
     (_, Err e) => fail e
 
-emissionText : String -> String -> String
+emissionText : String -> String -> <Stdout> String
 emissionText route victim =
   let cp = emissionVictim victim
   let target = if contains "llvm" route then LlvmBackend else WasmBackend
   let other = if contains "llvm" route then WasmBackend else LlvmBackend
-  let plan = buildEmitPlan (if victim == "target" then other else target) cp
+  let plan =
+    corruptGlobalPlan
+      victim
+      (buildEmitPlan (if victim == "target" then other else target) cp)
   let domain =
     if victim == "missing-domain" then
       runtimeDomain (externDecls (parse "extern zzEmissionMissingRow : Int"))
@@ -1957,13 +2050,21 @@ emissionText route victim =
   let li = makeEmitInput domain [] [] [] 0 [] [] "" []
   let wi = makeWasmEmitInputFull domain [] []
   match route
-    "llvm-stats" => fst (llvmStats li plan cp)
+    "llvm-stats" =>
+      let (text, stats) = llvmStats li plan cp
+      let _ =
+        putStrLn ("EMISSION_STATS_SENTINEL" ++ intToString (listLen stats))
+      text
     "llvm-strict" => llvmStrict li plan cp
     "llvm-record" => fst (llvmRecord li plan cp)
     "llvm-census" => joinNl (llvmCensus li plan cp)
     "wasm-strict" => wasmStrict wi plan cp
     "wasm-record" => fst (wasmRecord wi plan cp)
     "wasm-census" => joinNl (emitProgramGaps wi plan cp)
+    "playground" =>
+      let wat = wasmStrict wi plan cp
+      let _ = putStrLn "__MEDAKA_WAT__"
+      wat
     _ => wasmUnchecked wi plan cp
 
 emissionRefused : String -> String -> <IO, Exec, Env> Expectation
@@ -1979,6 +2080,12 @@ emissionRefused route victim = match boundedVerbSeconds 90 "env" [
       "no output returned",
       expectFalse (contains "EMISSION_RETURNED_SENTINEL" out),
     ),
+    (
+      "no module text",
+      expectFalse (contains "(module" out || contains "define i32" out),
+    ),
+    ("no marker", expectFalse (contains "__MEDAKA_WAT__" out)),
+    ("no stats", expectFalse (contains "EMISSION_STATS_SENTINEL" out)),
   ]
 
 test "gateway emission seams refuse F1-F6 and a mismatched target before returning output" =
@@ -2003,6 +2110,40 @@ test "gateway emission seams refuse F1-F6 and a mismatched target before returni
             (route =>
               ("\{route}/not-provided", emissionRefused route "not-provided"))
             ["llvm-strict", "wasm-strict", "wasm-unchecked"])
+
+test "all global corruptions refuse before output on every renderer and playground composition" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (flatMap
+          (route =>
+            map
+              (victim => ("\{route}/\{victim}", emissionRefused route victim))
+              globalVictims)
+          (emissionRoutes ++ ["playground"]))
+
+test "global route controls emit nonempty modules and gaps remain empty" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (map
+          (route => (
+            route,
+            if contains "census" route then
+              expectEqual "" (emissionText route "global-valid")
+            else
+              expectTextContainsAll
+                [
+                  if contains "llvm" route then
+                    "define i32 @mdk_program_main"
+                  else
+                    "(module",
+                ]
+                (emissionText route "global-valid"),
+          ))
+          (emissionRoutes ++ ["playground"]))
 
 test "gateway returns fatal defects separately from target extern findings" =
   expectEach

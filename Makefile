@@ -233,6 +233,7 @@ inlang-backend-emit-binder-refusal-test:
 ## that neither emitter recomputes it. Native: the check reads the emitter sources.
 inlang-backend-emit-plan-test:
 	./medaka test --native compiler/backend/emit_plan_test.mdk
+	./medaka test compiler/backend/global_plan_test.mdk
 
 ## The built-in wall's derived pin: every profile x every NotProvided catalog
 ## row is refused with the row's reason. Native: each pair spawns `medaka`.

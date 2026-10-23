@@ -1,0 +1,267 @@
+import backend.global_plan.{GlobalInitPlan(..), planGlobals, validateGlobalInit}
+import backend.emit_support.{eagerReachMap, lazyGlobalNames}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.program_facts.{emptyFacts}
+import ir.core_ir_lower.{lowerProgramEmitWith}
+import ir.core_ir.{CProgram(..), CBind(..), CClause(..)}
+import test.{Expectation, expectEach, expectEqual}
+
+program : String -> CProgram
+program src =
+  lowerProgramEmitWith emptyFacts (annotateProgram (desugar (parse src)))
+
+candidate : CProgram -> GlobalInitPlan
+candidate cp =
+  let (CProgram binds _ _ _ _ _) = cp
+  planGlobals cp (lazyGlobalNames binds) (eagerReachMap binds)
+
+checkOrder : String -> List String -> List String -> Expectation
+checkOrder src values eager =
+  let cp = program src
+  let (CProgram binds _ _ _ _ _) = cp
+  let result = candidate cp
+  expectEach [
+    ("value order", expectEqual values result.valueOrder),
+    ("eager order", expectEqual eager result.eagerOrder),
+    (
+      "Core validation",
+      expectEqual [] (validateGlobalInit cp (lazyGlobalNames binds) result),
+    ),
+  ]
+
+test "ready components use earliest source priority rather than DFS discovery" =
+  checkOrder
+    """
+    a = c + 1
+    b = 5
+    c = 40
+    main = a + b
+    """
+    ["b", "c", "a"]
+    ["b", "c", "a"]
+
+test "transitive helper dependencies and diamonds precede users" = expectEach [
+  (
+    "helper",
+    checkOrder
+      """
+    a = f 1
+    b = 3
+    c = d + 1
+    d = 40
+    f n = c + n
+    main = a + b
+    """
+      ["b", "d", "c", "a"]
+      ["b", "d", "c", "a"],
+  ),
+  (
+    "diamond",
+    checkOrder
+      """
+    a = b + c
+    b = d + 1
+    c = d + 2
+    d = 10
+    main = a
+    """
+      ["d", "b", "c", "a"]
+      ["d", "b", "c", "a"],
+  ),
+]
+
+test "SCC members keep source order and the lazy filter never sorts again" = expectEach
+  [
+    (
+      "SCC",
+      checkOrder
+        """
+    x = y
+    independent = 1
+    y = x
+    main = independent
+    """
+        ["x", "y", "independent"]
+        ["independent"],
+    ),
+    (
+      "lazy pulls safe",
+      checkOrder
+        """
+    a = if True then c else a
+    b = 1
+    c = 2
+    main = b
+    """
+        ["b", "c", "a"]
+        ["b", "c"],
+    ),
+  ]
+
+test "scope and deferred lambda bodies do not invent global dependencies" =
+  checkOrder
+    """
+    a = f 7
+    f c = c
+    c = c + 1
+    deferred = x => c
+    main = a
+    """
+    ["a", "c", "deferred"]
+    ["a", "deferred"]
+
+test "membership, SCC, dependency and priority corruptions have named defects" =
+  let cp = program """
+    a = f 1
+    b = 5
+    c = 40
+    f n = c + n
+    main = a
+    """
+  let bad values eager = validateGlobalInit cp [] GlobalInitPlan {
+    valueOrder = values,
+    eagerOrder = eager,
+  }
+  expectEach [
+    (
+      "missing",
+      expectEqual ["global init: membership"] (bad ["c", "a"] ["c", "a"]),
+    ),
+    (
+      "unknown",
+      expectEqual
+        ["global init: membership"]
+        (bad ["b", "c", "absent"] ["b", "c", "absent"]),
+    ),
+    (
+      "repeat",
+      expectEqual
+        ["global init: membership"]
+        (bad ["b", "c", "c"] ["b", "c", "c"]),
+    ),
+    (
+      "main",
+      expectEqual
+        ["global init: membership"]
+        (bad ["b", "c", "main"] ["b", "c", "main"]),
+    ),
+    (
+      "function",
+      expectEqual
+        ["global init: membership"]
+        (bad ["b", "c", "f"] ["b", "c", "f"]),
+    ),
+    (
+      "dependency",
+      expectEqual
+        ["global init: dependency order"]
+        (bad ["a", "b", "c"] ["a", "b", "c"]),
+    ),
+    (
+      "source priority",
+      expectEqual
+        ["global init: source priority"]
+        (bad ["c", "a", "b"] ["c", "a", "b"]),
+    ),
+    (
+      "eager partition",
+      expectEqual
+        ["global init: lazy partition"]
+        (bad ["b", "c", "a"] ["c", "a"]),
+    ),
+  ]
+
+test "valid cycles are lazy but cannot be removed from the partition" =
+  let cp = program """
+    x = x + 1
+    main = x
+    """
+  let order = candidate cp
+  expectEach [
+    ("valid lazy", expectEqual [] (validateGlobalInit cp ["x"] order)),
+    (
+      "paired eager cycle",
+      expectEqual
+        ["global init: eager cycle / lazy partition"]
+        (validateGlobalInit cp [] { order | eagerOrder = ["x"] }),
+    ),
+    (
+      "repeated lazy",
+      expectEqual
+        ["global init: lazy partition"]
+        (validateGlobalInit cp ["x", "x"] order),
+    ),
+    (
+      "unknown lazy",
+      expectEqual
+        ["global init: lazy partition"]
+        (validateGlobalInit cp ["unknown"] order),
+    ),
+  ]
+
+test "duplicate Core binding occurrences and malformed nullary clauses are refused" =
+  let cp = program """
+    a = 1
+    b = 2
+    main = a
+    """
+  let (CProgram binds cs ts impls ms facts) = cp
+  let duplicate = match binds
+    (first@(CBind name _ _ _)) :: (CBind _ clauses loc bid) :: rest =>
+      CProgram
+        (first :: CBind name clauses loc bid :: rest)
+        cs
+        ts
+        impls
+        ms
+        facts
+    _ => cp
+  let malformed = match binds
+    (CBind n clauses loc bid) :: rest =>
+      CProgram
+        (CBind n (clauses ++ clauses) loc bid :: rest)
+        cs
+        ts
+        impls
+        ms
+        facts
+    _ => cp
+  expectEach [
+    (
+      "duplicate",
+      expectEqual
+        ["global init: duplicate binding"]
+        (validateGlobalInit duplicate [] (candidate duplicate)),
+    ),
+    (
+      "malformed value",
+      expectEqual
+        ["global init: membership"]
+        (validateGlobalInit malformed [] (candidate malformed)),
+    ),
+  ]
+
+test "candidate order cannot split or reverse a lazy SCC" =
+  let cp = program """
+    x = y
+    z = 0
+    y = x
+    main = z
+    """
+  let bad names =
+    validateGlobalInit
+      cp
+      ["x", "y"]
+      GlobalInitPlan { valueOrder = names, eagerOrder = ["z"] }
+  expectEach [
+    (
+      "split",
+      expectEqual ["global init: component order"] (bad ["x", "z", "y"]),
+    ),
+    (
+      "reverse",
+      expectEqual ["global init: component order"] (bad ["y", "x", "z"]),
+    ),
+  ]

@@ -121,6 +121,7 @@ import frontend.ast.{
   isFixedIntHead, isBoxed64Head
 }
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
+import backend.global_plan.{validateGlobalInit}
 import backend.emit_target.{Backend(..), backendName}
 import backend.emit_plan.{EmitPlan, indexMethodResults, lookupMethodResult}
 import backend.extern_catalog.{
@@ -199,6 +200,7 @@ emissionDefects backend plan cp =
     None => match dictTagCollision backend cp
       Some message => [CoreDefect message]
       None => firstShapeDefect [
+        () => validateGlobalInit cp plan.lazyGlobals plan.globalInit,
         () => validateRecords cp,
         () => validateBinderStamps cp,
         () =>

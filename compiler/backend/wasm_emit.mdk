@@ -551,7 +551,7 @@ freshWasmEmit mode = WasmEmit {
 -- Declaration-derived facts are indexed once for each emission. The last field
 -- is the complete loaded runtime declaration domain.
 data WasmEmitInputData =
-  | WasmEmitInputData (OrdMap (List Int)) (OrdMap (List (String, String), (List String, String))) RuntimeExternDomain
+  WasmEmitInputData (OrdMap (List Int)) (OrdMap (List (String, String), (List String, String))) RuntimeExternDomain
 
 export type WasmEmitInput = WasmEmitInputData
 
@@ -647,7 +647,7 @@ topRow rows (CBind name _ _ bid) =
     None => []
 
 data Prog =
-  | Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit FnCtx
+  Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit FnCtx
 
 -- What is true of the ONE function whose body is being emitted: the TMC loop
 -- or dispatch-group context its tail leaves redirect to, its first-clause site
@@ -1535,7 +1535,8 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
   -- (W6) also force ref-mode: a String is a boxed (ref eq) $str struct.  W8 RNG /
   -- hash externs produce/consume (ref eq) i31 values, so they force ref-mode too.
   let useRef =
-    useClos
+    isNonEmptyList plan.lazyGlobals
+      || useClos
       || programUsesAdt groups ctorArs
       || isNonEmptyList impls
       || !emit.useStr
@@ -2464,7 +2465,7 @@ emitScalarInit : WasmEmit ->
   List CBind ->
   List String
 emitScalarInit emit plan fnNames valNames groups =
-  let valBinds = topoSortValBinds plan (filterList isValBind groups)
+  let valBinds = plannedValBinds plan groups
   let valInit = flatMap (emitScalarValInit emit fnNames valNames) valBinds
   let mainLines = emitScalarMain emit fnNames valNames groups
   let valLocals = flatMap collectBindLocals valBinds
@@ -3386,97 +3387,6 @@ emitReservedCtorStruct ty ctor =
 
 -- ── ref-mode globals init + main ─────────────────────────────────────────────
 
--- Value globals (nullary top-level bindings) are eagerly initialized in `$__init`
--- in the order `valBinds` arrives.  But a value binding may REFERENCE another value
--- global (`topA = wrap topB`), and a forward reference reads that other global's
--- slot before its `global.set` runs → it is still `ref.null eq` → a `ref.as_non_null`
--- in the consumer traps "dereferencing a null pointer" at instantiate.  The parser
--- combinator ladder (`parsePipe = ParserE (binLevel pipeLevel)`) is exactly this shape, a
--- chain of forward-referencing nullary value globals.  Topologically sort the value
--- binds so every global is initialized AFTER the value globals it reads EAGERLY.
---
--- CRUCIAL: the dependency edge is only an EAGER reference — a name NOT inside a
--- lambda/closure body.  A `CLam`/`do`-closure captures a global BY REFERENCE and
--- reads it only when later CALLED (at parse time, long after every global is set), so
--- a reference appearing solely inside a closure is NOT an init-order dependency.
--- Counting it would forge FALSE cycles between mutually-recursive combinators (the
--- whole parser ladder: `parseAtom` reaches `parseExpr` reaches `parseAtom`, but only
--- THROUGH their `do`-closures), and the cycle fallback would then emit them in source
--- order, leaving an eager forward ref null again — which is exactly why a naive
--- free-vars sort (descending lambdas) did NOT fix `parse ""`.  This mirrors the LLVM
--- backend's `eagerVars`/`orderedValBinds`, the proven solution.
--- A genuine EAGER value cycle (mutual recursion through nullary globals with no
--- intervening closure — none arise in practice) keeps source order via the back-edge
--- guard, the pre-existing behaviour.
--- The plan's `eagerReach` was computed over the WHOLE program (functions included)
--- so the closure follows calls; `binds` is the nullary value bindings to be ordered.
-topoSortValBinds : EmitPlan -> List CBind -> List CBind
--- Intentional cross-file duplicate of the same helper in llvm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-topoSortValBinds plan binds =
-  let rm = plan.eagerReach
-  -- #623: ONE name→bind map replaces the `all : List CBind` + `names : List
-  -- String` pair; `done`/`visiting` are sets, not lists; and `acc` is built by
-  -- PREPEND + one final reverse instead of `acc ++ [b]` per binding.  Mirrors
-  -- the LLVM emitter's fix exactly.  Output order unchanged.
-  let bm = bindNameMap binds
-  let (_, ordered) = topoValGo rm bm binds omEmpty []
-  reverseL ordered
-
--- DFS post-order: visit each binding's value-global EAGER deps first, appending the
--- binding after them.  `visiting` guards cycles (a back-edge is skipped).  `rm` is
--- the eager-reachability map (Stage B of #553): a binding's edges are the value
--- globals it eagerly reaches THROUGH calls, not merely the ones its body names.
-topoValGo : OrdMap (List String) ->
-  OrdMap CBind ->
-  List CBind ->
-  OrdMap Unit ->
-  List CBind ->
-  (OrdMap Unit, List CBind)
-topoValGo _ _ [] done acc = (done, acc)
--- Intentional cross-file duplicate of the same helper in llvm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-topoValGo rm bm (b :: rest) done acc =
-  let (done2, acc2) = topoValVisit rm bm b done acc omEmpty
-  topoValGo rm bm rest done2 acc2
-
-topoValVisit : OrdMap (List String) ->
-  OrdMap CBind ->
-  CBind ->
-  OrdMap Unit ->
-  List CBind ->
-  OrdMap Unit ->
-  (OrdMap Unit, List CBind)
-topoValVisit rm bm b done acc visiting
-  | omHasKey (bindName b) done = (done, acc)
-  | omHasKey (bindName b) visiting = (done, acc)
-  | otherwise =
-    let deps = filterList (n => omHasKey n bm) (dedupKeep (bindEagerReach rm b))
-    let (done2, acc2) =
-      topoValVisitDeps rm bm deps done acc (omInsert (bindName b) () visiting)
-    (omInsert (bindName b) () done2, b :: acc2)
-
-topoValVisitDeps : OrdMap (List String) ->
-  OrdMap CBind ->
-  List String ->
-  OrdMap Unit ->
-  List CBind ->
-  OrdMap Unit ->
-  (OrdMap Unit, List CBind)
-topoValVisitDeps _ _ [] done acc _ = (done, acc)
--- Intentional cross-file duplicate of the same helper in llvm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-topoValVisitDeps rm bm (d :: rest) done acc visiting = match omLookup d bm
-  Some db =>
-    let (done2, acc2) = topoValVisit rm bm db done acc visiting
-    topoValVisitDeps rm bm rest done2 acc2 visiting
-  None => topoValVisitDeps rm bm rest done acc visiting
-
--- `eagerVars` (eager free-var / strictness analysis) and its transitive closure
--- `eagerReachMap`/`bindEagerReach` (Stage B of #553) live in
--- `backend.emit_support`, shared with the LLVM emitter; `bindEagerReach` above
--- threads the reachability map into this backend's value-init topo sort.
-
 -- #561 PR-B: the (mut i32) 3-state flag for a LAZY value global (0 UNFORCED / 1 FORCING
 -- / 2 FORCED).  Peer of oneGlobalRef; the value cell $g_<name> stays (mut (ref null eq)).
 oneGlobalState : String -> String
@@ -3500,10 +3410,7 @@ emitRefInit prog plan groups =
   -- global's whole eager reach is SAFE (the taint is downward-closed over reads), so this
   -- prologue never calls a $force fn.  LAZY globals are initialised on first use by their
   -- $force_<name> defines (emitRefForceFns); they are excluded from the eager set here.
-  let valBinds =
-    filterList
-      (b => not (isLazyGlobalW prog (bindName b)))
-      (topoSortValBinds plan (filterList isValBind groups))
+  let valBinds = plannedValBinds plan groups
   let initW7Outer = w7ScopeOpen (progEmit prog)
   let valInit = flatMap (emitRefValInit prog) valBinds
   let initW7Used = w7ScopeClose (progEmit prog) initW7Outer
@@ -12210,3 +12117,12 @@ ptag _ = "?"
 -- the W3 scope wall: any out-of-slice node lands here (an explicit hard stop).
 gap : String -> a
 gap msg = panic ("wasm_emit gap — " ++ msg)
+
+plannedValBinds : EmitPlan -> List CBind -> List CBind
+plannedValBinds plan groups =
+  let binds = bindNameMap groups
+  map
+    (n => match omLookup n binds
+      Some b => b
+      None => panic ("internal error: global init: membership: " ++ n))
+    plan.globalInit.eagerOrder

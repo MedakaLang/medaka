@@ -20,10 +20,11 @@ import set as S
 import string.{
   capitalize, countOccurrences, endsWith, fromChars, split, toChars, isAlphaNum,
   isSpace, join, lines, replace, startsWith, stripPrefix, stripSuffix, trim,
-  trimLeft, unlines, words
+  trimLeft, unlines, words, indexOf
 }
 import test.{
-  Expectation, expectAll, expectAtLeast, expectEqual, expectGolden, fail, pass
+  Expectation, expectAll, expectAtLeast, expectEqual, expectGolden, fail, pass,
+  expectEach, expectLessThan
 }
 import test_process.{underRoot}
 
@@ -579,6 +580,36 @@ moduleBodies ls =
     (M.fromList [])
     (segmentLines ls)
 
+outputAfterRenderer : String -> String -> String -> <IO> Expectation
+outputAfterRenderer moduleName functionName output =
+  let source = optionOr [] (lookup moduleName loadModules)
+  match M.get functionName (moduleBodies source)
+    None => fail "missing \{moduleName}.\{functionName}"
+    Some (body, _) => match (
+      indexOf "let wat = emitProgram input plan reached" body,
+      indexOf output body,
+    )
+      (Some renderer, Some marker) => expectLessThan marker renderer
+      _ => fail "missing renderer or \{output} in \{moduleName}.\{functionName}"
+
+test "arch_boundaries: public Wasm compositions validate before markers and stats" = expectEach
+  [
+    (
+      "playground WAT marker",
+      outputAfterRenderer
+        "entries.playground_main"
+        "runEmit"
+        "emitWatMarker warnTriples",
+    ),
+    (
+      "modules stats",
+      outputAfterRenderer
+        "entries.wasm_emit_modules_main"
+        "emitTail"
+        "if statsEnabled ()",
+    ),
+  ]
+
 type DefRow = (String, String, Bool)
 
 -- name -> (module, body, exempt) over non-test, non-`entries/` modules.
@@ -631,6 +662,16 @@ topCount bodies =
 
 test "arch_boundaries: llvm/wasm twins match twins.golden" =
   pin "twins.golden" (twinNames loadModules)
+
+test "arch_boundaries: global order has one shared authority" =
+  let forbidden = [
+    "orderedValBinds", "topoSortValBinds", "topoValGo", "topoValVisit",
+    "topoValVisitDeps"
+  ]
+  let names =
+    toList (namesOf loadModules "backend.llvm_emit")
+      ++ toList (namesOf loadModules "backend.wasm_emit")
+  expectEqual [] (filter (n => S.has n (S.fromList names)) forbidden)
 
 test "arch_boundaries: identical-body names match dupbodies.golden" =
   let idx = definitionIndex loadModules
