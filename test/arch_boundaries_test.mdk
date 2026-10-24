@@ -380,6 +380,15 @@ test "arch_boundaries: frontend.visibility closure matches its golden" =
 test "arch_boundaries: types.effect_param_decode closure matches its golden" =
   closurePin "types.effect_param_decode"
 
+test "arch_boundaries: types.capability_manifest closure matches its golden" =
+  closurePin "types.capability_manifest"
+
+test "arch_boundaries: types.manifest_publish closure matches its golden" =
+  closurePin "types.manifest_publish"
+
+test "arch_boundaries: types.capability_policy closure matches its golden" =
+  closurePin "types.capability_policy"
+
 test "arch_boundaries: types.repr closure matches its golden" =
   closurePin "types.repr"
 

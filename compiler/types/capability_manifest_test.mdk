@@ -1,0 +1,145 @@
+import test.{expectAll, expectEqual, expectTrue, expectFalse}
+import types.capability_manifest.{
+  EntryKey(..),
+  InvocationProtocol(..),
+  ManifestRequest(..),
+  ManifestLookup(..),
+  CapabilityManifest(..),
+  FrozenAuthority(..),
+  FrozenVariable(..),
+  FrozenAtom(..),
+  ManifestDefect(..),
+  requestEqual,
+  entryKeyEqual,
+  lookupManifest,
+  validateManifest,
+}
+import frontend.ast.{TyConOrigin(..)}
+import types.effect_domain.{Param(..)}
+
+request : String -> InvocationProtocol -> ManifestRequest
+request moduleId protocol = ManifestRequest {
+  entry = EntryKey { moduleId = moduleId, binding = "main" },
+  protocol = protocol,
+}
+
+manifest : List FrozenAtom -> CapabilityManifest
+manifest atoms =
+  CapabilityManifest { request = request "entry" HostInvocation, atoms = atoms }
+
+atom : FrozenAuthority -> FrozenAtom
+atom authority = FrozenAtom {
+  label = "Net",
+  origin = OriginBuiltin,
+  domainTop = PPrefix None,
+  authority = authority,
+}
+
+defects : CapabilityManifest -> List String
+defects m =
+  map
+    (d => match d
+      ManifestDefect message => message)
+    (validateManifest m)
+
+lookupKind : ManifestLookup -> String
+lookupKind NotRequested = "unrequested"
+lookupKind (RequestedMissing _) = "missing"
+lookupKind (Published m) = match m.atoms
+  [] => "pure"
+  _ => "effectful"
+
+test "request identity includes the entry module and invocation protocol" = expectAll
+  [
+    expectTrue
+      (requestEqual (request "a" HostInvocation) (request "a" HostInvocation)),
+    expectFalse
+      (requestEqual (request "a" HostInvocation) (request "b" HostInvocation)),
+    expectFalse
+      (requestEqual (request "a" HostInvocation) (request "a" ExecutedMain)),
+    expectFalse
+      (entryKeyEqual (request "a" HostInvocation).entry EntryKey {
+        moduleId = "a",
+        binding = "other",
+      }),
+  ]
+
+test "lookup distinguishes unrequested, missing and a checked pure binding" =
+  let wanted = request "entry" HostInvocation
+  let pure = manifest []
+  expectAll [
+    expectEqual "unrequested" (lookupKind (lookupManifest wanted [] [pure])),
+    expectEqual "missing" (lookupKind (lookupManifest wanted [wanted] [])),
+    expectEqual "pure" (lookupKind (lookupManifest wanted [wanted] [pure])),
+    expectEqual
+      "unrequested"
+      (lookupKind
+        (lookupManifest (request "entry" ExecutedMain) [wanted] [pure])),
+  ]
+
+test "empty manifest and empty authority remain valid" = expectAll [
+  expectEqual [] (defects (manifest [])),
+  expectEqual [] (defects (manifest [atom (FrozenJoin [])])),
+]
+
+test "validation checks domains, repeated variable metadata and label identity" =
+  let variable = FrozenVariable {
+    localId = 0,
+    domainTop = PPrefix None,
+    patternOnly = True,
+    sourceName = Some "p",
+  }
+  expectAll [
+    expectEqual
+      ["constant domain mismatch"]
+      (defects (manifest [atom (FrozenConst (PSet None))])),
+    expectEqual
+      []
+      (defects
+        (manifest [
+          atom (FrozenJoin [FrozenVar variable, FrozenVar variable]),
+        ])),
+    expectEqual
+      ["inconsistent frozen variable metadata"]
+      (defects
+        (manifest [
+          atom
+            (FrozenJoin [
+              FrozenVar variable,
+              FrozenVar FrozenVariable {
+                localId = 0,
+                domainTop = PPrefix None,
+                patternOnly = True,
+                sourceName = Some "q",
+              },
+            ]),
+        ])),
+    expectEqual
+      ["duplicate effect identity"]
+      (defects (manifest [atom (FrozenJoin []), atom (FrozenJoin [])])),
+    expectEqual
+      []
+      (defects
+        (manifest [
+          { atom (FrozenJoin []) | origin = OriginModule "a" },
+          { atom (FrozenJoin []) | origin = OriginModule "b" },
+        ])),
+  ]
+
+test "product schema order and axis shape are structural obligations" =
+  let top = PProduct [("Host", PPrefix None), ("Method", PSet None)]
+  let product = FrozenProduct [
+    ("Method", FrozenConst (PSet None)),
+    ("Host", FrozenConst (PPrefix None)),
+  ]
+  expectAll [
+    expectEqual
+      [
+        "product axis order mismatch", "constant domain mismatch",
+        "product axis order mismatch", "constant domain mismatch"
+      ]
+      (defects (manifest [{ atom product | domainTop = top }])),
+    expectEqual
+      ["product axis schema mismatch"]
+      (defects (manifest [{ atom (FrozenProduct []) | domainTop = top }])),
+  ]

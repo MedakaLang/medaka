@@ -1,0 +1,326 @@
+-- The invocation summary over hand-built schemes: every negative beside a
+-- control that differs in one position.
+import test.{expectAll, expectEqual}
+import types.effect_invocation.{InvocationOps(..), Variance(..)}
+import frontend.ast.{TyConOrigin(..)}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{EffRow(..), atomBuiltin}
+import types.repr.{Scheme(..), Mono(..)}
+import types.effect_authority.{Authority(..), Authvar(..)}
+import types.manifest_publish.{
+  ManifestEntryInput(..), publishManifests, freezeAtoms
+}
+import types.capability_manifest.{
+  EntryKey(..), InvocationProtocol(..), ManifestRequest(..), CapabilityManifest,
+  FrozenAuthority(..), FrozenVariable, FrozenAtom, ManifestDefect(..)
+}
+import types.capability_policy.{PolicyVerdict(..), manifestAllowed}
+import frontend.ast.{EffParamTy(..)}
+import types.effect_domain.{drender, domainKey}
+import types.effect_rows.{Atom(..), EffLabel(..), atomWith}
+import support.util.{joinWith}
+
+net : String -> EffRow
+net path = rowWith "Net" (PPrefix (Some path))
+
+rowWith : String -> Param -> EffRow
+rowWith label param = EffRow [atomBuiltin label param] None
+
+pure : EffRow
+pure = EffRow [] None
+
+unit : Mono
+unit = TRigid "Unit"
+
+con : String -> Mono
+con n = TCon n (OriginModule "m")
+
+-- `Sink a` is contravariant in `a`; `Box a` covariant; `Cell a` invariant;
+-- `Api` has one monomorphic field performing `Net "api/"`; `Loop` names
+-- itself; `Holder p` holds a callback under its authority argument;
+-- `Grow a` holds a callback and a `Grow (Box a)`, ever larger; any other head is
+-- unknown to the summary.
+ops : InvocationOps
+ops = InvocationOps {
+  headVariances =
+    h => match h
+      TCon "Sink" _ => Some [VContra]
+      TCon "Box" _ => Some [VCo]
+      TCon "Cell" _ => Some [VInv]
+      TCon "Api" _ => Some []
+      TCon "Loop" _ => Some []
+      TCon "Holder" _ => Some [VInv]
+      TCon "Grow" _ => Some [VCo]
+      _ => None,
+  appliedFields =
+    applied => match applied
+      TCon "Api" (OriginModule "m") => [callback "api/"]
+      TCon "Api" (OriginModule "other") => [callback "other/"]
+      TCon "Loop" _ => [con "Loop", callback "loop/"]
+      TApp (TCon "Holder" _) (TAuth (AConst (PPrefix (Some p)))) => [callback p]
+      TApp (TCon "Grow" _) x =>
+        [TApp (con "Grow") (TApp (con "Box") x), callback "grow/"]
+      _ => [],
+  headKey =
+    h => match h
+      TCon n (OriginModule m) => "\{m}:\{n}"
+      TCon n _ => n
+      _ => "?",
+}
+
+-- A right-nested tuple of one `Holder` per path.
+holders : List String -> Mono
+holders =
+  foldRight
+    (p rest =>
+      TApp
+        (TApp
+          (con "__tuple2__")
+          (TApp (con "Holder") (TAuth (AConst (PPrefix (Some p))))))
+        rest)
+    unit
+
+summary : EffRow -> Mono -> String
+summary force mono = publishedText [input HostInvocation force mono []]
+
+input : InvocationProtocol ->
+  EffRow ->
+  Mono ->
+  List (EntryKey, Scheme) ->
+  ManifestEntryInput
+input protocol force mono wrappers = ManifestEntryInput {
+  request = ManifestRequest {
+    entry = EntryKey { moduleId = "entry", binding = "main" },
+    protocol = protocol,
+  },
+  scheme = Forall [] [] [] [] force mono,
+  wrappers = wrappers,
+}
+
+publishedText : List ManifestEntryInput -> String
+publishedText inputs = match publishManifests [("Net", PPrefix None)] ops inputs
+  Err defects =>
+    joinWith
+      ";"
+      (map
+        (d => match d
+          ManifestDefect message => message)
+        defects)
+  Ok manifests =>
+    joinWith
+      ";"
+      (map (m => joinWith ", " (flatMap atomTexts m.atoms)) manifests)
+
+atomTexts : FrozenAtom -> List String
+atomTexts atom = map (atom.label ++ _) (authorityTexts atom.authority)
+
+authorityTexts : FrozenAuthority -> List String
+authorityTexts (FrozenConst p) = [drender p]
+authorityTexts (FrozenVar v) = [" #" ++ intToString v.localId]
+authorityTexts (FrozenJoin members) = flatMap authorityTexts members
+authorityTexts (FrozenProduct _) = [" product"]
+
+callback : String -> Mono
+callback path = TFun unit (net path) unit
+
+test "rows join across arrows, and the forcing row joins them" = expectAll [
+  expectEqual
+    "Net \"host/a/\", Net \"host/b/\""
+    (summary pure (TFun unit (net "host/a/") (callback "host/b/"))),
+  expectEqual
+    "Net \"host/a/\", Net \"host/b/\", Net \"other/path/\""
+    (summary
+      (net "other/path/")
+      (TFun unit (net "host/a/") (callback "host/b/"))),
+]
+
+test "a callback the host supplies is not charged; one it is handed back is" = expectAll
+  [
+    expectEqual "" (summary pure (TFun (callback "cb/") pure unit)),
+    expectEqual "Net \"cb/\"" (summary pure (TFun unit pure (callback "cb/"))),
+    -- a callback the entry passes back into a host-supplied function: positive
+    expectEqual
+      "Net \"cb/\""
+      (summary pure (TFun (TFun (callback "cb/") pure unit) pure unit)),
+  ]
+
+test "a slot is read at its declared variance, and an unknown one as invariant" = expectAll
+  [
+    expectEqual "" (summary pure (TApp (con "Sink") (callback "s/"))),
+    expectEqual "Net \"s/\"" (summary pure (TApp (con "Box") (callback "s/"))),
+    expectEqual "Net \"s/\"" (summary pure (TApp (con "Cell") (callback "s/"))),
+    expectEqual
+      "Net \"s/\""
+      (summary pure (TFun (TApp (con "Cell") (callback "s/")) pure unit)),
+    expectEqual
+      "Net \"s/\""
+      (summary pure (TApp (con "Opaque") (callback "s/"))),
+  ]
+
+test "an effect index is charged where it is positive" = expectAll [
+  expectEqual "Net \"i/\"" (summary pure (TApp (con "Box") (TEff (net "i/")))),
+  expectEqual "" (summary pure (TApp (con "Sink") (TEff (net "i/")))),
+]
+
+test "tuple elements and constructor fields are read at their position" = expectAll
+  [
+    expectEqual
+      "Net \"t/\""
+      (summary pure (TApp (TApp (con "__tuple2__") unit) (callback "t/"))),
+    expectEqual "Net \"api/\"" (summary pure (con "Api")),
+    expectEqual "" (summary pure (TFun (con "Api") pure unit)),
+    expectEqual "Net \"loop/\"" (summary pure (con "Loop")),
+  ]
+
+test "each authority instantiation of a head is opened, and a growing type ends" = expectAll
+  [
+    expectEqual
+      "Net \"h/a/\", Net \"h/b/\""
+      (summary pure (holders ["h/a/", "h/b/"])),
+    expectEqual "Net \"grow/\"" (summary pure (TApp (con "Grow") unit)),
+    -- nine sibling authority instantiations are each opened, and stay a set
+    expectEqual
+      "Net \"h/a/\", Net \"h/b/\", Net \"h/c/\", Net \"h/d/\", Net \"h/e/\", Net \"h/f/\", Net \"h/g/\", Net \"h/h/\", Net \"h/i/\""
+      (summary
+        pure
+        (holders [
+          "h/a/", "h/b/", "h/c/", "h/d/", "h/e/", "h/f/", "h/g/", "h/h/", "h/i/"
+        ])),
+  ]
+
+test "forcing a value keeps declared Clock without any physical demand" =
+  expectEqual "Clock" (summary (rowWith "Clock" PUnit) unit)
+
+test "constructor visibility and module identity control opening" = expectAll [
+  expectEqual "" (summary pure (TCon "Api" (OriginModule "hidden"))),
+  expectEqual
+    "Net \"api/\", Net \"other/\""
+    (summary
+      pure
+      (TApp
+        (TApp (con "__tuple2__") (con "Api"))
+        (TCon "Api" (OriginModule "other")))),
+]
+
+test "executed requests charge checked wrappers while host requests stay pure" =
+  let print = (
+    EntryKey { moduleId = "core", binding = "println" },
+    Forall [] [] [] [] pure (TFun unit (rowWith "Stdout" PUnit) unit),
+  )
+  expectAll [
+    expectEqual
+      ""
+      (publishedText [input HostInvocation pure (TRigid "Float") [print]]),
+    expectEqual
+      "Stdout"
+      (publishedText [input ExecutedMain pure (TRigid "Float") [print]]),
+  ]
+
+variableIds : FrozenAuthority -> List Int
+variableIds (FrozenVar v) = [v.localId]
+variableIds (FrozenJoin members) = flatMap variableIds members
+variableIds (FrozenProduct axes) = flatMap (a => variableIds (snd a)) axes
+variableIds _ = []
+
+test "freeze follows aliases, retains joins and products, and shares local variable identity across the batch" =
+  let cell = Ref (AUnbound 80 0 (PPrefix None) True (Some "path"))
+  let alias = Ref (ALink 81 (PPrefix None) (AVar cell))
+  let other = Ref (AUnbound 99 0 (PPrefix None) False (Some "other"))
+  let row authority =
+    EffRow [Atom (EffLabel "Net" OriginBuiltin) authority] None
+  let inputs = [
+    input HostInvocation (row (AVar alias)) unit [],
+    input HostInvocation (row (AJoin [AVar cell, AVar other])) unit [],
+  ]
+  let ids = match publishManifests [("Net", PPrefix None)] ops inputs
+    Ok manifests =>
+      map (m => flatMap (a => variableIds a.authority) m.atoms) manifests
+    Err _ => []
+  let top = PProduct [("Host", PPrefix None), ("Method", PSet None)]
+  let product =
+    freezeAtoms
+      [("Http", top)]
+      [
+        Atom
+          (EffLabel "Http" OriginBuiltin)
+          (AProduct [
+            ("Host", AVar cell),
+            ("Method", AConst (PSet (Some ["GET"]))),
+          ]),
+      ]
+  let productIds = flatMap (a => variableIds a.authority) product
+  let productShape =
+    map
+      (a => match a.authority
+        FrozenProduct axes => map fst axes
+        _ => [])
+      product
+  let metadata = match product
+    [a] => match a.authority
+      FrozenProduct ((_, FrozenVar v) :: _) =>
+        (v.localId, domainKey v.domainTop, v.patternOnly, v.sourceName)
+      _ => (-1, "?", False, None)
+    _ => (-1, "?", False, None)
+  expectAll [
+    expectEqual [[0], [0, 1]] ids,
+    expectEqual [0] productIds,
+    expectEqual [["Host", "Method"]] productShape,
+    expectEqual (0, "p", True, Some "path") metadata,
+  ]
+
+test "a frozen publication and its verdict survive cell mutation and unrelated queries" =
+  let cell = Ref (AUnbound 42 0 (PPrefix None) True (Some "path"))
+  let row = EffRow [Atom (EffLabel "Net" OriginBuiltin) (AVar cell)] None
+  match (publishManifests
+    [("Net", PPrefix None)]
+    ops
+    [input HostInvocation row unit []])
+    Err _ => expectEqual "published" "error"
+    Ok [manifest] =>
+      let before = describe manifest
+      let changed =
+        cell := ALink 42 (PPrefix None) (AConst (PPrefix (Some "cfg/*")))
+      let unrelated =
+        publishedText [input HostInvocation (net "unrelated/*") unit []]
+      expectAll [
+        expectEqual () changed,
+        expectEqual "Net \"unrelated/*\"" unrelated,
+        expectEqual
+          ([0], ["   not proven: Net path (authority variable `path`)\n"])
+          before,
+        expectEqual before (describe manifest),
+        expectEqual
+          "Net \"cfg/*\""
+          (publishedText [input HostInvocation row unit []]),
+      ]
+    Ok _ => expectEqual "one manifest" "wrong batch"
+
+describe : CapabilityManifest -> (List Int, List String)
+describe manifest =
+  let lines =
+    match (manifestAllowed
+      [("Net", PPrefix None)]
+      manifest
+      [("Net", EPLit "cfg/*")])
+      PolicyAdmitted => []
+      PolicyRefused _ messages => messages
+  (flatMap (a => variableIds a.authority) manifest.atoms, lines)
+
+test "same-spelled label origins remain separate frozen atoms" =
+  let atoms =
+    freezeAtoms
+      [("a::Store", PPrefix None), ("b::Store", PPrefix None)]
+      [
+        atomWith (EffLabel "Store" (OriginModule "a")) (PPrefix (Some "a/*")),
+        atomWith (EffLabel "Store" (OriginModule "b")) (PPrefix (Some "b/*")),
+      ]
+  expectEqual
+    [("Store", "a"), ("Store", "b")]
+    (map
+      (a => (
+        a.label,
+        match a.origin
+          OriginModule m => m
+          _ => "?",
+      ))
+      atoms)
