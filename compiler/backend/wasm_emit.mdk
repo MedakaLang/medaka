@@ -6930,6 +6930,7 @@ emitArrayExternRef prog _ _ name _ =
 --   byteBlockFromString   s            → $mdk_bb_from_string
 --   byteBlockToString     b            → $mdk_bb_to_string
 --   byteBlockWriteStdout  b            → $mdk_bb_write_stdout
+--   sha256Native          b            → $mdk_sha256
 emitByteBlockExternRef : Prog ->
   List String ->
   Int ->
@@ -7004,6 +7005,10 @@ emitByteBlockExternRef prog env d "byteBlockToString" [b] =
     ++ ["ref.cast (ref $u8arr)", "call $mdk_bb_to_string"]
 emitByteBlockExternRef prog env d "byteBlockToString" _ =
   gapLP prog "wasm: byteBlockToString takes exactly one argument"
+emitByteBlockExternRef prog env d "sha256Native" [b] =
+  emitRefExpr prog env d b ++ ["ref.cast (ref $u8arr)", "call $mdk_sha256"]
+emitByteBlockExternRef prog env d "sha256Native" _ =
+  gapLP prog "wasm: sha256Native takes exactly one argument"
 -- byteBlockWriteStdout: writes the block's bytes to stdout byte-for-byte via
 -- the same $mdk_write_byte host import putStr's $mdk_print_str loop uses,
 -- then returns Unit -- the operand is a $u8arr, so this dispatches through

@@ -1,5 +1,5 @@
 # META
-source_lines=1039
+source_lines=1044
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -904,6 +904,11 @@ extern byteBlockFromString : String -> ByteBlock
 -- `--allow-internal`.
 extern byteBlockToString : ByteBlock -> String
 
+-- | The 32-byte SHA-256 digest (FIPS 180-4) of the whole block, in a new
+-- block. Restricted to the standard library and to modules compiled with
+-- `--allow-internal`; `crypto.sha256.sha256` is the public form.
+extern sha256Native : ByteBlock -> ByteBlock
+
 -- | Writes the block's bytes to stdout as-is, with no bounds check and no
 -- encoding assumption: unlike `putStr`, the bytes are not required to be
 -- valid UTF-8 and are written byte-for-byte. Under `medaka test`'s
@@ -1221,6 +1226,7 @@ extern stringToLower : String -> String
 (DExtern false "byteBlockToIntArray" (TyFun (TyCon "ByteBlock") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DExtern false "byteBlockFromString" (TyFun (TyCon "String") (TyCon "ByteBlock")))
 (DExtern false "byteBlockToString" (TyFun (TyCon "ByteBlock") (TyCon "String")))
+(DExtern false "sha256Native" (TyFun (TyCon "ByteBlock") (TyCon "ByteBlock")))
 (DExtern false "byteBlockWriteStdout" (TyFun (TyCon "ByteBlock") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DExtern false "stringToChars" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Char"))))
 (DExtern false "stringFromChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "String")))
@@ -1432,6 +1438,7 @@ extern stringToLower : String -> String
 (DExtern false "byteBlockToIntArray" (TyFun (TyCon "ByteBlock") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DExtern false "byteBlockFromString" (TyFun (TyCon "String") (TyCon "ByteBlock")))
 (DExtern false "byteBlockToString" (TyFun (TyCon "ByteBlock") (TyCon "String")))
+(DExtern false "sha256Native" (TyFun (TyCon "ByteBlock") (TyCon "ByteBlock")))
 (DExtern false "byteBlockWriteStdout" (TyFun (TyCon "ByteBlock") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DExtern false "stringToChars" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Char"))))
 (DExtern false "stringFromChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "String")))

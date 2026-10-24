@@ -1,5 +1,5 @@
 # META
-source_lines=11104
+source_lines=11109
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_demand.{
@@ -6934,6 +6934,7 @@ emitArrayExternRef prog _ _ name _ =
 --   byteBlockFromString   s            → $mdk_bb_from_string
 --   byteBlockToString     b            → $mdk_bb_to_string
 --   byteBlockWriteStdout  b            → $mdk_bb_write_stdout
+--   sha256Native          b            → $mdk_sha256
 emitByteBlockExternRef : Prog ->
   List String ->
   Int ->
@@ -7008,6 +7009,10 @@ emitByteBlockExternRef prog env d "byteBlockToString" [b] =
     ++ ["ref.cast (ref $u8arr)", "call $mdk_bb_to_string"]
 emitByteBlockExternRef prog env d "byteBlockToString" _ =
   gapLP prog "wasm: byteBlockToString takes exactly one argument"
+emitByteBlockExternRef prog env d "sha256Native" [b] =
+  emitRefExpr prog env d b ++ ["ref.cast (ref $u8arr)", "call $mdk_sha256"]
+emitByteBlockExternRef prog env d "sha256Native" _ =
+  gapLP prog "wasm: sha256Native takes exactly one argument"
 -- byteBlockWriteStdout: writes the block's bytes to stdout byte-for-byte via
 -- the same $mdk_write_byte host import putStr's $mdk_print_str loop uses,
 -- then returns Unit -- the operand is a $u8arr, so this dispatches through
@@ -12436,6 +12441,8 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockFromString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockFromString takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToString")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_to_string")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockToString takes exactly one argument"))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sha256Native")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_sha256")))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sha256Native")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: sha256Native takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockWriteStdout")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_write_stdout")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockWriteStdout")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockWriteStdout takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") PWild PWild (PVar "name") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: unsupported byte-block extern '")) (EVar "name")) (ELit (LString "'")))))
@@ -14521,6 +14528,8 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockFromString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockFromString takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToString")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_to_string")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockToString takes exactly one argument"))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sha256Native")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_sha256")))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sha256Native")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: sha256Native takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockWriteStdout")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_write_stdout")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockWriteStdout")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockWriteStdout takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") PWild PWild (PVar "name") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: unsupported byte-block extern '")) (EVar "name")) (ELit (LString "'")))))

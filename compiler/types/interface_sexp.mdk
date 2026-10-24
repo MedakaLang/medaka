@@ -101,7 +101,7 @@
 -- node, a section count that differs from the nodes present, or any component
 -- refusal is an `Err`, never a partial record.
 import list.{mapAccumL, sortOn}
-import crypto.sha256.{sha256}
+import crypto.sha256_fast.{sha256Fast}
 import hex as Hex
 import bytes.{encodeUtf8}
 import string as S
@@ -1331,7 +1331,7 @@ pairAtoms = pairSExp SAtom SAtom
 -- The SHA-256 of a text, in lower-case hex.
 export
 sha256Hex : String -> String
-sha256Hex text = Hex.encode (sha256 (encodeUtf8 text))
+sha256Hex text = Hex.encode (sha256Fast (encodeUtf8 text))
 
 headerNode : InterfaceKey -> Int -> String -> SExp
 headerNode key count digest = tagged "medaka-interface" [

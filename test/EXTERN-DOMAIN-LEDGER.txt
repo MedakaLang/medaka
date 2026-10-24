@@ -203,6 +203,7 @@ byteBlockLength	TOTAL	total: length of any ByteBlock
 byteBlockFromIntArray	TOTAL	total: every Int has low eight bits, for any Array Int
 byteBlockToIntArray	TOTAL	total: every byte is an Int in 0..255
 byteBlockFromString	TOTAL	total: UTF-8 encoding is defined for every String
+sha256Native	TOTAL	total: the digest is defined for every ByteBlock
 # Float functions with a total real domain (bounded or finite everywhere).
 sin	TOTAL	total, bounded output [-1,1]
 cos	TOTAL	total, bounded output [-1,1]
