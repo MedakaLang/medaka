@@ -278,7 +278,7 @@ sha256FoldKeyBlock block =
 {- | The 32-byte SHA-256 digest of `msg`. -}
 export
 sha256 : Bytes -> Bytes
-sha256 msg = adoptByteBlockUnsafe (sha256Native (lendByteBlockUnsafe msg))
+sha256 msg = sha256AssumeByteDomainFrom h0Init 0 msg
 
 digestWord : ByteBlock -> Int -> U32 -> Unit
 digestWord out i h =

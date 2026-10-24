@@ -184,7 +184,7 @@ suites = [
   ("core", (138, Eval)),
   ("core_test", (45, EvalAndNative)),
   ("crypto/hmac", (12, EvalAndNative)),
-  ("crypto/sha256_test", (7, EvalAndNative)),
+  ("crypto/sha256_fast_test", (7, EvalAndNative)),
   ("fs", (8, NativeCapability)),
   -- `readFile` of a file that is not UTF-8. Writes a scratch file, so it is
   -- a capability row like `fs` itself.
@@ -455,8 +455,8 @@ test "stdlib/core_test.mdk executed >= 29 assertions" =
 test "stdlib/crypto/hmac.mdk executed >= 12 assertions" =
   floorExpectation "crypto/hmac"
 
-test "stdlib/crypto/sha256_test.mdk executed >= 7 assertions" =
-  floorExpectation "crypto/sha256_test"
+test "stdlib/crypto/sha256_fast_test.mdk executed >= 7 assertions" =
+  floorExpectation "crypto/sha256_fast_test"
 
 test "stdlib/fs.mdk executed >= 8 assertions" = floorExpectation "fs"
 

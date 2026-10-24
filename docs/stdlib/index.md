@@ -338,6 +338,12 @@ SHA-256 hashing of a byte string (FIPS 180-4).
 - [`sha256FoldKeyBlock`](crypto.sha256.md#sha256foldkeyblock)
 - [`sha256`](crypto.sha256.md#sha256)
 
+## [`crypto.sha256_fast`](crypto.sha256_fast.md)
+
+SHA-256 of non-secret data, computed in the runtime.
+
+- [`sha256Fast`](crypto.sha256_fast.md#sha256fast)
+
 ## [`fs`](fs.md)
 
 Filesystem helpers built on the host file primitives.
