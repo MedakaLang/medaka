@@ -55,6 +55,7 @@ import driver.diagnostics.{
   FrontInput(..),
   FrontOutput(..),
   FrontPolicy(..),
+  ChainSteps(..),
   FrontProgram(..),
   chainKeyOf,
   emitDiagExitCode,
@@ -655,7 +656,8 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
           fiTrusted = front.jfTrusted,
           fiRuntimeSrc = rsrc,
           fiCoreSrc = csrc,
-          fiPolicy = DriveUnblocked (chainKeyOf front.jfEntry front.jfRoots),
+          fiPolicy =
+            DriveUnblocked (chainKeyOf front.jfEntry front.jfRoots) NoSteps,
           fiProgram = program,
         }
   -- Both halves of the fold read the trees the loader parsed: the elaboration

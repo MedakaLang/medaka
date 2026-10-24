@@ -1,5 +1,5 @@
 # META
-source_lines=1894
+source_lines=1895
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -105,6 +105,7 @@ import driver.loader.{
 }
 import support.util.{zipL, startsWith, endsWith, splitOnChar}
 import support.path.{joinPath}
+import support.ordmap.{omEmpty}
 import list.{sort}
 import support.char.{isUpper}
 import array.{get as arrayGet}
@@ -1542,7 +1543,7 @@ buildRefIndex : (String -> Option String) ->
   String ->
   <IO> RefIndex
 buildRefIndex read entry roots runtimeSrc coreSrc =
-  let parseCache = Ref []
+  let parseCache = Ref omEmpty
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
   -- lint-disable-next-line rule-prefer-assign-op
   match loadProgramFilesLocatedCached parseCache read entry roots
@@ -1902,6 +1903,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
@@ -2350,7 +2352,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DTypeSig false "emptyIndex" (TyFun (TyCon "Unit") (TyCon "RefIndex")))
 (DFunDef false "emptyIndex" (PWild) (ERecordCreate "RefIndex" ((fa "defs" (EApp (EVar "hmNew") (ELit LUnit))) (fa "refs" (EApp (EVar "hmNew") (ELit LUnit))) (fa "occ" (EApp (EVar "hmNew") (ELit LUnit))) (fa "ops" (ELit (LInt 0))))))
 (DTypeSig true "buildRefIndex" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "RefIndex"))))))))
-(DFunDef false "buildRefIndex" ((PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "parseCache") (EApp (EVar "Ref") (EListLit))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EVar "parseCache")) (EVar "read")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EApp (EVar "emptyIndex") (ELit LUnit))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "newCtx") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "runtime"))) (EVar "runtimeSrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "core"))) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "opCnt")) (ELit (LInt 0)))) (DoLet false false PWild (EApp (EApp (EApp (EVar "processModules") (EVar "ctx")) (EVar "read")) (EVar "mods"))) (DoExpr (ERecordCreate "RefIndex" ((fa "defs" (EFieldAccess (EVar "ctx") "defs")) (fa "refs" (EFieldAccess (EVar "ctx") "refs")) (fa "occ" (EFieldAccess (EVar "ctx") "occ")) (fa "ops" (EUnOp "!" (EFieldAccess (EVar "ctx") "opCnt"))))))))))))
+(DFunDef false "buildRefIndex" ((PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "parseCache") (EApp (EVar "Ref") (EVar "omEmpty"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EVar "parseCache")) (EVar "read")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EApp (EVar "emptyIndex") (ELit LUnit))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "newCtx") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "runtime"))) (EVar "runtimeSrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "core"))) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "opCnt")) (ELit (LInt 0)))) (DoLet false false PWild (EApp (EApp (EApp (EVar "processModules") (EVar "ctx")) (EVar "read")) (EVar "mods"))) (DoExpr (ERecordCreate "RefIndex" ((fa "defs" (EFieldAccess (EVar "ctx") "defs")) (fa "refs" (EFieldAccess (EVar "ctx") "refs")) (fa "occ" (EFieldAccess (EVar "ctx") "occ")) (fa "ops" (EUnOp "!" (EFieldAccess (EVar "ctx") "opCnt"))))))))))))
 (DTypeSig true "buildRefIndexDisk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "RefIndex")))))))
 (DFunDef false "buildRefIndexDisk" ((PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EApp (EApp (EVar "buildRefIndex") (EVar "noOverride")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")))
 (DTypeSig false "noOverride" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -2434,6 +2436,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
@@ -2882,7 +2885,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DTypeSig false "emptyIndex" (TyFun (TyCon "Unit") (TyCon "RefIndex")))
 (DFunDef false "emptyIndex" (PWild) (ERecordCreate "RefIndex" ((fa "defs" (EApp (EVar "hmNew") (ELit LUnit))) (fa "refs" (EApp (EVar "hmNew") (ELit LUnit))) (fa "occ" (EApp (EVar "hmNew") (ELit LUnit))) (fa "ops" (ELit (LInt 0))))))
 (DTypeSig true "buildRefIndex" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "RefIndex"))))))))
-(DFunDef false "buildRefIndex" ((PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "parseCache") (EApp (EVar "Ref") (EListLit))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EVar "parseCache")) (EVar "read")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EApp (EVar "emptyIndex") (ELit LUnit))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "newCtx") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "runtime"))) (EVar "runtimeSrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "core"))) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "opCnt")) (ELit (LInt 0)))) (DoLet false false PWild (EApp (EApp (EApp (EVar "processModules") (EVar "ctx")) (EVar "read")) (EVar "mods"))) (DoExpr (ERecordCreate "RefIndex" ((fa "defs" (EFieldAccess (EVar "ctx") "defs")) (fa "refs" (EFieldAccess (EVar "ctx") "refs")) (fa "occ" (EFieldAccess (EVar "ctx") "occ")) (fa "ops" (EUnOp "!" (EFieldAccess (EVar "ctx") "opCnt"))))))))))))
+(DFunDef false "buildRefIndex" ((PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "parseCache") (EApp (EVar "Ref") (EVar "omEmpty"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EVar "parseCache")) (EVar "read")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EApp (EVar "emptyIndex") (ELit LUnit))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "newCtx") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "runtime"))) (EVar "runtimeSrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "core"))) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "opCnt")) (ELit (LInt 0)))) (DoLet false false PWild (EApp (EApp (EApp (EVar "processModules") (EVar "ctx")) (EVar "read")) (EVar "mods"))) (DoExpr (ERecordCreate "RefIndex" ((fa "defs" (EFieldAccess (EVar "ctx") "defs")) (fa "refs" (EFieldAccess (EVar "ctx") "refs")) (fa "occ" (EFieldAccess (EVar "ctx") "occ")) (fa "ops" (EUnOp "!" (EFieldAccess (EVar "ctx") "opCnt"))))))))))))
 (DTypeSig true "buildRefIndexDisk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "RefIndex")))))))
 (DFunDef false "buildRefIndexDisk" ((PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EApp (EApp (EVar "buildRefIndex") (EVar "noOverride")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")))
 (DTypeSig false "noOverride" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))

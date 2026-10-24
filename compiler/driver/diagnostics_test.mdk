@@ -13,14 +13,16 @@
    publishes no link and no unsolved effect summary, and a value-restricted
    binding publishes its weak variable. -}
 
+import support.ordmap.{OrdMap, omEmpty, omSize}
 import driver.diagnostics.{
-  analyzeToLines, analyzeProjectFull, analyzeProjectReport, noStdlibExports,
-  graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom, frontEnd,
-  checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
+  analyzeToLines, analyzeProjectFull, analyzeProjectReport, analyzeProjectKeyed,
+  noStdlibExports, graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom,
+  frontEnd, checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
   FrontOutput(..), Diag(..)
 }
 import types.typecheck.{defaultDriveInputs}
-import types.tc_types.{emptyDriveOutputs}
+import frontend.ast.{Decl}
+import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
 import frontend.parser.{parseLocated}
 import fs.{fixtureFiles}
 import list.{sort, somes}
@@ -103,7 +105,7 @@ graphRows rsrc csrc read entry roots =
       True
       []
       (Ref [])
-      (Ref [])
+      (Ref omEmpty)
       read
       entry
       roots
@@ -278,7 +280,7 @@ reportOf rsrc csrc dir src =
           True
           []
           (Ref [])
-          (Ref [])
+          (Ref omEmpty)
           (_ => None)
           entry
           [dir, "stdlib"]
@@ -360,3 +362,68 @@ test "a derive error outside the drive withholds the checked program" = match (
       ("clean control: checked", expectTrue (isSome clean.foReport.trChecked)),
     ]
   _ => fail "could not read the prelude pair"
+
+-- ── a graph past the loader caches' old bounds ─────────────────────────────
+
+-- Module [i] of an [n]-module chain: it imports module [i + 1] and exports a
+-- value built on that module's. The last file holds the chain's base case.
+chainModuleSrc : Int -> Int -> String
+chainModuleSrc n i =
+  if i + 1 < n then
+    "import m\{i + 1}.{v\{i + 1}}\nexport\nv\{i} : Int\nv\{i} = v\{i + 1} + 1\n"
+  else
+    "export\nv\{i} : Int\nv\{i} = 1\n"
+
+-- Writes modules [i], [i + 1], ... of the [n]-module chain beside the entry.
+writeChain : String -> Int -> Int -> <FileWrite> Result String Unit
+writeChain dir n i =
+  if i >= n then
+    writeFile "\{dir}/main.mdk" "import m1.{v1}\n\nmain = println v1\n"
+  else match writeFile "\{dir}/m\{i}.mdk" (chainModuleSrc n i)
+    Err e => Err e
+    Ok _ => writeChain dir n (i + 1)
+
+-- One analyze of the chain's entry through the session caches: the number of
+-- modules its drive served from their interfaces.
+analyzeChain : String ->
+  String ->
+  String ->
+  Ref (OrdMap (List Decl)) ->
+  <IO> Int
+analyzeChain rsrc csrc dir parseCache =
+  let (keyed, _) =
+    analyzeProjectKeyed
+      noStdlibExports
+      True
+      []
+      (Ref [])
+      parseCache
+      (_ => None)
+      "\{dir}/main.mdk"
+      [dir, "stdlib"]
+      rsrc
+      csrc
+  match keyed
+    Some ((_, outputs), _) => outputs.doServedModules
+    None => -1
+
+test "a graph of 70 modules serves every module but the entry on the second analyze" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) => withScratchDir (dir => match writeChain dir 70 1
+      Ok _ =>
+        let parseCache = Ref omEmpty
+        let first = analyzeChain rsrc csrc dir parseCache
+        let second = analyzeChain rsrc csrc dir parseCache
+        expectEach [
+          ("the first analyze serves nothing", expectEqual 0 first),
+          (
+            "the second serves the 69 modules before the entry",
+            expectEqual 69 second,
+          ),
+          (
+            "the parse memo holds the whole graph",
+            expectEqual 70 (omSize !parseCache),
+          ),
+        ]
+      Err e => fail "could not write the chain: \{e}")
+    _ => fail "could not read the prelude pair"

@@ -1,0 +1,6 @@
+import le_mid.{midValue}
+
+entryValue : Int
+entryValue = midValue + 2
+
+main = println entryValue

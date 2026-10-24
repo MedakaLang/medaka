@@ -101,6 +101,7 @@ import driver.loader.{
 }
 import support.util.{zipL, startsWith, endsWith, splitOnChar}
 import support.path.{joinPath}
+import support.ordmap.{omEmpty}
 import list.{sort}
 import support.char.{isUpper}
 import array.{get as arrayGet}
@@ -1538,7 +1539,7 @@ buildRefIndex : (String -> Option String) ->
   String ->
   <IO> RefIndex
 buildRefIndex read entry roots runtimeSrc coreSrc =
-  let parseCache = Ref []
+  let parseCache = Ref omEmpty
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
   -- lint-disable-next-line rule-prefer-assign-op
   match loadProgramFilesLocatedCached parseCache read entry roots
