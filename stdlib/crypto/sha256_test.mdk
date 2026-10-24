@@ -1,0 +1,95 @@
+-- Tests for `crypto.sha256.sha256`, which hashes in the runtime, against the
+-- FIPS 180-4 vectors and against the Medaka implementation behind
+-- `sha256AssumeByteDomainFrom` (the HMAC resume path), which is kept in
+-- Medaka. The two are independent implementations, so their agreeing at each
+-- padding boundary says something about the runtime's digest.
+
+import array.{makeWith}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain}
+import crypto.sha256.{sha256, sha256AssumeByteDomainFrom}
+import hex as Hex
+import test.{expectEqual}
+
+digestHex : String -> String
+digestHex s = Hex.encode (sha256 (encodeUtf8 s))
+
+-- A message of `n` bytes, each a different function of its position.
+patterned : Int -> Bytes
+patterned n = fromArrayAssumeByteDomain (makeWith n (i => (i * 7 + 3) % 256))
+
+reference : Bytes -> Bytes
+reference msg =
+  sha256AssumeByteDomainFrom
+    (
+      0x6a09e667,
+      0xbb67ae85,
+      0x3c6ef372,
+      0xa54ff53a,
+      0x510e527f,
+      0x9b05688c,
+      0x1f83d9ab,
+      0x5be0cd19,
+    )
+    0
+    msg
+
+-- The padding boundaries: the last block before the 0x80 marker no longer
+-- fits (55 to 56), a full block (63 to 65), and the two-block cases past it.
+boundaryLengths : List Int
+boundaryLengths = [
+  0,
+  1,
+  54,
+  55,
+  56,
+  57,
+  62,
+  63,
+  64,
+  65,
+  119,
+  120,
+  121,
+  127,
+  128,
+  129,
+  191,
+  200,
+]
+
+test "sha256 of the empty message" =
+  expectEqual
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    (digestHex "")
+
+test "sha256 of abc" =
+  expectEqual
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    (digestHex "abc")
+
+test "sha256 of the 448-bit two-block message" =
+  expectEqual
+    "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+    (digestHex "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
+
+test "sha256 of the 896-bit message" =
+  expectEqual
+    "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1"
+    (digestHex
+      "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu")
+
+test "sha256 digests are 32 bytes whatever the message" =
+  expectEqual
+    (map (_ => 32) boundaryLengths)
+    (map (n => B.length (sha256 (patterned n))) boundaryLengths)
+
+test "sha256 agrees with the Medaka implementation at every padding boundary" =
+  expectEqual
+    (map (n => Hex.encode (reference (patterned n))) boundaryLengths)
+    (map (n => Hex.encode (sha256 (patterned n))) boundaryLengths)
+
+test "sha256 agrees with the Medaka implementation on a long message" =
+  expectEqual
+    (Hex.encode (reference (patterned 5000)))
+    (Hex.encode (sha256 (patterned 5000)))
