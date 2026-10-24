@@ -3133,8 +3133,8 @@ public export data ModuleSeed = ModuleSeed {
 --     per call instead).
 --
 -- Two things a hit does not do, neither of them load-bearing: it retains
--- `pmfConstrainedBodyVars` (every `=>`-constrained prelude name with its body's
--- EVars) for the process lifetime, where the parent recomputed it transiently;
+-- `pmfConstrainedNames` (every `=>`-constrained prelude name) for the process
+-- lifetime, where the parent recomputed it transiently;
 -- and it does not re-walk the prelude, so `opBump` (`support/opcount.mdk`, default
 -- off, profiler-only) counts the prelude's steps once per process rather than once
 -- per analyze.
@@ -3439,7 +3439,7 @@ public export data PreludeMarkFacts = PreludeMarkFacts {
   pmfMethodConstraints : List String,
   pmfArgDispatch : List (String, Int),
   pmfArgDispatchById : List ((IfaceRef, String), Int),
-  pmfConstrainedBodyVars : List (String, List String),
+  pmfConstrainedNames : List String,
 }
 
 -- ── Marking on the schedule (ARCH §E) ────────────────────────────────────────
@@ -3674,7 +3674,7 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "StampCtx" () ((variant "StampCtx" (ConNamed (field "scModule" (TyCon "String")) (field "scModuleCtx" (TyCon "ModuleCtx")) (field "scRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "scGoals" (TyApp (TyCon "List") (TyCon "Obligation"))) (field "scNumlits" (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route"))))) (field "scLiveLocs" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "DrainFinding" () ((variant "DrainFinding" (ConNamed (field "dfModule" (TyCon "String")) (field "dfDiag" (TyCon "TcDiag")) (field "dfVerdict" (TyCon "Bool")) (field "dfLive" (TyCon "Bool"))))) ())
 (DData Public "MarkSets" () ((variant "MarkSets" (ConNamed (field "msMarkRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msMarkSharedNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msGraphShadowNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msArgNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msCoreShadowMap" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "msBareDictNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msUnits" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))) ())
-(DData Public "PreludeMarkFacts" () ((variant "PreludeMarkFacts" (ConNamed (field "pmfReturnPos" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfMethodConstraints" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfArgDispatch" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "pmfArgDispatchById" (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int")))) (field "pmfConstrainedBodyVars" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))) ())
+(DData Public "PreludeMarkFacts" () ((variant "PreludeMarkFacts" (ConNamed (field "pmfReturnPos" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfMethodConstraints" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfArgDispatch" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "pmfArgDispatchById" (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int")))) (field "pmfConstrainedNames" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "ModuleMarking" () ((variant "ModuleMarking" (ConNamed (field "mmCtx" (TyCon "MarkCtx")) (field "mmTop" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "mmDictSet" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mmUserNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mmExterns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ident" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvTable" false) (mem "Arm" true) (mem "Expr" true) (mem "Loc" true) (mem "Field" true) (mem "Variant" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "TabKey" true) (mem "EffParamTy" true))))
@@ -3879,5 +3879,5 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "StampCtx" () ((variant "StampCtx" (ConNamed (field "scModule" (TyCon "String")) (field "scModuleCtx" (TyCon "ModuleCtx")) (field "scRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "scGoals" (TyApp (TyCon "List") (TyCon "Obligation"))) (field "scNumlits" (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route"))))) (field "scLiveLocs" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "DrainFinding" () ((variant "DrainFinding" (ConNamed (field "dfModule" (TyCon "String")) (field "dfDiag" (TyCon "TcDiag")) (field "dfVerdict" (TyCon "Bool")) (field "dfLive" (TyCon "Bool"))))) ())
 (DData Public "MarkSets" () ((variant "MarkSets" (ConNamed (field "msMarkRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msMarkSharedNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msGraphShadowNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msArgNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msCoreShadowMap" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "msBareDictNames" (TyApp (TyCon "List") (TyCon "String"))) (field "msUnits" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))) ())
-(DData Public "PreludeMarkFacts" () ((variant "PreludeMarkFacts" (ConNamed (field "pmfReturnPos" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfMethodConstraints" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfArgDispatch" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "pmfArgDispatchById" (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int")))) (field "pmfConstrainedBodyVars" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))) ())
+(DData Public "PreludeMarkFacts" () ((variant "PreludeMarkFacts" (ConNamed (field "pmfReturnPos" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfMethodConstraints" (TyApp (TyCon "List") (TyCon "String"))) (field "pmfArgDispatch" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "pmfArgDispatchById" (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int")))) (field "pmfConstrainedNames" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "ModuleMarking" () ((variant "ModuleMarking" (ConNamed (field "mmCtx" (TyCon "MarkCtx")) (field "mmTop" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "mmDictSet" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mmUserNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mmExterns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())

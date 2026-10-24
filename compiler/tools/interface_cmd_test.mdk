@@ -9,16 +9,22 @@ import test.{
   labelFail
 }
 import test_process.{underRoot, withScratchDir, medakaBin}
-import list.{zipWith}
+import list.{zipWith, take, drop}
 import string as S
 import tools.interface_cmd.{
-  buildInterfaceFile, buildBoth, showLines, verdictOf, verdictText
+  buildInterfaceFile, buildBoth, showLines, showDeclsLines, verdictOf,
+  verdictText
+}
+import types.prelude_decls.{
+  PreludeDecls(..), PreludeTree(..), encodeDeclsFile, readDeclsFile,
+  readDeclsKey, declsKeyOf, renderDeclsFault
 }
 import types.prelude_elab.{
-  PreludeElab(..), encodeElabFile, elabKeyOf, readElabFile, renderElabFault
+  PreludeElab(..), encodeElabFile, elabKeyOf, readElabFile, readElabKey,
+  renderElabFault
 }
 import driver.build_cmd.{
-  readPreludeInterface, PreludeInputs(..), PreludeVerdict(..)
+  readPreludeInterface, PreludeInputs(..), FileVerdict(..)
 }
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface, sha256Hex,
@@ -63,48 +69,64 @@ withStagedStdlib body = withScratchDir (dir => match (
   (Ok _, Ok _) => body dir
   _ => fail "could not stage the scratch stdlib")
 
+-- What `verify` says of [core]'s files right now.
+verdictNow : String -> <IO> String
+verdictNow core = verdictText (verdictOf core)
+
 test "verify reads fresh, then stale: sources after an edit, and missing without a file" = withStagedStdlib
   (dir =>
     let scratchCore = "\{dir}/core.mdk"
     match buildBoth scratchCore []
       Err e => fail e
-      Ok (file, elab) =>
-        let before = verdictText (verdictOf scratchCore)
+      Ok (file, elab, decls) =>
+        let before = verdictNow scratchCore
         match writeFile "\{scratchCore}i" (encodeInterface file)
           Err e => fail e
           Ok _ =>
-            let onlyInterface = verdictText (verdictOf scratchCore)
+            let onlyInterface = verdictNow scratchCore
             let elabText = encodeElabFile (elabKeyOf file.ifKey) elab
             match writeFile "\{scratchCore}e" elabText
               Err e => fail e
               Ok _ =>
-                let fresh = verdictText (verdictOf scratchCore)
-                match readFile scratchCore
+                let noDecls = verdictNow scratchCore
+                let declsText = encodeDeclsFile (declsKeyOf file.ifKey) decls
+                match writeFile "\{scratchCore}d" declsText
                   Err e => fail e
-                  Ok text => match writeFile scratchCore (text ++ " ")
-                    Err e => fail e
-                    Ok _ => expectAll [
-                      labelFail "no file yet" (expectEqual "missing" before),
-                      labelFail
-                        "interface only"
-                        (expectEqual
-                          "stale: elaborated trees (.mdke) missing"
-                          onlyInterface),
-                      labelFail
-                        "both files just written"
-                        (expectEqual "fresh" fresh),
-                      labelFail
-                        "source edited"
-                        (expectEqual
-                          "stale: sources"
-                          (verdictText (verdictOf scratchCore))),
-                    ])
+                  Ok _ =>
+                    let fresh = verdictNow scratchCore
+                    match readFile scratchCore
+                      Err e => fail e
+                      Ok text => match writeFile scratchCore (text ++ " ")
+                        Err e => fail e
+                        Ok _ => expectAll [
+                          labelFail
+                            "no file yet"
+                            (expectEqual "missing" before),
+                          labelFail
+                            "interface only"
+                            (expectEqual
+                              "stale: elaborated trees (.mdke) missing"
+                              onlyInterface),
+                          labelFail
+                            "no declarations file"
+                            (expectEqual
+                              "stale: declarations (.mdkd) missing"
+                              noDecls),
+                          labelFail
+                            "all three files just written"
+                            (expectEqual "fresh" fresh),
+                          labelFail
+                            "source edited"
+                            (expectEqual
+                              "stale: sources"
+                              (verdictNow scratchCore)),
+                        ])
 
-verdictName : PreludeVerdict -> String
-verdictName (PVLoaded _) = "loaded"
-verdictName PVMissing = "missing"
-verdictName (PVStale component) = "stale: \{component}"
-verdictName PVDisabled = "disabled"
+verdictName : FileVerdict -> String
+verdictName FileLoaded = "loaded"
+verdictName FileMissing = "missing"
+verdictName (FileStale component) = "stale: \{component}"
+verdictName FileDisabled = "disabled"
 
 -- The verdict of reading [file], written under compiler identity [written],
 -- as compiler [reader].
@@ -180,7 +202,9 @@ staleLine : String -> String
 staleLine component =
   "prelude interface stale: checking stdlib/core.mdk (\{component})\n"
 
--- A scratch root holding the real prelude and [mdki] as its `core.mdki`.
+-- A scratch root holding the real prelude and [mdki] as its `core.mdki`, with
+-- the real `core.mdkd` beside it, so a row speaks for the interface alone: a
+-- missing `core.mdkd` beside a fresh header earns a line of its own.
 stageRoot : String -> Option String -> <IO> Result String Unit
 stageRoot root mdki = do
   _ <- makeDir root
@@ -188,7 +212,9 @@ stageRoot root mdki = do
   _ <- copyInto "\{root}/stdlib" "runtime.mdk"
   _ <- copyInto "\{root}/stdlib" "core.mdk"
   match mdki
-    Some text => writeFile "\{root}/stdlib/core.mdki" text
+    Some text => do
+      _ <- copyInto "\{root}/stdlib" "core.mdkd"
+      writeFile "\{root}/stdlib/core.mdki" text
     None => Ok ()
 
 -- [text] with its key changed and its digest recomputed.
@@ -446,6 +472,9 @@ test "a core with a type error writes neither file and exits 1" = withStagedStdl
             labelFail
               "no elaborated file"
               (expectTrue (isErr (readFile "\{dir}/core.mdke"))),
+            labelFail
+              "no declarations file"
+              (expectTrue (isErr (readFile "\{dir}/core.mdkd"))),
           ]
           _ => fail "write run failed")
 
@@ -543,5 +572,188 @@ test "verify names the component of a header edit, a truncation and an empty ela
             (expectEqual
               (Ok "stale: elaborated trees (.mdke) file")
               counterDigested),
+        ]
+    _ => fail "write run failed")
+
+test "the writer leaves a declarations file that reads back, shows and verifies" = withStagedStdlib
+  (dir => match runCommandBatch "env" 1 [writeArgv dir]
+    [run] => match readFile "\{dir}/core.mdkd"
+      Err e => fail "core.mdkd was not written: \{e}"
+      Ok text => match readDeclsFile text
+        Err f => fail "did not read: \{renderDeclsFault f}"
+        Ok (key, pd) => expectAll [
+          labelFail "write exit" (expectEqual 0 (exitOf run)),
+          labelFail
+            "the file is what its own value encodes to"
+            (expectEqual text (encodeDeclsFile key pd)),
+          labelFail
+            "runtime mints no binder, core mints from 0"
+            (expectEqual
+              (0, 0, 0)
+              (pd.pdRuntime.ptBinders, pd.pdRuntime.ptBase, pd.pdCore.ptBase)),
+          labelFail "core mints binders" (expectTrue (pd.pdCore.ptBinders > 0)),
+          labelFail
+            "show lists both trees and the counters"
+            (expectEqual
+              [
+                "runtime decls \{length pd.pdRuntime.ptDecls}",
+                "core decls \{length pd.pdCore.ptDecls}",
+              ]
+              (take 2 (drop 4 (showDeclsLines "d" key pd)))),
+          labelFail "all three fresh" (expectEqual "fresh" (verifyOut dir)),
+        ]
+    _ => fail "write run failed")
+
+-- The sources and compiler each of the three written files claims.
+claimedKeys : String ->
+  <IO> Result String (List (List (String, String), String))
+claimedKeys dir = do
+  iface <- readFile "\{dir}/core.mdki"
+  elab <- readFile "\{dir}/core.mdke"
+  decls <- readFile "\{dir}/core.mdkd"
+  f <- mapErr (e => e.seWhat) (decodeInterface iface)
+  e <- mapErr renderElabFault (readElabKey elab)
+  d <- mapErr renderDeclsFault (readDeclsKey decls)
+  Ok (map (k => (k.ikSources, k.ikCompiler)) [f.ifKey, e, d])
+
+test "the three written files carry one key apart from their formats" = withStagedStdlib
+  (dir => match runCommandBatch "env" 1 [writeArgv dir]
+    [_] => match claimedKeys dir
+      Err e => fail e
+      Ok [a, b, c] => expectAll [
+        labelFail "interface and elaborated trees" (expectEqual a b),
+        labelFail "interface and declarations" (expectEqual a c),
+      ]
+      Ok other => fail "three keys expected: \{debug other}"
+    _ => fail "write run failed")
+
+test "a missing or stale declarations file makes verify name it" = withStagedStdlib
+  (dir => match runCommandBatch "env" 1 [writeArgv dir]
+    [_] => match readFile "\{dir}/core.mdkd"
+      Err e => fail e
+      Ok fresh =>
+        let _ = writeFile "\{dir}/core.mdkd" (S.take (S.length fresh / 2) fresh)
+        let truncated = verifyOut dir
+        let _ =
+          writeFile
+            "\{dir}/core.mdkd"
+            (S.replace "(compiler " "(compiler 0" fresh)
+        let foreign = verifyOut dir
+        let _ =
+          writeFile
+            "\{dir}/core.mdkd"
+            (S.replace "(medaka-decls 4 " "(medaka-decls 99 " fresh)
+        let version = verifyOut dir
+        let _ = removeFile "\{dir}/core.mdkd"
+        expectAll [
+          labelFail
+            "truncated"
+            (expectEqual "stale: declarations (.mdkd) file" truncated),
+          labelFail
+            "compiler edited"
+            (expectEqual "stale: declarations (.mdkd) compiler" foreign),
+          labelFail
+            "another format"
+            (expectEqual "stale: declarations (.mdkd) format" version),
+          labelFail
+            "removed"
+            (expectEqual "stale: declarations (.mdkd) missing" (verifyOut dir)),
+        ]
+    _ => fail "write run failed")
+
+-- [fresh] with its covered text replaced by [edit] of it and the digest recomputed.
+redigested : String -> (String -> String) -> String
+redigested fresh edit = match S.indexOf "\n" fresh
+  None => fresh
+  Some i =>
+    let covered = S.drop (i + 1) fresh
+    let edited = edit covered
+    let header = S.take i fresh
+    "\{S.replace (sha256Hex covered) (sha256Hex edited) header}\n\{edited}"
+
+-- What `verify` prints once core.mdkd is [text].
+verifyDecls : String ->
+  String ->
+  <Exec, IO, FileWrite, Env "MEDAKA_ROOT", Env "MEDAKA"> String
+verifyDecls dir text =
+  let _ = writeFile "\{dir}/core.mdkd" text
+  verifyOut dir
+
+test "verify refuses a digest-valid declarations file that the loader would refuse" = withStagedStdlib
+  (dir => match runCommandBatch "env" 1 [writeArgv dir]
+    [_] => match readFile "\{dir}/core.mdkd"
+      Err e => fail e
+      Ok fresh =>
+        let counters =
+          line => redigested fresh (c =>
+            line ++ S.drop (optionOr 0 (S.indexOf "\n" c)) c)
+        let stale = "stale: declarations (.mdkd) file"
+        let n = match readDeclsFile fresh
+          Ok (_, pd) => pd.pdCore.ptBinders
+          Err _ => 0
+        expectAll [
+          labelFail
+            "counters one short"
+            (expectEqual
+              stale
+              (verifyDecls dir (counters "(counters 0 0 \{n - 1} 0)"))),
+          labelFail
+            "counters zero"
+            (expectEqual
+              stale
+              (verifyDecls dir (counters "(counters 0 0 0 0)"))),
+          labelFail
+            "a huge count"
+            (expectEqual
+              stale
+              (verifyDecls dir (counters "(counters 0 0 99999999999 0)"))),
+          labelFail
+            "not declarations"
+            (expectEqual
+              stale
+              (verifyDecls
+                dir
+                (redigested fresh (_ =>
+                  "(counters 0 0 0 0)\n(not declarations)\n")))),
+          labelFail "the original" (expectEqual "fresh" (verifyDecls dir fresh)),
+        ]
+    _ => fail "write run failed")
+
+test "verify names the key component before it refuses a bad declarations body" = withStagedStdlib
+  (dir => match runCommandBatch "env" 1 [writeArgv dir]
+    [_] => match readFile "\{dir}/core.mdkd"
+      Err e => fail e
+      Ok fresh =>
+        let lying = redigested fresh (c =>
+          "(counters 0 0 0 0)" ++ S.drop (optionOr 0 (S.indexOf "\n" c)) c)
+        let junk = redigested fresh (_ => "(counters 0 0 0 0)\n(junk)\n")
+        let otherCompiler = S.replace "(compiler " "(compiler 0"
+        let otherSources = S.replace "(core.mdk " "(core.mdk 0"
+        let versioned = S.replace "(medaka-decls 4 " "(medaka-decls 99 "
+        let declared = c => "stale: declarations (.mdkd) \{c}"
+        expectAll [
+          labelFail
+            "compiler changed, counters lie"
+            (expectEqual
+              (declared "compiler")
+              (verifyDecls dir (otherCompiler lying))),
+          labelFail
+            "sources changed, counters lie"
+            (expectEqual
+              (declared "sources")
+              (verifyDecls dir (otherSources lying))),
+          labelFail
+            "compiler changed, body is not declarations"
+            (expectEqual
+              (declared "compiler")
+              (verifyDecls dir (otherCompiler junk))),
+          labelFail
+            "format changed, counters lie"
+            (expectEqual
+              (declared "format")
+              (verifyDecls dir (versioned (otherCompiler lying)))),
+          labelFail
+            "key fresh, counters lie"
+            (expectEqual (declared "file") (verifyDecls dir lying)),
         ]
     _ => fail "write run failed")

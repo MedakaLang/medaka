@@ -16,7 +16,7 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import frontend.desugar.{desugarIn}
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.resolve.{internalGuardFor, resolveModulesErrorsByFile}
 import driver.diagnostics.{
   CheckJson(..),
@@ -184,7 +184,7 @@ public export data FrontGraph = FrontGraph {
 -- search roots are the entry's own (`entrySearchRoots`) and the stdlib, the set
 -- every verb loads with, and never the emitter's argv roots, which also name
 -- the compiler's own sources.  The prelude sources were validated by the
--- parent (`readPreludeFile`); `stdlibDir` is the directory holding them.
+-- parent (`readPreludeSources`); `stdlibDir` is the directory holding them.
 export
 frontGate : Bool ->
   String ->
@@ -269,7 +269,7 @@ resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
               (map modIdToPath g.fgMods)
               allowInternal
               trusted
-              (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+              (Some (preludeGeneration rsrc csrc))
               g.fgRuntimeD
               g.fgCoreD
               g.fgModsD))

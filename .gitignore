@@ -61,3 +61,5 @@ __pycache__/
 /stdlib/*.mdki
 # The same call also writes the module's elaborated trees beside it.
 /stdlib/*.mdke
+# And the desugared declarations those trees were elaborated from.
+/stdlib/*.mdkd

@@ -49,6 +49,21 @@ case "$CON$COFF" in
 esac
 [ $((CON + 1)) -eq "$COFF" ] || fail "interface not loaded: typecheck.module on=$CON off=$COFF, want off = on + 1"
 
+# The parse half of the seed (stdlib/core.mdkd): the on arm neither parses the
+# prelude for its declarations nor desugars it, so its parse.prescan and
+# desugar rows sit two below the off arm's (1/1 against 3/3 for hello).
+stagecount() {
+  env "$1" MEDAKA_STAGE_COUNTS=1 timeout 120 "$M" check "$HELLO" 2>&1 | awk -F'\t' -v s="$2" '$2 == s { print $3 }'
+}
+for st in parse.prescan desugar; do
+  SON=$(stagecount MEDAKA_ON=1 "$st")
+  SOFF=$(stagecount MEDAKA_NO_INTERFACE=1 "$st")
+  case "$SON$SOFF" in
+    ''|*[!0-9]*) fail "decls seed not loaded: no $st counts (on='$SON' off='$SOFF')" ;;
+  esac
+  [ $((SON + 2)) -eq "$SOFF" ] || fail "decls seed not loaded: check hello $st on=$SON off=$SOFF, want off = on + 2"
+done
+
 OUT=$(mktemp -d "${TMPDIR:-/tmp}/onoff.XXXXXX") || fail "mktemp"
 trap 'rm -rf "$OUT"' EXIT
 LIST="$OUT/entries"
@@ -266,6 +281,10 @@ while IFS= read -r line; do
 done < "$OUT/probes"
 xargs -P "$JOBS" -L 1 sh "$OUT/mone.sh" < "$OUT/mjobs"
 mbad=0
+# A test that makes its own scratch directory prints its random name.
+for f in "$OUT"/m.[ab].*.out "$OUT"/m.[ab].*.err; do
+  sed -i 's#tmp\.[A-Za-z0-9]\{6,\}#tmp.X#g' "$f"
+done
 while IFS= read -r line; do
   name=${line%% *}
   for k in out err code; do
@@ -388,10 +407,114 @@ rm -f "$FB/root.ifacemissing/stdlib/core.mdki"
 fbrow ifacemissing MEDAKA_ON=1
 fbcheck ifacemissing "interface"
 
+# The declarations file (stdlib/core.mdkd): a stale or unreadable one makes the
+# loader parse stdlib/core.mdk itself, prints exactly one decls line, and leaves
+# every verb's stdout as the fresh arm's. The trees (.mdke) and the interface
+# (.mdki) stay fresh, so the only notice is the decls line.
+
+# redigest FILE: rewrite the header's digest to cover the body as it now stands.
+redigest() {
+  f=$1
+  tail -n +2 "$f" > "$f.body"
+  if command -v sha256sum >/dev/null 2>&1; then
+    d=$(sha256sum < "$f.body" | cut -d' ' -f1)
+  else
+    d=$(shasum -a 256 < "$f.body" | cut -d' ' -f1)
+  fi
+  head -n 1 "$f" | sed "s/(digest [0-9a-f]*)/(digest $d)/" > "$f.new"
+  cat "$f.body" >> "$f.new"
+  mv "$f.new" "$f"
+  rm -f "$f.body"
+}
+
+fbdrow() {
+  name=$1; r="$FB/root.$name"; o="$FB/$name"
+  mkdir -p "$o"
+  e() { env MEDAKA_ROOT="$r" MEDAKA_ON=1 "$@"; }
+  e "$M" run "$HELLO" > "$o/run.out" 2> "$o/run.err" < /dev/null; echo $? > "$o/run.code"
+  e MEDAKA_STRICT=1 "$M" run "$HELLO" > "$o/runs.out" 2> "$o/runs.err" < /dev/null; echo $? > "$o/runs.code"
+  e "$M" check "$HELLO" > "$o/check.out" 2> "$o/check.err" < /dev/null; echo $? > "$o/check.code"
+  e MEDAKA_STRICT=1 "$M" check "$HELLO" > "$o/checks.out" 2> "$o/checks.err" < /dev/null; echo $? > "$o/checks.code"
+}
+
+fbdcheck() {
+  ROWNAME=$1; comp=$2
+  o="$FB/$1"
+  line="prelude decls stale: parsing stdlib/core.mdk ($comp)"
+  printf '%s\n' "$line" > "$o/line"
+  for k in run.out run.code check.out check.code; do
+    cmp -s "$o/$k" "$FD/$k" || fail "fallback row $ROWNAME: $k differs from the fresh arm"
+  done
+  cmp -s "$o/run.err" "$o/line" || fail "fallback row $ROWNAME: run stderr is not exactly the one decls line"
+  cmp -s "$o/check.err" "$o/line" || fail "fallback row $ROWNAME: check stderr is not exactly the one decls line"
+  for v in runs checks; do
+    want "$(cat "$o/$v.code")" 1 "STRICT $v exit code"
+    grep -F -q "$line" "$o/$v.err" || fail "fallback row $ROWNAME: STRICT $v stderr lacks the decls line"
+  done
+  want "$(cat "$o/run.code")" 0 "run exit code"
+}
+
+mkroot decls_fresh
+fbdrow decls_fresh
+FD="$FB/decls_fresh"
+for k in run.err check.err; do
+  [ ! -s "$FD/$k" ] || fail "fallback row decls_fresh: $k is not empty: $(head -c 200 "$FD/$k")"
+done
+cmp -s "$FD/run.out" "$D/run.out" || fail "fallback row decls_fresh: run stdout differs from the disabled arm"
+
+mkroot dheader
+sed -i '1s/(compiler \([0-9a-f]*\))/(compiler 0\1)/' "$FB/root.dheader/stdlib/core.mdkd"
+fbdrow dheader
+fbdcheck dheader compiler
+# A header edit of the declarations file alone leaves the interface fresh.
+cmp -s "$FB/root.dheader/stdlib/core.mdki" "$ROOT/stdlib/core.mdki" || fail "fallback row dheader: the interface changed"
+
+mkroot dtruncated
+head -c 100000 "$ROOT/stdlib/core.mdkd" > "$FB/root.dtruncated/stdlib/core.mdkd"
+fbdrow dtruncated
+fbdcheck dtruncated file
+
+mkroot dversion
+sed -i '1s/^(medaka-decls [0-9]* /(medaka-decls 9 /' "$FB/root.dversion/stdlib/core.mdkd"
+fbdrow dversion
+fbdcheck dversion format
+
+mkroot dmissing
+rm -f "$FB/root.dmissing/stdlib/core.mdkd"
+fbdrow dmissing
+fbdcheck dmissing missing
+
+# A body whose digest is right but which is not two declaration lists.
+mkroot dundecodable
+head -n 2 "$ROOT/stdlib/core.mdkd" > "$FB/root.dundecodable/stdlib/core.mdkd"
+printf '(not a declaration list)\n(neither is this)\n' >> "$FB/root.dundecodable/stdlib/core.mdkd"
+redigest "$FB/root.dundecodable/stdlib/core.mdkd"
+fbdrow dundecodable
+fbdcheck dundecodable file
+
+# A program that does not parse still reports the declarations file once: `run`
+# stops on the parse error, and the one decls line comes with it, not a second
+# one and not none. A fresh root prints no line.
+PERR="$FB/perr.mdk"
+printf 'main = (\n' > "$PERR"
+perrrow() {
+  ROWNAME=perr_$1
+  env MEDAKA_ROOT="$FB/root.$1" MEDAKA_ON=1 "$M" run "$PERR" > "$FB/$1/perr.out" 2> "$FB/$1/perr.err" < /dev/null; echo $? > "$FB/$1/perr.code"
+  want "$(cat "$FB/$1/perr.code")" 1 "run of an unparsable program exit code"
+  want "$(grep -c '^prelude decls stale' "$FB/$1/perr.err")" "$2" "decls lines on stderr"
+}
+perrrow dmissing 1
+perrrow decls_fresh 0
+
+for r in dheader dtruncated dversion dundecodable; do
+  if cmp -s "$FB/root.$r/stdlib/core.mdkd" "$ROOT/stdlib/core.mdkd"; then fail "fallback row $r: the edit did not change the file"; fi
+done
+if [ -e "$FB/root.dmissing/stdlib/core.mdkd" ]; then fail "fallback row dmissing: the file is still there"; fi
+
 fbcheck disabled ""
 if cmp -s "$FB/root.header/stdlib/core.mdke" "$ROOT/stdlib/core.mdke"; then fail "fallback row header: the edit did not change the file"; fi
 if cmp -s "$FB/root.version/stdlib/core.mdke" "$ROOT/stdlib/core.mdke"; then fail "fallback row version: the edit did not change the file"; fi
 if cmp -s "$FB/root.ifacecompiler/stdlib/core.mdki" "$ROOT/stdlib/core.mdki"; then fail "fallback row ifacecompiler: the edit did not change the file"; fi
 if cmp -s "$FB/root.ifacenewline/stdlib/core.mdki" "$ROOT/stdlib/core.mdki"; then fail "fallback row ifacenewline: the edit did not change the file"; fi
-echo "fallback rows: header, truncated, version, missing, interface compiler/newline/missing, disabled ok"
+echo "fallback rows: header, truncated, version, missing, interface compiler/newline/missing, decls header/truncated/version/missing/undecodable, parse error, disabled ok"
 echo PASS

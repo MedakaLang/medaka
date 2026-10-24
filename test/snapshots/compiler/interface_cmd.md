@@ -1,5 +1,5 @@
 # META
-source_lines=470
+source_lines=544
 stages=DESUGAR,MARK
 # SOURCE
 {- interface_cmd.mdk: `medaka interface write|show|verify`, the driver for the
@@ -9,9 +9,11 @@ stages=DESUGAR,MARK
    diagnostics arm under each named target profile, and only a module that
    checks clean under all of them leaves a file.  It also elaborates the module
    once through the tree arm and writes the elaborated trees beside the
-   interface (`<module>.mdke`, the format of `types.prelude_elab`).  `show`
-   prints a file's header and what it holds.  `verify` compares the key each
-   file was written under with the key its module has now. -}
+   interface (`<module>.mdke`, the format of `types.prelude_elab`), and the
+   desugared declarations those trees came from (`<module>.mdkd`, the format
+   of `types.prelude_decls`).  `show` prints a file's header and what it
+   holds.  `verify` compares the key each file was written under with the key
+   its module has now. -}
 
 import args.{
   ArgSpec, FlagSpec, spec, switch, valueList, withStrictDash, parseArgs, flag,
@@ -38,7 +40,11 @@ import types.interface_sexp.{
 }
 import types.prelude_elab.{
   PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile, elabKeyOf,
-  elabDigestOf, renderElabFault
+  framedDigestOf, renderElabFault, readElabKey
+}
+import types.prelude_decls.{
+  PreludeDecls(..), preludeDeclsOf, encodeDeclsFile, readDeclsFile, declsKeyOf,
+  readDeclsFramed, acceptedDeclsBody, renderDeclsFault
 }
 import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
@@ -57,19 +63,20 @@ interfaceHelpText = stringConcat [
   "\n",
   "Usage:\n",
   "  medaka interface write  <module.mdk> [--target <profile>]...\n",
-  "  medaka interface show   <file.mdki|file.mdke>\n",
+  "  medaka interface show   <file.mdki|file.mdke|file.mdkd>\n",
   "  medaka interface verify <module.mdk>\n",
   "\n",
   "  write   type-checks the module (the prelude's core, with runtime.mdk beside\n",
   "          it) under each --target profile and writes <module>.mdki beside it.\n",
   "          Without --target the profiles are the full IO join and\n",
   "          wasmgc/browser-worker.  It also writes <module>.mdke, the module\n",
-  "          elaborated once with no user module.  A module with a type error\n",
-  "          leaves no file.\n",
+  "          elaborated once with no user module, and <module>.mdkd, the\n",
+  "          desugared declarations of runtime.mdk and the module.  A module\n",
+  "          with a type error leaves no file.\n",
   "  show    prints the header and every published row of a .mdki, or the\n",
-  "          header and counts of a .mdke.\n",
+  "          header and counts of a .mdke or .mdkd.\n",
   "  verify  prints `fresh`, `stale: <component>` or `missing`; exit 0 only on\n",
-  "          `fresh`, which needs both files fresh.\n",
+  "          `fresh`, which needs all three files fresh.\n",
   "\n",
   "  -h, --help  prints this help.\n",
 ]
@@ -110,6 +117,10 @@ interfacePath modulePath = modulePath ++ "i"
 -- The elaborated trees are named for the module the same way.
 elabPath : String -> String
 elabPath modulePath = modulePath ++ "e"
+
+-- The desugared declarations are named for the module the same way.
+declsPath : String -> String
+declsPath modulePath = modulePath ++ "d"
 
 runtimePathOf : String -> String
 runtimePathOf modulePath = joinPath (dirOf modulePath) "runtime.mdk"
@@ -206,27 +217,38 @@ elaborateCore runtimeSrc coreSrc =
         else
           Ok (preludeElabOf trees c.cpEvidence (map snd (entries c.cpBinders)))
 
--- Both files for [modulePath]: the interface file, and the elaborated trees
--- under the same key.  The loc state is reset before the prelude is parsed so
--- no span of an earlier parse is written into the trees.  A type error shows as
--- the interface check's diagnostic.
+-- The desugared trees the elaboration ran on, with their binder counters.  Core
+-- is the process's first minting, so its first ordinal is the elaboration's.
+declsOf : String -> String -> PreludeElab -> Result String PreludeDecls
+declsOf runtimeSrc coreSrc elab = do
+  pd <- preludeDeclsOf (desugaredPrelude runtimeSrc) (desugaredPrelude coreSrc)
+  if pd.pdCore.ptBase == elab.peBinderBase then
+    Ok pd
+  else
+    Err
+      "medaka interface write: the desugared core and its elaboration disagree on the first binder ordinal"
+
+-- The three files for [modulePath]: the interface file, the elaborated trees
+-- under the same key, and the desugared declarations the trees came from.  A
+-- type error shows as the interface check's diagnostic.
 export
 buildBoth : String ->
   List String ->
-  <IO> Result String (PreludeInterfaceFile, PreludeElab)
-buildBoth modulePath targets =
-  let _ = parseLocated ""
-  match (
-    readPreludeFile (runtimePathOf modulePath),
-    readPreludeFile modulePath,
-  )
-    (Ok runtimeSrc, Ok coreSrc) =>
-      let elab = elaborateCore runtimeSrc coreSrc
-      match buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
-        Err e => Err e
-        Ok file => map (e => (file, e)) elab
-    (Err e, _) => Err e
-    (_, Err e) => Err e
+  <IO> Result String (PreludeInterfaceFile, PreludeElab, PreludeDecls)
+buildBoth modulePath targets = match (
+  readPreludeFile (runtimePathOf modulePath),
+  readPreludeFile modulePath,
+)
+  (Ok runtimeSrc, Ok coreSrc) =>
+    let elab = elaborateCore runtimeSrc coreSrc
+    match buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
+      Err e => Err e
+      Ok file => do
+        e <- elab
+        pd <- declsOf runtimeSrc coreSrc e
+        Ok (file, e, pd)
+  (Err e, _) => Err e
+  (_, Err e) => Err e
 
 -- Each text goes into a staging directory beside the first target and is then
 -- renamed over its target, so a reader never sees a half-written file and a
@@ -282,14 +304,16 @@ writeCmd modulePath targets
       "medaka interface write: this binary carries no build fingerprint (an unstamped build), so a file it wrote could not be told from another unstamped compiler's; build with `make medaka`"
   | otherwise = match buildBoth modulePath targets
     Err e => failWith e
-    Ok (file, elab) => match writeAllAtomically [
+    Ok (file, elab, decls) => match writeAllAtomically [
+      (declsPath modulePath, encodeDeclsFile (declsKeyOf file.ifKey) decls),
       (elabPath modulePath, encodeElabFile (elabKeyOf file.ifKey) elab),
       (interfacePath modulePath, encodeInterface file),
     ]
       Err e => failWith "medaka interface write: \{e}"
       Ok _ =>
-        let _ = putStrLn "wrote \{interfacePath modulePath}"
+        putStrLn "wrote \{interfacePath modulePath}"
         putStrLn "wrote \{elabPath modulePath}"
+        putStrLn "wrote \{declsPath modulePath}"
 
 -- ── show ────────────────────────────────────────────────────────────────────
 
@@ -304,18 +328,22 @@ sectionLines n total s =
       (row => "  row \{fst row} : \{ppPubScheme (snd row)}")
       s.isInterface.piCore
 
+-- What every framed file's show opens with, then [middle], then the file's own
+-- [digest].
+showHeaderLines : InterfaceKey -> List String -> String -> List String
+showHeaderLines key middle digest =
+  ["format \{key.ikFormat}"]
+    ++ map (s => "source \{fst s} sha256 \{snd s}") key.ikSources
+    ++ ["compiler \{key.ikCompiler}"]
+    ++ middle
+    ++ ["digest \{digest}"]
+
 -- The header and every section of a decoded file; [digest] is the file's own.
 export
 showLines : String -> PreludeInterfaceFile -> List String
 showLines digest f =
   let total = length f.ifSections
-  ["format \{f.ifKey.ikFormat}"]
-    ++ map (s => "source \{fst s} sha256 \{snd s}") f.ifKey.ikSources
-    ++ [
-      "compiler \{f.ifKey.ikCompiler}",
-      "sections \{total}",
-      "digest \{digest}",
-    ]
+  showHeaderLines f.ifKey ["sections \{total}"] digest
     ++ flatMap
       (p => sectionLines (fst p) total (snd p))
       (zip [1..=total] f.ifSections)
@@ -324,18 +352,45 @@ showCmd : String -> <IO> Unit
 showCmd path
   | S.endsWith ".mdk" path =
     failWith
-      "medaka interface show: `\{path}` is a source file; show takes the `.mdki` or `.mdke` that `medaka interface write` wrote beside it (`\{interfacePath path}`, `\{elabPath path}`)"
+      "medaka interface show: `\{path}` is a source file; show takes the `.mdki`, `.mdke` or `.mdkd` that `medaka interface write` wrote beside it (`\{interfacePath path}`, `\{elabPath path}`, `\{declsPath path}`)"
   | S.endsWith ".mdke" path = showElabFile path
+  | S.endsWith ".mdkd" path = showDeclsFile path
   | otherwise = showFile path
+
+-- The header and counts of a desugared-declarations file; [digest] is the
+-- file's own.
+export
+showDeclsLines : String -> InterfaceKey -> PreludeDecls -> List String
+showDeclsLines digest key pd =
+  showHeaderLines
+    key
+    [
+      "runtime decls \{length pd.pdRuntime.ptDecls}",
+      "core decls \{length pd.pdCore.ptDecls}",
+      "binders \{pd.pdRuntime.ptBinders + pd.pdCore.ptBinders}",
+      "Nr \{pd.pdRuntime.ptBinders}",
+      "B0r \{pd.pdRuntime.ptBase}",
+      "Nc \{pd.pdCore.ptBinders}",
+      "B0c \{pd.pdCore.ptBase}",
+    ]
+    digest
+
+showDeclsFile : String -> <IO> Unit
+showDeclsFile path = match readFile path
+  Err e => failWith "medaka interface show: cannot read `\{path}`: \{e}"
+  Ok text => match readDeclsFile text
+    Err fault =>
+      failWith "medaka interface show: `\{path}`: \{renderDeclsFault fault}"
+    Ok (key, pd) =>
+      putStrLn (joinNl (showDeclsLines (framedDigestOf text) key pd))
 
 -- The header and counts of an elaborated-trees file; [digest] is the file's own.
 export
 showElabLines : String -> InterfaceKey -> PreludeElab -> List String
 showElabLines digest key pe =
-  ["format \{key.ikFormat}"]
-    ++ map (s => "source \{fst s} sha256 \{snd s}") key.ikSources
-    ++ [
-      "compiler \{key.ikCompiler}",
+  showHeaderLines
+    key
+    [
       "decls \{length pe.peDecls}",
       "evidence \{length pe.peEvidence}",
       "binder rows \{length pe.peBinders}",
@@ -343,8 +398,8 @@ showElabLines digest key pe =
       "L \{pe.peLocalCounter}",
       "N \{pe.peBinderCount}",
       "B0 \{pe.peBinderBase}",
-      "digest \{digest}",
     ]
+    digest
 
 showElabFile : String -> <IO> Unit
 showElabFile path = match readFile path
@@ -352,7 +407,8 @@ showElabFile path = match readFile path
   Ok text => match readElabFile text
     Err fault =>
       failWith "medaka interface show: `\{path}`: \{renderElabFault fault}"
-    Ok (key, pe) => putStrLn (joinNl (showElabLines (elabDigestOf text) key pe))
+    Ok (key, pe) =>
+      putStrLn (joinNl (showElabLines (framedDigestOf text) key pe))
 
 showFile : String -> <IO> Unit
 showFile path = match readFile path
@@ -400,6 +456,10 @@ interfaceVerdictOf modulePath = match readFile (interfacePath modulePath)
     Err fault => Stale (faultComponent fault)
     Ok (f, _) => againstSources modulePath (k => k) f.ifKey
 
+-- `verify` is the one command that reads the whole file: the version, the header,
+-- the digest, the body and the counters against their rows.  The hot parents read
+-- the header alone (`readElabKey`), so a digest-valid file whose counters lie
+-- reads as fresh to them; `verify` is where it is called stale.
 elabVerdictOf : String -> <IO> Verdict
 elabVerdictOf modulePath = match readFile (elabPath modulePath)
   Err _ => Missing
@@ -407,14 +467,28 @@ elabVerdictOf modulePath = match readFile (elabPath modulePath)
     Err fault => Stale (faultComponent fault)
     Ok (key, _) => againstSources modulePath elabKeyOf key
 
--- How [modulePath]'s two files stand against the module's sources now: fresh
--- only when both are, and a stale or missing elaborated-trees file is named as
--- such.
+declsVerdictOf : String -> <IO> Verdict
+declsVerdictOf modulePath = match readFile (declsPath modulePath)
+  Err _ => Missing
+  Ok text => match readDeclsFramed text
+    Err fault => Stale (faultComponent fault)
+    Ok (key, covered) => match againstSources modulePath declsKeyOf key
+      Fresh => match acceptedDeclsBody covered
+        Err fault => Stale (faultComponent fault)
+        Ok _ => Fresh
+      other => other
+
+-- How [modulePath]'s three files stand against the module's sources now: fresh
+-- only when all are, and a stale or missing elaborated-trees or declarations
+-- file is named as such.
 export
 verdictOf : String -> <IO> Verdict
 verdictOf modulePath = match interfaceVerdictOf modulePath
   Fresh => match elabVerdictOf modulePath
-    Fresh => Fresh
+    Fresh => match declsVerdictOf modulePath
+      Fresh => Fresh
+      Missing => Stale "declarations (.mdkd) missing"
+      Stale component => Stale "declarations (.mdkd) \{component}"
     Missing => Stale "elaborated trees (.mdke) missing"
     Stale component => Stale "elaborated trees (.mdke) \{component}"
   other => other
@@ -488,14 +562,15 @@ runInterfaceCmd (sub :: _) =
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "renderAtom" false))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "PreludeInterfaceFile" true) (mem "InterfaceSection" true) (mem "encodeInterface" false) (mem "readInterface" false) (mem "renderFault" false) (mem "mergeSections" false))))
-(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" true) (mem "preludeElabOf" false) (mem "encodeElabFile" false) (mem "readElabFile" false) (mem "elabKeyOf" false) (mem "elabDigestOf" false) (mem "renderElabFault" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" true) (mem "preludeElabOf" false) (mem "encodeElabFile" false) (mem "readElabFile" false) (mem "elabKeyOf" false) (mem "framedDigestOf" false) (mem "renderElabFault" false) (mem "readElabKey" false))))
+(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "preludeDeclsOf" false) (mem "encodeDeclsFile" false) (mem "readDeclsFile" false) (mem "declsKeyOf" false) (mem "readDeclsFramed" false) (mem "acceptedDeclsBody" false) (mem "renderDeclsFault" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true) (mem "keysMatch" false) (mem "currentPreludeInterface" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ppPubScheme" false) (mem "CheckedProgram" true) (mem "TcReport" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "lookupProfile" false) (mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "elaborateModulesWithReport" false))))
 (DTypeSig true "interfaceHelpText" (TyCon "String"))
-(DFunDef false "interfaceHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka interface — Write, show and verify the prelude interface file\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka interface write  <module.mdk> [--target <profile>]...\n")) (ELit (LString "  medaka interface show   <file.mdki|file.mdke>\n")) (ELit (LString "  medaka interface verify <module.mdk>\n")) (ELit (LString "\n")) (ELit (LString "  write   type-checks the module (the prelude's core, with runtime.mdk beside\n")) (ELit (LString "          it) under each --target profile and writes <module>.mdki beside it.\n")) (ELit (LString "          Without --target the profiles are the full IO join and\n")) (ELit (LString "          wasmgc/browser-worker.  It also writes <module>.mdke, the module\n")) (ELit (LString "          elaborated once with no user module.  A module with a type error\n")) (ELit (LString "          leaves no file.\n")) (ELit (LString "  show    prints the header and every published row of a .mdki, or the\n")) (ELit (LString "          header and counts of a .mdke.\n")) (ELit (LString "  verify  prints `fresh`, `stale: <component>` or `missing`; exit 0 only on\n")) (ELit (LString "          `fresh`, which needs both files fresh.\n")) (ELit (LString "\n")) (ELit (LString "  -h, --help  prints this help.\n")))))
+(DFunDef false "interfaceHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka interface — Write, show and verify the prelude interface file\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka interface write  <module.mdk> [--target <profile>]...\n")) (ELit (LString "  medaka interface show   <file.mdki|file.mdke|file.mdkd>\n")) (ELit (LString "  medaka interface verify <module.mdk>\n")) (ELit (LString "\n")) (ELit (LString "  write   type-checks the module (the prelude's core, with runtime.mdk beside\n")) (ELit (LString "          it) under each --target profile and writes <module>.mdki beside it.\n")) (ELit (LString "          Without --target the profiles are the full IO join and\n")) (ELit (LString "          wasmgc/browser-worker.  It also writes <module>.mdke, the module\n")) (ELit (LString "          elaborated once with no user module, and <module>.mdkd, the\n")) (ELit (LString "          desugared declarations of runtime.mdk and the module.  A module\n")) (ELit (LString "          with a type error leaves no file.\n")) (ELit (LString "  show    prints the header and every published row of a .mdki, or the\n")) (ELit (LString "          header and counts of a .mdke or .mdkd.\n")) (ELit (LString "  verify  prints `fresh`, `stale: <component>` or `missing`; exit 0 only on\n")) (ELit (LString "          `fresh`, which needs all three files fresh.\n")) (ELit (LString "\n")) (ELit (LString "  -h, --help  prints this help.\n")))))
 (DTypeSig false "writeSpec" (TyCon "ArgSpec"))
 (DFunDef false "writeSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "interface write"))) (EListLit (EVar "helpSwitch") (EApp (EApp (EApp (EVar "valueList") (EListLit (ELit (LString "--target")))) (ELit (LString "PROFILE"))) (ELit (LString "a target profile whose IO join gets a section (repeatable)")))))))
 (DTypeSig false "plainSpec" (TyFun (TyCon "String") (TyCon "ArgSpec")))
@@ -508,6 +583,8 @@ runInterfaceCmd (sub :: _) =
 (DFunDef false "interfacePath" ((PVar "modulePath")) (EBinOp "++" (EVar "modulePath") (ELit (LString "i"))))
 (DTypeSig false "elabPath" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "elabPath" ((PVar "modulePath")) (EBinOp "++" (EVar "modulePath") (ELit (LString "e"))))
+(DTypeSig false "declsPath" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "declsPath" ((PVar "modulePath")) (EBinOp "++" (EVar "modulePath") (ELit (LString "d"))))
 (DTypeSig false "runtimePathOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "runtimePathOf" ((PVar "modulePath")) (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "modulePath"))) (ELit (LString "runtime.mdk"))))
 (DTypeSig false "defaultTargets" (TyApp (TyCon "List") (TyCon "String")))
@@ -523,8 +600,10 @@ runInterfaceCmd (sub :: _) =
 (DFunDef false "buildInterfaceFileFrom" ((PVar "modulePath") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "targets")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "traverse") (EVar "profileOfTarget")) (EIf (EApp (EVar "isEmpty") (EVar "targets")) (EVar "defaultTargets") (EVar "targets")))) (ELam ((PVar "profiles")) (ELet false (PVar "inputs") (EApp (EApp (EApp (EVar "inputsOf") (EVar "modulePath")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "traverse") (EApp (EApp (EVar "driveUnder") (EVar "inputs")) (EVar "modulePath"))) (EVar "profiles"))) (ELam ((PVar "drives")) (EApp (EVar "Ok") (ERecordCreate "PreludeInterfaceFile" ((fa "ifKey" (EApp (EApp (EVar "preludeInterfaceKey") (EApp (EVar "baseName") (EVar "modulePath"))) (EVar "inputs"))) (fa "ifSections" (EApp (EVar "mergeSections") (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EVar "d"))) (EVar "drives")))))))))))))
 (DTypeSig false "elaborateCore" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeElab")))))
 (DFunDef false "elaborateCore" ((PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple PWild (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EVar "defaultDriveInputs")) (EVar "False")) (EVar "None")) (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (EListLit))) (DoExpr (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration left no checked program")))) (arm (PCon "Some" (PVar "c")) () (EMatch (EFieldAccess (EVar "c") "cpTrees") (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration left no trees")))) (arm (PCon "Some" (PTuple (PVar "trees") PWild)) () (EIf (EFieldAccess (EVar "outputs") "doHadTypeErrors") (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration had type errors"))) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "preludeElabOf") (EVar "trees")) (EFieldAccess (EVar "c") "cpEvidence")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "entries") (EFieldAccess (EVar "c") "cpBinders")))))))))))))
-(DTypeSig true "buildBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "PreludeInterfaceFile") (TyCon "PreludeElab")))))))
-(DFunDef false "buildBoth" ((PVar "modulePath") (PVar "targets")) (EBlock (DoLet false false PWild (EApp (EVar "parseLocated") (ELit (LString "")))) (DoExpr (EMatch (ETuple (EApp (EVar "readPreludeFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readPreludeFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EVar "elaborateCore") (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "buildInterfaceFileFrom") (EVar "modulePath")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "file")) () (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EVar "file") (EVar "e")))) (EVar "elab"))))))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))))
+(DTypeSig false "declsOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "PreludeElab") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeDecls"))))))
+(DFunDef false "declsOf" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "elab")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "preludeDeclsOf") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (EApp (EVar "desugaredPrelude") (EVar "coreSrc")))) (ELam ((PVar "pd")) (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBase") (EFieldAccess (EVar "elab") "peBinderBase")) (EApp (EVar "Ok") (EVar "pd")) (EApp (EVar "Err") (ELit (LString "medaka interface write: the desugared core and its elaboration disagree on the first binder ordinal")))))))
+(DTypeSig true "buildBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "PreludeInterfaceFile") (TyCon "PreludeElab") (TyCon "PreludeDecls")))))))
+(DFunDef false "buildBoth" ((PVar "modulePath") (PVar "targets")) (EMatch (ETuple (EApp (EVar "readPreludeFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readPreludeFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EVar "elaborateCore") (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "buildInterfaceFileFrom") (EVar "modulePath")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "file")) () (EApp (EApp (EVar "andThen") (EVar "elab")) (ELam ((PVar "e")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "declsOf") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "e"))) (ELam ((PVar "pd")) (EApp (EVar "Ok") (ETuple (EVar "file") (EVar "e") (EVar "pd")))))))))))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig false "writeAllAtomically" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "writeAllAtomically" ((PList)) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "writeAllAtomically" ((PAs "files" (PCons (PTuple (PVar "first") PWild) PWild))) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "first"))) (ELit (LString ".new.XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot make a staging directory beside `")) (EApp (EVar "display") (EVar "first"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "S.trim") (EVar "out"))) (DoLet false false (PVar "staged") (EApp (EApp (EVar "map") (ELam ((PVar "f")) (ERecordCreate "Staged" ((fa "stStaging" (EApp (EApp (EVar "joinPath") (EVar "dir")) (EApp (EVar "baseName") (EApp (EVar "fst") (EVar "f"))))) (fa "stTarget" (EApp (EVar "fst") (EVar "f"))) (fa "stText" (EApp (EVar "snd") (EVar "f"))))))) (EVar "files"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "traverse") (EVar "stageFile")) (EVar "staged"))) (ELam (PWild) (EApp (EApp (EVar "traverse") (EVar "moveFile")) (EVar "staged"))))) (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PVar "st")) (EApp (EVar "removeFile") (EFieldAccess (EVar "st") "stStaging")))) (EVar "staged"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "dir"))) (DoExpr (EApp (EApp (EVar "map") (ELam (PWild) (ELit LUnit))) (EVar "result")))))))
@@ -536,19 +615,25 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "failWith" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "failWith" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))
 (DTypeSig false "writeCmd" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "writeCmd" ((PVar "modulePath") (PVar "targets")) (EIf (EBinOp "==" (EApp (EVar "buildFingerprint") (ELit LUnit)) (ELit (LString ""))) (EApp (EVar "failWith") (ELit (LString "medaka interface write: this binary carries no build fingerprint (an unstamped build), so a file it wrote could not be told from another unstamped compiler's; build with `make medaka`"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "buildBoth") (EVar "modulePath")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "file") (PVar "elab"))) () (EMatch (EApp (EVar "writeAllAtomically") (EListLit (ETuple (EApp (EVar "elabPath") (EVar "modulePath")) (EApp (EApp (EVar "encodeElabFile") (EApp (EVar "elabKeyOf") (EFieldAccess (EVar "file") "ifKey"))) (EVar "elab"))) (ETuple (EApp (EVar "interfacePath") (EVar "modulePath")) (EApp (EVar "encodeInterface") (EVar "file"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface write: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "wrote ")) (EApp (EVar "display") (EApp (EVar "interfacePath") (EVar "modulePath")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "wrote ")) (EApp (EVar "display") (EApp (EVar "elabPath") (EVar "modulePath")))) (ELit (LString "")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "writeCmd" ((PVar "modulePath") (PVar "targets")) (EIf (EBinOp "==" (EApp (EVar "buildFingerprint") (ELit LUnit)) (ELit (LString ""))) (EApp (EVar "failWith") (ELit (LString "medaka interface write: this binary carries no build fingerprint (an unstamped build), so a file it wrote could not be told from another unstamped compiler's; build with `make medaka`"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "buildBoth") (EVar "modulePath")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "file") (PVar "elab") (PVar "decls"))) () (EMatch (EApp (EVar "writeAllAtomically") (EListLit (ETuple (EApp (EVar "declsPath") (EVar "modulePath")) (EApp (EApp (EVar "encodeDeclsFile") (EApp (EVar "declsKeyOf") (EFieldAccess (EVar "file") "ifKey"))) (EVar "decls"))) (ETuple (EApp (EVar "elabPath") (EVar "modulePath")) (EApp (EApp (EVar "encodeElabFile") (EApp (EVar "elabKeyOf") (EFieldAccess (EVar "file") "ifKey"))) (EVar "elab"))) (ETuple (EApp (EVar "interfacePath") (EVar "modulePath")) (EApp (EVar "encodeInterface") (EVar "file"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface write: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "wrote ")) (EApp (EVar "display") (EApp (EVar "interfacePath") (EVar "modulePath")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "wrote ")) (EApp (EVar "display") (EApp (EVar "elabPath") (EVar "modulePath")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "wrote ")) (EApp (EVar "display") (EApp (EVar "declsPath") (EVar "modulePath")))) (ELit (LString "")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "joinView" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "joinView" ((PVar "j")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "renderAtom")) (EVar "j"))))
 (DTypeSig false "sectionLines" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "InterfaceSection") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "sectionLines" ((PVar "n") (PVar "total") (PVar "s")) (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "section ")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " of "))) (EApp (EVar "display") (EVar "total"))) (ELit (LString "")))) (EApp (EApp (EVar "map") (ELam ((PVar "j")) (EBinOp "++" (EBinOp "++" (ELit (LString "  join ")) (EApp (EVar "display") (EApp (EVar "joinView") (EVar "j")))) (ELit (LString ""))))) (EFieldAccess (EVar "s") "isJoins"))) (EApp (EApp (EVar "map") (ELam ((PVar "row")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  row ")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "row")))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "ppPubScheme") (EApp (EVar "snd") (EVar "row"))))) (ELit (LString ""))))) (EFieldAccess (EFieldAccess (EVar "s") "isInterface") "piCore"))))
+(DTypeSig false "showHeaderLines" (TyFun (TyCon "InterfaceKey") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "showHeaderLines" ((PVar "key") (PVar "middle") (PVar "digest")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "format ")) (EApp (EVar "display") (EFieldAccess (EVar "key") "ikFormat"))) (ELit (LString "")))) (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "source ")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "s")))) (ELit (LString " sha256 "))) (EApp (EVar "display") (EApp (EVar "snd") (EVar "s")))) (ELit (LString ""))))) (EFieldAccess (EVar "key") "ikSources"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "compiler ")) (EApp (EVar "display") (EFieldAccess (EVar "key") "ikCompiler"))) (ELit (LString ""))))) (EVar "middle")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "digest ")) (EApp (EVar "display") (EVar "digest"))) (ELit (LString ""))))))
 (DTypeSig true "showLines" (TyFun (TyCon "String") (TyFun (TyCon "PreludeInterfaceFile") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "showLines" ((PVar "digest") (PVar "f")) (EBlock (DoLet false false (PVar "total") (EApp (EVar "length") (EFieldAccess (EVar "f") "ifSections"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "format ")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EVar "f") "ifKey") "ikFormat"))) (ELit (LString "")))) (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "source ")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "s")))) (ELit (LString " sha256 "))) (EApp (EVar "display") (EApp (EVar "snd") (EVar "s")))) (ELit (LString ""))))) (EFieldAccess (EFieldAccess (EVar "f") "ifKey") "ikSources"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "compiler ")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EVar "f") "ifKey") "ikCompiler"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "sections ")) (EApp (EVar "display") (EVar "total"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "digest ")) (EApp (EVar "display") (EVar "digest"))) (ELit (LString ""))))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "sectionLines") (EApp (EVar "fst") (EVar "p"))) (EVar "total")) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zip") (ERangeList (ELit (LInt 1)) (EVar "total") true)) (EFieldAccess (EVar "f") "ifSections")))))))
+(DFunDef false "showLines" ((PVar "digest") (PVar "f")) (EBlock (DoLet false false (PVar "total") (EApp (EVar "length") (EFieldAccess (EVar "f") "ifSections"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "showHeaderLines") (EFieldAccess (EVar "f") "ifKey")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "sections ")) (EApp (EVar "display") (EVar "total"))) (ELit (LString ""))))) (EVar "digest")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "sectionLines") (EApp (EVar "fst") (EVar "p"))) (EVar "total")) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zip") (ERangeList (ELit (LInt 1)) (EVar "total") true)) (EFieldAccess (EVar "f") "ifSections")))))))
 (DTypeSig false "showCmd" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "showCmd" ((PVar "path")) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString ".mdk"))) (EVar "path")) (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "` is a source file; show takes the `.mdki` or `.mdke` that `medaka interface write` wrote beside it (`"))) (EApp (EVar "display") (EApp (EVar "interfacePath") (EVar "path")))) (ELit (LString "`, `"))) (EApp (EVar "display") (EApp (EVar "elabPath") (EVar "path")))) (ELit (LString "`)")))) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString ".mdke"))) (EVar "path")) (EApp (EVar "showElabFile") (EVar "path")) (EIf (EVar "otherwise") (EApp (EVar "showFile") (EVar "path")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "showCmd" ((PVar "path")) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString ".mdk"))) (EVar "path")) (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "` is a source file; show takes the `.mdki`, `.mdke` or `.mdkd` that `medaka interface write` wrote beside it (`"))) (EApp (EVar "display") (EApp (EVar "interfacePath") (EVar "path")))) (ELit (LString "`, `"))) (EApp (EVar "display") (EApp (EVar "elabPath") (EVar "path")))) (ELit (LString "`, `"))) (EApp (EVar "display") (EApp (EVar "declsPath") (EVar "path")))) (ELit (LString "`)")))) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString ".mdke"))) (EVar "path")) (EApp (EVar "showElabFile") (EVar "path")) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString ".mdkd"))) (EVar "path")) (EApp (EVar "showDeclsFile") (EVar "path")) (EIf (EVar "otherwise") (EApp (EVar "showFile") (EVar "path")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig true "showDeclsLines" (TyFun (TyCon "String") (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "PreludeDecls") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "showDeclsLines" ((PVar "digest") (PVar "key") (PVar "pd")) (EApp (EApp (EApp (EVar "showHeaderLines") (EVar "key")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "runtime decls ")) (EApp (EVar "display") (EApp (EVar "length") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptDecls")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "core decls ")) (EApp (EVar "display") (EApp (EVar "length") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptDecls")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "binders ")) (EApp (EVar "display") (EBinOp "+" (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptBinders") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBinders")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "Nr ")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptBinders"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "B0r ")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptBase"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "Nc ")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBinders"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "B0c ")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBase"))) (ELit (LString ""))))) (EVar "digest")))
+(DTypeSig false "showDeclsFile" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "showDeclsFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: cannot read `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EVar "display") (EApp (EVar "renderDeclsFault") (EVar "fault")))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "pd"))) () (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "showDeclsLines") (EApp (EVar "framedDigestOf") (EVar "text"))) (EVar "key")) (EVar "pd")))))))))
 (DTypeSig true "showElabLines" (TyFun (TyCon "String") (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "PreludeElab") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "showElabLines" ((PVar "digest") (PVar "key") (PVar "pe")) (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "format ")) (EApp (EVar "display") (EFieldAccess (EVar "key") "ikFormat"))) (ELit (LString "")))) (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "source ")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "s")))) (ELit (LString " sha256 "))) (EApp (EVar "display") (EApp (EVar "snd") (EVar "s")))) (ELit (LString ""))))) (EFieldAccess (EVar "key") "ikSources"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "compiler ")) (EApp (EVar "display") (EFieldAccess (EVar "key") "ikCompiler"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "decls ")) (EApp (EVar "display") (EApp (EVar "length") (EFieldAccess (EVar "pe") "peDecls")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "evidence ")) (EApp (EVar "display") (EApp (EVar "length") (EFieldAccess (EVar "pe") "peEvidence")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "binder rows ")) (EApp (EVar "display") (EApp (EVar "length") (EFieldAccess (EVar "pe") "peBinders")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "K ")) (EApp (EVar "display") (EFieldAccess (EVar "pe") "peEvCounter"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "L ")) (EApp (EVar "display") (EFieldAccess (EVar "pe") "peLocalCounter"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "N ")) (EApp (EVar "display") (EFieldAccess (EVar "pe") "peBinderCount"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "B0 ")) (EApp (EVar "display") (EFieldAccess (EVar "pe") "peBinderBase"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "digest ")) (EApp (EVar "display") (EVar "digest"))) (ELit (LString ""))))))
+(DFunDef false "showElabLines" ((PVar "digest") (PVar "key") (PVar "pe")) (EApp (EApp (EApp (EVar "showHeaderLines") (EVar "key")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "decls ")) (EApp (EVar "display") (EApp (EVar "length") (EFieldAccess (EVar "pe") "peDecls")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "evidence ")) (EApp (EVar "display") (EApp (EVar "length") (EFieldAccess (EVar "pe") "peEvidence")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "binder rows ")) (EApp (EVar "display") (EApp (EVar "length") (EFieldAccess (EVar "pe") "peBinders")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "K ")) (EApp (EVar "display") (EFieldAccess (EVar "pe") "peEvCounter"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "L ")) (EApp (EVar "display") (EFieldAccess (EVar "pe") "peLocalCounter"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "N ")) (EApp (EVar "display") (EFieldAccess (EVar "pe") "peBinderCount"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "B0 ")) (EApp (EVar "display") (EFieldAccess (EVar "pe") "peBinderBase"))) (ELit (LString ""))))) (EVar "digest")))
 (DTypeSig false "showElabFile" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "showElabFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: cannot read `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EVar "display") (EApp (EVar "renderElabFault") (EVar "fault")))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "pe"))) () (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "showElabLines") (EApp (EVar "elabDigestOf") (EVar "text"))) (EVar "key")) (EVar "pe")))))))))
+(DFunDef false "showElabFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: cannot read `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EVar "display") (EApp (EVar "renderElabFault") (EVar "fault")))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "pe"))) () (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "showElabLines") (EApp (EVar "framedDigestOf") (EVar "text"))) (EVar "key")) (EVar "pe")))))))))
 (DTypeSig false "showFile" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "showFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: cannot read `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterface") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EVar "display") (EApp (EVar "renderFault") (EVar "fault")))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "f") (PVar "digest"))) () (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EVar "showLines") (EVar "digest")) (EVar "f")))))))))
 (DData Public "Verdict" () ((variant "Fresh" (ConPos)) (variant "Stale" (ConPos (TyCon "String"))) (variant "Missing" (ConPos))) ())
@@ -562,8 +647,10 @@ runInterfaceCmd (sub :: _) =
 (DFunDef false "interfaceVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "interfacePath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterface") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "f") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (ELam ((PVar "k")) (EVar "k"))) (EFieldAccess (EVar "f") "ifKey")))))))
 (DTypeSig false "elabVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "elabVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "elabPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "elabKeyOf")) (EVar "key")))))))
+(DTypeSig false "declsVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
+(DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsFramed") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "covered"))) () (EMatch (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" PWild) () (EVar "Fresh")))) (arm (PVar "other") () (EVar "other"))))))))
 (DTypeSig true "verdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
-(DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "interfaceVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "elabVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EVar "Fresh")) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "elaborated trees (.mdke) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "elaborated trees (.mdke) ")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PVar "other") () (EVar "other"))))
+(DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "interfaceVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "elabVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "declsVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EVar "Fresh")) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "declarations (.mdkd) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "declarations (.mdkd) ")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "elaborated trees (.mdke) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "elaborated trees (.mdke) ")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "verifyCmd" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "verifyCmd" ((PVar "modulePath")) (EBlock (DoLet false false (PVar "verdict") (EApp (EVar "verdictOf") (EVar "modulePath"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "verdictText") (EVar "verdict")))) (DoExpr (EMatch (EVar "verdict") (arm (PCon "Fresh") () (ELit LUnit)) (arm PWild () (EApp (EVar "stageExit") (ELit (LInt 1))))))))
 (DTypeSig false "printHelp" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -594,14 +681,15 @@ runInterfaceCmd (sub :: _) =
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "renderAtom" false))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "PreludeInterfaceFile" true) (mem "InterfaceSection" true) (mem "encodeInterface" false) (mem "readInterface" false) (mem "renderFault" false) (mem "mergeSections" false))))
-(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" true) (mem "preludeElabOf" false) (mem "encodeElabFile" false) (mem "readElabFile" false) (mem "elabKeyOf" false) (mem "elabDigestOf" false) (mem "renderElabFault" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" true) (mem "preludeElabOf" false) (mem "encodeElabFile" false) (mem "readElabFile" false) (mem "elabKeyOf" false) (mem "framedDigestOf" false) (mem "renderElabFault" false) (mem "readElabKey" false))))
+(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "preludeDeclsOf" false) (mem "encodeDeclsFile" false) (mem "readDeclsFile" false) (mem "declsKeyOf" false) (mem "readDeclsFramed" false) (mem "acceptedDeclsBody" false) (mem "renderDeclsFault" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true) (mem "keysMatch" false) (mem "currentPreludeInterface" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ppPubScheme" false) (mem "CheckedProgram" true) (mem "TcReport" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "lookupProfile" false) (mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "elaborateModulesWithReport" false))))
 (DTypeSig true "interfaceHelpText" (TyCon "String"))
-(DFunDef false "interfaceHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka interface — Write, show and verify the prelude interface file\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka interface write  <module.mdk> [--target <profile>]...\n")) (ELit (LString "  medaka interface show   <file.mdki|file.mdke>\n")) (ELit (LString "  medaka interface verify <module.mdk>\n")) (ELit (LString "\n")) (ELit (LString "  write   type-checks the module (the prelude's core, with runtime.mdk beside\n")) (ELit (LString "          it) under each --target profile and writes <module>.mdki beside it.\n")) (ELit (LString "          Without --target the profiles are the full IO join and\n")) (ELit (LString "          wasmgc/browser-worker.  It also writes <module>.mdke, the module\n")) (ELit (LString "          elaborated once with no user module.  A module with a type error\n")) (ELit (LString "          leaves no file.\n")) (ELit (LString "  show    prints the header and every published row of a .mdki, or the\n")) (ELit (LString "          header and counts of a .mdke.\n")) (ELit (LString "  verify  prints `fresh`, `stale: <component>` or `missing`; exit 0 only on\n")) (ELit (LString "          `fresh`, which needs both files fresh.\n")) (ELit (LString "\n")) (ELit (LString "  -h, --help  prints this help.\n")))))
+(DFunDef false "interfaceHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka interface — Write, show and verify the prelude interface file\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka interface write  <module.mdk> [--target <profile>]...\n")) (ELit (LString "  medaka interface show   <file.mdki|file.mdke|file.mdkd>\n")) (ELit (LString "  medaka interface verify <module.mdk>\n")) (ELit (LString "\n")) (ELit (LString "  write   type-checks the module (the prelude's core, with runtime.mdk beside\n")) (ELit (LString "          it) under each --target profile and writes <module>.mdki beside it.\n")) (ELit (LString "          Without --target the profiles are the full IO join and\n")) (ELit (LString "          wasmgc/browser-worker.  It also writes <module>.mdke, the module\n")) (ELit (LString "          elaborated once with no user module, and <module>.mdkd, the\n")) (ELit (LString "          desugared declarations of runtime.mdk and the module.  A module\n")) (ELit (LString "          with a type error leaves no file.\n")) (ELit (LString "  show    prints the header and every published row of a .mdki, or the\n")) (ELit (LString "          header and counts of a .mdke or .mdkd.\n")) (ELit (LString "  verify  prints `fresh`, `stale: <component>` or `missing`; exit 0 only on\n")) (ELit (LString "          `fresh`, which needs all three files fresh.\n")) (ELit (LString "\n")) (ELit (LString "  -h, --help  prints this help.\n")))))
 (DTypeSig false "writeSpec" (TyCon "ArgSpec"))
 (DFunDef false "writeSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "interface write"))) (EListLit (EVar "helpSwitch") (EApp (EApp (EApp (EVar "valueList") (EListLit (ELit (LString "--target")))) (ELit (LString "PROFILE"))) (ELit (LString "a target profile whose IO join gets a section (repeatable)")))))))
 (DTypeSig false "plainSpec" (TyFun (TyCon "String") (TyCon "ArgSpec")))
@@ -614,6 +702,8 @@ runInterfaceCmd (sub :: _) =
 (DFunDef false "interfacePath" ((PVar "modulePath")) (EBinOp "++" (EVar "modulePath") (ELit (LString "i"))))
 (DTypeSig false "elabPath" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "elabPath" ((PVar "modulePath")) (EBinOp "++" (EVar "modulePath") (ELit (LString "e"))))
+(DTypeSig false "declsPath" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "declsPath" ((PVar "modulePath")) (EBinOp "++" (EVar "modulePath") (ELit (LString "d"))))
 (DTypeSig false "runtimePathOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "runtimePathOf" ((PVar "modulePath")) (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "modulePath"))) (ELit (LString "runtime.mdk"))))
 (DTypeSig false "defaultTargets" (TyApp (TyCon "List") (TyCon "String")))
@@ -629,8 +719,10 @@ runInterfaceCmd (sub :: _) =
 (DFunDef false "buildInterfaceFileFrom" ((PVar "modulePath") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "targets")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EMethodRef "traverse") (EVar "profileOfTarget")) (EIf (EApp (EMethodRef "isEmpty") (EVar "targets")) (EVar "defaultTargets") (EVar "targets")))) (ELam ((PVar "profiles")) (ELet false (PVar "inputs") (EApp (EApp (EApp (EVar "inputsOf") (EVar "modulePath")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EMethodRef "traverse") (EApp (EApp (EVar "driveUnder") (EVar "inputs")) (EVar "modulePath"))) (EVar "profiles"))) (ELam ((PVar "drives")) (EApp (EVar "Ok") (ERecordCreate "PreludeInterfaceFile" ((fa "ifKey" (EApp (EApp (EVar "preludeInterfaceKey") (EApp (EVar "baseName") (EVar "modulePath"))) (EVar "inputs"))) (fa "ifSections" (EApp (EVar "mergeSections") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EVar "d"))) (EVar "drives")))))))))))))
 (DTypeSig false "elaborateCore" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeElab")))))
 (DFunDef false "elaborateCore" ((PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple PWild (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EVar "defaultDriveInputs")) (EVar "False")) (EVar "None")) (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (EListLit))) (DoExpr (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration left no checked program")))) (arm (PCon "Some" (PVar "c")) () (EMatch (EFieldAccess (EVar "c") "cpTrees") (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration left no trees")))) (arm (PCon "Some" (PTuple (PVar "trees") PWild)) () (EIf (EFieldAccess (EVar "outputs") "doHadTypeErrors") (EApp (EVar "Err") (ELit (LString "medaka interface write: the elaboration had type errors"))) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "preludeElabOf") (EVar "trees")) (EFieldAccess (EVar "c") "cpEvidence")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "entries") (EFieldAccess (EVar "c") "cpBinders")))))))))))))
-(DTypeSig true "buildBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "PreludeInterfaceFile") (TyCon "PreludeElab")))))))
-(DFunDef false "buildBoth" ((PVar "modulePath") (PVar "targets")) (EBlock (DoLet false false PWild (EApp (EVar "parseLocated") (ELit (LString "")))) (DoExpr (EMatch (ETuple (EApp (EVar "readPreludeFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readPreludeFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EVar "elaborateCore") (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "buildInterfaceFileFrom") (EVar "modulePath")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "file")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EVar "file") (EVar "e")))) (EVar "elab"))))))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))))
+(DTypeSig false "declsOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "PreludeElab") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeDecls"))))))
+(DFunDef false "declsOf" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "elab")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "preludeDeclsOf") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (EApp (EVar "desugaredPrelude") (EVar "coreSrc")))) (ELam ((PVar "pd")) (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBase") (EFieldAccess (EVar "elab") "peBinderBase")) (EApp (EVar "Ok") (EVar "pd")) (EApp (EVar "Err") (ELit (LString "medaka interface write: the desugared core and its elaboration disagree on the first binder ordinal")))))))
+(DTypeSig true "buildBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "PreludeInterfaceFile") (TyCon "PreludeElab") (TyCon "PreludeDecls")))))))
+(DFunDef false "buildBoth" ((PVar "modulePath") (PVar "targets")) (EMatch (ETuple (EApp (EVar "readPreludeFile") (EApp (EVar "runtimePathOf") (EVar "modulePath"))) (EApp (EVar "readPreludeFile") (EVar "modulePath"))) (arm (PTuple (PCon "Ok" (PVar "runtimeSrc")) (PCon "Ok" (PVar "coreSrc"))) () (EBlock (DoLet false false (PVar "elab") (EApp (EApp (EVar "elaborateCore") (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "buildInterfaceFileFrom") (EVar "modulePath")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "file")) () (EApp (EApp (EMethodRef "andThen") (EVar "elab")) (ELam ((PVar "e")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "declsOf") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "e"))) (ELam ((PVar "pd")) (EApp (EVar "Ok") (ETuple (EVar "file") (EVar "e") (EVar "pd")))))))))))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig false "writeAllAtomically" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "writeAllAtomically" ((PList)) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "writeAllAtomically" ((PAs "files" (PCons (PTuple (PVar "first") PWild) PWild))) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "first"))) (ELit (LString ".new.XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot make a staging directory beside `")) (EApp (EMethodRef "display") (EVar "first"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "S.trim") (EVar "out"))) (DoLet false false (PVar "staged") (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (ERecordCreate "Staged" ((fa "stStaging" (EApp (EApp (EVar "joinPath") (EVar "dir")) (EApp (EVar "baseName") (EApp (EVar "fst") (EVar "f"))))) (fa "stTarget" (EApp (EVar "fst") (EVar "f"))) (fa "stText" (EApp (EVar "snd") (EVar "f"))))))) (EVar "files"))) (DoLet false false (PVar "result") (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EMethodRef "traverse") (EVar "stageFile")) (EVar "staged"))) (ELam (PWild) (EApp (EApp (EMethodRef "traverse") (EVar "moveFile")) (EVar "staged"))))) (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PVar "st")) (EApp (EVar "removeFile") (EFieldAccess (EVar "st") "stStaging")))) (EVar "staged"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "dir"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam (PWild) (ELit LUnit))) (EVar "result")))))))
@@ -642,19 +734,25 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "failWith" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "failWith" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))
 (DTypeSig false "writeCmd" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "writeCmd" ((PVar "modulePath") (PVar "targets")) (EIf (EBinOp "==" (EApp (EVar "buildFingerprint") (ELit LUnit)) (ELit (LString ""))) (EApp (EVar "failWith") (ELit (LString "medaka interface write: this binary carries no build fingerprint (an unstamped build), so a file it wrote could not be told from another unstamped compiler's; build with `make medaka`"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "buildBoth") (EVar "modulePath")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "file") (PVar "elab"))) () (EMatch (EApp (EVar "writeAllAtomically") (EListLit (ETuple (EApp (EVar "elabPath") (EVar "modulePath")) (EApp (EApp (EVar "encodeElabFile") (EApp (EVar "elabKeyOf") (EFieldAccess (EVar "file") "ifKey"))) (EVar "elab"))) (ETuple (EApp (EVar "interfacePath") (EVar "modulePath")) (EApp (EVar "encodeInterface") (EVar "file"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface write: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "wrote ")) (EApp (EMethodRef "display") (EApp (EVar "interfacePath") (EVar "modulePath")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "wrote ")) (EApp (EMethodRef "display") (EApp (EVar "elabPath") (EVar "modulePath")))) (ELit (LString "")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "writeCmd" ((PVar "modulePath") (PVar "targets")) (EIf (EBinOp "==" (EApp (EVar "buildFingerprint") (ELit LUnit)) (ELit (LString ""))) (EApp (EVar "failWith") (ELit (LString "medaka interface write: this binary carries no build fingerprint (an unstamped build), so a file it wrote could not be told from another unstamped compiler's; build with `make medaka`"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "buildBoth") (EVar "modulePath")) (EVar "targets")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "file") (PVar "elab") (PVar "decls"))) () (EMatch (EApp (EVar "writeAllAtomically") (EListLit (ETuple (EApp (EVar "declsPath") (EVar "modulePath")) (EApp (EApp (EVar "encodeDeclsFile") (EApp (EVar "declsKeyOf") (EFieldAccess (EVar "file") "ifKey"))) (EVar "decls"))) (ETuple (EApp (EVar "elabPath") (EVar "modulePath")) (EApp (EApp (EVar "encodeElabFile") (EApp (EVar "elabKeyOf") (EFieldAccess (EVar "file") "ifKey"))) (EVar "elab"))) (ETuple (EApp (EVar "interfacePath") (EVar "modulePath")) (EApp (EVar "encodeInterface") (EVar "file"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface write: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "wrote ")) (EApp (EMethodRef "display") (EApp (EVar "interfacePath") (EVar "modulePath")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "wrote ")) (EApp (EMethodRef "display") (EApp (EVar "elabPath") (EVar "modulePath")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "wrote ")) (EApp (EMethodRef "display") (EApp (EVar "declsPath") (EVar "modulePath")))) (ELit (LString "")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "joinView" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "joinView" ((PVar "j")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "renderAtom")) (EVar "j"))))
 (DTypeSig false "sectionLines" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "InterfaceSection") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "sectionLines" ((PVar "n") (PVar "total") (PVar "s")) (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "section ")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " of "))) (EApp (EMethodRef "display") (EVar "total"))) (ELit (LString "")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "j")) (EBinOp "++" (EBinOp "++" (ELit (LString "  join ")) (EApp (EMethodRef "display") (EApp (EVar "joinView") (EVar "j")))) (ELit (LString ""))))) (EFieldAccess (EVar "s") "isJoins"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  row ")) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "row")))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "ppPubScheme") (EApp (EVar "snd") (EVar "row"))))) (ELit (LString ""))))) (EFieldAccess (EFieldAccess (EVar "s") "isInterface") "piCore"))))
+(DTypeSig false "showHeaderLines" (TyFun (TyCon "InterfaceKey") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "showHeaderLines" ((PVar "key") (PVar "middle") (PVar "digest")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "format ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "key") "ikFormat"))) (ELit (LString "")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "source ")) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "s")))) (ELit (LString " sha256 "))) (EApp (EMethodRef "display") (EApp (EVar "snd") (EVar "s")))) (ELit (LString ""))))) (EFieldAccess (EVar "key") "ikSources"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "compiler ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "key") "ikCompiler"))) (ELit (LString ""))))) (EVar "middle")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "digest ")) (EApp (EMethodRef "display") (EVar "digest"))) (ELit (LString ""))))))
 (DTypeSig true "showLines" (TyFun (TyCon "String") (TyFun (TyCon "PreludeInterfaceFile") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "showLines" ((PVar "digest") (PVar "f")) (EBlock (DoLet false false (PVar "total") (EApp (EMethodRef "length") (EFieldAccess (EVar "f") "ifSections"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "format ")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EVar "f") "ifKey") "ikFormat"))) (ELit (LString "")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "source ")) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "s")))) (ELit (LString " sha256 "))) (EApp (EMethodRef "display") (EApp (EVar "snd") (EVar "s")))) (ELit (LString ""))))) (EFieldAccess (EFieldAccess (EVar "f") "ifKey") "ikSources"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "compiler ")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EVar "f") "ifKey") "ikCompiler"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "sections ")) (EApp (EMethodRef "display") (EVar "total"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "digest ")) (EApp (EMethodRef "display") (EVar "digest"))) (ELit (LString ""))))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "sectionLines") (EApp (EVar "fst") (EVar "p"))) (EVar "total")) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zip") (ERangeList (ELit (LInt 1)) (EVar "total") true)) (EFieldAccess (EVar "f") "ifSections")))))))
+(DFunDef false "showLines" ((PVar "digest") (PVar "f")) (EBlock (DoLet false false (PVar "total") (EApp (EMethodRef "length") (EFieldAccess (EVar "f") "ifSections"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "showHeaderLines") (EFieldAccess (EVar "f") "ifKey")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "sections ")) (EApp (EMethodRef "display") (EVar "total"))) (ELit (LString ""))))) (EVar "digest")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "sectionLines") (EApp (EVar "fst") (EVar "p"))) (EVar "total")) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zip") (ERangeList (ELit (LInt 1)) (EVar "total") true)) (EFieldAccess (EVar "f") "ifSections")))))))
 (DTypeSig false "showCmd" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "showCmd" ((PVar "path")) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString ".mdk"))) (EVar "path")) (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "` is a source file; show takes the `.mdki` or `.mdke` that `medaka interface write` wrote beside it (`"))) (EApp (EMethodRef "display") (EApp (EVar "interfacePath") (EVar "path")))) (ELit (LString "`, `"))) (EApp (EMethodRef "display") (EApp (EVar "elabPath") (EVar "path")))) (ELit (LString "`)")))) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString ".mdke"))) (EVar "path")) (EApp (EVar "showElabFile") (EVar "path")) (EIf (EVar "otherwise") (EApp (EVar "showFile") (EVar "path")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "showCmd" ((PVar "path")) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString ".mdk"))) (EVar "path")) (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "` is a source file; show takes the `.mdki`, `.mdke` or `.mdkd` that `medaka interface write` wrote beside it (`"))) (EApp (EMethodRef "display") (EApp (EVar "interfacePath") (EVar "path")))) (ELit (LString "`, `"))) (EApp (EMethodRef "display") (EApp (EVar "elabPath") (EVar "path")))) (ELit (LString "`, `"))) (EApp (EMethodRef "display") (EApp (EVar "declsPath") (EVar "path")))) (ELit (LString "`)")))) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString ".mdke"))) (EVar "path")) (EApp (EVar "showElabFile") (EVar "path")) (EIf (EApp (EApp (EVar "S.endsWith") (ELit (LString ".mdkd"))) (EVar "path")) (EApp (EVar "showDeclsFile") (EVar "path")) (EIf (EVar "otherwise") (EApp (EVar "showFile") (EVar "path")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig true "showDeclsLines" (TyFun (TyCon "String") (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "PreludeDecls") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "showDeclsLines" ((PVar "digest") (PVar "key") (PVar "pd")) (EApp (EApp (EApp (EVar "showHeaderLines") (EVar "key")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "runtime decls ")) (EApp (EMethodRef "display") (EApp (EMethodRef "length") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptDecls")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "core decls ")) (EApp (EMethodRef "display") (EApp (EMethodRef "length") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptDecls")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "binders ")) (EApp (EMethodRef "display") (EBinOp "+" (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptBinders") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBinders")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "Nr ")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptBinders"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "B0r ")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptBase"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "Nc ")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBinders"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "B0c ")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBase"))) (ELit (LString ""))))) (EVar "digest")))
+(DTypeSig false "showDeclsFile" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "showDeclsFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: cannot read `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EApp (EVar "renderDeclsFault") (EVar "fault")))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "pd"))) () (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "showDeclsLines") (EApp (EVar "framedDigestOf") (EVar "text"))) (EVar "key")) (EVar "pd")))))))))
 (DTypeSig true "showElabLines" (TyFun (TyCon "String") (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "PreludeElab") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "showElabLines" ((PVar "digest") (PVar "key") (PVar "pe")) (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "format ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "key") "ikFormat"))) (ELit (LString "")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "source ")) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "s")))) (ELit (LString " sha256 "))) (EApp (EMethodRef "display") (EApp (EVar "snd") (EVar "s")))) (ELit (LString ""))))) (EFieldAccess (EVar "key") "ikSources"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "compiler ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "key") "ikCompiler"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "decls ")) (EApp (EMethodRef "display") (EApp (EMethodRef "length") (EFieldAccess (EVar "pe") "peDecls")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "evidence ")) (EApp (EMethodRef "display") (EApp (EMethodRef "length") (EFieldAccess (EVar "pe") "peEvidence")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "binder rows ")) (EApp (EMethodRef "display") (EApp (EMethodRef "length") (EFieldAccess (EVar "pe") "peBinders")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "K ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "pe") "peEvCounter"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "L ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "pe") "peLocalCounter"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "N ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "pe") "peBinderCount"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "B0 ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "pe") "peBinderBase"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "digest ")) (EApp (EMethodRef "display") (EVar "digest"))) (ELit (LString ""))))))
+(DFunDef false "showElabLines" ((PVar "digest") (PVar "key") (PVar "pe")) (EApp (EApp (EApp (EVar "showHeaderLines") (EVar "key")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "decls ")) (EApp (EMethodRef "display") (EApp (EMethodRef "length") (EFieldAccess (EVar "pe") "peDecls")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "evidence ")) (EApp (EMethodRef "display") (EApp (EMethodRef "length") (EFieldAccess (EVar "pe") "peEvidence")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "binder rows ")) (EApp (EMethodRef "display") (EApp (EMethodRef "length") (EFieldAccess (EVar "pe") "peBinders")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "K ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "pe") "peEvCounter"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "L ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "pe") "peLocalCounter"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "N ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "pe") "peBinderCount"))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "B0 ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "pe") "peBinderBase"))) (ELit (LString ""))))) (EVar "digest")))
 (DTypeSig false "showElabFile" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "showElabFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: cannot read `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EApp (EVar "renderElabFault") (EVar "fault")))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "pe"))) () (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "showElabLines") (EApp (EVar "elabDigestOf") (EVar "text"))) (EVar "key")) (EVar "pe")))))))))
+(DFunDef false "showElabFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: cannot read `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EApp (EVar "renderElabFault") (EVar "fault")))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "pe"))) () (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "showElabLines") (EApp (EVar "framedDigestOf") (EVar "text"))) (EVar "key")) (EVar "pe")))))))))
 (DTypeSig false "showFile" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "showFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: cannot read `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterface") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "failWith") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka interface show: `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EApp (EVar "renderFault") (EVar "fault")))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "f") (PVar "digest"))) () (EApp (EVar "putStrLn") (EApp (EVar "joinNl") (EApp (EApp (EVar "showLines") (EVar "digest")) (EVar "f")))))))))
 (DData Public "Verdict" () ((variant "Fresh" (ConPos)) (variant "Stale" (ConPos (TyCon "String"))) (variant "Missing" (ConPos))) ())
@@ -668,8 +766,10 @@ runInterfaceCmd (sub :: _) =
 (DFunDef false "interfaceVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "interfacePath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterface") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "f") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (ELam ((PVar "k")) (EVar "k"))) (EFieldAccess (EVar "f") "ifKey")))))))
 (DTypeSig false "elabVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "elabVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "elabPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "elabKeyOf")) (EVar "key")))))))
+(DTypeSig false "declsVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
+(DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsFramed") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "covered"))) () (EMatch (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" PWild) () (EVar "Fresh")))) (arm (PVar "other") () (EVar "other"))))))))
 (DTypeSig true "verdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
-(DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "interfaceVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "elabVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EVar "Fresh")) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "elaborated trees (.mdke) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "elaborated trees (.mdke) ")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PVar "other") () (EVar "other"))))
+(DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "interfaceVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "elabVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "declsVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EVar "Fresh")) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "declarations (.mdkd) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "declarations (.mdkd) ")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "elaborated trees (.mdke) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "elaborated trees (.mdke) ")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "verifyCmd" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "verifyCmd" ((PVar "modulePath")) (EBlock (DoLet false false (PVar "verdict") (EApp (EVar "verdictOf") (EVar "modulePath"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "verdictText") (EVar "verdict")))) (DoExpr (EMatch (EVar "verdict") (arm (PCon "Fresh") () (ELit LUnit)) (arm PWild () (EApp (EVar "stageExit") (ELit (LInt 1))))))))
 (DTypeSig false "printHelp" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))

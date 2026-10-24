@@ -62,7 +62,7 @@ import tools.target_parse.{
   targetDesugared,
   targetExamples,
 }
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import driver.loader.{
   loadProgramFilesLocatedE,
   modIdToPath,
@@ -76,9 +76,9 @@ import driver.loader.{
   readSource,
 }
 import driver.build_cmd.{
-  readPreludeFile, envOr, defaultMedakaRoot, loadPreludeInterface,
-  loadPreludeElab, preludeTreesLine, treesLoaded, withHeldPrelude, TreesVerdict,
-  PreludeInputs, shippedInputs
+  readPreludeSources, envOr, defaultMedakaRoot, loadPreludeInterface,
+  loadPreludeElab, treesLoaded, withHeldPrelude, FileVerdict, SideFile(..),
+  PreludeInputs(..), staleLine, preludeDeclsVerdict, reportStaleLine
 }
 import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
@@ -282,6 +282,8 @@ substringMatch needle haystack = isSome (stringIndexOf needle haystack)
 -- `cases` overrides the prop sample count (`--cases`, default 100 at the CLI);
 -- `filterOpt` restricts doctests/`test "…"`/`prop "…"` to names containing a
 -- substring (`--filter`, #2295).
+-- The prelude is read from the directory of `runtimeP`, so `coreP` must be the
+-- `core.mdk` beside it; any other path is refused.
 export
 runTest : List Engine ->
   String ->
@@ -291,103 +293,110 @@ runTest : List Engine ->
   Int ->
   Option String ->
   <IO> Bool
-runTest engines runtimeP coreP target roots cases filterOpt =
-  match carryProjectProfile None target
+runTest engines runtimeP coreP target roots cases filterOpt
+  | not (besideRuntime runtimeP coreP) =
+    ePutStrLn
+      "error: `core.mdk` must be the one beside `runtime.mdk`, got `\{coreP}`"
+    False
+  | otherwise = match carryProjectProfile None target
     Err m =>
-      let _ = ePutStrLn ("error: " ++ m)
+      ePutStrLn ("error: " ++ m)
       False
-    Ok _ =>
-      runTestUnderProfile engines runtimeP coreP target roots cases filterOpt
+    Ok _ => runTestUnderProfile engines runtimeP target roots cases filterOpt
+
+-- Is [coreP] the `core.mdk` in the directory [runtimeP] is in?  The directories
+-- are compared resolved, so `//`, `.` and a symlinked directory name the same
+-- place however they are spelled.
+export
+besideRuntime : String -> String -> <IO> Bool
+besideRuntime runtimeP coreP =
+  baseOf coreP == "core.mdk"
+    && canonicalizePath (dirOf coreP) == canonicalizePath (dirOf runtimeP)
 
 -- `runTest` once the target's project profile is the selected one.
 runTestUnderProfile : List Engine ->
-  String ->
   String ->
   String ->
   List String ->
   Int ->
   Option String ->
   <IO> Bool
-runTestUnderProfile engines runtimeP coreP target roots cases filterOpt =
-  match readPreludeFile runtimeP
+runTestUnderProfile engines runtimeP target roots cases filterOpt =
+  match readPreludeSources (dirOf runtimeP)
     Err e =>
-      let _ = ePutStrLn e
+      ePutStrLn e
       False
-    Ok rsrc => match readPreludeFile coreP
+    Ok prelude => match readSource target
       Err e =>
-        let _ = ePutStrLn e
+        ePutStrLn e
         False
-      Ok csrc => match readSource target
+      -- A FILE-LEVEL parse error in the target must surface as the SAME located
+      -- `file:L:C:` diagnostic `medaka check` prints — not the unlocated
+      -- `panic "parse error"` the memoized `targetDesugared`/`targetRaw` below
+      -- would raise (issue #892).  Gate on the non-panicking `parseTargetResult`
+      -- first (the same parse `check` uses) and, on failure, render the structured
+      -- `ParseError` through the shared `parseErrDiag`/`ppDiagCliSrc` machinery,
+      -- returning False so the caller exits nonzero — accumulate-and-report, not
+      -- panic.  (Issue #55 fixed parse errors in an individual doctest EXAMPLE;
+      -- this covers a parse error in the module SOURCE itself.)
+      Ok tsrc => match parseTargetResult tsrc
         Err e =>
-          let _ = ePutStrLn e
+          ePutStrLn (ppDiagCliSrc tsrc target (parseErrDiag target e))
           False
-        -- A FILE-LEVEL parse error in the target must surface as the SAME located
-        -- `file:L:C:` diagnostic `medaka check` prints — not the unlocated
-        -- `panic "parse error"` the memoized `targetDesugared`/`targetRaw` below
-        -- would raise (issue #892).  Gate on the non-panicking `parseTargetResult`
-        -- first (the same parse `check` uses) and, on failure, render the structured
-        -- `ParseError` through the shared `parseErrDiag`/`ppDiagCliSrc` machinery,
-        -- returning False so the caller exits nonzero — accumulate-and-report, not
-        -- panic.  (Issue #55 fixed parse errors in an individual doctest EXAMPLE;
-        -- this covers a parse error in the module SOURCE itself.)
-        Ok tsrc => match parseTargetResult tsrc
-          Err e =>
-            let _ = ePutStrLn (ppDiagCliSrc tsrc target (parseErrDiag target e))
-            False
-          Ok _ =>
-            let userDecls = targetDesugared tsrc
-            let exempt = typecheckExempt target userDecls tsrc
-            let _ = exemptNotice exempt target userDecls
-            match pinIndexForTarget target userDecls
-              Err err =>
-                let _ = ePutStrLn err
-                False
-              Ok (file, index) =>
-                let _ =
-                  holdTestPrelude
-                    True
-                    (shippedInputs (dirOf runtimeP) rsrc csrc)
-                -- S-1/#2234 (F-converge): the prelude halves go through the
-                -- content-keyed `desugaredPrelude` memo; only the USER source is
-                -- parsed+desugared fresh here.
-                driveAll
-                  engines
-                  (desugaredPrelude rsrc)
-                  (desugaredPrelude csrc)
-                  rsrc
-                  csrc
-                  (dirOf runtimeP)
-                  target
-                  tsrc
-                  roots
-                  cases
-                  filterOpt
-                  userDecls
-                  exempt
-                  file
-                  index
+        Ok _ =>
+          let userDecls = targetDesugared tsrc
+          let exempt = typecheckExempt target userDecls tsrc
+          let _ = exemptNotice exempt target userDecls
+          match pinIndexForTarget target userDecls
+            Err err =>
+              ePutStrLn err
+              False
+            Ok (file, index) =>
+              let _ = holdTestPrelude True prelude
+              -- S-1/#2234 (F-converge): the prelude halves go through the
+              -- content-keyed `desugaredPrelude` memo; only the USER source is
+              -- parsed+desugared fresh here.
+              driveAll
+                engines
+                (desugaredPrelude prelude.pnRuntimeSrc)
+                (desugaredPrelude prelude.pnCoreSrc)
+                prelude.pnRuntimeSrc
+                prelude.pnCoreSrc
+                prelude.pnStdlibDir
+                target
+                tsrc
+                roots
+                cases
+                filterOpt
+                userDecls
+                exempt
+                file
+                index
 
 -- Hold the prelude's interface and elaborated trees for this process, so the
 -- drives built by `testDriveInputs` skip core's pass.  [report] is the verb's
--- own process: it prints the trees' verdict once, a stop under MEDAKA_STRICT; a
--- props worker, spawned by that process, prints nothing.
+-- own process: it prints the trees' and the declarations' verdicts once, a stop
+-- under MEDAKA_STRICT; a props worker, spawned by that process, prints nothing.
 holdTestPrelude : Bool -> PreludeInputs -> <IO> Unit
 holdTestPrelude report inputs =
   let _ = loadPreludeInterface inputs
   let first = not (treesLoaded ())
   let verdict = loadPreludeElab inputs
-  if report && first then reportTestTrees verdict
+  if report && first then
+    let _ = reportTestTrees verdict
+    reportTestLine (staleLine DeclsFile (preludeDeclsVerdict inputs))
 
 -- The line a stale file earns, once per process because the load is.
-reportTestTrees : TreesVerdict -> <IO> Unit
-reportTestTrees verdict = match preludeTreesLine verdict
-  Some msg =>
-    if envOr "MEDAKA_STRICT" "" /= "" then
-      let _ = ePutStrLn msg
-      stageExit 1
-    else
+reportTestTrees : FileVerdict -> <IO> Unit
+reportTestTrees verdict = reportTestLine (staleLine TreesFile verdict)
+
+reportTestLine : Option String -> <IO> Unit
+reportTestLine =
+  reportStaleLine
+    (msg =>
       ePutStrLn msg
-  None => ()
+      stageExit 1)
+    None
 
 -- A drive's inputs: keyed for the shipped trees when [coreDecls] are core's.
 testDriveInputs : List Decl -> DriveInputs
@@ -969,7 +978,7 @@ gateOfCheck False rsrc csrc target roots mods =
       []
       (desugaredPrelude rsrc)
       (desugaredPrelude csrc)
-      (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+      (Some (preludeGeneration rsrc csrc))
       (chainKeyOf target roots)
       mods)
 
@@ -3057,28 +3066,21 @@ runEvalPropsWorker : String -> List PropRequest -> <IO> Unit
 runEvalPropsWorker target requests =
   let nonce = startEvalPropWorker ()
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let runtimePath = joinPath root "stdlib/runtime.mdk"
-  let corePath = joinPath root "stdlib/core.mdk"
   let stdlibDir = joinPath root "stdlib"
-  match readPreludeFile runtimePath
-    Err message => evalWorkerDie "could not read runtime prelude: \{message}"
-    Ok runtimeSrc => match readPreludeFile corePath
-      Err message => evalWorkerDie "could not read core prelude: \{message}"
-      Ok coreSrc => match readSource target
-        Err message =>
-          evalWorkerDie "could not read property target: \{message}"
-        Ok tsrc => match parseTargetResult tsrc
-          Err _ => evalWorkerDie "could not parse property target"
-          Ok _ =>
-            runEvalPropsWorkerSource
-              target
-              nonce
-              requests
-              runtimeSrc
-              coreSrc
-              stdlibDir
-              tsrc
-              (targetDesugared tsrc)
+  match readPreludeSources stdlibDir
+    Err message => evalWorkerDie "could not read the prelude: \{message}"
+    Ok prelude => match readSource target
+      Err message => evalWorkerDie "could not read property target: \{message}"
+      Ok tsrc => match parseTargetResult tsrc
+        Err _ => evalWorkerDie "could not parse property target"
+        Ok _ =>
+          runEvalPropsWorkerSource
+            target
+            nonce
+            requests
+            prelude
+            tsrc
+            (targetDesugared tsrc)
 
 evalWorkerDie : String -> <IO> Unit
 evalWorkerDie message = do
@@ -3088,14 +3090,15 @@ evalWorkerDie message = do
 runEvalPropsWorkerSource : String ->
   String ->
   List PropRequest ->
-  String ->
-  String ->
-  String ->
+  PreludeInputs ->
   String ->
   List Decl ->
   <IO> Unit
-runEvalPropsWorkerSource target nonce requests runtimeSrc coreSrc stdlibDir tsrc userDecls =
-  let _ = holdTestPrelude False (shippedInputs stdlibDir runtimeSrc coreSrc)
+runEvalPropsWorkerSource target nonce requests prelude tsrc userDecls =
+  let runtimeSrc = prelude.pnRuntimeSrc
+  let coreSrc = prelude.pnCoreSrc
+  let stdlibDir = prelude.pnStdlibDir
+  let _ = holdTestPrelude False prelude
   let runtimeDecls = desugaredPrelude runtimeSrc
   let coreDecls = desugaredPrelude coreSrc
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]

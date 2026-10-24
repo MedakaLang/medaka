@@ -831,5 +831,9 @@ resolves a different stdlib root. CI does not ship the file in the build-once ar
 dict-passed trees the tree arm (`run`, the emitter child, `medaka test`'s eval drives) continues from
 instead of re-elaborating core. It has the same key components as `core.mdki` and its own format tag
 and digest; every `make medaka` path and CI's `setup-medaka` regenerate it, `.gitignore` excludes it,
-and `scripts/make_dist.sh` ships it with the rest of `stdlib/`. `interface verify` is `fresh` only
-when both files are.
+and `scripts/make_dist.sh` ships it with the rest of `stdlib/`.
+
+`interface write` also writes `stdlib/core.mdkd` beside both: the desugared declarations of the
+runtime and core texts, with the same key components and its own format tag and digest. It is
+regenerated, ignored and shipped the same way. `interface verify` is `fresh` only when all three
+files are.

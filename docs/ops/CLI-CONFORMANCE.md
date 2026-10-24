@@ -414,6 +414,24 @@ envelope's `stalePreludeTrees` field (routed like `staleBinary`, §4) and print 
 non-envelope exit. `MEDAKA_STRICT=1` exits 1 on the stale line for each of those verbs. An emitter
 child never prints the line and never exits on it.
 
+**The prelude's declarations (`stdlib/core.mdkd`).** `medaka interface show <file.mdkd>` prints the
+header (format, source hashes, compiler identity), the declaration counts, the two binder runs
+(`Nr`, `B0r`, `Nc`, `B0c`) and the digest. `interface verify <module.mdk>` is `fresh` only when
+`core.mdki`, `core.mdke` and `core.mdkd` all are, and names a bad `.mdkd` as `stale: declarations
+(.mdkd) <component>`: `verify` applies the acceptance the loader applies, so a digest-valid file whose
+body does not decode, or whose counters do not describe its trees, is stale there too. A stale or missing `core.mdkd` makes the verb parse and desugar the runtime and
+core texts as before and print one stderr line, `prelude decls stale: parsing stdlib/core.mdk
+(<component>)`. The verbs that print it are `check`, `check --json`, `lsp`, `mcp`, `run`, `run --json`,
+`build`, `build --json`, `check-policy`, `manifest`, `repl` and plain `test` (which also exits 1 on it
+under `MEDAKA_STRICT`); `doc` and `test --json` load silently. The set is the callers of
+`loadCheckPrelude`, `takeShippedPrelude`, `reportChildTrees`, `nativeTreesReport` and
+`jsonPreludeNotices` in `compiler/driver/medaka_cli.mdk` and of `holdTestPrelude True` in
+`compiler/tools/test_cmd.mdk`; `make cli-conformance-census` lists the verbs but not which load
+the prelude's files.
+Under `--json`, `run` and `build` carry the line as the envelope's `stalePreludeDecls` field, and
+`check --json` prints it on stderr only. `MEDAKA_STRICT` (any non-empty value) stops the verb on the
+line with exit 1, as it does for the trees line.
+
 ✅ **DRAINED by S-5.** `check --types` under `--json` used to be a silent drop: `medaka check
 --types ok.mdk` printed `main : Unit`; `medaka check --json --types ok.mdk` printed the same
 envelope as without `--types`, no message, no note in `checkHelpText`. The envelope has no
