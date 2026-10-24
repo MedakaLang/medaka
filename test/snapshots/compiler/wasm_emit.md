@@ -1,5 +1,5 @@
 # META
-source_lines=11946
+source_lines=11952
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -1843,6 +1843,7 @@ fileBoundEnterW prog env d g mode keep =
 -- catalog wasm family is `WasmStr` (intToString/putStrLn/stringConcat/…).  Any of
 -- these forces the §3.3 $str rep + the byte-write runtime + ref-mode.  Detected
 -- structurally over every clause body.
+-- Local spellings retain legacy mode eligibility; extern binding uses facts.
 programUsesStr : OrdMap ExternDeclFact -> List CBind -> Bool
 programUsesStr facts groups = anyBind (bindUsesStr facts) groups
 
@@ -1854,12 +1855,12 @@ exprUsesStr : OrdMap ExternDeclFact -> CExpr -> Bool
 exprUsesStr _ (CLit (LString _)) = True
 exprUsesStr _ (CLit (LChar _)) = True
 exprUsesStr _ (CLit _) = False
-exprUsesStr facts (CVar symbol AGlobal) = match externRuntimeKey facts symbol
-  Some key => match wasmFamily key
-    Some WasmStr => True
-    _ => False
-  None => False
-exprUsesStr _ (CVar _ _) = False
+exprUsesStr facts (CVar symbol AGlobal) =
+  isStrModeNameW symbol
+    || (match externRuntimeKey facts symbol
+      Some key => isStrModeNameW key
+      None => False)
+exprUsesStr _ (CVar symbol _) = isStrModeNameW symbol
 exprUsesStr facts (app@(CApp _ _ _)) =
   let (hd, args) = flattenApp app []
   headUsesStr facts hd || anyList (exprUsesStr facts) args
@@ -1884,6 +1885,11 @@ stmtUsesStr _ _ = False
 
 headUsesStr : OrdMap ExternDeclFact -> CExpr -> Bool
 headUsesStr facts h = exprUsesStr facts h
+
+isStrModeNameW : String -> Bool
+isStrModeNameW name = match wasmFamily name
+  Some WasmStr => True
+  _ => False
 
 -- Seeds the demand cells from the plan's walk of the program (`wasmDemandOf`).
 seedDemandW : WasmEmit -> WasmDemand -> Unit
@@ -12251,8 +12257,8 @@ externDisplayW emit symbol = match omLookup symbol emit.externFacts
 (DFunDef false "exprUsesStr" (PWild (PCon "CLit" (PCon "LString" PWild))) (EVar "True"))
 (DFunDef false "exprUsesStr" (PWild (PCon "CLit" (PCon "LChar" PWild))) (EVar "True"))
 (DFunDef false "exprUsesStr" (PWild (PCon "CLit" PWild)) (EVar "False"))
-(DFunDef false "exprUsesStr" ((PVar "facts") (PCon "CVar" (PVar "symbol") (PCon "AGlobal"))) (EMatch (EApp (EApp (EVar "externRuntimeKey") (EVar "facts")) (EVar "symbol")) (arm (PCon "Some" (PVar "key")) () (EMatch (EApp (EVar "wasmFamily") (EVar "key")) (arm (PCon "Some" (PCon "WasmStr")) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
-(DFunDef false "exprUsesStr" (PWild (PCon "CVar" PWild PWild)) (EVar "False"))
+(DFunDef false "exprUsesStr" ((PVar "facts") (PCon "CVar" (PVar "symbol") (PCon "AGlobal"))) (EBinOp "||" (EApp (EVar "isStrModeNameW") (EVar "symbol")) (EMatch (EApp (EApp (EVar "externRuntimeKey") (EVar "facts")) (EVar "symbol")) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "isStrModeNameW") (EVar "key"))) (arm (PCon "None") () (EVar "False")))))
+(DFunDef false "exprUsesStr" (PWild (PCon "CVar" (PVar "symbol") PWild)) (EApp (EVar "isStrModeNameW") (EVar "symbol")))
 (DFunDef false "exprUsesStr" ((PVar "facts") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EBinOp "||" (EApp (EApp (EVar "headUsesStr") (EVar "facts")) (EVar "hd")) (EApp (EApp (EVar "anyList") (EApp (EVar "exprUsesStr") (EVar "facts"))) (EVar "args"))))))
 (DFunDef false "exprUsesStr" ((PVar "facts") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EVar "exprUsesStr") (EVar "facts")) (EVar "b")))
 (DFunDef false "exprUsesStr" ((PVar "facts") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "||" (EApp (EApp (EVar "exprUsesStr") (EVar "facts")) (EVar "l")) (EApp (EApp (EVar "exprUsesStr") (EVar "facts")) (EVar "r"))))
@@ -12269,6 +12275,8 @@ externDisplayW emit symbol = match omLookup symbol emit.externFacts
 (DFunDef false "stmtUsesStr" (PWild PWild) (EVar "False"))
 (DTypeSig false "headUsesStr" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")) (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "headUsesStr" ((PVar "facts") (PVar "h")) (EApp (EApp (EVar "exprUsesStr") (EVar "facts")) (EVar "h")))
+(DTypeSig false "isStrModeNameW" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isStrModeNameW" ((PVar "name")) (EMatch (EApp (EVar "wasmFamily") (EVar "name")) (arm (PCon "Some" (PCon "WasmStr")) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "seedDemandW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmDemand") (TyCon "Unit"))))
 (DFunDef false "seedDemandW" ((PVar "emit") (PVar "d")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "forEachU") (ELam ((PVar "u")) (EApp (EApp (EVar "noteWasmUse") (EVar "emit")) (EVar "u")))) (EFieldAccess (EVar "d") "uses"))) (DoLet false false PWild (EIf (EFieldAccess (EVar "d") "refBox") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useRefBox")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EFieldAccess (EVar "d") "divGuard") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useDivGuard")) (EVar "True")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "tupleArities")) (EApp (EVar "reverseL") (EFieldAccess (EVar "d") "tupleArities"))))))
 (DTypeSig false "noteWasmUse" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmUse") (TyCon "Unit"))))
@@ -14588,8 +14596,8 @@ externDisplayW emit symbol = match omLookup symbol emit.externFacts
 (DFunDef false "exprUsesStr" (PWild (PCon "CLit" (PCon "LString" PWild))) (EVar "True"))
 (DFunDef false "exprUsesStr" (PWild (PCon "CLit" (PCon "LChar" PWild))) (EVar "True"))
 (DFunDef false "exprUsesStr" (PWild (PCon "CLit" PWild)) (EVar "False"))
-(DFunDef false "exprUsesStr" ((PVar "facts") (PCon "CVar" (PVar "symbol") (PCon "AGlobal"))) (EMatch (EApp (EApp (EVar "externRuntimeKey") (EVar "facts")) (EVar "symbol")) (arm (PCon "Some" (PVar "key")) () (EMatch (EApp (EVar "wasmFamily") (EVar "key")) (arm (PCon "Some" (PCon "WasmStr")) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
-(DFunDef false "exprUsesStr" (PWild (PCon "CVar" PWild PWild)) (EVar "False"))
+(DFunDef false "exprUsesStr" ((PVar "facts") (PCon "CVar" (PVar "symbol") (PCon "AGlobal"))) (EBinOp "||" (EApp (EVar "isStrModeNameW") (EVar "symbol")) (EMatch (EApp (EApp (EVar "externRuntimeKey") (EVar "facts")) (EVar "symbol")) (arm (PCon "Some" (PVar "key")) () (EApp (EVar "isStrModeNameW") (EVar "key"))) (arm (PCon "None") () (EVar "False")))))
+(DFunDef false "exprUsesStr" (PWild (PCon "CVar" (PVar "symbol") PWild)) (EApp (EVar "isStrModeNameW") (EVar "symbol")))
 (DFunDef false "exprUsesStr" ((PVar "facts") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EBinOp "||" (EApp (EApp (EVar "headUsesStr") (EVar "facts")) (EVar "hd")) (EApp (EApp (EVar "anyList") (EApp (EVar "exprUsesStr") (EVar "facts"))) (EVar "args"))))))
 (DFunDef false "exprUsesStr" ((PVar "facts") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EVar "exprUsesStr") (EVar "facts")) (EVar "b")))
 (DFunDef false "exprUsesStr" ((PVar "facts") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "||" (EApp (EApp (EVar "exprUsesStr") (EVar "facts")) (EVar "l")) (EApp (EApp (EVar "exprUsesStr") (EVar "facts")) (EVar "r"))))
@@ -14606,6 +14614,8 @@ externDisplayW emit symbol = match omLookup symbol emit.externFacts
 (DFunDef false "stmtUsesStr" (PWild PWild) (EVar "False"))
 (DTypeSig false "headUsesStr" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")) (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "headUsesStr" ((PVar "facts") (PVar "h")) (EApp (EApp (EVar "exprUsesStr") (EVar "facts")) (EVar "h")))
+(DTypeSig false "isStrModeNameW" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isStrModeNameW" ((PVar "name")) (EMatch (EApp (EVar "wasmFamily") (EVar "name")) (arm (PCon "Some" (PCon "WasmStr")) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "seedDemandW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmDemand") (TyCon "Unit"))))
 (DFunDef false "seedDemandW" ((PVar "emit") (PVar "d")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "forEachU") (ELam ((PVar "u")) (EApp (EApp (EVar "noteWasmUse") (EVar "emit")) (EVar "u")))) (EFieldAccess (EVar "d") "uses"))) (DoLet false false PWild (EIf (EFieldAccess (EVar "d") "refBox") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useRefBox")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EFieldAccess (EVar "d") "divGuard") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useDivGuard")) (EVar "True")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "tupleArities")) (EApp (EVar "reverseL") (EFieldAccess (EVar "d") "tupleArities"))))))
 (DTypeSig false "noteWasmUse" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmUse") (TyCon "Unit"))))
