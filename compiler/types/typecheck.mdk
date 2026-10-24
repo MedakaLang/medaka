@@ -18,12 +18,11 @@
 -- residual and the evidence table) is what `run`, `build`'s child, `medaka test`'s
 -- phases and the emit entries consume.  They share one preamble, one per-module
 -- worker and one graph-end drain, so a module is checked against the same universe,
--- the same seed and the same mark sets on both.  Every UNKEYED whole-graph entry point
--- in this file is a projection of that function.  The chain memo's KEYED arm is not:
--- `checkModulesDiagsChain (Some …)` runs `chainGo`, which shares `graphPreamble` (via
--- `checkModulesPreambleK`) and `graphModuleWorker` but MIRRORS `driveGraphK GOutDiags`'
--- `foldModules` by hand — a lockstep obligation, stated at `chainGo` itself, that no
--- gate checks.  Its unkeyed arm (`None`) is a projection like the rest.
+-- the same seed and the same mark sets on both.  Every whole-graph entry point in this
+-- file is a projection of that function.  A keyed diagnostics drive
+-- (`checkModulesDiagsChain (Some …)`) hands the one fold a serve policy (`diagsServe`),
+-- which serves each unchanged module before the entry from its recorded interface
+-- (`types/module_interface.mdk`) instead of checking it.
 --
 -- One thing the selections still differ on by construction, and it is observable:
 -- `GOutTrees` promotes (inferred-constraint user fns join the dict-name set).  So
@@ -470,8 +469,8 @@ import types.tc_types.{
   ModuleSeed(..),
   PreludePreamble(..),
   GraphOut(..),
-  ChainStep(..),
-  ChainMemo(..),
+  ModuleServe(..),
+  ServeStep(..),
   GraphDrive(..),
   ElabResult,
   ElabFacts(..),
@@ -613,7 +612,6 @@ import support.util.{
   i64HalvesLiteral,
   int64Halves,
   listLen,
-  matchingStepPrefix,
   lookupAssoc,
   contains,
   endsWith,
@@ -740,6 +738,18 @@ import types.runtime_types.{
 import types.runtime_ops.{arithmeticTag}
 import types.runtime_grants as RuntimeGrants
 import types.program_facts.{ProgramFacts, factsOfElab}
+import types.module_interface.{
+  ModuleKey(..),
+  ModuleInterface,
+  ModuleRows,
+  applyModuleInterface,
+  captureModuleRows,
+  freezeModuleInterface,
+  freshModuleSerial,
+  moduleCacheHit,
+  moduleInterfaceIdentity,
+  recordModuleInterface,
+}
 import types.prelude_interface.{
   PreludeInterface,
   freezeInterface,
@@ -8304,8 +8314,8 @@ initialGraphCtx ctors run = GraphCtx {
 
 -- The process's interners (see `Interners`): the lineage objects and the extern
 -- catalog of the graph record a drive continues from.  The drive's mint, the record
--- past the core pass, a chain-memo hit's restored record and `markModules`' record
--- each write it, so the next mint continues from the last of them.  Before any drive they are a fresh record's.
+-- past the core pass and `markModules`' record each write it (`noteInterners`), so
+-- the next mint continues from the last of them.  Before any drive they are a fresh record's.
 interners : Ref Interners
 interners = Ref (internersOf (initialGraphCtx builtinCtors (freshGraphRun ())))
 
@@ -8315,9 +8325,24 @@ internersOf c = Interners {
     lnEvCounter = c.graphRun.evCounter,
     lnLocalAbs = c.graphRun.localAbs,
     lnGrants = c.graphRun.grants,
+    lnTyvarHigh = Ref 0,
+    lnEffvarHigh = Ref 0,
   },
   externCatalog = c.builtinExternNamesRef,
 }
+
+-- [c] becomes the record the next drive continues from: the interners take its
+-- lineage objects and extern catalog, and keep the process's counter high-water.
+noteInterners : GraphCtx -> Unit
+noteInterners c =
+  let high = interners.value.lineage
+  let next = internersOf c
+  interners := Interners { next |
+    lineage = Lineage { next.lineage |
+      lnTyvarHigh = high.lnTyvarHigh,
+      lnEffvarHigh = high.lnEffvarHigh,
+    },
+  }
 
 -- A test probe's graph record: every field fresh, as a process's first record.
 probeGraphCtx : Unit -> GraphCtx
@@ -10424,7 +10449,6 @@ freshGraphRun _ = GraphRun {
   markedAhead = False,
   evJudged = Ref 0,
   evTable = Ref [],
-  memoMethodReturns = Ref [],
   evCells = Ref (arrayMake 0 None),
   siteCells = Ref (arrayMake 0 None),
   scopeStore = Scopes.freshScopeStore (),
@@ -10696,15 +10720,10 @@ currentScopeStore gctx _ = gctx.graphRun.scopeStore
 -- module component comes from the module's record, which `checkBodyImpl` mints once per
 -- module before any body of it is inferred; the ordinal is this run's counter.
 -- `evCounter` is graph-global, and `graphLineageRun` carries it across every new
--- lineage (a chain-memo hit rewinds it to its snapshot's), so the ordinal alone
--- is what makes an id unique; the module half does not scope it, and `evDictRoutesIn` indexes on the ordinal without consulting it.
+-- lineage, so the ordinal alone is what makes an id unique; the module half does not
+-- scope it, and `evDictRoutesIn` indexes on the ordinal without consulting it.
 -- The module half is a tripwire for that lookup (see `EvId` in `frontend/ast.mdk`):
 -- do not make ordinals per-module in the belief that the pair still separates them.
---
--- Both halves ride `GraphRun`, so the chain memo rewinds the counter and the goal
--- channel TOGETHER (`copyGraphRun`): a hit can hand back an ordinal an abandoned
--- branch already minted, but never two live goals sharing one id, because the goals
--- that consumed those ordinals were dropped with the channel.
 freshEvId : ModuleCtx -> Unit -> EvId
 freshEvId mctx _ =
   let g = mctx.mcGraph.graphRun
@@ -10715,10 +10734,8 @@ freshEvId mctx _ =
 -- #2549 M2: start a new graph lineage from [lineage], the interners' (the run
 -- most recently minted or restored).  The evidence ORDINAL continues from that run's counter, so an
 -- id minted from here does not repeat one the previous drive's tree holds, and a
--- stray read of such an id fails loudly instead of answering for another node.  It
--- is not monotone across a chain-memo hit: the hit installs a copy of its
--- snapshot's run, whose counter is the snapshot's, so the next ordinals rewind to it (the
--- rewind `freshEvId` states).  What is indexed by ordinal is not carried: `evBase`
+-- stray read of such an id fails loudly instead of answering for another node.
+-- What is indexed by ordinal is not carried: `evBase`
 -- moves up to the counter and `evCells` starts empty, so a long-lived process's
 -- arrays span one graph rather than its whole life.
 --
@@ -10760,59 +10777,6 @@ graphLineageRun marked lineage =
     evCells = kept.evCells,
     siteCells = kept.siteCells,
   }
-
--- A detached copy for the chain memo, like `copyCrossRun`: every cell re-minted
--- over the same value, so neither side's later writes reach the other.
-copyGraphRun : GraphRun -> GraphRun
-copyGraphRun g = GraphRun {
-  tyvarCounter = Ref g.tyvarCounter.value,
-  effvarCounter = Ref g.effvarCounter.value,
-  ctorExistentialsRef = Ref g.ctorExistentialsRef.value,
-  patternAuthIdsRef = Ref g.patternAuthIdsRef.value,
-  anyExistentialsRef = Ref g.anyExistentialsRef.value,
-  goals = Ref g.goals.value,
-  numlitRefs = Ref g.numlitRefs.value,
-  numlitN = Ref g.numlitN.value,
-  activeDictVars = Ref g.activeDictVars.value,
-  gGiven = Ref g.gGiven.value,
-  moduleRanges = Ref g.moduleRanges.value,
-  stampCtxs = Ref g.stampCtxs.value,
-  goalsN = Ref g.goalsN.value,
-  evCounter = Ref g.evCounter.value,
-  evBase = g.evBase,
-  markedAhead = g.markedAhead,
-  evJudged = Ref g.evJudged.value,
-  evTable = Ref g.evTable.value,
-  memoMethodReturns = Ref g.memoMethodReturns.value,
-  -- The cells themselves are shared, not re-minted: a memoized tree still holds
-  -- the ids of the cells minted for it, and its nodes must keep answering.  Only
-  -- the INDEX is copied, so a mint on one side cannot grow the other's array.
-  evCells = Ref (arrayCopy g.evCells.value),
-  siteCells = Ref (arrayCopy g.siteCells.value),
-  scopeStore = Scopes.copyScopeStore g.scopeStore,
-  localAbs = copyLocalAbsState g.localAbs,
-  grants = copyGrantState g.grants,
-  binderPending = Ref g.binderPending.value,
-  binderRows = Ref g.binderRows.value,
-  liveRoots = Ref g.liveRoots.value,
-  liveNumRoots = Ref g.liveNumRoots.value,
-  liveNumGoals = Ref g.liveNumGoals.value,
-  liveGoals = Ref g.liveGoals.value,
-}
-
--- Memo snapshots are taken only after `checkGraphFinish` drained the prefix.  At
--- that boundary an exact-return request has no remaining solver work: diagnostics
--- are in the module result and route evidence is in `evTable`/method cells.  Replace
--- its live goal carrier with the immutable observation above before the graph can
--- outlive the request.
-copyGraphRunForMemo : GraphCtx -> GraphRun -> GraphRun
-copyGraphRunForMemo gctx g =
-  let (goals, views) = sealMethodReturnGoals gctx g.evTable.value g.goals.value
-  let copied = copyGraphRun g
-  copied.goals := goals
-  copied.goalsN := listLen goals
-  copied.memoMethodReturns := views ++ g.memoMethodReturns.value
-  copied
 
 sealMethodReturnGoals : GraphCtx ->
   EvTable ->
@@ -11146,6 +11110,7 @@ freshModuleCells seed mid = ModuleCells {
   sigTyMapRef = Ref omEmpty,
   currentModuleRef = Ref mid,
   invocationViewRef = Ref (InvocationView [] [] []),
+  ownPopsRef = Ref (spEmpty, spEmpty),
 }
 
 -- The record a drive starts from in the graph record [gctx]: no module, an empty
@@ -11181,17 +11146,16 @@ checkRunResidue m = CheckRunSeed {
 -- whole-record operation is a call of this function.
 --   [run] — what the module's inference, its channels and its stampers accumulate, the
 --     graph record they accumulate in (`mcGraph`), and the span of the construct around
---     a check (`mcLoc`, none in every record passed here).  A carry and a memo hit take a
---     fresh record's, minted in the graph they are given; a stamp context takes the
+--     a check (`mcLoc`, none in every record passed here).  A carry takes a fresh
+--     record's, minted in the graph it is given; a stamp context takes the
 --     module's own (shared); the drain's enter takes the stamp context's.
 --   [tables] — the module's declared tables and its match oracle and warnings.  A carry
 --     copies the module's; a stamp context drops them (its `superDeclsRef` holds the
---     interface decls of the module's universe instead); a memo hit takes the snapshot's.
+--     interface decls of the module's universe instead).
 --   [drain] — the two tables the stampers read (`standaloneValuesRef`,
 --     `methodDispatchIdxByIdRef`).  As [tables], except that the drain's enter takes the
 --     live record's: a stamp context holds none of its own.
---   [ident] — the module id and the invocation view.  As [tables], except that a memo
---     hit keeps the record it continues from's, which a hit never restored.
+--   [ident] — the module id and the invocation view.  As [tables].
 -- With [detach] every field of the last three classes is a fresh `Ref` over the
 -- source's value, so later writes on either side do not reach the other.
 moduleCtxFrom : Bool ->
@@ -11301,6 +11265,7 @@ moduleCellsFrom detach run tables drain ident = ModuleCells {
   occursCheckFailed = run.occursCheckFailed,
   currentLevel = run.currentLevel,
   markingRef = run.markingRef,
+  ownPopsRef = run.ownPopsRef,
   superDeclsRef = refFrom detach tables.superDeclsRef,
   sigNameSetRef = refFrom detach tables.sigNameSetRef,
   sigTyMapRef = refFrom detach tables.sigTyMapRef,
@@ -11316,17 +11281,9 @@ refFrom : Bool -> Ref a -> Ref a
 refFrom detach r = if detach then Ref r.value else r
 
 -- A record with fresh run fields in the graph record [gctx] and [m]'s other fields,
--- copied by value: what a memo snapshot stores (in the memo's own detached graph), and
--- what a test probe runs in.
+-- copied by value: what a test probe runs in.
 carryModuleCtx : GraphCtx -> ModuleCtx -> ModuleCtx
 carryModuleCtx gctx m = moduleCtxFrom True (initialModuleCtx gctx) m m m
-
--- The record a memo hit continues from in [gctx], the graph record the hit restored:
--- the snapshot [snap] carried, with the module id and the invocation view of [cur], the
--- record current when the hit is taken.
-resumeModuleCtx : GraphCtx -> ModuleCtx -> ModuleCtx -> ModuleCtx
-resumeModuleCtx gctx cur snap =
-  moduleCtxFrom True (initialModuleCtx gctx) snap snap cur
 
 containsI : Int -> List Int -> Bool
 containsI _ [] = False
@@ -16475,14 +16432,6 @@ freshLocalAbsState _ = LocalAbsState {
   lasQuantified = Ref omEmpty,
 }
 
-copyLocalAbsState : LocalAbsState -> LocalAbsState
-copyLocalAbsState st = LocalAbsState {
-  lasBinders = Ref st.lasBinders.value,
-  lasRecOccs = Ref st.lasRecOccs.value,
-  lasCounter = Ref st.lasCounter.value,
-  lasQuantified = Ref st.lasQuantified.value,
-}
-
 freshLocalAbsName : GraphCtx -> String -> String
 freshLocalAbsName gctx x =
   let st = gctx.graphRun.localAbs
@@ -16807,25 +16756,6 @@ freshGrantState _ = GrantState {
   gsBounds = Ref omEmpty,
   gsValueBounds = Ref omEmpty,
   gsPassingModule = Ref "",
-}
-
-copyGrantState : GrantState -> GrantState
-copyGrantState st = GrantState {
-  gsOccs = Ref st.gsOccs.value,
-  gsGrantOnly = Ref st.gsGrantOnly.value,
-  gsTopIds = Ref st.gsTopIds.value,
-  gsLocalIds = Ref st.gsLocalIds.value,
-  gsMethods = Ref st.gsMethods.value,
-  gsBodies = Ref st.gsBodies.value,
-  gsLastInst = Ref st.gsLastInst.value,
-  gsLastMethodInst = Ref st.gsLastMethodInst.value,
-  gsLastStandalone = Ref st.gsLastStandalone.value,
-  gsSourceless = Ref st.gsSourceless.value,
-  gsTakers = Ref st.gsTakers.value,
-  gsFresh = Ref st.gsFresh.value,
-  gsBounds = Ref st.gsBounds.value,
-  gsValueBounds = Ref st.gsValueBounds.value,
-  gsPassingModule = Ref st.gsPassingModule.value,
 }
 
 -- The catalog externs whose authority parameter names a file path
@@ -50060,6 +49990,8 @@ appendDataUniverse mctx mid prog0 =
     insertCtorPop env2 pubDecls mctx.mcGraph.crossRun.universeCtorPop.value
   mctx.mcGraph.crossRun.universeRecordPop :=
     insertRecordPop mctx pubDecls mctx.mcGraph.crossRun.universeRecordPop.value
+  mctx.mcCells.ownPopsRef :=
+    (insertCtorPop env2 pubDecls spEmpty, insertRecordPop mctx pubDecls spEmpty)
 
 -- What `appendDataUniverse` registers to elaborate a module's public data: the
 -- public declarations plus every alias the module declares, private ones
@@ -53359,6 +53291,10 @@ reexportSeed coreV (_ :: rest) depEnv = reexportSeed coreV rest depEnv
 --               `isLast` is True only for the terminal (entry) module — the one
 --               place checkModulesEntryFull keeps the module's OWN schemes/warns
 --               rather than the recursion's.
+--   * serve   : the drive's serve policy (`ModuleServe`), `None` for a drive that
+--               checks every module.  It is consulted once for each module before the
+--               entry; a module it serves skips the worker, and the policy supplies
+--               its own export bindings and its payload.  The policy comes back last.
 -- foldModules owns ONLY the loop and performs NO mintGraphCtx: the reset
 -- boundary stays in each driver's preamble (a reset leaking in here would hand the
 -- `check*` drivers a reset they must not have).
@@ -53376,6 +53312,7 @@ reexportSeed coreV (_ :: rest) depEnv = reexportSeed coreV rest depEnv
 foldModules : Bool ->
   Bool ->
   (ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, e, ModuleCtx)) ->
+  Option (ModuleServe e) ->
   (Bool -> String -> e -> acc -> acc) ->
   acc ->
   List (String, Scheme) ->
@@ -53385,13 +53322,14 @@ foldModules : Bool ->
   List Decl ->
   ModuleCtx ->
   List (String, List Decl) ->
-  (acc, ModuleCtx)
-foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData accAll prev modules =
-  let (done, last) =
+  (acc, Option (ModuleServe e), ModuleCtx)
+foldModules wantData wantAll worker serve collect base baseSeed coreV depEnv accData accAll prev modules =
+  let (done, served, last) =
     workModules
       wantData
       wantAll
       worker
+      serve
       baseSeed
       coreV
       depEnv
@@ -53400,15 +53338,16 @@ foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData a
       []
       prev
       modules
-  (collectModules collect base done, last)
+  (collectModules collect base done, served, last)
 
 -- `foldModules`' loop: runs the worker over [modules] head-first, threading the
--- accumulators and the record, and returns each module's payload, newest first.  Every
--- call is a tail call: a frame waiting on the rest would keep its module's record
--- reachable until the graph end.
+-- accumulators, the record and the serve policy, and returns each module's payload,
+-- newest first.  The recursive call is a tail call: a frame waiting on the rest would
+-- keep its module's record reachable until the graph end.
 workModules : Bool ->
   Bool ->
   (ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, e, ModuleCtx)) ->
+  Option (ModuleServe e) ->
   List (String, Scheme) ->
   List (String, ExportBinding) ->
   List (String, List (String, ExportBinding)) ->
@@ -53417,36 +53356,54 @@ workModules : Bool ->
   List (String, e) ->
   ModuleCtx ->
   List (String, List Decl) ->
-  (List (String, e), ModuleCtx)
-workModules _ _ _ _ _ _ _ _ done prev [] = (done, prev)
-workModules _wantData _wantAll worker baseSeed coreV depEnv accData accAll done prev [(mid, prog)] =
-  let seed =
-    moduleImportSeed
-      prev
-      baseSeed
-      (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
+  (List (String, e), Option (ModuleServe e), ModuleCtx)
+workModules _ _ _ serve _ _ _ _ _ done prev [] = (done, serve, prev)
+workModules _wantData _wantAll worker serve baseSeed coreV depEnv accData accAll done prev [(mid, prog)] =
+  let seed = moduleSeedFor prev baseSeed coreV mid prog depEnv
   let (_, extra, next) = worker prev mid seed accData accAll prog
-  ((mid, extra) :: done, next)
-workModules wantData wantAll worker baseSeed coreV depEnv accData accAll done prev ((mid, prog) :: rest) =
-  let seed =
-    moduleImportSeed
-      prev
-      baseSeed
-      (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
-  let (schemes, extra, next) = worker prev mid seed accData accAll prog
-  let pubV = publicModuleExports prog schemes ++ reexportSeed coreV prog depEnv
+  ((mid, extra) :: done, serve, next)
+workModules wantData wantAll worker serve baseSeed coreV depEnv accData accAll done prev ((mid, prog) :: rest) =
+  let step = map (policy => policy.msStep mid prog prev) serve
+  let (own, done2, serve2, next) = match step
+    Some (ServeHit own extra policy) =>
+      (own, (mid, extra) :: done, Some policy, prev)
+    _ =>
+      let seed = moduleSeedFor prev baseSeed coreV mid prog depEnv
+      let (schemes, extra, next) = worker prev mid seed accData accAll prog
+      let own = publicModuleExports prog schemes
+      match step
+        Some (ServeCheck after) =>
+          let (done3, policy) = after next own ((mid, extra) :: done)
+          (own, done3, Some policy, next)
+        _ => (own, (mid, extra) :: done, serve, next)
   workModules
     wantData
     wantAll
     worker
+    serve2
     baseSeed
     coreV
-    ((mid, pubV) :: depEnv)
+    ((mid, own ++ reexportSeed coreV prog depEnv) :: depEnv)
     (if wantData then accData ++ publicDataDecls prog else accData)
     (if wantAll then accAll ++ prog else accAll)
-    ((mid, extra) :: done)
+    done2
     next
     rest
+
+-- The import-scoped seed [mid] is checked from: [baseSeed] and what [prog]'s imports
+-- select from [depEnv].
+moduleSeedFor : ModuleCtx ->
+  List (String, Scheme) ->
+  List (String, ExportBinding) ->
+  String ->
+  List Decl ->
+  List (String, List (String, ExportBinding)) ->
+  ModuleSeed
+moduleSeedFor prev baseSeed coreV mid prog depEnv =
+  moduleImportSeed
+    prev
+    baseSeed
+    (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
 
 -- The right fold of `collect` over the payloads [done] (newest first): the last module
 -- first, the only one `collect` sees as last, onto [base].
@@ -53457,58 +53414,6 @@ collectModules : (Bool -> String -> e -> acc -> acc) ->
 collectModules _ base [] = base
 collectModules collect base ((mid, extra) :: older) =
   fold (acc (m, x) => collect False m x acc) (collect True mid extra base) older
-
--- A detached copy: every field re-minted as a fresh Ref over the same (immutable)
--- value, so neither side's later writes reach the other.  The constructor keeps
--- this complete — a new CrossRun field cannot be left out of the copy.
-copyCrossRun : CrossRun -> CrossRun
-copyCrossRun c = CrossRun {
-  universeFunNamesRef = Ref c.universeFunNamesRef.value,
-  universeMethodDispatchIdxByIdRef =
-    Ref c.universeMethodDispatchIdxByIdRef.value,
-  universeDataCtors = Ref c.universeDataCtors.value,
-  universeCtorPop = Ref c.universeCtorPop.value,
-  universeRecordPop = Ref c.universeRecordPop.value,
-  builtinClassesRef = Ref c.builtinClassesRef.value,
-  crossModuleFunPredicateSlotsRef = Ref c.crossModuleFunPredicateSlotsRef.value,
-  crossModuleFunPredicateSlotsQualRef =
-    Ref c.crossModuleFunPredicateSlotsQualRef.value,
-  crossModuleFunConstraintDeclaredRef =
-    Ref c.crossModuleFunConstraintDeclaredRef.value,
-  crossModuleFunConstraintDeclaredQualRef =
-    Ref c.crossModuleFunConstraintDeclaredQualRef.value,
-  crossModuleMethodPredicateSlotsRef =
-    Ref c.crossModuleMethodPredicateSlotsRef.value,
-  crossModuleMethodPredicateSlotsQualRef =
-    Ref c.crossModuleMethodPredicateSlotsQualRef.value,
-  coreSchemeObligationsRef = Ref c.coreSchemeObligationsRef.value,
-  crossModuleSchemeOblsQualRef = Ref c.crossModuleSchemeOblsQualRef.value,
-}
-
--- One chain step's graph snapshot: detached copies of the two sub-records and the
--- extern-name map (a hit reads only those three).  The other fields are the initial
--- record's, not [c]'s: a step that carried them would keep its drive's whole
--- declaration environment alive for as long as the memo holds the step.
-snapshotGraphCtx : GraphCtx -> GraphCtx
-snapshotGraphCtx c = GraphCtx { initialGraphCtx builtinCtors (freshGraphRun ()) |
-  crossRun = copyCrossRun c.crossRun,
-  graphRun = copyGraphRunForMemo c c.graphRun,
-  builtinExternNamesRef = Ref c.builtinExternNamesRef.value,
-}
-
--- The record a memo hit continues from: [cur] (this drive's, whose preamble fields
--- this drive derived) with detached copies of the snapshot's sub-records and
--- extern-name map applied.  Never the stored record whole.
-restoreGraphCtx : GraphCtx ->
-  CrossRun ->
-  GraphRun ->
-  OrdMap (Ty, List (String, Int)) ->
-  GraphCtx
-restoreGraphCtx cur cross run externs = GraphCtx { cur |
-  crossRun = copyCrossRun cross,
-  graphRun = copyGraphRun run,
-  builtinExternNamesRef = Ref externs,
-}
 
 -- The core pass, through the prelude interface (`types/prelude_interface.mdk`).
 -- Under the caller's prelude key a hit is the cached interface whose section lists
@@ -53665,7 +53570,7 @@ mintGraphCtx inputs admitted =
     graphAdmittedMethodsRef = Ref admitted,
     builtinExternNamesRef = carried.externCatalog,
   }
-  interners := internersOf gctx
+  let _ = noteInterners gctx
   gctx
 
 -- [admitted]: the per-module method admissions `renameAliasedMethods` computed for
@@ -53817,7 +53722,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
           runtimeSeed
       -- The graph record the drive continues from, with the interface thawed into
       -- it.  Nothing holds `initial` past this point.
-      interners := internersOf coreCtx.mcGraph
+      let _ = noteInterners coreCtx.mcGraph
       (
         bindings,
         Some published,
@@ -53829,7 +53734,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
       Some (pe, pi) =>
         let (bindings, published, coreCtx) =
           continueFromInterface gctx gctx.graphRun pi
-        interners := internersOf coreCtx.mcGraph
+        let _ = noteInterners coreCtx.mcGraph
         (
           bindings,
           Some published,
@@ -54067,11 +53972,12 @@ cmFold runtimeSeed coreSchemes coreCtx modules =
   -- the dead values empty → the whole perf-gate `checkModules` path is O(N).  #2705: this
   -- driver marks but does not solve — see `cmCheckWorker` — so it queues nothing and
   -- drains nothing.
-  let (rows, lastCtx) =
+  let (rows, _, lastCtx) =
     foldModules
       False
       False
       cmCheckWorker
+      None
       (_last mid schemes rest => (mid, schemes) :: rest)
       []
       (runtimeSeed ++ coreSchemes.mbSchemes)
@@ -54101,9 +54007,8 @@ cmFold runtimeSeed coreSchemes coreCtx modules =
 -- per-module `freshModuleCtx`.  They are grown by `appendUniverseAccums prog0` per module but
 -- must be cleared once per run by `mintGraphCtx` (and seeded by the core pass)
 -- before the first module.  Every existing caller goes through a driver that does exactly
--- that (`driveGraphK` and the keyed chain's `chainGo`, both via `graphPreamble`'s
--- `mintGraphCtx`); a future standalone caller that skips it would leak the
--- previous run's universe into this one.
+-- that (`driveGraphK`, via `graphPreamble`'s `mintGraphCtx`); a future standalone
+-- caller that skips it would leak the previous run's universe into this one.
 --
 -- The stage-K envelope (`GraphCtx.declEnvsRef`, which carries the method namespace
 -- `deMethods`) runs the other way (#1111 A-2.5b): it is not a `CrossRun` accumulator and
@@ -54260,8 +54165,7 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
 -- doc above).  Surfaces this module's own `schemes` (for pubV) plus the
 -- (marked tree, schemes, errs, warns) payload.  IMPORT-SCOPED seed exactly like
 -- cmCheckWorker; NOT a flat union.  ONE worker serves EVERY graph consumer — the
--- per-module diagnostics fold behind `analyzeProject`, the LSP and the chain memo,
--- the entry report (`checkModulesEntryFullSplitK`), and the elaboration behind
+-- per-module diagnostics fold behind `analyzeProject` and the LSP, the entry report (`checkModulesEntryFullSplitK`), and the elaboration behind
 -- `run`/`build`/`test`/the emit entries.  They differ in what they PROJECT from the
 -- payload, never in what a module is checked against.  Keeping it one function is
 -- what makes that a property of the code rather than of a comment: the consumers
@@ -54297,10 +54201,10 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
 -- `mainSchemeRef` its SET-OR-CLEAR write — is inside the payload, and the entry-report
 -- projection needs the same triple to keep the terminal module's OWN schemes/warns.
 -- Costs nothing: `checkModuleFullDiags` already computed them, and the marked tree is
--- the same list value the module was marked in, not a copy.  The diags arm carries
--- that tree as far as `graphCollect` and `graphCollect` drops it there, rather than
--- consing it: that selection returns `gdModules = []`, so accumulating the tree would
--- hold every module's marked forms live for the whole drive.
+-- the same list value the module was marked in, not a copy.  The diags arm puts no
+-- tree in the payload: that selection returns `gdModules = []`, and the fold holds
+-- every payload until the graph end, so a tree there would hold every module's
+-- marked forms live for the whole drive.
 graphModuleWorker : GraphOut ->
   ModuleCtx ->
   String ->
@@ -54314,7 +54218,7 @@ graphModuleWorker sel prev mid seed accData accAll prog =
   let (schemes, marked, errs, warns, mctx) =
     checkModuleFullDiags prev.mcGraph mid seed accData implDecls prog
   let published = publishOwn mctx schemes.mbSchemes
-  let _ = match sel
+  let tree = match sel
     GOutTrees =>
       let _ = match lookupAssoc "main" schemes.mbSchemes
         Some sc => prev.mcGraph.mainSchemeRef := Some sc
@@ -54323,9 +54227,9 @@ graphModuleWorker sel prev mid seed accData accAll prog =
         dedup
           (prev.mcGraph.promotionHarvestRef.value
             ++ mctx.mcCells.promotedRef.value)
-      ()
-    GOutDiags => ()
-  (schemes, (marked, published, errs, warns), mctx)
+      marked
+    GOutDiags => []
+  (schemes, (tree, published, errs, warns), mctx)
 
 -- collect: keeps the worker's marked tree and its `(schemes, errs, warns)` payload
 -- per module in load order, and on the DIAGS selection's TERMINAL module records
@@ -54369,9 +54273,8 @@ graphCollect gctx sel isLast mid (marked, schemes, errs, warns) (markedRest, dia
   let _ = match sel
     GOutDiags => setMainSchemeIfEntry gctx isLast schemes
     GOutTrees => ()
-  -- The DIAGS selection drops the marked tree HERE, at the module boundary, because
-  -- its `driveGraphK` arm returns `gdModules = []`: accumulating it would hold every
-  -- module's marked forms live for the whole drive on the GC-bound `check` stage.
+  -- The DIAGS selection keeps no tree: its `driveGraphK` arm returns
+  -- `gdModules = []`, and its worker puts none in the payload (`graphModuleWorker`).
   let markedOut = match sel
     GOutDiags => markedRest
     GOutTrees => (mid, marked) :: markedRest
@@ -54423,115 +54326,30 @@ setMainSchemeIfEntry gctx False _ = ()
 setMainSchemeIfEntry gctx True schemes =
   gctx.mainSchemeRef := map (p => p.psScheme) (lookupAssoc "main" schemes)
 
-moduleChainMemoRef : Ref (Option ChainMemo)
-moduleChainMemoRef = Ref None
-
-exactReturnGoalCount : List Obligation -> Int
-exactReturnGoalCount [] = 0
-exactReturnGoalCount (goal :: rest) =
-  (if isSome (exactReturnRequestOfGoal goal) then 1 else 0)
-    + exactReturnGoalCount rest
-
-methodReturnMemoGraphStats : GraphRun -> (Int, Int)
-methodReturnMemoGraphStats graph = (
-  exactReturnGoalCount graph.goals.value,
-  listLen graph.memoMethodReturns.value,
-)
-
-methodReturnChainStats : List ChainStep -> (Int, Int, Int)
-methodReturnChainStats [] = (0, 0, 0)
-methodReturnChainStats (step :: rest) =
-  let (carriers, summaries) = methodReturnMemoGraphStats step.csCtx.graphRun
-  let (restCarriers, restSummaries, restSteps) = methodReturnChainStats rest
-  (carriers + restCarriers, summaries + restSummaries, restSteps + 1)
-
--- Family-specific structural retention, not a heap-size proxy: live request
--- carriers, immutable closed summaries, and retained chain steps reachable from
--- the chain memo, the one cache that snapshots a GraphRun (the prelude interface
--- holds no goal).
-export
-methodReturnMemoRetentionStats : Unit -> (Int, Int, Int)
-methodReturnMemoRetentionStats _ = match moduleChainMemoRef.value
-  None => (0, 0, 0)
-  Some memo => methodReturnChainStats memo.chSteps
-
--- How many steps the last keyed chain drive replayed instead of re-checking.
-export
-chainMemoReplayedSteps : Unit -> Int
-chainMemoReplayedSteps _ = match moduleChainMemoRef.value
-  None => 0
-  Some memo => memo.chReplayed
-
--- The method-return views of [gctx]: its live goals sealed, then its memoized views.
+-- The method-return views of [gctx]: its live exact-return goals, sealed.
 export
 methodReturnMemoCurrentViews : GraphCtx -> List MethodReturnMemoView
 methodReturnMemoCurrentViews gctx =
-  let (_, live) =
-    sealMethodReturnGoals
+  snd
+    (sealMethodReturnGoals
       gctx
       gctx.graphRun.evTable.value
-      gctx.graphRun.goals.value
-  live ++ gctx.graphRun.memoMethodReturns.value
+      gctx.graphRun.goals.value)
 
--- Test-only lifecycle observation: model session teardown by clearing the
--- GraphRun-owning memo, observe the family counters at their floor, then restore
--- the session so the sibling suite remains order-independent.
-export
-methodReturnMemoTeardownStats : Unit -> (Int, Int, Int)
-methodReturnMemoTeardownStats _ =
-  let savedChain = moduleChainMemoRef.value
-  moduleChainMemoRef := None
-  let floor = methodReturnMemoRetentionStats ()
-  moduleChainMemoRef := savedChain
-  floor
-
-firstExactReturnRequest : List Obligation -> Option MethodReturnRequest
-firstExactReturnRequest [] = None
-firstExactReturnRequest (goal :: rest) = match exactReturnRequestOfGoal goal
-  Some request => Some request
-  None => firstExactReturnRequest rest
-
--- The first two booleans prove the rejected mutations are observable: skipping
--- sealing retains a carrier, and the old detached copy shallow-shares its
--- resolution Ref.  The third proves the memo projection removes that carrier and
--- retains only a closed observation.
-export
-methodReturnMemoFenceMutationProbe : GraphCtx -> (Bool, Bool, Bool)
-methodReturnMemoFenceMutationProbe gctx =
-  match firstExactReturnRequest gctx.graphRun.goals.value
-    None => (False, False, False)
-    Some request =>
-      let shallow = copyGraphRun gctx.graphRun
-      let skippedSeal = exactReturnGoalCount shallow.goals.value > 0
-      let shallowShare = match firstExactReturnRequest shallow.goals.value
-        None => False
-        Some copiedRequest =>
-          let saved = request.mrrResolution.value
-          copiedRequest.mrrResolution := None
-          let leaked = isNone request.mrrResolution.value
-          request.mrrResolution := saved
-          leaked
-      let sealed = copyGraphRunForMemo gctx gctx.graphRun
-      let sealedSafe =
-        exactReturnGoalCount sealed.goals.value == 0
-          && isNonEmptyL sealed.memoMethodReturns.value
-      (skippedSeal, shallowShare, sealedSafe)
-
--- `driveGraphK GOutDiags` resuming from the module-chain memo.  `stepKeys` pairs
--- with `modules0` positionally.
--- The per-module payload is the worker's whole `(schemes, errs, warns)` triple: a
--- caller that also needs the graph's ENTRY REPORT derives it from this list
--- (`entryReportFromDiags`) instead of running a second, entry-only driver over the
--- same graph.  `dropModSchemes` is the narrower `(errs, warns)` projection the
--- bucketing fold consumes.
-
--- The whole-graph memo key both prefix memos (the typecheck chain here, the
--- resolve chain in `driver/diagnostics.mdk`) compare their stored key against:
--- the prelude generation pair plus the chain key.  One definition, so the two
--- memos cannot drift apart on what "the same graph" means.
+-- The prelude generation pair plus the chain key: what the module interfaces' graph
+-- key (`serveStateOf`) and the resolve prefix memo (`driver/diagnostics.mdk`) carry
+-- for "the same graph".  One definition, so the two cannot drift apart on it.
 export
 chainFullKey : Int -> Int -> String -> String
 chainFullKey rk ck chainKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
+
+-- `driveGraphK GOutDiags` over [modules0].  Under a prelude key the drive serves the
+-- modules before the entry from their interfaces (`diagsServe`), with [stepKeys]
+-- pairing one source key with each module positionally.  The per-module payload is
+-- the worker's whole `(schemes, errs, warns)` triple: a caller that also needs the
+-- graph's ENTRY REPORT derives it from this list (`entryReportFromDiags`) instead of
+-- running a second, entry-only driver over the same graph.  `dropModSchemes` is the
+-- narrower `(errs, warns)` projection the bucketing fold consumes.
 export
 checkModulesDiagsChain : DriveInputs ->
   Option (Int, Int) ->
@@ -54577,8 +54395,7 @@ checkModulesDiagsChainFor inputs valueMain preludeKey chainKey stepKeys runtimeD
       modules0)).trDiagnostics
 
 -- `checkModulesDiagsChainFor` returning the drive's whole report beside its
--- outputs.  The keyed arm builds the report with the same `graphReport` call as
--- `driveGraphK`'s diags arm.
+-- outputs.
 export
 checkModulesChainReportFor : DriveInputs ->
   Bool ->
@@ -54601,30 +54418,6 @@ checkModulesChainReportFor inputs valueMain preludeKey chainKey stepKeys runtime
       coreDecls0
       modules0)
 
--- `checkModulesDiagsChain` beside the graph record its drive ends in, for a test that
--- observes that record after the drive.
-export
-checkModulesDiagsChainGraph : DriveInputs ->
-  Option (Int, Int) ->
-  String ->
-  List (Option String) ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  (List ModDiags, GraphCtx)
-checkModulesDiagsChainGraph inputs preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
-  let ((report, _), gctx) =
-    checkModulesChainReportForGraph
-      inputs
-      False
-      preludeKey
-      chainKey
-      stepKeys
-      runtimeDecls
-      coreDecls0
-      modules0
-  (report.trDiagnostics, gctx)
-
 -- `checkModulesChainReportFor` beside the graph record its drive ends in, for a test
 -- that observes that record after the drive.
 export
@@ -54637,236 +54430,201 @@ checkModulesChainReportForGraph : DriveInputs ->
   List Decl ->
   List (String, List Decl) ->
   ((TcReport, DriveOutputs), GraphCtx)
-checkModulesChainReportForGraph inputs valueMain None _ _ runtimeDecls coreDecls0 modules0 =
+checkModulesChainReportForGraph inputs valueMain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   let g =
     driveGraphK
       inputs
       GOutDiags
       valueMain
       None
-      None
+      preludeKey
+      (map ((rk, ck) => (chainFullKey rk ck chainKey, stepKeys)) preludeKey)
       runtimeDecls
       coreDecls0
       modules0
   ((g.gdReport, g.gdOutputs), g.gdGraph)
-checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
-  -- The keyed arm mirrors `driveGraphK`'s prologue by hand, so it owes the same
-  -- method-alias rewrite: without it this arm typechecks a graph in which
-  -- `import m as A` binds none of `m`'s methods under their origin name, and a bare
-  -- occurrence of such a name resolves to a different declaration than on the arm
-  -- that renames.  A module's rewrite reads only its dependencies' method sets, so
-  -- it is stable under the prefix the step memo resumes from.
-  let (admitted, modulesAliased) = renameAliasedMethods coreDecls0 modules0
-  let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
-  let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _, coreCtx) =
-    graphPreamble
-      inputs
-      admitted
-      GOutDiags
-      (Some (rk, ck))
-      runtimeDecls
-      coreDecls
-      modules
-  let fullKey =
-    "\{coreCtx.mcGraph.config.value.tcKey}\n\{chainFullKey rk ck chainKey}\n\{chainGraphKey modules}"
-  let steps = match !moduleChainMemoRef
-    Some m => if m.chKey == fullKey then m.chSteps else []
-    None => []
-  let (kept, restored) =
-    matchingStepPrefix (st => st.csKey) steps stepKeys (listLen modules)
-  let (depEnv, accData, accAll, results, resumeModule) = match restored
-    None => ([], publicDataDecls coreDecls, coreDecls, [], coreCtx)
-    Some st =>
-      let resumeCtx =
-        restoreGraphCtx
-          coreCtx.mcGraph
-          st.csCtx.crossRun
-          st.csCtx.graphRun
-          st.csCtx.builtinExternNamesRef.value
-      (
-        st.csDepEnv,
-        st.csAccData,
-        st.csAccAll,
-        st.csResults,
-        resumeModuleCtx resumeCtx coreCtx st.csModule,
-      )
-  -- The graph record the suffix continues from: the restored prefix's, or the one the
-  -- core pass left.  Nothing holds `coreCtx` past this point.
-  interners := internersOf resumeModule.mcGraph
-  let n = listLen kept
-  -- A restored step's rows were frozen when it was recorded, so nothing is open.
-  let (finalResults, open, newSteps, lastCtx) =
-    chainGo
-      (runtimeSeed ++ coreSchemes.mbSchemes)
-      (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
-      depEnv
-      accData
-      accAll
-      results
-      0
-      (drop n stepKeys)
-      []
-      resumeModule
-      -- #2705: each suffix module is marked as it is checked (`checkBodyImpl`), i.e.
-      -- after the prefix restore above replaced `GraphCtx.graphRun` — a cell minted before
-      -- that restore would index the older, shorter table and `methodCellOf` would
-      -- panic on the next analyze.  The restored prefix keeps its own cells (they
-      -- ride the snapshot).
-      (drop n modules)
-  moduleChainMemoRef := Some
-    ChainMemo {
-      chKey = fullKey,
-      chSteps = kept ++ reverseL newSteps,
-      chReplayed = n,
-    }
-  -- #2705: the graph-end drain for what the steps did not already drain (the entry
-  -- module, and any module after the last recorded step) — see `chainGo`.
-  let findings = checkGraphFinish lastCtx
-  let (wanted, autoPrint) =
-    autoPrintWanted
-      lastCtx
-      valueMain
-      None
-      findings
-      finalResults
-      coreDecls
-      modules
-  -- `driveGraphK`'s freeze point: the rows no recorded step froze.
-  let perMod =
-    attachCoherenceConflict
-      lastCtx
-      (attachDrainFindings
-        (findings ++ wanted)
-        (reverseL (freezeNewest open finalResults)))
-  let entryTables = captureEntryTables lastCtx coreContexts modules
-  -- Built for the report, not installed: no lowering reads a check drive's table.
-  let dispositions =
-    buildDispositions lastCtx.mcGraph lastCtx.mcGraph.declEnvsRef.value
-  let outcome = entryOutcomeNow lastCtx (mainHasObligations lastCtx) autoPrint
-  let report =
-    graphReportWithOutcome
-      outcome
-      perMod
-      (publishedCore coreClosed coreContexts coreSchemes)
-      []
-      (drivenEvidence lastCtx.mcGraph)
-      dispositions
-      lastCtx.mcGraph.graphRun.binderRows.value
-      None
-      entryTables
-  ((report, driveOutputsNow lastCtx outcome), lastCtx.mcGraph)
 
--- The fold itself, iterative, recording a step after each non-entry module while
--- keys are available.  Mirrors `driveGraphK GOutDiags`'s `foldModules` exactly:
--- same worker, import-scoped seed, pubV threading, both accumulator concats, the
--- entry-only `mainSchemeRef` write.  It drops the marked-tree half of the payload —
--- the memo may capture no `Decl` (see `ChainStep`), which is why the memo wraps the
--- DIAGS selection only.  `results` and the returned steps are newest first.
--- `open` counts the newest rows of `results` not yet frozen: a recorded step
--- freezes them, since its prefix is closed, and the caller freezes the rest at
--- graph end.  [steps] accumulates the recorded steps, newest first, so every call is a
--- tail call: a frame waiting on the rest would keep its module's record reachable
--- until the graph end.  [prev] is the record current before the next module; the last
--- module's record comes back as the fourth component.
-chainGo : List (String, Scheme) ->
-  List (String, ExportBinding) ->
-  List (String, List (String, ExportBinding)) ->
-  List Decl ->
-  List Decl ->
-  List ModDiags ->
-  Int ->
-  List (Option String) ->
-  List ChainStep ->
-  ModuleCtx ->
+-- ── serving modules from their interfaces ───────────────────────────────────
+
+-- A diagnostics drive's per-module payload (`graphModuleWorker`).
+type DiagsPayload = (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)
+
+-- The serve policy's state: the source keys of the modules still to come, the graph
+-- key, the identity of each module so far, whether a module checked and not recorded
+-- precedes, and the counts `ModuleServe` reports.
+data ServeState = ServeState {
+  ssKeys : List (Option String),
+  ssGraph : String,
+  ssIdents : OrdMap String,
+  ssPending : Bool,
+  ssRows : Int,
+  ssFrozen : Int,
+  ssServed : Int,
+}
+
+-- The policy's start for a drive over [modules] whose chain key and source keys are
+-- [keyed]: the graph key is the drive's configuration, the chain key, and every
+-- module's instance heads and constrained signature names, which a module reads
+-- whether or not it imports their definer (`chainGraphKey`).
+serveStateOf : GraphCtx ->
   List (String, List Decl) ->
-  (List ModDiags, Int, List ChainStep, ModuleCtx)
-chainGo _ _ _ _ _ results open _ steps prev [] = (results, open, steps, prev)
-chainGo baseSeed coreV depEnv accData accAll results open _ steps prev [(mid, prog)] =
-  let seed =
-    moduleImportSeed
-      prev
-      baseSeed
-      (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
-  let (_, (_, published, errs, warns), next) =
-    graphModuleWorker GOutDiags prev mid seed accData accAll prog
-  let _ = setMainSchemeIfEntry next.mcGraph True published
-  ((mid, (published, errs, warns)) :: results, open + 1, steps, next)
-chainGo baseSeed coreV depEnv accData accAll results open keys steps prev ((mid, prog) :: rest) =
-  let seed =
-    moduleImportSeed
-      prev
-      baseSeed
-      (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
-  let (schemes, (_, published, errs, warns), next) =
-    graphModuleWorker GOutDiags prev mid seed accData accAll prog
-  let pubV = publicModuleExports prog schemes ++ reexportSeed coreV prog depEnv
-  let depEnv2 = (mid, pubV) :: depEnv
-  let accData2 = accData ++ publicDataDecls prog
-  let accAll2 = accAll ++ prog
-  let results2 = (mid, (published, errs, warns)) :: results
-  let open2 = open + 1
-  let (key, keys2) = match keys
-    k :: ks => (k, ks)
-    [] => (None, [])
-  -- A live root still open is a later module's to ground, so this prefix is not
-  -- closed and records no step: the step's drain would stamp its goals unground.
-  let stepKey = if liveRootsOpen next.mcGraph () then None else key
-  match stepKey
-    None =>
-      -- No key for this module: nothing after it can be resumed either, so the rest
-      -- records no step and this is a tail call.  A frame waiting on the rest would
-      -- keep its own `accAll2`/`accData2` copies reachable from the stack.
-      chainGo
-        baseSeed
-        coreV
-        depEnv2
-        accData2
-        accAll2
-        results2
-        open2
-        []
-        steps
-        next
-        rest
-    Some k =>
-      -- #2705: drain what is queued (this module's context, and the contexts of
-      -- any un-keyed modules before it) BEFORE the snapshot, so a hit restores a
-      -- graph with an empty queue and a memoized prefix is solved once per edit of
-      -- its source rather than once per keystroke (a replayed prefix solve is what
-      -- puts the warm analyze over ruling 7's Ir ceiling).  This treats a recorded
-      -- prefix as closed at its own end — the closure this memo already assumes by
-      -- snapshotting its solution here — and it is a second resolution schedule
-      -- beside the graph-end one; folding the two back into one is #2719's.
-      -- The drain's holes join the results the step records, so a hit replays them.
-      -- The closed prefix's rows are frozen here, once, and a hit replays the copy.
-      let results3 =
-        freezeNewest
-          open2
-          (attachDrainFindings (checkGraphFinish next) results2)
-      -- The step's module record is carried into the step's own snapshot, so the memo
-      -- keeps no drive's graph record alive.
-      let snap = snapshotGraphCtx next.mcGraph
-      let step = ChainStep {
-        csKey = k,
-        csDepEnv = depEnv2,
-        csAccData = accData2,
-        csAccAll = accAll2,
-        csResults = results3,
-        csCtx = snap,
-        csModule = carryModuleCtx snap next,
+  (String, List (Option String)) ->
+  ServeState
+serveStateOf gctx modules (chain, steps) = ServeState {
+  ssKeys = steps,
+  ssGraph =
+    if anyList isSome steps then
+      "\{gctx.config.value.tcKey}\n\{chain}\n\{chainGraphKey modules}"
+    else
+      "",
+  ssIdents = omEmpty,
+  ssPending = False,
+  ssRows = 0,
+  ssFrozen = 0,
+  ssServed = 0,
+}
+
+-- A keyed diagnostics drive's serve policy.  A module before the entry whose
+-- `ModuleKey` matches its interface's is served from it.  A miss is checked, and it
+-- records when no module checked and not recorded precedes it and no live root is
+-- open before or after its check: an open live root is a later module's to ground, so
+-- the module could not be replayed without that module.  A recording module is
+-- drained at its own end before its row is frozen and its interface taken, so an
+-- interface brings no queued goal.  The key carries each direct import's identity,
+-- and an import checked and not recorded has a fresh serial no interface carries, so
+-- a change anywhere in a module's import closure re-checks it.
+diagsServe : ServeState -> ModuleServe DiagsPayload
+diagsServe st = ModuleServe {
+  msServed = st.ssServed,
+  msFrozen = st.ssFrozen,
+  msStep = diagsServeStep st,
+}
+
+diagsServeStep : ServeState ->
+  String ->
+  List Decl ->
+  ModuleCtx ->
+  ServeStep DiagsPayload
+diagsServeStep st mid prog prev =
+  let next = { st | ssKeys = drop 1 st.ssKeys, ssRows = st.ssRows + 1 }
+  match st.ssKeys
+    (Some source) :: _ =>
+      let key = ModuleKey {
+        mkModule = mid,
+        mkSource = source,
+        mkImports =
+          map
+            (m => (m, optionOr "" (omLookup m st.ssIdents)))
+            (dedup (flatMap importIdsOf prog)),
+        mkGraph = st.ssGraph,
       }
-      chainGo
-        baseSeed
-        coreV
-        depEnv2
-        accData2
-        accAll2
-        results3
-        0
-        keys2
-        (step :: steps)
-        next
-        rest
+      match moduleCacheHit key
+        Some mi =>
+          let ((_, (schemes, errs, warns)), own) =
+            applyModuleInterface prev.mcGraph mi
+          ServeHit
+            own
+            ([], schemes, errs, warns)
+            (diagsServe (servedState next mid mi))
+        None =>
+          let openBefore = liveRootsOpen prev.mcGraph ()
+          let before = captureModuleRows prev.mcGraph
+          ServeCheck (mctx own done =>
+            if st.ssPending || openBefore || liveRootsOpen mctx.mcGraph () then
+              (done, diagsServe (unrecordedState next mid))
+            else
+              recordChecked next key before mctx own done)
+    _ => ServeCheck (_ _ done => (done, diagsServe (unrecordedState next mid)))
+
+importIdsOf : Decl -> List String
+importIdsOf (DAttrib _ d) = importIdsOf d
+importIdsOf d = useModuleId d
+
+-- A served row extends the frozen prefix when every row before it is frozen.
+servedState : ServeState -> String -> ModuleInterface -> ServeState
+servedState st mid mi = { st |
+  ssIdents = omInsert mid (moduleInterfaceIdentity mi) st.ssIdents,
+  ssFrozen = if st.ssFrozen + 1 == st.ssRows then st.ssRows else st.ssFrozen,
+  ssServed = st.ssServed + 1,
+}
+
+unrecordedState : ServeState -> String -> ServeState
+unrecordedState st mid = { st |
+  ssIdents = omInsert mid (intToString (freshModuleSerial ())) st.ssIdents,
+  ssPending = True,
+}
+
+-- A checked module's record: drain what it queued, attach the drain's findings to
+-- the rows so far (whose errors decide which live findings stay), freeze its row and
+-- record its interface.  [done] is the payloads so far, this module's first.
+recordChecked : ServeState ->
+  ModuleKey ->
+  ModuleRows ->
+  ModuleCtx ->
+  List (String, ExportBinding) ->
+  List (String, DiagsPayload) ->
+  (List (String, DiagsPayload), ModuleServe DiagsPayload)
+recordChecked st key before mctx own done =
+  let drained = match checkGraphFinish mctx
+    [] => done
+    findings => withModDiags (attachDrainFindings findings) done
+  match drained
+    [] => (drained, diagsServe st)
+    (mid, (marked, schemes, errs, warns)) :: older =>
+      let published = freezeRows schemes
+      let mi =
+        freezeModuleInterface
+          key
+          (freshModuleSerial ())
+          (mid, (published, errs, warns))
+          own
+          before
+          mctx
+      let _ = recordModuleInterface mi
+      (
+        (mid, (marked, published, errs, warns)) :: older,
+        diagsServe { st |
+          ssIdents = omInsert mid (moduleInterfaceIdentity mi) st.ssIdents,
+          ssFrozen = st.ssRows,
+        },
+      )
+
+-- [f] over the diagnostics rows of [done], each payload keeping its marked tree.
+-- [f] keeps every row in place.
+withModDiags : (List ModDiags -> List ModDiags) ->
+  List (String, DiagsPayload) ->
+  List (String, DiagsPayload)
+withModDiags f done = map withMarked (zipL done (f (map payloadRow done)))
+
+payloadRow : (String, DiagsPayload) -> ModDiags
+payloadRow (mid, (_, schemes, errs, warns)) = (mid, (schemes, errs, warns))
+
+withMarked : ((String, DiagsPayload), ModDiags) -> (String, DiagsPayload)
+withMarked ((mid, (marked, _, _, _)), (_, (schemes, errs, warns))) =
+  (mid, (marked, schemes, errs, warns))
+
+-- A serving drive's type and effect variables start above every id a serving drive
+-- before it ended at, so no variable it mints shares an id with one a served
+-- interface holds: the existential and pattern-authority tables are keyed by those
+-- ids.
+raiseToHighWater : GraphCtx -> Unit
+raiseToHighWater gctx =
+  let lineage = interners.value.lineage
+  let r = gctx.graphRun
+  r.tyvarCounter := max r.tyvarCounter.value lineage.lnTyvarHigh.value
+  r.effvarCounter := max r.effvarCounter.value lineage.lnEffvarHigh.value
+
+noteHighWater : GraphCtx -> Unit
+noteHighWater gctx =
+  let lineage = interners.value.lineage
+  let r = gctx.graphRun
+  lineage.lnTyvarHigh := max lineage.lnTyvarHigh.value r.tyvarCounter.value
+  lineage.lnEffvarHigh := max lineage.lnEffvarHigh.value r.effvarCounter.value
+
+-- [rows] with every row past the oldest [n] frozen: the oldest [n] were frozen when
+-- they were recorded or served.
+freezeFrom : Int -> List ModDiags -> List ModDiags
+freezeFrom n rows = take n rows ++ map freezeModDiags (drop n rows)
 
 -- #1112 A-3: the disposition producer.  For every accepted instance
 -- (`ieRowsAll` — every impl row in the whole-graph `IE`, prelude included) and
@@ -54985,8 +54743,8 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
     -- test/run_check_agreement_fixtures/p0_17_missing_impl_method.mdk.
     restRows
 
-driveOutputsNow : ModuleCtx -> EntryOutcome -> DriveOutputs
-driveOutputsNow mctx outcome = DriveOutputs {
+driveOutputsNow : ModuleCtx -> EntryOutcome -> Int -> DriveOutputs
+driveOutputsNow mctx outcome served = DriveOutputs {
   doEntryOutcome = outcome,
   doHadTypeErrors = typeErrorsArmed mctx.mcGraph (),
   doHadMatchWarnings = matchWarningsNow mctx,
@@ -54998,6 +54756,7 @@ driveOutputsNow mctx outcome = DriveOutputs {
   doFfiAliases = mctx.mcGraph.declEnvsRef.value.deData.deAliases,
   doOrdIndex = mctx.mcGraph.declEnvsRef.value.deOrdIndex,
   doEffvarNext = mctx.mcGraph.graphRun.effvarCounter.value,
+  doServedModules = served,
 }
 
 frozenInvocationView : InvocationView -> InvocationView
@@ -55007,22 +54766,17 @@ frozenInvocationView (InvocationView ctors pols kinds) =
 -- Drive the whole module graph ONCE: stamp type-constructor identity, run the
 -- shared preamble, check every module dependency-first through one worker, drain
 -- at graph end, and attach the whole-graph coherence verdict.  `sel` chooses what
--- comes back (see `GraphOut`).  Every UNKEYED whole-graph entry point below is a
--- projection of this function; the keyed memo arm (`chainGo`) shares `graphPreamble`
--- and `graphModuleWorker` and MIRRORS the fold below rather than reusing it, which is
--- the lockstep obligation `chainGo`'s own comment states.
+-- comes back (see `GraphOut`).  Every whole-graph entry point below is a projection
+-- of this function.
 --
--- The memo layer is OUTSIDE, not a parameter: memoization is a property of the
--- caller's process lifetime, not of the driver.  A one-shot CLI process drives the
--- graph once, so a chain memo can never hit inside it and would be pure overhead
--- (`ChainStep` copies `CrossRun`, `GraphRun` and the extern-name map per recorded step);
--- a long-lived `medaka lsp` drives it once per keystroke over a graph whose import
--- PREFIX is unchanged, which is the whole point of the memo.  So
--- `checkModulesDiagsChain` wraps the `GOutDiags` selection and nothing wraps
--- `GOutTrees` — `ChainStep` captures neither marked trees nor dict-passed output,
--- so a memo over the tree arm would be a different data structure.  Re-deriving
--- only the SUFFIX's trees from the memo's prefix-state restore is a separate unit
--- and is NOT done here.
+-- [keyed] is a keyed diagnostics drive's chain key (`chainFullKey`) and one source
+-- key per module, `None` for every other drive.  Under it the fold serves each
+-- unchanged module before the entry from its recorded interface and records the
+-- modules it checks (`diagsServe`); the tree arm takes `None`, because an interface
+-- carries neither marked trees nor dict-passed output.  Whether a drive is keyed is
+-- its caller's choice: a one-shot process passes no source keys, so it neither serves
+-- nor records, and a session (the LSP, the playground) keeps the interfaces between
+-- requests.
 --
 -- `preludeKey` is the desugar-cache generation pair for the prelude interface (see
 -- `checkCoreMemoized`); the tree arm ignores it and reads the drive's own
@@ -55035,11 +54789,12 @@ driveGraphK : DriveInputs ->
   Bool ->
   Option String ->
   Option (Int, Int) ->
+  Option (String, List (Option String)) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   GraphDrive
-driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn =
+driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecls0 modulesIn =
   -- IMPORT ALIASING of an interface/impl METHOD — a method is global-by-name, so an
   -- alias of one is a second SPELLING, not a second binding.  A member alias and a
   -- module alias both keep their spelling through inference and are resolved at the
@@ -55062,15 +54817,19 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, coreTree, ms, coreCtx) =
     graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules
+  let serve =
+    map (k => diagsServe (serveStateOf coreCtx.mcGraph modules k)) keyed
+  let _ = if isSome serve then raiseToHighWater coreCtx.mcGraph
   -- #154 PR-C: the worker reads BOTH accData (buildOracle `prog ++ accData`) and
   -- accAll (checkModuleFullImpl implDecls), and
   -- both are order-observable (oracle first-wins, implDecls scan order), so both
   -- concats are RETAINED — this is not the perf-gate path, which is `cmCheckWorker`'s.
-  let ((modules2, perModRaw), lastCtx) =
+  let ((modules2, perModRaw), served, lastCtx) =
     foldModules
       True
       True
       (graphModuleWorker sel)
+      serve
       (graphCollect coreCtx.mcGraph sel)
       ([], [])
       (runtimeSeed ++ coreSchemes.mbSchemes)
@@ -55082,8 +54841,14 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       modules
   -- #2548: quiescence.  Every module (core first) has been inferred and has queued
   -- its stamping context; drain them all now, in module order, before any tree goes
-  -- to `dictPassModulesIfEnabled`.  The drive ends in the last module's record.
-  let findings = drainStampQueue lastCtx
+  -- to `dictPassModulesIfEnabled`.  The drive ends in the last module's record.  A
+  -- keyed drive's drains, its recording modules' and this one, restore the sticky
+  -- type-error cells (`checkGraphFinish`), so a served module's recorded sticky rows
+  -- are the ones a check of it leaves.
+  let findings =
+    if isSome serve then checkGraphFinish lastCtx else drainStampQueue lastCtx
+  let _ = if isSome serve then noteHighWater lastCtx.mcGraph
+  let servedCount = optionOr 0 (map (policy => policy.msServed) served)
   -- D3 / WS-2 part-2: attach any cross-module coherence conflict to the ENTRY
   -- module's diagnostics (last in dependency-first order), so LSP/analyzeProject
   -- surfaces it too.  User modules only (prelude excluded).
@@ -55109,7 +54874,11 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
   let perMod =
     attachCoherenceConflict
       lastCtx
-      (attachDrainFindings (findings ++ wanted) (map freezeModDiags perModRaw))
+      (attachDrainFindings
+        (findings ++ wanted)
+        (freezeFrom
+          (optionOr 0 (map (policy => policy.msFrozen) served))
+          perModRaw))
   -- Before the tree arm's `dictPass`, which writes the record's slot tables.
   let entryTables = captureEntryTables lastCtx coreContexts modules
   let corePub = publishedCore coreClosed coreContexts coreSchemes
@@ -55118,6 +54887,9 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
   let dispositions =
     buildDispositions lastCtx.mcGraph lastCtx.mcGraph.declEnvsRef.value
   match sel
+    -- A served module's evidence cells are not carried (`types/module_interface.mdk`),
+    -- so a keyed drive's `cpEvidence` holds the checked modules' cells only.  No
+    -- diagnostics-arm consumer reads it.
     GOutDiags => GraphDrive {
       gdPerMod = perMod,
       gdCoreSchemes = corePub,
@@ -55140,7 +54912,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
           None
           entryTables,
       gdGraph = lastCtx.mcGraph,
-      gdOutputs = driveOutputsNow lastCtx outcome,
+      gdOutputs = driveOutputsNow lastCtx outcome servedCount,
     }
     GOutTrees =>
       -- The set `dictPass` prepends dict params for: the bare set plus every
@@ -55202,7 +54974,7 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
             (Some (coreD, modulesOut))
             entryTables,
         gdGraph = lastCtx.mcGraph,
-        gdOutputs = driveOutputsNow lastCtx outcome,
+        gdOutputs = driveOutputsNow lastCtx outcome servedCount,
       }
 
 -- The prelude's published rows: the core pass's own when that pass closed core
@@ -55216,7 +54988,7 @@ publishedCore None contexts coreSchemes =
   freezeRows (publishCore contexts coreSchemes.mbSchemes)
 
 -- The whole-graph coherence verdict, attached to the entry module's diagnostics —
--- the tail `driveGraphK` and the chain memo both end with.  The narrower
+-- the tail `driveGraphK` ends with.  The narrower
 -- `(errs, warns)` view is `map dropModSchemes` OVER this result: `cohOntoFull`
 -- passes `schemes` through untouched and `attachEntryPayload` rewrites one entry,
 -- so dropping the schemes commutes with attaching.
@@ -55595,6 +55367,7 @@ checkModulesEntryFullReportKGraph inputs valueMain preludeKey runtimeDecls coreD
       valueMain
       None
       effectivePreludeKey
+      None
       runtimeDecls
       effectiveCoreDecls0
       effectiveModules0
@@ -56056,6 +55829,7 @@ elaborateModulesWithReportGraph inputs valueMain executes runtimeDecls coreDecls
       GOutTrees
       valueMain
       executes
+      None
       None
       runtimeDecls
       coreDecls0
@@ -57160,7 +56934,7 @@ markModules coreDecls modules =
   let carried = interners.value
   let base = initialGraphCtx builtinCtors (graphLineageRun None carried.lineage)
   let gctx = GraphCtx { base | builtinExternNamesRef = carried.externCatalog }
-  interners := internersOf gctx
+  let _ = noteInterners gctx
   let mctx = initialModuleCtx gctx
   let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
   let core2 = prePassDict mctx rpNames [] coreDecls
@@ -57425,13 +57199,12 @@ stampNoting stamp resolve o =
 -- The per-module context is REPLAYED, not re-derived (see `StampCtx`), and restored
 -- afterwards so `dictPassModulesIfEnabled` — which runs next — sees the state the
 -- last module left, exactly as it does today.
--- #2705: the drain at the core pass's freeze and a chain step's snapshot
--- (`checkCoreMemoized`, `chainGo`) and
--- at the keyed chain's graph end.  Nothing is published: a check driver has no
--- reader of the evidence table.
+-- #2705: the drain at the core pass's freeze (`checkCoreMemoized`), at a recording
+-- module's end and at a keyed drive's graph end (`diagsServe`).  Nothing is
+-- published: a check driver has no reader of the evidence table.
 --
 -- The sticky type-error cells are saved before the drain and restored after it, so
--- a memo snapshot never carries a drain's diagnostics.  The unkeyed drive
+-- a recorded interface never carries a drain's diagnostics.  An unkeyed drive
 -- (`driveGraphK`) keeps them instead; the two agree because the drain raises none on
 -- an accepted program.  The drain's evidence holes are returned, not recorded: a
 -- per-module diagnostics list is closed before any drain, so the caller attaches

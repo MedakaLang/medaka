@@ -15,14 +15,14 @@
 
 import support.ordmap.{OrdMap, omEmpty, omSize}
 import driver.diagnostics.{
-  analyzeToLines, analyzeProjectFull, analyzeProjectReport, noStdlibExports,
-  graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom, frontEnd,
-  checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
+  analyzeToLines, analyzeProjectFull, analyzeProjectReport, analyzeProjectKeyed,
+  noStdlibExports, graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom,
+  frontEnd, checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
   FrontOutput(..), Diag(..)
 }
-import types.typecheck.{defaultDriveInputs, chainMemoReplayedSteps}
+import types.typecheck.{defaultDriveInputs}
 import frontend.ast.{Decl}
-import types.tc_types.{emptyDriveOutputs}
+import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
 import frontend.parser.{parseLocated}
 import fs.{fixtureFiles}
 import list.{sort, somes}
@@ -383,15 +383,16 @@ writeChain dir n i =
     Err e => Err e
     Ok _ => writeChain dir n (i + 1)
 
--- One analyze of the chain's entry through the session caches.
+-- One analyze of the chain's entry through the session caches: the number of
+-- modules its drive served from their interfaces.
 analyzeChain : String ->
   String ->
   String ->
   Ref (OrdMap (List Decl)) ->
   <IO> Int
 analyzeChain rsrc csrc dir parseCache =
-  let _ =
-    analyzeProjectReport
+  let (keyed, _) =
+    analyzeProjectKeyed
       noStdlibExports
       True
       []
@@ -402,9 +403,11 @@ analyzeChain rsrc csrc dir parseCache =
       [dir, "stdlib"]
       rsrc
       csrc
-  chainMemoReplayedSteps ()
+  match keyed
+    Some ((_, outputs), _) => outputs.doServedModules
+    None => -1
 
-test "a graph of 70 modules replays every module but the entry on the second analyze" =
+test "a graph of 70 modules serves every module but the entry on the second analyze" =
   match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
     (Ok rsrc, Ok csrc) => withScratchDir (dir => match writeChain dir 70 1
       Ok _ =>
@@ -412,9 +415,9 @@ test "a graph of 70 modules replays every module but the entry on the second ana
         let first = analyzeChain rsrc csrc dir parseCache
         let second = analyzeChain rsrc csrc dir parseCache
         expectEach [
-          ("the first analyze replays nothing", expectEqual 0 first),
+          ("the first analyze serves nothing", expectEqual 0 first),
           (
-            "the second replays the 69 modules before the entry",
+            "the second serves the 69 modules before the entry",
             expectEqual 69 second,
           ),
           (
