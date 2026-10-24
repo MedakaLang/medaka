@@ -3424,8 +3424,8 @@ emitU64RawApp : Emit ->
   (CExpr, List CExpr) ->
   String
 emitU64RawApp e env ex (CVar f _, args)
-  | isW64RawKernel f (lengthS args) && not (isLocal env f) =
-    emitU64Kernel e env f args
+  | isW64RawKernel (runtimeName e f) (lengthS args) && not (isLocal env f) =
+    emitU64Kernel e env (runtimeName e f) args
   | isLocal env f = unboxU64 e (fst (emitExpr e env ex))
   | otherwise = match u64KernelAlias e f args
     Some k => emitU64Kernel e env k args
@@ -3656,7 +3656,7 @@ staticIsU64 e env ex = match flattenApp ex []
   (CVar f _, args) =>
     if isLocal env f then
       False
-    else if isU64RawKernel f (lengthS args) then
+    else if isU64RawKernel (runtimeName e f) (lengthS args) then
       True
     else match u64KernelAlias e f args
       Some k => isU64RawKernel k (lengthS args)
@@ -3731,7 +3731,7 @@ emitU32Raw e env (CLet False (PVar x a bid) e1 e2) = match e1
     untagU32 e (fst (emitExpr e env (CLet False (PVar x a bid) e1 e2)))
   _ => emitU32Raw e (bindLetRaw e env x bid e1 e2) e2
 emitU32Raw e env ex = match flattenApp ex []
-  (CVar f _, [a]) if isTruncate32 f && not (isLocal env f) =>
+  (CVar f _, [a]) if isTruncate32 (runtimeName e f) && not (isLocal env f) =>
     u32TruncateRaw e env a
   (CVar f _, args) =>
     if isLocal env f then
@@ -3873,14 +3873,14 @@ intRaw e env x = match flattenApp x []
   (CVar f _, args) =>
     if isLocal env f then
       untagInt e (fst (emitExpr e env x))
-    else match (intRawBitOp f, args)
+    else match (intRawBitOp (runtimeName e f), args)
       (Some instr, [a, b]) =>
         let p = intRaw e env a
         let q = intRaw e env b
         let r = freshReg e
         let _ = emit e "  \{r} = \{instr} i64 \{p}, \{q}"
         r
-      _ => match (f, args)
+      _ => match (runtimeName e f, args)
         ("u32ToInt", [a]) =>
           let v = emitU32Raw e env a
           let z = freshReg e
@@ -3923,9 +3923,9 @@ static32Kind e env ex = match flattenApp ex []
   (CVar f _, args) =>
     if isLocal env f then
       RawWord
-    else if isTruncate32 f then
+    else if isTruncate32 (runtimeName e f) then
       if lengthS args == 1 then
-        if f == "i32Truncate" then RawI32 else RawU32
+        if runtimeName e f == "i32Truncate" then RawI32 else RawU32
       else
         RawWord
     else match u32Inline e env f args
@@ -4173,11 +4173,12 @@ u64EscapesArgs _ _ _ [] = 0
 -- positions.
 u64ArgRaw : Emit -> String -> List CExpr -> List Bool
 u64ArgRaw e f args =
+  let key = runtimeName e f
   let n = lengthS args
-  if f == "u64TruncateToInt" && n == 1 then
+  if key == "u64TruncateToInt" && n == 1 then
     [True]
-  else if isW64RawKernel f n then
-    u64KernelArgRaw f
+  else if isW64RawKernel key n then
+    u64KernelArgRaw key
   else match u64KernelAlias e f args
     Some k => if k == "u64TruncateToInt" then [True] else u64KernelArgRaw k
     None => match rawWorkerCall e f n
@@ -4201,7 +4202,7 @@ u64Shaped _ (CBinPrim op _ _ tag _) = isU64Head tag && isArithOp op
 u64Shaped e (CIf _ t f) = u64Shaped e t && u64Shaped e f
 u64Shaped e ex = match flattenApp ex []
   (CVar f _, args) =>
-    if isU64RawKernel f (lengthS args) then
+    if isU64RawKernel (runtimeName e f) (lengthS args) then
       True
     else match u64KernelAlias e f args
       Some k => isU64RawKernel k (lengthS args)
@@ -5417,7 +5418,7 @@ emitFloatD e env (ex@(CBinPrim op l r _ _)) =
 emitFloatD e env ex = emitFloatLeaf e env ex
 
 emitFloatLeaf : Emit -> OrdMap (String, LTy) -> CExpr -> String
-emitFloatLeaf e env ex = match floatFromIntArg ex
+emitFloatLeaf e env ex = match floatFromIntArg e env ex
   Some a =>
     let (aw, _) = emitExpr e env a
     let i = untagInt e aw
@@ -5460,8 +5461,14 @@ floatFwFp e f = match lookupAssoc f !e.floatFwSet
 -- in a statically-Float context, `intToFloat x` / `fromInt x` (@ Float) is just an
 -- int→double conversion: emit `sitofp` directly instead of the extern/impl call's
 -- box-then-unbox. Returns the Int arg if `ex` is such a call (head name match, arity 1).
-floatFromIntArg : CExpr -> Option CExpr
-floatFromIntArg ex = match flattenApp ex []
+floatFromIntArg : Emit -> OrdMap (String, LTy) -> CExpr -> Option CExpr
+floatFromIntArg e env ex = match flattenApp ex []
+  (CVar f _, a :: []) =>
+    if runtimeName e f == "intToFloat" && not (isLocal env f)
+      || f == "fromInt" then
+      Some a
+    else
+      None
   (h, a :: []) =>
     if headNameIs h "intToFloat" || headNameIs h "fromInt" then Some a else None
   _ => None

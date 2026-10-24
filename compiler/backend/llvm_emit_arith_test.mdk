@@ -6,15 +6,36 @@
 -- Run it: medaka test --native compiler/backend/llvm_emit_arith_test.mdk
 
 import test.{expectAll, expectEqual, expectFalse, expectTextContainsAll}
-import string.{contains}
+import string.{contains, countOccurrences}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
 import backend.emit_plan.{buildEmitPlan}
 import backend.llvm_emit.{emitProgram, makeEmitInput}
-import frontend.ast.{Addr(..), BinderId(..), Lit(..), Pat(..), noDeclLoc}
-import ir.core_ir.{
-  CBind(..), CClause(..), CExpr(..), CProgram(..), DeclFacts(..), noDeclFacts
+import frontend.ast.{
+  Addr(..), BinderId(..), Lit(..), Pat(..), Route(..), noDeclLoc
 }
+import ir.core_ir.{
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CProgram(..),
+  DeclFacts(..),
+  CImplEntry(..),
+  CImplBody(..),
+  MethodEvidence(..),
+  mkApp,
+  noDeclFacts,
+}
+import ir.extern_types.{ExternDeclFact(..)}
+import ir.core_ir.{
+  ImplSym(..), CallSite(..), CallMode(..), MethodResultFact(..)
+}
+import ir.extern_lower.{externFactIndex}
+import types.extern_source.{
+  ExternBindingKind(..), ExternProvenance(..), runtimeExternSymbol
+}
+import types.runtime_abi.{runtimeAbi}
+import types.route_key.{numFloatWord}
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 
 fstPlusOne : (Int, Bool) -> Int
@@ -118,4 +139,199 @@ test "a solved Int Core arithmetic tag selects checked inline emission" =
       ["call { i64, i1 } @llvm.sadd.with.overflow.i64"]
       llvm,
     expectFalse (contains "call i64 @mdk_num_add(" llvm),
+  ]
+
+numericFact : String -> ExternDeclFact
+numericFact key = ExternDeclFact {
+  symbol = runtimeExternSymbol key,
+  originModule = "runtime",
+  declaredName = key,
+  bindingKind = RuntimeBinding key,
+  hostBindings = [],
+  callableShape = runtimeAbi key,
+  provenance = NoSourceSignature,
+}
+
+numericLlvm : List ExternDeclFact -> List CImplEntry -> CExpr -> String
+numericLlvm facts impls body =
+  let cp =
+    CProgram
+      [CBind "main" [CClause [] body] noDeclLoc (BinderId "numeric" 1)]
+      []
+      []
+      impls
+      []
+      { noDeclFacts |
+        factExterns = externFactIndex facts,
+        factMethodResults = [
+          MethodResultFact {
+            iface = "core::Num",
+            method = "fromInt",
+            returnsHead = True,
+            callbackPositions = [],
+            valueArity = 1,
+          },
+        ],
+        factBinders =
+          map
+            ((n, name) => BinderRow {
+              brId = BinderId "numeric" n,
+              brName = name,
+              brType = RTValue,
+              brReturns = if n == 1 then Some RTValue else None,
+              brSigned = False,
+            })
+            [(1, "main"), (2, "raw"), (3, "intToFloat"), (4, "x")],
+      }
+  emitProgram
+    (makeEmitInput PreludeFreeRuntime [] [] 0 [] [] "")
+    (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
+    cp
+
+numericCall : String -> List CExpr -> CExpr
+numericCall key args = mkApp (CVar (runtimeExternSymbol key) AGlobal) args
+
+numericLet : CExpr -> CExpr -> CExpr
+numericLet rhs body =
+  CLet False (PVar "raw" noDeclLoc (BinderId "numeric" 2)) rhs body
+
+test "canonical U64 kernel let stays raw until the arithmetic result is boxed" =
+  let llvm =
+    numericLlvm
+      [numericFact "u64BitAnd"]
+      []
+      (numericLet
+        (numericCall "u64BitAnd" [CLit (LU64 0 7), CLit (LU64 0 3)])
+        (CBinPrim
+          "+"
+          (CVar "raw" (ALocal 0 0))
+          (CLit (LU64 0 1))
+          "U64"
+          noDeclLoc))
+  expectAll [
+    expectTextContainsAll ["and i64", "add i64"] llvm,
+    expectEqual 1 (countOccurrences "call ptr @mdk_alloc_atomic(i64 16)" llvm),
+  ]
+
+test "canonical U32 and I32 truncations retain their unsigned and signed raw lets" =
+  let render key =
+    numericLlvm
+      [numericFact key]
+      []
+      (numericLet
+        (numericCall key [CLit (LInt (0 - 1))])
+        (CBinPrim
+          "+"
+          (CVar "raw" (ALocal 0 0))
+          (CLit (LInt 1))
+          (if key == "i32Truncate" then "I32" else "U32")
+          noDeclLoc))
+  let unsigned = render "u32Truncate"
+  let signed = render "i32Truncate"
+  expectAll [
+    expectTextContainsAll ["trunc i64", "zext i32"] unsigned,
+    expectFalse (contains "sext i32" unsigned),
+    expectTextContainsAll ["trunc i64", "sext i32"] signed,
+    expectFalse (contains "zext i32" signed),
+    expectEqual 1 (countOccurrences "trunc i64" unsigned),
+    expectEqual 1 (countOccurrences "trunc i64" signed),
+  ]
+
+test "canonical Int bit kernels and U32 I32 conversions fuse beneath truncation" =
+  let keys = [
+    "u32Truncate", "i32Truncate", "u32ToInt", "i32ToInt", "intBitAnd",
+    "intBitOr", "intBitXor", "intBitNot"
+  ]
+  let a = numericCall "u32ToInt" [numericCall "u32Truncate" [CLit (LInt 7)]]
+  let b =
+    numericCall "i32ToInt" [numericCall "i32Truncate" [CLit (LInt (0 - 1))]]
+  let llvm =
+    numericLlvm
+      (map numericFact keys)
+      []
+      (numericCall "u32Truncate" [
+        numericCall "intBitNot" [
+          numericCall "intBitXor" [
+            numericCall "intBitOr" [numericCall "intBitAnd" [a, b], a],
+            b,
+          ],
+        ],
+      ])
+  expectAll [
+    expectTextContainsAll
+      ["and i64", "or i64", "xor i64", "sext i32", "zext i32", ", -1"]
+      llvm,
+    expectFalse (contains "call i64 @mdk_bit_and(" llvm),
+    expectFalse (contains "call i64 @mdk_bit_or(" llvm),
+    expectFalse (contains "call i64 @mdk_bit_xor(" llvm),
+    expectFalse (contains "call i64 @mdk_bit_not(" llvm),
+  ]
+
+test "canonical intToFloat and the existing fromInt method route convert without an intermediate box" =
+  let entry =
+    CImplEntry
+      "fromInt"
+      0
+      1
+      (CImplTagged
+        "Float"
+        numFloatWord
+        "core::Num"
+        (ImplSym "Float" "" "")
+        []
+        [PVar "x" noDeclLoc (BinderId "numeric" 4)]
+        (CApp
+          (CVar (runtimeExternSymbol "intToFloat") AGlobal)
+          [CVar "x" (ALocal 0 0)]
+          (CallSite CallDynamic True)))
+  let render impls conversion =
+    numericLlvm
+      [numericFact "intToFloat"]
+      impls
+      (CBinPrim "+" conversion (CLit (LFloat 1.0)) "Float" noDeclLoc)
+  let direct = render [] (numericCall "intToFloat" [CLit (LInt 41)])
+  let method =
+    CMethod
+      "fromInt"
+      (MethodEvidence "core::Num" 1 (RKey numFloatWord [] []) [] [])
+  let routed =
+    render [entry] (CApp method [CLit (LInt 41)] (CallSite CallExact False))
+  expectAll [
+    expectTextContainsAll ["sitofp i64", "fadd double"] direct,
+    expectEqual
+      1
+      (countOccurrences "call ptr @mdk_alloc_atomic(i64 16)" direct),
+    expectTextContainsAll ["sitofp i64", "fadd double"] routed,
+    expectFalse (contains "call i64 @mdk_impl_Float_fromInt(" routed),
+  ]
+
+test "foreign same-spelled truncation keeps its ordinary foreign call" =
+  let fact = { numericFact "u32Truncate" |
+    symbol = "u32Truncate",
+    originModule = "foreign",
+    bindingKind = ForeignBinding,
+    hostBindings = [("c", "foreign_truncate")],
+  }
+  let call = mkApp (CVar "u32Truncate" AGlobal) [CLit (LInt 7)]
+  let llvm =
+    numericLlvm [fact] [] (CBinPrim "+" call (CLit (LInt 1)) "U32" noDeclLoc)
+  expectTextContainsAll ["call zeroext i32 @foreign_truncate("] llvm
+
+test "local same-spelled intToFloat without a runtime fact keeps its closure call" =
+  let local = CVar "intToFloat" (ALocal 0 0)
+  let body =
+    CLet
+      False
+      (PVar "intToFloat" noDeclLoc (BinderId "numeric" 3))
+      (CLam [PVar "x" noDeclLoc (BinderId "numeric" 4)] (CLit (LFloat 40.0)))
+      (CBinPrim
+        "+"
+        (CApp local [CLit (LInt 41)] (CallSite CallExact False))
+        (CLit (LFloat 1.0))
+        "Float"
+        noDeclLoc)
+  let llvm = numericLlvm [] [] body
+  expectAll [
+    expectTextContainsAll ["call i64 %", "fadd double"] llvm,
+    expectFalse (contains "sitofp i64" llvm),
   ]
