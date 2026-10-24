@@ -9,7 +9,7 @@
 -- freshness from the key first (`checkedFramed`'s gate) and only then hashes the
 -- covered bytes and decodes them: a file written for other sources never has
 -- its body looked at.
-import crypto.sha256.{sha256}
+import crypto.sha256_fast.{sha256Fast}
 import hex as Hex
 import list.{take, drop}
 import bytes.{encodeUtf8}
@@ -39,7 +39,7 @@ noGate _ = None
 -- The SHA-256 of a text, in lower-case hex.
 export
 sha256Hex : String -> String
-sha256Hex text = Hex.encode (sha256 (encodeUtf8 text))
+sha256Hex text = Hex.encode (sha256Fast (encodeUtf8 text))
 
 -- What the digest covers: the file's text after its first line.
 export

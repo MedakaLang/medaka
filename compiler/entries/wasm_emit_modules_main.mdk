@@ -1,3 +1,4 @@
+import backend.wasm_emit.{inputCtorFloatFieldsW}
 import types.extern_source.{externSourceHeadRows}
 -- MULTI-MODULE WasmGC emit driver (slice W9) — the WasmGC peer of
 -- entries/llvm_emit_modules_main.mdk, and the MVP capstone for the WasmGC
@@ -100,7 +101,10 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
       (ctorFieldTypeNames allDecls)
   let lowered = lowerProgramEmitWith facts allDecls
   let (plan, reached) =
-    buildEmitPlanReached (runtimeDomain (externDecls runtimeDecls)) lowered
+    buildEmitPlanReached
+      (runtimeDomain (externDecls runtimeDecls))
+      (inputCtorFloatFieldsW input)
+      lowered
   let wat = emitProgram input plan reached
   -- MEDAKA_STATS reporting hook: the counts come from the plan, so the ratio is the
   -- reach filter's own notion of reachable.  Off by default, so ordinary emission

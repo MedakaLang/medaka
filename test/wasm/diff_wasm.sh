@@ -32,6 +32,7 @@ MEDAKA="$ROOT/medaka"
 EMITTER="$ROOT/medaka_emitter"
 EMITBIN="$ROOT/test/bin/wasm_emit_main"
 FIXDIR="$ROOT/test/wasm/fixtures"
+DEMANDFIXDIR="$ROOT/test/wasm/fixtures_demand"
 RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
 
@@ -210,6 +211,9 @@ JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo
 NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
 fixtures=("$FIXDIR"/*.mdk)
 [ -e "${fixtures[0]}" ] || { echo "FAIL W2: no fixtures in $FIXDIR"; exit 1; }
+demand_fixtures=("$DEMANDFIXDIR"/*.mdk)
+[ -e "${demand_fixtures[0]}" ] || { echo "FAIL W2: no fixtures in $DEMANDFIXDIR"; exit 1; }
+fixtures+=("${demand_fixtures[@]}")
 fixture_count="${#fixtures[@]}"
 if ! printf '%s\n' "${fixtures[@]}" \
   | MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" NODE="$NODE_ABS" RUNJS="$RUNJS" \

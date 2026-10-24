@@ -1,0 +1,359 @@
+import backend.wasm_demand.{
+  WasmDemandPlan, WasmDemand(..), wasmTypeContext, returnStamp, cexprStamp
+}
+import backend.emit_plan.{EmitPlan, prepareWasmPlan}
+import backend.emit_target.{Backend(..)}
+import backend.extern_catalog.{RuntimeExternDomain(..), WasmUse(..)}
+import backend.core_validate.{validateForEmission, coreDefectMessage}
+import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInput}
+import frontend.parser.{parse}
+import frontend.ast.{Addr(..)}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.program_facts.{emptyFacts}
+import types.runtime_types.{RuntimeType(..)}
+import ir.core_ir.{CProgram, CExpr(..)}
+import ir.core_ir_lower.{lowerProgramEmitWith}
+import ir.extern_lower.{walkExternVars, externVar, implicitRuntimeFacts}
+import support.ordmap.{omEmpty, omFromNames, omKeys}
+import support.util.{joinNl}
+import test.{Expectation, expectAll, expectEach, expectEqual, expectErrContains}
+
+prepared : String -> (EmitPlan, CProgram)
+prepared =
+  parse
+    >> desugar
+    >> annotateProgram
+    >> lowerProgramEmitWith emptyFacts
+    >> prepareWasmPlan PreludeFreeRuntime omEmpty
+
+physical : EmitPlan -> WasmDemandPlan
+physical plan = match plan.wasmPhysical
+  Some demand => demand
+  None => panic "missing test demand"
+
+demandOf : String -> WasmDemandPlan
+demandOf src = physical (fst (prepared src))
+
+setOf : List String -> List String
+setOf names = omKeys (omFromNames names omEmpty)
+
+expectPrerequisites : String -> List String -> List String -> Expectation
+expectPrerequisites src helpers types =
+  let demand = demandOf src
+  expectAll [
+    expectEqual
+      (setOf helpers)
+      (setOf (filter (h => any (== h) helpers) demand.helpers)),
+    expectEqual
+      (setOf types)
+      (setOf (filter (t => any (== t) types) demand.representationTypes)),
+  ]
+
+test "String clause and decision patterns close helpers and representation before rendering" =
+  expectEach
+    (map
+      ((name, src) => (
+        name,
+        expectPrerequisites
+          src
+          ["strSearchRuntimeLines", "strLeafRuntimeLines", "ioStrRuntimeLines"]
+          ["str", "u8arr"],
+      ))
+      [
+        ("clause", """
+f "" = 1
+f _ = 2
+main = 42
+"""),
+        ("nested tuple", """
+f ("", x) = 1
+f _ = 2
+main = 42
+"""),
+        ("tail switch", """
+f s = match s
+  "" => 1
+  _ => 2
+main = 42
+"""),
+        ("guard", """
+f s
+  | "" <- s = 1
+  | True = 2
+main = 42
+"""),
+      ])
+
+test "lambda destructuring includes tuple and list representation without constructing either" = expectEach
+  [
+    (
+      "tuple",
+      expectPrerequisites
+        """
+main =
+  let f = (x,y) => x
+  42
+"""
+        ["closApplyLines", "stderrByteImportLines"]
+        ["C_Tup2", "T_Tup2", "argarr", "clos", "codety"],
+    ),
+    (
+      "list",
+      expectPrerequisites
+        """
+main =
+  let f = (x :: xs) => x
+  42
+"""
+        ["closApplyLines", "stderrByteImportLines"]
+        ["C_Cons", "T_List"],
+    ),
+  ]
+
+test "compound expressions close String helper types independently of String mode eligibility" = expectEach
+  [
+    (
+      "tuple",
+      expectPrerequisites
+        """
+f x = (charToStr x,42)
+main = 42
+"""
+        ["strLeafRuntimeLines"]
+        ["str", "u8arr"],
+    ),
+    (
+      "list",
+      expectPrerequisites
+        """
+f x = [charToStr x]
+main = 42
+"""
+        ["strLeafRuntimeLines"]
+        ["str", "u8arr"],
+    ),
+    (
+      "array",
+      expectPrerequisites
+        """
+f x = [|charToStr x|]
+main = 42
+"""
+        ["strLeafRuntimeLines"]
+        ["str", "u8arr", "arr"],
+    ),
+    (
+      "stderr tuple",
+      expectPrerequisites
+        """
+f x = (ePutStr x,42)
+main = 42
+"""
+        ["stderrRuntimeLines"]
+        ["str", "u8arr"],
+    ),
+  ]
+
+importFields : WasmDemandPlan -> List String
+importFields demand = map (i => "\{i.namespace}:\{i.field}") demand.imports
+
+test "Float autoprint closes both formatting and String printing prerequisites" =
+  expectPrerequisites
+    """
+main =
+  let _ = (1,2)
+  pi
+"""
+    ["floatRuntimeLines", "ioStrRuntimeLines"]
+    ["str", "u8arr", "float"]
+
+test "closure bodies below collection expressions retain their physical representation" =
+  expectPrerequisites
+    "main = let _ = [x => x] in 42"
+    ["closApplyLines"]
+    ["clos", "argarr", "codety", "T_List", "C_Cons"]
+
+test "captured local-group arithmetic retains the outer binder stamp" =
+  let demand =
+    demandOf
+      """
+f x = g ()
+  where
+    g _ = x + x
+main = let _ = (z => z) in f 21
+"""
+  expectEqual
+    ["valueAddRuntimeLines"]
+    (filter (== "valueAddRuntimeLines") demand.helpers)
+
+test "captured local-group comparison retains the outer binder stamp" =
+  let demand =
+    demandOf
+      """
+f x = g ()
+  where
+    g _ = if x > x then 0 else 42
+main = let _ = (z => z) in f 21
+"""
+  expectEqual
+    ["valueCmpNumRuntimeLines"]
+    (filter (== "valueCmpNumRuntimeLines") demand.helpers)
+
+test "ordinary lambda capture retains its value arithmetic helper" =
+  let demand =
+    demandOf """
+f x = (u => x + x) ()
+main = let _ = (z => z) in f 21
+"""
+  expectEqual
+    ["valueAddRuntimeLines"]
+    (filter (== "valueAddRuntimeLines") demand.helpers)
+
+test "baseline imports and new type prerequisites do not broaden legacy eligibility" =
+  let scalar = demandOf "main = 42"
+  let local = demandOf """
+main =
+  let putStrLn = 42
+  putStrLn
+"""
+  let neutral = demandOf """
+main =
+  let value = 42
+  value
+"""
+  let nested = demandOf """
+f x = g x
+  where
+    g y = charToStr y
+main = 42
+"""
+  expectAll [
+    expectEqual
+      [False, True, False, False]
+      [scalar.useRef, local.useRef, neutral.useRef, nested.useRef],
+    expectEqual ["env:mdk_write_byte"] (importFields scalar),
+    expectEqual ["env:mdk_write_byte"] (importFields local),
+    expectEqual [] scalar.sourceHostKeys,
+    expectEqual ["boxint", "float"] scalar.representationTypes,
+  ]
+
+test "scalar traps and emitted unused bodies retain exact import order" =
+  expectEach
+    (map
+      (src => (
+        src,
+        expectEqual
+          ["env:mdk_write_byte", "env:mdk_write_err_byte"]
+          (importFields (demandOf src)),
+      ))
+      ["main = 12 / 3", """
+unused x = 10 / x
+main = 42
+"""])
+
+test "catalog specials retain selected dispositions and Ref representation" =
+  let ref = demandOf "main = (Ref 42).value"
+  let bound = demandOf """
+main =
+  let _ = (1,2)
+  intMaxBound
+"""
+  let cp =
+    parse "main = __fallthrough__ ()"
+      |> desugar
+      |> annotateProgram
+      |> lowerProgramEmitWith emptyFacts
+  let fallthrough =
+    match filter (f => f.declaredName == "__fallthrough__") implicitRuntimeFacts
+      fact :: _ =>
+        let canonical =
+          walkExternVars
+            (scope supplied name addr =>
+              if name == "__fallthrough__" then
+                externVar fact
+              else
+                CVar name addr)
+            cp
+        physical (fst (prepareWasmPlan PreludeFreeRuntime omEmpty canonical))
+      [] => panic "missing canonical fallthrough fact"
+  expectAll [
+    expectEqual ["Ref"] (map fst ref.catalogFamilies),
+    expectEqual ["intMaxBound"] (map fst bound.catalogFamilies),
+    expectEqual ["__fallthrough__"] (map fst fallthrough.catalogFamilies),
+    expectPrerequisites "main = (Ref 42).value" [] ["refbox"],
+    expectEqual ["env:mdk_write_byte"] (importFields ref),
+  ]
+
+refusal : String -> (WasmDemandPlan -> WasmDemandPlan) -> Result String String
+refusal src mutate =
+  let (plan, cp) = prepared src
+  let bad = { plan | wasmPhysical = Some (mutate (physical plan)) }
+  let checked = validateForEmission WasmBackend PreludeFreeRuntime bad cp
+  match checked.defects
+    [] => Ok "output would be permitted"
+    defects => Err (joinNl (map coreDefectMessage defects))
+
+without : String -> List String -> List String
+without name = filter (/= name)
+
+stringPattern : String
+stringPattern = """
+f "" = 1
+f _ = 2
+main = 42
+"""
+
+test "gateway refuses required helper, type and catalog disposition mutations" = expectAll
+  [
+    expectErrContains
+      "missing-wasm-helper-prerequisite: strSearchRuntimeLines"
+      (refusal stringPattern (d => { d |
+        helpers = without "strSearchRuntimeLines" d.helpers,
+      })),
+    expectErrContains
+      "missing-wasm-type-prerequisite: str"
+      (refusal stringPattern (d => { d |
+        representationTypes = without "str" d.representationTypes,
+      })),
+    expectErrContains
+      "wasm-catalog-disposition-mismatch"
+      (refusal "main = (Ref 42).value" (d => { d | catalogFamilies = [] })),
+  ]
+
+test "paired helper/type/import omissions cannot erase unchanged Core prerequisites" = expectAll
+  [
+    expectErrContains
+      "missing-wasm-helper-prerequisite: strSearchRuntimeLines"
+      (refusal stringPattern (d => { d |
+        helpers =
+          without
+            "strSearchRuntimeLines"
+            (without "strLeafRuntimeLines" d.helpers),
+        representationTypes =
+          without "str" (without "u8arr" d.representationTypes),
+        representation =
+          { d.representation | uses = filter (/= UseStr) d.representation.uses },
+      })),
+    expectErrContains
+      "missing-wasm-host-key: env:mdk_write_err_byte"
+      (refusal "main = 12 / 3" (d => { d |
+        helpers =
+          without "stderrByteImportLines" (without "intRuntimeLines" d.helpers),
+        imports = filter (i => i.field /= "mdk_write_err_byte") d.imports,
+      })),
+  ]
+
+test "gap census preserves its forced reference walk without requiring main" =
+  let (plan, cp) = prepared "f x y = x + y"
+  expectEqual
+    []
+    (emitProgramGaps (makeWasmEmitInput PreludeFreeRuntime []) plan cp)
+
+test "ordinary spellings cannot acquire a runtime declaration's result stamp" =
+  let (_, cp) = prepared "main = 42"
+  let context = wasmTypeContext omEmpty cp
+  expectAll [
+    expectEqual RTValue (returnStamp context [] "putStrLn"),
+    expectEqual RTValue (cexprStamp context [] (CVar "pi" AGlobal)),
+  ]

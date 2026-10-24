@@ -539,6 +539,7 @@ wasmUseRows = [
   ("byteBlockFromString", [UseStr, UseArray, UseByteBlock]),
   ("byteBlockToString", [UseStr, UseArray, UseByteBlock]),
   ("byteBlockWriteStdout", [UseStr, UseArray, UseByteBlock]),
+  ("sha256Native", [UseStr, UseArray, UseByteBlock]),
   ("stringToChars", [UseStr, UseStrLeaf, UseStrCodec, UseArray]),
   ("stringFromChars", [UseStr, UseStrLeaf, UseStrCodec, UseArray]),
   ("stringToUtf8Bytes", [UseStr, UseStrCodec, UseArray]),
@@ -1392,6 +1393,11 @@ catalogRows = [
   ExternRow
     "byteBlockToString"
     (CSymbol LlvmByteBlock "mdk_byteblock_to_string")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "sha256Native"
+    (CSymbol LlvmByteBlock "mdk_sha256")
     (Inline WasmByteBlock)
     Interpreted,
   ExternRow

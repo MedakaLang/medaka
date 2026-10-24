@@ -65,9 +65,9 @@ test_probe.typecheck.drive	2
 test_probe.typecheck.module	12
 lint_probe.exit	0
 lint_probe.exhaust.oracle	1
-lint_probe.lex.pairs	50
+lint_probe.lex.pairs	52
 lint_probe.lint.comments	1
-lint_probe.parse.positions	50
+lint_probe.parse.positions	52
 lint_probe.read.source	1
 check_bad.exit	1
 check_bad.desugar	1

@@ -1,3 +1,4 @@
+import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
 --
 -- This IS the canonical LLVM backend (STAGE2-DESIGN.md §2.4). Originally
@@ -310,9 +311,6 @@ import types.route_key.{numIntWord}
 import backend.emit_plan.{
   EmitPlan(..),
   lookupMethodResult,
-  TrmcVerdicts,
-  isTrmcFn,
-  isTrmcImpl,
   planEntryMainIsUnit,
   planEntryMainIsFloat,
 }
@@ -2590,6 +2588,12 @@ emitByteBlockExtern e env "byteBlockToString" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_byteblock_to_string(i64 \{bb})"
     (r, LTStr)
   _ => panic "llvm: byteBlockToString takes one argument"
+emitByteBlockExtern e env "sha256Native" args = match emitArgs e env args
+  [bb] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_sha256(i64 \{bb})"
+    (r, LTCon)
+  _ => panic "llvm: sha256Native takes one argument"
 emitByteBlockExtern e _ name _ =
   gapE e ("unsupported byte-block extern " ++ name)
 

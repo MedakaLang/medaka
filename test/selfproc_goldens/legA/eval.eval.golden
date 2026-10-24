@@ -413,6 +413,7 @@ pRestoreRandomState : Value a -> <a> Value a
 pRound : Value a -> <a> Value a
 pSetRef : Value a -> Value a -> <a> Value a
 pSetSeed : Value a -> <a> Value a
+pSha256Native : Value a -> <a> Value a
 pShiftLeft : Value a -> Value a -> <a> Value a
 pShiftRight : Value a -> Value a -> <a> Value a
 pSin : Value a -> <a> Value a

@@ -1194,6 +1194,23 @@ GT
 UPPER "Unit"
 NEWLINE
 EXTERN
+IDENT "fetchText"
+COLON
+LPAREN
+IDENT "url"
+COLON
+UPPER "String"
+RPAREN
+ARROW
+LT
+UPPER "Net"
+IDENT "url"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "String"
+NEWLINE
+EXTERN
 IDENT "allocBytes"
 COLON
 UPPER "Unit"
@@ -2041,6 +2058,13 @@ COLON
 UPPER "ByteBlock"
 ARROW
 UPPER "String"
+NEWLINE
+EXTERN
+IDENT "sha256Native"
+COLON
+UPPER "ByteBlock"
+ARROW
+UPPER "ByteBlock"
 NEWLINE
 EXTERN
 IDENT "byteBlockWriteStdout"

@@ -1,0 +1,2 @@
+f x = (u => x + x) ()
+main = let _ = z => z in f 21

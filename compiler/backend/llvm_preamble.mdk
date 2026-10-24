@@ -89,6 +89,7 @@ preambleLines = [
   "declare i64 @mdk_byteblock_to_int_array(i64)",
   "declare i64 @mdk_byteblock_from_string(i64)",
   "declare i64 @mdk_byteblock_to_string(i64)",
+  "declare i64 @mdk_sha256(i64)",
   "declare void @mdk_byteblock_write_stdout(i64)",
   "declare void @mdk_print_char(i64)",
   "declare i64 @mdk_char_to_str(i64)",

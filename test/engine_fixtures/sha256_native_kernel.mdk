@@ -1,0 +1,55 @@
+-- `sha256Native` on all three engines: C in the runtime (native), the same C
+-- through the host (interpreter) and a WAT body (wasm). Every printed value
+-- is an Int projected out of a digest, never a block, as in
+-- byteblock_kernel.mdk. The lengths sit on both sides of the padding boundary
+-- (55/56 and 63/64/65 bytes, then the second-block cases) and the first two
+-- digests are the FIPS 180-4 vectors for "" and "abc": e3b0c442... and
+-- ba7816bf....
+
+filled : Int -> ByteBlock
+filled n =
+  let b = byteBlockMake n
+  fillGo b 0 n
+  b
+
+fillGo : ByteBlock -> Int -> Int -> Unit
+fillGo b i n =
+  if i >= n then
+    ()
+  else
+    let _ = byteBlockSetUnsafe i (i * 7 + 3) b
+    fillGo b (i + 1) n
+
+sumBytes : ByteBlock -> Int -> Int -> Int
+sumBytes b i n
+  | i >= n = 0
+  | otherwise = byteBlockGetUnsafe i b * (i + 1) + sumBytes b (i + 1) n
+
+-- (length, first byte, last byte, position-weighted sum) of the digest.
+probe : Int -> (Int, Int, Int, Int)
+probe n =
+  let d = sha256Native (filled n)
+  (
+    byteBlockLength d,
+    byteBlockGetUnsafe 0 d,
+    byteBlockGetUnsafe 31 d,
+    sumBytes d 0 32,
+  )
+
+main =
+  let empty = sha256Native (byteBlockMake 0)
+  let abc = sha256Native (byteBlockFromString "abc")
+  (
+    (
+      byteBlockGetUnsafe 0 empty,
+      byteBlockGetUnsafe 1 empty,
+      byteBlockGetUnsafe 31 empty,
+    ),
+    (
+      byteBlockGetUnsafe 0 abc,
+      byteBlockGetUnsafe 1 abc,
+      byteBlockGetUnsafe 31 abc,
+    ),
+    (probe 55, probe 56, probe 63, probe 64),
+    (probe 65, probe 119, probe 120, probe 1000),
+  )

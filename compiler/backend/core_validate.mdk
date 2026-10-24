@@ -1,3 +1,4 @@
+import backend.wasm_demand.{validateWasmDemand}
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
 -- check reads only the `CProgram` the emitter received and the extern catalog,
 -- so every build entry reports a refusal from one place, and before either
@@ -215,6 +216,7 @@ emissionDefects backend domain plan cp =
           validateExternRequirements backend domain cp plan.externRequirements,
         () => validateRequirementProjection backend plan,
         () => validateGlobalInit cp plan.lazyGlobals plan.globalInit,
+        () => validatePhysicalDemand backend plan cp,
         () => validateRecords cp,
         () => validateBinderStamps cp,
         () =>
@@ -1627,3 +1629,25 @@ shapeName BoundCell = "a constructor cell"
 export
 renderBinderRefusal : List String -> String
 renderBinderRefusal bad = joinWith "\n" bad
+
+validatePhysicalDemand : Backend -> EmitPlan -> CProgram -> List String
+validatePhysicalDemand WasmBackend plan cp = match plan.wasmPhysical
+  None => ["missing-wasm-demand-plan"]
+  Some physical =>
+    validateWasmDemand
+        { plan.wasmInputs |
+          lazyGlobals = plan.lazyGlobals,
+          globalInit = plan.globalInit,
+          trmcVerdicts = plan.trmc,
+          dispatchGroups = plan.dispGroups,
+        }
+        cp
+        plan.externRequirements
+        physical
+      ++ (if physical.sourceDemand /= plan.wasmDemand
+        || physical.sourceHostKeys /= plan.hostKeys
+        || physical.jsImports /= plan.jsImports then
+        ["wasm-source-demand-mismatch"]
+      else
+        [])
+validatePhysicalDemand _ _ _ = []

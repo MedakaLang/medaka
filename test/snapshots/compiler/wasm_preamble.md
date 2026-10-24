@@ -1,7 +1,12 @@
 # META
-source_lines=3257
+source_lines=3537
 stages=DESUGAR,MARK
 # SOURCE
+import backend.wasm_demand.{
+  WasmDemandPlan, PlannedImport, helperOrder, hasWasmHelper, jsWireParam,
+  jsWireResult, unaryF64Sig, binaryF64Sig
+}
+import backend.wasm_demand.{JsImport(..)}
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
 -- (WASMGC-DESIGN.md §3 type-section + §6 host-import seam).  Peer of
 -- `backend.llvm_preamble` (the `declare @mdk_…` block): PURE DATA, identical for
@@ -43,7 +48,6 @@ stages=DESUGAR,MARK
 
 import support.util.{anyList, contains, joinWith}
 import types.private_mangle.{injectiveIdent}
-import backend.emit_plan.{JsImport(..)}
 
 export
 preambleHeadLines : List String
@@ -1771,12 +1775,6 @@ hostImportSigOf "mdk_file_bound_enter" =
 hostImportSigOf "mdk_file_bound_exit" = Some ""
 hostImportSigOf _ = None
 
-unaryF64Sig : String
-unaryF64Sig = " (param f64) (result f64)"
-
-binaryF64Sig : String
-binaryF64Sig = " (param f64) (param f64) (result f64)"
-
 -- stringToFloat host seam: the guest pushes the string's bytes via the path channel
 -- (mdk_path_reset + mdk_path_push, shared with IO) then calls mdk_str_to_float, which
 -- reads pathBuf as a UTF-8 string, parses it with the strtod acceptance set and returns
@@ -2200,19 +2198,6 @@ jsffiWrapperId name = "jsffi.wrap.\{injectiveIdent name}"
 export
 jsImportField : JsImport -> String
 jsImportField imp = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}"
-
--- The wasm parameter a head crosses as: a scalar by value, a `String` or `Array`
--- as its length (its contents go on the path channel), a `Unit` as nothing.
-jsWireParam : String -> String
-jsWireParam "Unit" = ""
-jsWireParam head = " (param \{jsWireTy head})"
-
--- The wasm result a head comes back as; a `String` comes back on the result
--- channel and a `Unit` as nothing.
-jsWireResult : String -> String
-jsWireResult "Unit" = ""
-jsWireResult "String" = ""
-jsWireResult head = " (result \{jsWireTy head})"
 
 jsWireTy : String -> String
 jsWireTy "Int" = "i64"
@@ -3173,74 +3158,249 @@ strCodecRuntimeLines = [
 -- useArray ($arr), the two reps these bodies name.
 export
 byteBlockRuntimeLines : List String
-byteBlockRuntimeLines = [
-  "  ;; -- the `ByteBlock` builtin (peer of the mdk_byteblock_* C helpers) --",
-  "  ;; byteBlockCopyUnsafe: the first $n bytes into a FRESH block.  A COPY, never a",
-  "  ;; view: this is freeze's engine half, so a later write to the source must not",
-  "  ;; reach the result (matching mdk_byteblock_copy's memcpy).",
-  "  (func $mdk_bb_copy (param $n i32) (param $b (ref $u8arr)) (result (ref $u8arr))",
-  "    (local $out (ref $u8arr))",
-  "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
-  "    (local.get $out))",
-  "  ;; byteBlockFromIntArray: the low eight bits of each element.  Unboxes through",
-  "  ;; $mdk_unbox_int rather than the i31 fast path so an element outside the i31",
-  "  ;; range (a $boxint) masks instead of trapping -- native has no boxed Int, so",
-  "  ;; the i31-only route would diverge on exactly those elements.",
-  "  (func $mdk_bb_from_int_array (param $a (ref $arr)) (result (ref $u8arr))",
-  "    (local $n i32) (local $out (ref $u8arr)) (local $i i32)",
-  "    (local.set $n (array.len (local.get $a)))",
-  "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (local.set $i (i32.const 0))",
-  "    (block $d (loop $l",
-  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (array.set $u8arr (local.get $out) (local.get $i)",
-  "        (i32.and (i32.wrap_i64 (call $mdk_unbox_int (ref.as_non_null (array.get $arr (local.get $a) (local.get $i))))) (i32.const 255)))",
-  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (local.get $out))",
-  "  ;; byteBlockToIntArray: each byte as an Int in 0..255 (array.get_u zero-extends).",
-  "  (func $mdk_bb_to_int_array (param $b (ref $u8arr)) (result (ref $arr))",
-  "    (local $n i32) (local $out (ref $arr)) (local $i i32)",
-  "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))",
-  "    (local.set $i (i32.const 0))",
-  "    (block $d (loop $l",
-  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))",
-  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (local.get $out))",
-  "  ;; byteBlockFromString: the string's UTF-8 bytes, COPIED.  A $str's backing is",
-  "  ;; shared by every reference to that string and a block is mutable, so handing",
-  "  ;; the backing back unaliased would let a write edit the string.",
-  "  (func $mdk_bb_from_string (param $s (ref $str)) (result (ref $u8arr))",
-  "    (local $b (ref $u8arr)) (local $n i32) (local $out (ref $u8arr))",
-  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
-  "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
-  "    (local.get $out))",
-  "  ;; byteBlockToString: the block's bytes as a fresh $str.  The backing is COPIED",
-  "  ;; because a block is mutable and a $str's bytes are shared by every reference to",
-  "  ;; it; the copy is then read as UTF-8 by $mdk_u8_to_str_lossy, the same route as",
-  "  ;; $mdk_utf8_bytes_to_str and medaka_rt.c's mdk_byteblock_to_string.",
-  "  (func $mdk_bb_to_string (param $b (ref $u8arr)) (result (ref $str))",
-  "    (local $n i32) (local $buf (ref $u8arr))",
-  "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
-  "    (call $mdk_u8_to_str_lossy (local.get $buf)))",
-  "  ;; byteBlockWriteStdout: write the block's bytes to stdout byte-for-byte, no",
-  "  ;; encoding assumption -- unlike $mdk_print_str, there is no $str/cp_count to",
-  "  ;; read, just the raw $u8arr length.",
-  "  (func $mdk_bb_write_stdout (param $b (ref $u8arr))",
-  "    (local $i i32) (local $n i32)",
-  "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $i (i32.const 0))",
-  "    (block $d (loop $l",
-  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (call $mdk_write_byte (array.get_u $u8arr (local.get $b) (local.get $i)))",
-  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))",
+byteBlockRuntimeLines =
+  [
+      "  ;; -- the `ByteBlock` builtin (peer of the mdk_byteblock_* C helpers) --",
+      "  ;; byteBlockCopyUnsafe: the first $n bytes into a FRESH block.  A COPY, never a",
+      "  ;; view: this is freeze's engine half, so a later write to the source must not",
+      "  ;; reach the result (matching mdk_byteblock_copy's memcpy).",
+      "  (func $mdk_bb_copy (param $n i32) (param $b (ref $u8arr)) (result (ref $u8arr))",
+      "    (local $out (ref $u8arr))",
+      "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))",
+      "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
+      "    (local.get $out))",
+      "  ;; byteBlockFromIntArray: the low eight bits of each element.  Unboxes through",
+      "  ;; $mdk_unbox_int rather than the i31 fast path so an element outside the i31",
+      "  ;; range (a $boxint) masks instead of trapping -- native has no boxed Int, so",
+      "  ;; the i31-only route would diverge on exactly those elements.",
+      "  (func $mdk_bb_from_int_array (param $a (ref $arr)) (result (ref $u8arr))",
+      "    (local $n i32) (local $out (ref $u8arr)) (local $i i32)",
+      "    (local.set $n (array.len (local.get $a)))",
+      "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))",
+      "    (local.set $i (i32.const 0))",
+      "    (block $d (loop $l",
+      "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+      "      (array.set $u8arr (local.get $out) (local.get $i)",
+      "        (i32.and (i32.wrap_i64 (call $mdk_unbox_int (ref.as_non_null (array.get $arr (local.get $a) (local.get $i))))) (i32.const 255)))",
+      "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+      "    (local.get $out))",
+      "  ;; byteBlockToIntArray: each byte as an Int in 0..255 (array.get_u zero-extends).",
+      "  (func $mdk_bb_to_int_array (param $b (ref $u8arr)) (result (ref $arr))",
+      "    (local $n i32) (local $out (ref $arr)) (local $i i32)",
+      "    (local.set $n (array.len (local.get $b)))",
+      "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))",
+      "    (local.set $i (i32.const 0))",
+      "    (block $d (loop $l",
+      "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+      "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))",
+      "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+      "    (local.get $out))",
+      "  ;; byteBlockFromString: the string's UTF-8 bytes, COPIED.  A $str's backing is",
+      "  ;; shared by every reference to that string and a block is mutable, so handing",
+      "  ;; the backing back unaliased would let a write edit the string.",
+      "  (func $mdk_bb_from_string (param $s (ref $str)) (result (ref $u8arr))",
+      "    (local $b (ref $u8arr)) (local $n i32) (local $out (ref $u8arr))",
+      "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+      "    (local.set $n (array.len (local.get $b)))",
+      "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))",
+      "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
+      "    (local.get $out))",
+      "  ;; byteBlockToString: the block's bytes as a fresh $str.  The backing is COPIED",
+      "  ;; because a block is mutable and a $str's bytes are shared by every reference to",
+      "  ;; it; the copy is then read as UTF-8 by $mdk_u8_to_str_lossy, the same route as",
+      "  ;; $mdk_utf8_bytes_to_str and medaka_rt.c's mdk_byteblock_to_string.",
+      "  (func $mdk_bb_to_string (param $b (ref $u8arr)) (result (ref $str))",
+      "    (local $n i32) (local $buf (ref $u8arr))",
+      "    (local.set $n (array.len (local.get $b)))",
+      "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
+      "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
+      "    (call $mdk_u8_to_str_lossy (local.get $buf)))",
+      "  ;; byteBlockWriteStdout: write the block's bytes to stdout byte-for-byte, no",
+      "  ;; encoding assumption -- unlike $mdk_print_str, there is no $str/cp_count to",
+      "  ;; read, just the raw $u8arr length.",
+      "  (func $mdk_bb_write_stdout (param $b (ref $u8arr))",
+      "    (local $i i32) (local $n i32)",
+      "    (local.set $n (array.len (local.get $b)))",
+      "    (local.set $i (i32.const 0))",
+      "    (block $d (loop $l",
+      "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+      "      (call $mdk_write_byte (array.get_u $u8arr (local.get $b) (local.get $i)))",
+      "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))",
+    ]
+    ++ sha256RuntimeLines
+
+-- FIPS 180-4 section 4.2.2 round constants K[0..63].
+sha256K : List Int
+sha256K = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+  0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+  0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+  0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+  0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+  0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+  0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 ]
+
+-- WasmGC has no constant table of i32 words here, so K is a `br_table` over 64
+-- nested blocks: case k falls out of block $ck into `(return K[k])`.
+shaLabel : Int -> String
+shaLabel j = "$c\{intToString j}"
+
+sha256KLines : List String
+sha256KLines =
+  ["  (func $mdk_sha_k (param $i i32) (result i32)"]
+    ++ map (j => "    (block $c\{intToString (63 - j)}") [0..=63]
+    ++ [
+      "    (br_table "
+        ++ joinWith " " (map shaLabel [0..=63])
+        ++ " $c63 (local.get $i))",
+    ]
+    ++ flatMap
+      (kc => ["    )", "    (return (i32.const \{intToString kc}))"])
+      sha256K
+    ++ ["  )"]
+
+-- sha256Native (mdk_sha256 in medaka_rt.c).  State and message schedule live in
+-- $u8arr scratch blocks holding little-endian 32-bit words, read and written
+-- through $mdk_sha_get / $mdk_sha_set; the message itself is read big-endian.
+sha256RuntimeLines : List String
+sha256RuntimeLines =
+  [
+      "  ;; -- sha256Native (peer of medaka_rt.c mdk_sha256) --",
+      "  (func $mdk_sha_get (param $a (ref $u8arr)) (param $i i32) (result i32)",
+      "    (local $o i32)",
+      "    (local.set $o (i32.shl (local.get $i) (i32.const 2)))",
+      "    (i32.or",
+      "      (i32.or (array.get_u $u8arr (local.get $a) (local.get $o))",
+      "              (i32.shl (array.get_u $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 1))) (i32.const 8)))",
+      "      (i32.or (i32.shl (array.get_u $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 2))) (i32.const 16))",
+      "              (i32.shl (array.get_u $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 3))) (i32.const 24)))))",
+      "  (func $mdk_sha_set (param $a (ref $u8arr)) (param $i i32) (param $v i32)",
+      "    (local $o i32)",
+      "    (local.set $o (i32.shl (local.get $i) (i32.const 2)))",
+      "    (array.set $u8arr (local.get $a) (local.get $o) (local.get $v))",
+      "    (array.set $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 1)) (i32.shr_u (local.get $v) (i32.const 8)))",
+      "    (array.set $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 2)) (i32.shr_u (local.get $v) (i32.const 16)))",
+      "    (array.set $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 3)) (i32.shr_u (local.get $v) (i32.const 24))))",
+    ]
+    ++ sha256KLines
+    ++ [
+      "  ;; One 64-byte block of $src at $off folded into the state $h; $w is the 256-byte schedule scratch.",
+      "  (func $mdk_sha_block (param $h (ref $u8arr)) (param $src (ref $u8arr)) (param $off i32) (param $w (ref $u8arr))",
+      "    (local $i i32) (local $p i32) (local $x i32) (local $s0 i32) (local $s1 i32)",
+      "    (local $a i32) (local $b i32) (local $c i32) (local $d i32) (local $e i32) (local $f i32) (local $g i32) (local $hh i32)",
+      "    (local $t1 i32) (local $t2 i32)",
+      "    (local.set $i (i32.const 0))",
+      "    (block $d1 (loop $l1",
+      "      (br_if $d1 (i32.ge_u (local.get $i) (i32.const 16)))",
+      "      (local.set $p (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 2))))",
+      "      (call $mdk_sha_set (local.get $w) (local.get $i)",
+      "        (i32.or",
+      "          (i32.or (i32.shl (array.get_u $u8arr (local.get $src) (local.get $p)) (i32.const 24))",
+      "                  (i32.shl (array.get_u $u8arr (local.get $src) (i32.add (local.get $p) (i32.const 1))) (i32.const 16)))",
+      "          (i32.or (i32.shl (array.get_u $u8arr (local.get $src) (i32.add (local.get $p) (i32.const 2))) (i32.const 8))",
+      "                  (array.get_u $u8arr (local.get $src) (i32.add (local.get $p) (i32.const 3))))))",
+      "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l1)))",
+      "    (block $d2 (loop $l2",
+      "      (br_if $d2 (i32.ge_u (local.get $i) (i32.const 64)))",
+      "      (local.set $x (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 15))))",
+      "      (local.set $s0 (i32.xor (i32.xor (i32.rotr (local.get $x) (i32.const 7)) (i32.rotr (local.get $x) (i32.const 18))) (i32.shr_u (local.get $x) (i32.const 3))))",
+      "      (local.set $x (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 2))))",
+      "      (local.set $s1 (i32.xor (i32.xor (i32.rotr (local.get $x) (i32.const 17)) (i32.rotr (local.get $x) (i32.const 19))) (i32.shr_u (local.get $x) (i32.const 10))))",
+      "      (call $mdk_sha_set (local.get $w) (local.get $i)",
+      "        (i32.add (i32.add (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 16))) (local.get $s0))",
+      "                 (i32.add (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 7))) (local.get $s1))))",
+      "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))",
+      "    (local.set $a (call $mdk_sha_get (local.get $h) (i32.const 0)))",
+      "    (local.set $b (call $mdk_sha_get (local.get $h) (i32.const 1)))",
+      "    (local.set $c (call $mdk_sha_get (local.get $h) (i32.const 2)))",
+      "    (local.set $d (call $mdk_sha_get (local.get $h) (i32.const 3)))",
+      "    (local.set $e (call $mdk_sha_get (local.get $h) (i32.const 4)))",
+      "    (local.set $f (call $mdk_sha_get (local.get $h) (i32.const 5)))",
+      "    (local.set $g (call $mdk_sha_get (local.get $h) (i32.const 6)))",
+      "    (local.set $hh (call $mdk_sha_get (local.get $h) (i32.const 7)))",
+      "    (local.set $i (i32.const 0))",
+      "    (block $d3 (loop $l3",
+      "      (br_if $d3 (i32.ge_u (local.get $i) (i32.const 64)))",
+      "      (local.set $t1",
+      "        (i32.add",
+      "          (i32.add (local.get $hh)",
+      "            (i32.xor (i32.xor (i32.rotr (local.get $e) (i32.const 6)) (i32.rotr (local.get $e) (i32.const 11))) (i32.rotr (local.get $e) (i32.const 25))))",
+      "          (i32.add",
+      "            (i32.xor (i32.and (local.get $e) (local.get $f)) (i32.and (i32.xor (local.get $e) (i32.const -1)) (local.get $g)))",
+      "            (i32.add (call $mdk_sha_k (local.get $i)) (call $mdk_sha_get (local.get $w) (local.get $i))))))",
+      "      (local.set $t2",
+      "        (i32.add",
+      "          (i32.xor (i32.xor (i32.rotr (local.get $a) (i32.const 2)) (i32.rotr (local.get $a) (i32.const 13))) (i32.rotr (local.get $a) (i32.const 22)))",
+      "          (i32.xor (i32.xor (i32.and (local.get $a) (local.get $b)) (i32.and (local.get $a) (local.get $c))) (i32.and (local.get $b) (local.get $c)))))",
+      "      (local.set $hh (local.get $g))",
+      "      (local.set $g (local.get $f))",
+      "      (local.set $f (local.get $e))",
+      "      (local.set $e (i32.add (local.get $d) (local.get $t1)))",
+      "      (local.set $d (local.get $c))",
+      "      (local.set $c (local.get $b))",
+      "      (local.set $b (local.get $a))",
+      "      (local.set $a (i32.add (local.get $t1) (local.get $t2)))",
+      "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l3)))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 0) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 0)) (local.get $a)))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 1) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 1)) (local.get $b)))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 2) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 2)) (local.get $c)))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 3) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 3)) (local.get $d)))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 4) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 4)) (local.get $e)))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 5) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 5)) (local.get $f)))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 6) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 6)) (local.get $g)))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 7) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 7)) (local.get $hh))))",
+      "  (func $mdk_sha256 (param $b (ref $u8arr)) (result (ref $u8arr))",
+      "    (local $n i32) (local $full i32) (local $rem i32) (local $size i32) (local $i i32) (local $x i32)",
+      "    (local $h (ref $u8arr)) (local $w (ref $u8arr)) (local $tail (ref $u8arr)) (local $out (ref $u8arr)) (local $bits i64)",
+      "    (local.set $n (array.len (local.get $b)))",
+      "    (local.set $h (array.new $u8arr (i32.const 0) (i32.const 32)))",
+      "    (local.set $w (array.new $u8arr (i32.const 0) (i32.const 256)))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 0) (i32.const 1779033703))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 1) (i32.const -1150833019))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 2) (i32.const 1013904242))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 3) (i32.const -1521486534))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 4) (i32.const 1359893119))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 5) (i32.const -1694144372))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 6) (i32.const 528734635))",
+      "    (call $mdk_sha_set (local.get $h) (i32.const 7) (i32.const 1541459225))",
+      "    (local.set $full (i32.shr_u (local.get $n) (i32.const 6)))",
+      "    (local.set $i (i32.const 0))",
+      "    (block $d (loop $l",
+      "      (br_if $d (i32.ge_u (local.get $i) (local.get $full)))",
+      "      (call $mdk_sha_block (local.get $h) (local.get $b) (i32.shl (local.get $i) (i32.const 6)) (local.get $w))",
+      "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+      "    (local.set $rem (i32.and (local.get $n) (i32.const 63)))",
+      "    (local.set $size (select (i32.const 64) (i32.const 128) (i32.le_u (i32.add (local.get $rem) (i32.const 9)) (i32.const 64))))",
+      "    (local.set $tail (array.new $u8arr (i32.const 0) (i32.const 128)))",
+      "    (array.copy $u8arr $u8arr (local.get $tail) (i32.const 0) (local.get $b) (i32.shl (local.get $full) (i32.const 6)) (local.get $rem))",
+      "    (array.set $u8arr (local.get $tail) (local.get $rem) (i32.const 128))",
+      "    (local.set $bits (i64.shl (i64.extend_i32_u (local.get $n)) (i64.const 3)))",
+      "    (local.set $i (i32.const 0))",
+      "    (block $d4 (loop $l4",
+      "      (br_if $d4 (i32.ge_u (local.get $i) (i32.const 8)))",
+      "      (array.set $u8arr (local.get $tail) (i32.sub (i32.sub (local.get $size) (i32.const 1)) (local.get $i))",
+      "        (i32.wrap_i64 (i64.shr_u (local.get $bits) (i64.extend_i32_u (i32.shl (local.get $i) (i32.const 3))))))",
+      "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l4)))",
+      "    (call $mdk_sha_block (local.get $h) (local.get $tail) (i32.const 0) (local.get $w))",
+      "    (if (i32.eq (local.get $size) (i32.const 128))",
+      "      (then (call $mdk_sha_block (local.get $h) (local.get $tail) (i32.const 64) (local.get $w))))",
+      "    (local.set $out (array.new $u8arr (i32.const 0) (i32.const 32)))",
+      "    (local.set $i (i32.const 0))",
+      "    (block $d5 (loop $l5",
+      "      (br_if $d5 (i32.ge_u (local.get $i) (i32.const 8)))",
+      "      (local.set $x (call $mdk_sha_get (local.get $h) (local.get $i)))",
+      "      (array.set $u8arr (local.get $out) (i32.shl (local.get $i) (i32.const 2)) (i32.shr_u (local.get $x) (i32.const 24)))",
+      "      (array.set $u8arr (local.get $out) (i32.add (i32.shl (local.get $i) (i32.const 2)) (i32.const 1)) (i32.shr_u (local.get $x) (i32.const 16)))",
+      "      (array.set $u8arr (local.get $out) (i32.add (i32.shl (local.get $i) (i32.const 2)) (i32.const 2)) (i32.shr_u (local.get $x) (i32.const 8)))",
+      "      (array.set $u8arr (local.get $out) (i32.add (i32.shl (local.get $i) (i32.const 2)) (i32.const 3)) (local.get $x))",
+      "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l5)))",
+      "    (local.get $out))",
+    ]
 
 -- ── W11b charFromCode : Int -> Option Char ───────────────────────────────────────
 -- Range-check the i32 codepoint (valid = 0..0x10FFFF EXCLUDING surrogates 0xD800..
@@ -3259,10 +3419,131 @@ charFromCodeRuntimeLines = [
   "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (local.get $cp))))))",
   "    (ref.i31 (i32.const 1)))",
 ]
+
+export
+plannedImportLines : List PlannedImport -> List String
+plannedImportLines = map (imp =>
+  "  (import \"\{imp.namespace}\" \"\{imp.field}\" (func $\{imp.watSymbol}\{imp.signature}))")
+
+export
+plannedHelperLines : WasmDemandPlan -> List (List Int) -> List String
+plannedHelperLines plan files =
+  flatMap
+    (name =>
+      if hasWasmHelper plan name then
+        plannedHelperBlock plan files name
+      else
+        [])
+    helperOrder
+
+plannedHelperBlock : WasmDemandPlan -> List (List Int) -> String -> List String
+plannedHelperBlock plan files "closApplyLines" = closApplyLines
+plannedHelperBlock plan files "ioRuntimeLines" = ioRuntimeLines
+plannedHelperBlock plan files "ioStrRuntimeLines" = ioStrRuntimeLines
+plannedHelperBlock plan files "strLeafRuntimeLines" = strLeafRuntimeLines
+plannedHelperBlock plan files "strConcatRuntimeLines" = strConcatRuntimeLines
+plannedHelperBlock plan files "appendRuntimeLines" = appendRuntimeLines
+plannedHelperBlock plan files "valueEqRuntimeLines" =
+  valueEqRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueAddRuntimeLines" =
+  valueAddRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueSubRuntimeLines" =
+  valueSubRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueMulRuntimeLines" =
+  valueMulRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueDivRuntimeLines" =
+  valueDivRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueModRuntimeLines" =
+  valueModRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueCmpNumRuntimeLines" =
+  valueCmpNumRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "u64RuntimeLines" = u64RuntimeLines
+plannedHelperBlock plan files "i64RuntimeLines" = i64RuntimeLines
+plannedHelperBlock plan files "stderrRuntimeLines" = stderrRuntimeLines
+plannedHelperBlock plan files "rngRuntimeLines" = rngRuntimeLines
+plannedHelperBlock plan files "hashRuntimeLines" = hashRuntimeLines
+plannedHelperBlock plan files "hashStringRuntimeLines" = hashStringRuntimeLines
+plannedHelperBlock plan files "floatRemRuntimeLines" = floatRemRuntimeLines
+plannedHelperBlock plan files "floatRuntimeLines" = floatRuntimeLines
+plannedHelperBlock plan files "hashFloatRuntimeLines" = hashFloatRuntimeLines
+plannedHelperBlock plan files "randomFloatRuntimeLines" =
+  randomFloatRuntimeLines
+plannedHelperBlock plan files "floatStrLines" = floatStrLines
+plannedHelperBlock plan files "strSearchRuntimeLines" = strSearchRuntimeLines
+plannedHelperBlock plan files "strToIntRuntimeLines" = strToIntRuntimeLines
+plannedHelperBlock plan files "strReverseRuntimeLines" = strReverseRuntimeLines
+plannedHelperBlock plan files "strJoinRuntimeLines" = strJoinRuntimeLines
+plannedHelperBlock plan files "strCodecRuntimeLines" = strCodecRuntimeLines
+plannedHelperBlock plan files "byteBlockRuntimeLines" = byteBlockRuntimeLines
+plannedHelperBlock plan files "charFromCodeRuntimeLines" =
+  charFromCodeRuntimeLines
+plannedHelperBlock plan files "charClassRuntimeLines" = charClassRuntimeLines
+plannedHelperBlock plan files "ioPushPathLines" = ioPushPathLines
+plannedHelperBlock plan files "ioPushPathMoreLines" = ioPushPathMoreLines
+plannedHelperBlock plan files "ioPushGrantLines" = ioPushGrantLines
+plannedHelperBlock plan files "ioPushGrantMoreLines" = ioPushGrantMoreLines
+plannedHelperBlock plan files "ioResultLines" = ioResultLines
+plannedHelperBlock plan files "ioRefusedPanicLines" = ioRefusedPanicLines
+plannedHelperBlock plan files "ioReadFileLines" = ioReadFileLines
+plannedHelperBlock plan files "ioFetchTextLines" = ioFetchTextLines
+plannedHelperBlock plan files "ioFileExistsLines" = ioFileExistsLines
+plannedHelperBlock plan files "ioCanonicalizeLines" = ioCanonicalizeLines
+plannedHelperBlock plan files "ioWriteFileLines" = ioWriteFileLines
+plannedHelperBlock plan files "ioAppendFileLines" = ioAppendFileLines
+plannedHelperBlock plan files "ioRenameLines" = ioRenameLines
+plannedHelperBlock plan files "ioListDirLines" = ioListDirLines
+plannedHelperBlock plan files "ioStatFileLines" = ioStatFileLines
+plannedHelperBlock plan files "ioMakeDirLines" = ioMakeDirLines
+plannedHelperBlock plan files "ioRemoveFileLines" = ioRemoveFileLines
+plannedHelperBlock plan files "ioRemoveDirLines" = ioRemoveDirLines
+plannedHelperBlock plan files "ioFsyncLines" = ioFsyncLines
+plannedHelperBlock plan files "ioFileModeLines" = ioFileModeLines
+plannedHelperBlock plan files "ioWriteFileModeLines" = ioWriteFileModeLines
+plannedHelperBlock plan files "ioGetEnvLines" = ioGetEnvLines
+plannedHelperBlock plan files "ioReadLineLines" = ioReadLineLines
+plannedHelperBlock plan files "ioReadAllLines" = ioReadAllLines
+plannedHelperBlock plan files "ioReadExactlyLines" = ioReadExactlyLines
+plannedHelperBlock plan files "ioExecutablePathLines" = ioExecutablePathLines
+plannedHelperBlock plan files "jsffiArrayLines" = jsffiArrayLines
+plannedHelperBlock plan files "jsffiResultStrLines" = jsffiResultStrLines
+plannedHelperBlock plan files "ioArgsLines" = ioArgsLines
+plannedHelperBlock plan files "utf8LossyRuntimeLines" = utf8LossyRuntimeLines
+plannedHelperBlock plan files "writeFileBytesLines" = writeFileBytesLines
+plannedHelperBlock plan files "osEntropyLines" = osEntropyLines
+plannedHelperBlock plan files "readFileBytesLines" = readFileBytesLines
+plannedHelperBlock plan files "trapIntRuntimeLines" = trapIntRuntimeLines
+plannedHelperBlock plan files "intRuntimeLines" =
+  intRuntimeLines plan.intHelpers
+plannedHelperBlock plan files "siteRuntimeLines" =
+  siteRuntimeLines files plan.nonexhaustiveRuntime
+plannedHelperBlock _ _ name =
+  panic ("internal error: unplanned-wasm-helper: " ++ name)
 # DESUGAR
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
-(DUse false (UseGroup ("backend" "emit_plan") ((mem "JsImport" true))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3464,10 +3745,6 @@ charFromCodeRuntimeLines = [
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
-(DTypeSig false "unaryF64Sig" (TyCon "String"))
-(DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
-(DTypeSig false "binaryF64Sig" (TyCon "String"))
-(DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
 (DTypeSig true "floatStrRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "floatStrRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_str_to_float"))) (EVar "keys")) (EVar "floatStrLines")))
 (DTypeSig false "floatStrLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3514,13 +3791,6 @@ charFromCodeRuntimeLines = [
 (DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
 (DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
-(DTypeSig false "jsWireParam" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsWireParam" ((PLit (LString "Unit"))) (ELit (LString "")))
-(DFunDef false "jsWireParam" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param ")) (EApp (EVar "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
-(DTypeSig false "jsWireResult" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsWireResult" ((PLit (LString "Unit"))) (ELit (LString "")))
-(DFunDef false "jsWireResult" ((PLit (LString "String"))) (ELit (LString "")))
-(DFunDef false "jsWireResult" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (result ")) (EApp (EVar "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
 (DTypeSig false "jsWireTy" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "jsWireTy" ((PLit (LString "Int"))) (ELit (LString "i64")))
 (DFunDef false "jsWireTy" ((PLit (LString "U64"))) (ELit (LString "i64")))
@@ -3623,13 +3893,96 @@ charFromCodeRuntimeLines = [
 (DTypeSig true "strCodecRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "strCodecRuntimeLines" () (EListLit (ELit (LString "  ;; -- W11b UTF-8 codec (byte-identical to medaka_rt.c) --")) (ELit (LString "  ;; decode a $str's UTF-8 bytes into a fresh $arr of cp_count i31 Char codepoints.")) (ELit (LString "  (func $mdk_str_to_chars (param $s (ref $str)) (result (ref $arr))")) (ELit (LString "    (local $b (ref $u8arr)) (local $n i32) (local $cpc i32) (local $out (ref $arr))")) (ELit (LString "    (local $bo i32) (local $oi i32) (local $lead i32) (local $cp i32) (local $k i32) (local $w i32)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $cpc (struct.get $str $cp_count (local.get $s)))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $cpc)))")) (ELit (LString "    (local.set $bo (i32.const 0)) (local.set $oi (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $bo) (local.get $n)))")) (ELit (LString "      ;; the output holds cp_count codepoints; never step past it.")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $oi) (local.get $cpc)))")) (ELit (LString "      (local.set $lead (array.get_u $u8arr (local.get $b) (local.get $bo)))")) (ELit (LString "      ;; lead-byte class → codepoint seed bits + total byte width.")) (ELit (LString "      (if (i32.lt_u (local.get $lead) (i32.const 128))")) (ELit (LString "        (then (local.set $cp (local.get $lead)) (local.set $w (i32.const 1)))")) (ELit (LString "        (else (if (i32.lt_u (local.get $lead) (i32.const 224))")) (ELit (LString "          (then (local.set $cp (i32.and (local.get $lead) (i32.const 31))) (local.set $w (i32.const 2)))")) (ELit (LString "          (else (if (i32.lt_u (local.get $lead) (i32.const 240))")) (ELit (LString "            (then (local.set $cp (i32.and (local.get $lead) (i32.const 15))) (local.set $w (i32.const 3)))")) (ELit (LString "            (else (local.set $cp (i32.and (local.get $lead) (i32.const 7))) (local.set $w (i32.const 4))))))))")) (ELit (LString "      ;; a sequence never reads past the backing's end.")) (ELit (LString "      (if (i32.gt_s (local.get $w) (i32.sub (local.get $n) (local.get $bo)))")) (ELit (LString "        (then (local.set $w (i32.sub (local.get $n) (local.get $bo)))))")) (ELit (LString "      ;; fold in (w-1) continuation bytes: cp = (cp << 6) | (byte & 0x3F).")) (ELit (LString "      (local.set $k (i32.const 1))")) (ELit (LString "      (block $cd (loop $cl")) (ELit (LString "        (br_if $cd (i32.ge_s (local.get $k) (local.get $w)))")) (ELit (LString "        (local.set $cp (i32.or (i32.shl (local.get $cp) (i32.const 6))")) (ELit (LString "          (i32.and (array.get_u $u8arr (local.get $b) (i32.add (local.get $bo) (local.get $k))) (i32.const 63))))")) (ELit (LString "        (local.set $k (i32.add (local.get $k) (i32.const 1))) (br $cl)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $oi) (ref.i31 (local.get $cp)))")) (ELit (LString "      (local.set $oi (i32.add (local.get $oi) (i32.const 1)))")) (ELit (LString "      (local.set $bo (i32.add (local.get $bo) (local.get $w))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; number of UTF-8 bytes a codepoint encodes to (1..4).")) (ELit (LString "  (func $mdk_utf8_nbytes (param $cp i32) (result i32)")) (ELit (LString "    (if (result i32) (i32.lt_u (local.get $cp) (i32.const 128)) (then (i32.const 1))")) (ELit (LString "      (else (if (result i32) (i32.lt_u (local.get $cp) (i32.const 2048)) (then (i32.const 2))")) (ELit (LString "        (else (if (result i32) (i32.lt_u (local.get $cp) (i32.const 65536)) (then (i32.const 3))")) (ELit (LString "          (else (i32.const 4))))))))")) (ELit (LString "  ;; encode one codepoint into $buf at offset $off; return the next offset.")) (ELit (LString "  (func $mdk_utf8_emit_at (param $buf (ref $u8arr)) (param $off i32) (param $cp i32) (result i32)")) (ELit (LString "    (if (result i32) (i32.lt_u (local.get $cp) (i32.const 128))")) (ELit (LString "      (then")) (ELit (LString "        (array.set $u8arr (local.get $buf) (local.get $off) (local.get $cp))")) (ELit (LString "        (i32.add (local.get $off) (i32.const 1)))")) (ELit (LString "      (else (if (result i32) (i32.lt_u (local.get $cp) (i32.const 2048))")) (ELit (LString "        (then")) (ELit (LString "          (array.set $u8arr (local.get $buf) (local.get $off) (i32.or (i32.const 192) (i32.shr_u (local.get $cp) (i32.const 6))))")) (ELit (LString "          (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 1)) (i32.or (i32.const 128) (i32.and (local.get $cp) (i32.const 63))))")) (ELit (LString "          (i32.add (local.get $off) (i32.const 2)))")) (ELit (LString "        (else (if (result i32) (i32.lt_u (local.get $cp) (i32.const 65536))")) (ELit (LString "          (then")) (ELit (LString "            (array.set $u8arr (local.get $buf) (local.get $off) (i32.or (i32.const 224) (i32.shr_u (local.get $cp) (i32.const 12))))")) (ELit (LString "            (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 1)) (i32.or (i32.const 128) (i32.and (i32.shr_u (local.get $cp) (i32.const 6)) (i32.const 63))))")) (ELit (LString "            (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 2)) (i32.or (i32.const 128) (i32.and (local.get $cp) (i32.const 63))))")) (ELit (LString "            (i32.add (local.get $off) (i32.const 3)))")) (ELit (LString "          (else")) (ELit (LString "            (array.set $u8arr (local.get $buf) (local.get $off) (i32.or (i32.const 240) (i32.shr_u (local.get $cp) (i32.const 18))))")) (ELit (LString "            (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 1)) (i32.or (i32.const 128) (i32.and (i32.shr_u (local.get $cp) (i32.const 12)) (i32.const 63))))")) (ELit (LString "            (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 2)) (i32.or (i32.const 128) (i32.and (i32.shr_u (local.get $cp) (i32.const 6)) (i32.const 63))))")) (ELit (LString "            (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 3)) (i32.or (i32.const 128) (i32.and (local.get $cp) (i32.const 63))))")) (ELit (LString "            (i32.add (local.get $off) (i32.const 4))))))))")) (ELit (LString "  )")) (ELit (LString "  ;; encode an $arr of i31 Char codepoints into a fresh $str (UTF-8); cp_count = len.")) (ELit (LString "  (func $mdk_chars_to_str (param $a (ref $arr)) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $i i32) (local $total i32) (local $off i32)")) (ELit (LString "    (local $buf (ref $u8arr)) (local $cp i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    ;; pass 1: total encoded byte length.")) (ELit (LString "    (local.set $i (i32.const 0)) (local.set $total (i32.const 0))")) (ELit (LString "    (block $d1 (loop $l1")) (ELit (LString "      (br_if $d1 (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (local.set $cp (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $a) (local.get $i)))))")) (ELit (LString "      (local.set $total (i32.add (local.get $total) (call $mdk_utf8_nbytes (local.get $cp))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l1)))")) (ELit (LString "    ;; pass 2: encode into the buffer.")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $total)))")) (ELit (LString "    (local.set $i (i32.const 0)) (local.set $off (i32.const 0))")) (ELit (LString "    (block $d2 (loop $l2")) (ELit (LString "      (br_if $d2 (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (local.set $cp (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $a) (local.get $i)))))")) (ELit (LString "      (local.set $off (call $mdk_utf8_emit_at (local.get $buf) (local.get $off) (local.get $cp)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))")) (ELit (LString "    (struct.new $str (local.get $n) (local.get $buf)))")) (ELit (LString "  ;; stringToUtf8Bytes: copy the $str's $u8arr backing into a fresh $arr of i31 Int bytes.")) (ELit (LString "  (func $mdk_str_to_utf8_bytes (param $s (ref $str)) (result (ref $arr))")) (ELit (LString "    (local $b (ref $u8arr)) (local $n i32) (local $out (ref $arr)) (local $i i32)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; stringFromUtf8Bytes: blit the low 8 bits of each i31 Int into a $u8arr, read")) (ELit (LString "  ;; as UTF-8 by $mdk_u8_to_str_lossy (medaka_rt.c mdk_string_from_utf8_bytes).")) (ELit (LString "  (func $mdk_utf8_bytes_to_str (param $a (ref $arr)) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $buf (ref $u8arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i)")) (ELit (LString "        (i32.and (i31.get_u (ref.cast (ref i31) (array.get $arr (local.get $a) (local.get $i)))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))"))))
 (DTypeSig true "byteBlockRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "byteBlockRuntimeLines" () (EListLit (ELit (LString "  ;; -- the `ByteBlock` builtin (peer of the mdk_byteblock_* C helpers) --")) (ELit (LString "  ;; byteBlockCopyUnsafe: the first $n bytes into a FRESH block.  A COPY, never a")) (ELit (LString "  ;; view: this is freeze's engine half, so a later write to the source must not")) (ELit (LString "  ;; reach the result (matching mdk_byteblock_copy's memcpy).")) (ELit (LString "  (func $mdk_bb_copy (param $n i32) (param $b (ref $u8arr)) (result (ref $u8arr))")) (ELit (LString "    (local $out (ref $u8arr))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromIntArray: the low eight bits of each element.  Unboxes through")) (ELit (LString "  ;; $mdk_unbox_int rather than the i31 fast path so an element outside the i31")) (ELit (LString "  ;; range (a $boxint) masks instead of trapping -- native has no boxed Int, so")) (ELit (LString "  ;; the i31-only route would diverge on exactly those elements.")) (ELit (LString "  (func $mdk_bb_from_int_array (param $a (ref $arr)) (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $out (ref $u8arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (local.get $i)")) (ELit (LString "        (i32.and (i32.wrap_i64 (call $mdk_unbox_int (ref.as_non_null (array.get $arr (local.get $a) (local.get $i))))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToIntArray: each byte as an Int in 0..255 (array.get_u zero-extends).")) (ELit (LString "  (func $mdk_bb_to_int_array (param $b (ref $u8arr)) (result (ref $arr))")) (ELit (LString "    (local $n i32) (local $out (ref $arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromString: the string's UTF-8 bytes, COPIED.  A $str's backing is")) (ELit (LString "  ;; shared by every reference to that string and a block is mutable, so handing")) (ELit (LString "  ;; the backing back unaliased would let a write edit the string.")) (ELit (LString "  (func $mdk_bb_from_string (param $s (ref $str)) (result (ref $u8arr))")) (ELit (LString "    (local $b (ref $u8arr)) (local $n i32) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToString: the block's bytes as a fresh $str.  The backing is COPIED")) (ELit (LString "  ;; because a block is mutable and a $str's bytes are shared by every reference to")) (ELit (LString "  ;; it; the copy is then read as UTF-8 by $mdk_u8_to_str_lossy, the same route as")) (ELit (LString "  ;; $mdk_utf8_bytes_to_str and medaka_rt.c's mdk_byteblock_to_string.")) (ELit (LString "  (func $mdk_bb_to_string (param $b (ref $u8arr)) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))")) (ELit (LString "  ;; byteBlockWriteStdout: write the block's bytes to stdout byte-for-byte, no")) (ELit (LString "  ;; encoding assumption -- unlike $mdk_print_str, there is no $str/cp_count to")) (ELit (LString "  ;; read, just the raw $u8arr length.")) (ELit (LString "  (func $mdk_bb_write_stdout (param $b (ref $u8arr))")) (ELit (LString "    (local $i i32) (local $n i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_byte (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))"))))
+(DFunDef false "byteBlockRuntimeLines" () (EBinOp "++" (EListLit (ELit (LString "  ;; -- the `ByteBlock` builtin (peer of the mdk_byteblock_* C helpers) --")) (ELit (LString "  ;; byteBlockCopyUnsafe: the first $n bytes into a FRESH block.  A COPY, never a")) (ELit (LString "  ;; view: this is freeze's engine half, so a later write to the source must not")) (ELit (LString "  ;; reach the result (matching mdk_byteblock_copy's memcpy).")) (ELit (LString "  (func $mdk_bb_copy (param $n i32) (param $b (ref $u8arr)) (result (ref $u8arr))")) (ELit (LString "    (local $out (ref $u8arr))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromIntArray: the low eight bits of each element.  Unboxes through")) (ELit (LString "  ;; $mdk_unbox_int rather than the i31 fast path so an element outside the i31")) (ELit (LString "  ;; range (a $boxint) masks instead of trapping -- native has no boxed Int, so")) (ELit (LString "  ;; the i31-only route would diverge on exactly those elements.")) (ELit (LString "  (func $mdk_bb_from_int_array (param $a (ref $arr)) (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $out (ref $u8arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (local.get $i)")) (ELit (LString "        (i32.and (i32.wrap_i64 (call $mdk_unbox_int (ref.as_non_null (array.get $arr (local.get $a) (local.get $i))))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToIntArray: each byte as an Int in 0..255 (array.get_u zero-extends).")) (ELit (LString "  (func $mdk_bb_to_int_array (param $b (ref $u8arr)) (result (ref $arr))")) (ELit (LString "    (local $n i32) (local $out (ref $arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromString: the string's UTF-8 bytes, COPIED.  A $str's backing is")) (ELit (LString "  ;; shared by every reference to that string and a block is mutable, so handing")) (ELit (LString "  ;; the backing back unaliased would let a write edit the string.")) (ELit (LString "  (func $mdk_bb_from_string (param $s (ref $str)) (result (ref $u8arr))")) (ELit (LString "    (local $b (ref $u8arr)) (local $n i32) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToString: the block's bytes as a fresh $str.  The backing is COPIED")) (ELit (LString "  ;; because a block is mutable and a $str's bytes are shared by every reference to")) (ELit (LString "  ;; it; the copy is then read as UTF-8 by $mdk_u8_to_str_lossy, the same route as")) (ELit (LString "  ;; $mdk_utf8_bytes_to_str and medaka_rt.c's mdk_byteblock_to_string.")) (ELit (LString "  (func $mdk_bb_to_string (param $b (ref $u8arr)) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))")) (ELit (LString "  ;; byteBlockWriteStdout: write the block's bytes to stdout byte-for-byte, no")) (ELit (LString "  ;; encoding assumption -- unlike $mdk_print_str, there is no $str/cp_count to")) (ELit (LString "  ;; read, just the raw $u8arr length.")) (ELit (LString "  (func $mdk_bb_write_stdout (param $b (ref $u8arr))")) (ELit (LString "    (local $i i32) (local $n i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_byte (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))"))) (EVar "sha256RuntimeLines")))
+(DTypeSig false "sha256K" (TyApp (TyCon "List") (TyCon "Int")))
+(DFunDef false "sha256K" () (EListLit (ELit (LInt 1116352408)) (ELit (LInt 1899447441)) (ELit (LInt 3049323471)) (ELit (LInt 3921009573)) (ELit (LInt 961987163)) (ELit (LInt 1508970993)) (ELit (LInt 2453635748)) (ELit (LInt 2870763221)) (ELit (LInt 3624381080)) (ELit (LInt 310598401)) (ELit (LInt 607225278)) (ELit (LInt 1426881987)) (ELit (LInt 1925078388)) (ELit (LInt 2162078206)) (ELit (LInt 2614888103)) (ELit (LInt 3248222580)) (ELit (LInt 3835390401)) (ELit (LInt 4022224774)) (ELit (LInt 264347078)) (ELit (LInt 604807628)) (ELit (LInt 770255983)) (ELit (LInt 1249150122)) (ELit (LInt 1555081692)) (ELit (LInt 1996064986)) (ELit (LInt 2554220882)) (ELit (LInt 2821834349)) (ELit (LInt 2952996808)) (ELit (LInt 3210313671)) (ELit (LInt 3336571891)) (ELit (LInt 3584528711)) (ELit (LInt 113926993)) (ELit (LInt 338241895)) (ELit (LInt 666307205)) (ELit (LInt 773529912)) (ELit (LInt 1294757372)) (ELit (LInt 1396182291)) (ELit (LInt 1695183700)) (ELit (LInt 1986661051)) (ELit (LInt 2177026350)) (ELit (LInt 2456956037)) (ELit (LInt 2730485921)) (ELit (LInt 2820302411)) (ELit (LInt 3259730800)) (ELit (LInt 3345764771)) (ELit (LInt 3516065817)) (ELit (LInt 3600352804)) (ELit (LInt 4094571909)) (ELit (LInt 275423344)) (ELit (LInt 430227734)) (ELit (LInt 506948616)) (ELit (LInt 659060556)) (ELit (LInt 883997877)) (ELit (LInt 958139571)) (ELit (LInt 1322822218)) (ELit (LInt 1537002063)) (ELit (LInt 1747873779)) (ELit (LInt 1955562222)) (ELit (LInt 2024104815)) (ELit (LInt 2227730452)) (ELit (LInt 2361852424)) (ELit (LInt 2428436474)) (ELit (LInt 2756734187)) (ELit (LInt 3204031479)) (ELit (LInt 3329325298))))
+(DTypeSig false "shaLabel" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "shaLabel" ((PVar "j")) (EBinOp "++" (EBinOp "++" (ELit (LString "$c")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "j")))) (ELit (LString ""))))
+(DTypeSig false "sha256KLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "sha256KLines" () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  (func $mdk_sha_k (param $i i32) (result i32)"))) (EApp (EApp (EVar "map") (ELam ((PVar "j")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (block $c")) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "-" (ELit (LInt 63)) (EVar "j"))))) (ELit (LString ""))))) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (br_table ")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "shaLabel")) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true)))) (ELit (LString " $c63 (local.get $i))"))))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "kc")) (EListLit (ELit (LString "    )")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (return (i32.const ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "kc")))) (ELit (LString "))")))))) (EVar "sha256K"))) (EListLit (ELit (LString "  )")))))
+(DTypeSig false "sha256RuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "sha256RuntimeLines" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; -- sha256Native (peer of medaka_rt.c mdk_sha256) --")) (ELit (LString "  (func $mdk_sha_get (param $a (ref $u8arr)) (param $i i32) (result i32)")) (ELit (LString "    (local $o i32)")) (ELit (LString "    (local.set $o (i32.shl (local.get $i) (i32.const 2)))")) (ELit (LString "    (i32.or")) (ELit (LString "      (i32.or (array.get_u $u8arr (local.get $a) (local.get $o))")) (ELit (LString "              (i32.shl (array.get_u $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 1))) (i32.const 8)))")) (ELit (LString "      (i32.or (i32.shl (array.get_u $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 2))) (i32.const 16))")) (ELit (LString "              (i32.shl (array.get_u $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 3))) (i32.const 24)))))")) (ELit (LString "  (func $mdk_sha_set (param $a (ref $u8arr)) (param $i i32) (param $v i32)")) (ELit (LString "    (local $o i32)")) (ELit (LString "    (local.set $o (i32.shl (local.get $i) (i32.const 2)))")) (ELit (LString "    (array.set $u8arr (local.get $a) (local.get $o) (local.get $v))")) (ELit (LString "    (array.set $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 1)) (i32.shr_u (local.get $v) (i32.const 8)))")) (ELit (LString "    (array.set $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 2)) (i32.shr_u (local.get $v) (i32.const 16)))")) (ELit (LString "    (array.set $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 3)) (i32.shr_u (local.get $v) (i32.const 24))))"))) (EVar "sha256KLines")) (EListLit (ELit (LString "  ;; One 64-byte block of $src at $off folded into the state $h; $w is the 256-byte schedule scratch.")) (ELit (LString "  (func $mdk_sha_block (param $h (ref $u8arr)) (param $src (ref $u8arr)) (param $off i32) (param $w (ref $u8arr))")) (ELit (LString "    (local $i i32) (local $p i32) (local $x i32) (local $s0 i32) (local $s1 i32)")) (ELit (LString "    (local $a i32) (local $b i32) (local $c i32) (local $d i32) (local $e i32) (local $f i32) (local $g i32) (local $hh i32)")) (ELit (LString "    (local $t1 i32) (local $t2 i32)")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d1 (loop $l1")) (ELit (LString "      (br_if $d1 (i32.ge_u (local.get $i) (i32.const 16)))")) (ELit (LString "      (local.set $p (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 2))))")) (ELit (LString "      (call $mdk_sha_set (local.get $w) (local.get $i)")) (ELit (LString "        (i32.or")) (ELit (LString "          (i32.or (i32.shl (array.get_u $u8arr (local.get $src) (local.get $p)) (i32.const 24))")) (ELit (LString "                  (i32.shl (array.get_u $u8arr (local.get $src) (i32.add (local.get $p) (i32.const 1))) (i32.const 16)))")) (ELit (LString "          (i32.or (i32.shl (array.get_u $u8arr (local.get $src) (i32.add (local.get $p) (i32.const 2))) (i32.const 8))")) (ELit (LString "                  (array.get_u $u8arr (local.get $src) (i32.add (local.get $p) (i32.const 3))))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l1)))")) (ELit (LString "    (block $d2 (loop $l2")) (ELit (LString "      (br_if $d2 (i32.ge_u (local.get $i) (i32.const 64)))")) (ELit (LString "      (local.set $x (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 15))))")) (ELit (LString "      (local.set $s0 (i32.xor (i32.xor (i32.rotr (local.get $x) (i32.const 7)) (i32.rotr (local.get $x) (i32.const 18))) (i32.shr_u (local.get $x) (i32.const 3))))")) (ELit (LString "      (local.set $x (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 2))))")) (ELit (LString "      (local.set $s1 (i32.xor (i32.xor (i32.rotr (local.get $x) (i32.const 17)) (i32.rotr (local.get $x) (i32.const 19))) (i32.shr_u (local.get $x) (i32.const 10))))")) (ELit (LString "      (call $mdk_sha_set (local.get $w) (local.get $i)")) (ELit (LString "        (i32.add (i32.add (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 16))) (local.get $s0))")) (ELit (LString "                 (i32.add (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 7))) (local.get $s1))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))")) (ELit (LString "    (local.set $a (call $mdk_sha_get (local.get $h) (i32.const 0)))")) (ELit (LString "    (local.set $b (call $mdk_sha_get (local.get $h) (i32.const 1)))")) (ELit (LString "    (local.set $c (call $mdk_sha_get (local.get $h) (i32.const 2)))")) (ELit (LString "    (local.set $d (call $mdk_sha_get (local.get $h) (i32.const 3)))")) (ELit (LString "    (local.set $e (call $mdk_sha_get (local.get $h) (i32.const 4)))")) (ELit (LString "    (local.set $f (call $mdk_sha_get (local.get $h) (i32.const 5)))")) (ELit (LString "    (local.set $g (call $mdk_sha_get (local.get $h) (i32.const 6)))")) (ELit (LString "    (local.set $hh (call $mdk_sha_get (local.get $h) (i32.const 7)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d3 (loop $l3")) (ELit (LString "      (br_if $d3 (i32.ge_u (local.get $i) (i32.const 64)))")) (ELit (LString "      (local.set $t1")) (ELit (LString "        (i32.add")) (ELit (LString "          (i32.add (local.get $hh)")) (ELit (LString "            (i32.xor (i32.xor (i32.rotr (local.get $e) (i32.const 6)) (i32.rotr (local.get $e) (i32.const 11))) (i32.rotr (local.get $e) (i32.const 25))))")) (ELit (LString "          (i32.add")) (ELit (LString "            (i32.xor (i32.and (local.get $e) (local.get $f)) (i32.and (i32.xor (local.get $e) (i32.const -1)) (local.get $g)))")) (ELit (LString "            (i32.add (call $mdk_sha_k (local.get $i)) (call $mdk_sha_get (local.get $w) (local.get $i))))))")) (ELit (LString "      (local.set $t2")) (ELit (LString "        (i32.add")) (ELit (LString "          (i32.xor (i32.xor (i32.rotr (local.get $a) (i32.const 2)) (i32.rotr (local.get $a) (i32.const 13))) (i32.rotr (local.get $a) (i32.const 22)))")) (ELit (LString "          (i32.xor (i32.xor (i32.and (local.get $a) (local.get $b)) (i32.and (local.get $a) (local.get $c))) (i32.and (local.get $b) (local.get $c)))))")) (ELit (LString "      (local.set $hh (local.get $g))")) (ELit (LString "      (local.set $g (local.get $f))")) (ELit (LString "      (local.set $f (local.get $e))")) (ELit (LString "      (local.set $e (i32.add (local.get $d) (local.get $t1)))")) (ELit (LString "      (local.set $d (local.get $c))")) (ELit (LString "      (local.set $c (local.get $b))")) (ELit (LString "      (local.set $b (local.get $a))")) (ELit (LString "      (local.set $a (i32.add (local.get $t1) (local.get $t2)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l3)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 0) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 0)) (local.get $a)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 1) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 1)) (local.get $b)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 2) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 2)) (local.get $c)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 3) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 3)) (local.get $d)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 4) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 4)) (local.get $e)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 5) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 5)) (local.get $f)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 6) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 6)) (local.get $g)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 7) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 7)) (local.get $hh))))")) (ELit (LString "  (func $mdk_sha256 (param $b (ref $u8arr)) (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $full i32) (local $rem i32) (local $size i32) (local $i i32) (local $x i32)")) (ELit (LString "    (local $h (ref $u8arr)) (local $w (ref $u8arr)) (local $tail (ref $u8arr)) (local $out (ref $u8arr)) (local $bits i64)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $h (array.new $u8arr (i32.const 0) (i32.const 32)))")) (ELit (LString "    (local.set $w (array.new $u8arr (i32.const 0) (i32.const 256)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 0) (i32.const 1779033703))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 1) (i32.const -1150833019))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 2) (i32.const 1013904242))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 3) (i32.const -1521486534))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 4) (i32.const 1359893119))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 5) (i32.const -1694144372))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 6) (i32.const 528734635))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 7) (i32.const 1541459225))")) (ELit (LString "    (local.set $full (i32.shr_u (local.get $n) (i32.const 6)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_u (local.get $i) (local.get $full)))")) (ELit (LString "      (call $mdk_sha_block (local.get $h) (local.get $b) (i32.shl (local.get $i) (i32.const 6)) (local.get $w))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.set $rem (i32.and (local.get $n) (i32.const 63)))")) (ELit (LString "    (local.set $size (select (i32.const 64) (i32.const 128) (i32.le_u (i32.add (local.get $rem) (i32.const 9)) (i32.const 64))))")) (ELit (LString "    (local.set $tail (array.new $u8arr (i32.const 0) (i32.const 128)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $tail) (i32.const 0) (local.get $b) (i32.shl (local.get $full) (i32.const 6)) (local.get $rem))")) (ELit (LString "    (array.set $u8arr (local.get $tail) (local.get $rem) (i32.const 128))")) (ELit (LString "    (local.set $bits (i64.shl (i64.extend_i32_u (local.get $n)) (i64.const 3)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d4 (loop $l4")) (ELit (LString "      (br_if $d4 (i32.ge_u (local.get $i) (i32.const 8)))")) (ELit (LString "      (array.set $u8arr (local.get $tail) (i32.sub (i32.sub (local.get $size) (i32.const 1)) (local.get $i))")) (ELit (LString "        (i32.wrap_i64 (i64.shr_u (local.get $bits) (i64.extend_i32_u (i32.shl (local.get $i) (i32.const 3))))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l4)))")) (ELit (LString "    (call $mdk_sha_block (local.get $h) (local.get $tail) (i32.const 0) (local.get $w))")) (ELit (LString "    (if (i32.eq (local.get $size) (i32.const 128))")) (ELit (LString "      (then (call $mdk_sha_block (local.get $h) (local.get $tail) (i32.const 64) (local.get $w))))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (i32.const 32)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d5 (loop $l5")) (ELit (LString "      (br_if $d5 (i32.ge_u (local.get $i) (i32.const 8)))")) (ELit (LString "      (local.set $x (call $mdk_sha_get (local.get $h) (local.get $i)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (i32.shl (local.get $i) (i32.const 2)) (i32.shr_u (local.get $x) (i32.const 24)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (i32.add (i32.shl (local.get $i) (i32.const 2)) (i32.const 1)) (i32.shr_u (local.get $x) (i32.const 16)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (i32.add (i32.shl (local.get $i) (i32.const 2)) (i32.const 2)) (i32.shr_u (local.get $x) (i32.const 8)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (i32.add (i32.shl (local.get $i) (i32.const 2)) (i32.const 3)) (local.get $x))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l5)))")) (ELit (LString "    (local.get $out))")))))
 (DTypeSig true "charFromCodeRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "charFromCodeRuntimeLines" () (EListLit (ELit (LString "  ;; -- W11b charFromCode (byte-identical to medaka_rt.c mdk_char_from_code) --")) (ELit (LString "  (func $mdk_char_from_code (param $cp i32) (result (ref eq))")) (ELit (LString "    ;; valid: 0 <= cp <= 0x10FFFF and not (0xD800 <= cp <= 0xDFFF).")) (ELit (LString "    (if (i32.and (i32.and (i32.ge_s (local.get $cp) (i32.const 0)) (i32.le_s (local.get $cp) (i32.const 1114111)))")) (ELit (LString "                 (i32.eqz (i32.and (i32.ge_s (local.get $cp) (i32.const 55296)) (i32.le_s (local.get $cp) (i32.const 57343)))))")) (ELit (LString "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (local.get $cp))))))")) (ELit (LString "    (ref.i31 (i32.const 1)))"))))
+(DTypeSig true "plannedImportLines" (TyFun (TyApp (TyCon "List") (TyCon "PlannedImport")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "plannedImportLines" () (EApp (EVar "map") (ELam ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "namespace"))) (ELit (LString "\" \""))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "field"))) (ELit (LString "\" (func $"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "watSymbol"))) (ELit (LString ""))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "signature"))) (ELit (LString "))"))))))
+(DTypeSig true "plannedHelperLines" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "plannedHelperLines" ((PVar "plan") (PVar "files")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (EVar "name")) (EApp (EApp (EApp (EVar "plannedHelperBlock") (EVar "plan")) (EVar "files")) (EVar "name")) (EListLit)))) (EVar "helperOrder")))
+(DTypeSig false "plannedHelperBlock" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "closApplyLines"))) (EVar "closApplyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRuntimeLines"))) (EVar "ioRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioStrRuntimeLines"))) (EVar "ioStrRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strLeafRuntimeLines"))) (EVar "strLeafRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strConcatRuntimeLines"))) (EVar "strConcatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "appendRuntimeLines"))) (EVar "appendRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueEqRuntimeLines"))) (EApp (EVar "valueEqRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueAddRuntimeLines"))) (EApp (EVar "valueAddRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueSubRuntimeLines"))) (EApp (EVar "valueSubRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueMulRuntimeLines"))) (EApp (EVar "valueMulRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueDivRuntimeLines"))) (EApp (EVar "valueDivRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueModRuntimeLines"))) (EApp (EVar "valueModRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueCmpNumRuntimeLines"))) (EApp (EVar "valueCmpNumRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "u64RuntimeLines"))) (EVar "u64RuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "i64RuntimeLines"))) (EVar "i64RuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "stderrRuntimeLines"))) (EVar "stderrRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "rngRuntimeLines"))) (EVar "rngRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashRuntimeLines"))) (EVar "hashRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashStringRuntimeLines"))) (EVar "hashStringRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatRemRuntimeLines"))) (EVar "floatRemRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatRuntimeLines"))) (EVar "floatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashFloatRuntimeLines"))) (EVar "hashFloatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "randomFloatRuntimeLines"))) (EVar "randomFloatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatStrLines"))) (EVar "floatStrLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strSearchRuntimeLines"))) (EVar "strSearchRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strToIntRuntimeLines"))) (EVar "strToIntRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strReverseRuntimeLines"))) (EVar "strReverseRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strJoinRuntimeLines"))) (EVar "strJoinRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strCodecRuntimeLines"))) (EVar "strCodecRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "byteBlockRuntimeLines"))) (EVar "byteBlockRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "charFromCodeRuntimeLines"))) (EVar "charFromCodeRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "charClassRuntimeLines"))) (EVar "charClassRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushPathLines"))) (EVar "ioPushPathLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushPathMoreLines"))) (EVar "ioPushPathMoreLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushGrantLines"))) (EVar "ioPushGrantLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushGrantMoreLines"))) (EVar "ioPushGrantMoreLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioResultLines"))) (EVar "ioResultLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRefusedPanicLines"))) (EVar "ioRefusedPanicLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadFileLines"))) (EVar "ioReadFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFetchTextLines"))) (EVar "ioFetchTextLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFileExistsLines"))) (EVar "ioFileExistsLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioCanonicalizeLines"))) (EVar "ioCanonicalizeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioWriteFileLines"))) (EVar "ioWriteFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioAppendFileLines"))) (EVar "ioAppendFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRenameLines"))) (EVar "ioRenameLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioListDirLines"))) (EVar "ioListDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioStatFileLines"))) (EVar "ioStatFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioMakeDirLines"))) (EVar "ioMakeDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRemoveFileLines"))) (EVar "ioRemoveFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRemoveDirLines"))) (EVar "ioRemoveDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFsyncLines"))) (EVar "ioFsyncLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFileModeLines"))) (EVar "ioFileModeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioWriteFileModeLines"))) (EVar "ioWriteFileModeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioGetEnvLines"))) (EVar "ioGetEnvLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadLineLines"))) (EVar "ioReadLineLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadAllLines"))) (EVar "ioReadAllLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadExactlyLines"))) (EVar "ioReadExactlyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioExecutablePathLines"))) (EVar "ioExecutablePathLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "jsffiArrayLines"))) (EVar "jsffiArrayLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "jsffiResultStrLines"))) (EVar "jsffiResultStrLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioArgsLines"))) (EVar "ioArgsLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "utf8LossyRuntimeLines"))) (EVar "utf8LossyRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "writeFileBytesLines"))) (EVar "writeFileBytesLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "osEntropyLines"))) (EVar "osEntropyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "readFileBytesLines"))) (EVar "readFileBytesLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "trapIntRuntimeLines"))) (EVar "trapIntRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "intRuntimeLines"))) (EApp (EVar "intRuntimeLines") (EFieldAccess (EVar "plan") "intHelpers")))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "siteRuntimeLines"))) (EApp (EApp (EVar "siteRuntimeLines") (EVar "files")) (EFieldAccess (EVar "plan") "nonexhaustiveRuntime")))
+(DFunDef false "plannedHelperBlock" (PWild PWild (PVar "name")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: unplanned-wasm-helper: ")) (EVar "name"))))
 # MARK
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
-(DUse false (UseGroup ("backend" "emit_plan") ((mem "JsImport" true))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3831,10 +4184,6 @@ charFromCodeRuntimeLines = [
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
-(DTypeSig false "unaryF64Sig" (TyCon "String"))
-(DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
-(DTypeSig false "binaryF64Sig" (TyCon "String"))
-(DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
 (DTypeSig true "floatStrRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "floatStrRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_str_to_float"))) (EVar "keys")) (EVar "floatStrLines")))
 (DTypeSig false "floatStrLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3881,13 +4230,6 @@ charFromCodeRuntimeLines = [
 (DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
 (DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
-(DTypeSig false "jsWireParam" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsWireParam" ((PLit (LString "Unit"))) (ELit (LString "")))
-(DFunDef false "jsWireParam" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param ")) (EApp (EMethodRef "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
-(DTypeSig false "jsWireResult" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsWireResult" ((PLit (LString "Unit"))) (ELit (LString "")))
-(DFunDef false "jsWireResult" ((PLit (LString "String"))) (ELit (LString "")))
-(DFunDef false "jsWireResult" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (result ")) (EApp (EMethodRef "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
 (DTypeSig false "jsWireTy" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "jsWireTy" ((PLit (LString "Int"))) (ELit (LString "i64")))
 (DFunDef false "jsWireTy" ((PLit (LString "U64"))) (ELit (LString "i64")))
@@ -3990,6 +4332,88 @@ charFromCodeRuntimeLines = [
 (DTypeSig true "strCodecRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "strCodecRuntimeLines" () (EListLit (ELit (LString "  ;; -- W11b UTF-8 codec (byte-identical to medaka_rt.c) --")) (ELit (LString "  ;; decode a $str's UTF-8 bytes into a fresh $arr of cp_count i31 Char codepoints.")) (ELit (LString "  (func $mdk_str_to_chars (param $s (ref $str)) (result (ref $arr))")) (ELit (LString "    (local $b (ref $u8arr)) (local $n i32) (local $cpc i32) (local $out (ref $arr))")) (ELit (LString "    (local $bo i32) (local $oi i32) (local $lead i32) (local $cp i32) (local $k i32) (local $w i32)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $cpc (struct.get $str $cp_count (local.get $s)))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $cpc)))")) (ELit (LString "    (local.set $bo (i32.const 0)) (local.set $oi (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $bo) (local.get $n)))")) (ELit (LString "      ;; the output holds cp_count codepoints; never step past it.")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $oi) (local.get $cpc)))")) (ELit (LString "      (local.set $lead (array.get_u $u8arr (local.get $b) (local.get $bo)))")) (ELit (LString "      ;; lead-byte class → codepoint seed bits + total byte width.")) (ELit (LString "      (if (i32.lt_u (local.get $lead) (i32.const 128))")) (ELit (LString "        (then (local.set $cp (local.get $lead)) (local.set $w (i32.const 1)))")) (ELit (LString "        (else (if (i32.lt_u (local.get $lead) (i32.const 224))")) (ELit (LString "          (then (local.set $cp (i32.and (local.get $lead) (i32.const 31))) (local.set $w (i32.const 2)))")) (ELit (LString "          (else (if (i32.lt_u (local.get $lead) (i32.const 240))")) (ELit (LString "            (then (local.set $cp (i32.and (local.get $lead) (i32.const 15))) (local.set $w (i32.const 3)))")) (ELit (LString "            (else (local.set $cp (i32.and (local.get $lead) (i32.const 7))) (local.set $w (i32.const 4))))))))")) (ELit (LString "      ;; a sequence never reads past the backing's end.")) (ELit (LString "      (if (i32.gt_s (local.get $w) (i32.sub (local.get $n) (local.get $bo)))")) (ELit (LString "        (then (local.set $w (i32.sub (local.get $n) (local.get $bo)))))")) (ELit (LString "      ;; fold in (w-1) continuation bytes: cp = (cp << 6) | (byte & 0x3F).")) (ELit (LString "      (local.set $k (i32.const 1))")) (ELit (LString "      (block $cd (loop $cl")) (ELit (LString "        (br_if $cd (i32.ge_s (local.get $k) (local.get $w)))")) (ELit (LString "        (local.set $cp (i32.or (i32.shl (local.get $cp) (i32.const 6))")) (ELit (LString "          (i32.and (array.get_u $u8arr (local.get $b) (i32.add (local.get $bo) (local.get $k))) (i32.const 63))))")) (ELit (LString "        (local.set $k (i32.add (local.get $k) (i32.const 1))) (br $cl)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $oi) (ref.i31 (local.get $cp)))")) (ELit (LString "      (local.set $oi (i32.add (local.get $oi) (i32.const 1)))")) (ELit (LString "      (local.set $bo (i32.add (local.get $bo) (local.get $w))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; number of UTF-8 bytes a codepoint encodes to (1..4).")) (ELit (LString "  (func $mdk_utf8_nbytes (param $cp i32) (result i32)")) (ELit (LString "    (if (result i32) (i32.lt_u (local.get $cp) (i32.const 128)) (then (i32.const 1))")) (ELit (LString "      (else (if (result i32) (i32.lt_u (local.get $cp) (i32.const 2048)) (then (i32.const 2))")) (ELit (LString "        (else (if (result i32) (i32.lt_u (local.get $cp) (i32.const 65536)) (then (i32.const 3))")) (ELit (LString "          (else (i32.const 4))))))))")) (ELit (LString "  ;; encode one codepoint into $buf at offset $off; return the next offset.")) (ELit (LString "  (func $mdk_utf8_emit_at (param $buf (ref $u8arr)) (param $off i32) (param $cp i32) (result i32)")) (ELit (LString "    (if (result i32) (i32.lt_u (local.get $cp) (i32.const 128))")) (ELit (LString "      (then")) (ELit (LString "        (array.set $u8arr (local.get $buf) (local.get $off) (local.get $cp))")) (ELit (LString "        (i32.add (local.get $off) (i32.const 1)))")) (ELit (LString "      (else (if (result i32) (i32.lt_u (local.get $cp) (i32.const 2048))")) (ELit (LString "        (then")) (ELit (LString "          (array.set $u8arr (local.get $buf) (local.get $off) (i32.or (i32.const 192) (i32.shr_u (local.get $cp) (i32.const 6))))")) (ELit (LString "          (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 1)) (i32.or (i32.const 128) (i32.and (local.get $cp) (i32.const 63))))")) (ELit (LString "          (i32.add (local.get $off) (i32.const 2)))")) (ELit (LString "        (else (if (result i32) (i32.lt_u (local.get $cp) (i32.const 65536))")) (ELit (LString "          (then")) (ELit (LString "            (array.set $u8arr (local.get $buf) (local.get $off) (i32.or (i32.const 224) (i32.shr_u (local.get $cp) (i32.const 12))))")) (ELit (LString "            (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 1)) (i32.or (i32.const 128) (i32.and (i32.shr_u (local.get $cp) (i32.const 6)) (i32.const 63))))")) (ELit (LString "            (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 2)) (i32.or (i32.const 128) (i32.and (local.get $cp) (i32.const 63))))")) (ELit (LString "            (i32.add (local.get $off) (i32.const 3)))")) (ELit (LString "          (else")) (ELit (LString "            (array.set $u8arr (local.get $buf) (local.get $off) (i32.or (i32.const 240) (i32.shr_u (local.get $cp) (i32.const 18))))")) (ELit (LString "            (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 1)) (i32.or (i32.const 128) (i32.and (i32.shr_u (local.get $cp) (i32.const 12)) (i32.const 63))))")) (ELit (LString "            (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 2)) (i32.or (i32.const 128) (i32.and (i32.shr_u (local.get $cp) (i32.const 6)) (i32.const 63))))")) (ELit (LString "            (array.set $u8arr (local.get $buf) (i32.add (local.get $off) (i32.const 3)) (i32.or (i32.const 128) (i32.and (local.get $cp) (i32.const 63))))")) (ELit (LString "            (i32.add (local.get $off) (i32.const 4))))))))")) (ELit (LString "  )")) (ELit (LString "  ;; encode an $arr of i31 Char codepoints into a fresh $str (UTF-8); cp_count = len.")) (ELit (LString "  (func $mdk_chars_to_str (param $a (ref $arr)) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $i i32) (local $total i32) (local $off i32)")) (ELit (LString "    (local $buf (ref $u8arr)) (local $cp i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    ;; pass 1: total encoded byte length.")) (ELit (LString "    (local.set $i (i32.const 0)) (local.set $total (i32.const 0))")) (ELit (LString "    (block $d1 (loop $l1")) (ELit (LString "      (br_if $d1 (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (local.set $cp (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $a) (local.get $i)))))")) (ELit (LString "      (local.set $total (i32.add (local.get $total) (call $mdk_utf8_nbytes (local.get $cp))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l1)))")) (ELit (LString "    ;; pass 2: encode into the buffer.")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $total)))")) (ELit (LString "    (local.set $i (i32.const 0)) (local.set $off (i32.const 0))")) (ELit (LString "    (block $d2 (loop $l2")) (ELit (LString "      (br_if $d2 (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (local.set $cp (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $a) (local.get $i)))))")) (ELit (LString "      (local.set $off (call $mdk_utf8_emit_at (local.get $buf) (local.get $off) (local.get $cp)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))")) (ELit (LString "    (struct.new $str (local.get $n) (local.get $buf)))")) (ELit (LString "  ;; stringToUtf8Bytes: copy the $str's $u8arr backing into a fresh $arr of i31 Int bytes.")) (ELit (LString "  (func $mdk_str_to_utf8_bytes (param $s (ref $str)) (result (ref $arr))")) (ELit (LString "    (local $b (ref $u8arr)) (local $n i32) (local $out (ref $arr)) (local $i i32)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; stringFromUtf8Bytes: blit the low 8 bits of each i31 Int into a $u8arr, read")) (ELit (LString "  ;; as UTF-8 by $mdk_u8_to_str_lossy (medaka_rt.c mdk_string_from_utf8_bytes).")) (ELit (LString "  (func $mdk_utf8_bytes_to_str (param $a (ref $arr)) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $buf (ref $u8arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i)")) (ELit (LString "        (i32.and (i31.get_u (ref.cast (ref i31) (array.get $arr (local.get $a) (local.get $i)))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))"))))
 (DTypeSig true "byteBlockRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "byteBlockRuntimeLines" () (EListLit (ELit (LString "  ;; -- the `ByteBlock` builtin (peer of the mdk_byteblock_* C helpers) --")) (ELit (LString "  ;; byteBlockCopyUnsafe: the first $n bytes into a FRESH block.  A COPY, never a")) (ELit (LString "  ;; view: this is freeze's engine half, so a later write to the source must not")) (ELit (LString "  ;; reach the result (matching mdk_byteblock_copy's memcpy).")) (ELit (LString "  (func $mdk_bb_copy (param $n i32) (param $b (ref $u8arr)) (result (ref $u8arr))")) (ELit (LString "    (local $out (ref $u8arr))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromIntArray: the low eight bits of each element.  Unboxes through")) (ELit (LString "  ;; $mdk_unbox_int rather than the i31 fast path so an element outside the i31")) (ELit (LString "  ;; range (a $boxint) masks instead of trapping -- native has no boxed Int, so")) (ELit (LString "  ;; the i31-only route would diverge on exactly those elements.")) (ELit (LString "  (func $mdk_bb_from_int_array (param $a (ref $arr)) (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $out (ref $u8arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (local.get $i)")) (ELit (LString "        (i32.and (i32.wrap_i64 (call $mdk_unbox_int (ref.as_non_null (array.get $arr (local.get $a) (local.get $i))))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToIntArray: each byte as an Int in 0..255 (array.get_u zero-extends).")) (ELit (LString "  (func $mdk_bb_to_int_array (param $b (ref $u8arr)) (result (ref $arr))")) (ELit (LString "    (local $n i32) (local $out (ref $arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromString: the string's UTF-8 bytes, COPIED.  A $str's backing is")) (ELit (LString "  ;; shared by every reference to that string and a block is mutable, so handing")) (ELit (LString "  ;; the backing back unaliased would let a write edit the string.")) (ELit (LString "  (func $mdk_bb_from_string (param $s (ref $str)) (result (ref $u8arr))")) (ELit (LString "    (local $b (ref $u8arr)) (local $n i32) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToString: the block's bytes as a fresh $str.  The backing is COPIED")) (ELit (LString "  ;; because a block is mutable and a $str's bytes are shared by every reference to")) (ELit (LString "  ;; it; the copy is then read as UTF-8 by $mdk_u8_to_str_lossy, the same route as")) (ELit (LString "  ;; $mdk_utf8_bytes_to_str and medaka_rt.c's mdk_byteblock_to_string.")) (ELit (LString "  (func $mdk_bb_to_string (param $b (ref $u8arr)) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))")) (ELit (LString "  ;; byteBlockWriteStdout: write the block's bytes to stdout byte-for-byte, no")) (ELit (LString "  ;; encoding assumption -- unlike $mdk_print_str, there is no $str/cp_count to")) (ELit (LString "  ;; read, just the raw $u8arr length.")) (ELit (LString "  (func $mdk_bb_write_stdout (param $b (ref $u8arr))")) (ELit (LString "    (local $i i32) (local $n i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_byte (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))"))))
+(DFunDef false "byteBlockRuntimeLines" () (EBinOp "++" (EListLit (ELit (LString "  ;; -- the `ByteBlock` builtin (peer of the mdk_byteblock_* C helpers) --")) (ELit (LString "  ;; byteBlockCopyUnsafe: the first $n bytes into a FRESH block.  A COPY, never a")) (ELit (LString "  ;; view: this is freeze's engine half, so a later write to the source must not")) (ELit (LString "  ;; reach the result (matching mdk_byteblock_copy's memcpy).")) (ELit (LString "  (func $mdk_bb_copy (param $n i32) (param $b (ref $u8arr)) (result (ref $u8arr))")) (ELit (LString "    (local $out (ref $u8arr))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromIntArray: the low eight bits of each element.  Unboxes through")) (ELit (LString "  ;; $mdk_unbox_int rather than the i31 fast path so an element outside the i31")) (ELit (LString "  ;; range (a $boxint) masks instead of trapping -- native has no boxed Int, so")) (ELit (LString "  ;; the i31-only route would diverge on exactly those elements.")) (ELit (LString "  (func $mdk_bb_from_int_array (param $a (ref $arr)) (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $out (ref $u8arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (local.get $i)")) (ELit (LString "        (i32.and (i32.wrap_i64 (call $mdk_unbox_int (ref.as_non_null (array.get $arr (local.get $a) (local.get $i))))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToIntArray: each byte as an Int in 0..255 (array.get_u zero-extends).")) (ELit (LString "  (func $mdk_bb_to_int_array (param $b (ref $u8arr)) (result (ref $arr))")) (ELit (LString "    (local $n i32) (local $out (ref $arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromString: the string's UTF-8 bytes, COPIED.  A $str's backing is")) (ELit (LString "  ;; shared by every reference to that string and a block is mutable, so handing")) (ELit (LString "  ;; the backing back unaliased would let a write edit the string.")) (ELit (LString "  (func $mdk_bb_from_string (param $s (ref $str)) (result (ref $u8arr))")) (ELit (LString "    (local $b (ref $u8arr)) (local $n i32) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToString: the block's bytes as a fresh $str.  The backing is COPIED")) (ELit (LString "  ;; because a block is mutable and a $str's bytes are shared by every reference to")) (ELit (LString "  ;; it; the copy is then read as UTF-8 by $mdk_u8_to_str_lossy, the same route as")) (ELit (LString "  ;; $mdk_utf8_bytes_to_str and medaka_rt.c's mdk_byteblock_to_string.")) (ELit (LString "  (func $mdk_bb_to_string (param $b (ref $u8arr)) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))")) (ELit (LString "  ;; byteBlockWriteStdout: write the block's bytes to stdout byte-for-byte, no")) (ELit (LString "  ;; encoding assumption -- unlike $mdk_print_str, there is no $str/cp_count to")) (ELit (LString "  ;; read, just the raw $u8arr length.")) (ELit (LString "  (func $mdk_bb_write_stdout (param $b (ref $u8arr))")) (ELit (LString "    (local $i i32) (local $n i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_byte (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))"))) (EVar "sha256RuntimeLines")))
+(DTypeSig false "sha256K" (TyApp (TyCon "List") (TyCon "Int")))
+(DFunDef false "sha256K" () (EListLit (ELit (LInt 1116352408)) (ELit (LInt 1899447441)) (ELit (LInt 3049323471)) (ELit (LInt 3921009573)) (ELit (LInt 961987163)) (ELit (LInt 1508970993)) (ELit (LInt 2453635748)) (ELit (LInt 2870763221)) (ELit (LInt 3624381080)) (ELit (LInt 310598401)) (ELit (LInt 607225278)) (ELit (LInt 1426881987)) (ELit (LInt 1925078388)) (ELit (LInt 2162078206)) (ELit (LInt 2614888103)) (ELit (LInt 3248222580)) (ELit (LInt 3835390401)) (ELit (LInt 4022224774)) (ELit (LInt 264347078)) (ELit (LInt 604807628)) (ELit (LInt 770255983)) (ELit (LInt 1249150122)) (ELit (LInt 1555081692)) (ELit (LInt 1996064986)) (ELit (LInt 2554220882)) (ELit (LInt 2821834349)) (ELit (LInt 2952996808)) (ELit (LInt 3210313671)) (ELit (LInt 3336571891)) (ELit (LInt 3584528711)) (ELit (LInt 113926993)) (ELit (LInt 338241895)) (ELit (LInt 666307205)) (ELit (LInt 773529912)) (ELit (LInt 1294757372)) (ELit (LInt 1396182291)) (ELit (LInt 1695183700)) (ELit (LInt 1986661051)) (ELit (LInt 2177026350)) (ELit (LInt 2456956037)) (ELit (LInt 2730485921)) (ELit (LInt 2820302411)) (ELit (LInt 3259730800)) (ELit (LInt 3345764771)) (ELit (LInt 3516065817)) (ELit (LInt 3600352804)) (ELit (LInt 4094571909)) (ELit (LInt 275423344)) (ELit (LInt 430227734)) (ELit (LInt 506948616)) (ELit (LInt 659060556)) (ELit (LInt 883997877)) (ELit (LInt 958139571)) (ELit (LInt 1322822218)) (ELit (LInt 1537002063)) (ELit (LInt 1747873779)) (ELit (LInt 1955562222)) (ELit (LInt 2024104815)) (ELit (LInt 2227730452)) (ELit (LInt 2361852424)) (ELit (LInt 2428436474)) (ELit (LInt 2756734187)) (ELit (LInt 3204031479)) (ELit (LInt 3329325298))))
+(DTypeSig false "shaLabel" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "shaLabel" ((PVar "j")) (EBinOp "++" (EBinOp "++" (ELit (LString "$c")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "j")))) (ELit (LString ""))))
+(DTypeSig false "sha256KLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "sha256KLines" () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  (func $mdk_sha_k (param $i i32) (result i32)"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "j")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (block $c")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "-" (ELit (LInt 63)) (EVar "j"))))) (ELit (LString ""))))) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (br_table ")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "shaLabel")) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true)))) (ELit (LString " $c63 (local.get $i))"))))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "kc")) (EListLit (ELit (LString "    )")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (return (i32.const ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "kc")))) (ELit (LString "))")))))) (EVar "sha256K"))) (EListLit (ELit (LString "  )")))))
+(DTypeSig false "sha256RuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "sha256RuntimeLines" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; -- sha256Native (peer of medaka_rt.c mdk_sha256) --")) (ELit (LString "  (func $mdk_sha_get (param $a (ref $u8arr)) (param $i i32) (result i32)")) (ELit (LString "    (local $o i32)")) (ELit (LString "    (local.set $o (i32.shl (local.get $i) (i32.const 2)))")) (ELit (LString "    (i32.or")) (ELit (LString "      (i32.or (array.get_u $u8arr (local.get $a) (local.get $o))")) (ELit (LString "              (i32.shl (array.get_u $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 1))) (i32.const 8)))")) (ELit (LString "      (i32.or (i32.shl (array.get_u $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 2))) (i32.const 16))")) (ELit (LString "              (i32.shl (array.get_u $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 3))) (i32.const 24)))))")) (ELit (LString "  (func $mdk_sha_set (param $a (ref $u8arr)) (param $i i32) (param $v i32)")) (ELit (LString "    (local $o i32)")) (ELit (LString "    (local.set $o (i32.shl (local.get $i) (i32.const 2)))")) (ELit (LString "    (array.set $u8arr (local.get $a) (local.get $o) (local.get $v))")) (ELit (LString "    (array.set $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 1)) (i32.shr_u (local.get $v) (i32.const 8)))")) (ELit (LString "    (array.set $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 2)) (i32.shr_u (local.get $v) (i32.const 16)))")) (ELit (LString "    (array.set $u8arr (local.get $a) (i32.add (local.get $o) (i32.const 3)) (i32.shr_u (local.get $v) (i32.const 24))))"))) (EVar "sha256KLines")) (EListLit (ELit (LString "  ;; One 64-byte block of $src at $off folded into the state $h; $w is the 256-byte schedule scratch.")) (ELit (LString "  (func $mdk_sha_block (param $h (ref $u8arr)) (param $src (ref $u8arr)) (param $off i32) (param $w (ref $u8arr))")) (ELit (LString "    (local $i i32) (local $p i32) (local $x i32) (local $s0 i32) (local $s1 i32)")) (ELit (LString "    (local $a i32) (local $b i32) (local $c i32) (local $d i32) (local $e i32) (local $f i32) (local $g i32) (local $hh i32)")) (ELit (LString "    (local $t1 i32) (local $t2 i32)")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d1 (loop $l1")) (ELit (LString "      (br_if $d1 (i32.ge_u (local.get $i) (i32.const 16)))")) (ELit (LString "      (local.set $p (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 2))))")) (ELit (LString "      (call $mdk_sha_set (local.get $w) (local.get $i)")) (ELit (LString "        (i32.or")) (ELit (LString "          (i32.or (i32.shl (array.get_u $u8arr (local.get $src) (local.get $p)) (i32.const 24))")) (ELit (LString "                  (i32.shl (array.get_u $u8arr (local.get $src) (i32.add (local.get $p) (i32.const 1))) (i32.const 16)))")) (ELit (LString "          (i32.or (i32.shl (array.get_u $u8arr (local.get $src) (i32.add (local.get $p) (i32.const 2))) (i32.const 8))")) (ELit (LString "                  (array.get_u $u8arr (local.get $src) (i32.add (local.get $p) (i32.const 3))))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l1)))")) (ELit (LString "    (block $d2 (loop $l2")) (ELit (LString "      (br_if $d2 (i32.ge_u (local.get $i) (i32.const 64)))")) (ELit (LString "      (local.set $x (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 15))))")) (ELit (LString "      (local.set $s0 (i32.xor (i32.xor (i32.rotr (local.get $x) (i32.const 7)) (i32.rotr (local.get $x) (i32.const 18))) (i32.shr_u (local.get $x) (i32.const 3))))")) (ELit (LString "      (local.set $x (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 2))))")) (ELit (LString "      (local.set $s1 (i32.xor (i32.xor (i32.rotr (local.get $x) (i32.const 17)) (i32.rotr (local.get $x) (i32.const 19))) (i32.shr_u (local.get $x) (i32.const 10))))")) (ELit (LString "      (call $mdk_sha_set (local.get $w) (local.get $i)")) (ELit (LString "        (i32.add (i32.add (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 16))) (local.get $s0))")) (ELit (LString "                 (i32.add (call $mdk_sha_get (local.get $w) (i32.sub (local.get $i) (i32.const 7))) (local.get $s1))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))")) (ELit (LString "    (local.set $a (call $mdk_sha_get (local.get $h) (i32.const 0)))")) (ELit (LString "    (local.set $b (call $mdk_sha_get (local.get $h) (i32.const 1)))")) (ELit (LString "    (local.set $c (call $mdk_sha_get (local.get $h) (i32.const 2)))")) (ELit (LString "    (local.set $d (call $mdk_sha_get (local.get $h) (i32.const 3)))")) (ELit (LString "    (local.set $e (call $mdk_sha_get (local.get $h) (i32.const 4)))")) (ELit (LString "    (local.set $f (call $mdk_sha_get (local.get $h) (i32.const 5)))")) (ELit (LString "    (local.set $g (call $mdk_sha_get (local.get $h) (i32.const 6)))")) (ELit (LString "    (local.set $hh (call $mdk_sha_get (local.get $h) (i32.const 7)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d3 (loop $l3")) (ELit (LString "      (br_if $d3 (i32.ge_u (local.get $i) (i32.const 64)))")) (ELit (LString "      (local.set $t1")) (ELit (LString "        (i32.add")) (ELit (LString "          (i32.add (local.get $hh)")) (ELit (LString "            (i32.xor (i32.xor (i32.rotr (local.get $e) (i32.const 6)) (i32.rotr (local.get $e) (i32.const 11))) (i32.rotr (local.get $e) (i32.const 25))))")) (ELit (LString "          (i32.add")) (ELit (LString "            (i32.xor (i32.and (local.get $e) (local.get $f)) (i32.and (i32.xor (local.get $e) (i32.const -1)) (local.get $g)))")) (ELit (LString "            (i32.add (call $mdk_sha_k (local.get $i)) (call $mdk_sha_get (local.get $w) (local.get $i))))))")) (ELit (LString "      (local.set $t2")) (ELit (LString "        (i32.add")) (ELit (LString "          (i32.xor (i32.xor (i32.rotr (local.get $a) (i32.const 2)) (i32.rotr (local.get $a) (i32.const 13))) (i32.rotr (local.get $a) (i32.const 22)))")) (ELit (LString "          (i32.xor (i32.xor (i32.and (local.get $a) (local.get $b)) (i32.and (local.get $a) (local.get $c))) (i32.and (local.get $b) (local.get $c)))))")) (ELit (LString "      (local.set $hh (local.get $g))")) (ELit (LString "      (local.set $g (local.get $f))")) (ELit (LString "      (local.set $f (local.get $e))")) (ELit (LString "      (local.set $e (i32.add (local.get $d) (local.get $t1)))")) (ELit (LString "      (local.set $d (local.get $c))")) (ELit (LString "      (local.set $c (local.get $b))")) (ELit (LString "      (local.set $b (local.get $a))")) (ELit (LString "      (local.set $a (i32.add (local.get $t1) (local.get $t2)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l3)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 0) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 0)) (local.get $a)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 1) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 1)) (local.get $b)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 2) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 2)) (local.get $c)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 3) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 3)) (local.get $d)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 4) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 4)) (local.get $e)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 5) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 5)) (local.get $f)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 6) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 6)) (local.get $g)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 7) (i32.add (call $mdk_sha_get (local.get $h) (i32.const 7)) (local.get $hh))))")) (ELit (LString "  (func $mdk_sha256 (param $b (ref $u8arr)) (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $full i32) (local $rem i32) (local $size i32) (local $i i32) (local $x i32)")) (ELit (LString "    (local $h (ref $u8arr)) (local $w (ref $u8arr)) (local $tail (ref $u8arr)) (local $out (ref $u8arr)) (local $bits i64)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $h (array.new $u8arr (i32.const 0) (i32.const 32)))")) (ELit (LString "    (local.set $w (array.new $u8arr (i32.const 0) (i32.const 256)))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 0) (i32.const 1779033703))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 1) (i32.const -1150833019))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 2) (i32.const 1013904242))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 3) (i32.const -1521486534))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 4) (i32.const 1359893119))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 5) (i32.const -1694144372))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 6) (i32.const 528734635))")) (ELit (LString "    (call $mdk_sha_set (local.get $h) (i32.const 7) (i32.const 1541459225))")) (ELit (LString "    (local.set $full (i32.shr_u (local.get $n) (i32.const 6)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_u (local.get $i) (local.get $full)))")) (ELit (LString "      (call $mdk_sha_block (local.get $h) (local.get $b) (i32.shl (local.get $i) (i32.const 6)) (local.get $w))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.set $rem (i32.and (local.get $n) (i32.const 63)))")) (ELit (LString "    (local.set $size (select (i32.const 64) (i32.const 128) (i32.le_u (i32.add (local.get $rem) (i32.const 9)) (i32.const 64))))")) (ELit (LString "    (local.set $tail (array.new $u8arr (i32.const 0) (i32.const 128)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $tail) (i32.const 0) (local.get $b) (i32.shl (local.get $full) (i32.const 6)) (local.get $rem))")) (ELit (LString "    (array.set $u8arr (local.get $tail) (local.get $rem) (i32.const 128))")) (ELit (LString "    (local.set $bits (i64.shl (i64.extend_i32_u (local.get $n)) (i64.const 3)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d4 (loop $l4")) (ELit (LString "      (br_if $d4 (i32.ge_u (local.get $i) (i32.const 8)))")) (ELit (LString "      (array.set $u8arr (local.get $tail) (i32.sub (i32.sub (local.get $size) (i32.const 1)) (local.get $i))")) (ELit (LString "        (i32.wrap_i64 (i64.shr_u (local.get $bits) (i64.extend_i32_u (i32.shl (local.get $i) (i32.const 3))))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l4)))")) (ELit (LString "    (call $mdk_sha_block (local.get $h) (local.get $tail) (i32.const 0) (local.get $w))")) (ELit (LString "    (if (i32.eq (local.get $size) (i32.const 128))")) (ELit (LString "      (then (call $mdk_sha_block (local.get $h) (local.get $tail) (i32.const 64) (local.get $w))))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (i32.const 32)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d5 (loop $l5")) (ELit (LString "      (br_if $d5 (i32.ge_u (local.get $i) (i32.const 8)))")) (ELit (LString "      (local.set $x (call $mdk_sha_get (local.get $h) (local.get $i)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (i32.shl (local.get $i) (i32.const 2)) (i32.shr_u (local.get $x) (i32.const 24)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (i32.add (i32.shl (local.get $i) (i32.const 2)) (i32.const 1)) (i32.shr_u (local.get $x) (i32.const 16)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (i32.add (i32.shl (local.get $i) (i32.const 2)) (i32.const 2)) (i32.shr_u (local.get $x) (i32.const 8)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (i32.add (i32.shl (local.get $i) (i32.const 2)) (i32.const 3)) (local.get $x))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l5)))")) (ELit (LString "    (local.get $out))")))))
 (DTypeSig true "charFromCodeRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "charFromCodeRuntimeLines" () (EListLit (ELit (LString "  ;; -- W11b charFromCode (byte-identical to medaka_rt.c mdk_char_from_code) --")) (ELit (LString "  (func $mdk_char_from_code (param $cp i32) (result (ref eq))")) (ELit (LString "    ;; valid: 0 <= cp <= 0x10FFFF and not (0xD800 <= cp <= 0xDFFF).")) (ELit (LString "    (if (i32.and (i32.and (i32.ge_s (local.get $cp) (i32.const 0)) (i32.le_s (local.get $cp) (i32.const 1114111)))")) (ELit (LString "                 (i32.eqz (i32.and (i32.ge_s (local.get $cp) (i32.const 55296)) (i32.le_s (local.get $cp) (i32.const 57343)))))")) (ELit (LString "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (local.get $cp))))))")) (ELit (LString "    (ref.i31 (i32.const 1)))"))))
+(DTypeSig true "plannedImportLines" (TyFun (TyApp (TyCon "List") (TyCon "PlannedImport")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "plannedImportLines" () (EApp (EMethodRef "map") (ELam ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "namespace"))) (ELit (LString "\" \""))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "field"))) (ELit (LString "\" (func $"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "watSymbol"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "signature"))) (ELit (LString "))"))))))
+(DTypeSig true "plannedHelperLines" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "plannedHelperLines" ((PVar "plan") (PVar "files")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (EVar "name")) (EApp (EApp (EApp (EVar "plannedHelperBlock") (EVar "plan")) (EVar "files")) (EVar "name")) (EListLit)))) (EVar "helperOrder")))
+(DTypeSig false "plannedHelperBlock" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "closApplyLines"))) (EVar "closApplyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRuntimeLines"))) (EVar "ioRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioStrRuntimeLines"))) (EVar "ioStrRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strLeafRuntimeLines"))) (EVar "strLeafRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strConcatRuntimeLines"))) (EVar "strConcatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "appendRuntimeLines"))) (EVar "appendRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueEqRuntimeLines"))) (EApp (EVar "valueEqRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueAddRuntimeLines"))) (EApp (EVar "valueAddRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueSubRuntimeLines"))) (EApp (EVar "valueSubRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueMulRuntimeLines"))) (EApp (EVar "valueMulRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueDivRuntimeLines"))) (EApp (EVar "valueDivRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueModRuntimeLines"))) (EApp (EVar "valueModRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueCmpNumRuntimeLines"))) (EApp (EVar "valueCmpNumRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "u64RuntimeLines"))) (EVar "u64RuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "i64RuntimeLines"))) (EVar "i64RuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "stderrRuntimeLines"))) (EVar "stderrRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "rngRuntimeLines"))) (EVar "rngRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashRuntimeLines"))) (EVar "hashRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashStringRuntimeLines"))) (EVar "hashStringRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatRemRuntimeLines"))) (EVar "floatRemRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatRuntimeLines"))) (EVar "floatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashFloatRuntimeLines"))) (EVar "hashFloatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "randomFloatRuntimeLines"))) (EVar "randomFloatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatStrLines"))) (EVar "floatStrLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strSearchRuntimeLines"))) (EVar "strSearchRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strToIntRuntimeLines"))) (EVar "strToIntRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strReverseRuntimeLines"))) (EVar "strReverseRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strJoinRuntimeLines"))) (EVar "strJoinRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strCodecRuntimeLines"))) (EVar "strCodecRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "byteBlockRuntimeLines"))) (EVar "byteBlockRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "charFromCodeRuntimeLines"))) (EVar "charFromCodeRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "charClassRuntimeLines"))) (EVar "charClassRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushPathLines"))) (EVar "ioPushPathLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushPathMoreLines"))) (EVar "ioPushPathMoreLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushGrantLines"))) (EVar "ioPushGrantLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushGrantMoreLines"))) (EVar "ioPushGrantMoreLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioResultLines"))) (EVar "ioResultLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRefusedPanicLines"))) (EVar "ioRefusedPanicLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadFileLines"))) (EVar "ioReadFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFetchTextLines"))) (EVar "ioFetchTextLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFileExistsLines"))) (EVar "ioFileExistsLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioCanonicalizeLines"))) (EVar "ioCanonicalizeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioWriteFileLines"))) (EVar "ioWriteFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioAppendFileLines"))) (EVar "ioAppendFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRenameLines"))) (EVar "ioRenameLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioListDirLines"))) (EVar "ioListDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioStatFileLines"))) (EVar "ioStatFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioMakeDirLines"))) (EVar "ioMakeDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRemoveFileLines"))) (EVar "ioRemoveFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRemoveDirLines"))) (EVar "ioRemoveDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFsyncLines"))) (EVar "ioFsyncLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFileModeLines"))) (EVar "ioFileModeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioWriteFileModeLines"))) (EVar "ioWriteFileModeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioGetEnvLines"))) (EVar "ioGetEnvLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadLineLines"))) (EVar "ioReadLineLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadAllLines"))) (EVar "ioReadAllLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadExactlyLines"))) (EVar "ioReadExactlyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioExecutablePathLines"))) (EVar "ioExecutablePathLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "jsffiArrayLines"))) (EVar "jsffiArrayLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "jsffiResultStrLines"))) (EVar "jsffiResultStrLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioArgsLines"))) (EVar "ioArgsLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "utf8LossyRuntimeLines"))) (EVar "utf8LossyRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "writeFileBytesLines"))) (EVar "writeFileBytesLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "osEntropyLines"))) (EVar "osEntropyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "readFileBytesLines"))) (EVar "readFileBytesLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "trapIntRuntimeLines"))) (EVar "trapIntRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "intRuntimeLines"))) (EApp (EVar "intRuntimeLines") (EFieldAccess (EVar "plan") "intHelpers")))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "siteRuntimeLines"))) (EApp (EApp (EVar "siteRuntimeLines") (EVar "files")) (EFieldAccess (EVar "plan") "nonexhaustiveRuntime")))
+(DFunDef false "plannedHelperBlock" (PWild PWild (PVar "name")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: unplanned-wasm-helper: ")) (EVar "name"))))
