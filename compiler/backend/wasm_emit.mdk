@@ -1839,6 +1839,7 @@ fileBoundEnterW prog env d g mode keep =
 -- catalog wasm family is `WasmStr` (intToString/putStrLn/stringConcat/…).  Any of
 -- these forces the §3.3 $str rep + the byte-write runtime + ref-mode.  Detected
 -- structurally over every clause body.
+-- Local spellings retain legacy mode eligibility; extern binding uses facts.
 programUsesStr : OrdMap ExternDeclFact -> List CBind -> Bool
 programUsesStr facts groups = anyBind (bindUsesStr facts) groups
 
@@ -1850,12 +1851,12 @@ exprUsesStr : OrdMap ExternDeclFact -> CExpr -> Bool
 exprUsesStr _ (CLit (LString _)) = True
 exprUsesStr _ (CLit (LChar _)) = True
 exprUsesStr _ (CLit _) = False
-exprUsesStr facts (CVar symbol AGlobal) = match externRuntimeKey facts symbol
-  Some key => match wasmFamily key
-    Some WasmStr => True
-    _ => False
-  None => False
-exprUsesStr _ (CVar _ _) = False
+exprUsesStr facts (CVar symbol AGlobal) =
+  isStrModeNameW symbol
+    || (match externRuntimeKey facts symbol
+      Some key => isStrModeNameW key
+      None => False)
+exprUsesStr _ (CVar symbol _) = isStrModeNameW symbol
 exprUsesStr facts (app@(CApp _ _ _)) =
   let (hd, args) = flattenApp app []
   headUsesStr facts hd || anyList (exprUsesStr facts) args
@@ -1880,6 +1881,11 @@ stmtUsesStr _ _ = False
 
 headUsesStr : OrdMap ExternDeclFact -> CExpr -> Bool
 headUsesStr facts h = exprUsesStr facts h
+
+isStrModeNameW : String -> Bool
+isStrModeNameW name = match wasmFamily name
+  Some WasmStr => True
+  _ => False
 
 -- Seeds the demand cells from the plan's walk of the program (`wasmDemandOf`).
 seedDemandW : WasmEmit -> WasmDemand -> Unit

@@ -147,6 +147,7 @@ trap 'rm -rf "$WORK" "$RESULTS"' EXIT
 
 c6_run() {
   c6_name="$1"; c6_source="$2"; c6_expected="$3"
+  c6_mode="${4:-}"
   c6_base="$WORK/c6-$c6_name"
   printf '%s\n' "$c6_source" > "$c6_base.mdk"
   if ! "$EMITBIN" "$c6_base.mdk" > "$c6_base.wat" 2> "$c6_base.err" ||
@@ -154,6 +155,8 @@ c6_run() {
      ! wasm-tools validate --features=all "$c6_base.wasm" 2>> "$c6_base.err" ||
      ! "$NODE" "$RUNJS" "$c6_base.wasm" > "$c6_base.out" 2>> "$c6_base.err" ||
      [ -s "$c6_base.err" ] ||
+     { [ "$c6_mode" = ref ] && ! grep -F '(type $str' "$c6_base.wat" >/dev/null; } ||
+     { [ "$c6_mode" = scalar ] && grep -F '(type $str' "$c6_base.wat" >/dev/null; } ||
      ! printf '%s\n' "$c6_expected" | cmp -s - "$c6_base.out"; then
     echo "FAIL C6 $c6_name"
     cat "$c6_base.err"
@@ -163,6 +166,8 @@ c6_run() {
 }
 
 c6_fail=0
+c6_run local-putStrLn-ref 'main = let putStrLn = True in if putStrLn then 42 else 0' 42 ref || c6_fail=1
+c6_run local-int-scalar 'main = let answer = 42 in answer' 42 scalar || c6_fail=1
 for c6_constant in pi e intMinBound intMaxBound charMinBound charMaxBound; do
   c6_run "$c6_constant-scalar" "$c6_constant = 42
 main = $c6_constant" 42 || c6_fail=1
