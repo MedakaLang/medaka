@@ -1,0 +1,4 @@
+f x = g ()
+  where
+    g _ = if x > x then 0 else 42
+main = let _ = z => z in f 21

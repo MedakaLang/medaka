@@ -1,3 +1,5 @@
+import backend.emit_plan.{prepareWasmPlan}
+import backend.wasm_emit.{inputCtorFloatFieldsW}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- WasmGC TYPED driver for slice W5 (typeclass dispatch) — the WasmGC peer of
 -- entries/llvm_emit_typed_main.mdk.  Where wasm_emit_main.mdk (the W1–W4 scalar/
@@ -93,31 +95,39 @@ import support.ordmap.{OrdMap, omFromPairs, omEmpty, omLookup}
 -- Every emission here builds its own plan from the program it emits.
 emitProgram : WasmEmitInput -> CProgram -> String
 emitProgram input cp =
-  emitWithPlan
-    input
-    (buildEmitPlan WasmBackend (inputRuntimeExternsW input) cp)
-    cp
+  let (plan, prepared) =
+    prepareWasmPlan
+      (inputRuntimeExternsW input)
+      (inputCtorFloatFieldsW input)
+      cp
+  emitWithPlan input plan prepared
 
 emitProgramUnchecked : WasmEmitInput -> CProgram -> String
 emitProgramUnchecked input cp =
-  emitUncheckedWithPlan
-    input
-    (buildEmitPlan WasmBackend (inputRuntimeExternsW input) cp)
-    cp
+  let (plan, prepared) =
+    prepareWasmPlan
+      (inputRuntimeExternsW input)
+      (inputCtorFloatFieldsW input)
+      cp
+  emitUncheckedWithPlan input plan prepared
 
 emitProgramRecord : WasmEmitInput -> CProgram -> (String, List String)
 emitProgramRecord input cp =
-  emitRecordWithPlan
-    input
-    (buildEmitPlan WasmBackend (inputRuntimeExternsW input) cp)
-    cp
+  let (plan, prepared) =
+    prepareWasmPlan
+      (inputRuntimeExternsW input)
+      (inputCtorFloatFieldsW input)
+      cp
+  emitRecordWithPlan input plan prepared
 
 emitProgramGaps : WasmEmitInput -> CProgram -> List String
 emitProgramGaps input cp =
-  emitGapsWithPlan
-    input
-    (buildEmitPlan WasmBackend (inputRuntimeExternsW input) cp)
-    cp
+  let (plan, prepared) =
+    prepareWasmPlan
+      (inputRuntimeExternsW input)
+      (inputCtorFloatFieldsW input)
+      cp
+  emitGapsWithPlan input plan prepared
 
 main = match args ()
   "--reemit-trmc-state" :: _ => reemitTrmcState ()

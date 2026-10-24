@@ -1,7 +1,12 @@
 # META
-source_lines=3257
+source_lines=3362
 stages=DESUGAR,MARK
 # SOURCE
+import backend.wasm_demand.{
+  WasmDemandPlan, PlannedImport, helperOrder, hasWasmHelper, jsWireParam,
+  jsWireResult, unaryF64Sig, binaryF64Sig
+}
+import backend.wasm_demand.{JsImport(..)}
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
 -- (WASMGC-DESIGN.md §3 type-section + §6 host-import seam).  Peer of
 -- `backend.llvm_preamble` (the `declare @mdk_…` block): PURE DATA, identical for
@@ -43,7 +48,6 @@ stages=DESUGAR,MARK
 
 import support.util.{anyList, contains, joinWith}
 import types.private_mangle.{injectiveIdent}
-import backend.emit_plan.{JsImport(..)}
 
 export
 preambleHeadLines : List String
@@ -1771,12 +1775,6 @@ hostImportSigOf "mdk_file_bound_enter" =
 hostImportSigOf "mdk_file_bound_exit" = Some ""
 hostImportSigOf _ = None
 
-unaryF64Sig : String
-unaryF64Sig = " (param f64) (result f64)"
-
-binaryF64Sig : String
-binaryF64Sig = " (param f64) (param f64) (result f64)"
-
 -- stringToFloat host seam: the guest pushes the string's bytes via the path channel
 -- (mdk_path_reset + mdk_path_push, shared with IO) then calls mdk_str_to_float, which
 -- reads pathBuf as a UTF-8 string, parses it with the strtod acceptance set and returns
@@ -2200,19 +2198,6 @@ jsffiWrapperId name = "jsffi.wrap.\{injectiveIdent name}"
 export
 jsImportField : JsImport -> String
 jsImportField imp = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}"
-
--- The wasm parameter a head crosses as: a scalar by value, a `String` or `Array`
--- as its length (its contents go on the path channel), a `Unit` as nothing.
-jsWireParam : String -> String
-jsWireParam "Unit" = ""
-jsWireParam head = " (param \{jsWireTy head})"
-
--- The wasm result a head comes back as; a `String` comes back on the result
--- channel and a `Unit` as nothing.
-jsWireResult : String -> String
-jsWireResult "Unit" = ""
-jsWireResult "String" = ""
-jsWireResult head = " (result \{jsWireTy head})"
 
 jsWireTy : String -> String
 jsWireTy "Int" = "i64"
@@ -3259,10 +3244,131 @@ charFromCodeRuntimeLines = [
   "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (local.get $cp))))))",
   "    (ref.i31 (i32.const 1)))",
 ]
+
+export
+plannedImportLines : List PlannedImport -> List String
+plannedImportLines = map (imp =>
+  "  (import \"\{imp.namespace}\" \"\{imp.field}\" (func $\{imp.watSymbol}\{imp.signature}))")
+
+export
+plannedHelperLines : WasmDemandPlan -> List (List Int) -> List String
+plannedHelperLines plan files =
+  flatMap
+    (name =>
+      if hasWasmHelper plan name then
+        plannedHelperBlock plan files name
+      else
+        [])
+    helperOrder
+
+plannedHelperBlock : WasmDemandPlan -> List (List Int) -> String -> List String
+plannedHelperBlock plan files "closApplyLines" = closApplyLines
+plannedHelperBlock plan files "ioRuntimeLines" = ioRuntimeLines
+plannedHelperBlock plan files "ioStrRuntimeLines" = ioStrRuntimeLines
+plannedHelperBlock plan files "strLeafRuntimeLines" = strLeafRuntimeLines
+plannedHelperBlock plan files "strConcatRuntimeLines" = strConcatRuntimeLines
+plannedHelperBlock plan files "appendRuntimeLines" = appendRuntimeLines
+plannedHelperBlock plan files "valueEqRuntimeLines" =
+  valueEqRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueAddRuntimeLines" =
+  valueAddRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueSubRuntimeLines" =
+  valueSubRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueMulRuntimeLines" =
+  valueMulRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueDivRuntimeLines" =
+  valueDivRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueModRuntimeLines" =
+  valueModRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueCmpNumRuntimeLines" =
+  valueCmpNumRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "u64RuntimeLines" = u64RuntimeLines
+plannedHelperBlock plan files "i64RuntimeLines" = i64RuntimeLines
+plannedHelperBlock plan files "stderrRuntimeLines" = stderrRuntimeLines
+plannedHelperBlock plan files "rngRuntimeLines" = rngRuntimeLines
+plannedHelperBlock plan files "hashRuntimeLines" = hashRuntimeLines
+plannedHelperBlock plan files "hashStringRuntimeLines" = hashStringRuntimeLines
+plannedHelperBlock plan files "floatRemRuntimeLines" = floatRemRuntimeLines
+plannedHelperBlock plan files "floatRuntimeLines" = floatRuntimeLines
+plannedHelperBlock plan files "hashFloatRuntimeLines" = hashFloatRuntimeLines
+plannedHelperBlock plan files "randomFloatRuntimeLines" =
+  randomFloatRuntimeLines
+plannedHelperBlock plan files "floatStrLines" = floatStrLines
+plannedHelperBlock plan files "strSearchRuntimeLines" = strSearchRuntimeLines
+plannedHelperBlock plan files "strToIntRuntimeLines" = strToIntRuntimeLines
+plannedHelperBlock plan files "strReverseRuntimeLines" = strReverseRuntimeLines
+plannedHelperBlock plan files "strJoinRuntimeLines" = strJoinRuntimeLines
+plannedHelperBlock plan files "strCodecRuntimeLines" = strCodecRuntimeLines
+plannedHelperBlock plan files "byteBlockRuntimeLines" = byteBlockRuntimeLines
+plannedHelperBlock plan files "charFromCodeRuntimeLines" =
+  charFromCodeRuntimeLines
+plannedHelperBlock plan files "charClassRuntimeLines" = charClassRuntimeLines
+plannedHelperBlock plan files "ioPushPathLines" = ioPushPathLines
+plannedHelperBlock plan files "ioPushPathMoreLines" = ioPushPathMoreLines
+plannedHelperBlock plan files "ioPushGrantLines" = ioPushGrantLines
+plannedHelperBlock plan files "ioPushGrantMoreLines" = ioPushGrantMoreLines
+plannedHelperBlock plan files "ioResultLines" = ioResultLines
+plannedHelperBlock plan files "ioRefusedPanicLines" = ioRefusedPanicLines
+plannedHelperBlock plan files "ioReadFileLines" = ioReadFileLines
+plannedHelperBlock plan files "ioFetchTextLines" = ioFetchTextLines
+plannedHelperBlock plan files "ioFileExistsLines" = ioFileExistsLines
+plannedHelperBlock plan files "ioCanonicalizeLines" = ioCanonicalizeLines
+plannedHelperBlock plan files "ioWriteFileLines" = ioWriteFileLines
+plannedHelperBlock plan files "ioAppendFileLines" = ioAppendFileLines
+plannedHelperBlock plan files "ioRenameLines" = ioRenameLines
+plannedHelperBlock plan files "ioListDirLines" = ioListDirLines
+plannedHelperBlock plan files "ioStatFileLines" = ioStatFileLines
+plannedHelperBlock plan files "ioMakeDirLines" = ioMakeDirLines
+plannedHelperBlock plan files "ioRemoveFileLines" = ioRemoveFileLines
+plannedHelperBlock plan files "ioRemoveDirLines" = ioRemoveDirLines
+plannedHelperBlock plan files "ioFsyncLines" = ioFsyncLines
+plannedHelperBlock plan files "ioFileModeLines" = ioFileModeLines
+plannedHelperBlock plan files "ioWriteFileModeLines" = ioWriteFileModeLines
+plannedHelperBlock plan files "ioGetEnvLines" = ioGetEnvLines
+plannedHelperBlock plan files "ioReadLineLines" = ioReadLineLines
+plannedHelperBlock plan files "ioReadAllLines" = ioReadAllLines
+plannedHelperBlock plan files "ioReadExactlyLines" = ioReadExactlyLines
+plannedHelperBlock plan files "ioExecutablePathLines" = ioExecutablePathLines
+plannedHelperBlock plan files "jsffiArrayLines" = jsffiArrayLines
+plannedHelperBlock plan files "jsffiResultStrLines" = jsffiResultStrLines
+plannedHelperBlock plan files "ioArgsLines" = ioArgsLines
+plannedHelperBlock plan files "utf8LossyRuntimeLines" = utf8LossyRuntimeLines
+plannedHelperBlock plan files "writeFileBytesLines" = writeFileBytesLines
+plannedHelperBlock plan files "osEntropyLines" = osEntropyLines
+plannedHelperBlock plan files "readFileBytesLines" = readFileBytesLines
+plannedHelperBlock plan files "trapIntRuntimeLines" = trapIntRuntimeLines
+plannedHelperBlock plan files "intRuntimeLines" =
+  intRuntimeLines plan.intHelpers
+plannedHelperBlock plan files "siteRuntimeLines" =
+  siteRuntimeLines files plan.nonexhaustiveRuntime
+plannedHelperBlock _ _ name =
+  panic ("internal error: unplanned-wasm-helper: " ++ name)
 # DESUGAR
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
-(DUse false (UseGroup ("backend" "emit_plan") ((mem "JsImport" true))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3464,10 +3570,6 @@ charFromCodeRuntimeLines = [
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
-(DTypeSig false "unaryF64Sig" (TyCon "String"))
-(DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
-(DTypeSig false "binaryF64Sig" (TyCon "String"))
-(DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
 (DTypeSig true "floatStrRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "floatStrRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_str_to_float"))) (EVar "keys")) (EVar "floatStrLines")))
 (DTypeSig false "floatStrLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3514,13 +3616,6 @@ charFromCodeRuntimeLines = [
 (DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
 (DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
-(DTypeSig false "jsWireParam" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsWireParam" ((PLit (LString "Unit"))) (ELit (LString "")))
-(DFunDef false "jsWireParam" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param ")) (EApp (EVar "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
-(DTypeSig false "jsWireResult" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsWireResult" ((PLit (LString "Unit"))) (ELit (LString "")))
-(DFunDef false "jsWireResult" ((PLit (LString "String"))) (ELit (LString "")))
-(DFunDef false "jsWireResult" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (result ")) (EApp (EVar "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
 (DTypeSig false "jsWireTy" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "jsWireTy" ((PLit (LString "Int"))) (ELit (LString "i64")))
 (DFunDef false "jsWireTy" ((PLit (LString "U64"))) (ELit (LString "i64")))
@@ -3626,10 +3721,85 @@ charFromCodeRuntimeLines = [
 (DFunDef false "byteBlockRuntimeLines" () (EListLit (ELit (LString "  ;; -- the `ByteBlock` builtin (peer of the mdk_byteblock_* C helpers) --")) (ELit (LString "  ;; byteBlockCopyUnsafe: the first $n bytes into a FRESH block.  A COPY, never a")) (ELit (LString "  ;; view: this is freeze's engine half, so a later write to the source must not")) (ELit (LString "  ;; reach the result (matching mdk_byteblock_copy's memcpy).")) (ELit (LString "  (func $mdk_bb_copy (param $n i32) (param $b (ref $u8arr)) (result (ref $u8arr))")) (ELit (LString "    (local $out (ref $u8arr))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromIntArray: the low eight bits of each element.  Unboxes through")) (ELit (LString "  ;; $mdk_unbox_int rather than the i31 fast path so an element outside the i31")) (ELit (LString "  ;; range (a $boxint) masks instead of trapping -- native has no boxed Int, so")) (ELit (LString "  ;; the i31-only route would diverge on exactly those elements.")) (ELit (LString "  (func $mdk_bb_from_int_array (param $a (ref $arr)) (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $out (ref $u8arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (local.get $i)")) (ELit (LString "        (i32.and (i32.wrap_i64 (call $mdk_unbox_int (ref.as_non_null (array.get $arr (local.get $a) (local.get $i))))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToIntArray: each byte as an Int in 0..255 (array.get_u zero-extends).")) (ELit (LString "  (func $mdk_bb_to_int_array (param $b (ref $u8arr)) (result (ref $arr))")) (ELit (LString "    (local $n i32) (local $out (ref $arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromString: the string's UTF-8 bytes, COPIED.  A $str's backing is")) (ELit (LString "  ;; shared by every reference to that string and a block is mutable, so handing")) (ELit (LString "  ;; the backing back unaliased would let a write edit the string.")) (ELit (LString "  (func $mdk_bb_from_string (param $s (ref $str)) (result (ref $u8arr))")) (ELit (LString "    (local $b (ref $u8arr)) (local $n i32) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToString: the block's bytes as a fresh $str.  The backing is COPIED")) (ELit (LString "  ;; because a block is mutable and a $str's bytes are shared by every reference to")) (ELit (LString "  ;; it; the copy is then read as UTF-8 by $mdk_u8_to_str_lossy, the same route as")) (ELit (LString "  ;; $mdk_utf8_bytes_to_str and medaka_rt.c's mdk_byteblock_to_string.")) (ELit (LString "  (func $mdk_bb_to_string (param $b (ref $u8arr)) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))")) (ELit (LString "  ;; byteBlockWriteStdout: write the block's bytes to stdout byte-for-byte, no")) (ELit (LString "  ;; encoding assumption -- unlike $mdk_print_str, there is no $str/cp_count to")) (ELit (LString "  ;; read, just the raw $u8arr length.")) (ELit (LString "  (func $mdk_bb_write_stdout (param $b (ref $u8arr))")) (ELit (LString "    (local $i i32) (local $n i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_byte (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))"))))
 (DTypeSig true "charFromCodeRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "charFromCodeRuntimeLines" () (EListLit (ELit (LString "  ;; -- W11b charFromCode (byte-identical to medaka_rt.c mdk_char_from_code) --")) (ELit (LString "  (func $mdk_char_from_code (param $cp i32) (result (ref eq))")) (ELit (LString "    ;; valid: 0 <= cp <= 0x10FFFF and not (0xD800 <= cp <= 0xDFFF).")) (ELit (LString "    (if (i32.and (i32.and (i32.ge_s (local.get $cp) (i32.const 0)) (i32.le_s (local.get $cp) (i32.const 1114111)))")) (ELit (LString "                 (i32.eqz (i32.and (i32.ge_s (local.get $cp) (i32.const 55296)) (i32.le_s (local.get $cp) (i32.const 57343)))))")) (ELit (LString "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (local.get $cp))))))")) (ELit (LString "    (ref.i31 (i32.const 1)))"))))
+(DTypeSig true "plannedImportLines" (TyFun (TyApp (TyCon "List") (TyCon "PlannedImport")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "plannedImportLines" () (EApp (EVar "map") (ELam ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "namespace"))) (ELit (LString "\" \""))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "field"))) (ELit (LString "\" (func $"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "watSymbol"))) (ELit (LString ""))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "signature"))) (ELit (LString "))"))))))
+(DTypeSig true "plannedHelperLines" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "plannedHelperLines" ((PVar "plan") (PVar "files")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (EVar "name")) (EApp (EApp (EApp (EVar "plannedHelperBlock") (EVar "plan")) (EVar "files")) (EVar "name")) (EListLit)))) (EVar "helperOrder")))
+(DTypeSig false "plannedHelperBlock" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "closApplyLines"))) (EVar "closApplyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRuntimeLines"))) (EVar "ioRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioStrRuntimeLines"))) (EVar "ioStrRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strLeafRuntimeLines"))) (EVar "strLeafRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strConcatRuntimeLines"))) (EVar "strConcatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "appendRuntimeLines"))) (EVar "appendRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueEqRuntimeLines"))) (EApp (EVar "valueEqRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueAddRuntimeLines"))) (EApp (EVar "valueAddRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueSubRuntimeLines"))) (EApp (EVar "valueSubRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueMulRuntimeLines"))) (EApp (EVar "valueMulRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueDivRuntimeLines"))) (EApp (EVar "valueDivRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueModRuntimeLines"))) (EApp (EVar "valueModRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueCmpNumRuntimeLines"))) (EApp (EVar "valueCmpNumRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "u64RuntimeLines"))) (EVar "u64RuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "i64RuntimeLines"))) (EVar "i64RuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "stderrRuntimeLines"))) (EVar "stderrRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "rngRuntimeLines"))) (EVar "rngRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashRuntimeLines"))) (EVar "hashRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashStringRuntimeLines"))) (EVar "hashStringRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatRemRuntimeLines"))) (EVar "floatRemRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatRuntimeLines"))) (EVar "floatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashFloatRuntimeLines"))) (EVar "hashFloatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "randomFloatRuntimeLines"))) (EVar "randomFloatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatStrLines"))) (EVar "floatStrLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strSearchRuntimeLines"))) (EVar "strSearchRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strToIntRuntimeLines"))) (EVar "strToIntRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strReverseRuntimeLines"))) (EVar "strReverseRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strJoinRuntimeLines"))) (EVar "strJoinRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strCodecRuntimeLines"))) (EVar "strCodecRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "byteBlockRuntimeLines"))) (EVar "byteBlockRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "charFromCodeRuntimeLines"))) (EVar "charFromCodeRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "charClassRuntimeLines"))) (EVar "charClassRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushPathLines"))) (EVar "ioPushPathLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushPathMoreLines"))) (EVar "ioPushPathMoreLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushGrantLines"))) (EVar "ioPushGrantLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushGrantMoreLines"))) (EVar "ioPushGrantMoreLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioResultLines"))) (EVar "ioResultLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRefusedPanicLines"))) (EVar "ioRefusedPanicLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadFileLines"))) (EVar "ioReadFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFetchTextLines"))) (EVar "ioFetchTextLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFileExistsLines"))) (EVar "ioFileExistsLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioCanonicalizeLines"))) (EVar "ioCanonicalizeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioWriteFileLines"))) (EVar "ioWriteFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioAppendFileLines"))) (EVar "ioAppendFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRenameLines"))) (EVar "ioRenameLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioListDirLines"))) (EVar "ioListDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioStatFileLines"))) (EVar "ioStatFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioMakeDirLines"))) (EVar "ioMakeDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRemoveFileLines"))) (EVar "ioRemoveFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRemoveDirLines"))) (EVar "ioRemoveDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFsyncLines"))) (EVar "ioFsyncLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFileModeLines"))) (EVar "ioFileModeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioWriteFileModeLines"))) (EVar "ioWriteFileModeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioGetEnvLines"))) (EVar "ioGetEnvLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadLineLines"))) (EVar "ioReadLineLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadAllLines"))) (EVar "ioReadAllLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadExactlyLines"))) (EVar "ioReadExactlyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioExecutablePathLines"))) (EVar "ioExecutablePathLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "jsffiArrayLines"))) (EVar "jsffiArrayLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "jsffiResultStrLines"))) (EVar "jsffiResultStrLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioArgsLines"))) (EVar "ioArgsLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "utf8LossyRuntimeLines"))) (EVar "utf8LossyRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "writeFileBytesLines"))) (EVar "writeFileBytesLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "osEntropyLines"))) (EVar "osEntropyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "readFileBytesLines"))) (EVar "readFileBytesLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "trapIntRuntimeLines"))) (EVar "trapIntRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "intRuntimeLines"))) (EApp (EVar "intRuntimeLines") (EFieldAccess (EVar "plan") "intHelpers")))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "siteRuntimeLines"))) (EApp (EApp (EVar "siteRuntimeLines") (EVar "files")) (EFieldAccess (EVar "plan") "nonexhaustiveRuntime")))
+(DFunDef false "plannedHelperBlock" (PWild PWild (PVar "name")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: unplanned-wasm-helper: ")) (EVar "name"))))
 # MARK
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
-(DUse false (UseGroup ("backend" "emit_plan") ((mem "JsImport" true))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3831,10 +4001,6 @@ charFromCodeRuntimeLines = [
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
-(DTypeSig false "unaryF64Sig" (TyCon "String"))
-(DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
-(DTypeSig false "binaryF64Sig" (TyCon "String"))
-(DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
 (DTypeSig true "floatStrRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "floatStrRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_str_to_float"))) (EVar "keys")) (EVar "floatStrLines")))
 (DTypeSig false "floatStrLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3881,13 +4047,6 @@ charFromCodeRuntimeLines = [
 (DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
 (DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
-(DTypeSig false "jsWireParam" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsWireParam" ((PLit (LString "Unit"))) (ELit (LString "")))
-(DFunDef false "jsWireParam" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param ")) (EApp (EMethodRef "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
-(DTypeSig false "jsWireResult" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsWireResult" ((PLit (LString "Unit"))) (ELit (LString "")))
-(DFunDef false "jsWireResult" ((PLit (LString "String"))) (ELit (LString "")))
-(DFunDef false "jsWireResult" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (result ")) (EApp (EMethodRef "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
 (DTypeSig false "jsWireTy" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "jsWireTy" ((PLit (LString "Int"))) (ELit (LString "i64")))
 (DFunDef false "jsWireTy" ((PLit (LString "U64"))) (ELit (LString "i64")))
@@ -3993,3 +4152,77 @@ charFromCodeRuntimeLines = [
 (DFunDef false "byteBlockRuntimeLines" () (EListLit (ELit (LString "  ;; -- the `ByteBlock` builtin (peer of the mdk_byteblock_* C helpers) --")) (ELit (LString "  ;; byteBlockCopyUnsafe: the first $n bytes into a FRESH block.  A COPY, never a")) (ELit (LString "  ;; view: this is freeze's engine half, so a later write to the source must not")) (ELit (LString "  ;; reach the result (matching mdk_byteblock_copy's memcpy).")) (ELit (LString "  (func $mdk_bb_copy (param $n i32) (param $b (ref $u8arr)) (result (ref $u8arr))")) (ELit (LString "    (local $out (ref $u8arr))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromIntArray: the low eight bits of each element.  Unboxes through")) (ELit (LString "  ;; $mdk_unbox_int rather than the i31 fast path so an element outside the i31")) (ELit (LString "  ;; range (a $boxint) masks instead of trapping -- native has no boxed Int, so")) (ELit (LString "  ;; the i31-only route would diverge on exactly those elements.")) (ELit (LString "  (func $mdk_bb_from_int_array (param $a (ref $arr)) (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $out (ref $u8arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $out) (local.get $i)")) (ELit (LString "        (i32.and (i32.wrap_i64 (call $mdk_unbox_int (ref.as_non_null (array.get $arr (local.get $a) (local.get $i))))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToIntArray: each byte as an Int in 0..255 (array.get_u zero-extends).")) (ELit (LString "  (func $mdk_bb_to_int_array (param $b (ref $u8arr)) (result (ref $arr))")) (ELit (LString "    (local $n i32) (local $out (ref $arr)) (local $i i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockFromString: the string's UTF-8 bytes, COPIED.  A $str's backing is")) (ELit (LString "  ;; shared by every reference to that string and a block is mutable, so handing")) (ELit (LString "  ;; the backing back unaliased would let a write edit the string.")) (ELit (LString "  (func $mdk_bb_from_string (param $s (ref $str)) (result (ref $u8arr))")) (ELit (LString "    (local $b (ref $u8arr)) (local $n i32) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (local.get $out))")) (ELit (LString "  ;; byteBlockToString: the block's bytes as a fresh $str.  The backing is COPIED")) (ELit (LString "  ;; because a block is mutable and a $str's bytes are shared by every reference to")) (ELit (LString "  ;; it; the copy is then read as UTF-8 by $mdk_u8_to_str_lossy, the same route as")) (ELit (LString "  ;; $mdk_utf8_bytes_to_str and medaka_rt.c's mdk_byteblock_to_string.")) (ELit (LString "  (func $mdk_bb_to_string (param $b (ref $u8arr)) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))")) (ELit (LString "  ;; byteBlockWriteStdout: write the block's bytes to stdout byte-for-byte, no")) (ELit (LString "  ;; encoding assumption -- unlike $mdk_print_str, there is no $str/cp_count to")) (ELit (LString "  ;; read, just the raw $u8arr length.")) (ELit (LString "  (func $mdk_bb_write_stdout (param $b (ref $u8arr))")) (ELit (LString "    (local $i i32) (local $n i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_byte (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l))))"))))
 (DTypeSig true "charFromCodeRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "charFromCodeRuntimeLines" () (EListLit (ELit (LString "  ;; -- W11b charFromCode (byte-identical to medaka_rt.c mdk_char_from_code) --")) (ELit (LString "  (func $mdk_char_from_code (param $cp i32) (result (ref eq))")) (ELit (LString "    ;; valid: 0 <= cp <= 0x10FFFF and not (0xD800 <= cp <= 0xDFFF).")) (ELit (LString "    (if (i32.and (i32.and (i32.ge_s (local.get $cp) (i32.const 0)) (i32.le_s (local.get $cp) (i32.const 1114111)))")) (ELit (LString "                 (i32.eqz (i32.and (i32.ge_s (local.get $cp) (i32.const 55296)) (i32.le_s (local.get $cp) (i32.const 57343)))))")) (ELit (LString "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (local.get $cp))))))")) (ELit (LString "    (ref.i31 (i32.const 1)))"))))
+(DTypeSig true "plannedImportLines" (TyFun (TyApp (TyCon "List") (TyCon "PlannedImport")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "plannedImportLines" () (EApp (EMethodRef "map") (ELam ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "namespace"))) (ELit (LString "\" \""))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "field"))) (ELit (LString "\" (func $"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "watSymbol"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "signature"))) (ELit (LString "))"))))))
+(DTypeSig true "plannedHelperLines" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "plannedHelperLines" ((PVar "plan") (PVar "files")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (EVar "name")) (EApp (EApp (EApp (EVar "plannedHelperBlock") (EVar "plan")) (EVar "files")) (EVar "name")) (EListLit)))) (EVar "helperOrder")))
+(DTypeSig false "plannedHelperBlock" (TyFun (TyCon "WasmDemandPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "closApplyLines"))) (EVar "closApplyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRuntimeLines"))) (EVar "ioRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioStrRuntimeLines"))) (EVar "ioStrRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strLeafRuntimeLines"))) (EVar "strLeafRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strConcatRuntimeLines"))) (EVar "strConcatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "appendRuntimeLines"))) (EVar "appendRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueEqRuntimeLines"))) (EApp (EVar "valueEqRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueAddRuntimeLines"))) (EApp (EVar "valueAddRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueSubRuntimeLines"))) (EApp (EVar "valueSubRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueMulRuntimeLines"))) (EApp (EVar "valueMulRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueDivRuntimeLines"))) (EApp (EVar "valueDivRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueModRuntimeLines"))) (EApp (EVar "valueModRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "valueCmpNumRuntimeLines"))) (EApp (EVar "valueCmpNumRuntimeLines") (EApp (EApp (EVar "Wide64W") (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "u64RuntimeLines")))) (EApp (EApp (EVar "hasWasmHelper") (EVar "plan")) (ELit (LString "i64RuntimeLines"))))))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "u64RuntimeLines"))) (EVar "u64RuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "i64RuntimeLines"))) (EVar "i64RuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "stderrRuntimeLines"))) (EVar "stderrRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "rngRuntimeLines"))) (EVar "rngRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashRuntimeLines"))) (EVar "hashRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashStringRuntimeLines"))) (EVar "hashStringRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatRemRuntimeLines"))) (EVar "floatRemRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatRuntimeLines"))) (EVar "floatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "hashFloatRuntimeLines"))) (EVar "hashFloatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "randomFloatRuntimeLines"))) (EVar "randomFloatRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "floatStrLines"))) (EVar "floatStrLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strSearchRuntimeLines"))) (EVar "strSearchRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strToIntRuntimeLines"))) (EVar "strToIntRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strReverseRuntimeLines"))) (EVar "strReverseRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strJoinRuntimeLines"))) (EVar "strJoinRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "strCodecRuntimeLines"))) (EVar "strCodecRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "byteBlockRuntimeLines"))) (EVar "byteBlockRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "charFromCodeRuntimeLines"))) (EVar "charFromCodeRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "charClassRuntimeLines"))) (EVar "charClassRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushPathLines"))) (EVar "ioPushPathLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushPathMoreLines"))) (EVar "ioPushPathMoreLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushGrantLines"))) (EVar "ioPushGrantLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioPushGrantMoreLines"))) (EVar "ioPushGrantMoreLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioResultLines"))) (EVar "ioResultLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRefusedPanicLines"))) (EVar "ioRefusedPanicLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadFileLines"))) (EVar "ioReadFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFetchTextLines"))) (EVar "ioFetchTextLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFileExistsLines"))) (EVar "ioFileExistsLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioCanonicalizeLines"))) (EVar "ioCanonicalizeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioWriteFileLines"))) (EVar "ioWriteFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioAppendFileLines"))) (EVar "ioAppendFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRenameLines"))) (EVar "ioRenameLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioListDirLines"))) (EVar "ioListDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioStatFileLines"))) (EVar "ioStatFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioMakeDirLines"))) (EVar "ioMakeDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRemoveFileLines"))) (EVar "ioRemoveFileLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioRemoveDirLines"))) (EVar "ioRemoveDirLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFsyncLines"))) (EVar "ioFsyncLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioFileModeLines"))) (EVar "ioFileModeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioWriteFileModeLines"))) (EVar "ioWriteFileModeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioGetEnvLines"))) (EVar "ioGetEnvLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadLineLines"))) (EVar "ioReadLineLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadAllLines"))) (EVar "ioReadAllLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioReadExactlyLines"))) (EVar "ioReadExactlyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioExecutablePathLines"))) (EVar "ioExecutablePathLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "jsffiArrayLines"))) (EVar "jsffiArrayLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "jsffiResultStrLines"))) (EVar "jsffiResultStrLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "ioArgsLines"))) (EVar "ioArgsLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "utf8LossyRuntimeLines"))) (EVar "utf8LossyRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "writeFileBytesLines"))) (EVar "writeFileBytesLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "osEntropyLines"))) (EVar "osEntropyLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "readFileBytesLines"))) (EVar "readFileBytesLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "trapIntRuntimeLines"))) (EVar "trapIntRuntimeLines"))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "intRuntimeLines"))) (EApp (EVar "intRuntimeLines") (EFieldAccess (EVar "plan") "intHelpers")))
+(DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "siteRuntimeLines"))) (EApp (EApp (EVar "siteRuntimeLines") (EVar "files")) (EFieldAccess (EVar "plan") "nonexhaustiveRuntime")))
+(DFunDef false "plannedHelperBlock" (PWild PWild (PVar "name")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: unplanned-wasm-helper: ")) (EVar "name"))))

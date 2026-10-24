@@ -1,3 +1,8 @@
+import backend.wasm_demand.{
+  WasmDemandPlan, PlannedImport, helperOrder, hasWasmHelper, jsWireParam,
+  jsWireResult, unaryF64Sig, binaryF64Sig
+}
+import backend.wasm_demand.{JsImport(..)}
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
 -- (WASMGC-DESIGN.md §3 type-section + §6 host-import seam).  Peer of
 -- `backend.llvm_preamble` (the `declare @mdk_…` block): PURE DATA, identical for
@@ -39,7 +44,6 @@
 
 import support.util.{anyList, contains, joinWith}
 import types.private_mangle.{injectiveIdent}
-import backend.emit_plan.{JsImport(..)}
 
 export
 preambleHeadLines : List String
@@ -1767,12 +1771,6 @@ hostImportSigOf "mdk_file_bound_enter" =
 hostImportSigOf "mdk_file_bound_exit" = Some ""
 hostImportSigOf _ = None
 
-unaryF64Sig : String
-unaryF64Sig = " (param f64) (result f64)"
-
-binaryF64Sig : String
-binaryF64Sig = " (param f64) (param f64) (result f64)"
-
 -- stringToFloat host seam: the guest pushes the string's bytes via the path channel
 -- (mdk_path_reset + mdk_path_push, shared with IO) then calls mdk_str_to_float, which
 -- reads pathBuf as a UTF-8 string, parses it with the strtod acceptance set and returns
@@ -2196,19 +2194,6 @@ jsffiWrapperId name = "jsffi.wrap.\{injectiveIdent name}"
 export
 jsImportField : JsImport -> String
 jsImportField imp = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}"
-
--- The wasm parameter a head crosses as: a scalar by value, a `String` or `Array`
--- as its length (its contents go on the path channel), a `Unit` as nothing.
-jsWireParam : String -> String
-jsWireParam "Unit" = ""
-jsWireParam head = " (param \{jsWireTy head})"
-
--- The wasm result a head comes back as; a `String` comes back on the result
--- channel and a `Unit` as nothing.
-jsWireResult : String -> String
-jsWireResult "Unit" = ""
-jsWireResult "String" = ""
-jsWireResult head = " (result \{jsWireTy head})"
 
 jsWireTy : String -> String
 jsWireTy "Int" = "i64"
@@ -3255,3 +3240,123 @@ charFromCodeRuntimeLines = [
   "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (local.get $cp))))))",
   "    (ref.i31 (i32.const 1)))",
 ]
+
+export
+plannedImportLines : List PlannedImport -> List String
+plannedImportLines = map (imp =>
+  "  (import \"\{imp.namespace}\" \"\{imp.field}\" (func $\{imp.watSymbol}\{imp.signature}))")
+
+export
+plannedHelperLines : WasmDemandPlan -> List (List Int) -> List String
+plannedHelperLines plan files =
+  flatMap
+    (name =>
+      if hasWasmHelper plan name then
+        plannedHelperBlock plan files name
+      else
+        [])
+    helperOrder
+
+plannedHelperBlock : WasmDemandPlan -> List (List Int) -> String -> List String
+plannedHelperBlock plan files "closApplyLines" = closApplyLines
+plannedHelperBlock plan files "ioRuntimeLines" = ioRuntimeLines
+plannedHelperBlock plan files "ioStrRuntimeLines" = ioStrRuntimeLines
+plannedHelperBlock plan files "strLeafRuntimeLines" = strLeafRuntimeLines
+plannedHelperBlock plan files "strConcatRuntimeLines" = strConcatRuntimeLines
+plannedHelperBlock plan files "appendRuntimeLines" = appendRuntimeLines
+plannedHelperBlock plan files "valueEqRuntimeLines" =
+  valueEqRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueAddRuntimeLines" =
+  valueAddRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueSubRuntimeLines" =
+  valueSubRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueMulRuntimeLines" =
+  valueMulRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueDivRuntimeLines" =
+  valueDivRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueModRuntimeLines" =
+  valueModRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "valueCmpNumRuntimeLines" =
+  valueCmpNumRuntimeLines
+    (Wide64W
+      (hasWasmHelper plan "u64RuntimeLines")
+      (hasWasmHelper plan "i64RuntimeLines"))
+plannedHelperBlock plan files "u64RuntimeLines" = u64RuntimeLines
+plannedHelperBlock plan files "i64RuntimeLines" = i64RuntimeLines
+plannedHelperBlock plan files "stderrRuntimeLines" = stderrRuntimeLines
+plannedHelperBlock plan files "rngRuntimeLines" = rngRuntimeLines
+plannedHelperBlock plan files "hashRuntimeLines" = hashRuntimeLines
+plannedHelperBlock plan files "hashStringRuntimeLines" = hashStringRuntimeLines
+plannedHelperBlock plan files "floatRemRuntimeLines" = floatRemRuntimeLines
+plannedHelperBlock plan files "floatRuntimeLines" = floatRuntimeLines
+plannedHelperBlock plan files "hashFloatRuntimeLines" = hashFloatRuntimeLines
+plannedHelperBlock plan files "randomFloatRuntimeLines" =
+  randomFloatRuntimeLines
+plannedHelperBlock plan files "floatStrLines" = floatStrLines
+plannedHelperBlock plan files "strSearchRuntimeLines" = strSearchRuntimeLines
+plannedHelperBlock plan files "strToIntRuntimeLines" = strToIntRuntimeLines
+plannedHelperBlock plan files "strReverseRuntimeLines" = strReverseRuntimeLines
+plannedHelperBlock plan files "strJoinRuntimeLines" = strJoinRuntimeLines
+plannedHelperBlock plan files "strCodecRuntimeLines" = strCodecRuntimeLines
+plannedHelperBlock plan files "byteBlockRuntimeLines" = byteBlockRuntimeLines
+plannedHelperBlock plan files "charFromCodeRuntimeLines" =
+  charFromCodeRuntimeLines
+plannedHelperBlock plan files "charClassRuntimeLines" = charClassRuntimeLines
+plannedHelperBlock plan files "ioPushPathLines" = ioPushPathLines
+plannedHelperBlock plan files "ioPushPathMoreLines" = ioPushPathMoreLines
+plannedHelperBlock plan files "ioPushGrantLines" = ioPushGrantLines
+plannedHelperBlock plan files "ioPushGrantMoreLines" = ioPushGrantMoreLines
+plannedHelperBlock plan files "ioResultLines" = ioResultLines
+plannedHelperBlock plan files "ioRefusedPanicLines" = ioRefusedPanicLines
+plannedHelperBlock plan files "ioReadFileLines" = ioReadFileLines
+plannedHelperBlock plan files "ioFetchTextLines" = ioFetchTextLines
+plannedHelperBlock plan files "ioFileExistsLines" = ioFileExistsLines
+plannedHelperBlock plan files "ioCanonicalizeLines" = ioCanonicalizeLines
+plannedHelperBlock plan files "ioWriteFileLines" = ioWriteFileLines
+plannedHelperBlock plan files "ioAppendFileLines" = ioAppendFileLines
+plannedHelperBlock plan files "ioRenameLines" = ioRenameLines
+plannedHelperBlock plan files "ioListDirLines" = ioListDirLines
+plannedHelperBlock plan files "ioStatFileLines" = ioStatFileLines
+plannedHelperBlock plan files "ioMakeDirLines" = ioMakeDirLines
+plannedHelperBlock plan files "ioRemoveFileLines" = ioRemoveFileLines
+plannedHelperBlock plan files "ioRemoveDirLines" = ioRemoveDirLines
+plannedHelperBlock plan files "ioFsyncLines" = ioFsyncLines
+plannedHelperBlock plan files "ioFileModeLines" = ioFileModeLines
+plannedHelperBlock plan files "ioWriteFileModeLines" = ioWriteFileModeLines
+plannedHelperBlock plan files "ioGetEnvLines" = ioGetEnvLines
+plannedHelperBlock plan files "ioReadLineLines" = ioReadLineLines
+plannedHelperBlock plan files "ioReadAllLines" = ioReadAllLines
+plannedHelperBlock plan files "ioReadExactlyLines" = ioReadExactlyLines
+plannedHelperBlock plan files "ioExecutablePathLines" = ioExecutablePathLines
+plannedHelperBlock plan files "jsffiArrayLines" = jsffiArrayLines
+plannedHelperBlock plan files "jsffiResultStrLines" = jsffiResultStrLines
+plannedHelperBlock plan files "ioArgsLines" = ioArgsLines
+plannedHelperBlock plan files "utf8LossyRuntimeLines" = utf8LossyRuntimeLines
+plannedHelperBlock plan files "writeFileBytesLines" = writeFileBytesLines
+plannedHelperBlock plan files "osEntropyLines" = osEntropyLines
+plannedHelperBlock plan files "readFileBytesLines" = readFileBytesLines
+plannedHelperBlock plan files "trapIntRuntimeLines" = trapIntRuntimeLines
+plannedHelperBlock plan files "intRuntimeLines" =
+  intRuntimeLines plan.intHelpers
+plannedHelperBlock plan files "siteRuntimeLines" =
+  siteRuntimeLines files plan.nonexhaustiveRuntime
+plannedHelperBlock _ _ name =
+  panic ("internal error: unplanned-wasm-helper: " ++ name)

@@ -1,3 +1,4 @@
+import backend.wasm_emit.{inputCtorFloatFieldsW}
 import types.extern_source.{externSourceHeadRows}
 -- lint-disable-file rule-duplicate-body
 -- (The hover/completion helpers below are DELIBERATELY reimplemented from the
@@ -758,7 +759,10 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
   -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
   let lowered = lowerProgramEmitWith facts allDecls
   let (plan, reached) =
-    buildEmitPlanReached (runtimeDomain (externDecls runtimeDecls)) lowered
+    buildEmitPlanReached
+      (runtimeDomain (externDecls runtimeDecls))
+      (inputCtorFloatFieldsW input)
+      lowered
   let wat = emitProgram input plan reached
   let _ = emitWatMarker warnTriples
   putStr wat

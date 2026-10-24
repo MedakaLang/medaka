@@ -1,0 +1,2302 @@
+import frontend.ast.{
+  Lit(..), Pat(..), Addr(..), BinderId(..), Loc(..), isTaggedFixedHead
+}
+import ir.core_ir.{
+  CProgram(..), DeclFacts(..), EntryFact(..), CBind(..), CClause(..), CExpr(..),
+  CField(..), CGuard(..), CImplEntry(..), CImplBody(..), CStmt(..), CArm(..),
+  CHead(..), CTree(..), CTBranch(..), CallSite(..), CallMode(..), FailSite(..),
+  litRuntimeType, siteSentinelName
+}
+import ir.extern_types.{ExternDeclFact(..)}
+import ir.extern_lower.{externRuntimeKey}
+import backend.extern_requirements.{
+  ExternRequirements, RequirementBinding(..), requirementHostRows,
+  requirementFacts
+}
+import backend.extern_catalog.{
+  WasmUse(..), WasmFamily(..), Disposition(..), wasmUses, wasmHostKeys,
+  wasmTupleArities, wasmFamily, isWasmExternFamily, fileBoundHostKeys
+}
+import backend.global_plan.{GlobalInitPlan}
+import backend.trmc_analysis.{
+  TrmcVerdicts, DispGroup, patVarsList, patVars, bindName, clauseBodyOf,
+  armBody, flattenApp
+}
+import backend.emit_support.{appParts, isExactCall}
+import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
+import types.private_mangle.{injectiveIdent}
+import support.ordmap.{
+  OrdMap, omEmpty, omInsert, omLookup, omHasKey, omKeys, omFromNames,
+  omFromPairs, omDelete
+}
+import support.util.{
+  reverseL, filterList, listLen, contains, startsWith, isEmptyL, isNonEmptyL,
+  anyList, lookupAssoc, joinWith, lenKey
+}
+
+-- A reached user extern's `js` binding (docs/spec/WASM-SEMANTICS.md section
+-- 3.1): its Medaka name, the JS name it binds, and its declared parameter and
+-- result heads (`Array` is `Array Int`).
+public export data JsImport = JsImport {
+  medakaName : String,
+  jsName : String,
+  params : List String,
+  result : String,
+} deriving (Eq, Debug)
+
+-- One walk of every binding and impl body (`wasmDemandOf`).  `uses` holds, once
+-- each, the catalog demands (`wasmUses`) of every runtime extern the program
+-- names and the demands its literals, collection forms and `++`/`::` make.
+-- `refBox` is a `Ref` cell, `divGuard` a `/` or `%`, and `tupleArities` the
+-- distinct tuple arities, first seen first.  A name demands what its extern
+-- does only where the emitter would lower it as that extern (`DemandScope`), so a
+-- binder that shares an extern's name demands nothing.
+public export data WasmDemand = WasmDemand {
+  uses : List WasmUse,
+  refBox : Bool,
+  divGuard : Bool,
+  tupleArities : List Int,
+} deriving (Eq, Debug)
+
+-- ── the wasm demand walk ────────────────────────────────────────────────────
+
+-- the walk's state: the demand so far, newest first, and the host keys and `js`
+-- imports seen
+data DemandAcc = DemandAcc {
+  seenUses : List WasmUse,
+  seenKeys : OrdMap Unit,
+  seenJs : OrdMap JsImport,
+  seenRefBox : Bool,
+  seenDivGuard : Bool,
+  seenArities : List Int,
+}
+
+-- What a bare name denotes where the walk meets it, resolved in the order the
+-- wasm emitter resolves it (`emitAppRef`, `emitTailCallW`, `emitVarRefPlain`).
+-- A binder in scope is a local, whatever else shares its name.  Otherwise a
+-- value reference is a top-level binding of that name, or the `core__`
+-- function a bare prelude name stands for, before it is an extern; an applied
+-- name is an extern before it is a top-level function, unless only its
+-- `core__` function exists.  `topFns` and `topVals` partition the top-level
+-- bindings other than `main` as the emitter's own indexes do.  An extern is a
+-- user extern with a `js` binding (`jsBinds`: name -> (JS name, heads)) before
+-- it is a catalog extern, as in the emitter.
+data DemandScope = DemandScope {
+  locals : OrdMap Unit,
+  topFns : OrdMap Unit,
+  topVals : OrdMap Unit,
+  jsBinds : OrdMap (String, (List String, String)),
+  externFacts : OrdMap ExternDeclFact,
+}
+
+wasmDemandOf : OrdMap ExternDeclFact ->
+  OrdMap (String, (List String, String)) ->
+  List CBind ->
+  List CImplEntry ->
+  (WasmDemand, List String, List JsImport)
+wasmDemandOf externFacts jsBinds groups impls =
+  let start = DemandAcc {
+    seenUses = [],
+    seenKeys = omEmpty,
+    seenJs = omEmpty,
+    seenRefBox = False,
+    seenDivGuard = False,
+    seenArities = [],
+  }
+  let tops = filterList (b => bindName b /= "main") groups
+  let sc = DemandScope {
+    locals = omEmpty,
+    topFns =
+      omFromNames
+        (map bindName (filterList (b => not (isValBind b)) tops))
+        omEmpty,
+    topVals = omFromNames (map bindName (filterList isValBind tops)) omEmpty,
+    jsBinds = jsBinds,
+    externFacts = externFacts,
+  }
+  let acc = walkEach (dImpl sc) (walkEach (dBind sc) start groups) impls
+  (
+    WasmDemand {
+      uses = reverseL acc.seenUses,
+      refBox = acc.seenRefBox,
+      divGuard = acc.seenDivGuard,
+      tupleArities = reverseL acc.seenArities,
+    },
+    omKeys acc.seenKeys,
+    filterMap (k => omLookup k acc.seenJs) (omKeys acc.seenJs),
+  )
+
+walkEach : (DemandAcc -> a -> DemandAcc) -> DemandAcc -> List a -> DemandAcc
+walkEach _ acc [] = acc
+walkEach f acc (x :: xs) = walkEach f (f acc x) xs
+
+-- `seenUses` holds at most one entry per `WasmUse` constructor, so the scan is
+-- bounded.
+noteUse : DemandAcc -> WasmUse -> DemandAcc
+noteUse acc u =
+  if any (== u) acc.seenUses then
+    acc
+  else
+    { acc | seenUses = u :: acc.seenUses }
+
+noteKey : DemandAcc -> String -> DemandAcc
+noteKey acc k =
+  if omHasKey k acc.seenKeys then
+    acc
+  else
+    { acc | seenKeys = omInsert k () acc.seenKeys }
+
+noteArity : DemandAcc -> Int -> DemandAcc
+noteArity acc n =
+  if any (== n) acc.seenArities then
+    acc
+  else
+    { acc | seenArities = n :: acc.seenArities }
+
+noteRefBox : DemandAcc -> DemandAcc
+noteRefBox acc = if acc.seenRefBox then acc else { acc | seenRefBox = True }
+
+-- an occurrence of a name: every demand and host key the catalog lists for it
+noteName : DemandAcc -> String -> DemandAcc
+noteName acc "$withFileReadBound" = noteFileBound acc
+noteName acc "$withFileWriteBound" = noteFileBound acc
+noteName acc name =
+  let acc = match wasmFamily name
+    Some WasmRefCell => noteRefBox acc
+    _ => acc
+  walkEach
+    noteArity
+    (walkEach
+      noteKey
+      (walkEach noteUse acc (wasmUses name))
+      (wasmHostKeys name))
+    (wasmTupleArities name)
+
+-- a name the emitter lowers as an extern: a user `js` binding, else a catalog
+-- extern
+noteExtern : DemandScope -> DemandAcc -> String -> DemandAcc
+noteExtern sc acc name = match omLookup name sc.jsBinds
+  None => match externRuntimeKey sc.externFacts name
+    Some key => noteName acc key
+    None =>
+      if name == "$withFileReadBound" || name == "$withFileWriteBound" then
+        noteFileBound acc
+      else
+        acc
+  Some (js, (params, result)) =>
+    if omHasKey name acc.seenJs then
+      acc
+    else
+      let imp = JsImport {
+        medakaName = name,
+        jsName = js,
+        params = params,
+        result = result,
+      }
+      noteJsResult
+        (walkEach
+          noteJsParam
+          { acc | seenJs = omInsert name imp acc.seenJs }
+          params)
+        result
+
+-- What one parameter head of a `js` import needs (WASM-SEMANTICS section 3.1): a
+-- `String` or `Array` crosses on the path channel, an `Array` comes back on the
+-- result channel, and a boxed head needs its type.
+noteJsParam : DemandAcc -> String -> DemandAcc
+noteJsParam acc "String" = walkEach noteKey (noteUse acc UseStr) jsPathKeys
+noteJsParam acc "Array" =
+  walkEach noteKey (noteUse acc UseArray) (jsPathKeys ++ jsResultKeys)
+noteJsParam acc head = noteJsBoxed acc head
+
+-- What a `js` import's result head needs: a `String` comes back on the result
+-- channel.
+noteJsResult : DemandAcc -> String -> DemandAcc
+noteJsResult acc "String" = walkEach noteKey (noteUse acc UseStr) jsResultKeys
+noteJsResult acc head = noteJsBoxed acc head
+
+noteJsBoxed : DemandAcc -> String -> DemandAcc
+noteJsBoxed acc "Float" = noteUse acc UseFloat
+noteJsBoxed acc "U64" = noteUse acc UseU64
+noteJsBoxed acc "I64" = noteUse acc UseI64
+noteJsBoxed acc _ = acc
+
+jsPathKeys : List String
+jsPathKeys = ["mdk_path_reset", "mdk_path_push"]
+
+jsResultKeys : List String
+jsResultKeys = ["mdk_result_len", "mdk_result_byte"]
+
+-- a declared file bound pushes its grant, a cons list of $str elements
+noteFileBound : DemandAcc -> DemandAcc
+noteFileBound acc =
+  walkEach noteKey (noteUse (noteUse acc UseStr) UseList) fileBoundHostKeys
+
+noteTag : DemandAcc -> String -> DemandAcc
+noteTag acc "U64" = noteUse acc UseU64
+noteTag acc "I64" = noteUse acc UseI64
+noteTag acc _ = acc
+
+-- `++` is runtime-dispatched ($mdk_append): the $str leaf concat and the cons list.
+noteBinop : DemandAcc -> String -> DemandAcc
+noteBinop acc "++" = noteUse (noteUse (noteUse acc UseStrLeaf) UseStr) UseList
+noteBinop acc "::" = noteUse acc UseList
+noteBinop acc "/" = { acc | seenDivGuard = True }
+noteBinop acc "%" = { acc | seenDivGuard = True }
+noteBinop acc _ = acc
+
+-- Top-level nullary values become globals; `main` remains the program entry.
+export
+isValBind : CBind -> Bool
+isValBind (CBind name [CClause [] _] _ _) = name /= "main"
+isValBind _ = False
+
+-- [sc] with every variable [pats] bind in scope
+bindIn : DemandScope -> List Pat -> DemandScope
+bindIn sc pats = match patVarsList pats
+  [] => sc
+  names => { sc | locals = omFromNames names sc.locals }
+
+isLocal : DemandScope -> String -> Bool
+isLocal sc x = omHasKey x sc.locals
+
+isCoreFn : DemandScope -> String -> Bool
+isCoreFn sc x = omHasKey ("core__" ++ x) sc.topFns
+
+-- a name read as a value
+dVar : DemandScope -> DemandAcc -> String -> DemandAcc
+dVar sc acc x =
+  if isLocal sc x
+    || omHasKey x sc.topVals
+    || omHasKey x sc.topFns
+    || isCoreFn sc x then
+    acc
+  else
+    noteExtern sc acc x
+
+dBind : DemandScope -> DemandAcc -> CBind -> DemandAcc
+dBind sc acc (CBind _ clauses _ _) = walkEach (dClause sc) acc clauses
+
+-- a clause's parameter patterns, then its body with them in scope
+dClause : DemandScope -> DemandAcc -> CClause -> DemandAcc
+dClause sc acc (CClause pats body) =
+  dExpr (bindIn sc pats) (walkEach dPat acc pats) body
+
+dImpl : DemandScope -> DemandAcc -> CImplEntry -> DemandAcc
+dImpl sc acc (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ pats b)) =
+  dExpr (bindIn sc pats) (walkEach dPat acc pats) b
+dImpl sc acc (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ pats b)) =
+  dExpr (bindIn sc pats) (walkEach dPat acc pats) b
+
+dExpr : DemandScope -> DemandAcc -> CExpr -> DemandAcc
+dExpr sc acc (CList es) = walkEach (dExpr sc) (noteUse acc UseList) es
+dExpr sc acc (CRangeList lo hi _) =
+  dExpr sc (dExpr sc (noteUse acc UseList) lo) hi
+dExpr sc acc (CTuple es) = walkEach (dExpr sc) (noteArity acc (listLen es)) es
+dExpr sc acc (CArray es) = walkEach (dExpr sc) (noteUse acc UseArray) es
+dExpr sc acc (CRangeArray lo hi _) =
+  dExpr sc (dExpr sc (noteUse acc UseArray) lo) hi
+dExpr sc acc (CIndex a i) = dExpr sc (dExpr sc (noteUse acc UseArray) a) i
+dExpr sc acc (CSlice a lo hi _) =
+  dExpr sc (dExpr sc (dExpr sc (noteUse acc UseArray) a) lo) hi
+dExpr sc acc (CRecord _ fields) = walkEach (dField sc) acc fields
+dExpr sc acc (CFieldAccess ex _ _ _) = dExpr sc acc ex
+dExpr sc acc (CRecordUpdate _ base fields) =
+  walkEach (dField sc) (dExpr sc acc base) fields
+dExpr sc acc (CVariantUpdate _ base fields) =
+  walkEach (dField sc) (dExpr sc acc base) fields
+dExpr sc acc (app@(CApp _ _ _)) =
+  let (hd, args) = flattenApp app []
+  walkEach (dExpr sc) (dAppHead sc acc hd) args
+dExpr sc acc (CVar x _) = dVar sc acc x
+dExpr _ acc (CLit (LFloat _)) = noteUse acc UseFloat
+dExpr _ acc (CLit (LU64 _ _)) = noteUse acc UseU64
+dExpr _ acc (CLit (LI64 _ _)) = noteUse acc UseI64
+dExpr _ acc (CLit (LString _)) = noteUse acc UseStr
+dExpr _ acc (CLit (LChar _)) = noteUse acc UseStr
+dExpr sc acc (CLam pats b) = dExpr (bindIn sc pats) acc b
+dExpr sc acc (CBinPrim op l r tag _) =
+  dExpr sc (dExpr sc (noteBinop (noteTag acc tag) op) l) r
+dExpr sc acc (CUnOp _ x) = dExpr sc acc x
+dExpr sc acc (CIf c t f) = dExpr sc (dExpr sc (dExpr sc acc c) t) f
+dExpr sc acc (CLet r pat a b) =
+  let inner = bindIn sc [pat]
+  dExpr inner (dExpr (if r then inner else sc) (dPat acc pat) a) b
+dExpr sc acc (CBlock stmts) = dStmts sc acc stmts
+dExpr sc acc (CDecision scrut arms tree) =
+  dTree (walkEach (dArm sc) (dExpr sc acc scrut) arms) tree
+dExpr sc acc (CMatch scrut arms) = walkEach (dArm sc) (dExpr sc acc scrut) arms
+dExpr sc acc (CLetGroup binds b) =
+  let inner = { sc | locals = omFromNames (map bindName binds) sc.locals }
+  dExpr inner (walkEach (dBind inner) acc binds) b
+dExpr _ acc _ = acc
+
+-- an applied name: a local is a closure call, a `core__` function a call to it
+dAppHead : DemandScope -> DemandAcc -> CExpr -> DemandAcc
+dAppHead sc acc (CVar f _) =
+  if isLocal sc f || not (omHasKey f sc.topFns) && isCoreFn sc f then
+    acc
+  else
+    noteExtern sc acc f
+dAppHead sc acc h = dExpr sc acc h
+
+dField : DemandScope -> DemandAcc -> CField -> DemandAcc
+dField sc acc (CField _ _ e) = dExpr sc acc e
+
+-- an arm's pattern binds its guards and body; a `Pat <- e` guard binds the
+-- guards after it and the body
+dArm : DemandScope -> DemandAcc -> CArm -> DemandAcc
+dArm sc acc (CArm pat guards body) =
+  dGuarded (bindIn sc [pat]) (dPat acc pat) guards body
+
+dGuarded : DemandScope -> DemandAcc -> List CGuard -> CExpr -> DemandAcc
+dGuarded sc acc [] body = dExpr sc acc body
+dGuarded sc acc ((CGBool g) :: rest) body =
+  dGuarded sc (dExpr sc acc g) rest body
+dGuarded sc acc ((CGBind p e) :: rest) body =
+  dGuarded (bindIn sc [p]) (dExpr sc (dPat acc p) e) rest body
+
+-- a block's `let` binds the statements after it, and its own right side when
+-- it is `rec`
+dStmts : DemandScope -> DemandAcc -> List CStmt -> DemandAcc
+dStmts _ acc [] = acc
+dStmts sc acc ((CSExpr e) :: rest) = dStmts sc (dExpr sc acc e) rest
+dStmts sc acc ((CSLet r pat e) :: rest) =
+  let inner = bindIn sc [pat]
+  dStmts inner (dExpr (if r then inner else sc) (dPat acc pat) e) rest
+dStmts sc acc ((CSAssign _ e) :: rest) = dStmts sc (dExpr sc acc e) rest
+
+-- a pattern's collection heads: a cons or list pattern is a list, a tuple
+-- pattern its arity
+dPat : DemandAcc -> Pat -> DemandAcc
+dPat acc (PCons h t) = dPat (dPat (noteUse acc UseList) h) t
+dPat acc (PList ps) = walkEach dPat (noteUse acc UseList) ps
+dPat acc (PTuple ps) = walkEach dPat (noteArity acc (listLen ps)) ps
+dPat acc (PCon _ args) = walkEach dPat acc args
+dPat acc (PAs _ _ _ p) = dPat acc p
+dPat acc _ = acc
+
+-- a decision tree's switch heads, the lowered shape of list and tuple patterns
+dTree : DemandAcc -> CTree -> DemandAcc
+dTree acc (CTGuard _ fail) = dTree acc fail
+dTree acc (CTDrop sub) = dTree acc sub
+dTree acc (CTSwitch branches dft) = dTree (walkEach dBranch acc branches) dft
+dTree acc _ = acc
+
+dBranch : DemandAcc -> CTBranch -> DemandAcc
+dBranch acc (CTBranch h sub) = dTree (dSwitchHead acc h) sub
+
+dSwitchHead : DemandAcc -> CHead -> DemandAcc
+dSwitchHead acc HCons = noteUse acc UseList
+dSwitchHead acc HNil = noteUse acc UseList
+dSwitchHead acc (HTuple n) = noteArity acc n
+dSwitchHead acc _ = acc
+
+-- ── W6: does the program use strings? ────────────────────────────────────────
+-- True if any body contains a String/Char literal, or applies an extern whose
+-- catalog wasm family is `WasmStr` (intToString/putStrLn/stringConcat/…).  Any of
+-- these forces the §3.3 $str rep + the byte-write runtime + ref-mode.  Detected
+-- structurally over every clause body.
+-- Local spellings retain legacy mode eligibility; extern binding uses facts.
+programUsesStr : OrdMap ExternDeclFact -> List CBind -> Bool
+programUsesStr facts groups = anyBind (bindUsesStr facts) groups
+
+bindUsesStr : OrdMap ExternDeclFact -> CBind -> Bool
+bindUsesStr facts (CBind _ clauses _ _) =
+  anyList (c => exprUsesStr facts (clauseBodyOf c)) clauses
+
+exprUsesStr : OrdMap ExternDeclFact -> CExpr -> Bool
+exprUsesStr _ (CLit (LString _)) = True
+exprUsesStr _ (CLit (LChar _)) = True
+exprUsesStr _ (CLit _) = False
+exprUsesStr facts (CVar symbol AGlobal) =
+  isStrModeNameW symbol
+    || (match externRuntimeKey facts symbol
+      Some key => isStrModeNameW key
+      None => False)
+exprUsesStr _ (CVar symbol _) = isStrModeNameW symbol
+exprUsesStr facts (app@(CApp _ _ _)) =
+  let (hd, args) = flattenApp app []
+  headUsesStr facts hd || anyList (exprUsesStr facts) args
+exprUsesStr facts (CLam _ b) = exprUsesStr facts b
+exprUsesStr facts (CBinPrim _ l r _ _) =
+  exprUsesStr facts l || exprUsesStr facts r
+exprUsesStr facts (CUnOp _ x) = exprUsesStr facts x
+exprUsesStr facts (CIf c t f) =
+  exprUsesStr facts c || exprUsesStr facts t || exprUsesStr facts f
+exprUsesStr facts (CLet _ _ a b) = exprUsesStr facts a || exprUsesStr facts b
+exprUsesStr facts (CBlock stmts) = anyList (stmtUsesStr facts) stmts
+exprUsesStr facts (CDecision scrut arms _) =
+  exprUsesStr facts scrut || anyList (a => exprUsesStr facts (armBody a)) arms
+exprUsesStr facts (CMatch scrut arms) =
+  exprUsesStr facts scrut || anyList (a => exprUsesStr facts (armBody a)) arms
+exprUsesStr _ _ = False
+
+stmtUsesStr : OrdMap ExternDeclFact -> CStmt -> Bool
+stmtUsesStr facts (CSExpr e) = exprUsesStr facts e
+stmtUsesStr facts (CSLet _ _ e) = exprUsesStr facts e
+stmtUsesStr _ _ = False
+
+headUsesStr : OrdMap ExternDeclFact -> CExpr -> Bool
+headUsesStr facts h = exprUsesStr facts h
+
+isStrModeNameW : String -> Bool
+isStrModeNameW name = match wasmFamily name
+  Some WasmStr => True
+  _ => False
+
+bindUsesClosures : OrdMap Unit -> List (String, Int) -> CBind -> Bool
+bindUsesClosures fnNames ctorArs (CBind _ clauses _ _) =
+  multiOrPatternClauses clauses
+    || anyList (clauseUsesClosures fnNames ctorArs) clauses
+
+-- a fn binding needs clause-dispatch coalescing (W4) if it has >1 clause or any
+-- non-PVar/PWild parameter (an inner-match on the args).
+multiOrPatternClauses : List CClause -> Bool
+multiOrPatternClauses [] = False
+multiOrPatternClauses [CClause pats _] =
+  anyList (p => not (isPlainParam p)) pats
+multiOrPatternClauses _ = True
+
+export
+isPlainParam : Pat -> Bool
+isPlainParam (PVar _ _ _) = True
+isPlainParam PWild = True
+isPlainParam _ = False
+
+clauseUsesClosures : OrdMap Unit -> List (String, Int) -> CClause -> Bool
+clauseUsesClosures fnNames ctorArs (CClause pats body) =
+  exprUsesClosures fnNames ctorArs (flatMap patVars pats) body
+
+-- a CLam anywhere; an application whose head is not a saturated known-fn/ctor call;
+-- a bare CVar referencing a top-level fn in NON-call (value) position.
+-- `locals` = the in-scope LOCALLY-BOUND names (clause params, let/lambda binders).
+-- A CVar matching a local SHADOWS any same-named top-level fn / ctor, so applying it
+-- is an INDIRECT (closure) call — the analysis MUST agree with emitAppRef/emitTailCallW's
+-- `contains f0 env`-first guard, else a shadowing-local call (`applyEq eq x y = eq x y`
+-- with a top-level `eq` in scope) is mis-judged "saturated direct call, no closure" and
+-- the closure types are never emitted though emit uses them (parse/validate failure).
+exprUsesClosures : OrdMap Unit ->
+  List (String, Int) ->
+  List String ->
+  CExpr ->
+  Bool
+exprUsesClosures fnNames ctorArs locals (CLam _ _) = True
+exprUsesClosures fnNames ctorArs locals (app@(CApp _ _ _)) =
+  appUsesClosures fnNames ctorArs locals app
+exprUsesClosures fnNames ctorArs locals (CVar x _) =
+  not (contains x locals) && fnMemberIndexW fnNames x
+exprUsesClosures fnNames ctorArs locals (CLit _) = False
+exprUsesClosures fnNames ctorArs locals (CBinPrim _ l r _ _) =
+  exprUsesClosures fnNames ctorArs locals l
+    || exprUsesClosures fnNames ctorArs locals r
+exprUsesClosures fnNames ctorArs locals (CUnOp _ x) =
+  exprUsesClosures fnNames ctorArs locals x
+exprUsesClosures fnNames ctorArs locals (CIf c t f) =
+  exprUsesClosures fnNames ctorArs locals c
+    || exprUsesClosures fnNames ctorArs locals t
+    || exprUsesClosures fnNames ctorArs locals f
+exprUsesClosures fnNames ctorArs locals (CLet _ pat a b) =
+  exprUsesClosures fnNames ctorArs locals a
+    || exprUsesClosures fnNames ctorArs (patVars pat ++ locals) b
+exprUsesClosures fnNames ctorArs locals (CBlock stmts) =
+  blockUsesClosures fnNames ctorArs locals stmts
+exprUsesClosures fnNames ctorArs locals (CDecision scrut arms _) =
+  exprUsesClosures fnNames ctorArs locals scrut
+    || anyList (a => exprUsesClosures fnNames ctorArs locals (armBody a)) arms
+exprUsesClosures fnNames ctorArs locals (CMatch scrut arms) =
+  exprUsesClosures fnNames ctorArs locals scrut
+    || anyList (a => exprUsesClosures fnNames ctorArs locals (armBody a)) arms
+exprUsesClosures fnNames ctorArs locals _ = False
+
+-- thread let-bound names through a block so a later statement's shadowing local is seen.
+blockUsesClosures : OrdMap Unit ->
+  List (String, Int) ->
+  List String ->
+  List CStmt ->
+  Bool
+blockUsesClosures _ _ _ [] = False
+blockUsesClosures fnNames ctorArs locals ((CSLet _ pat e) :: rest) =
+  exprUsesClosures fnNames ctorArs locals e
+    || blockUsesClosures fnNames ctorArs (patVars pat ++ locals) rest
+blockUsesClosures fnNames ctorArs locals ((CSExpr e) :: rest) =
+  exprUsesClosures fnNames ctorArs locals e
+    || blockUsesClosures fnNames ctorArs locals rest
+blockUsesClosures fnNames ctorArs locals (_ :: rest) =
+  blockUsesClosures fnNames ctorArs locals rest
+
+-- an application uses closures unless it is a saturated direct call to a known
+-- top-level fn (exact arity) or a ctor application.  Over/under application of a
+-- known fn, or a non-variable / non-fn / non-ctor head, is a closure use.  The args
+-- are also scanned (a saturated call passing a lambda is still a closure use).
+appUsesClosures : OrdMap Unit ->
+  List (String, Int) ->
+  List String ->
+  CExpr ->
+  Bool
+appUsesClosures fnNames ctorArs locals app =
+  let (hd, args, mode) = appParts app
+  let argsClos = anyList (exprUsesClosures fnNames ctorArs locals) args
+  match hd
+    CVar f _ =>
+      if contains f locals then
+        True  -- a shadowing local/param head → indirect (closure) call
+      else if fnMemberIndexW fnNames f then
+        not (isExactCall mode) || argsClos
+      else if isSome (lookupAssoc f ctorArs) || isReservedCtor f then
+        argsClos
+      else
+        True  -- a local/param/let-bound head → an indirect (closure) call
+    _ => True
+
+-- a program uses ADTs if it has any user constructor (the ctor table is non-empty
+-- once a `data` decl exists) OR any `CDecision` in any body.  The reserved
+-- Option/Result/Ordering ctors only enter the table when actually used, and a
+-- bare scalar program (the W2 corpus) has an empty ctor table + no CDecision.
+programUsesAdt : List CBind -> List (String, Int) -> Bool
+programUsesAdt groups ctorArs =
+  listLen ctorArs /= 0 || anyBindHasDecision groups
+
+anyBindHasDecision : List CBind -> Bool
+anyBindHasDecision [] = False
+anyBindHasDecision ((CBind _ clauses _ _) :: rest) =
+  if anyClauseHasDecision clauses then True else anyBindHasDecision rest
+
+anyClauseHasDecision : List CClause -> Bool
+anyClauseHasDecision [] = False
+anyClauseHasDecision ((CClause _ body) :: rest) =
+  if exprHasDecision body then True else anyClauseHasDecision rest
+
+exprHasDecision : CExpr -> Bool
+exprHasDecision (CDecision _ _ _) = True
+exprHasDecision (CMatch _ _) = True
+exprHasDecision (CIf c t f) =
+  exprHasDecision c || exprHasDecision t || exprHasDecision f
+exprHasDecision (CLet _ _ a b) = exprHasDecision a || exprHasDecision b
+exprHasDecision (CBinPrim _ a b _ _) = exprHasDecision a || exprHasDecision b
+exprHasDecision (CUnOp _ a) = exprHasDecision a
+exprHasDecision (CApp f args _) =
+  exprHasDecision f || anyList exprHasDecision args
+exprHasDecision (CBlock stmts) = anyList stmtHasDecision stmts
+exprHasDecision _ = False
+
+stmtHasDecision : CStmt -> Bool
+stmtHasDecision (CSExpr e) = exprHasDecision e
+stmtHasDecision (CSLet _ _ e) = exprHasDecision e
+stmtHasDecision _ = False
+
+anyBind : (CBind -> Bool) -> List CBind -> Bool
+anyBind _ [] = False
+anyBind p (b :: rest) = p b || anyBind p rest
+
+fnMemberIndexW : OrdMap Unit -> String -> Bool
+fnMemberIndexW names n = omHasKey n names
+
+isReservedCtor : String -> Bool
+isReservedCtor n = contains n ["Some", "None", "Ok", "Err", "Lt", "Eq", "Gt"]
+
+public export data WasmTypeContext = WasmTypeContext {
+  rows : OrdMap BinderRow,
+  tops : OrdMap BinderRow,
+  fnNames : OrdMap Unit,
+  valNames : OrdMap Unit,
+  externFacts : OrdMap ExternDeclFact,
+  ctorFloatFields : OrdMap (List Int),
+  ctorArities : List (String, Int),
+}
+
+export
+wasmTypeContext : OrdMap (List Int) -> CProgram -> WasmTypeContext
+wasmTypeContext ctorFields (CProgram groups ctorArs _ _ _ facts) =
+  let rows =
+    omFromPairs
+      (reverseL
+        (map
+          (row => (intToString (binderOrdinal row.brId), row))
+          facts.factBinders))
+      omEmpty
+  WasmTypeContext {
+    rows = rows,
+    tops =
+      omFromPairs
+        (reverseL
+          (filterMap
+            ((CBind n _ _ bid) =>
+              map
+                (row => (n, row))
+                (omLookup (intToString (binderOrdinal bid)) rows))
+            groups))
+        omEmpty,
+    fnNames =
+      omFromNames
+        (map
+          bindName
+          (filterList (b => bindName b /= "main" && not (isValBind b)) groups))
+        omEmpty,
+    valNames =
+      omFromNames
+        (map
+          bindName
+          (filterList (b => bindName b /= "main" && isValBind b) groups))
+        omEmpty,
+    externFacts = facts.factExterns,
+    ctorFloatFields = ctorFields,
+    ctorArities = ctorArs,
+  }
+
+runtimeKeyD : WasmTypeContext -> String -> String
+runtimeKeyD ctx symbol = optionOr "" (externRuntimeKey ctx.externFacts symbol)
+
+-- the env entry that says the local `x` is the binder with ordinal [bid]'s
+export
+envMark : String -> BinderId -> String
+envMark x bid = "\{x}@\{intToString (binderOrdinal bid)}"
+
+-- [env] extended with the stamped binder [x]
+export
+envBind : String -> BinderId -> List String -> List String
+envBind x bid env = x :: envMark x bid :: env
+
+-- the env entries of a function's plain parameters, in order
+export
+paramEnv : List Pat -> List String
+paramEnv pats = flatMap paramEntries pats
+
+export
+paramEntries : Pat -> List String
+paramEntries (PVar x _ bid) = [x, envMark x bid]
+paramEntries _ = ["_"]
+
+-- every variable a pattern binds, with its id
+export
+patBinders : Pat -> List (String, BinderId)
+patBinders (PVar x _ bid) = [(x, bid)]
+patBinders (PAs x _ bid p) = (x, bid) :: patBinders p
+patBinders (PCon _ args) = flatMap patBinders args
+patBinders (PTuple ps) = flatMap patBinders ps
+patBinders (PCons h t) = patBinders h ++ patBinders t
+patBinders (PList ps) = flatMap patBinders ps
+patBinders _ = []
+
+-- [env] extended with every variable [pat] binds
+export
+envBindPat : Pat -> List String -> List String
+envBindPat pat env =
+  fold (acc b => envBind (fst b) (snd b) acc) env (patBinders pat)
+
+-- the entries of [env] that name the binders behind [names], for a lifted body
+-- that captures them
+export
+envMarksOf : List String -> List String -> List String
+envMarksOf names env = flatMap (x => envMarkOf x env) names
+
+-- [names] as env entries, each followed by its entry in [marks] when it has one
+export
+envWithMarks : List String -> List String -> List String
+envWithMarks names marks =
+  flatMap (x => x :: filterList (startsWith "\{x}@") marks) names
+
+export
+envMarkOf : String -> List String -> List String
+envMarkOf x env = match envLookup x env
+  LocalBinder ord => ["\{x}@\{ord}"]
+  _ => []
+
+-- what a name denotes inside `env`
+public export data EnvRef = NotLocal | LocalUnstamped | LocalBinder String
+
+export
+envLookup : String -> List String -> EnvRef
+envLookup _ [] = NotLocal
+envLookup x (e :: rest) =
+  if e == x then match rest
+    m :: _ =>
+      if startsWith "\{x}@" m then
+        LocalBinder (stringSlice (stringLength x + 1) (stringLength m) m)
+      else
+        LocalUnstamped
+    [] => LocalUnstamped
+  else
+    envLookup x rest
+
+stampRowOf : WasmTypeContext -> String -> Option BinderRow
+stampRowOf prog ord = omLookup ord prog.rows
+
+-- the stamp row of the binder a reference to [x] reaches: its local binder when
+-- [x] is bound in [env], else the top-level binding of that name
+export
+varRow : WasmTypeContext -> List String -> String -> Option BinderRow
+varRow prog env x = match envLookup x env
+  LocalBinder ord => stampRowOf prog ord
+  LocalUnstamped => None
+  NotLocal => omLookup x prog.tops
+
+-- what a reference to [x] holds; RTValue where no row states it
+export
+varStamp : WasmTypeContext -> List String -> String -> RuntimeType
+varStamp prog env x = match varRow prog env x
+  Some row => row.brType
+  None => RTValue
+
+-- what a call to [fn] returns once saturated: its return stamp, or for a runtime
+-- extern (a name no binder in the program has) the result type its declaration in
+-- `stdlib/runtime.mdk` gives
+export
+returnStamp : WasmTypeContext -> List String -> String -> RuntimeType
+returnStamp prog env fn = match varRow prog env fn
+  Some row => optionOr RTValue row.brReturns
+  None =>
+    if contains fn env
+      || omHasKey fn prog.fnNames
+      || omHasKey fn prog.valNames then
+      RTValue
+    else
+      externResultStamp (runtimeKeyD prog fn)
+
+-- The result type of the runtime extern [fn], for the externs whose result
+-- decides how a value is printed or computed on.  RTValue where it is none of
+-- them.
+externResultStamp : String -> RuntimeType
+externResultStamp fn =
+  if contains fn [
+    "intToString",
+    "charToStr",
+    "stringConcat",
+    "stringSlice",
+    "stringToUpper",
+    "stringToLower",
+    "floatToString",
+    "stringFromChars",
+    "stringFromUtf8Bytes",
+  ] then
+    RTString
+  else if contains fn [
+    "randomBool",
+    "charIsAlpha",
+    "charIsSpace",
+    "charIsUpper",
+    "charIsLower",
+    "charIsPunct",
+  ] then
+    RTBool
+  else if contains fn ["randomChar", "charToUpper", "charToLower"] then
+    RTChar
+  else if contains fn ["intToFloat", "randomFloat"] then
+    RTFloat
+  else if contains fn [
+    "putStr", "putStrLn", "ePutStr", "ePutStrLn", "flushStdout"
+  ] then
+    RTUnit
+  else
+    RTValue
+
+-- The static type of [e], read off stamped Core without emitting it: a literal
+-- states its own type, a variable its binder's stamp, an operator node its
+-- stamped scalar tag (or its operands'), and a saturated call its callee's
+-- return stamp.  RTValue where nothing states it.
+export
+cexprStamp : WasmTypeContext -> List String -> CExpr -> RuntimeType
+cexprStamp _ _ (CLit l) = litRuntimeType l
+cexprStamp _ _ (CVar "True" _) = RTBool
+cexprStamp _ _ (CVar "False" _) = RTBool
+cexprStamp prog env (CVar x _) =
+  if runtimeKeyD prog x == "pi" || runtimeKeyD prog x == "e" then
+    RTFloat
+  else
+    varStamp prog env x
+cexprStamp prog env (CBinPrim op l r tag _) =
+  if isCmpOp op then
+    RTBool
+  else if op == "::" then
+    RTCon
+  else if isArithOp op then
+    arithStamp prog env tag l r
+  else
+    appendStamp (cexprStamp prog env l) (cexprStamp prog env r)
+cexprStamp prog env (CUnOp "-" x) = cexprStamp prog env x
+cexprStamp prog env (CIf _ t f) =
+  stampOrElse (cexprStamp prog env t) (cexprStamp prog env f)
+cexprStamp prog env (CLet _ pat _ b) = cexprStamp prog (envBindPat pat env) b
+cexprStamp prog env (CLetGroup binds b) =
+  cexprStamp prog (envBindGroups binds env) b
+cexprStamp prog env (CBlock stmts) = blockStamp prog env stmts
+cexprStamp prog env (CDecision _ arms _) = armsStamp prog env arms
+cexprStamp prog env (CMatch _ arms) = armsStamp prog env arms
+cexprStamp prog env (app@(CApp _ _ (CallSite mode _))) = match mode
+  CallPartial _ => RTValue
+  CallOver _ => RTValue
+  _ => match appHead app
+    CVar fn _ => returnStamp prog env fn
+    CDict fn _ => returnStamp prog env fn
+    _ => RTValue
+cexprStamp prog _ (CFieldAccess _ _ recName ord) =
+  if ord >= 0
+    && any (== ord) (optionOr [] (omLookup recName prog.ctorFloatFields)) then
+    RTFloat
+  else
+    RTValue
+cexprStamp _ _ _ = RTValue
+
+-- `++` appends two Strings or two Lists.  Where neither operand states which,
+-- the result prints as a String: a List-valued `main` has no print.
+appendStamp : RuntimeType -> RuntimeType -> RuntimeType
+appendStamp RTValue RTValue = RTString
+appendStamp a RTValue = a
+appendStamp _ b = b
+
+-- the arithmetic result of two operands: the typechecker's scalar tag where it
+-- states one, else a Float operand makes a Float result
+arithStamp : WasmTypeContext ->
+  List String ->
+  String ->
+  CExpr ->
+  CExpr ->
+  RuntimeType
+arithStamp prog env tag l r =
+  if tag == "Float" then
+    RTFloat
+  else if tag == "U64" then
+    RTU64
+  else if tag == "I64" then
+    RTI64
+  else if isTaggedFixedHead tag then
+    RTInt
+  else
+    stampOrElse (cexprStamp prog env l) (cexprStamp prog env r)
+
+-- [a] where it states a type, else [b]
+stampOrElse : RuntimeType -> RuntimeType -> RuntimeType
+stampOrElse RTValue b = b
+stampOrElse a _ = a
+
+export
+envBindGroup : CBind -> List String -> List String
+envBindGroup (CBind name _ _ bid) env = envBind name bid env
+
+export
+envBindGroups : List CBind -> List String -> List String
+envBindGroups binds env = fold (acc g => envBindGroup g acc) env binds
+
+-- the env entry naming a let-group member's binder
+export
+groupBindMark : CBind -> String
+groupBindMark (CBind name _ _ bid) = envMark name bid
+
+blockStamp : WasmTypeContext -> List String -> List CStmt -> RuntimeType
+blockStamp _ _ [] = RTValue
+blockStamp prog env [CSExpr e] = cexprStamp prog env e
+blockStamp prog env ((CSLet _ pat _) :: rest) =
+  blockStamp prog (envBindPat pat env) rest
+blockStamp prog env (_ :: rest) = blockStamp prog env rest
+
+armsStamp : WasmTypeContext -> List String -> List CArm -> RuntimeType
+armsStamp _ _ [] = RTValue
+armsStamp prog env ((CArm pat _ body) :: rest) =
+  stampOrElse
+    (cexprStamp prog (envBindPat pat env) body)
+    (armsStamp prog env rest)
+
+export
+isPolyNumBinop : WasmTypeContext -> List String -> CExpr -> CExpr -> Bool
+isPolyNumBinop prog env l r =
+  isPolyNumOperand prog env l || isPolyNumOperand prog env r
+
+isPolyNumOperand : WasmTypeContext -> List String -> CExpr -> Bool
+isPolyNumOperand prog env (CVar x _) = match varRow prog env x
+  Some row => row.brType == RTValue
+  None => False
+isPolyNumOperand _ _ _ = False
+
+isArithOp : String -> Bool
+isArithOp op = contains op ["+", "-", "*", "/", "%"]
+
+export
+isCmpOp : String -> Bool
+isCmpOp op = contains op ["==", "/=", "<", ">", "<=", ">="]
+
+export
+appHead : CExpr -> CExpr
+appHead (CApp f _ _) = appHead f
+appHead e = e
+
+public export data WasmDemandInputs = WasmDemandInputs {
+  ctorFloatFields : OrdMap (List Int),
+  lazyGlobals : List String,
+  globalInit : GlobalInitPlan,
+  trmcVerdicts : TrmcVerdicts,
+  dispatchGroups : List DispGroup,
+}
+
+public export data PlannedImport = PlannedImport {
+  namespace : String,
+  field : String,
+  watSymbol : String,
+  signature : String,
+} deriving (Eq, Debug)
+
+public export data WasmDemandPlan = WasmDemandPlan {
+  sourceDemand : WasmDemand,
+  sourceHostKeys : List String,
+  jsImports : List JsImport,
+  useRef : Bool,
+  useClos : Bool,
+  stringOps : Bool,
+  representation : WasmDemand,
+  representationTypes : List String,
+  helpers : List String,
+  intHelpers : List String,
+  censusHelpers : List String,
+  censusIntHelpers : List String,
+  siteRuntime : Bool,
+  nonexhaustiveRuntime : Bool,
+  imports : List PlannedImport,
+  catalogFamilies : List (String, WasmFamily),
+}
+
+data HelperAcc = HelperAcc {
+  helpers : OrdMap Unit,
+  ints : OrdMap Unit,
+  site : Bool,
+  nonexh : Bool,
+  patternTuples : OrdMap Int,
+  patternList : Bool,
+  refRead : Bool,
+}
+
+emptyHelpers : HelperAcc
+emptyHelpers = HelperAcc {
+  helpers = omEmpty,
+  ints = omEmpty,
+  site = False,
+  nonexh = False,
+  patternTuples = omEmpty,
+  patternList = False,
+  refRead = False,
+}
+
+need : HelperAcc -> String -> HelperAcc
+need acc name = { acc | helpers = omInsert name () acc.helpers }
+
+needMany : HelperAcc -> List String -> HelperAcc
+needMany = fold need
+
+needTrap : HelperAcc -> HelperAcc
+needTrap acc = need acc "stderrByteImportLines"
+
+needSite : HelperAcc -> HelperAcc
+needSite acc = { needMany acc ["siteRuntimeLines", "trapIntRuntimeLines", "stderrByteImportLines"] |
+  site = True,
+}
+
+needInt : HelperAcc -> String -> HelperAcc
+needInt acc name = { needSite (need acc "intRuntimeLines") |
+  ints = omInsert name () acc.ints,
+}
+
+export
+wasmFamilyTag : WasmFamily -> String
+wasmFamilyTag WasmStr = "str"
+wasmFamilyTag WasmLeaf = "leaf"
+wasmFamilyTag WasmArray = "array"
+wasmFamilyTag WasmByteBlock = "bytes"
+wasmFamilyTag WasmRefCell = "ref"
+wasmFamilyTag WasmConstant = "constant"
+wasmFamilyTag WasmFallthrough = "fallthrough"
+
+catalogFamilies : ExternRequirements -> List (String, WasmFamily)
+catalogFamilies req =
+  filterMap
+    (row => match row.selectedBinding
+      RuntimeRequirement key => map (family => (key, family)) (wasmFamily key)
+      _ => None)
+    req.rows
+
+export
+planWasmDemand : WasmDemandInputs ->
+  CProgram ->
+  ExternRequirements ->
+  WasmDemandPlan
+planWasmDemand inputs (cp@(CProgram groups ctorArs _ impls _ facts)) req =
+  let (source, hostKeys, _) =
+    wasmDemandOf
+      (requirementFacts req)
+      (omFromPairs (reverseL (requirementHostRows req)) omEmpty)
+      groups
+      impls
+  let js =
+    map
+      ((symbol, (host, (params, result))) => JsImport {
+        medakaName = symbol,
+        jsName = host,
+        params = params,
+        result = result,
+      })
+      (requirementHostRows req)
+  let str =
+    programUsesStr facts.factExterns groups
+      || hasUse source UseStr
+      || hasUse source UseFloat
+  let ctx = wasmTypeContext inputs.ctorFloatFields cp
+  let clos = anyBind (bindUsesClosures ctx.fnNames ctorArs) groups
+  let refMode =
+    isNonEmptyL inputs.lazyGlobals
+      || clos
+      || programUsesAdt groups ctorArs
+      || isNonEmptyL impls
+      || str
+      || source.refBox
+      || isNonEmptyL source.tupleArities
+      || any (hasUse source) [
+        UseList, UseArray, UseRng, UseHash, UseFloat, UseU64, UseI64,
+        UseStrSearch, UseCharClass
+      ]
+      || isNonEmptyL hostKeys
+      || isNonEmptyL js
+  let roots = need emptyHelpers "ioRuntimeLines"
+  let roots =
+    if refMode then sourceRoots source str clos hostKeys js roots else roots
+  let roots = fold (hBind ctx refMode str []) roots groups
+  let roots = fold (hImpl ctx refMode str) roots impls
+  let roots = if refMode then implFailureRoots roots impls else roots
+  let roots =
+    if refMode && isNonEmptyL inputs.lazyGlobals then needTrap roots else roots
+  let roots =
+    if refMode then
+      printRoots ctx facts.factEntryOutcome groups roots
+    else
+      roots
+  let families = catalogFamilies req
+  let closed = closeHelpers (hasUse source UseI64) roots
+  let census =
+    if refMode then
+      closed
+    else
+      closeHelpers
+        (hasUse source UseI64)
+        (fold
+          (hImpl ctx True str)
+          (fold (hBind ctx True str []) closed groups)
+          impls)
+  let renderClos = clos || omHasKey "closApplyLines" closed.helpers
+  let representation = representationOf source str closed
+  let imports = physicalImports closed hostKeys js
+  WasmDemandPlan {
+    sourceDemand = source,
+    sourceHostKeys = hostKeys,
+    jsImports = js,
+    useRef = refMode,
+    useClos = renderClos,
+    stringOps = str,
+    representation = representation,
+    representationTypes = physicalTypes cp refMode renderClos representation,
+    helpers = omKeys closed.helpers,
+    intHelpers = omKeys closed.ints,
+    censusHelpers = omKeys census.helpers,
+    censusIntHelpers = omKeys census.ints,
+    siteRuntime = closed.site,
+    nonexhaustiveRuntime = closed.nonexh,
+    imports = imports,
+    catalogFamilies = families,
+  }
+
+hasUse : WasmDemand -> WasmUse -> Bool
+hasUse demand u = any (== u) demand.uses
+
+sourceRoots : WasmDemand ->
+  Bool ->
+  Bool ->
+  List String ->
+  List JsImport ->
+  HelperAcc ->
+  HelperAcc
+sourceRoots source str clos keys js acc =
+  let acc = if clos then need acc "closApplyLines" else acc
+  let acc = if str then need acc "ioStrRuntimeLines" else acc
+  let acc =
+    fold
+      (a (u, block) => if hasUse source u then need a block else a)
+      acc
+      [
+        (UseStrLeaf, "strLeafRuntimeLines"),
+        (UseRng, "rngRuntimeLines"),
+        (UseHash, "hashRuntimeLines"),
+        (UseFloatHash, "hashFloatRuntimeLines"),
+        (UseFloatRng, "randomFloatRuntimeLines"),
+        (UseFloat, "floatRuntimeLines"),
+        (UseU64, "u64RuntimeLines"),
+        (UseI64, "i64RuntimeLines"),
+        (UseStrSearch, "strSearchRuntimeLines"),
+        (UseStrToInt, "strToIntRuntimeLines"),
+        (UseStrReverse, "strReverseRuntimeLines"),
+        (UseStrJoin, "strJoinRuntimeLines"),
+        (UseStrCodec, "strCodecRuntimeLines"),
+        (UseByteBlock, "byteBlockRuntimeLines"),
+        (UseCharFromCode, "charFromCodeRuntimeLines"),
+        (UseCharClass, "charClassRuntimeLines"),
+        (UseEPut, "stderrRuntimeLines"),
+      ]
+  let acc =
+    if hasUse source UseStrLeaf && hasUse source UseList then
+      needMany acc ["strConcatRuntimeLines", "appendRuntimeLines"]
+    else
+      acc
+  let acc =
+    if hasUse source UseHash && str then
+      need acc "hashStringRuntimeLines"
+    else
+      acc
+  let acc =
+    if hasUse source UseFloat then need acc "floatRemRuntimeLines" else acc
+  let acc =
+    fold
+      (a (key, block) => if contains key keys then need a block else a)
+      acc
+      hostHelperRoots
+  let acc =
+    if contains "mdk_file_exists" keys
+      || contains "mdk_canonicalize_path" keys
+      || contains "mdk_os_entropy" keys then
+      need acc "ioRefusedPanicLines"
+    else
+      acc
+  let acc =
+    if contains "mdk_os_entropy" keys then need acc "osEntropyLines" else acc
+  let acc =
+    if contains "mdk_read_file" keys && hasUse source UseFileBytes then
+      need acc "readFileBytesLines"
+    else
+      acc
+  let acc =
+    if contains "mdk_write_file_commit" keys then
+      need acc "writeFileBytesLines"
+    else
+      acc
+  let heads = flatMap (imp => imp.params) js
+  let acc =
+    if any (h => h == "String" || h == "Array") heads then
+      need acc "ioPushPathMoreLines"
+    else
+      acc
+  let acc = if contains "Array" heads then need acc "jsffiArrayLines" else acc
+  let acc =
+    if any (imp => imp.result == "String") js then
+      need acc "jsffiResultStrLines"
+    else
+      acc
+  let acc =
+    if any
+      (imp =>
+        imp.result == "Int"
+          || imp.result == "Char"
+          || contains "Array" imp.params)
+      js then
+      needTrap acc
+    else
+      acc
+  if contains "mdk_write_err_byte" keys then needTrap acc else acc
+
+hostHelperRoots : List (String, String)
+hostHelperRoots = [
+  ("mdk_path_push", "ioPushPathLines"),
+  ("mdk_rename", "ioPushPathMoreLines"),
+  ("mdk_grant_push", "ioPushGrantLines"),
+  ("mdk_rename", "ioPushGrantMoreLines"),
+  ("mdk_result_len", "ioResultLines"),
+  ("mdk_read_file", "ioReadFileLines"),
+  ("mdk_fetch_text", "ioFetchTextLines"),
+  ("mdk_file_exists", "ioFileExistsLines"),
+  ("mdk_canonicalize_path", "ioCanonicalizeLines"),
+  ("mdk_write_file", "ioWriteFileLines"),
+  ("mdk_append_file", "ioAppendFileLines"),
+  ("mdk_rename", "ioRenameLines"),
+  ("mdk_list_dir", "ioListDirLines"),
+  ("mdk_stat_file", "ioStatFileLines"),
+  ("mdk_make_dir", "ioMakeDirLines"),
+  ("mdk_remove_file", "ioRemoveFileLines"),
+  ("mdk_remove_dir", "ioRemoveDirLines"),
+  ("mdk_fsync", "ioFsyncLines"),
+  ("mdk_file_mode", "ioFileModeLines"),
+  ("mdk_write_file_mode", "ioWriteFileModeLines"),
+  ("mdk_get_env", "ioGetEnvLines"),
+  ("mdk_read_line", "ioReadLineLines"),
+  ("mdk_read_all", "ioReadAllLines"),
+  ("mdk_read_exactly", "ioReadExactlyLines"),
+  ("mdk_executable_path", "ioExecutablePathLines"),
+  ("mdk_args_count", "ioArgsLines"),
+  ("mdk_str_to_float", "floatStrLines"),
+]
+
+export
+hasWasmHelper : WasmDemandPlan -> String -> Bool
+hasWasmHelper plan name = contains name plan.helpers
+
+-- The gap census walks reference bodies even for a scalar module. Its checks
+-- use this planned allowance only after the ordinary module gateway succeeds.
+export
+censusWasmDemand : WasmDemandPlan -> WasmDemandPlan
+censusWasmDemand plan = { plan |
+  helpers = plan.censusHelpers,
+  intHelpers = plan.censusIntHelpers,
+}
+
+export
+selectWasmBin : WasmTypeContext ->
+  Bool ->
+  List String ->
+  String ->
+  CExpr ->
+  CExpr ->
+  String ->
+  String
+selectWasmBin ctx str env op l r tag =
+  if isArithOp op && isTaggedFixedHead tag then
+    "int-fixed"
+  else if (isArithOp op || isCmpOp op) && tag == "U64" then
+    "u64"
+  else if (isArithOp op || isCmpOp op) && tag == "I64" then
+    "i64"
+  else if (isArithOp op || isCmpOp op)
+    && (tag == "Float"
+      || cexprStamp ctx env l == RTFloat
+      || cexprStamp ctx env r == RTFloat) then
+    "float"
+  else if isCmpOp op && str then
+    "compare"
+  else if isCmpOp op && isPolyNumBinop ctx env l r then
+    "compare-number"
+  else if isArithOp op && isPolyNumBinop ctx env l r then
+    "value-" ++ op
+  else
+    "int"
+
+hBind : WasmTypeContext ->
+  Bool ->
+  Bool ->
+  List String ->
+  HelperAcc ->
+  CBind ->
+  HelperAcc
+hBind ctx refMode str env acc (CBind name clauses loc _) =
+  let acc =
+    if refMode
+      && name /= "main"
+      && (multiOrPatternClauses clauses
+        || any (c => exprHasFallthrough (clauseBodyOf c)) clauses) then
+      locatedNonexh acc loc
+    else
+      acc
+  fold (hClause ctx refMode str env) acc clauses
+
+hClause : WasmTypeContext ->
+  Bool ->
+  Bool ->
+  List String ->
+  HelperAcc ->
+  CClause ->
+  HelperAcc
+hClause ctx refMode str env acc (CClause pats body) =
+  hExpr
+    ctx
+    refMode
+    str
+    (fold (hPat refMode) acc pats)
+    (fold (flip envBindPat) env pats)
+    body
+
+hImpl : WasmTypeContext -> Bool -> Bool -> HelperAcc -> CImplEntry -> HelperAcc
+hImpl ctx refMode str acc (CImplEntry _ _ _ body) = match body
+  CImplTagged _ _ _ _ _ pats b =>
+    hClause ctx refMode str [] acc (CClause pats b)
+  CImplDefault _ _ _ _ _ pats b =>
+    hClause ctx refMode str [] acc (CClause pats b)
+
+implFailureRoots : HelperAcc -> List CImplEntry -> HelperAcc
+implFailureRoots acc entries =
+  let groups =
+    fold
+      (index (CImplEntry method _ _ body) =>
+        let (key, clause) = match body
+          CImplTagged _ key _ _ _ pats b => (key, CClause pats b)
+          CImplDefault _ _ key _ _ pats b => (key, CClause pats b)
+        let groupKey = lenKey method ++ key
+        omInsert
+          groupKey
+          (clause :: optionOr [] (omLookup groupKey index))
+          index)
+      omEmpty
+      entries
+  fold
+    (a key =>
+      let clauses = optionOr [] (omLookup key groups)
+      if multiOrPatternClauses clauses
+        || any (c => exprHasFallthrough (clauseBodyOf c)) clauses then
+        needTrap a
+      else
+        a)
+    acc
+    (omKeys groups)
+
+localFunctionRoots : Bool -> HelperAcc -> List Pat -> CExpr -> HelperAcc
+localFunctionRoots refMode acc pats body =
+  if refMode
+    && (multiOrPatternClauses [CClause pats body]
+      || exprHasFallthrough body) then
+    needTrap acc
+  else
+    acc
+
+hPat : Bool -> HelperAcc -> Pat -> HelperAcc
+hPat True acc (PLit (LString _)) = needMany acc [
+  "strSearchRuntimeLines", "strLeafRuntimeLines", "ioStrRuntimeLines"
+]
+hPat refMode acc (PCon _ ps) = fold (hPat refMode) acc ps
+hPat refMode acc (PTuple ps) =
+  fold
+    (hPat refMode)
+    { acc |
+      patternTuples =
+        omInsert (intToString (listLen ps)) (listLen ps) acc.patternTuples,
+    }
+    ps
+hPat refMode acc (PList ps) =
+  fold (hPat refMode) { acc | patternList = True } ps
+hPat refMode acc (PCons a b) =
+  hPat refMode (hPat refMode { acc | patternList = True } a) b
+hPat refMode acc (PAs _ _ _ p) = hPat refMode acc p
+hPat _ acc _ = acc
+
+hExpr : WasmTypeContext ->
+  Bool ->
+  Bool ->
+  HelperAcc ->
+  List String ->
+  CExpr ->
+  HelperAcc
+hExpr ctx refMode str acc env (CBinPrim op l r tag _) =
+  let branch = if refMode then selectWasmBin ctx str env op l r tag else "int"
+  let acc =
+    if branch == "compare" then
+      need acc "valueEqRuntimeLines"
+    else if branch == "compare-number" then
+      need acc "valueCmpNumRuntimeLines"
+    else
+      acc
+  let acc =
+    if startsWith "value-" branch then
+      need acc ("value" ++ valueOpBlock op ++ "RuntimeLines")
+    else
+      acc
+  let acc =
+    if (branch == "int" && not (isTaggedFixedHead tag)
+        || startsWith "value-" branch)
+      && contains op ["+", "-", "*", "/"] then
+      needInt acc (intOpName op)
+    else
+      acc
+  let acc =
+    if (op == "/" || op == "%") && branch /= "float" then needTrap acc else acc
+  hExpr ctx refMode str (hExpr ctx refMode str acc env l) env r
+hExpr ctx refMode str acc env (CUnOp "-" x) =
+  let acc =
+    if refMode && cexprStamp ctx env x == RTFloat then
+      acc
+    else
+      needInt acc "neg"
+  hExpr ctx refMode str acc env x
+hExpr ctx refMode str acc env (app@(CApp f args _)) =
+  let acc =
+    if refMode && appUsesClosures ctx.fnNames ctx.ctorArities env app then
+      need acc "closApplyLines"
+    else
+      acc
+  let acc = match f
+    CVar name _ => runtimeRoots ctx acc name args
+    _ => acc
+  fold
+    (a x => hExpr ctx refMode str a env x)
+    (match f
+      CVar _ _ => acc
+      _ => hExpr ctx refMode str acc env f)
+    args
+hExpr ctx refMode str acc env (CVar name _) =
+  let acc =
+    if refMode
+      && not (contains name env)
+      && (omHasKey name ctx.fnNames || externNeedsClosure ctx name) then
+      need acc "closApplyLines"
+    else
+      acc
+  runtimeRoots ctx acc name []
+hExpr _ True _ acc _ (CMethod _ _) = need acc "closApplyLines"
+hExpr _ True _ acc _ (CDict _ _) = need acc "closApplyLines"
+hExpr ctx refMode str acc env (CLam pats b) =
+  hExpr
+    ctx
+    refMode
+    str
+    (fold
+      (hPat refMode)
+      (if refMode then need acc "closApplyLines" else acc)
+      pats)
+    (fold (flip envBindPat) env pats)
+    b
+hExpr ctx refMode str acc env (CIf c t f) =
+  fold (a x => hExpr ctx refMode str a env x) acc [c, t, f]
+hExpr ctx refMode str acc env (CLet recFlag pat a b) =
+  let inner = envBindPat pat env
+  let acc = match (recFlag, pat, a)
+    (True, PVar _ _ _, CLam pats body) =>
+      localFunctionRoots refMode acc pats body
+    _ => acc
+  hExpr
+    ctx
+    refMode
+    str
+    (hExpr
+      ctx
+      refMode
+      str
+      (hPat refMode acc pat)
+      (if recFlag then inner else env)
+      a)
+    inner
+    b
+hExpr ctx refMode str acc env (CLetGroup binds b) =
+  let inner = envBindGroups binds env
+  let acc =
+    fold
+      (a (CBind _ cs loc bid) =>
+        hBind ctx refMode str inner a (CBind "$local" cs loc bid))
+      acc
+      binds
+  hExpr ctx refMode str acc inner b
+hExpr ctx refMode str acc env (CBlock stmts) =
+  hStmts ctx refMode str acc env stmts
+hExpr ctx refMode str acc env (CDecision scrut arms tree) =
+  hTree
+    refMode
+    (fold (hArm ctx refMode str env) (hExpr ctx refMode str acc env scrut) arms)
+    tree
+hExpr ctx refMode str acc env (CMatch scrut arms) =
+  fold (hArm ctx refMode str env) (hExpr ctx refMode str acc env scrut) arms
+hExpr ctx refMode str acc env (CIndex a i) =
+  hExpr
+    ctx
+    refMode
+    str
+    (hExpr ctx refMode str (if refMode then needTrap acc else acc) env a)
+    env
+    i
+hExpr ctx refMode str acc env (CSlice a lo hi _) =
+  fold
+    (a x => hExpr ctx refMode str a env x)
+    (if refMode then needTrap acc else acc)
+    [a, lo, hi]
+hExpr ctx refMode str acc env (CTuple xs) =
+  fold (a x => hExpr ctx refMode str a env x) acc xs
+hExpr ctx refMode str acc env (CList xs) =
+  fold (a x => hExpr ctx refMode str a env x) acc xs
+hExpr ctx refMode str acc env (CArray xs) =
+  fold (a x => hExpr ctx refMode str a env x) acc xs
+hExpr ctx refMode str acc env (CRangeList lo hi _) =
+  fold (a x => hExpr ctx refMode str a env x) acc [lo, hi]
+hExpr ctx refMode str acc env (CRangeArray lo hi _) =
+  fold (a x => hExpr ctx refMode str a env x) acc [lo, hi]
+hExpr ctx refMode str acc env (CRecord _ fs) =
+  fold (a (CField _ _ x) => hExpr ctx refMode str a env x) acc fs
+hExpr ctx refMode str acc env (CFieldAccess x "value" _ _) =
+  hExpr ctx refMode str { acc | refRead = True } env x
+hExpr ctx refMode str acc env (CFieldAccess x _ _ _) =
+  hExpr ctx refMode str acc env x
+hExpr ctx refMode str acc env (CRecordUpdate _ x fs) =
+  fold
+    (a (CField _ _ e) => hExpr ctx refMode str a env e)
+    (hExpr ctx refMode str acc env x)
+    fs
+hExpr ctx refMode str acc env (CVariantUpdate _ x fs) =
+  fold
+    (a (CField _ _ e) => hExpr ctx refMode str a env e)
+    (hExpr ctx refMode str acc env x)
+    fs
+hExpr _ _ _ acc _ _ = acc
+
+externNeedsClosure : WasmTypeContext -> String -> Bool
+externNeedsClosure ctx symbol = match omLookup symbol ctx.externFacts
+  Some fact => match (
+    externRuntimeKey ctx.externFacts symbol,
+    fact.callableShape,
+  )
+    (Some key, Some shape) =>
+      shape.loweredCoreArity > 0
+        && (match wasmFamily key
+          Some family => isWasmExternFamily family
+          None => False)
+    (None, _) => True
+    _ => False
+  None => False
+
+hStmts : WasmTypeContext ->
+  Bool ->
+  Bool ->
+  HelperAcc ->
+  List String ->
+  List CStmt ->
+  HelperAcc
+hStmts _ _ _ acc _ [] = acc
+hStmts ctx refMode str acc env ((CSLet recFlag (pat@(PVar _ _ _)) (lam@(CLam pats body))) :: rest) =
+  let inner = envBindPat pat env
+  hStmts
+    ctx
+    refMode
+    str
+    (hExpr
+      ctx
+      refMode
+      str
+      (localFunctionRoots refMode acc pats body)
+      (if recFlag then inner else env)
+      lam)
+    inner
+    rest
+hStmts ctx refMode str acc env ((CSLet recFlag pat x) :: rest) =
+  let inner = envBindPat pat env
+  hStmts
+    ctx
+    refMode
+    str
+    (hExpr
+      ctx
+      refMode
+      str
+      (hPat refMode acc pat)
+      (if recFlag then inner else env)
+      x)
+    inner
+    rest
+hStmts ctx refMode str acc env ((CSExpr x) :: rest) =
+  hStmts ctx refMode str (hExpr ctx refMode str acc env x) env rest
+hStmts ctx refMode str acc env ((CSAssign _ x) :: rest) =
+  hStmts ctx refMode str (hExpr ctx refMode str acc env x) env rest
+
+hArm : WasmTypeContext ->
+  Bool ->
+  Bool ->
+  List String ->
+  HelperAcc ->
+  CArm ->
+  HelperAcc
+hArm ctx refMode str env acc (CArm pat guards b) =
+  let (acc, inner) =
+    fold
+      ((a, scope) g => match g
+        CGBool x => (hExpr ctx refMode str a scope x, scope)
+        CGBind p x => (
+          hExpr ctx refMode str (hPat refMode a p) scope x,
+          envBindPat p scope,
+        ))
+      (hPat refMode acc pat, envBindPat pat env)
+      guards
+  hExpr ctx refMode str acc inner b
+
+hTree : Bool -> HelperAcc -> CTree -> HelperAcc
+hTree True acc (CTFail (LetRefuted loc)) = locatedTrap acc loc
+hTree True acc (CTFail (NoArm loc)) = locatedNonexh acc loc
+hTree refMode acc (CTGuard _ t) = hTree refMode acc t
+hTree refMode acc (CTDrop t) = hTree refMode acc t
+hTree refMode acc (CTSwitch branches dft) =
+  hTree refMode (fold (hBranch refMode) acc branches) dft
+hTree _ acc _ = acc
+
+hBranch : Bool -> HelperAcc -> CTBranch -> HelperAcc
+hBranch refMode acc (CTBranch head tree) =
+  let acc = match head
+    HLit lit => hPat refMode acc (PLit lit)
+    HCons => { acc | patternList = True }
+    HNil => { acc | patternList = True }
+    HTuple n =>
+      { acc | patternTuples = omInsert (intToString n) n acc.patternTuples }
+    _ => acc
+  hTree refMode acc tree
+
+locatedTrap : HelperAcc -> Loc -> HelperAcc
+locatedTrap acc loc = if hasLocation loc then needSite acc else needTrap acc
+
+locatedNonexh : HelperAcc -> Loc -> HelperAcc
+locatedNonexh acc loc =
+  if hasLocation loc then { needSite acc | nonexh = True } else needTrap acc
+
+hasLocation : Loc -> Bool
+hasLocation (Loc f sl sc el ec) =
+  f /= ""
+    && not (sl == 1 && sc == 0 && el == 1 && ec == 0)
+    && sl >= 0
+    && sl < 16777216
+    && sc >= 0
+    && sc < 1048576
+
+runtimeRoots : WasmTypeContext -> HelperAcc -> String -> List CExpr -> HelperAcc
+runtimeRoots ctx acc symbol args = match externRuntimeKey ctx.externFacts symbol
+  Some key if contains key ["shiftLeft", "intShiftLeft"] => needInt acc "left"
+  Some key if contains key ["shiftRight", "intShiftRight"] =>
+    needInt acc "right"
+  Some key if contains key ["panic", "indexError", "sliceError"] => needTrap acc
+  Some "indexErrorAt" => need (needTrap acc) "trapIntRuntimeLines"
+  Some key if key == "indexErrorAtSite" || key == "panicAt" =>
+    let acc =
+      if key == "indexErrorAtSite" then
+        need (needTrap acc) "trapIntRuntimeLines"
+      else
+        needTrap acc
+    match args
+      (CLit (LInt 0)) :: _ => acc
+      _ => needSite acc
+  _ => acc
+
+intOpName : String -> String
+intOpName "+" = "add"
+intOpName "-" = "sub"
+intOpName "*" = "mul"
+intOpName _ = "div"
+
+valueOpBlock : String -> String
+valueOpBlock "+" = "Add"
+valueOpBlock "-" = "Sub"
+valueOpBlock "*" = "Mul"
+valueOpBlock "/" = "Div"
+valueOpBlock _ = "Mod"
+
+printRoots : WasmTypeContext ->
+  Option EntryFact ->
+  List CBind ->
+  HelperAcc ->
+  HelperAcc
+printRoots ctx outcome groups acc =
+  let body = filterMap mainBodyD groups
+  match body
+    e :: _ =>
+      let own = varStamp ctx [] "main"
+      let stamp = match outcome
+        Some fact if fact.entryMainIsUnit => RTUnit
+        Some fact if fact.entryMainIsFloat => RTFloat
+        _ => if own == RTValue then cexprStamp ctx [] e else own
+      if stamp == RTFloat then
+        needMany acc ["floatRuntimeLines", "ioStrRuntimeLines"]
+      else if stamp == RTChar then
+        needMany acc ["ioStrRuntimeLines", "strLeafRuntimeLines"]
+      else
+        acc
+    [] => acc
+
+mainBodyD : CBind -> Option CExpr
+mainBodyD (CBind "main" [CClause [] e] _ _) = Some e
+mainBodyD _ = None
+
+representationOf : WasmDemand -> Bool -> HelperAcc -> WasmDemand
+representationOf source str acc =
+  let types = flatMap helperTypes (omKeys acc.helpers)
+  let uses =
+    if str || contains "str" types || contains "u8arr" types then
+      addUse source.uses UseStr
+    else
+      source.uses
+  let uses = if contains "arr" types then addUse uses UseArray else uses
+  let uses =
+    if acc.patternList || contains "C_Cons" types then
+      addUse uses UseList
+    else
+      uses
+  let seen = omFromNames (map intToString source.tupleArities) omEmpty
+  let extraTuples =
+    filterMap
+      (k => if omHasKey k seen then None else omLookup k acc.patternTuples)
+      (omKeys acc.patternTuples)
+  { source |
+    uses = uses,
+    refBox = source.refBox || acc.refRead,
+    tupleArities = source.tupleArities ++ extraTuples,
+  }
+
+physicalTypes : CProgram -> Bool -> Bool -> WasmDemand -> List String
+physicalTypes _ False _ _ = ["boxint", "float"]
+physicalTypes (CProgram _ ctorArs ctorTypes _ _ _) True clos rep =
+  let ctorIndex = omFromPairs (reverseL ctorArs) omEmpty
+  omKeys
+    (omFromNames
+      ([
+          "boxint", "float", "dictarr", "dictcell", "T_Option", "C_Some",
+          "T_Result", "C_Ok", "C_Err", "T_Ordering"
+        ]
+        ++ (if clos then ["argarr", "codety", "clos"] else [])
+        ++ (if hasUse rep UseStr then ["str", "u8arr"] else [])
+        ++ (if hasUse rep UseList then ["T_List", "C_Cons"] else [])
+        ++ flatMap
+          (n => ["T_Tup" ++ intToString n, "C_Tup" ++ intToString n])
+          rep.tupleArities
+        ++ (if hasUse rep UseArray then ["arr"] else [])
+        ++ (if rep.refBox then ["refbox"] else [])
+        ++ (if hasUse rep UseU64 then ["u64"] else [])
+        ++ (if hasUse rep UseI64 then ["i64"] else [])
+        ++ flatMap
+          ((ctor, ty) =>
+            if contains ty ["Option", "Result", "Ordering"] then
+              []
+            else
+              ["T_" ++ injectiveIdent ty]
+                ++ (if optionOr 0 (omLookup ctor ctorIndex) > 0 then
+                  [
+                    if ctor == "Cons" || ctor == "Nil" then
+                      "CU_" ++ ctor
+                    else
+                      "C_" ++ ctor,
+                  ]
+                else
+                  []))
+          ctorTypes)
+      omEmpty)
+
+addUse : List WasmUse -> WasmUse -> List WasmUse
+addUse uses use = if any (== use) uses then uses else use :: uses
+
+export
+helperOrder : List String
+helperOrder = [
+  "closApplyLines",
+  "ioRuntimeLines",
+  "ioStrRuntimeLines",
+  "strLeafRuntimeLines",
+  "strConcatRuntimeLines",
+  "appendRuntimeLines",
+  "valueEqRuntimeLines",
+  "valueAddRuntimeLines",
+  "valueSubRuntimeLines",
+  "valueMulRuntimeLines",
+  "valueDivRuntimeLines",
+  "valueModRuntimeLines",
+  "valueCmpNumRuntimeLines",
+  "u64RuntimeLines",
+  "i64RuntimeLines",
+  "stderrRuntimeLines",
+  "rngRuntimeLines",
+  "hashRuntimeLines",
+  "hashStringRuntimeLines",
+  "floatRemRuntimeLines",
+  "floatRuntimeLines",
+  "hashFloatRuntimeLines",
+  "randomFloatRuntimeLines",
+  "strSearchRuntimeLines",
+  "strToIntRuntimeLines",
+  "strReverseRuntimeLines",
+  "strJoinRuntimeLines",
+  "utf8LossyRuntimeLines",
+  "strCodecRuntimeLines",
+  "byteBlockRuntimeLines",
+  "charFromCodeRuntimeLines",
+  "charClassRuntimeLines",
+  "ioPushPathLines",
+  "ioPushPathMoreLines",
+  "ioPushGrantLines",
+  "ioPushGrantMoreLines",
+  "ioResultLines",
+  "ioRefusedPanicLines",
+  "ioReadFileLines",
+  "ioFetchTextLines",
+  "ioFileExistsLines",
+  "ioCanonicalizeLines",
+  "ioWriteFileLines",
+  "ioAppendFileLines",
+  "ioRenameLines",
+  "ioListDirLines",
+  "ioStatFileLines",
+  "ioMakeDirLines",
+  "ioRemoveFileLines",
+  "ioRemoveDirLines",
+  "ioFsyncLines",
+  "ioFileModeLines",
+  "ioWriteFileModeLines",
+  "ioGetEnvLines",
+  "ioReadLineLines",
+  "ioReadAllLines",
+  "ioReadExactlyLines",
+  "ioExecutablePathLines",
+  "jsffiArrayLines",
+  "jsffiResultStrLines",
+  "ioArgsLines",
+  "writeFileBytesLines",
+  "osEntropyLines",
+  "readFileBytesLines",
+  "floatStrLines",
+  "trapIntRuntimeLines",
+  "intRuntimeLines",
+  "siteRuntimeLines",
+]
+
+helperDependencies : Bool -> String -> List String
+helperDependencies _ "appendRuntimeLines" = ["strLeafRuntimeLines"]
+helperDependencies _ "byteBlockRuntimeLines" =
+  ["ioByteImportLines", "ioRuntimeLines", "utf8LossyRuntimeLines"]
+helperDependencies _ "floatRuntimeLines" = ["floatFmtImportLines"]
+helperDependencies _ "hashFloatRuntimeLines" = ["hashRuntimeLines"]
+helperDependencies _ "intRuntimeLines" =
+  ["siteRuntimeLines", "stderrByteImportLines", "trapIntRuntimeLines"]
+helperDependencies _ "ioAppendFileLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioResultLines"]
+helperDependencies _ "ioArgsLines" = ["utf8LossyRuntimeLines"]
+helperDependencies _ "ioCanonicalizeLines" = [
+  "ioPushGrantLines", "ioPushPathLines", "ioRefusedPanicLines", "ioResultLines"
+]
+helperDependencies _ "ioExecutablePathLines" = ["ioResultLines"]
+helperDependencies _ "ioFetchTextLines" = ["ioPushPathLines", "ioResultLines"]
+helperDependencies _ "ioFileExistsLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioRefusedPanicLines"]
+helperDependencies _ "ioFileModeLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioResultLines", "ioRuntimeLines"]
+helperDependencies _ "ioFsyncLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioResultLines"]
+helperDependencies _ "ioGetEnvLines" = ["ioPushPathLines", "ioResultLines"]
+helperDependencies _ "ioListDirLines" = [
+  "ioPushGrantLines", "ioPushPathLines", "ioResultLines",
+  "utf8LossyRuntimeLines"
+]
+helperDependencies _ "ioMakeDirLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioResultLines"]
+helperDependencies _ "ioReadAllLines" = ["ioResultLines"]
+helperDependencies _ "ioReadExactlyLines" = ["ioResultLines"]
+helperDependencies _ "ioReadFileLines" = [
+  "ioPushGrantLines", "ioPushPathLines", "ioResultLines",
+  "utf8LossyRuntimeLines"
+]
+helperDependencies _ "ioReadLineLines" = ["ioResultLines"]
+helperDependencies _ "ioRefusedPanicLines" =
+  ["ioResultLines", "stderrByteImportLines"]
+helperDependencies _ "ioRemoveDirLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioResultLines"]
+helperDependencies _ "ioRemoveFileLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioResultLines"]
+helperDependencies _ "ioRenameLines" = [
+  "ioPushGrantLines", "ioPushGrantMoreLines", "ioPushPathLines",
+  "ioPushPathMoreLines", "ioResultLines"
+]
+helperDependencies _ "ioResultLines" = ["utf8LossyRuntimeLines"]
+helperDependencies _ "ioRuntimeLines" = ["ioByteImportLines"]
+helperDependencies _ "ioStatFileLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioResultLines", "ioRuntimeLines"]
+helperDependencies _ "ioStrRuntimeLines" = ["ioByteImportLines"]
+helperDependencies _ "ioWriteFileLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioResultLines"]
+helperDependencies _ "ioWriteFileModeLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioResultLines", "ioRuntimeLines"]
+helperDependencies _ "jsffiArrayLines" = ["ioRuntimeLines"]
+helperDependencies _ "jsffiResultStrLines" = ["utf8LossyRuntimeLines"]
+helperDependencies _ "osEntropyLines" = ["ioRefusedPanicLines"]
+helperDependencies _ "randomFloatRuntimeLines" = ["rngRuntimeLines"]
+helperDependencies _ "readFileBytesLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioResultLines"]
+helperDependencies _ "siteRuntimeLines" =
+  ["stderrByteImportLines", "trapIntRuntimeLines"]
+helperDependencies _ "stderrRuntimeLines" = ["stderrByteImportLines"]
+helperDependencies _ "strCodecRuntimeLines" = ["utf8LossyRuntimeLines"]
+helperDependencies _ "strSearchRuntimeLines" = ["strLeafRuntimeLines"]
+helperDependencies _ "strToIntRuntimeLines" = ["ioRuntimeLines"]
+helperDependencies _ "trapIntRuntimeLines" = ["stderrByteImportLines"]
+helperDependencies _ "valueAddRuntimeLines" =
+  ["intRuntimeLines", "ioRuntimeLines"]
+helperDependencies _ "valueCmpNumRuntimeLines" = ["ioRuntimeLines"]
+helperDependencies wide "valueDivRuntimeLines" =
+  ["intRuntimeLines", "ioRuntimeLines", "stderrByteImportLines"]
+    ++ (if wide then ["i64RuntimeLines"] else [])
+helperDependencies _ "valueEqRuntimeLines" =
+  ["ioRuntimeLines", "strSearchRuntimeLines"]
+helperDependencies _ "valueModRuntimeLines" =
+  ["floatRemRuntimeLines", "ioRuntimeLines", "stderrByteImportLines"]
+helperDependencies _ "valueMulRuntimeLines" =
+  ["intRuntimeLines", "ioRuntimeLines"]
+helperDependencies _ "valueSubRuntimeLines" =
+  ["intRuntimeLines", "ioRuntimeLines"]
+helperDependencies _ "writeFileBytesLines" =
+  ["ioPushGrantLines", "ioPushPathLines", "ioResultLines"]
+helperDependencies _ _ = []
+
+helperHostKeys : String -> List String
+helperHostKeys "floatFmtImportLines" = ["mdk_float_fmt", "mdk_float_fmt_byte"]
+helperHostKeys "floatStrLines" =
+  ["mdk_path_push", "mdk_path_reset", "mdk_str_to_float", "mdk_str_to_float_ok"]
+helperHostKeys "ioAppendFileLines" =
+  ["mdk_append_file", "mdk_write_file_push", "mdk_write_file_reset"]
+helperHostKeys "ioArgsLines" = ["mdk_arg_byte", "mdk_arg_len", "mdk_args_count"]
+helperHostKeys "ioByteImportLines" = ["mdk_write_byte"]
+helperHostKeys "ioCanonicalizeLines" = ["mdk_canonicalize_path"]
+helperHostKeys "ioExecutablePathLines" = ["mdk_executable_path"]
+helperHostKeys "ioFetchTextLines" = ["mdk_fetch_text"]
+helperHostKeys "ioFileExistsLines" = ["mdk_file_exists"]
+helperHostKeys "ioFileModeLines" = ["mdk_file_mode", "mdk_stat_field"]
+helperHostKeys "ioFsyncLines" = ["mdk_fsync"]
+helperHostKeys "ioGetEnvLines" = ["mdk_get_env"]
+helperHostKeys "ioListDirLines" = ["mdk_list_dir"]
+helperHostKeys "ioMakeDirLines" = ["mdk_make_dir"]
+helperHostKeys "ioPushGrantLines" = ["mdk_grant_push", "mdk_grant_reset"]
+helperHostKeys "ioPushGrantMoreLines" = ["mdk_grant_push"]
+helperHostKeys "ioPushPathLines" = ["mdk_path_push", "mdk_path_reset"]
+helperHostKeys "ioPushPathMoreLines" = ["mdk_path_push"]
+helperHostKeys "ioReadAllLines" = ["mdk_read_all"]
+helperHostKeys "ioReadExactlyLines" = ["mdk_read_exactly"]
+helperHostKeys "ioReadFileLines" = ["mdk_read_file"]
+helperHostKeys "ioReadLineLines" = ["mdk_read_line"]
+helperHostKeys "ioRemoveDirLines" = ["mdk_remove_dir"]
+helperHostKeys "ioRemoveFileLines" = ["mdk_remove_file"]
+helperHostKeys "ioRenameLines" = ["mdk_grant_push", "mdk_rename"]
+helperHostKeys "ioResultLines" = ["mdk_result_byte", "mdk_result_len"]
+helperHostKeys "ioStatFileLines" = ["mdk_stat_field", "mdk_stat_file"]
+helperHostKeys "ioWriteFileLines" =
+  ["mdk_write_file", "mdk_write_file_push", "mdk_write_file_reset"]
+helperHostKeys "ioWriteFileModeLines" =
+  ["mdk_write_file_mode", "mdk_write_file_push", "mdk_write_file_reset"]
+helperHostKeys "jsffiArrayLines" = ["mdk_path_push", "mdk_result_byte"]
+helperHostKeys "jsffiResultStrLines" = ["mdk_result_byte", "mdk_result_len"]
+helperHostKeys "osEntropyLines" =
+  ["mdk_os_entropy", "mdk_result_byte", "mdk_result_len"]
+helperHostKeys "readFileBytesLines" =
+  ["mdk_read_file", "mdk_result_byte", "mdk_result_len"]
+helperHostKeys "stderrByteImportLines" = ["mdk_write_err_byte"]
+helperHostKeys "writeFileBytesLines" =
+  ["mdk_write_file_commit", "mdk_write_file_push", "mdk_write_file_reset"]
+helperHostKeys _ = []
+
+helperTypes : String -> List String
+helperTypes "appendRuntimeLines" = ["C_Cons", "str"]
+helperTypes "byteBlockRuntimeLines" = ["arr", "str", "u8arr"]
+helperTypes "charFromCodeRuntimeLines" = ["C_Some"]
+helperTypes "closApplyLines" = ["argarr", "clos"]
+helperTypes "floatRuntimeLines" = ["float", "str", "u8arr"]
+helperTypes "floatStrLines" = ["C_Some", "float", "str", "u8arr"]
+helperTypes "hashFloatRuntimeLines" = ["float"]
+helperTypes "hashStringRuntimeLines" = ["str", "u8arr"]
+helperTypes "ioAppendFileLines" = ["C_Err", "C_Ok", "str", "u8arr"]
+helperTypes "ioArgsLines" = ["C_Cons", "str", "u8arr"]
+helperTypes "ioCanonicalizeLines" = ["str"]
+helperTypes "ioFetchTextLines" = ["C_Err", "C_Ok", "str"]
+helperTypes "ioFileExistsLines" = ["str"]
+helperTypes "ioFileModeLines" = ["C_Err", "C_Ok", "str"]
+helperTypes "ioFsyncLines" = ["C_Err", "C_Ok", "str"]
+helperTypes "ioGetEnvLines" = ["C_Some", "str"]
+helperTypes "ioListDirLines" = ["C_Cons", "C_Err", "C_Ok", "str", "u8arr"]
+helperTypes "ioMakeDirLines" = ["C_Err", "C_Ok", "str"]
+helperTypes "ioPushGrantLines" = ["C_Cons", "str", "u8arr"]
+helperTypes "ioPushGrantMoreLines" = ["C_Cons", "str", "u8arr"]
+helperTypes "ioPushPathLines" = ["str", "u8arr"]
+helperTypes "ioPushPathMoreLines" = ["str", "u8arr"]
+helperTypes "ioReadExactlyLines" = ["C_Some"]
+helperTypes "ioReadFileLines" = ["C_Err", "C_Ok", "str", "u8arr"]
+helperTypes "ioReadLineLines" = ["C_Some"]
+helperTypes "ioRefusedPanicLines" = ["u8arr"]
+helperTypes "ioRemoveDirLines" = ["C_Err", "C_Ok", "str"]
+helperTypes "ioRemoveFileLines" = ["C_Err", "C_Ok", "str"]
+helperTypes "ioRenameLines" = ["C_Err", "C_Ok", "str"]
+helperTypes "ioResultLines" = ["str", "u8arr"]
+helperTypes "ioRuntimeLines" = ["boxint"]
+helperTypes "ioStatFileLines" = ["C_Err", "C_Ok", "C_Tup4", "float", "str"]
+helperTypes "ioStrRuntimeLines" = ["str", "u8arr"]
+helperTypes "ioWriteFileLines" = ["C_Err", "C_Ok", "str", "u8arr"]
+helperTypes "ioWriteFileModeLines" = ["C_Err", "C_Ok", "str", "u8arr"]
+helperTypes "jsffiArrayLines" = ["arr"]
+helperTypes "jsffiResultStrLines" = ["str", "u8arr"]
+helperTypes "osEntropyLines" = ["arr"]
+helperTypes "randomFloatRuntimeLines" = ["float"]
+helperTypes "readFileBytesLines" = ["C_Err", "C_Ok", "arr", "str"]
+helperTypes "stderrRuntimeLines" = ["str", "u8arr"]
+helperTypes "strCodecRuntimeLines" = ["arr", "str", "u8arr"]
+helperTypes "strConcatRuntimeLines" = ["C_Cons", "str", "u8arr"]
+helperTypes "strJoinRuntimeLines" = ["C_Cons", "str", "u8arr"]
+helperTypes "strLeafRuntimeLines" = ["str", "u8arr"]
+helperTypes "strReverseRuntimeLines" = ["str", "u8arr"]
+helperTypes "strSearchRuntimeLines" = ["C_Some", "str", "u8arr"]
+helperTypes "strToIntRuntimeLines" = ["C_Some", "str", "u8arr"]
+helperTypes "utf8LossyRuntimeLines" = ["str", "u8arr"]
+helperTypes "valueAddRuntimeLines" = ["float"]
+helperTypes "valueCmpNumRuntimeLines" = ["float"]
+helperTypes "valueDivRuntimeLines" = ["float"]
+helperTypes "valueEqRuntimeLines" = ["boxint", "float", "str"]
+helperTypes "valueModRuntimeLines" = ["float"]
+helperTypes "valueMulRuntimeLines" = ["float"]
+helperTypes "valueSubRuntimeLines" = ["float"]
+helperTypes "writeFileBytesLines" = ["C_Err", "C_Ok", "arr", "str"]
+helperTypes _ = []
+
+closeHelpers : Bool -> HelperAcc -> HelperAcc
+closeHelpers wide acc =
+  let next =
+    fold
+      (a h => needMany a (helperDependencies wide h))
+      acc
+      (omKeys acc.helpers)
+  if omKeys next.helpers == omKeys acc.helpers then
+    next
+  else
+    closeHelpers wide next
+
+physicalImports : HelperAcc ->
+  List String ->
+  List JsImport ->
+  List PlannedImport
+physicalImports acc sourceKeys js =
+  let keys =
+    omKeys
+      (omFromNames
+        (sourceKeys ++ flatMap helperHostKeys (omKeys acc.helpers))
+        omEmpty)
+  let first =
+    ["mdk_write_byte"]
+      ++ (if contains "mdk_float_fmt" keys then
+        ["mdk_float_fmt", "mdk_float_fmt_byte"]
+      else
+        [])
+  let rest =
+    filterList
+      (k =>
+        not
+          (contains k [
+            "mdk_write_byte", "mdk_float_fmt", "mdk_float_fmt_byte",
+            "mdk_write_err_byte"
+          ]))
+      keys
+  map plannedEnv (first ++ rest)
+    ++ map plannedJs js
+    ++ (if contains "mdk_write_err_byte" keys then
+      [plannedEnv "mdk_write_err_byte"]
+    else
+      [])
+
+plannedEnv : String -> PlannedImport
+plannedEnv key = PlannedImport {
+  namespace = "env",
+  field = key,
+  watSymbol = key,
+  signature = optionOr "" (hostImportSigOf key),
+}
+
+plannedJs : JsImport -> PlannedImport
+plannedJs imp = PlannedImport {
+  namespace = "jsffi",
+  field = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}",
+  watSymbol = "jsffi.import.\{injectiveIdent imp.medakaName}",
+  signature =
+    joinWith "" (map jsWireParam imp.params) ++ jsWireResult imp.result,
+}
+
+export
+hostImportSigOf : String -> Option String
+hostImportSigOf "mdk_write_byte" = Some " (param i32)"
+hostImportSigOf "mdk_write_err_byte" = Some " (param i32)"
+hostImportSigOf "mdk_float_fmt" = Some " (param f64) (result i32)"
+hostImportSigOf "mdk_float_fmt_byte" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_exit" = Some " (param i32)"
+hostImportSigOf "mdk_wall_time_sec" = Some " (result f64)"
+hostImportSigOf "mdk_monotonic_sec" = Some " (result f64)"
+hostImportSigOf "mdk_sleep_ms" = Some " (param i64)"
+hostImportSigOf "mdk_fetch_text" = Some " (result i32)"
+hostImportSigOf "mdk_cbrt" = Some unaryF64Sig
+hostImportSigOf "mdk_exp" = Some unaryF64Sig
+hostImportSigOf "mdk_log" = Some unaryF64Sig
+hostImportSigOf "mdk_log2" = Some unaryF64Sig
+hostImportSigOf "mdk_log10" = Some unaryF64Sig
+hostImportSigOf "mdk_sin" = Some unaryF64Sig
+hostImportSigOf "mdk_cos" = Some unaryF64Sig
+hostImportSigOf "mdk_tan" = Some unaryF64Sig
+hostImportSigOf "mdk_asin" = Some unaryF64Sig
+hostImportSigOf "mdk_acos" = Some unaryF64Sig
+hostImportSigOf "mdk_atan" = Some unaryF64Sig
+hostImportSigOf "mdk_sinh" = Some unaryF64Sig
+hostImportSigOf "mdk_cosh" = Some unaryF64Sig
+hostImportSigOf "mdk_tanh" = Some unaryF64Sig
+hostImportSigOf "mdk_pow" = Some binaryF64Sig
+hostImportSigOf "mdk_atan2" = Some binaryF64Sig
+hostImportSigOf "mdk_hypot" = Some binaryF64Sig
+hostImportSigOf "mdk_path_reset" = Some ""
+hostImportSigOf "mdk_path_push" = Some " (param i32)"
+hostImportSigOf "mdk_read_file" = Some " (result i32)"
+hostImportSigOf "mdk_file_exists" = Some " (result i32)"
+hostImportSigOf "mdk_get_env" = Some " (result i32)"
+hostImportSigOf "mdk_read_line" = Some " (result i32)"
+hostImportSigOf "mdk_read_all" = Some ""
+hostImportSigOf "mdk_read_exactly" = Some " (param i64) (result i32)"
+hostImportSigOf "mdk_os_entropy" = Some " (param i64) (result i32)"
+hostImportSigOf "mdk_executable_path" = Some " (result i32)"
+hostImportSigOf "mdk_args_count" = Some " (result i32)"
+hostImportSigOf "mdk_arg_len" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_arg_byte" = Some " (param i32) (param i32) (result i32)"
+hostImportSigOf "mdk_result_len" = Some " (result i32)"
+hostImportSigOf "mdk_result_byte" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_write_file_reset" = Some ""
+hostImportSigOf "mdk_write_file_push" = Some " (param i32)"
+hostImportSigOf "mdk_write_file_commit" = Some " (result i32)"
+hostImportSigOf "mdk_str_to_float" = Some " (result f64)"
+hostImportSigOf "mdk_str_to_float_ok" = Some " (result i32)"
+hostImportSigOf "mdk_grant_reset" = Some ""
+hostImportSigOf "mdk_grant_push" = Some " (param i32)"
+hostImportSigOf "mdk_canonicalize_path" = Some " (result i32)"
+hostImportSigOf "mdk_write_file" = Some " (result i32)"
+hostImportSigOf "mdk_append_file" = Some " (result i32)"
+hostImportSigOf "mdk_make_dir" = Some " (result i32)"
+hostImportSigOf "mdk_remove_file" = Some " (result i32)"
+hostImportSigOf "mdk_remove_dir" = Some " (result i32)"
+hostImportSigOf "mdk_fsync" = Some " (result i32)"
+hostImportSigOf "mdk_file_mode" = Some " (result i32)"
+hostImportSigOf "mdk_write_file_mode" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_rename" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_list_dir" = Some " (result i32)"
+hostImportSigOf "mdk_stat_file" = Some " (result i32)"
+hostImportSigOf "mdk_stat_field" = Some " (param i32) (result f64)"
+hostImportSigOf "mdk_file_bound_enter" =
+  Some " (param i32) (param i32) (result i32)"
+hostImportSigOf "mdk_file_bound_exit" = Some ""
+hostImportSigOf _ = None
+
+export
+unaryF64Sig : String
+unaryF64Sig = " (param f64) (result f64)"
+
+export
+binaryF64Sig : String
+binaryF64Sig = " (param f64) (param f64) (result f64)"
+
+export
+jsWireParam : String -> String
+jsWireParam "Unit" = ""
+jsWireParam head = " (param \{jsWireTy head})"
+
+-- The wasm result a head comes back as; a `String` comes back on the result
+-- channel and a `Unit` as nothing.
+export
+jsWireResult : String -> String
+jsWireResult "Unit" = ""
+jsWireResult "String" = ""
+jsWireResult head = " (result \{jsWireTy head})"
+
+jsWireTy : String -> String
+jsWireTy "Int" = "i64"
+jsWireTy "U64" = "i64"
+jsWireTy "I64" = "i64"
+jsWireTy "Float" = "f64"
+jsWireTy _ = "i32"
+
+export
+validateWasmDemand : WasmDemandInputs ->
+  CProgram ->
+  ExternRequirements ->
+  WasmDemandPlan ->
+  List String
+validateWasmDemand inputs cp requirements actual =
+  let expected = planWasmDemand inputs cp requirements
+  let actualTypes = omFromNames actual.representationTypes omEmpty
+  let expectedKeys = map (i => "\{i.namespace}:\{i.field}") expected.imports
+  let actualKeys = map (i => "\{i.namespace}:\{i.field}") actual.imports
+  let expectedSet = omFromNames expectedKeys omEmpty
+  let actualSet = omFromNames actualKeys omEmpty
+  (if expected.useRef /= actual.useRef
+      || expected.useClos /= actual.useClos
+      || expected.stringOps /= actual.stringOps then
+      ["wasm-mode-mismatch"]
+    else
+      [])
+    ++ (if expected.sourceDemand /= actual.sourceDemand
+      || expected.representation /= actual.representation
+      || expected.intHelpers /= actual.intHelpers
+      || expected.siteRuntime /= actual.siteRuntime
+      || expected.nonexhaustiveRuntime /= actual.nonexhaustiveRuntime then
+      ["missing-wasm-helper-prerequisite: physical branches"]
+    else
+      [])
+    ++ (if expected.censusHelpers /= actual.censusHelpers
+      || expected.censusIntHelpers /= actual.censusIntHelpers then
+      ["wasm-census-demand-mismatch"]
+    else
+      [])
+    ++ flatMap
+      (name =>
+        if omHasKey name actualTypes then
+          []
+        else
+          ["missing-wasm-type-prerequisite: " ++ name])
+      expected.representationTypes
+    ++ (if expected.representationTypes == actual.representationTypes then
+      []
+    else
+      ["wasm-representation-types-mismatch"])
+    ++ flatMap
+      (h =>
+        if contains h actual.helpers then
+          []
+        else
+          ["missing-wasm-helper-prerequisite: " ++ h])
+      expected.helpers
+    ++ (if expected.helpers == actual.helpers then
+      []
+    else if all (h => contains h actual.helpers) expected.helpers then
+      ["unexpected-wasm-helper"]
+    else
+      [])
+    ++ (if map
+        ((key, family) => (key, wasmFamilyTag family))
+        expected.catalogFamilies
+      /= map
+        ((key, family) => (key, wasmFamilyTag family))
+        actual.catalogFamilies then
+      ["wasm-catalog-disposition-mismatch"]
+    else
+      [])
+    ++ flatMap
+      (key =>
+        if omHasKey key actualSet then
+          []
+        else
+          ["missing-wasm-host-key: " ++ key])
+      expectedKeys
+    ++ flatMap
+      (key =>
+        if omHasKey key expectedSet then
+          []
+        else
+          ["unexpected-wasm-host-key: " ++ key])
+      actualKeys
+    ++ (if expected.imports == actual.imports then
+      []
+    else
+      ["wasm-import-order"])
+    ++ (if expected.sourceHostKeys == actual.sourceHostKeys
+      && expected.jsImports == actual.jsImports then
+      []
+    else
+      ["wasm-source-demand-mismatch"])
+
+ctorToFloatIdxs : (String, List String) -> (String, List Int)
+ctorToFloatIdxs (ctor, typeNames) = (ctor, floatFieldIndices typeNames 0)
+
+-- collect the 0-based indices of "Float" fields from a type-head list.
+floatFieldIndices : List String -> Int -> List Int
+floatFieldIndices [] _ = []
+floatFieldIndices ("Float" :: rest) i = i :: floatFieldIndices rest (i + 1)
+floatFieldIndices (_ :: rest) i = floatFieldIndices rest (i + 1)
+
+export
+ctorFloatFieldIndex : List (String, List String) -> OrdMap (List Int)
+ctorFloatFieldIndex fields =
+  omFromPairs (reverseL (map ctorToFloatIdxs fields)) omEmpty
+
+export
+exprHasFallthrough : CExpr -> Bool
+exprHasFallthrough (CVar x _) = x == "__fallthrough__"
+exprHasFallthrough (CApp f args _) =
+  exprHasFallthrough f || anyList exprHasFallthrough args
+exprHasFallthrough (CIf c t f) =
+  exprHasFallthrough c || exprHasFallthrough t || exprHasFallthrough f
+exprHasFallthrough (CLet _ _ e1 e2) =
+  exprHasFallthrough e1 || exprHasFallthrough e2
+exprHasFallthrough (CLetGroup _ body) = exprHasFallthrough body
+exprHasFallthrough (CBlock stmts) = anyList stmtHasFallthrough stmts
+exprHasFallthrough (CDecision scrut arms _) =
+  exprHasFallthrough scrut || anyList (a => exprHasFallthrough (armBody a)) arms
+exprHasFallthrough _ = False
+
+stmtHasFallthrough : CStmt -> Bool
+stmtHasFallthrough (CSExpr e) = exprHasFallthrough e
+stmtHasFallthrough (CSLet _ _ e) = exprHasFallthrough e
+stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e

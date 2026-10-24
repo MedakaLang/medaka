@@ -203,223 +203,78 @@ has_wasm_pin 'emitScalarProgram emit plan fnNames valNames groups' || {
   echo "FAIL H2B7-NEAREST-MISS: scalar emission route changed"
   exit 1
 }
-if grep -E '^useTrapImport[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B8-AUTHORITY-SET: retired trap-import authority remains ambient"
-  exit 1
-fi
+# Physical prerequisites are selected before rendering; the semantic re-emission
+# probes below still exercise strict, record and gap routes in one process.
+DEMAND_SRC="$ROOT/compiler/backend/wasm_demand.mdk"
+DEMAND_FLAT="$(tr -s '[:space:]' ' ' < "$DEMAND_SRC")"
+PREAMBLE_SRC="$ROOT/compiler/backend/wasm_preamble.mdk"
+PREAMBLE_FLAT="$(tr -s '[:space:]' ' ' < "$PREAMBLE_SRC")"
+has_demand_pin() {
+  grep -F -q -- "$1" "$DEMAND_SRC" || printf '%s' "$DEMAND_FLAT" | grep -F -q -- "$1"
+}
+has_preamble_pin() {
+  grep -F -q -- "$1" "$PREAMBLE_SRC" || printf '%s' "$PREAMBLE_FLAT" | grep -F -q -- "$1"
+}
 for required in \
-  'trapImportNeeded : Ref Bool' \
-  'trapImportNeeded = Ref False' \
-  'wasmTrapBytes : WasmEmit -> String -> List String' \
-  'wasmTrap : WasmEmit -> String -> String -> List String' \
-  'setRef emit.trapImportNeeded True' \
-  'let trapImport = if !emit.trapImportNeeded then stderrByteImportLines else []' \
-  'let trapImport = if contains stderrByteKey plan.hostKeys || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []' \
-  'let _ = setRef (progEmit prog).trapImportNeeded True' \
-  'emitDivZeroGuard : WasmEmit -> String -> String -> Int -> List String' \
+  'planWasmDemand : WasmDemandInputs -> CProgram -> ExternRequirements -> WasmDemandPlan' \
+  'validateWasmDemand : WasmDemandInputs -> CProgram -> ExternRequirements -> WasmDemandPlan -> List String' \
+  'representationTypes : List String' \
+  'let closed = closeHelpers (hasUse source UseI64) roots' \
+  'let imports = physicalImports closed hostKeys js' \
+  'noteBinop acc "/" = { acc | seenDivGuard = True }' \
+  'noteBinop acc "%" = { acc | seenDivGuard = True }'; do
+  has_demand_pin "$required" || {
+    echo "FAIL WASM-DEMAND-AUTHORITY: missing $required"
+    exit 1
+  }
+done
+for required in \
+  'let physical = physicalPlanW plan' \
+  'let useRef = physical.useRef' \
+  'let useClos = physical.useClos' \
+  'let imports = plannedImportLines physical.imports' \
+  '++ plannedImportLines (physicalPlanW plan).imports' \
+  'requireHelperW : WasmEmit -> String -> Unit' \
+  'let _ = seedDemandW emit physical.representation' \
   'emitDivZeroGuard emit op "$__sdivr"' \
   'emitDivZeroGuard (progEmit prog) op (divrLocal prog d) site' \
   'wasmTrap emit "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"' \
   'wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "'; do
   has_wasm_pin "$required" || {
-    echo "FAIL H2B8-CARRIER: missing $required"
+    echo "FAIL WASM-DEMAND-RENDER: missing $required"
     exit 1
   }
 done
-# S2/#2359: narrowed from TWO unconditional poly-runtime writers (the isCmpOp
-# poly-num branch AND the isArithOp poly-num branch both forced trapImportNeeded
-# whenever useValueArith was set at all, #371's over-broad fix) to exactly ONE —
-# the isArithOp branch's OWN div/mod-specific arm — since the isCmpOp branch never
-# reaches $mdk_value_div/$mdk_value_mod's guard, and add/sub/mul never do either.
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).trapImportNeeded True' | wc -l | tr -d '[:space:]')" -eq 1 ] || {
-  echo "FAIL H2B8-WRITERS: expected exactly one explicit poly-runtime writer (S2/#2359: div/mod-only)"
-  exit 1
-}
-if grep -E '^_?useEPutRef[[:space:]]*[:=]|setRef (_?useEPutRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B9-EPUT-AUTHORITY: retired ambient ePut authority remains"
+if grep -E '^[[:space:]]*let _ = setRef (emit|\(progEmit prog\))\.(trapImportNeeded|useValueCmp|useStrSearch|useStrLeaf) True' "$WASM_SRC" >/dev/null; then
+  echo "FAIL WASM-DEMAND-RENDER: body emission mutates physical prerequisites"
   exit 1
 fi
-for required in \
-  'useEPut : Ref Bool' \
-  'useEPut = Ref' \
-  'setRef emit.useEPut True' \
-  '(progEmit prog).useEPut.value' \
-  'let trapImport = if contains stderrByteKey plan.hostKeys || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []'; do
-  has_wasm_pin "$required" || {
-    echo "FAIL H2B9-EPUT-AUTHORITY: missing $required"
+for pair in \
+  'UseEPut:useEPut' 'UseRng:useRng' 'UseHash:useHash' \
+  'UseFloatRng:useFloatRng' 'UseStrCodec:useStrCodec' \
+  'UseCharClass:useCharClass' 'UseCharFromCode:useCharFromCode' \
+  'UseFloatHash:useFloatHash' 'UseFileBytes:useFileBytes'; do
+  use="${pair%%:*}"; cell="${pair#*:}"
+  has_wasm_pin "noteWasmUse emit $use = setRef emit.$cell True" || {
+    echo "FAIL WASM-DEMAND-SEED: missing $use seed"
     exit 1
   }
 done
-# Which externs demand EPut (the abort externs and the stderr writers), and what it implies, is catalog data, asserted in
-# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useEPut True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'noteWasmUse emit UseEPut = setRef emit.useEPut True' || {
-  echo "FAIL H2B9-EPUT-WRITERS: expected one writer, the catalog demand's"
-  exit 1
-}
-if grep -E '^_?useDivGuardRef[[:space:]]*[:=]|setRef (_?useDivGuardRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B9-DIV-AUTHORITY: retired ambient divisor authority remains"
-  exit 1
-fi
-if grep -E '^_?useRecUpdateRef[[:space:]]*[:=]|setRef (_?useRecUpdateRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B9-RECUPDATE-AUTHORITY: retired ambient record-update authority remains"
-  exit 1
-fi
-if grep -E '^_?useRngRef[[:space:]]*[:=]|setRef (_?useRngRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B9-RNG-AUTHORITY: retired ambient RNG authority remains"
-  exit 1
-fi
-if grep -E '^_?useHashRef[[:space:]]*[:=]|setRef (_?useHashRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B9-HASH-AUTHORITY: retired ambient hash authority remains"
-  exit 1
-fi
-# The W7 scratch locals ($__rub<d>, $__divr<d>, ...) are declared per function from
-# the names its body recorded through w7Local (#3882), not from a per-program flag.
-for required in \
-  'w7Used : Ref (OrdMap Unit)' \
-  'w7Used = Ref omEmpty' \
-  'w7Local : WasmEmit -> String -> String -> String' \
-  'w7ScopeOpen : WasmEmit -> OrdMap Unit' \
-  'w7ScopeClose : WasmEmit -> OrdMap Unit -> OrdMap Unit' \
-  'divrLocal prog d = w7Local (progEmit prog) "__divr" (intToString d)' \
-  'let bL = w7Local (progEmit prog) "__rub" sfx'; do
-  has_wasm_pin "$required" || {
-    echo "FAIL H2B9-RECUPDATE-AUTHORITY: missing $required"
+for block in \
+  ioArgsLines floatStrLines charClassRuntimeLines randomFloatRuntimeLines \
+  strCodecRuntimeLines charFromCodeRuntimeLines hashFloatRuntimeLines \
+  readFileBytesLines writeFileBytesLines; do
+  has_preamble_pin "plannedHelperBlock plan files \"$block\"" || {
+    echo "FAIL WASM-DEMAND-HELPERS: missing planned $block renderer"
     exit 1
   }
 done
-for required in \
-  'useDivGuard : Ref Bool' \
-  'useDivGuard = Ref' \
-  'seedDemandW : WasmEmit -> WasmDemand -> Unit' \
-  'let _ = if d.divGuard then setRef emit.useDivGuard True' \
-  'w7LocalDecls : OrdMap Unit -> Int -> List String' \
-  'w7LocalsAtDepth : OrdMap Unit -> Int -> List String' \
-  'let dv = if !emit.useDivGuard then ["    (local $__sdivr i64)"] else []' \
-  'let dv = if !emit.useDivGuard then ["(local $__sdivr i64)"] else []'; do
-  has_wasm_pin "$required" || {
-    echo "FAIL H2B9-DIV-AUTHORITY: missing $required"
-    exit 1
-  }
-done
-# The demand walk is the emit plan's; its `/` and `%` arms are the divisor demand's
-# one authority, and the emitter's seed is each seeded flag's one writer.
-for required in \
-  'wasmDemandOf : OrdMap ExternDeclFact -> OrdMap (String, (List String, String)) -> List CBind -> List CImplEntry -> (WasmDemand, List String, List JsImport)' \
-  'dBind : DemandScope -> DemandAcc -> CBind -> DemandAcc' \
-  'dClause : DemandScope -> DemandAcc -> CClause -> DemandAcc' \
-  'dImpl : DemandScope -> DemandAcc -> CImplEntry -> DemandAcc' \
-  'dExpr : DemandScope -> DemandAcc -> CExpr -> DemandAcc' \
-  'dAppHead : DemandScope -> DemandAcc -> CExpr -> DemandAcc' \
-  'noteName : DemandAcc -> String -> DemandAcc' \
-  'noteBinop : DemandAcc -> String -> DemandAcc' \
-  'dArm : DemandScope -> DemandAcc -> CArm -> DemandAcc' \
-  'dGuarded : DemandScope -> DemandAcc -> List CGuard -> CExpr -> DemandAcc' \
-  'dStmts : DemandScope -> DemandAcc -> List CStmt -> DemandAcc' \
-  'dPat : DemandAcc -> Pat -> DemandAcc' \
-  'dTree : DemandAcc -> CTree -> DemandAcc' \
-  'dBranch : DemandAcc -> CTBranch -> DemandAcc' \
-  'dSwitchHead : DemandAcc -> CHead -> DemandAcc' \
-  'noteBinop acc "/" = { acc | seenDivGuard = True }' \
-  'noteBinop acc "%" = { acc | seenDivGuard = True }'; do
-  has_plan_pin "$required" || {
-    echo "FAIL H2B9-DIV-AUTHORITY: missing $required in emit_plan.mdk"
-    exit 1
-  }
-done
-[ "$(printf '%s' "$PLAN_FLAT" | grep -o -F 'seenDivGuard = True' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useDivGuard True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useRefBox True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.tupleArities' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'noteWasmUse emit u' | wc -l | tr -d '[:space:]')" -eq 1 ] || {
-  echo "FAIL H2B9-DIV-AUTHORITY: expected the plan's two divisor arms and one seed writer per seeded flag"
-  exit 1
-}
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'w7ScopeOpen (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 10 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'w7ScopeClose (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 10 ] || {
-  echo "FAIL H2B9-DIV-AUTHORITY: expected ten W7 scope brackets (one per function emitter)"
-  exit 1
-}
-has_plan_pin 'dExpr sc acc (CFieldAccess ex _ _ _) = dExpr sc acc ex' &&
-  ! grep -A 1 -F 'dExpr sc acc (CRecord _ fields) =' "$PLAN_SRC" | grep -F 'useRecUpdate' >/dev/null || {
-  echo "FAIL H2B9-RECUPDATE-NEAREST-MISS: plain record construction/access changed authority"
-  exit 1
-}
-for required in \
-  'useRng : Ref Bool' \
-  'useRng = Ref' \
-  'useHash : Ref Bool' \
-  'useHash = Ref' \
-  'let _ = forEachU (u => noteWasmUse emit u) d.uses' \
-  'noteWasmUse emit UseRng = setRef emit.useRng True' \
-  'noteWasmUse emit UseHash = setRef emit.useHash True' \
-  '|| !emit.useRng || !emit.useHash || !emit.useFloat'; do
-  has_wasm_pin "$required" || {
-    echo "FAIL H2B9-RNG-HASH-AUTHORITY: missing $required"
-    exit 1
-  }
-done
-has_plan_pin 'noteName acc name = walkEach noteArity (walkEach noteKey (walkEach noteUse acc (wasmUses name)) (wasmHostKeys name)) (wasmTupleArities name)' || {
-  echo "FAIL H2B9-RNG-HASH-AUTHORITY: the plan no longer reads an extern's demands from the catalog"
-  exit 1
-}
-# X-W.H: the fifteen module-level cells that used to be listed here are all lifted onto
-# WasmEmit, so the emitter's ambient authority set is EMPTY — the same count llvm_emit.mdk
-# has always had.  A new top-level `name : Ref …` in wasm_emit.mdk is a regression: it
-# reintroduces state that survives a same-process re-emission.
-EXPECTED_MODULE_REFS=""
-ACTUAL_MODULE_REF_SIGS="$(awk '
-  /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
-  /^export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $2 }
-  /^public[[:space:]]+export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $3 }
-' "$WASM_SRC" | LC_ALL=C sort -u)"
-ACTUAL_MODULE_REF_DEFS="$(awk '
-  /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
-  /^export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*Ref([[:space:]]|$)/ { print $2 }
-  /^public[[:space:]]+export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*Ref([[:space:]]|$)/ { print $3 }
-' "$WASM_SRC" | LC_ALL=C sort -u)"
-if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
-    [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B-LR-AUTHORITY-SET: top-level Ref authority set changed (X-W.H: it must stay EMPTY)"
-  printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
-  printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
-  exit 1
-fi
-if grep -E '^_?useFileBytesRef[[:space:]]*[:=]|setRef (_?useFileBytesRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL A4-FILEBYTES-AUTHORITY: retired ambient authority remains"
-  exit 1
-fi
-for required in \
-  'useFileBytes : Ref Bool' \
-  'useFileBytes = Ref False' \
-  'setRef emit.useFileBytes True' \
-  '(progEmit prog).useFileBytes.value'; do
-  has_wasm_pin "$required" || {
-    echo "FAIL A4-FILEBYTES-CARRIER: missing $required"
-    exit 1
-  }
-done
-# Which externs demand FileBytes, and what it implies, is catalog data, asserted in
-# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-has_wasm_pin 'noteWasmUse emit UseFileBytes = setRef emit.useFileBytes True' &&
-  has_wasm_pin 'let fileBytesRt = fileBytesRuntimeLines (progEmit prog).useFileBytes.value plan.hostKeys' &&
-  ! grep -E 'setRef emit\.useFileBytes False|setRef useFileBytesRef False' "$WASM_SRC" >/dev/null || {
-    echo "FAIL A4-FILEBYTES-ROUTES: producer, cofactors, drains, or reset changed"
-    exit 1
-  }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFileBytes True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFileBytes.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
+has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-    echo "FAIL A4-FILEBYTES-ROUTES: writer/read cardinality or fresh routes changed"
-    exit 1
-  }
-# The IO and file-bytes host imports are plan keys, declared by the one
-# `hostImportLines plan.hostKeys` call (H2B-LR-MATH-ROUTES); only the runtime order is pinned.
-has_wasm_pin '++ strCodecRt ++ byteBlockRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' || {
-    echo "FAIL A4-FILEBYTES-ORDER: runtime order changed"
-    exit 1
-  }
+  echo "FAIL WASM-DEMAND-LIFECYCLE: strict, record or census freshness changed"
+  exit 1
+}
+
 for required in \
   'reemitLeafRuntimeRow "FILEBYTES_READ" leafFileBytesReadP leafFileBytesU "leafFileBytesReadIntentionalGap" "missingLeafFileBytesReadCensus"' \
   'reemitLeafRuntimeRow "FILEBYTES_WRITE" leafFileBytesWriteP leafFileBytesU "leafFileBytesWriteIntentionalGap" "missingLeafFileBytesWriteCensus"' \
@@ -435,31 +290,6 @@ for required in \
     exit 1
   }
 done
-if grep -E 'reemitFileBytesState|fileBytesState(Input|Program|ControlProgram|CensusProgram)|--reemit-file-bytes-state' "$TYPED_ENTRY" >/dev/null; then
-  echo "FAIL A4-FILEBYTES-HARNESS: duplicate standalone lifecycle remains"
-  exit 1
-fi
-if grep -E '^_?useArgsRef[[:space:]]*[:=]|setRef (_?useArgsRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL A3-ARGS-AUTHORITY: retired ambient authority remains"
-  exit 1
-fi
-# `args` has no carrier flag: its runtime is gated on its `mdk_args_count` host key.
-if grep -F 'useArgs' "$WASM_SRC" >/dev/null; then
-  echo "FAIL A3-ARGS-CARRIER: a useArgs flag remains"
-  exit 1
-fi
-# Which externs demand Args, and what it implies, is catalog data, asserted in
-# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-has_wasm_pin 'noteWasmUse _ UseArgs = ()' &&
-  has_wasm_pin 'let ioArgsRt = ioArgsRuntimeLines plan.hostKeys' || {
-    echo "FAIL A3-ARGS-ROUTES: writer, drain, or reset changed"
-    exit 1
-  }
-has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-    echo "FAIL A3-ARGS-ROUTES: writer/read cardinality or fresh routes changed"
-    exit 1
-  }
 for required in \
   'reemitLeafRuntimeRow "ARGS" leafArgsP leafArgsU "leafArgsIntentionalGap" "missingLeafArgsCensus"' \
   'leafArgsP : CProgram' \
@@ -472,35 +302,6 @@ for required in \
     exit 1
   }
 done
-if grep -E 'reemitArgsState|argsState(Input|Program|ControlProgram|CensusProgram)|--reemit-args-state' "$TYPED_ENTRY" >/dev/null; then
-  echo "FAIL A3-ARGS-HARNESS: duplicate standalone lifecycle remains"
-  exit 1
-fi
-if grep -E '^_?useFloatStrRef[[:space:]]*[:=]|setRef (_?useFloatStrRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL A2-FLOATSTR-AUTHORITY: retired ambient authority remains"
-  exit 1
-fi
-# `stringToFloat` has no carrier flag: its runtime is gated on its `mdk_str_to_float` host key.
-if grep -F 'useFloatStr' "$WASM_SRC" >/dev/null; then
-  echo "FAIL A2-FLOATSTR-CARRIER: a useFloatStr flag remains"
-  exit 1
-fi
-# Which externs demand FloatStr, and what it implies, is catalog data, asserted in
-# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-has_wasm_pin 'noteWasmUse _ UseFloatStr = ()' &&
-  has_wasm_pin 'let floatStrRt = floatStrRuntimeLines plan.hostKeys' || {
-    echo "FAIL A2-FLOATSTR-ROUTES: writer, cofactors, drains, or reset changed"
-    exit 1
-  }
-has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-    echo "FAIL A2-FLOATSTR-ROUTES: writer/read cardinality or fresh routes changed"
-    exit 1
-  }
-has_wasm_pin '++ strCodecRt ++ byteBlockRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' || {
-    echo "FAIL A2-FLOATSTR-ORDER: runtime order changed"
-    exit 1
-  }
 for required in \
   'reemitLeafRuntimeRow "FLOATSTR" leafFloatStrP leafFloatStrU "leafFloatStrIntentionalGap" "missingLeafFloatStrCensus"' \
   'leafFloatStrP : CProgram' \
@@ -513,210 +314,6 @@ for required in \
     exit 1
   }
 done
-if grep -E 'reemitFloatStrState|floatStrState(Input|Program|ControlProgram|CensusProgram)|--reemit-float-str-state' "$TYPED_ENTRY" >/dev/null; then
-  echo "FAIL A2-FLOATSTR-HARNESS: duplicate standalone lifecycle remains"
-  exit 1
-fi
-if grep -E '^_?useCharClassRef[[:space:]]*[:=]|setRef (_?useCharClassRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B-LR-AUTHORITY-SET: retired CharClass ambient authority remains"
-  exit 1
-fi
-for required in \
-  'useCharClass : Ref Bool' \
-  'useCharClass = Ref'; do
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
-    echo "FAIL H2B-LR-CHARCLASS-CARRIER: missing or duplicate $required"
-    exit 1
-  }
-done
-# Which externs demand CharClass, and what it implies, is catalog data, asserted in
-# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-has_wasm_pin 'noteWasmUse emit UseCharClass = setRef emit.useCharClass True' &&
-  has_wasm_pin '|| !emit.useCharClass || isNonEmptyList plan.hostKeys' &&
-  has_wasm_pin 'let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []' &&
-  ! grep -E 'setRef emit\.useCharClass False|setRef useCharClassRef False' "$WASM_SRC" >/dev/null || {
-    echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer, operational read, or reset changed"
-    exit 1
-  }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useCharClass True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '!emit.useCharClass' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useCharClass.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-    echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer/read cardinality or fresh route changed"
-    exit 1
-  }
-if grep -E '^_?useFloatRngRef[[:space:]]*[:=]|setRef (_?useFloatRngRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B-LR-AUTHORITY-SET: retired FloatRng ambient authority remains"
-  exit 1
-fi
-for required in \
-  'useFloatRng : Ref Bool' \
-  'useFloatRng = Ref'; do
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
-    echo "FAIL H2B-LR-FLOATRNG-CARRIER: missing or duplicate $required"
-    exit 1
-  }
-done
-# Which externs demand FloatRng, and what it implies, is catalog data, asserted in
-# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-has_wasm_pin 'noteWasmUse emit UseFloatRng = setRef emit.useFloatRng True' &&
-  ! grep -E 'setRef emit\.useFloatRng False|setRef useFloatRngRef False' "$WASM_SRC" >/dev/null || {
-    echo "FAIL H2B-LR-FLOATRNG-ROUTES: writer, operational read, or reset changed"
-    exit 1
-  }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFloatRng True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFloatRng.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-    echo "FAIL H2B-LR-FLOATRNG-ROUTES: writer/read cardinality or fresh route changed"
-    exit 1
-  }
-if grep -E '^_?useStrCodecRef[[:space:]]*[:=]|setRef (_?useStrCodecRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B-LR-AUTHORITY-SET: retired StrCodec ambient authority remains"
-  exit 1
-fi
-for required in \
-  'useStrCodec : Ref Bool' \
-  'useStrCodec = Ref'; do
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
-    echo "FAIL H2B-LR-STRCODEC-CARRIER: missing or duplicate $required"
-    exit 1
-  }
-done
-# Which externs demand StrCodec, and what it implies, is catalog data, asserted in
-# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-has_wasm_pin 'noteWasmUse emit UseStrCodec = setRef emit.useStrCodec True' &&
-  ! grep -E 'setRef emit\.useStrCodec False|setRef useStrCodecRef False' "$WASM_SRC" >/dev/null || {
-    echo "FAIL H2B-LR-STRCODEC-ROUTES: producers, cofactors, or reset changed"
-    exit 1
-  }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useStrCodec True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useStrCodec.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-    echo "FAIL H2B-LR-STRCODEC-ROUTES: writer/reader cardinality or fresh route changed"
-    exit 1
-  }
-if has_wasm_pin 'useValueCmpRef'; then
-  echo "FAIL H2B-LR-AUTHORITY-SET: retired ValueCmp ambient authority remains"
-  exit 1
-fi
-for required in \
-  'useValueCmp : Ref Bool' \
-  'useValueCmp = Ref False'; do
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
-    echo "FAIL H2B-LR-VALUECMP-CARRIER: missing or duplicate $required"
-    exit 1
-  }
-done
-VALUECMP_WRITER_LINE="$(grep -n -F 'let _ = setRef (progEmit prog).useValueCmp True' "$WASM_SRC" | head -1 | cut -d: -f1)"
-[ -n "$VALUECMP_WRITER_LINE" ] &&
-  [ "$(sed -n "$((VALUECMP_WRITER_LINE + 1))p" "$WASM_SRC")" = '    let _ = setRef (progEmit prog).useStrSearch True' ] &&
-  [ "$(sed -n "$((VALUECMP_WRITER_LINE + 2))p" "$WASM_SRC")" = '    let _ = setRef (progEmit prog).useStrLeaf True' ] &&
-  has_wasm_pin 'let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines wide else []' &&
-  ! grep -E 'setRef (emit|\(progEmit prog\))\.useValueCmp False|setRef useValueCmpRef False' "$WASM_SRC" >/dev/null || {
-    echo "FAIL H2B-LR-VALUECMP-ROUTES: writer, cofactors, reader, or reset changed"
-    exit 1
-  }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef (progEmit prog).useValueCmp True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useValueCmp.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-    echo "FAIL H2B-LR-VALUECMP-ROUTES: writer/reader cardinality or fresh route changed"
-    exit 1
-  }
-if grep -E '^_?useMathRef[[:space:]]*[:=]|setRef (_?useMathRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B-LR-AUTHORITY-SET: retired Math ambient authority remains"
-  exit 1
-fi
-# The Math host-import name set (the 17 libm externs lowered to a JS Math.* import)
-# and its Float cofactor are catalog data, asserted in
-# compiler/backend/extern_catalog_test.mdk (b).  Each libm import is its extern's
-# own host key, declared from the plan's keys, so the demand has no carrier flag.
-MATH_IMPORT_LINE="$(grep -n -F 'hostImportLines plan.hostKeys' "$WASM_SRC" | cut -d: -f1)"
-FLOAT_IMPORT_LINE="$(grep -n -F 'floatFmtImportLines else []' "$WASM_SRC" | cut -d: -f1)"
-has_wasm_pin 'noteWasmUse _ UseMath = ()' &&
-  has_wasm_pin 'noteWasmUse emit UseFloat = setRef emit.useFloat True' &&
-  [ -n "$MATH_IMPORT_LINE" ] &&
-  [ -n "$FLOAT_IMPORT_LINE" ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'hostImportLines plan.hostKeys' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'floatFmtImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$FLOAT_IMPORT_LINE" -lt "$MATH_IMPORT_LINE" ] &&
-  ! grep -E 'setRef emit\.useMath|setRef useMathRef False|useMath :' "$WASM_SRC" >/dev/null || {
-    echo "FAIL H2B-LR-MATH-ROUTES: cofactor, import order, or reset changed"
-    exit 1
-  }
-[ "$(printf '%s' "$PLAN_FLAT" | grep -o -F 'hostKeys = keys,' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-    echo "FAIL H2B-LR-MATH-ROUTES: writer/reader cardinality or fresh route changed"
-    exit 1
-  }
-if grep -E '^_?useCharFromCodeRef[[:space:]]*[:=]|setRef (_?useCharFromCodeRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: retired ambient authority remains"
-  exit 1
-fi
-for required in \
-  'useCharFromCode : Ref Bool' \
-  'useCharFromCode = Ref False' \
-  'setRef emit.useCharFromCode True' \
-  '(progEmit prog).useCharFromCode.value'; do
-  has_wasm_pin "$required" || {
-    echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: missing $required"
-    exit 1
-  }
-done
-# Which externs demand CharFromCode, and what it implies, is catalog data, asserted in
-# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-has_wasm_pin 'noteWasmUse emit UseCharFromCode = setRef emit.useCharFromCode True' &&
-  has_wasm_pin 'let charFromCodeRt = if (progEmit prog).useCharFromCode.value then ' &&
-  ! grep -E 'setRef emit\.useCharFromCode False|setRef useCharFromCodeRef False' "$WASM_SRC" >/dev/null || {
-  echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: writer, reader, or retired reset changed"
-  exit 1
-}
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useCharFromCode True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useCharFromCode.value' | wc -l | tr -d '[:space:]')" -eq 1 ] || {
-  echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: expected one charFromCode writer and reader"
-  exit 1
-}
-has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-  echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: strict, record, census freshness routes changed"
-  exit 1
-}
-if grep -E '^_?useFloatHashRef[[:space:]]*[:=]|setRef (_?useFloatHashRef)' "$WASM_SRC" >/dev/null; then
-  echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: retired ambient hashFloat authority remains"
-  exit 1
-fi
-for required in \
-  'useFloatHash : Ref Bool' \
-  'useFloatHash = Ref False' \
-  'setRef emit.useFloatHash True' \
-  '(progEmit prog).useFloatHash.value'; do
-  has_wasm_pin "$required" || {
-    echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: missing $required"
-    exit 1
-  }
-done
-# Which externs demand FloatHash, and what it implies, is catalog data, asserted in
-# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-has_wasm_pin 'noteWasmUse emit UseFloatHash = setRef emit.useFloatHash True' &&
-  has_wasm_pin 'let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []' &&
-  ! grep -E 'setRef emit\.useFloatHash False|setRef useFloatHashRef False' "$WASM_SRC" >/dev/null || {
-  echo "FAIL H2B10-FLOAT-HASH-ROUTES: writer, reader, or retired reset changed"
-  exit 1
-}
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFloatHash True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFloatHash.value' | wc -l | tr -d '[:space:]')" -eq 1 ] || {
-  echo "FAIL H2B10-FLOAT-HASH-ROUTES: expected one hashFloat writer and reader"
-  exit 1
-}
-has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-  echo "FAIL H2B10-FLOAT-HASH-ROUTES: strict, record, census freshness routes changed"
-  exit 1
-}
 for required in \
   'site : Int, binding : String, }' \
   'freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?" }' \

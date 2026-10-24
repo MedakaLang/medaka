@@ -23,6 +23,7 @@ import ir.core_ir.{
   CImplBody(..),
 }
 import support.util.{
+  lenKey,
   contains,
   listLen,
   filterList,
@@ -1707,3 +1708,38 @@ anyListM _ [] = False
 anyListM p (x :: rest) =
   let h = p x
   if h then True else anyListM p rest
+
+-- The self-recursive TRMC verdict.  `eligibleFns` holds every top-level function, and
+-- `eligibleImpls` every impl group (one `(method, key)` pair, its clauses in program
+-- order), whose clauses `trmcEligible` accepts with a uniform count of leading
+-- dictionary parameters.
+--
+-- The verdict is the same on both backends, and each realizes every eligible
+-- function as a destination-passing loop.  What differs is only the cell a
+-- constructor leaf links.  LLVM allocates every leaf through its constructor
+-- tag.  Wasm picks the struct per function: the built-in list cell when the
+-- leaves are `::` (`ctorTailIsCons`), the user constructor's struct otherwise.
+-- A dispatch-group member is emitted by its group, not by this verdict.
+--
+-- A constructor is a name in the program's constructor table.  Wasm's own table
+-- also answers for reserved and synthetic names the program may not declare
+-- (`Some`, `Ok`, `Err`, `Cons`, `Tup<n>`).  None of them can head a leaf whose
+-- last field is the self-call: `Some (f x)` returned by `f` would need
+-- `Option T = T`, and the list and tuple cells lower to `::` and tuple nodes, not
+-- applications.  So, for a typechecked program, the one table gives both backends
+-- the verdict they computed.  Untyped input (the `wasm_emit_main` probe) can head
+-- such a leaf, and there the plan's verdict is the narrower one.
+public export data TrmcVerdicts = TrmcVerdicts {
+  eligibleFns : OrdMap Unit,
+  eligibleImpls : OrdMap Unit,
+}
+
+-- does the TRMC verdict hold for top-level function [name]?
+export
+isTrmcFn : TrmcVerdicts -> String -> Bool
+isTrmcFn v name = omHasKey name v.eligibleFns
+
+-- does the TRMC verdict hold for the impl group of [method] at instance [key]?
+export
+isTrmcImpl : TrmcVerdicts -> String -> String -> Bool
+isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
