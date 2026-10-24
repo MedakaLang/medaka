@@ -330,15 +330,12 @@ runTestUnderProfile engines runtimeP target roots cases filterOpt =
       Err e =>
         ePutStrLn e
         False
-      -- A FILE-LEVEL parse error in the target must surface as the SAME located
-      -- `file:L:C:` diagnostic `medaka check` prints — not the unlocated
-      -- `panic "parse error"` the memoized `targetDesugared`/`targetRaw` below
-      -- would raise (issue #892).  Gate on the non-panicking `parseTargetResult`
-      -- first (the same parse `check` uses) and, on failure, render the structured
-      -- `ParseError` through the shared `parseErrDiag`/`ppDiagCliSrc` machinery,
-      -- returning False so the caller exits nonzero — accumulate-and-report, not
-      -- panic.  (Issue #55 fixed parse errors in an individual doctest EXAMPLE;
-      -- this covers a parse error in the module SOURCE itself.)
+      -- A parse error in the target's own source must print the same located
+      -- `file:L:C:` diagnostic `medaka check` prints, not the unlocated panic that
+      -- the memoized `targetDesugared`/`targetRaw` below would raise.  So gate on
+      -- the non-panicking `parseTargetResult` first and render the `ParseError`
+      -- through `parseErrDiag`/`ppDiagCliSrc`; returning False makes the caller
+      -- exit nonzero.
       Ok tsrc => match parseTargetResult tsrc
         Err e =>
           ePutStrLn (ppDiagCliSrc tsrc target (parseErrDiag target e))
@@ -353,9 +350,8 @@ runTestUnderProfile engines runtimeP target roots cases filterOpt =
               False
             Ok (file, index) =>
               let _ = holdTestPrelude True prelude
-              -- S-1/#2234 (F-converge): the prelude halves go through the
-              -- content-keyed `desugaredPrelude` memo; only the USER source is
-              -- parsed+desugared fresh here.
+              -- The prelude halves go through the content-keyed `desugaredPrelude`
+              -- memo; only the user source is parsed and desugared fresh here.
               driveAll
                 engines
                 (desugaredPrelude prelude.pnRuntimeSrc)
@@ -2379,7 +2375,7 @@ runTestReportPinned : List Engine ->
   PinIndex ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
 runTestReportPinned engines runtimeSrc coreSrc target tsrc userDecls stdlibDir cases filterOpt includeTestDecls file index =
-  -- S-1/#2234 (F-converge): content-keyed prelude memo (see `runTest` above).
+  -- The prelude halves come from the content-keyed `desugaredPrelude` memo.
   let runtimeDecls = desugaredPrelude runtimeSrc
   let coreDecls = desugaredPrelude coreSrc
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]

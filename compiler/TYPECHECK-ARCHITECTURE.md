@@ -574,11 +574,11 @@ shape makes true that a linear reading does not:
 `foldModules` calls the worker **head-first**, so `graphModuleWorker` reads a module's
 promotion set before the recursion into `rest` resets it.
 
-The keyed chain memo (`checkModulesDiagsChain (Some …)`, the LSP/`analyzeProject` arm) does
-NOT go through `driveGraphK`: `chainGo` shares `graphPreamble` (via
-`checkModulesPreambleK`) and `graphModuleWorker`, but mirrors `driveGraphK GOutDiags`'
-`foldModules` by hand. That mirror is a `[T-EVAL-LOCKSTEP]` obligation — a change to
-either fold is owed to both.
+The keyed diagnostics drive (`checkModulesDiagsChain (Some …)`, the LSP/`analyzeProject`
+arm) goes through `driveGraphK GOutDiags` like the unkeyed one: it hands the one
+`foldModules` a serve policy (`diagsServe`) that serves each unchanged module before the
+entry from its recorded `ModuleInterface` (`types/module_interface.mdk`) instead of
+checking it. There is no second fold to keep in lockstep.
 
 ### 5.2 `checkBodyImpl` itself
 
