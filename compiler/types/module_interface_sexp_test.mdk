@@ -1,0 +1,387 @@
+-- The module interface file: a recorded interface written, read back and
+-- replayed, and the files a reader must refuse.  Drives run through
+-- `checkModulesChainReportForGraph` with source keys, as the keyed callers do;
+-- each test uses module ids of its own, because the module cache is keyed by
+-- module id and lives for the process.
+import test.{
+  Expectation, expectAll, expectEach, expectEqual, expectGreaterThan,
+  expectSatisfies, expectTrue, fail, labelFail
+}
+import frontend.ast.{Loc(..)}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse, parseLocated}
+import list.{filter, take}
+import string as S
+import support.sexp_value.{SExp(..), parseSExp, renderSExp}
+import support.util.{joinNl}
+import types.framed_test_support.{withDigestOf}
+import types.interface_frame.{InterfaceFault(..)}
+import types.module_interface_test.{
+  diagCode, entrySrc, freshGraph, interfaceOf, leafSrc, midSrc, render,
+  renderBinding, renderFrozenBinding, renderRow
+}
+import types.module_interface.{
+  ModuleInterface(..), FrozenExport(..), ModuleKey(..), applyModuleInterface,
+  currentModuleInterfaces, moduleKeyText, seedModuleInterfaces
+}
+import types.module_interface_sexp.{
+  decodeModuleInterface, decodeModuleInterfaceFor, encodeModuleInterface,
+  readModuleKey
+}
+import types.publish.{
+  ModDiags, PubScheme(..), TcDiag(..), TcReport(..), ppPubScheme
+}
+import types.repr.{ppSchemeCon}
+import types.tc_types.{
+  DriveOutputs(..), ExportBinding(..), GraphCtx(..), MethodGrant(..)
+}
+import types.typecheck.{defaultDriveInputs, checkModulesChainReportForGraph}
+
+-- ── fixtures ────────────────────────────────────────────────────────────────
+
+-- Constructors, a record, an interface with an impl and a method default, an
+-- effect-indexed data type with an existential binder and a warning-bearing
+-- match.
+richSrc : String
+richSrc = joinNl [
+  "effect Store Prefix",
+  "export data Shape = Circle Int | Rect Int Int",
+  "export data Person = Person { name : String, age : Int }",
+  "export data Handle (p : Authority Store) = Handle (String @p)",
+  "export data AnyHandle = AnyHandle (p : Authority Store) (Handle p)",
+  "export interface Area a where",
+  "  area : a -> Int",
+  "  double : a -> Int",
+  "  double x = area x + area x",
+  "export impl Area Shape where",
+  "  area s = match s",
+  "    Circle r => r * r * 3",
+  "    Rect w h => w * h",
+  "export birthday : Person -> Person",
+  "birthday p = { p | age = p.age + 1 }",
+  "export total : Area a => List a -> Int",
+  "total xs = fold (acc x => acc + area x) 0 xs",
+]
+
+richEntrySrc : String -> String
+richEntrySrc lib = joinNl [
+  "import \{lib}.{Shape(..), Person(..), total, birthday}",
+  "entry = total [Circle 1, Rect 2 3]",
+  "older = birthday (Person \"a\" 1)",
+]
+
+-- One keyed drive over the modules [p]_leaf, [p]_mid and [p]_entry.
+chainDrive : String -> Int -> String -> (List String, Int)
+chainDrive p seed chainKey =
+  let midText = midSrc "\{p}_leaf"
+  let entryText = entrySrc "\{p}_mid"
+  let ((report, outputs), _) =
+    checkModulesChainReportForGraph
+      defaultDriveInputs
+      False
+      (Some (seed, seed + 1))
+      chainKey
+      [Some leafSrc, Some midText, None]
+      []
+      (desugar (parse ""))
+      [
+        ("\{p}_leaf", desugar (parseLocated leafSrc)),
+        ("\{p}_mid", desugar (parseLocated midText)),
+        ("\{p}_entry", desugar (parseLocated entryText)),
+      ]
+  (render report, outputs.doServedModules)
+
+-- One keyed drive over [p]_lib and [p]_entry.
+richDrive : String -> Int -> String -> (List String, Int)
+richDrive p seed chainKey =
+  let entryText = richEntrySrc "\{p}_lib"
+  let ((report, outputs), _) =
+    checkModulesChainReportForGraph
+      defaultDriveInputs
+      False
+      (Some (seed, seed + 1))
+      chainKey
+      [Some richSrc, None]
+      []
+      (desugar (parse ""))
+      [
+        ("\{p}_lib", desugar (parseLocated richSrc)),
+        ("\{p}_entry", desugar (parseLocated entryText)),
+      ]
+  (render report, outputs.doServedModules)
+
+-- A graph record whose drive checked one unrelated module.
+-- What a fault says, as text: the verdict a reader names.
+verdict : Result InterfaceFault a -> String
+verdict (Ok _) = "ok"
+verdict (Err (WrongFormat v)) = "format \{v}"
+verdict (Err (StaleKey component)) = "stale \{component}"
+verdict (Err (Malformed e)) = "malformed \{e.sePath}: \{e.seWhat}"
+
+-- ── round trips ─────────────────────────────────────────────────────────────
+
+-- [mi] written, read back, written again and replayed into a fresh record.
+roundTripRows : ModuleInterface -> Int -> List (String, Bool)
+roundTripRows mi seed = match decodeModuleInterface (encodeModuleInterface mi)
+  Err fault => [("decode: \{verdict (Err fault)}", False)]
+  Ok back =>
+    let g1 = freshGraph "rtfresh\{intToString seed}a" seed
+    let g2 = freshGraph "rtfresh\{intToString seed}b" (seed + 1)
+    let (row1, exports1) = applyModuleInterface g1 mi
+    let (row2, exports2) = applyModuleInterface g2 back
+    [
+      (
+        "the key",
+        moduleKeyText back.miKey == moduleKeyText mi.miKey,
+      ),
+      (
+        "writing the read value gives the same text",
+        encodeModuleInterface back == encodeModuleInterface mi,
+      ),
+      ("the serial", back.miSerial == mi.miSerial),
+      ("the row prints alike", renderRow row1 == renderRow row2),
+      (
+        "the bindings print alike",
+        map renderBinding exports1 == map renderBinding exports2,
+      ),
+      (
+        "the frozen exports print alike",
+        map renderFrozenBinding mi.miExports
+          == map renderFrozenBinding back.miExports,
+      ),
+      ("the function names", back.miFunNames == mi.miFunNames),
+      ("the binder rows", length back.miBinders == length mi.miBinders),
+      ("the evidence rows", length back.miEvTable == length mi.miEvTable),
+    ]
+
+-- [mi] with the tables a small drive leaves empty filled in by hand.
+withExtras : ModuleInterface -> ModuleInterface
+withExtras mi = { mi |
+  miMethodGrants =
+    [("area", MethodGrant { mgArity = 2, mgNames = ["p", "q"] })],
+  miTopIds = [("total", [3, 4]), ("none", [])],
+  miTakers = ["total", "birthday"],
+  miSticky = [
+    (
+      "lib",
+      TcDiag
+        "E1"
+        1
+        (Some (Loc "lib.mdk" 1 2 3 4))
+        "a \"quoted\" message\nover two lines"
+        (Some "help")
+        (Some (Loc "lib.mdk" 5 6 7 8, "fix")),
+    ),
+    ("lib", TcDiag "W1" 2 None "plain" None None),
+  ],
+  miPatternAuth = [7, 8],
+  miSerial = 41,
+}
+
+rowsExpectation : List (String, Bool) -> Expectation
+rowsExpectation rows =
+  expectAll (map (r => labelFail (fst r) (expectTrue (snd r))) rows)
+
+test "interfaces recorded from a three-module chain round-trip" =
+  let _ = chainDrive "mc" 7701 "mc-k"
+  match (interfaceOf "mc_leaf", interfaceOf "mc_mid")
+    (Some leaf, Some mid) => expectAll [
+      labelFail "leaf" (rowsExpectation (roundTripRows leaf 7710)),
+      labelFail "mid" (rowsExpectation (roundTripRows mid 7712)),
+      labelFail
+        "the mid module's key names its import"
+        (expectEqual 1 (length mid.miKey.mkImports)),
+      labelFail
+        "the leaf holds constructors"
+        (expectGreaterThan 0 (length leaf.miDataCtors)),
+    ]
+    _ => fail "the chain recorded no interface"
+
+test "an interface with constructors, a record, an interface and an impl round-trips" =
+  let _ = richDrive "mr" 7721 "mr-k"
+  match interfaceOf "mr_lib"
+    None => fail "the library recorded no interface"
+    Some lib => expectAll [
+      labelFail "round trip" (rowsExpectation (roundTripRows lib 7730)),
+      labelFail "constructors" (expectGreaterThan 0 (length lib.miDataCtors)),
+      labelFail
+        "dispatch rows"
+        (expectGreaterThan 0 (length lib.miDispatchIdx)),
+      labelFail "exports" (expectGreaterThan 2 (length lib.miExports)),
+      labelFail
+        "existentials"
+        (expectGreaterThan 0 (length lib.miExistentials)),
+      labelFail
+        "fields the drive leaves empty"
+        (rowsExpectation (roundTripRows (withExtras lib) 7740)),
+      labelFail "binders" (expectGreaterThan 0 (length lib.miBinders)),
+      labelFail "evidence" (expectGreaterThan 0 (length lib.miEvTable)),
+    ]
+
+-- A drive whose interfaces were all read back from their files prints what
+-- the drive that recorded them printed, and serves the same modules.
+test "a drive over decoded interfaces prints what the recording drive printed" =
+  let (cold, coldServed) = chainDrive "md" 7741 "md-k"
+  match (interfaceOf "md_leaf", interfaceOf "md_mid")
+    (Some leaf, Some mid) => match (
+      decodeModuleInterface (encodeModuleInterface leaf),
+      decodeModuleInterface (encodeModuleInterface mid),
+    )
+      (Ok l, Ok m) =>
+        let _ = seedModuleInterfaces [l, m]
+        let (warm, warmServed) = chainDrive "md" 7741 "md-k"
+        expectEach [
+          ("the recording drive serves nothing", expectEqual 0 coldServed),
+          ("the decoded drive serves both", expectEqual 2 warmServed),
+          ("both print the same", expectEqual cold warm),
+          (
+            "the report is not empty",
+            expectSatisfies "lists schemes" (r => length r > 3) cold,
+          ),
+        ]
+      _ => fail "an interface did not read back"
+    _ => fail "the chain recorded no interface"
+
+otherGraph : ModuleKey -> ModuleKey
+otherGraph k = { k | mkGraph = k.mkGraph ++ "x" }
+
+-- ── forged files ────────────────────────────────────────────────────────────
+
+recorded : Unit -> Option (ModuleInterface, String)
+recorded _ =
+  let _ = chainDrive "mf" 7751 "mf-k"
+  map (mi => (mi, encodeModuleInterface mi)) (interfaceOf "mf_mid")
+
+-- [text] with the field [old] of its header replaced.
+header : String -> String -> String -> String
+header old new text = S.replace old new text
+
+-- The sections of [good] with the last field of the interface dropped, the
+-- digest recomputed over what remains.
+truncatedList : String -> String
+truncatedList good =
+  match (parseSExp
+    ("(" ++ S.drop (optionOr 0 (S.indexOf "\n" good) + 1) good ++ ")"))
+    Ok (SList [SList [s, js, SList fields]]) =>
+      let cut = SList [s, js, SList (take (length fields - 1) fields)]
+      withDigestOf good "\{renderSExp cut}\n"
+    _ => good
+
+test "a reader refuses every file that is not whole and true" =
+  match recorded ()
+    None => fail "no interface recorded"
+    Some (mi, good) =>
+      let key = mi.miKey
+      let flipped = S.replace "(digest " "(digest 0" good
+      expectEach [
+        (
+          "the file as written",
+          expectEqual "ok" (verdict (decodeModuleInterfaceFor key good)),
+        ),
+        (
+          "a lying key",
+          expectEqual
+            "stale module"
+            (verdict
+              (decodeModuleInterfaceFor
+                key
+                (header "(module mf_mid)" "(module mf_other)" good))),
+        ),
+        (
+          "a lying source",
+          expectEqual
+            "stale source"
+            (verdict
+              (decodeModuleInterfaceFor
+                { key | mkSource = key.mkSource ++ " " }
+                good)),
+        ),
+        (
+          "a lying digest",
+          expectEqual
+            "malformed header/digest: the body does not match the digest"
+            (verdict (decodeModuleInterface flipped)),
+        ),
+        (
+          "a torn file",
+          expectEqual
+            "malformed header/digest: the body does not match the digest"
+            (verdict (decodeModuleInterface (S.take (S.length good - 20) good))),
+        ),
+        (
+          "a wrong format version",
+          expectEqual
+            "format 2"
+            (verdict
+              (decodeModuleInterface
+                (S.replace "(medaka-module 1" "(medaka-module 2" good))),
+        ),
+        (
+          "an unknown section tag",
+          expectEqual
+            "malformed file/0: sectionx: unknown head; expected one of section"
+            (verdict
+              (decodeModuleInterface
+                (withDigestOf
+                  good
+                  (S.replace
+                    "(section "
+                    "(sectionx "
+                    (S.drop (optionOr 0 (S.indexOf "\n" good) + 1) good))))),
+        ),
+        (
+          "an unknown interface tag",
+          expectEqual
+            "malformed file/0/section.2: module-interfacx: unknown head; expected one of module-interface"
+            (verdict
+              (decodeModuleInterface
+                (withDigestOf
+                  good
+                  (S.replace
+                    "(module-interface "
+                    "(module-interfacx "
+                    (S.drop (optionOr 0 (S.indexOf "\n" good) + 1) good))))),
+        ),
+        (
+          "a truncated list",
+          expectEqual
+            "malformed file/0/section.2: module-interface: expected 24 field(s)"
+            (verdict (decodeModuleInterface (truncatedList good))),
+        ),
+        (
+          "a section count that is not the sections present",
+          expectEqual
+            "malformed header/sections.1: header counts 2 section(s), the file holds 1"
+            (verdict
+              (decodeModuleInterface
+                (S.replace "(sections 1)" "(sections 2)" good))),
+        ),
+      ]
+
+-- The header's key is read before the digest and before any section: a file
+-- whose key is stale and whose body is garbage names the key.
+test "a stale key is named before the body is read" = match recorded ()
+  None => fail "no interface recorded"
+  Some (mi, good) =>
+    let headerLine = S.take (optionOr 0 (S.indexOf "\n" good)) good
+    let garbage = "\{headerLine}\n))) not a section ((\n"
+    expectEach [
+      (
+        "garbage under a matching key reaches the digest",
+        expectEqual
+          "malformed header/digest: the body does not match the digest"
+          (verdict (decodeModuleInterfaceFor mi.miKey garbage)),
+      ),
+      (
+        "garbage under another key is stale, not malformed",
+        expectEqual
+          "stale graph"
+          (verdict (decodeModuleInterfaceFor (otherGraph mi.miKey) garbage)),
+      ),
+      (
+        "the header-only reader names the key and reads no body",
+        expectEqual
+          (Some (moduleKeyText mi.miKey))
+          (map moduleKeyText (fromResult (readModuleKey garbage))),
+      ),
+    ]

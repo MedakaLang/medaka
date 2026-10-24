@@ -30,6 +30,7 @@ import support.util.{joinNl}
 
 -- ── fixtures ────────────────────────────────────────────────────────────────
 
+export
 leafSrc : String
 leafSrc = joinNl [
   "export data Box a = Box a | Empty",
@@ -41,12 +42,14 @@ leafSrc = joinNl [
 ]
 
 -- [leaf] is the id of the module [midSrc] imports.
+export
 midSrc : String -> String
 midSrc leaf = joinNl [
   "import \{leaf}.{Box(..), wrap}",
   "export twice x = wrap (wrap x)",
 ]
 
+export
 entrySrc : String -> String
 entrySrc mid = joinNl ["import \{mid}.{twice}", "entry = twice 1"]
 
@@ -77,18 +80,22 @@ chainDrive p seed chainKey leafText entryText =
       ]
   (render report, outputs.doServedModules, gctx)
 
+export
 render : TcReport -> List String
 render r = flatMap renderRow r.trDiagnostics
 
+export
 renderRow : ModDiags -> List String
 renderRow (mid, (schemes, errs, warns)) =
   map (s => "\{mid}.\{fst s} : \{ppPubScheme (snd s)}") schemes
     ++ map (d => "\{mid} error \{diagCode d}") errs
     ++ map (d => "\{mid} warning \{diagCode d}") warns
 
+export
 diagCode : TcDiag -> String
 diagCode (TcDiag code _ _ _ _ _) = code
 
+export
 interfaceOf : String -> Option ModuleInterface
 interfaceOf mid =
   let found =
@@ -102,14 +109,17 @@ interfaceOf mid =
 renderFrozen : FrozenExport -> String
 renderFrozen fe = ppPubScheme fe.feScheme
 
+export
 renderBinding : (String, ExportBinding) -> String
 renderBinding (name, b) = "\{name} : \{ppSchemeCon [] b.xbScheme}"
 
+export
 renderFrozenBinding : (String, FrozenExport) -> String
 renderFrozenBinding (name, fe) = "\{name} : \{renderFrozen fe}"
 
 -- A graph record whose drive checked one unrelated module, so it holds none of the
 -- fixture leaf's names.
+export
 freshGraph : String -> Int -> GraphCtx
 freshGraph mid seed =
   let (_, gctx) =

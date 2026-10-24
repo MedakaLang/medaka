@@ -33,19 +33,21 @@ import frontend.desugar_cache.{
 import frontend.desugar.{reserveBinderOrdinals}
 import frontend.ast.{Decl}
 import types.tc_types.{DriveInputs(..)}
+import types.interface_frame.{InterfaceFault(..), KeyGate, sha256Hex}
 import types.interface_sexp.{
-  InterfaceSection, InterfaceFault(..), readInterface, readInterfaceKey,
-  cacheOfSections, formatVersion, sha256Hex
+  InterfaceSection, readInterfaceGated, readInterfaceKey, cacheOfSections,
+  formatVersion
 }
 import types.prelude_interface.{
   InterfaceKey, interfaceKeyOf, keysMatch, seedPreludeInterface
 }
 import types.prelude_elab.{
-  PreludeElab, elabKeyOf, readElabFile, readElabKey, relocDecls, seedPreludeElab
+  PreludeElab, elabKeyOf, readElabFileGated, readElabKeyGated, relocDecls,
+  seedPreludeElab
 }
 import types.prelude_decls.{
   PreludeDecls(..), PreludeTree(..), acceptedDeclsBody, declsKeyOf,
-  readDeclsFramed
+  readDeclsFramedGated
 }
 import support.stage_count.{forwardStageLines}
 import io.{runCommandOk}
@@ -382,35 +384,43 @@ shippedInputsFor compiler stdlibDir rsrc csrc = PreludeInputs {
 }
 
 -- The stale component a file that does not decode names: its format version
--- when that is what was refused, else the file itself.
+-- when that is what was refused, the key's component when the key was stale,
+-- else the file itself.
 export
 faultComponent : InterfaceFault -> String
 faultComponent (WrongFormat _) = "format"
 faultComponent (Malformed _) = "file"
+faultComponent (StaleKey component) = component
 
 -- How `<stdlibDir>/[file]` stands against [inputs], with what [read] decodes
--- from it when it is fresh.  [read] gives the key the text was written under,
+-- from it when it is fresh.  [read] decodes the text once the gate it is given
+-- finds the header's key fresh, so a stale file never has its body decoded;
 -- [keyOf] takes that kind of file's key off the interface's, and [absent] is
 -- the verdict of a file that cannot be read.  `MEDAKA_NO_INTERFACE` set to
 -- anything disables every one of them.
 verdictOfFile : String ->
   FileVerdict ->
   (InterfaceKey -> InterfaceKey) ->
-  (String -> Result InterfaceFault (InterfaceKey, a)) ->
+  (KeyGate -> String -> Result InterfaceFault a) ->
   PreludeInputs ->
   <IO> (FileVerdict, Option a)
 verdictOfFile file absent keyOf read inputs
   | envOr "MEDAKA_NO_INTERFACE" "" /= "" = (FileDisabled, None)
   | otherwise = match readFile (joinPath inputs.pnStdlibDir file)
     Err _ => (absent, None)
-    Ok text => match read text
-      Err fault => (FileStale (faultComponent fault), None)
-      Ok (key, _) if inputs.pnCompiler == "" || key.ikCompiler == "" =>
-        (FileStale "compiler", None)
-      Ok (key, value) =>
-        match keysMatch key (keyOf (preludeInterfaceKey "core.mdk" inputs))
-          None => (FileLoaded, Some value)
-          Some component => (FileStale component, None)
+    Ok text =>
+      match (read
+        (freshKey (keyOf (preludeInterfaceKey "core.mdk" inputs)) inputs)
+        text)
+        Err fault => (FileStale (faultComponent fault), None)
+        Ok value => (FileLoaded, Some value)
+
+-- The component a header's [key] differs from [expected] in, if it does; a
+-- compiler identity missing on either side is never fresh.
+freshKey : InterfaceKey -> PreludeInputs -> KeyGate
+freshKey expected inputs key
+  | inputs.pnCompiler == "" || key.ikCompiler == "" = Some "compiler"
+  | otherwise = keysMatch key expected
 
 -- How `<stdlibDir>/core.mdki` stands against [inputs].
 export
@@ -424,8 +434,8 @@ interfaceSections inputs =
     "core.mdki"
     FileMissing
     (key => key)
-    (text =>
-      map (fr => ((fst fr).ifKey, (fst fr).ifSections)) (readInterface text))
+    (gate text =>
+      map (fr => (fst fr).ifSections) (readInterfaceGated gate text))
     inputs
 
 -- The verdict of this process's last load, with the inputs it was read for.
@@ -487,7 +497,7 @@ readPreludeDecls inputs
       "core.mdkd"
       (FileStale "missing")
       declsKeyOf
-      readDeclsFramed
+      (gate text => map snd (readDeclsFramedGated gate text))
       inputs
 
 -- Whether `<stdlibDir>/core.mdki`'s header line carries the key [inputs] expect.
@@ -610,11 +620,11 @@ readPreludeTrees decode inputs =
       "core.mdke"
       FileMissing
       elabKeyOf
-      (text =>
+      (gate text =>
         if decode then
-          map (kv => (fst kv, Some (snd kv))) (readElabFile text)
+          map (kv => Some (snd kv)) (readElabFileGated gate text)
         else
-          map (k => (k, None)) (readElabKey text))
+          map (_ => None) (readElabKeyGated gate text))
       inputs
   let held = match value
     Some v => v

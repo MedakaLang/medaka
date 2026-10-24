@@ -9,7 +9,7 @@ import frontend.ast.{Decl}
 import frontend.ast_codec.{declsSExp}
 import string as S
 import support.sexp_value.{renderSExp}
-import types.interface_sexp.{sha256Hex}
+import types.interface_frame.{sha256Hex}
 import types.prelude_interface.{InterfaceKey, interfaceKeyOf}
 
 -- The key the rows write under, at the format [version] of the file's kind.
@@ -46,7 +46,7 @@ withDigestOf file body = match S.indexOf "\n" file
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false))))
 (DUse false (UseAlias ("string") "S"))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "renderSExp" false))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "sha256Hex" false))))
+(DUse false (UseGroup ("types" "interface_frame") ((mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false))))
 (DTypeSig true "testKeyAt" (TyFun (TyCon "Int") (TyCon "InterfaceKey")))
 (DFunDef false "testKeyAt" ((PVar "version")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "version")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (ELit (LString "aa"))) (ETuple (ELit (LString "core.mdk")) (ELit (LString "bb"))))) (ELit (LString "compiler-x"))))
@@ -59,7 +59,7 @@ withDigestOf file body = match S.indexOf "\n" file
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false))))
 (DUse false (UseAlias ("string") "S"))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "renderSExp" false))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "sha256Hex" false))))
+(DUse false (UseGroup ("types" "interface_frame") ((mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false))))
 (DTypeSig true "testKeyAt" (TyFun (TyCon "Int") (TyCon "InterfaceKey")))
 (DFunDef false "testKeyAt" ((PVar "version")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "version")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (ELit (LString "aa"))) (ETuple (ELit (LString "core.mdk")) (ELit (LString "bb"))))) (ELit (LString "compiler-x"))))

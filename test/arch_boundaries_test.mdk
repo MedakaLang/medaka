@@ -391,8 +391,14 @@ test "arch_boundaries: types.prelude_interface closure matches its golden" =
 test "arch_boundaries: types.module_interface closure matches its golden" =
   closurePin "types.module_interface"
 
+test "arch_boundaries: types.interface_frame closure matches its golden" =
+  closurePin "types.interface_frame"
+
 test "arch_boundaries: types.interface_sexp closure matches its golden" =
   closurePin "types.interface_sexp"
+
+test "arch_boundaries: types.module_interface_sexp closure matches its golden" =
+  closurePin "types.module_interface_sexp"
 
 test "arch_boundaries: types.prelude_elab closure matches its golden" =
   closurePin "types.prelude_elab"

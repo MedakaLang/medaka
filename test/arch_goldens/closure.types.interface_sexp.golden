@@ -17,6 +17,7 @@ types.effect_solver
 types.evidence
 types.evidence_complete
 types.evidence_coverage
+types.interface_frame
 types.prelude_interface
 types.publish
 types.registry
