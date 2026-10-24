@@ -111,7 +111,6 @@ returnPosOfDecl	Decl	1/14
 rewriteArgScoped	Expr	36/42
 rewriteBinopExpr	Expr	4/42
 rewriteLocalDictExpr	Expr	4/42
-rewriteRPDict	Expr	1/42
 shadowStandaloneHead	Expr	4/42
 sourceBindingArity	Expr	6/42
 spineHeadEv	Expr	3/42

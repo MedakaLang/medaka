@@ -4,7 +4,7 @@
 # the BUILD-PATH stages (lower / emit / plan / mangle / dce / trmc), the single-file
 # FRONTEND stages (parse / exhaust / desugar / resolve / mark / typecheck), the
 # single-file TOOL stages (fmt / lint), and the
-# MULTI-MODULE frontend stages (parse / load / desugar / resolve / mark /
+# MULTI-MODULE frontend stages (parse / load / desugar / resolve /
 # typecheck), measured in PER-STAGE Callgrind INSTRUCTION COUNTS.
 #
 # The single-file frontend rows ride the SAME runs the backend rows already pay for
@@ -253,7 +253,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE="$ROOT/test/bin/profile_main"
 # The MULTI-MODULE profiler, for the `modules` shape below. Same [perf] protocol as
 # PROFILE, same netting, same annotate read — but a DIFFERENT DRIVER
-# (loadProgram -> desugar -> resolveModulesToLines -> markModules -> checkModules)
+# (loadProgram -> desugar -> resolveModulesToLines -> checkModules)
 # over a DIRECTORY of modules rather than one file, so it exercises stage entry
 # points PROFILE never calls. See "THE MULTI-MODULE ARM" below.
 PROFILE_MODULES="$ROOT/test/bin/profile_modules_main"
@@ -481,8 +481,7 @@ lint=mdk_tools_lint__lintProgram"
 # Added by S-frontend-ir-arm part 1b. Everything above this line runs ONE driver
 # (profile_main) over ONE file. The frontend stage entry points a multi-module
 # compile actually calls are DIFFERENT FUNCTIONS — `resolveModulesToLines` not
-# `resolveToLines`, `checkModules` not `checkOneToLinesWithRuntime`, `markModules`
-# not `markWithPrelude` — and `loadProgram` has no single-file counterpart at all.
+# `resolveToLines`, `checkModules` not `checkOneToLinesWithRuntime` — and `loadProgram` has no single-file counterpart at all.
 # So the single-file rows above are not "the frontend, covered": they are one of
 # two drivers, and the O(modules^2) family (#153/#154) lands on stages ONLY this
 # arm can name.
@@ -526,16 +525,15 @@ lint=mdk_tools_lint__lintProgram"
 # If this row's margins ever move without a source cause, re-derive with
 #   nm $PROFILE_MODULES | grep parse
 #
-# Second correction, benign but equally easy to get wrong: the multi-module mark
-# symbol lives in types.typecheck, NOT frontend.marker — profile_modules_main
-# imports `markModules` from `types.typecheck`.
+# The multi-module driver has no separate mark row: marking runs inside
+# `checkModules`, per binding group, so its cost is part of the `typecheck` row.
 #
 # MEASURED margins at the shipped band, this box, on the tree this arm landed on
 # (N=25/50/100, K=8, netted against the same generator at N=2):
 #     modules: parse   2.088/2.042   load    2.089/2.044   desugar 2.087/2.041
-#              resolve 2.089/2.043   mark    2.086/2.044   typecheck 2.190/2.217
+#              resolve 2.089/2.043   typecheck 2.190/2.217
 #
-# Every one of those six rows GRADES — none falls under the netting guard, and the
+# Every one of those rows GRADES — none falls under the netting guard, and the
 # narrowest margin is `desugar`'s at 46% of its own floor, i.e. 23x the 2% guard.
 # (Contrast the `parse` row a `mdk_frontend_parser__parse` symbol would have
 # produced: net 0, SKIP, forever. The corrected row nets 3.0e8 at N=25.)
@@ -546,12 +544,12 @@ lint=mdk_tools_lint__lintProgram"
 # above is NOT its five siblings' 2.04-2.09; it is the visible tail of a live
 # O(modules^2) term (#1879), and this arm is now that defect's LIVE PIN — see the
 # `modules:typecheck` entry in KNOWN_SLOW below for the four attributed sites and the
-# ceiling/fixed pair. The other five MOD_SYMS rows remain a regression guard and a
+# ceiling/fixed pair. The other MOD_SYMS rows remain a regression guard and a
 # driver-parity claim, as written.
 #
 # DELIBERATE RED — negative control, or lack of one (F-fixround-3, §7.1): NO
 # pre-fix-red-then-fixed observation exists for the multi-module driver itself.
-# When this arm landed (S-frontend-ir-arm part 1b), all six MOD_SYMS rows read
+# When this arm landed (S-frontend-ir-arm part 1b), all MOD_SYMS rows read
 # "ok" and dead-linear on first measurement — see that slice's report §6.1,
 # which nets byte-identical to the "MEASURED margins" table above. The driver
 # was never seen red and then fixed; it has only ever been observed passing.
@@ -568,7 +566,6 @@ MOD_SYMS="parse=mdk_frontend_parser__parseResult \
 load=mdk_driver_loader__loadProgram \
 desugar=mdk_frontend_desugar__desugar \
 resolve=mdk_frontend_resolve__resolveModulesToLines \
-mark=mdk_types_typecheck__markModules \
 typecheck=mdk_types_typecheck__checkModules"
 
 # ── KNOWN SLOW — a self-draining ledger, NOT a skip list ────────────────────
@@ -1139,7 +1136,7 @@ gen_wideiface() {
 # SHARED field names, and exercising every one of its impls in a local `use` value.
 #
 # ⚠️ THE FIXTURE MUST RESOLVE 0-DIAGNOSTIC, or this arm measures a different
-# mechanism. markModules/checkModules do not run frontend.resolve's result, so a
+# mechanism. checkModules does not run frontend.resolve's result, so a
 # resolve-BROKEN corpus still grows with N — but that growth can be the compiler
 # re-failing to bind the same unresolved names once per module, NOT the accumulated-
 # universe rescan. Three properties are load-bearing and were each reproduced with
