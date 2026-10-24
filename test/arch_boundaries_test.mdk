@@ -366,9 +366,7 @@ visibilityCount ls =
 -- [root]'s import closure against `closure.<root>.golden`.
 closurePin : String -> <IO> Expectation
 closurePin root =
-  pin
-    "closure.\{root}.golden"
-    (closureOf (buildGraph loadModules) root)
+  pin "closure.\{root}.golden" (closureOf (buildGraph loadModules) root)
 
 test "arch_boundaries: declaration-visibility counts match visibility.golden" =
   pin "visibility.golden" (countRows "visibility." visibilityCount loadModules)
@@ -378,6 +376,9 @@ test "arch_boundaries: frontend.ast closure matches its golden" =
 
 test "arch_boundaries: frontend.visibility closure matches its golden" =
   closurePin "frontend.visibility"
+
+test "arch_boundaries: types.effect_param_decode closure matches its golden" =
+  closurePin "types.effect_param_decode"
 
 test "arch_boundaries: types.repr closure matches its golden" =
   closurePin "types.repr"

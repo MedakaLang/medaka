@@ -31,7 +31,7 @@ import types.effect_rows.{
 }
 import types.repr.{Scheme(..), Mono(..), normalize}
 import types.effect_domain.{Param}
-import types.typecheck.{decodeWrittenParam, atomOfLabel}
+import types.effect_param_decode.{decodeWrittenParam, atomOfLabel}
 import types.target_profile.{hostLabels}
 import support.util.{
   sortUniqS, joinWith, reverseL, filterList, contains, anyList

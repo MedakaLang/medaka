@@ -8,7 +8,8 @@ import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, viaChain, CallGraph, EffectTable
 }
 import types.effect_rows.{Atom(..), EffLabel(..), atomBuiltin, atomLabel}
-import types.typecheck.{atomOfLabel, ioJoinAtoms}
+import types.effect_param_decode.{atomOfLabel}
+import types.typecheck.{ioJoinAtoms}
 import types.target_profile.{hostLabels}
 import list.{take, sort}
 import support.ordmap.{omEmpty, omFromPairs}
