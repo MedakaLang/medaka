@@ -1,9 +1,12 @@
+import types.value_main.{mainUseSite, mainUsedMsg}
 -- The checked main-shape facts published at the end of a typecheck drive.
 
-import frontend.ast.{EvId, TyConOrigin(..)}
-import types.repr.{Mono(..), Scheme(..), normalize}
-import types.tc_types.{GraphCtx(..), ModuleCtx(..)}
-import types.publish.{EntryOutcome(..)}
+import frontend.ast.{EvId, TyConOrigin(..), Decl(..), Expr(..), Ty(..), Loc}
+import types.repr.{Mono(..), Scheme(..), normalize, IfaceRef(..)}
+import types.tc_types.{
+  GraphCtx(..), ModuleCtx(..), DriveOutputs(..), InvocationView(..)
+}
+import types.publish.{EntryOutcome(..), TcDiag(..), zonkScheme, emptyZonk}
 
 -- The head node of a left-spine type application.
 mainHead : Mono -> Mono
@@ -66,3 +69,53 @@ entryOutcomeNow mctx hasObligations autoPrint = EntryOutcome {
   eoMainAsyncPayloadIsUnit = mainAsyncPayloadIsUnitNow mctx.mcGraph (),
   eoAutoPrint = autoPrint,
 }
+
+export
+driveOutputsNow : ModuleCtx -> EntryOutcome -> DriveOutputs
+driveOutputsNow mctx outcome = DriveOutputs {
+  doManifestRequests = [],
+  doManifests = [],
+  doEntryOutcome = outcome,
+  doHadTypeErrors = mctx.mcGraph.typeErrorsSticky.value,
+  doHadMatchWarnings = not (isEmpty mctx.mcCells.matchWarnings.value),
+  doInvocationView = frozenInvocationView mctx.mcCells.invocationViewRef.value,
+  doGrantsEnabled = isSome mctx.mcGraph.markSetsRef.value,
+  doEffectDomains = mctx.mcGraph.effectDomains.value,
+  doStickyDiags = mctx.mcGraph.typeErrorsStickyDiags.value,
+  doIfaceExports = mctx.mcGraph.declEnvsRef.value.deMethods.meIfaceExports,
+  doFfiAliases = mctx.mcGraph.declEnvsRef.value.deData.deAliases,
+  doOrdIndex = mctx.mcGraph.declEnvsRef.value.deOrdIndex,
+  doEffvarNext = mctx.mcGraph.graphRun.effvarCounter.value,
+}
+
+frozenInvocationView : InvocationView -> InvocationView
+frozenInvocationView (InvocationView ctors pols kinds) =
+  InvocationView (map (c => snd (zonkScheme emptyZonk c)) ctors) pols kinds
+
+-- The interface of `println`'s one-predicate context (`Display a => …`).
+export
+printlnIface : List Decl -> Option IfaceRef
+printlnIface [] = None
+printlnIface ((DAttrib _ d) :: rest) = printlnIface (d :: rest)
+printlnIface ((DTypeSig _ "println" (TyConstrained [c] _) _) :: _) =
+  Some IfaceRef { irName = c.constraintHead, irOrigin = c.constraintOrigin }
+printlnIface (_ :: rest) = printlnIface rest
+
+-- The span of `main`'s body, or of the binding when the body carries none.
+export
+mainBodySpan : List Decl -> Option Loc
+mainBodySpan [] = None
+mainBodySpan ((DAttrib _ d) :: rest) = mainBodySpan (d :: rest)
+mainBodySpan ((DFunDef _ "main" [] body site _) :: _) = match body
+  ELoc l _ => Some l
+  _ => Some site
+mainBodySpan (_ :: rest) = mainBodySpan rest
+
+-- Another binding's use of `main` is typed against the printing wrap's `main`
+-- where run, build and test elaborate the wrapped program, so it is rejected.
+export
+mainUseDiags : Option Loc -> List Decl -> List TcDiag
+mainUseDiags None _ = []
+mainUseDiags (Some site) entry = match mainUseSite site entry
+  Some at => [TcDiag "T-MAIN-USED" 1 (Some at) mainUsedMsg None None]
+  None => []

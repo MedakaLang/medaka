@@ -1094,6 +1094,7 @@ emitDeclFacts facts decls =
     factMethodResults = methodResultFacts decls,
     factEntryOutcome = entryFact facts,
     factExterns = omEmpty,
+    factManifests = facts.pfManifests,
   }
 
 entryFact : ProgramFacts -> Option EntryFact

@@ -395,6 +395,15 @@ test "arch_boundaries: types.repr closure matches its golden" =
 test "arch_boundaries: types.tc_types closure matches its golden" =
   closurePin "types.tc_types"
 
+test "arch_boundaries: types.publish closure matches its golden" =
+  closurePin "types.publish"
+
+test "arch_boundaries: types.program_facts closure matches its golden" =
+  closurePin "types.program_facts"
+
+test "arch_boundaries: types.entry_outcome closure matches its golden" =
+  closurePin "types.entry_outcome"
+
 test "arch_boundaries: types.prelude_interface closure matches its golden" =
   closurePin "types.prelude_interface"
 
@@ -744,7 +753,8 @@ ownerVocab = [
 
 targetVocab : List String
 targetVocab = [
-  "TcEnv", "GroupCtx", "ModuleCtx", "GraphCtx", "TcConfig", "interner", "delete"
+  "TcEnv", "GroupCtx", "ModuleCtx", "GraphCtx", "TcConfig", "DriveInputs",
+  "interner", "delete"
 ]
 
 fillsVocab : List String

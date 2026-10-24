@@ -59,6 +59,91 @@ import support.util.{listLen}
 import list.{sortOn}
 import map as BM
 import string as S
+import types.capability_manifest.{
+  EntryKey(..),
+  ManifestRequest(..),
+  InvocationProtocol(..),
+  CapabilityManifest(..),
+  FrozenAtom(..),
+  FrozenAuthority(..),
+  FrozenVariable(..),
+}
+import types.effect_domain.{Param(..)}
+import frontend.ast.{TyConOrigin(..)}
+
+test "manifest serialization retains protocols origins domains variables joins and product axes" =
+  let top = PProduct [("Host", PPrefix None), ("Method", PSet None)]
+  let variable = FrozenVariable {
+    localId = 7,
+    domainTop = PPrefix None,
+    patternOnly = True,
+    sourceName = Some "path",
+  }
+  let atoms = [
+    FrozenAtom {
+      label = "Http",
+      origin = OriginModule "owner",
+      domainTop = top,
+      authority = FrozenProduct [
+        (
+          "Host",
+          FrozenJoin [FrozenVar variable, FrozenConst (PPrefix (Some "site/*"))],
+        ),
+        ("Method", FrozenConst (PSet (Some ["GET", "POST"]))),
+      ],
+    },
+    FrozenAtom {
+      label = "FileRead",
+      origin = OriginBuiltin,
+      domainTop = PPath None,
+      authority = FrozenConst (PPath (Some "cfg/*")),
+    },
+  ]
+  let manifest protocol = CapabilityManifest {
+    request = ManifestRequest {
+      entry = EntryKey { moduleId = "source", binding = "dead" },
+      protocol = protocol,
+    },
+    atoms = atoms,
+  }
+  let p = CProgram [] [] [] [] [] { noDeclFacts |
+    factManifests = [manifest HostInvocation, manifest ExecutedMain],
+  }
+  let text = cprogramToSexp p
+  let restored = parseCProgram text
+  expectAll [
+    expectEqual text (cprogramToSexp restored),
+    expectTextContainsAll
+      [
+        "(manifest \"source\" \"dead\" host",
+        "(manifest \"source\" \"dead\" executed",
+        "(module \"owner\")",
+        "(axes (\"Host\" (prefix none)) (\"Method\" (set none)))",
+        "(var 7 (prefix none) true (some \"path\"))",
+        "(join (var 7 (prefix none) true (some \"path\")) (const (prefix (some \"site/*\"))))",
+        "(set (some \"GET\" \"POST\"))",
+        "(path (some \"cfg/*\"))",
+      ]
+      text,
+  ]
+
+test "older absent declaration facts remain absent manifests" =
+  let view text = match parseCProgram text
+    CProgram _ _ _ _ _ facts =>
+      map
+        (m => (m : CapabilityManifest).request.entry.binding)
+        facts.factManifests
+  expectAll
+    (map
+      (text => expectEqual [] (view text))
+      [
+        "(CProgram () () () ())",
+        "(CProgram () () () () ())",
+        "(CProgram () () () () () (facts () ()))",
+        "(CProgram () () () () () (facts () () ()))",
+        "(CProgram () () () () () (facts () () () (entry true false)))",
+        "(CProgram () () () () () (facts () () () none (externs)))",
+      ])
 
 -- A one-binding program whose body is [body].
 programOf : CExpr -> CProgram
@@ -283,6 +368,7 @@ test "two occurrences of one binder id stay one binder" =
         factSupers = [],
         factEntryOutcome = None,
         factExterns = noDeclFacts.factExterns,
+        factManifests = [],
         factBinders = [
           BinderRow {
             brId = shared,

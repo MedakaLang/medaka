@@ -103,6 +103,9 @@ import types.runtime_types.{
 import frontend.exhaust.{
   Oracle,
 }
+import types.capability_manifest.{
+  EntryKey(..), ManifestSelector, ManifestRequest, CapabilityManifest
+}
 
 -- Where an obligation the scoped solver holds was recorded, for its report:
 -- the location, the binding, and whether an authority obligation is an index
@@ -973,6 +976,8 @@ public export data TraceSink = TraceSink {
 -- generation pair of the two prelude trees the drive is handed, when its driver
 -- knows it: the tree arm continues from the prelude's shipped trees only under it.
 public export data DriveInputs = DriveInputs {
+  diExecutedMainDriver : Option EntryKey,
+  diManifestRequests : List ManifestSelector,
   diStdlibOwned : OrdMap Unit,
   diFlatEntryIsStdlib : Bool,
   diTrace : Option TraceSink,
@@ -996,6 +1001,8 @@ public export data DriveInputs = DriveInputs {
 -- (`lastInvocationOps`) starts its own counter there, so its ids cannot collide with
 -- an id the drive's schemes hold.
 public export data DriveOutputs = DriveOutputs {
+  doManifestRequests : List ManifestRequest,
+  doManifests : List CapabilityManifest,
   doEntryOutcome : EntryOutcome,
   doHadTypeErrors : Bool,
   doHadMatchWarnings : Bool,
@@ -1013,6 +1020,8 @@ public export data DriveOutputs = DriveOutputs {
 export
 emptyDriveOutputs : Unit -> DriveOutputs
 emptyDriveOutputs _ = DriveOutputs {
+  doManifestRequests = [],
+  doManifests = [],
   doEntryOutcome = noEntryOutcome,
   doHadTypeErrors = False,
   doHadMatchWarnings = False,
@@ -1025,6 +1034,22 @@ emptyDriveOutputs _ = DriveOutputs {
   doOrdIndex = omEmpty,
   doEffvarNext = 0,
 }
+
+export
+withPublishedManifests : List ManifestRequest ->
+  List CapabilityManifest ->
+  DriveOutputs ->
+  DriveOutputs
+withPublishedManifests requests manifests outputs = { outputs |
+  doManifestRequests = requests,
+  doManifests = manifests,
+}
+
+export
+manifestDriverFor : DriveInputs -> Option String -> Option EntryKey
+manifestDriverFor _ (Some name) =
+  Some EntryKey { moduleId = "async", binding = name }
+manifestDriverFor inputs None = inputs.diExecutedMainDriver
 
 -- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by
 -- convention" across module reset/push/error-rollback, per-channel) as ONE value whose
@@ -3249,6 +3274,7 @@ public export data GraphDrive = GraphDrive {
 -- TABLE (`compiler/types/disposition.mdk`).  The seventh bundles the BINDER-TYPE
 -- table and selected entry outcome the elaboration produced.
 public export data ElabFacts = ElabFacts {
+  efManifests : List CapabilityManifest,
   efBinders : BinderTypeTable,
   efEntryOutcome : EntryOutcome,
 }

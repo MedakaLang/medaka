@@ -1,3 +1,4 @@
+import types.capability_manifest.{CapabilityManifest}
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
 -- representation lowered from the elaborated (desugared + typed + dict-routed)
 -- AST.  The Stage-2 design's load-bearing discipline (Axis 1, Condition 1) is
@@ -445,6 +446,7 @@ public export data EntryFact = EntryFact {
 }
 
 public export data DeclFacts = DeclFacts {
+  factManifests : List CapabilityManifest,
   factRequires : List (String, Int),
   factSupers : List (String, Int),
   factBinders : List BinderRow,
@@ -462,6 +464,7 @@ noDeclFacts = DeclFacts {
   factMethodResults = [],
   factEntryOutcome = None,
   factExterns = omEmpty,
+  factManifests = [],
 }
 
 -- ── binder walk ──────────────────────────────────────────────────────────────
@@ -543,6 +546,7 @@ withBinderRows rows (CProgram groups ctorArs ctorTypes impls mctx facts) = CProg
     factMethodResults = facts.factMethodResults,
     factEntryOutcome = facts.factEntryOutcome,
     factExterns = facts.factExterns,
+    factManifests = facts.factManifests,
   }
 
 -- Every binder id of [prog], in walk order.

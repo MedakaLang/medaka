@@ -1,3 +1,14 @@
+import types.capability_manifest.{
+  EntryKey(..),
+  ManifestRequest(..),
+  InvocationProtocol(..),
+  CapabilityManifest(..),
+  FrozenAtom(..),
+  FrozenAuthority(..),
+  FrozenVariable(..),
+}
+import types.effect_domain.{Param(..)}
+import frontend.ast.{TyConOrigin(..)}
 import ir.extern_lower.{externFactIndex}
 -- Round-trip deserializer for the Core IR S-expression format produced by
 -- core_ir_sexp.mdk.  Parses the output of cprogramToSexp back into a CProgram
@@ -558,6 +569,18 @@ toRuntimeType other =
   panic ("core_ir_sexp_parse: bad runtime type: " ++ sexprToStr other)
 
 toDeclFacts : SExp -> DeclFacts
+toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome, externs, SList ((SAtom "manifests") :: manifests)])) =
+  let facts =
+    toDeclFacts
+      (SList [
+        SAtom "facts",
+        SList reqs,
+        SList sups,
+        SList results,
+        outcome,
+        externs,
+      ])
+  { facts | factManifests = map toManifest manifests }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
@@ -565,6 +588,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
   factMethodResults = [],
   factEntryOutcome = None,
   factExterns = noDeclFacts.factExterns,
+  factManifests = [],
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results])) = DeclFacts {
   factRequires = map (toFactPair "rq") reqs,
@@ -573,6 +597,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results]))
   factMethodResults = map toMethodResult results,
   factEntryOutcome = None,
   factExterns = noDeclFacts.factExterns,
+  factManifests = [],
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome])) = DeclFacts {
   factRequires = map (toFactPair "rq") reqs,
@@ -581,6 +606,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, o
   factMethodResults = map toMethodResult results,
   factEntryOutcome = Some (toEntryOutcome outcome),
   factExterns = noDeclFacts.factExterns,
+  factManifests = [],
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome, SList ((SAtom "externs") :: rows)])) = DeclFacts {
   factRequires = map (toFactPair "rq") reqs,
@@ -591,6 +617,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, o
     SAtom "none" => None
     _ => Some (toEntryOutcome outcome),
   factExterns = externFactIndex (map toExtern rows),
+  factManifests = [],
 }
 toDeclFacts other =
   panic ("core_ir_sexp_parse: bad declaration facts: " ++ sexprToStr other)
@@ -673,3 +700,77 @@ toShape (SList ((SAtom "abi") :: [written, core, SList params, result, signature
     canonicalSignature = toStr signature,
   }
 toShape _ = panic "core_ir_sexp_parse: bad extern ABI"
+
+toManifest : SExp -> CapabilityManifest
+toManifest (SList [SAtom "manifest", mid, binding, protocol, SList atoms]) = CapabilityManifest {
+  request = ManifestRequest {
+    entry = EntryKey { moduleId = toStr mid, binding = toStr binding },
+    protocol = match protocol
+      SAtom "host" => HostInvocation
+      SAtom "executed" => ExecutedMain
+      _ => panic "core_ir_sexp_parse: bad manifest protocol",
+  },
+  atoms = map toFrozenAtom atoms,
+}
+toManifest other =
+  panic ("core_ir_sexp_parse: bad manifest: " ++ sexprToStr other)
+
+toFrozenAtom : SExp -> FrozenAtom
+toFrozenAtom (SList [SAtom "atom", label, origin, top, authority]) = FrozenAtom {
+  label = toStr label,
+  origin = match origin
+    SAtom "builtin" => OriginBuiltin
+    SAtom "unresolved" => OriginUnresolved
+    SList [SAtom "module", mid] => OriginModule (toStr mid)
+    _ => panic "core_ir_sexp_parse: bad manifest origin",
+  domainTop = toManifestParam top,
+  authority = toFrozenAuthority authority,
+}
+toFrozenAtom other =
+  panic ("core_ir_sexp_parse: bad manifest atom: " ++ sexprToStr other)
+
+toFrozenAuthority : SExp -> FrozenAuthority
+toFrozenAuthority (SList [SAtom "const", value]) =
+  FrozenConst (toManifestParam value)
+toFrozenAuthority (SList [SAtom "var", id, top, pattern, name]) = FrozenVar
+  FrozenVariable {
+    localId = toInt id,
+    domainTop = toManifestParam top,
+    patternOnly = toBool pattern,
+    sourceName = toManifestString name,
+  }
+toFrozenAuthority (SList ((SAtom "join") :: members)) =
+  FrozenJoin (map toFrozenAuthority members)
+toFrozenAuthority (SList ((SAtom "product") :: axes)) =
+  FrozenProduct
+    (map
+      (axis => match axis
+        SList [name, authority] => (toStr name, toFrozenAuthority authority)
+        _ => panic "core_ir_sexp_parse: bad frozen product axis")
+      axes)
+toFrozenAuthority other =
+  panic ("core_ir_sexp_parse: bad frozen authority: " ++ sexprToStr other)
+
+toManifestParam : SExp -> Param
+toManifestParam (SAtom "unit") = PUnit
+toManifestParam (SList [SAtom "prefix", value]) =
+  PPrefix (toManifestString value)
+toManifestParam (SList [SAtom "path", value]) = PPath (toManifestString value)
+toManifestParam (SList [SAtom "set", SAtom "none"]) = PSet None
+toManifestParam (SList [SAtom "set", SList ((SAtom "some") :: members)]) =
+  PSet (Some (map toStr members))
+toManifestParam (SList ((SAtom "axes") :: axes)) =
+  PProduct
+    (map
+      (axis => match axis
+        SList [name, value] => (toStr name, toManifestParam value)
+        _ => panic "core_ir_sexp_parse: bad manifest domain axis")
+      axes)
+toManifestParam other =
+  panic ("core_ir_sexp_parse: bad manifest parameter: " ++ sexprToStr other)
+
+toManifestString : SExp -> Option String
+toManifestString (SAtom "none") = None
+toManifestString (SList [SAtom "some", value]) = Some (toStr value)
+toManifestString other =
+  panic ("core_ir_sexp_parse: bad manifest string: " ++ sexprToStr other)

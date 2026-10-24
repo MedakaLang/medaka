@@ -4,6 +4,7 @@ support.opcount
 support.ordmap
 support.path
 support.util
+types.capability_manifest
 types.effect_authority
 types.effect_domain
 types.effect_rows

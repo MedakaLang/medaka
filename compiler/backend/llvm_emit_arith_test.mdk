@@ -80,6 +80,7 @@ arithProgram tag =
       factSupers = [],
       factEntryOutcome = None,
       factExterns = noDeclFacts.factExterns,
+      factManifests = [],
       factBinders = [
         BinderRow {
           brId = BinderId "arith" 1,

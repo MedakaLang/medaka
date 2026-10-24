@@ -105,6 +105,7 @@ emitGapIsolation =
         factSupers = [],
         factEntryOutcome = None,
         factExterns = noDeclFacts.factExterns,
+        factManifests = [],
         factBinders = [
           BinderRow {
             brId = mainId,

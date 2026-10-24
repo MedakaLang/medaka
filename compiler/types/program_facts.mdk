@@ -15,10 +15,12 @@ import types.disposition.{DispositionTable}
 import types.runtime_types.{BinderTypeTable}
 import types.publish.{CheckedProgram(..), EntryOutcome}
 import types.tc_types.{DriveOutputs, ElabResult, ElabFacts(..)}
+import types.capability_manifest.{CapabilityManifest}
 
 -- `Option` fields are `None` for a program that was never typechecked, so an
 -- untyped lowering reads absence.
 public export data ProgramFacts = ProgramFacts {
+  pfManifests : List CapabilityManifest,
   pfEvidence : EvIndex,
   pfDispositions : Option DispositionTable,
   pfBinders : Option BinderTypeTable,
@@ -30,6 +32,7 @@ public export data ProgramFacts = ProgramFacts {
 export
 emptyFacts : ProgramFacts
 emptyFacts = ProgramFacts {
+  pfManifests = [],
   pfEvidence = evIndexOf [],
   pfDispositions = None,
   pfBinders = None,
@@ -40,6 +43,7 @@ emptyFacts = ProgramFacts {
 export
 factsOfChecked : CheckedProgram -> ProgramFacts
 factsOfChecked c = ProgramFacts {
+  pfManifests = c.cpManifests,
   pfEvidence = evIndexOf c.cpEvidence,
   pfDispositions = Some c.cpDispositions,
   pfBinders = Some c.cpBinders,
@@ -58,6 +62,7 @@ factsOfElab (elab@(_, _, _, _, table, _, _)) = factsOfElabWith table elab
 export
 factsOfElabWith : EvTable -> ElabResult -> ProgramFacts
 factsOfElabWith table (_, _, _, _, _, dispositions, facts) = ProgramFacts {
+  pfManifests = facts.efManifests,
   pfEvidence = evIndexOf table,
   pfDispositions = Some dispositions,
   pfBinders = Some facts.efBinders,
