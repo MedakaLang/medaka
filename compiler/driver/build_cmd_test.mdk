@@ -7,20 +7,19 @@
 import test.{Expectation, expectAll, expectEqual, fail, labelFail}
 import test_process.{underRoot, withScratchDir}
 import list.{get, indexed}
-import string as S
 import driver.build_cmd.{
   BuildProfile(..), profileClang, gcStaticLibs, gcSharedLibs,
-  scratchCandidatesFrom, readPreludeSourcesAs, preludeDeclsLine,
-  preludeDeclsVerdict, shippedInputs
+  scratchCandidatesFrom, readPreludeSourcesAs, staleLine, SideFile(..),
+  preludeDeclsVerdict, PreludeInputs(..)
 }
 import frontend.ast.{Decl(..), Ty(..), noDeclLoc}
-import frontend.ast_codec.{declsSExp}
 import frontend.desugar.{desugar, reserveBinderOrdinals}
 import frontend.desugar_cache.{desugaredPrelude}
 import frontend.parse_cache.{parsePrelude}
-import support.sexp_value.{renderSExp}
-import types.interface_sexp.{sha256Hex}
-import types.prelude_decls.{PreludeDecls(..), encodeDeclsFile, readDeclsFile}
+import types.framed_test_support.{treeText, withDigestOf}
+import types.prelude_decls.{
+  PreludeDecls(..), PreludeTree(..), encodeDeclsFile, readDeclsFile
+}
 import types.prelude_interface.{InterfaceKey(..)}
 import types.prelude_elab.{binderSpan, relocDecls}
 
@@ -127,22 +126,28 @@ shipped _ = match (
 marker : Decl
 marker = DTypeSig False "seededMarker" (TyVar "a") noDeclLoc
 
-treeText : List Decl -> String
-treeText ds = renderSExp (declsSExp ds)
-
 -- The shipped file with its core tree ending in the marker.
 marked : Shipped -> String
 marked sh = encodeDeclsFile sh.shKey { sh.shDecls |
-  pdCore = sh.shDecls.pdCore ++ [marker],
+  pdCore =
+    { sh.shDecls.pdCore | ptDecls = sh.shDecls.pdCore.ptDecls ++ [marker] },
 }
 
 -- A marked file whose counters line claims one core binder more than the tree
 -- holds: the digest covers the lie.
 lying : Shipped -> String
 lying sh = encodeDeclsFile sh.shKey { sh.shDecls |
-  pdCore = sh.shDecls.pdCore ++ [marker],
-  pdCoreBinders = sh.shDecls.pdCoreBinders + 1,
+  pdCore = { sh.shDecls.pdCore |
+    ptDecls = sh.shDecls.pdCore.ptDecls ++ [marker],
+    ptBinders = sh.shDecls.pdCore.ptBinders + 1,
+  },
 }
+
+-- Whether [d] holds a minted binder id.
+mintsBinders : Decl -> Bool
+mintsBinders d = match binderSpan [d]
+  Some run => run.brCount > 0
+  None => False
 
 -- A marked file whose middle binder-carrying declaration has every id moved up by
 -- one: the run's ends, its size and the counters line are as they were, an id is
@@ -152,23 +157,21 @@ shifted sh =
   let carrying =
     map
       fst
-      (filter (p => snd (binderSpan [snd p]) > 0) (indexed sh.shDecls.pdCore))
+      (filter (p => mintsBinders (snd p)) (indexed sh.shDecls.pdCore.ptDecls))
   let mid = optionOr 0 (get (length carrying / 2) carrying)
   encodeDeclsFile sh.shKey { sh.shDecls |
-    pdCore =
-      flatMap
-        (p => if fst p == mid then relocDecls 1 [snd p] else [snd p])
-        (indexed sh.shDecls.pdCore),
+    pdCore = { sh.shDecls.pdCore |
+      ptDecls =
+        flatMap
+          (p => if fst p == mid then relocDecls 1 [snd p] else [snd p])
+          (indexed sh.shDecls.pdCore.ptDecls),
+    },
   }
 
 -- A file whose digest matches a body that is not two declaration lists.
 undecodable : Shipped -> String
 undecodable sh =
-  let file = marked sh
-  let i = optionOr 0 (S.indexOf "\n" file)
-  let header = S.take i file
-  let body = "(counters 0 0 0 0)\n(not declarations)\n"
-  "\{S.replace (sha256Hex (S.drop (i + 1) file)) (sha256Hex body) header}\n\{body}"
+  withDigestOf (marked sh) "(counters 0 0 0 0)\n(not declarations)\n"
 
 -- The memo holds four texts, so four others make it forget the prelude's.
 forgetPrelude : Unit -> Unit
@@ -196,20 +199,17 @@ loadedAt sh dir decls shift =
     Err _ => None
     Ok _ => match readPreludeSourcesAs sh.shKey.ikCompiler dir
       Err _ => None
-      Ok (rsrc, csrc) =>
+      Ok inputs =>
         let _ = reserveBinderOrdinals shift
         let before = reserveBinderOrdinals 0
-        let _ = desugaredPrelude rsrc
-        let core = desugaredPrelude csrc
+        let _ = desugaredPrelude inputs.pnRuntimeSrc
+        let core = desugaredPrelude inputs.pnCoreSrc
         let after = reserveBinderOrdinals 0
-        let inputs = { shippedInputs dir rsrc csrc |
-          pnCompiler = sh.shKey.ikCompiler,
-        }
         Some (
           core,
           before,
           after,
-          preludeDeclsLine (preludeDeclsVerdict inputs),
+          staleLine DeclsFile (preludeDeclsVerdict inputs),
         )
 
 -- Core desugared in-process now, moved back onto the run that starts at [first].
@@ -232,7 +232,7 @@ seededAt sh dir shift = match loadedAt sh dir (marked sh) shift
         (treeText core)),
     labelFail
       "the counter moves by the file's count"
-      (expectEqual (before + sh.shDecls.pdCoreBinders) after),
+      (expectEqual (before + sh.shDecls.pdCore.ptBinders) after),
     labelFail "no stale line" (expectEqual None line),
   ]
 

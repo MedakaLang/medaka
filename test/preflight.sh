@@ -1624,6 +1624,9 @@ done < "$CHANGED_PATHS"
 # name. A LEAF stdlib module (map, set, …) is not passed into the closure by name, so it
 # gets no entry here; a change to one still reaches selfproc via the blast-radius
 # `stdlib/*|runtime/*` arm above (which does `add 'diff_compiler_*'`, matching selfproc).
+
+# The `sources` list of the diff_interface_onoff row, as written in gates.toml.
+_onoff_sources="$(awk '/^name = "diff_interface_onoff"$/{row=1; next} /^name = /{row=0} row && /^sources = \[/{print; exit}' "$ROOT/test/gates.toml")"
 while IFS= read -r f; do
   case "$f" in
     compiler/*.mdk|compiler/*/*.mdk|stdlib/*.mdk) add 'diff_compiler_snapshot*' ;;
@@ -1633,11 +1636,12 @@ while IFS= read -r f; do
   esac
   # The prelude interface on/off differential (diff_interface_onoff): the files
   # that write, key, read, load and seed the interface, and the two prelude
-  # sources it is a function of.  Same set as that gate's `sources` in
-  # test/gates.toml; the `stdlib/*` blast-radius arm above adds only
-  # `diff_compiler_*`, which does not match this gate's name.
-  case "$f" in
-    compiler/types/prelude_interface.mdk|compiler/types/interface_sexp.mdk|compiler/types/typecheck.mdk|compiler/support/sexp_value.mdk|compiler/driver/loader.mdk|compiler/driver/diagnostics.mdk|compiler/driver/build_cmd.mdk|compiler/driver/medaka_cli.mdk|compiler/tools/interface_cmd.mdk|stdlib/core.mdk|stdlib/runtime.mdk|test/build_native_medaka.sh|test/diff_interface_onoff.sh|compiler/types/prelude_elab.mdk|compiler/frontend/ast_codec.mdk|compiler/tools/test_cmd.mdk|compiler/entries/llvm_emit_modules_main.mdk|compiler/entries/entry_support.mdk|compiler/types/route_key.mdk|compiler/types/evidence_coverage.mdk|compiler/types/prelude_decls.mdk|compiler/frontend/desugar_cache.mdk|compiler/frontend/desugar.mdk|compiler/frontend/parser.mdk) add 'diff_interface_onoff' ;;
+  # sources it is a function of: the gate's own `sources` row in
+  # test/gates.toml, read once into `_onoff_sources` above the loop.  The
+  # `stdlib/*` blast-radius arm above adds only `diff_compiler_*`, which does
+  # not match this gate's name.
+  case "$_onoff_sources" in
+    *"\"$f\""*) add 'diff_interface_onoff' ;;
   esac
 done < "$CHANGED_PATHS"
 

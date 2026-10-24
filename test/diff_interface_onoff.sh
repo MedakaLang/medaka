@@ -492,6 +492,20 @@ redigest "$FB/root.dundecodable/stdlib/core.mdkd"
 fbdrow dundecodable
 fbdcheck dundecodable file
 
+# A program that does not parse still reports the declarations file once: `run`
+# stops on the parse error, and the one decls line comes with it, not a second
+# one and not none. A fresh root prints no line.
+PERR="$FB/perr.mdk"
+printf 'main = (\n' > "$PERR"
+perrrow() {
+  ROWNAME=perr_$1
+  env MEDAKA_ROOT="$FB/root.$1" MEDAKA_ON=1 "$M" run "$PERR" > "$FB/$1/perr.out" 2> "$FB/$1/perr.err" < /dev/null; echo $? > "$FB/$1/perr.code"
+  want "$(cat "$FB/$1/perr.code")" 1 "run of an unparsable program exit code"
+  want "$(grep -c '^prelude decls stale' "$FB/$1/perr.err")" "$2" "decls lines on stderr"
+}
+perrrow dmissing 1
+perrrow decls_fresh 0
+
 for r in dheader dtruncated dversion dundecodable; do
   if cmp -s "$FB/root.$r/stdlib/core.mdkd" "$ROOT/stdlib/core.mdkd"; then fail "fallback row $r: the edit did not change the file"; fi
 done
@@ -502,5 +516,5 @@ if cmp -s "$FB/root.header/stdlib/core.mdke" "$ROOT/stdlib/core.mdke"; then fail
 if cmp -s "$FB/root.version/stdlib/core.mdke" "$ROOT/stdlib/core.mdke"; then fail "fallback row version: the edit did not change the file"; fi
 if cmp -s "$FB/root.ifacecompiler/stdlib/core.mdki" "$ROOT/stdlib/core.mdki"; then fail "fallback row ifacecompiler: the edit did not change the file"; fi
 if cmp -s "$FB/root.ifacenewline/stdlib/core.mdki" "$ROOT/stdlib/core.mdki"; then fail "fallback row ifacenewline: the edit did not change the file"; fi
-echo "fallback rows: header, truncated, version, missing, interface compiler/newline/missing, decls header/truncated/version/missing/undecodable, disabled ok"
+echo "fallback rows: header, truncated, version, missing, interface compiler/newline/missing, decls header/truncated/version/missing/undecodable, parse error, disabled ok"
 echo PASS

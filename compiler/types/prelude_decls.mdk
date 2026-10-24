@@ -28,40 +28,43 @@ import support.sexp_value.{
 }
 import types.interface_sexp.{InterfaceFault(..), sha256Hex}
 import types.prelude_elab.{
-  binderRunIs, binderSpan, checkedFramed, failure, framedHeader, refuse
+  BinderRun(..), binderRunIs, binderSpan, checkedFramed, failure, firstLine,
+  framedHeader, refuse, renderFramedFault
 }
 import types.prelude_interface.{InterfaceKey(..)}
 
 -- ── the value ───────────────────────────────────────────────────────────────
 
-public export data PreludeDecls = PreludeDecls {
-  pdRuntime : List Decl,
-  pdCore : List Decl,
-  pdRuntimeBinders : Int,
-  pdRuntimeBase : Int,
-  pdCoreBinders : Int,
-  pdCoreBase : Int,
+-- One text's declarations, with the count of the binder ordinals they minted
+-- and the first of them.
+public export data PreludeTree = PreludeTree {
+  ptDecls : List Decl,
+  ptBinders : Int,
+  ptBase : Int,
 }
 
--- The first minted ordinal and the count of a tree's binders, `(0, 0)` for a
--- tree that mints none, or `None` when its ordinals are not one run.
-span : List Decl -> Option (Int, Int)
-span decls = match binderSpan decls
-  (first, count) if first < 0 && count <= 0 => Some (0, 0)
-  (_, count) if count < 0 => None
-  (first, count) => Some (first, count)
+public export data PreludeDecls = PreludeDecls {
+  pdRuntime : PreludeTree,
+  pdCore : PreludeTree,
+}
+
+treeOf : List Decl -> BinderRun -> PreludeTree
+treeOf decls run = PreludeTree {
+  ptDecls = decls,
+  ptBinders = run.brCount,
+  ptBase = run.brFirst,
+}
+
+treeRun : PreludeTree -> BinderRun
+treeRun tree = BinderRun { brFirst = tree.ptBase, brCount = tree.ptBinders }
 
 -- The value for the two trees, or why it cannot be written.
 export
 preludeDeclsOf : List Decl -> List Decl -> Result String PreludeDecls
-preludeDeclsOf runtime core = match (span runtime, span core)
-  (Some (rb, rn), Some (cb, cn)) => Ok PreludeDecls {
-    pdRuntime = runtime,
-    pdCore = core,
-    pdRuntimeBinders = rn,
-    pdRuntimeBase = rb,
-    pdCoreBinders = cn,
-    pdCoreBase = cb,
+preludeDeclsOf runtime core = match (binderSpan runtime, binderSpan core)
+  (Some rr, Some cr) => Ok PreludeDecls {
+    pdRuntime = treeOf runtime rr,
+    pdCore = treeOf core cr,
   }
   (None, _) => Err "the binder ordinals of runtime.mdk are not one run"
   (_, None) => Err "the binder ordinals of core.mdk are not one run"
@@ -86,10 +89,10 @@ declsKeyOf key = InterfaceKey {
 countersNode : PreludeDecls -> SExp
 countersNode pd = SList [
   SAtom "counters",
-  SAtom (intToString pd.pdRuntimeBinders),
-  SAtom (intToString pd.pdRuntimeBase),
-  SAtom (intToString pd.pdCoreBinders),
-  SAtom (intToString pd.pdCoreBase),
+  SAtom (intToString pd.pdRuntime.ptBinders),
+  SAtom (intToString pd.pdRuntime.ptBase),
+  SAtom (intToString pd.pdCore.ptBinders),
+  SAtom (intToString pd.pdCore.ptBase),
 ]
 
 -- The whole file for [pd] under [key]; the key's own format field is not
@@ -98,15 +101,13 @@ export
 encodeDeclsFile : InterfaceKey -> PreludeDecls -> String
 encodeDeclsFile key pd =
   let covered =
-    "\{renderSExp (countersNode pd)}\n\{renderSExp (declsSExp pd.pdRuntime)}\n\{renderSExp (declsSExp pd.pdCore)}\n"
+    "\{renderSExp (countersNode pd)}\n\{renderSExp (declsSExp pd.pdRuntime.ptDecls)}\n\{renderSExp (declsSExp pd.pdCore.ptDecls)}\n"
   "\{renderSExp (framedHeader "medaka-decls" declsFormatVersion key (sha256Hex covered))}\n\{covered}"
 
 export
 renderDeclsFault : InterfaceFault -> String
-renderDeclsFault (WrongFormat v) =
-  "prelude declarations format version \{v}, this compiler reads \{declsFormatVersion}"
-renderDeclsFault (Malformed e) =
-  "\{e.sePath}: \{e.seWhat} (prelude declarations)"
+renderDeclsFault fault =
+  renderFramedFault "prelude declarations" declsFormatVersion fault
 
 -- The key a file's header claims and the bytes its digest covers, after its
 -- version, header and digest are checked, without decoding them.
@@ -134,13 +135,10 @@ readDeclsFile text = do
 -- counters line, then the two trees.
 export
 decodeDeclsBody : String -> Result InterfaceFault PreludeDecls
-decodeDeclsBody covered = match S.indexOf "\n" covered
-  None => refuse "counters" "no counters line"
-  Some j => match parseSExp (S.take j covered)
-    Err e => failure e
-    Ok node => match countersOf node
-      Err e => failure e
-      Ok counters => decodeBody counters (S.drop (j + 1) covered)
+decodeDeclsBody covered = do
+  (node, rest) <- firstLine "counters" "no counters line" covered
+  counters <- mapErr Malformed (countersOf node)
+  decodeBody counters rest
 
 -- The value of the bytes a file's digest covers when it is also one a reader
 -- may seed from: its counters describe its trees.  The loader and `interface
@@ -160,28 +158,31 @@ acceptedDeclsBody covered = do
 -- the tree.
 describes : PreludeDecls -> Bool
 describes pd =
-  binderRunIs pd.pdRuntimeBinders pd.pdRuntimeBase pd.pdRuntime
-    && binderRunIs pd.pdCoreBinders pd.pdCoreBase pd.pdCore
+  binderRunIs (treeRun pd.pdRuntime) pd.pdRuntime.ptDecls
+    && binderRunIs (treeRun pd.pdCore) pd.pdCore.ptDecls
 
-countersOf : SExp -> Result SexpError (Int, Int, Int, Int)
+-- The runs the counters line claims for the runtime and the core tree.
+countersOf : SExp -> Result SexpError (BinderRun, BinderRun)
 countersOf (SList [SAtom "counters", a, b, c, d]) = do
   rn <- atomInt "counters" a
   rb <- atomInt "counters" b
   cn <- atomInt "counters" c
   cb <- atomInt "counters" d
-  Ok (rn, rb, cn, cb)
+  Ok (
+    BinderRun { brFirst = rb, brCount = rn },
+    BinderRun { brFirst = cb, brCount = cn },
+  )
 countersOf _ = Err SexpError {
   seOffset = 0,
   sePath = "counters",
   seWhat = "expected a counters line of four numbers",
 }
 
-decodeBody : (Int, Int, Int, Int) ->
+decodeBody : (BinderRun, BinderRun) ->
   String ->
   Result InterfaceFault PreludeDecls
-decodeBody (rn, rb, cn, cb) body
-  | rn < 0 || rb < 0 || cn < 0 || cb < 0 =
-    refuse "counters" "a counter is negative"
+decodeBody (rr, cr) body
+  | negativeRun rr || negativeRun cr = refuse "counters" "a counter is negative"
   | otherwise =
     let cur = cursorOf body
     match readDecls cur
@@ -191,12 +192,8 @@ decodeBody (rn, rb, cn, cb) body
         Ok core =>
           if cursorAtEnd cur then
             Ok PreludeDecls {
-              pdRuntime = runtime,
-              pdCore = core,
-              pdRuntimeBinders = rn,
-              pdRuntimeBase = rb,
-              pdCoreBinders = cn,
-              pdCoreBase = cb,
+              pdRuntime = treeOf runtime rr,
+              pdCore = treeOf core cr,
             }
           else
             failure SexpError {
@@ -204,3 +201,6 @@ decodeBody (rn, rb, cn, cb) body
               sePath = "",
               seWhat = "trailing text after the core declarations",
             }
+
+negativeRun : BinderRun -> Bool
+negativeRun run = run.brFirst < 0 || run.brCount < 0

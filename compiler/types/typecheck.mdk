@@ -56757,9 +56757,9 @@ lastComponent [x] = x
 lastComponent (_ :: rest) = lastComponent rest
 
 -- The `=>`-constrained-function dict-name set `elaborateModules` hands to prePass and
--- dictPass, which must see the SAME set: the prelude's constrained names, then the
--- FULL `constrainedSigNames` of every module (not the return-position subset:
--- dictPass gives a leading dict PARAM to every function whose signature is
+-- dictPass, which must see the same set: the prelude's constrained names, then the
+-- full `constrainedSigNames` of every module (not the return-position subset:
+-- dictPass gives a leading dict parameter to every function whose signature is
 -- constrained, so a mark set that omitted `quad : Monoid a => a -> a` would leave
 -- its call sites unmarked).  The prelude's names are the one prelude-only input, so
 -- a driver with a prelude key derives them once per process.

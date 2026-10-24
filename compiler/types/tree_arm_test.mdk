@@ -23,7 +23,7 @@ import list.{reverse}
 import map.{entries}
 import frontend.desugar_cache.{preludeGeneration}
 import driver.build_cmd.{
-  TreesVerdict(..), loadPreludeElab, loadPreludeInterface, shippedInputs
+  FileVerdict(..), loadPreludeElab, loadPreludeInterface, shippedInputs
 }
 import eval.eval.{evalModulesOutputFacts}
 import types.prelude_elab.{PreludeElab(..), preludeElabFor, readElabKey}
@@ -92,7 +92,7 @@ suffixesIn (SAtom s)
 suffixesIn (SList items) = flatMap suffixesIn items
 
 -- The two prelude texts, the trees' verdict and the value held for them.
-loaded : Unit -> <IO> Option ((String, String), TreesVerdict, PreludeElab)
+loaded : Unit -> <IO> Option ((String, String), FileVerdict, PreludeElab)
 loaded _ =
   let _ = userMods
   match (
@@ -114,8 +114,8 @@ loaded _ =
           (preludeElabFor generation (desugaredPrelude csrc))
     _ => None
 
-isLoaded : TreesVerdict -> Bool
-isLoaded TVLoaded = True
+isLoaded : FileVerdict -> Bool
+isLoaded FileLoaded = True
 isLoaded _ = False
 
 -- An evidence row is the prelude's (module "", below the counter) or the

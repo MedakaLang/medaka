@@ -8,26 +8,21 @@
 import test.{Expectation, expectAll, expectEqual, expectTrue, fail, labelFail}
 import test_process.{underRoot}
 import frontend.ast.{Decl}
-import frontend.ast_codec.{declsSExp}
 import frontend.desugar.{desugar, freshBinderId}
 import frontend.desugar_cache.{desugaredPrelude}
 import frontend.parse_cache.{parsePrelude}
 import string as S
-import support.sexp_value.{SexpError(..), renderSExp}
-import types.interface_sexp.{InterfaceFault(..), sha256Hex}
+import types.framed_test_support.{testKeyAt, treeText, withDigestOf}
+import types.interface_sexp.{InterfaceFault(..)}
 import types.prelude_decls.{
   PreludeDecls(..), acceptedDeclsBody, preludeDeclsOf, encodeDeclsFile,
   readDeclsFile, readDeclsKey, declsKeyOf, declsFormatVersion, renderDeclsFault
 }
-import types.prelude_elab.{binderSpan, relocDecls}
-import types.prelude_interface.{InterfaceKey(..), interfaceKeyOf, keysMatch}
+import types.prelude_elab.{BinderRun(..), binderSpan, relocDecls}
+import types.prelude_interface.{InterfaceKey(..), keysMatch}
 
 testKey : InterfaceKey
-testKey =
-  interfaceKeyOf
-    declsFormatVersion
-    [("runtime.mdk", "aa"), ("core.mdk", "bb")]
-    "compiler-x"
+testKey = testKeyAt declsFormatVersion
 
 -- The two prelude texts.
 sources : Unit -> <Env "MEDAKA_ROOT", FileRead> Option (String, String)
@@ -49,28 +44,10 @@ advance n =
   let _ = freshBinderId ""
   advance (n - 1)
 
-treeText : List Decl -> String
-treeText ds = renderSExp (declsSExp ds)
-
 -- Why a read refused, as the fault's own text, or `ok`.
 why : Result InterfaceFault a -> String
 why (Err f) = renderDeclsFault f
 why (Ok _) = "ok"
-
--- The file with its header's digest rewritten to match the body, so only the
--- body is wrong.
-withBody : String -> String -> String
-withBody file body = match S.indexOf "\n" file
-  None => file
-  Some i =>
-    let header = S.take i file
-    let claimed =
-      S.take
-        64
-        (S.drop
-          (S.length "(digest " + optionOr 0 (S.indexOf "(digest " header))
-          header)
-    "\{S.replace claimed (sha256Hex body) header}\n\{body}"
 
 writtenFile : Unit -> <Env "MEDAKA_ROOT", FileRead> Option String
 writtenFile _ = match sources ()
@@ -101,36 +78,39 @@ test "the file round-trips byte for byte and equals the desugar of each source" 
                 "runtime declarations"
                 (expectEqual
                   (treeText (desugaredPrelude rsrc))
-                  (treeText back.pdRuntime)),
+                  (treeText back.pdRuntime.ptDecls)),
               labelFail
                 "core declarations"
                 (expectEqual
                   (treeText (desugaredPrelude csrc))
-                  (treeText back.pdCore)),
+                  (treeText back.pdCore.ptDecls)),
               labelFail
                 "the counters"
                 (expectEqual
                   (
-                    pd.pdRuntimeBinders,
-                    pd.pdRuntimeBase,
-                    pd.pdCoreBinders,
-                    pd.pdCoreBase,
+                    pd.pdRuntime.ptBinders,
+                    pd.pdRuntime.ptBase,
+                    pd.pdCore.ptBinders,
+                    pd.pdCore.ptBase,
                   )
                   (
-                    back.pdRuntimeBinders,
-                    back.pdRuntimeBase,
-                    back.pdCoreBinders,
-                    back.pdCoreBase,
+                    back.pdRuntime.ptBinders,
+                    back.pdRuntime.ptBase,
+                    back.pdCore.ptBinders,
+                    back.pdCore.ptBase,
                   )),
               labelFail
                 "core mints binders and runtime none"
                 (expectTrue
-                  (back.pdCoreBinders > 0 && back.pdRuntimeBinders == 0)),
+                  (back.pdCore.ptBinders > 0 && back.pdRuntime.ptBinders == 0)),
               labelFail
                 "the counters describe the trees"
                 (expectEqual
-                  (back.pdCoreBase, back.pdCoreBinders)
-                  (binderSpan back.pdCore)),
+                  (Some BinderRun {
+                    brFirst = back.pdCore.ptBase,
+                    brCount = back.pdCore.ptBinders,
+                  })
+                  (binderSpan back.pdCore.ptDecls)),
             ]
 
 -- The decoded core moved onto a desugar minted [shift] ordinals later equals
@@ -144,18 +124,21 @@ relocationAt shift rsrc csrc =
       Ok (_, pd) =>
         let _ = advance shift
         let fresh = freshTree csrc
-        let (first, count) = binderSpan fresh
-        let moved = relocDecls (first - pd.pdCoreBase) pd.pdCore
+        let span = binderSpan fresh
+        let first = optionOr 0 (map (run => run.brFirst) span)
+        let moved = relocDecls (first - pd.pdCore.ptBase) pd.pdCore.ptDecls
         expectAll [
           labelFail
             "the relocated trees are the desugar's"
             (expectEqual (treeText fresh) (treeText moved)),
           labelFail
             "the span lands equal"
-            (expectEqual (first, count) (binderSpan moved)),
+            (expectEqual span (binderSpan moved)),
           labelFail
             "the count is the file's"
-            (expectEqual pd.pdCoreBinders count),
+            (expectEqual
+              (Some pd.pdCore.ptBinders)
+              (map (run => run.brCount) span)),
         ]
 
 test "decode and relocate equals an in-process desugar at shifts 0 and 1000" =
@@ -183,7 +166,7 @@ test "a tree whose binders are not one run is not written" = match sources ()
         (expectEqual
           (Ok (0, 0))
           (map
-            (pd => (pd.pdRuntimeBinders, pd.pdRuntimeBase))
+            (pd => (pd.pdRuntime.ptBinders, pd.pdRuntime.ptBase))
             (preludeDeclsOf [] a))),
     ]
 
@@ -252,19 +235,19 @@ test "a body that is not two declaration lists refuses under a matching digest" 
             "trailing text"
             (expectEqual
               ": trailing text after the core declarations (prelude declarations)"
-              (why (readDeclsFile (withBody text (body ++ "()\n"))))),
+              (why (readDeclsFile (withDigestOf text (body ++ "()\n"))))),
           labelFail
             "no counters line"
             (expectEqual
               "counters: no counters line (prelude declarations)"
-              (why (readDeclsFile (withBody text "")))),
+              (why (readDeclsFile (withDigestOf text "")))),
           labelFail
             "a negative counter"
             (expectEqual
               "counters: a counter is negative (prelude declarations)"
               (why
                 (readDeclsFile
-                  (withBody text "(counters 0 -1 0 0)\n()\n()\n")))),
+                  (withDigestOf text "(counters 0 -1 0 0)\n()\n()\n")))),
         ]
 
 test "a key of another compiler or sources reads as a mismatch, never as the same key" =
@@ -302,7 +285,7 @@ test "a counters line that does not describe the trees is not accepted, whatever
     Some text => match readDeclsFile text
       Err f => fail "the file did not read: \{why (Err f)}"
       Ok (_, pd) =>
-        let n = pd.pdCoreBinders
+        let n = pd.pdCore.ptBinders
         let accepted = line => why (acceptedDeclsBody (withCounters text line))
         let refused =
           "counters: the binder counters disagree with the trees (prelude declarations)"

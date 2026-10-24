@@ -100,5 +100,9 @@ desugaredPreludeEntry src = match lookupAssoc src !desugarCacheRef
   Some (Minted gen decls) => (gen, decls)
   Some (Pending decode) => match decode ()
     Some decls => noteDesugaredPrelude src decls
-    None => noteDesugaredPrelude src (desugar (parsePrelude src))
-  None => noteDesugaredPrelude src (desugar (parsePrelude src))
+    None => mintFresh src
+  None => mintFresh src
+
+-- `src` parsed and desugared now, and entered under a new generation.
+mintFresh : String -> (Int, List Decl)
+mintFresh src = noteDesugaredPrelude src (desugar (parsePrelude src))

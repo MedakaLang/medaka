@@ -16,15 +16,15 @@ import tools.interface_cmd.{
   verdictText
 }
 import types.prelude_decls.{
-  PreludeDecls(..), encodeDeclsFile, readDeclsFile, readDeclsKey, declsKeyOf,
-  renderDeclsFault
+  PreludeDecls(..), PreludeTree(..), encodeDeclsFile, readDeclsFile,
+  readDeclsKey, declsKeyOf, renderDeclsFault
 }
 import types.prelude_elab.{
   PreludeElab(..), encodeElabFile, elabKeyOf, readElabFile, readElabKey,
   renderElabFault
 }
 import driver.build_cmd.{
-  readPreludeInterface, PreludeInputs(..), PreludeVerdict(..)
+  readPreludeInterface, PreludeInputs(..), FileVerdict(..)
 }
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface, sha256Hex,
@@ -69,27 +69,31 @@ withStagedStdlib body = withScratchDir (dir => match (
   (Ok _, Ok _) => body dir
   _ => fail "could not stage the scratch stdlib")
 
+-- What `verify` says of [core]'s files right now.
+verdictNow : String -> <IO> String
+verdictNow core = verdictText (verdictOf core)
+
 test "verify reads fresh, then stale: sources after an edit, and missing without a file" = withStagedStdlib
   (dir =>
     let scratchCore = "\{dir}/core.mdk"
     match buildBoth scratchCore []
       Err e => fail e
       Ok (file, elab, decls) =>
-        let before = verdictText (verdictOf scratchCore)
+        let before = verdictNow scratchCore
         match writeFile "\{scratchCore}i" (encodeInterface file)
           Err e => fail e
           Ok _ =>
-            let onlyInterface = verdictText (verdictOf scratchCore)
+            let onlyInterface = verdictNow scratchCore
             let elabText = encodeElabFile (elabKeyOf file.ifKey) elab
             match writeFile "\{scratchCore}e" elabText
               Err e => fail e
               Ok _ =>
-                let noDecls = verdictText (verdictOf scratchCore)
+                let noDecls = verdictNow scratchCore
                 let declsText = encodeDeclsFile (declsKeyOf file.ifKey) decls
                 match writeFile "\{scratchCore}d" declsText
                   Err e => fail e
                   Ok _ =>
-                    let fresh = verdictText (verdictOf scratchCore)
+                    let fresh = verdictNow scratchCore
                     match readFile scratchCore
                       Err e => fail e
                       Ok text => match writeFile scratchCore (text ++ " ")
@@ -115,14 +119,14 @@ test "verify reads fresh, then stale: sources after an edit, and missing without
                             "source edited"
                             (expectEqual
                               "stale: sources"
-                              (verdictText (verdictOf scratchCore))),
+                              (verdictNow scratchCore)),
                         ])
 
-verdictName : PreludeVerdict -> String
-verdictName (PVLoaded _) = "loaded"
-verdictName PVMissing = "missing"
-verdictName (PVStale component) = "stale: \{component}"
-verdictName PVDisabled = "disabled"
+verdictName : FileVerdict -> String
+verdictName FileLoaded = "loaded"
+verdictName FileMissing = "missing"
+verdictName (FileStale component) = "stale: \{component}"
+verdictName FileDisabled = "disabled"
 
 -- The verdict of reading [file], written under compiler identity [written],
 -- as compiler [reader].
@@ -586,14 +590,14 @@ test "the writer leaves a declarations file that reads back, shows and verifies"
             "runtime mints no binder, core mints from 0"
             (expectEqual
               (0, 0, 0)
-              (pd.pdRuntimeBinders, pd.pdRuntimeBase, pd.pdCoreBase)),
-          labelFail "core mints binders" (expectTrue (pd.pdCoreBinders > 0)),
+              (pd.pdRuntime.ptBinders, pd.pdRuntime.ptBase, pd.pdCore.ptBase)),
+          labelFail "core mints binders" (expectTrue (pd.pdCore.ptBinders > 0)),
           labelFail
             "show lists both trees and the counters"
             (expectEqual
               [
-                "runtime decls \{length pd.pdRuntime}",
-                "core decls \{length pd.pdCore}",
+                "runtime decls \{length pd.pdRuntime.ptDecls}",
+                "core decls \{length pd.pdCore.ptDecls}",
               ]
               (take 2 (drop 4 (showDeclsLines "d" key pd)))),
           labelFail "all three fresh" (expectEqual "fresh" (verifyOut dir)),
@@ -685,7 +689,7 @@ test "verify refuses a digest-valid declarations file that the loader would refu
             line ++ S.drop (optionOr 0 (S.indexOf "\n" c)) c)
         let stale = "stale: declarations (.mdkd) file"
         let n = match readDeclsFile fresh
-          Ok (_, pd) => pd.pdCoreBinders
+          Ok (_, pd) => pd.pdCore.ptBinders
           Err _ => 0
         expectAll [
           labelFail

@@ -77,9 +77,8 @@ import driver.loader.{
 }
 import driver.build_cmd.{
   readPreludeSources, envOr, defaultMedakaRoot, loadPreludeInterface,
-  loadPreludeElab, preludeTreesLine, treesLoaded, withHeldPrelude, TreesVerdict,
-  PreludeInputs, shippedInputs, preludeDeclsLine, preludeDeclsVerdict,
-  reportStaleLine
+  loadPreludeElab, treesLoaded, withHeldPrelude, FileVerdict, SideFile(..),
+  PreludeInputs(..), staleLine, preludeDeclsVerdict, reportStaleLine
 }
 import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
@@ -296,13 +295,12 @@ runTest : List Engine ->
   <IO> Bool
 runTest engines runtimeP coreP target roots cases filterOpt
   | dirOf coreP /= dirOf runtimeP || baseOf coreP /= "core.mdk" =
-    let _ =
-      ePutStrLn
-        "error: `core.mdk` must be the one beside `runtime.mdk`, got `\{coreP}`"
+    ePutStrLn
+      "error: `core.mdk` must be the one beside `runtime.mdk`, got `\{coreP}`"
     False
   | otherwise = match carryProjectProfile None target
     Err m =>
-      let _ = ePutStrLn ("error: " ++ m)
+      ePutStrLn ("error: " ++ m)
       False
     Ok _ => runTestUnderProfile engines runtimeP target roots cases filterOpt
 
@@ -317,11 +315,11 @@ runTestUnderProfile : List Engine ->
 runTestUnderProfile engines runtimeP target roots cases filterOpt =
   match readPreludeSources (dirOf runtimeP)
     Err e =>
-      let _ = ePutStrLn e
+      ePutStrLn e
       False
-    Ok (rsrc, csrc) => match readSource target
+    Ok prelude => match readSource target
       Err e =>
-        let _ = ePutStrLn e
+        ePutStrLn e
         False
       -- A FILE-LEVEL parse error in the target must surface as the SAME located
       -- `file:L:C:` diagnostic `medaka check` prints — not the unlocated
@@ -334,7 +332,7 @@ runTestUnderProfile engines runtimeP target roots cases filterOpt =
       -- this covers a parse error in the module SOURCE itself.)
       Ok tsrc => match parseTargetResult tsrc
         Err e =>
-          let _ = ePutStrLn (ppDiagCliSrc tsrc target (parseErrDiag target e))
+          ePutStrLn (ppDiagCliSrc tsrc target (parseErrDiag target e))
           False
         Ok _ =>
           let userDecls = targetDesugared tsrc
@@ -342,21 +340,20 @@ runTestUnderProfile engines runtimeP target roots cases filterOpt =
           let _ = exemptNotice exempt target userDecls
           match pinIndexForTarget target userDecls
             Err err =>
-              let _ = ePutStrLn err
+              ePutStrLn err
               False
             Ok (file, index) =>
-              let _ =
-                holdTestPrelude True (shippedInputs (dirOf runtimeP) rsrc csrc)
+              let _ = holdTestPrelude True prelude
               -- S-1/#2234 (F-converge): the prelude halves go through the
               -- content-keyed `desugaredPrelude` memo; only the USER source is
               -- parsed+desugared fresh here.
               driveAll
                 engines
-                (desugaredPrelude rsrc)
-                (desugaredPrelude csrc)
-                rsrc
-                csrc
-                (dirOf runtimeP)
+                (desugaredPrelude prelude.pnRuntimeSrc)
+                (desugaredPrelude prelude.pnCoreSrc)
+                prelude.pnRuntimeSrc
+                prelude.pnCoreSrc
+                prelude.pnStdlibDir
                 target
                 tsrc
                 roots
@@ -378,17 +375,17 @@ holdTestPrelude report inputs =
   let verdict = loadPreludeElab inputs
   if report && first then
     let _ = reportTestTrees verdict
-    reportTestLine (preludeDeclsLine (preludeDeclsVerdict inputs))
+    reportTestLine (staleLine DeclsFile (preludeDeclsVerdict inputs))
 
 -- The line a stale file earns, once per process because the load is.
-reportTestTrees : TreesVerdict -> <IO> Unit
-reportTestTrees verdict = reportTestLine (preludeTreesLine verdict)
+reportTestTrees : FileVerdict -> <IO> Unit
+reportTestTrees verdict = reportTestLine (staleLine TreesFile verdict)
 
 reportTestLine : Option String -> <IO> Unit
 reportTestLine =
   reportStaleLine
     (msg =>
-      let _ = ePutStrLn msg
+      ePutStrLn msg
       stageExit 1)
     None
 
@@ -3063,7 +3060,7 @@ runEvalPropsWorker target requests =
   let stdlibDir = joinPath root "stdlib"
   match readPreludeSources stdlibDir
     Err message => evalWorkerDie "could not read the prelude: \{message}"
-    Ok (runtimeSrc, coreSrc) => match readSource target
+    Ok prelude => match readSource target
       Err message => evalWorkerDie "could not read property target: \{message}"
       Ok tsrc => match parseTargetResult tsrc
         Err _ => evalWorkerDie "could not parse property target"
@@ -3072,9 +3069,7 @@ runEvalPropsWorker target requests =
             target
             nonce
             requests
-            runtimeSrc
-            coreSrc
-            stdlibDir
+            prelude
             tsrc
             (targetDesugared tsrc)
 
@@ -3086,14 +3081,15 @@ evalWorkerDie message = do
 runEvalPropsWorkerSource : String ->
   String ->
   List PropRequest ->
-  String ->
-  String ->
-  String ->
+  PreludeInputs ->
   String ->
   List Decl ->
   <IO> Unit
-runEvalPropsWorkerSource target nonce requests runtimeSrc coreSrc stdlibDir tsrc userDecls =
-  let _ = holdTestPrelude False (shippedInputs stdlibDir runtimeSrc coreSrc)
+runEvalPropsWorkerSource target nonce requests prelude tsrc userDecls =
+  let runtimeSrc = prelude.pnRuntimeSrc
+  let coreSrc = prelude.pnCoreSrc
+  let stdlibDir = prelude.pnStdlibDir
+  let _ = holdTestPrelude False prelude
   let runtimeDecls = desugaredPrelude runtimeSrc
   let coreDecls = desugaredPrelude coreSrc
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
