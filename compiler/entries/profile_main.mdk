@@ -1,3 +1,5 @@
+import types.extern_source.{externSourceHeadRows}
+import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- Single-file per-stage timing driver for the self-hosted front-end.
 -- Times each pipeline stage individually so the cost of each is visible
 -- rather than buried in a composite (e.g. elaborate = mark + typecheck).
@@ -60,7 +62,7 @@ import ir.core_ir_lower.{
 import ir.dce.{dceFilter}
 import types.tc_types.{DriveOutputs}
 import types.private_mangle.{mangleUnits, mangleUnitsEv}
-import types.program_facts.{factsOfElabWith}
+import types.program_facts.{factsOfElabSources, factsWithEvidence}
 import backend.emit_plan.{buildEmitPlan}
 
 import backend.llvm_emit.{emitProgram, makeEmitInput}
@@ -290,6 +292,8 @@ runStaged on targetPath rsrc csrc tsrc =
       livePrelude
       (("__user__", desugared) :: [])
   let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let externFacts =
+    factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let elaborated = coreD ++ flatMap snd modules2
   -- Input indexing is elaboration work; keep it outside the emit timer.  The FFI
@@ -367,7 +371,7 @@ runStaged on targetPath rsrc csrc tsrc =
   let tLw0 = now ()
   let aLw0 = allocSnap ()
   let oLw0 = opSnap ()
-  let cprog = lowerProgramEmitWith (factsOfElabWith evTableM elab) live
+  let cprog = lowerProgramEmitWith (factsWithEvidence evTableM externFacts) live
   let tLw1 = now ()
   let _ =
     emitPhaseAO

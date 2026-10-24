@@ -3,11 +3,15 @@
 -- Each program is prelude-free and lowered without typechecking, through the
 -- pipeline `compiler/entries/wasm_emit_main.mdk` and
 -- `compiler/entries/llvm_emit_main.mdk` use, so a reference to a runtime extern
--- reaches the checked program exactly as the source spells it.
+-- reaches the checked program with its canonical extern declaration identity.
 
 import backend.extern_catalog.{RuntimeExternDomain(..), runtimeDomain}
 import frontend.ast.{externDecls, Decl(..), Attr(..), Ty(..)}
 import backend.emit_target.{Backend(..), backendName}
+import ir.extern_types.{ExternDeclFact(..)}
+import ir.extern_lower.{externVar, externHeadRows}
+import types.extern_source.{runtimeExternSymbol}
+import support.ordmap.{omLookup}
 import test.{
   Expectation,
   fail,
@@ -98,6 +102,30 @@ lowered src =
   lowerProgramEmitWith
     emptyFacts
     (annotateProgram (grantWholeDomain (desugar (parse src))))
+
+test "missing-extern-abi is a fatal metadata defect before target gaps" =
+  let (cp@(CProgram groups ca ct impls mc facts)) =
+    lowered "main = intToString 42"
+  let symbol = runtimeExternSymbol "intToString"
+  match omLookup symbol facts.factExterns
+    None => fail "lowering omitted the runtime declaration"
+    Some fact =>
+      let malformed = CProgram groups ca ct impls mc { facts |
+        factExterns =
+          omInsert symbol { fact | callableShape = None } facts.factExterns,
+      }
+      let validation =
+        validateForEmission
+          LlvmBackend
+          PreludeFreeRuntime
+          (buildEmitPlan LlvmBackend malformed)
+          malformed
+      expectAll [
+        expectTextContainsAll
+          ["missing-extern-abi", symbol]
+          (joinNl (map coreDefectMessage validation.defects)),
+        expectEqual [] (map findingExtern validation.externFindings),
+      ]
 
 -- The extern names `backend` refuses in `src`, in order of first reference.
 refused : Backend -> String -> List String
@@ -365,11 +393,12 @@ ffiValueSrc =
 ffiNoJsEvents : Option CheckedTarget -> <IO> List String
 ffiNoJsEvents checked =
   let decls = grantWholeDomain (desugar (parse ffiValueSrc))
-  let ffiTypes =
-    [("ffiAddInts", ([("c", "ffiAddInts")], (["Int", "Int"], "Int")))]
-  let input =
-    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) ffiTypes
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
+  let input =
+    makeWasmEmitInputFull
+      PreludeFreeRuntime
+      (ctorFieldTypeNames decls)
+      (externHeadRows cp)
   checkedTarget := checked
   let (_, events) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   checkedTarget := None
@@ -1222,6 +1251,7 @@ evidenceProg body =
       factSupers = [("K", 0), ("S", 1)],
       factBinders = [],
       factEntryOutcome = None,
+      factExterns = noDeclFacts.factExterns,
     }
 
 evidenceOf : Route -> CExpr
@@ -1515,6 +1545,7 @@ dropBinderTable (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
     factSupers = facts.factSupers,
     factBinders = [],
     factEntryOutcome = facts.factEntryOutcome,
+    factExterns = facts.factExterns,
   }
 
 restampBinder : String -> RuntimeType -> CProgram -> CProgram
@@ -1529,6 +1560,7 @@ restampBinder name ty (CProgram groups ctors ctorTypes impls mctx facts) = CProg
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factEntryOutcome = facts.factEntryOutcome,
+    factExterns = facts.factExterns,
     factBinders =
       map
         (row =>
@@ -1617,6 +1649,7 @@ intLetProg ty =
       factRequires = [],
       factSupers = [],
       factEntryOutcome = None,
+      factExterns = noDeclFacts.factExterns,
       factBinders = [
         BinderRow {
           brId = bid,
@@ -1716,6 +1749,7 @@ editRows edit (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
     factSupers = facts.factSupers,
     factBinders = edit facts.factBinders,
     factEntryOutcome = facts.factEntryOutcome,
+    factExterns = facts.factExterns,
   }
 
 test "(ad) a function whose row is missing or gives no return type is refused" = expectEach
@@ -1890,7 +1924,10 @@ emissionVictim "F6" =
     (CMethod "show" (MethodEvidence "I" 1 (RDict "$dict_missing") [] []))
     emissionControl
 emissionVictim "not-provided" =
-  replaceMain (CVar "assertSnapshot" AGlobal) emissionControl
+  let (CProgram _ _ _ _ _ facts) = emissionControl
+  match omLookup (runtimeExternSymbol "assertSnapshot") facts.factExterns
+    Some fact => replaceMain (externVar fact) emissionControl
+    None => panic "emission control omitted assertSnapshot extern fact"
 emissionVictim victim =
   if contains "global-cycle" victim then
     typedLowered "" """

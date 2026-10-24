@@ -1,0 +1,306 @@
+import frontend.ast.{Addr(..), Pat(..), RecPatField(..)}
+import ir.core_ir.{
+  CProgram(..), CBind(..), CClause(..), CExpr(..), CImplEntry(..),
+  CImplBody(..), CArm(..), CGuard(..), CStmt(..), CField(..),
+  MethodEvidence(..), DeclFacts(..)
+}
+import ir.extern_types.{ExternDeclFact(..)}
+import types.extern_source.{
+  ExternSource(..), ExternProvenance(..), ExternBindingKind(..),
+  runtimeExternSymbol, sourceExterns, ExternHeadRows
+}
+import types.runtime_abi_data.{runtimeAbiRows}
+import types.program_facts.{ProgramFacts(..)}
+import frontend.ast.{Decl}
+import support.ordmap.{
+  OrdMap, omEmpty, omFromPairs, omFromNames, omHasKey, omInsert, omLookup,
+  omKeys
+}
+import support.util.{listLen, fallthroughName}
+
+export type ExternVisitor = OrdMap Unit -> Int -> String -> Addr -> CExpr
+
+export
+externVar : ExternDeclFact -> CExpr
+externVar fact = CVar fact.symbol AGlobal
+
+export
+externFact : ExternSource -> ExternDeclFact
+externFact s = ExternDeclFact {
+  symbol = s.sourceSymbol,
+  originModule = s.sourceModule,
+  declaredName = s.sourceName,
+  bindingKind = s.sourceBinding,
+  hostBindings = s.sourceHosts,
+  callableShape = s.sourceAbi,
+  provenance = s.sourceProvenance,
+}
+
+export
+implicitRuntimeFacts : List ExternDeclFact
+implicitRuntimeFacts =
+  map
+    ((name, shape) => ExternDeclFact {
+      symbol = runtimeExternSymbol name,
+      originModule = "runtime",
+      declaredName = name,
+      bindingKind = RuntimeBinding name,
+      hostBindings = [],
+      callableShape = Some shape,
+      provenance = NoSourceSignature,
+    })
+    runtimeAbiRows
+
+export
+lowerExterns : ProgramFacts -> List Decl -> CProgram -> CProgram
+lowerExterns input decls (prog@(CProgram groups _ _ _ _ facts)) =
+  let sources =
+    optionOr (sourceExterns RawSource "<raw>" [] decls) input.pfExternSources
+  let rows = map externFact sources ++ implicitRuntimeFacts
+  let inventory = omFromPairs (map (f => (f.symbol, f)) rows) omEmpty
+  let names =
+    omFromPairs
+      (map (f => (f.declaredName, f)) implicitRuntimeFacts
+        ++ (if isSome input.pfExternSources then
+          []
+        else
+          map (s => (s.sourceName, externFact s)) sources))
+      omEmpty
+  let globals = omFromNames (map ((CBind n _ _ _) => n) groups) omEmpty
+  let selected =
+    walkExternVars
+      (scope supplied name addr =>
+        if name == fallthroughName
+          || omHasKey name scope
+          || omHasKey name inventory then
+          CVar name addr
+        else match omLookup name names
+          Some fact =>
+            if omHasKey ("core__" ++ name) globals
+              || omHasKey name globals && (supplied < 0 || isConstant fact) then
+              CVar name addr
+            else
+              externVar fact
+          None => CVar name addr)
+      prog
+  let (CProgram bs ca ct impls mc _) = selected
+  CProgram bs ca ct impls mc { facts | factExterns = inventory }
+
+isConstant : ExternDeclFact -> Bool
+isConstant fact = match fact.callableShape
+  Some shape => shape.writtenValueArity == 0
+  None => False
+
+export
+walkExternVars : ExternVisitor -> CProgram -> CProgram
+walkExternVars f (CProgram groups ca ct impls mc facts) =
+  CProgram
+    (map (walkBind f omEmpty) groups)
+    ca
+    ct
+    (map (walkEntry f) impls)
+    mc
+    facts
+
+bindPatScope : Pat -> OrdMap Unit -> OrdMap Unit
+bindPatScope pat scope = omFromNames (patNames pat) scope
+
+bindPatsScope : List Pat -> OrdMap Unit -> OrdMap Unit
+bindPatsScope pats scope = omFromNames (flatMap patNames pats) scope
+
+bindLetScope : Pat -> CExpr -> OrdMap Unit -> OrdMap Unit
+bindLetScope pat _ scope = bindPatScope pat scope
+
+bindGroupScope : List CBind -> OrdMap Unit -> OrdMap Unit
+bindGroupScope binds scope =
+  omFromNames (map ((CBind n _ _ _) => n) binds) scope
+
+patNames : Pat -> List String
+patNames (PVar n _ _) = [n]
+patNames (PCon _ ps) = flatMap patNames ps
+patNames (PCons a b) = patNames a ++ patNames b
+patNames (PTuple ps) = flatMap patNames ps
+patNames (PList ps) = flatMap patNames ps
+patNames (PAs n _ _ p) = n :: patNames p
+patNames (PRec _ fs _) = flatMap fieldNames fs
+patNames PWild = []
+patNames (PLit _) = []
+patNames (PRng _ _ _) = []
+
+fieldNames : RecPatField -> List String
+fieldNames (RecPatField n _ _ None) = [n]
+fieldNames (RecPatField _ _ _ (Some p)) = patNames p
+
+export
+externHeadRows : CProgram -> ExternHeadRows
+externHeadRows (CProgram _ _ _ _ _ facts) =
+  flatMap
+    (key => match omLookup key facts.factExterns
+      Some fact => match (fact.bindingKind, fact.callableShape)
+        (ForeignBinding, Some shape) => [
+          (
+            fact.symbol,
+            (fact.hostBindings, (shape.parameterHeads, shape.resultHead)),
+          ),
+        ]
+        _ => []
+      None => [])
+    (omKeys facts.factExterns)
+
+export
+externRuntimeKey : OrdMap ExternDeclFact -> String -> Option String
+externRuntimeKey inventory symbol = match omLookup symbol inventory
+  Some fact => match fact.bindingKind
+    RuntimeBinding key => Some key
+    ForeignBinding => None
+  None => None
+
+walkBind : ExternVisitor -> OrdMap Unit -> CBind -> CBind
+walkBind env scope (CBind name clauses site bid) =
+  CBind name (map (walkClause env scope) clauses) site bid
+
+walkClause : ExternVisitor -> OrdMap Unit -> CClause -> CClause
+walkClause env scope (CClause pats body) =
+  CClause pats (walkExpr env (bindPatsScope pats scope) body)
+
+walkEntry : ExternVisitor -> CImplEntry -> CImplEntry
+walkEntry env (CImplEntry m s d (CImplTagged tag key iface sym pos pats body)) =
+  CImplEntry
+    m
+    s
+    d
+    (CImplTagged
+      tag
+      key
+      iface
+      sym
+      pos
+      pats
+      (walkExpr env (bindPatsScope pats omEmpty) body))
+walkEntry env (CImplEntry m s d (CImplDefault w tag key sym pos pats body)) =
+  CImplEntry
+    m
+    s
+    d
+    (CImplDefault
+      w
+      tag
+      key
+      sym
+      pos
+      pats
+      (walkExpr env (bindPatsScope pats omEmpty) body))
+
+-- Every constructor is listed, with no catch-all arm, so a new expression form
+-- must decide where its binders scope.
+walkExpr : ExternVisitor -> OrdMap Unit -> CExpr -> CExpr
+walkExpr env scope (CApp (CVar name addr) args site) =
+  CApp (env scope (listLen args) name addr) (map (walkExpr env scope) args) site
+walkExpr env scope (CApp f args site) =
+  CApp (walkExpr env scope f) (map (walkExpr env scope) args) site
+walkExpr _ _ (CLit l) = CLit l
+walkExpr env scope (CVar x addr) = env scope (0 - 1) x addr
+walkExpr env scope (CLam pats body) =
+  CLam pats (walkExpr env (bindPatsScope pats scope) body)
+walkExpr env scope (CLet recF pat rhs body) =
+  let inner = bindLetScope pat rhs scope
+  CLet
+    recF
+    pat
+    (walkExpr env (if recF then inner else scope) rhs)
+    (walkExpr env inner body)
+walkExpr env scope (CLetGroup binds body) =
+  let inner = bindGroupScope binds scope
+  CLetGroup (map (walkBind env inner) binds) (walkExpr env inner body)
+walkExpr env scope (CMatch scrut arms) =
+  CMatch (walkExpr env scope scrut) (map (walkArm env scope) arms)
+walkExpr env scope (CDecision scrut arms tree) =
+  CDecision (walkExpr env scope scrut) (map (walkArm env scope) arms) tree
+walkExpr env scope (CIf c t e) =
+  CIf (walkExpr env scope c) (walkExpr env scope t) (walkExpr env scope e)
+walkExpr env scope (CBinPrim op l r tag site) =
+  CBinPrim op (walkExpr env scope l) (walkExpr env scope r) tag site
+walkExpr env scope (CUnOp op x) = CUnOp op (walkExpr env scope x)
+walkExpr env scope (CTuple es) = CTuple (map (walkExpr env scope) es)
+walkExpr env scope (CList es) = CList (map (walkExpr env scope) es)
+walkExpr env scope (CRecord name fields) =
+  CRecord name (map (walkField env scope) fields)
+walkExpr env scope (CFieldAccess x label name ord) =
+  CFieldAccess (walkExpr env scope x) label name ord
+walkExpr env scope (CRecordUpdate name base fields) =
+  CRecordUpdate
+    name
+    (walkExpr env scope base)
+    (map (walkField env scope) fields)
+walkExpr env scope (CVariantUpdate con base fields) =
+  CVariantUpdate
+    con
+    (walkExpr env scope base)
+    (map (walkField env scope) fields)
+walkExpr env scope (CArray es) = CArray (map (walkExpr env scope) es)
+walkExpr env scope (CRangeList lo hi incl) =
+  CRangeList (walkExpr env scope lo) (walkExpr env scope hi) incl
+walkExpr env scope (CRangeArray lo hi incl) =
+  CRangeArray (walkExpr env scope lo) (walkExpr env scope hi) incl
+walkExpr env scope (CIndex a i) =
+  CIndex (walkExpr env scope a) (walkExpr env scope i)
+walkExpr env scope (CSlice a lo hi incl) =
+  CSlice
+    (walkExpr env scope a)
+    (walkExpr env scope lo)
+    (walkExpr env scope hi)
+    incl
+walkExpr env scope (CStringIndex a i) =
+  CStringIndex (walkExpr env scope a) (walkExpr env scope i)
+walkExpr env scope (CStringSlice a lo hi incl) =
+  CStringSlice
+    (walkExpr env scope a)
+    (walkExpr env scope lo)
+    (walkExpr env scope hi)
+    incl
+walkExpr env scope (CListIndex a i) =
+  CListIndex (walkExpr env scope a) (walkExpr env scope i)
+walkExpr env scope (CListSlice a lo hi incl) =
+  CListSlice
+    (walkExpr env scope a)
+    (walkExpr env scope lo)
+    (walkExpr env scope hi)
+    incl
+walkExpr env scope (CBlock stmts) = CBlock (walkStmts env scope stmts)
+walkExpr _ _ (CMethod name (MethodEvidence iface arity r ir mr)) =
+  CMethod name (MethodEvidence iface arity r ir mr)
+walkExpr _ _ (CDict name rs) = CDict name rs
+
+-- An arm's pattern scopes over its guards and body; a `Pat <- e` guard's
+-- pattern scopes over the guards after it and the body.
+walkArm : ExternVisitor -> OrdMap Unit -> CArm -> CArm
+walkArm env scope (CArm pat guards body) =
+  let inner = bindPatScope pat scope
+  let (guards2, bodyScope) = walkGuards env inner guards
+  CArm pat guards2 (walkExpr env bodyScope body)
+
+walkGuards : ExternVisitor ->
+  OrdMap Unit ->
+  List CGuard ->
+  (List CGuard, OrdMap Unit)
+walkGuards _ scope [] = ([], scope)
+walkGuards env scope ((CGBool c) :: rest) =
+  let (rest2, out) = walkGuards env scope rest
+  (CGBool (walkExpr env scope c) :: rest2, out)
+walkGuards env scope ((CGBind pat e) :: rest) =
+  let (rest2, out) = walkGuards env (bindPatScope pat scope) rest
+  (CGBind pat (walkExpr env scope e) :: rest2, out)
+
+walkStmts : ExternVisitor -> OrdMap Unit -> List CStmt -> List CStmt
+walkStmts _ _ [] = []
+walkStmts env scope ((CSExpr e) :: rest) =
+  CSExpr (walkExpr env scope e) :: walkStmts env scope rest
+walkStmts env scope ((CSLet recF pat e) :: rest) =
+  let inner = bindLetScope pat e scope
+  CSLet recF pat (walkExpr env (if recF then inner else scope) e)
+    :: walkStmts env inner rest
+walkStmts env scope ((CSAssign x e) :: rest) =
+  CSAssign x (walkExpr env scope e) :: walkStmts env scope rest
+
+walkField : ExternVisitor -> OrdMap Unit -> CField -> CField
+walkField env scope (CField k o e) = CField k o (walkExpr env scope e)

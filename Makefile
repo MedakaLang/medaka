@@ -166,6 +166,9 @@ inlang-stdlib-suite-test:
 inlang-types:
 	./medaka test compiler/types
 
+inlang-extern-core-test:
+	./medaka test compiler/types/runtime_abi_test.mdk compiler/types/extern_source_test.mdk compiler/ir/extern_lower_test.mdk
+
 ## Support property siblings have no production entry and require explicit discovery.
 inlang-support-ordmap-test:
 	./medaka test compiler/support/ordmap_test.mdk

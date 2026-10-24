@@ -103,6 +103,7 @@ stages=DESUGAR,MARK
 -- let / lambda arg / match-pattern var) named `f` shadows it.  Mirrors the
 -- binder-threading of typecheck.mdk's `rewriteArgScoped`.
 
+import types.extern_source.{sourceExternSymbol, externDisplayName}
 import frontend.ast.{
   letBindName,
   Decl(..),
@@ -1202,9 +1203,7 @@ externDeclEntries name (_ :: rest) = externDeclEntries name rest
 -- name is always of this kind (T-FFI-BUILTIN-BIND refuses its clauses) and the
 -- emitters dispatch it by that spelling, so it keeps it.
 externSymbolName : String -> ExternDecl -> String
-externSymbolName mid ed = match ed.edBinds
-  [] => ed.edName
-  _ => mangledName mid ed.edName
+externSymbolName mid ed = sourceExternSymbol mid ed.edName
 
 -- The name an extern's declaration wrote, for a message, from its program-wide
 -- name and its (host, symbol) bindings.  A declaration without clauses has the
@@ -1214,6 +1213,7 @@ externSymbolName mid ed = match ed.edBinds
 export
 externDeclaredName : String -> List (String, String) -> String
 externDeclaredName n binds
+  | isSome (externDisplayName n) = optionOr n (externDisplayName n)
   | binds == [("c", n)] = n
   | otherwise = match stringIndexOf "__" n
     Some i => stringSlice (i + 2) (stringLength n) n
@@ -2059,6 +2059,7 @@ recPatFieldVarsPM : RecPatField -> List String
 recPatFieldVarsPM (RecPatField label _ _ None) = [label]
 recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 # DESUGAR
+(DUse false (UseGroup ("types" "extern_source") ((mem "sourceExternSymbol" false) (mem "externDisplayName" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" true) (mem "coreExports" false) (mem "buildExportsWith" false) (mem "pubIfaceMethodSets" false) (mem "directIn" false) (mem "filterInSet" false) (mem "nsValues" false) (mem "valueDeclsOf" false) (mem "valueDeclOf" false) (mem "typeOfCtor" false))))
 (DUse false (UseAlias ("u64") "U64"))
@@ -2249,9 +2250,9 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "externDeclEntries" ((PVar "name") (PCons (PCon "DAttrib" PWild (PVar "decl")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "externDeclEntries") (EVar "name")) (EListLit (EVar "decl"))) (EApp (EApp (EVar "externDeclEntries") (EVar "name")) (EVar "rest"))))
 (DFunDef false "externDeclEntries" ((PVar "name") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "externDeclEntries") (EVar "name")) (EVar "rest")))
 (DTypeSig false "externSymbolName" (TyFun (TyCon "String") (TyFun (TyCon "ExternDecl") (TyCon "String"))))
-(DFunDef false "externSymbolName" ((PVar "mid") (PVar "ed")) (EMatch (EFieldAccess (EVar "ed") "edBinds") (arm (PList) () (EFieldAccess (EVar "ed") "edName")) (arm PWild () (EApp (EApp (EVar "mangledName") (EVar "mid")) (EFieldAccess (EVar "ed") "edName")))))
+(DFunDef false "externSymbolName" ((PVar "mid") (PVar "ed")) (EApp (EApp (EVar "sourceExternSymbol") (EVar "mid")) (EFieldAccess (EVar "ed") "edName")))
 (DTypeSig true "externDeclaredName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String"))))
-(DFunDef false "externDeclaredName" ((PVar "n") (PVar "binds")) (EIf (EBinOp "==" (EVar "binds") (EListLit (ETuple (ELit (LString "c")) (EVar "n")))) (EVar "n") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "__"))) (EVar "n")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EApp (EVar "stringLength") (EVar "n"))) (EVar "n"))) (arm (PCon "None") () (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "externDeclaredName" ((PVar "n") (PVar "binds")) (EIf (EApp (EVar "isSome") (EApp (EVar "externDisplayName") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "n")) (EApp (EVar "externDisplayName") (EVar "n"))) (EIf (EBinOp "==" (EVar "binds") (EListLit (ETuple (ELit (LString "c")) (EVar "n")))) (EVar "n") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "__"))) (EVar "n")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EApp (EVar "stringLength") (EVar "n"))) (EVar "n"))) (arm (PCon "None") () (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "externImportEntries" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "externImportEntries" ((PVar "exports") (PCon "DUse" PWild (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModIdU") (EVar "path"))) (EVar "exports")) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EVar "externPathEntries") (EVar "names")) (EVar "path"))) (arm (PCon "None") () (EListLit))))
 (DFunDef false "externImportEntries" ((PVar "exports") (PCon "DAttrib" PWild (PVar "decl"))) (EApp (EApp (EVar "externImportEntries") (EVar "exports")) (EVar "decl")))
@@ -2498,6 +2499,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patVarsPM") (EVar "p")))
 # MARK
+(DUse false (UseGroup ("types" "extern_source") ((mem "sourceExternSymbol" false) (mem "externDisplayName" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" true) (mem "coreExports" false) (mem "buildExportsWith" false) (mem "pubIfaceMethodSets" false) (mem "directIn" false) (mem "filterInSet" false) (mem "nsValues" false) (mem "valueDeclsOf" false) (mem "valueDeclOf" false) (mem "typeOfCtor" false))))
 (DUse false (UseAlias ("u64") "U64"))
@@ -2688,9 +2690,9 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "externDeclEntries" ((PVar "name") (PCons (PCon "DAttrib" PWild (PVar "decl")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "externDeclEntries") (EVar "name")) (EListLit (EVar "decl"))) (EApp (EApp (EVar "externDeclEntries") (EVar "name")) (EVar "rest"))))
 (DFunDef false "externDeclEntries" ((PVar "name") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "externDeclEntries") (EVar "name")) (EVar "rest")))
 (DTypeSig false "externSymbolName" (TyFun (TyCon "String") (TyFun (TyCon "ExternDecl") (TyCon "String"))))
-(DFunDef false "externSymbolName" ((PVar "mid") (PVar "ed")) (EMatch (EFieldAccess (EVar "ed") "edBinds") (arm (PList) () (EFieldAccess (EVar "ed") "edName")) (arm PWild () (EApp (EApp (EVar "mangledName") (EVar "mid")) (EFieldAccess (EVar "ed") "edName")))))
+(DFunDef false "externSymbolName" ((PVar "mid") (PVar "ed")) (EApp (EApp (EVar "sourceExternSymbol") (EVar "mid")) (EFieldAccess (EVar "ed") "edName")))
 (DTypeSig true "externDeclaredName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String"))))
-(DFunDef false "externDeclaredName" ((PVar "n") (PVar "binds")) (EIf (EBinOp "==" (EVar "binds") (EListLit (ETuple (ELit (LString "c")) (EVar "n")))) (EVar "n") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "__"))) (EVar "n")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EApp (EVar "stringLength") (EVar "n"))) (EVar "n"))) (arm (PCon "None") () (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "externDeclaredName" ((PVar "n") (PVar "binds")) (EIf (EApp (EVar "isSome") (EApp (EVar "externDisplayName") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "n")) (EApp (EVar "externDisplayName") (EVar "n"))) (EIf (EBinOp "==" (EVar "binds") (EListLit (ETuple (ELit (LString "c")) (EVar "n")))) (EVar "n") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "__"))) (EVar "n")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EApp (EVar "stringLength") (EVar "n"))) (EVar "n"))) (arm (PCon "None") () (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "externImportEntries" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "externImportEntries" ((PVar "exports") (PCon "DUse" PWild (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModIdU") (EVar "path"))) (EVar "exports")) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EVar "externPathEntries") (EVar "names")) (EVar "path"))) (arm (PCon "None") () (EListLit))))
 (DFunDef false "externImportEntries" ((PVar "exports") (PCon "DAttrib" PWild (PVar "decl"))) (EApp (EApp (EVar "externImportEntries") (EVar "exports")) (EVar "decl")))

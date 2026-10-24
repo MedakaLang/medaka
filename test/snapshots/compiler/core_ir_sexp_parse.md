@@ -1,5 +1,5 @@
 # META
-source_lines=622
+source_lines=677
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -23,6 +23,10 @@ import frontend.ast.{
   Loc(..),
   noDeclLoc,
 }
+import ir.extern_types.{ExternDeclFact(..)}
+import types.extern_source.{ExternBindingKind(..), ExternProvenance(..)}
+import types.runtime_abi_types.{CallableShape(..)}
+import support.ordmap.{omEmpty, omFromPairs}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -563,6 +567,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
   factBinders = [],
   factMethodResults = [],
   factEntryOutcome = None,
+  factExterns = noDeclFacts.factExterns,
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results])) = DeclFacts {
   factRequires = map (toFactPair "rq") reqs,
@@ -570,6 +575,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results]))
   factBinders = [],
   factMethodResults = map toMethodResult results,
   factEntryOutcome = None,
+  factExterns = noDeclFacts.factExterns,
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome])) = DeclFacts {
   factRequires = map (toFactPair "rq") reqs,
@@ -577,6 +583,20 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, o
   factBinders = [],
   factMethodResults = map toMethodResult results,
   factEntryOutcome = Some (toEntryOutcome outcome),
+  factExterns = noDeclFacts.factExterns,
+}
+toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome, SList ((SAtom "externs") :: rows)])) = DeclFacts {
+  factRequires = map (toFactPair "rq") reqs,
+  factSupers = map (toFactPair "sp") sups,
+  factBinders = [],
+  factMethodResults = map toMethodResult results,
+  factEntryOutcome = match outcome
+    SAtom "none" => None
+    _ => Some (toEntryOutcome outcome),
+  factExterns =
+    omFromPairs
+      (map (row => let fact = toExtern row in (fact.symbol, fact)) rows)
+      omEmpty,
 }
 toDeclFacts other =
   panic ("core_ir_sexp_parse: bad declaration facts: " ++ sexprToStr other)
@@ -624,8 +644,47 @@ joinSexps : List SExp -> String
 joinSexps [] = ""
 joinSexps [x] = sexprToStr x
 joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
+
+toExtern : SExp -> ExternDeclFact
+toExtern (SList ((SAtom "extern") :: [symbol, origin, name, binding, SList hosts, abi, provenance])) = ExternDeclFact {
+  symbol = toStr symbol,
+  originModule = toStr origin,
+  declaredName = toStr name,
+  bindingKind = match binding
+    SAtom "foreign" => ForeignBinding
+    SList [SAtom "runtime", key] => RuntimeBinding (toStr key)
+    _ => panic "core_ir_sexp_parse: bad extern binding",
+  hostBindings = map toExternHost hosts,
+  callableShape = toShape abi,
+  provenance = match provenance
+    SAtom "checked" => CheckedSource
+    SAtom "raw" => RawSource
+    SAtom "no-source-signature" => NoSourceSignature
+    _ => panic "core_ir_sexp_parse: bad extern provenance",
+}
+toExtern _ = panic "core_ir_sexp_parse: bad extern declaration"
+
+toExternHost : SExp -> (String, String)
+toExternHost (SList [host, symbol]) = (toStr host, toStr symbol)
+toExternHost _ = panic "core_ir_sexp_parse: bad extern host binding"
+
+toShape : SExp -> Option CallableShape
+toShape (SAtom "missing-abi") = None
+toShape (SList ((SAtom "abi") :: [written, core, SList params, result, signature])) = Some
+  CallableShape {
+    writtenValueArity = toInt written,
+    loweredCoreArity = toInt core,
+    parameterHeads = map toStr params,
+    resultHead = toStr result,
+    canonicalSignature = toStr signature,
+  }
+toShape _ = panic "core_ir_sexp_parse: bad extern ABI"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
+(DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true) (mem "ExternProvenance" true))))
+(DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "mapProgramBinders" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" false) (mem "runtimeTypeFromName" false))))
 (DUse false (UseAlias ("map") "BM"))
@@ -845,9 +904,10 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toRuntimeType" ((PCon "SAtom" (PVar "s"))) (EMatch (EApp (EVar "runtimeTypeFromName") (EVar "s")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad runtime type: ")) (EVar "s"))))))
 (DFunDef false "toRuntimeType" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad runtime type: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toDeclFacts" (TyFun (TyCon "SExp") (TyCon "DeclFacts")))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EVar "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EVar "None")))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome"))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EVar "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EVar "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome"))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EVar "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome") (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "externs"))) (PVar "rows"))))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EVar "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EVar "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EMatch (EVar "outcome") (arm (PCon "SAtom" (PLit (LString "none"))) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))))) (fa "factExterns" (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "row")) (ELet false (PVar "fact") (EApp (EVar "toExtern") (EVar "row")) (ETuple (EFieldAccess (EVar "fact") "symbol") (EVar "fact"))))) (EVar "rows"))) (EVar "omEmpty"))))))
 (DFunDef false "toDeclFacts" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad declaration facts: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toMethodResult" (TyFun (TyCon "SExp") (TyCon "MethodResultFact")))
 (DFunDef false "toMethodResult" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "mr"))) (PList (PVar "iface") (PVar "method") (PVar "returnsHead") (PCon "SList" (PVar "positions")) (PVar "arity"))))) (ERecordCreate "MethodResultFact" ((fa "iface" (EApp (EVar "toStr") (EVar "iface"))) (fa "method" (EApp (EVar "toStr") (EVar "method"))) (fa "returnsHead" (EApp (EVar "toBool") (EVar "returnsHead"))) (fa "callbackPositions" (EApp (EApp (EVar "map") (EVar "toInt")) (EVar "positions"))) (fa "valueArity" (EApp (EVar "toInt") (EVar "arity"))))))
@@ -868,8 +928,22 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "joinSexps" ((PList)) (ELit (LString "")))
 (DFunDef false "joinSexps" ((PList (PVar "x"))) (EApp (EVar "sexprToStr") (EVar "x")))
 (DFunDef false "joinSexps" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "sexprToStr") (EVar "x")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinSexps") (EVar "rest")))) (ELit (LString ""))))
+(DTypeSig false "toExtern" (TyFun (TyCon "SExp") (TyCon "ExternDeclFact")))
+(DFunDef false "toExtern" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "extern"))) (PList (PVar "symbol") (PVar "origin") (PVar "name") (PVar "binding") (PCon "SList" (PVar "hosts")) (PVar "abi") (PVar "provenance"))))) (ERecordCreate "ExternDeclFact" ((fa "symbol" (EApp (EVar "toStr") (EVar "symbol"))) (fa "originModule" (EApp (EVar "toStr") (EVar "origin"))) (fa "declaredName" (EApp (EVar "toStr") (EVar "name"))) (fa "bindingKind" (EMatch (EVar "binding") (arm (PCon "SAtom" (PLit (LString "foreign"))) () (EVar "ForeignBinding")) (arm (PCon "SList" (PList (PCon "SAtom" (PLit (LString "runtime"))) (PVar "key"))) () (EApp (EVar "RuntimeBinding") (EApp (EVar "toStr") (EVar "key")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern binding")))))) (fa "hostBindings" (EApp (EApp (EVar "map") (EVar "toExternHost")) (EVar "hosts"))) (fa "callableShape" (EApp (EVar "toShape") (EVar "abi"))) (fa "provenance" (EMatch (EVar "provenance") (arm (PCon "SAtom" (PLit (LString "checked"))) () (EVar "CheckedSource")) (arm (PCon "SAtom" (PLit (LString "raw"))) () (EVar "RawSource")) (arm (PCon "SAtom" (PLit (LString "no-source-signature"))) () (EVar "NoSourceSignature")) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern provenance")))))))))
+(DFunDef false "toExtern" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern declaration"))))
+(DTypeSig false "toExternHost" (TyFun (TyCon "SExp") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "toExternHost" ((PCon "SList" (PList (PVar "host") (PVar "symbol")))) (ETuple (EApp (EVar "toStr") (EVar "host")) (EApp (EVar "toStr") (EVar "symbol"))))
+(DFunDef false "toExternHost" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern host binding"))))
+(DTypeSig false "toShape" (TyFun (TyCon "SExp") (TyApp (TyCon "Option") (TyCon "CallableShape"))))
+(DFunDef false "toShape" ((PCon "SAtom" (PLit (LString "missing-abi")))) (EVar "None"))
+(DFunDef false "toShape" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "abi"))) (PList (PVar "written") (PVar "core") (PCon "SList" (PVar "params")) (PVar "result") (PVar "signature"))))) (EApp (EVar "Some") (ERecordCreate "CallableShape" ((fa "writtenValueArity" (EApp (EVar "toInt") (EVar "written"))) (fa "loweredCoreArity" (EApp (EVar "toInt") (EVar "core"))) (fa "parameterHeads" (EApp (EApp (EVar "map") (EVar "toStr")) (EVar "params"))) (fa "resultHead" (EApp (EVar "toStr") (EVar "result"))) (fa "canonicalSignature" (EApp (EVar "toStr") (EVar "signature")))))))
+(DFunDef false "toShape" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern ABI"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
+(DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true) (mem "ExternProvenance" true))))
+(DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "mapProgramBinders" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" false) (mem "runtimeTypeFromName" false))))
 (DUse false (UseAlias ("map") "BM"))
@@ -1089,9 +1163,10 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toRuntimeType" ((PCon "SAtom" (PVar "s"))) (EMatch (EApp (EVar "runtimeTypeFromName") (EVar "s")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad runtime type: ")) (EVar "s"))))))
 (DFunDef false "toRuntimeType" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad runtime type: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toDeclFacts" (TyFun (TyCon "SExp") (TyCon "DeclFacts")))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EMethodRef "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EVar "None")))))
-(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome"))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EMethodRef "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EMethodRef "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome"))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EMethodRef "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))) (fa "factExterns" (EFieldAccess (EVar "noDeclFacts") "factExterns")))))
+(DFunDef false "toDeclFacts" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "facts"))) (PList (PCon "SList" (PVar "reqs")) (PCon "SList" (PVar "sups")) (PCon "SList" (PVar "results")) (PVar "outcome") (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "externs"))) (PVar "rows"))))))) (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "rq")))) (EVar "reqs"))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (EApp (EVar "toFactPair") (ELit (LString "sp")))) (EVar "sups"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EApp (EMethodRef "map") (EVar "toMethodResult")) (EVar "results"))) (fa "factEntryOutcome" (EMatch (EVar "outcome") (arm (PCon "SAtom" (PLit (LString "none"))) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EVar "toEntryOutcome") (EVar "outcome")))))) (fa "factExterns" (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (ELet false (PVar "fact") (EApp (EVar "toExtern") (EVar "row")) (ETuple (EFieldAccess (EVar "fact") "symbol") (EVar "fact"))))) (EVar "rows"))) (EVar "omEmpty"))))))
 (DFunDef false "toDeclFacts" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad declaration facts: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toMethodResult" (TyFun (TyCon "SExp") (TyCon "MethodResultFact")))
 (DFunDef false "toMethodResult" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "mr"))) (PList (PVar "iface") (PVar "method") (PVar "returnsHead") (PCon "SList" (PVar "positions")) (PVar "arity"))))) (ERecordCreate "MethodResultFact" ((fa "iface" (EApp (EVar "toStr") (EVar "iface"))) (fa "method" (EApp (EVar "toStr") (EVar "method"))) (fa "returnsHead" (EApp (EVar "toBool") (EVar "returnsHead"))) (fa "callbackPositions" (EApp (EApp (EMethodRef "map") (EVar "toInt")) (EVar "positions"))) (fa "valueArity" (EApp (EVar "toInt") (EVar "arity"))))))
@@ -1112,3 +1187,13 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "joinSexps" ((PList)) (ELit (LString "")))
 (DFunDef false "joinSexps" ((PList (PVar "x"))) (EApp (EVar "sexprToStr") (EVar "x")))
 (DFunDef false "joinSexps" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "sexprToStr") (EVar "x")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "joinSexps") (EVar "rest")))) (ELit (LString ""))))
+(DTypeSig false "toExtern" (TyFun (TyCon "SExp") (TyCon "ExternDeclFact")))
+(DFunDef false "toExtern" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "extern"))) (PList (PVar "symbol") (PVar "origin") (PVar "name") (PVar "binding") (PCon "SList" (PVar "hosts")) (PVar "abi") (PVar "provenance"))))) (ERecordCreate "ExternDeclFact" ((fa "symbol" (EApp (EVar "toStr") (EVar "symbol"))) (fa "originModule" (EApp (EVar "toStr") (EVar "origin"))) (fa "declaredName" (EApp (EVar "toStr") (EVar "name"))) (fa "bindingKind" (EMatch (EVar "binding") (arm (PCon "SAtom" (PLit (LString "foreign"))) () (EVar "ForeignBinding")) (arm (PCon "SList" (PList (PCon "SAtom" (PLit (LString "runtime"))) (PVar "key"))) () (EApp (EVar "RuntimeBinding") (EApp (EVar "toStr") (EVar "key")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern binding")))))) (fa "hostBindings" (EApp (EApp (EMethodRef "map") (EVar "toExternHost")) (EVar "hosts"))) (fa "callableShape" (EApp (EVar "toShape") (EVar "abi"))) (fa "provenance" (EMatch (EVar "provenance") (arm (PCon "SAtom" (PLit (LString "checked"))) () (EVar "CheckedSource")) (arm (PCon "SAtom" (PLit (LString "raw"))) () (EVar "RawSource")) (arm (PCon "SAtom" (PLit (LString "no-source-signature"))) () (EVar "NoSourceSignature")) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern provenance")))))))))
+(DFunDef false "toExtern" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern declaration"))))
+(DTypeSig false "toExternHost" (TyFun (TyCon "SExp") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "toExternHost" ((PCon "SList" (PList (PVar "host") (PVar "symbol")))) (ETuple (EApp (EVar "toStr") (EVar "host")) (EApp (EVar "toStr") (EVar "symbol"))))
+(DFunDef false "toExternHost" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern host binding"))))
+(DTypeSig false "toShape" (TyFun (TyCon "SExp") (TyApp (TyCon "Option") (TyCon "CallableShape"))))
+(DFunDef false "toShape" ((PCon "SAtom" (PLit (LString "missing-abi")))) (EVar "None"))
+(DFunDef false "toShape" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "abi"))) (PList (PVar "written") (PVar "core") (PCon "SList" (PVar "params")) (PVar "result") (PVar "signature"))))) (EApp (EVar "Some") (ERecordCreate "CallableShape" ((fa "writtenValueArity" (EApp (EVar "toInt") (EVar "written"))) (fa "loweredCoreArity" (EApp (EVar "toInt") (EVar "core"))) (fa "parameterHeads" (EApp (EApp (EMethodRef "map") (EVar "toStr")) (EVar "params"))) (fa "resultHead" (EApp (EVar "toStr") (EVar "result"))) (fa "canonicalSignature" (EApp (EVar "toStr") (EVar "signature")))))))
+(DFunDef false "toShape" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern ABI"))))

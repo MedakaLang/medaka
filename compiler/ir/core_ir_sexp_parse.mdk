@@ -19,6 +19,10 @@ import frontend.ast.{
   Loc(..),
   noDeclLoc,
 }
+import ir.extern_types.{ExternDeclFact(..)}
+import types.extern_source.{ExternBindingKind(..), ExternProvenance(..)}
+import types.runtime_abi_types.{CallableShape(..)}
+import support.ordmap.{omEmpty, omFromPairs}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -559,6 +563,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
   factBinders = [],
   factMethodResults = [],
   factEntryOutcome = None,
+  factExterns = noDeclFacts.factExterns,
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results])) = DeclFacts {
   factRequires = map (toFactPair "rq") reqs,
@@ -566,6 +571,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results]))
   factBinders = [],
   factMethodResults = map toMethodResult results,
   factEntryOutcome = None,
+  factExterns = noDeclFacts.factExterns,
 }
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome])) = DeclFacts {
   factRequires = map (toFactPair "rq") reqs,
@@ -573,6 +579,20 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, o
   factBinders = [],
   factMethodResults = map toMethodResult results,
   factEntryOutcome = Some (toEntryOutcome outcome),
+  factExterns = noDeclFacts.factExterns,
+}
+toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, outcome, SList ((SAtom "externs") :: rows)])) = DeclFacts {
+  factRequires = map (toFactPair "rq") reqs,
+  factSupers = map (toFactPair "sp") sups,
+  factBinders = [],
+  factMethodResults = map toMethodResult results,
+  factEntryOutcome = match outcome
+    SAtom "none" => None
+    _ => Some (toEntryOutcome outcome),
+  factExterns =
+    omFromPairs
+      (map (row => let fact = toExtern row in (fact.symbol, fact)) rows)
+      omEmpty,
 }
 toDeclFacts other =
   panic ("core_ir_sexp_parse: bad declaration facts: " ++ sexprToStr other)
@@ -620,3 +640,38 @@ joinSexps : List SExp -> String
 joinSexps [] = ""
 joinSexps [x] = sexprToStr x
 joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
+
+toExtern : SExp -> ExternDeclFact
+toExtern (SList ((SAtom "extern") :: [symbol, origin, name, binding, SList hosts, abi, provenance])) = ExternDeclFact {
+  symbol = toStr symbol,
+  originModule = toStr origin,
+  declaredName = toStr name,
+  bindingKind = match binding
+    SAtom "foreign" => ForeignBinding
+    SList [SAtom "runtime", key] => RuntimeBinding (toStr key)
+    _ => panic "core_ir_sexp_parse: bad extern binding",
+  hostBindings = map toExternHost hosts,
+  callableShape = toShape abi,
+  provenance = match provenance
+    SAtom "checked" => CheckedSource
+    SAtom "raw" => RawSource
+    SAtom "no-source-signature" => NoSourceSignature
+    _ => panic "core_ir_sexp_parse: bad extern provenance",
+}
+toExtern _ = panic "core_ir_sexp_parse: bad extern declaration"
+
+toExternHost : SExp -> (String, String)
+toExternHost (SList [host, symbol]) = (toStr host, toStr symbol)
+toExternHost _ = panic "core_ir_sexp_parse: bad extern host binding"
+
+toShape : SExp -> Option CallableShape
+toShape (SAtom "missing-abi") = None
+toShape (SList ((SAtom "abi") :: [written, core, SList params, result, signature])) = Some
+  CallableShape {
+    writtenValueArity = toInt written,
+    loweredCoreArity = toInt core,
+    parameterHeads = map toStr params,
+    resultHead = toStr result,
+    canonicalSignature = toStr signature,
+  }
+toShape _ = panic "core_ir_sexp_parse: bad extern ABI"

@@ -738,6 +738,7 @@ import types.runtime_types.{
   runtimeTypeOf,
 }
 import types.runtime_ops.{arithmeticTag}
+import types.runtime_grants as RuntimeGrants
 import types.program_facts.{ProgramFacts, factsOfElab}
 import types.prelude_interface.{
   PreludeInterface,
@@ -16835,27 +16836,7 @@ copyGrantState st = GrantState {
 -- names.  No other extern takes a grant: a foreign function is not a
 -- parameterized file extern.
 fileGrantExterns : OrdMap (Int, Int)
-fileGrantExterns =
-  omFromPairs
-    [
-      ("readFile", (1, 1)),
-      ("readFileBytes", (1, 1)),
-      ("writeFile", (2, 1)),
-      ("writeFileBytes", (2, 1)),
-      ("writeFileMode", (3, 1)),
-      ("appendFile", (2, 1)),
-      ("fileExists", (1, 1)),
-      ("fileMode", (1, 1)),
-      ("canonicalizePath", (1, 1)),
-      ("listDir", (1, 1)),
-      ("makeDir", (1, 1)),
-      ("removeFile", (1, 1)),
-      ("rename", (2, 2)),
-      ("fsync", (1, 1)),
-      ("removeDir", (1, 1)),
-      ("statFile", (1, 1)),
-    ]
-    omEmpty
+fileGrantExterns = RuntimeGrants.fileGrantExterns
 
 -- A program lowered without elaboration (the prelude-free emitter probes) has no
 -- inference to solve a grant from: each file extern it names is granted the

@@ -1,3 +1,4 @@
+import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- compiler/tools/snapshot.mdk — `medaka snapshot`, the in-process snapshot runner
 -- (TESTING-DESIGN.md §4.3, R0).
 --
@@ -189,10 +190,11 @@ import types.typecheck.{
 import types.tc_types.{DriveOutputs}
 import types.target_profile.{selectedProfile}
 import types.private_mangle.{mangleUnitsEv}
-import types.program_facts.{emptyFacts, factsOfElabWith}
+import types.program_facts.{emptyFacts, factsOfElabSources, factsWithEvidence}
 import eval.eval.{evalOneOutputFacts, funNamesOf, dropShadowedExp, noMainMsg}
 import backend.emit_plan.{buildEmitPlan}
 
+import ir.extern_lower.{externHeadRows}
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 -- A member alias gives the Wasm emitter a distinct local name, so BOTH backends are driven from ONE process
 -- over ONE lowered CProgram.  (This is what retired `tools/snap_wasm.mdk`, a re-export
@@ -636,9 +638,12 @@ emitBoth root sel runtimeDecls userDecls =
     ("__user__", userDecls),
   ]
   let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let externFacts =
+    factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let allDecls = coreD ++ flatMap snd modules2
-  let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
+  let cp =
+    lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
   let _ =
     if wants sel "LLVM" then
       emitSection root "LLVM" (llvmOf runtimeDecls allDecls cp)
@@ -657,7 +662,7 @@ llvmOf runtimeDecls allDecls cp =
       []
       []
       ""
-      (ffiExternTypeNames runtimeDecls allDecls)
+      (externHeadRows cp)
   let (text, gaps) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
   withGaps ";" text gaps
 
@@ -667,7 +672,7 @@ wasmOf runtimeDecls allDecls cp =
     makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
-      []
+      (externHeadRows cp)
   let (text, gaps) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   withGaps ";;" text gaps
 

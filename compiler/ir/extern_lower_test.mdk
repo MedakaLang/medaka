@@ -1,0 +1,90 @@
+import frontend.parser.{parse}
+import frontend.ast.{Addr(..)}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.program_facts.{emptyFacts}
+import ir.core_ir.{CProgram(..), CExpr(..), DeclFacts(..), withBinderRows}
+import ir.extern_lower.{walkExternVars}
+import ir.extern_types.{ExternDeclFact(..)}
+import types.extern_source.{ExternProvenance(..)}
+import ir.core_ir_lower.{lowerProgramEmitWith, stampCallModes, markTailSites}
+import ir.core_ir_sexp.{cprogramToSexp}
+import ir.core_ir_sexp_parse.{parseCProgram}
+import ir.extern_uses.{collectExternUses}
+import ir.extern_types.{ExternUse(..), ExternUseKind(..)}
+import support.ordmap.{omKeys, omLookup}
+import test.{Expectation, expectAll, expectEach, expectEqual}
+
+lowered : String -> CProgram
+lowered src =
+  let ast = parse src
+  let coreSyntax = desugar ast
+  let annotated = annotateProgram coreSyntax
+  lowerProgramEmitWith emptyFacts annotated
+
+symbols : CProgram -> List String
+symbols cp = map (row => row.useSymbol) (collectExternUses cp)
+
+test "all six source and lexical constant shadows remain ordinary globals and locals" =
+  expectEach
+    (map
+      (name => (
+        name,
+        expectAll [
+          expectEqual [] (symbols (lowered (name ++ " = 42\nmain = " ++ name))),
+          expectEqual
+            []
+            (symbols (lowered ("main = let " ++ name ++ " = 42 in " ++ name))),
+          expectEqual
+            ["$extern$r" ++ intToString (stringLength name) ++ ":" ++ name]
+            (symbols (lowered ("main = " ++ name))),
+        ],
+      ))
+      ["pi", "e", "intMinBound", "intMaxBound", "charMinBound", "charMaxBound"])
+
+test "Core transforms, binder rebuilding and serialization preserve extern identity" =
+  let p = lowered "main = intToString 42"
+  let u = lowered "main = charCode charMaxBound"
+  let transformed = markTailSites (stampCallModes p)
+  let (CProgram _ _ _ _ _ facts) = p
+  let (CProgram _ _ _ _ _ parsed) = parseCProgram (cprogramToSexp p)
+  expectAll [
+    expectEqual ["$extern$r11:intToString"] (symbols p),
+    expectEqual (symbols p) (symbols transformed),
+    expectEqual (symbols p) (symbols (withBinderRows [] p)),
+    expectEqual (symbols p) (symbols (parseCProgram (cprogramToSexp p))),
+    expectEqual (omKeys facts.factExterns) (omKeys parsed.factExterns),
+    expectEqual ["$extern$r8:charCode", "$extern$r12:charMaxBound"] (symbols u),
+    expectEqual (symbols p) (symbols (lowered "main = intToString 42")),
+  ]
+
+test "generated clause failure stays a compiler intrinsic" =
+  expectEqual
+    []
+    (symbols (lowered "choose x | x > 0 = x\nchoose _ = 0\nmain = choose 42"))
+
+test "unknown ordinary names stay ordinary and opaque unknown externs stay visible" =
+  let p = lowered "main = ordinaryUnknown"
+  let unknown =
+    walkExternVars (_ _ _ _ => CVar "$extern$u7:missing1:f" AGlobal) p
+  expectAll [
+    expectEqual [] (symbols p),
+    expectEqual ["$extern$u7:missing1:f"] (symbols unknown),
+  ]
+
+test "implicit runtime declarations have ABI without a source signature" =
+  let (CProgram _ _ _ _ _ facts) = lowered "main = intToString 42"
+  expectEqual
+    (Some (NoSourceSignature, Some (1, 1)))
+    (map
+      (fact => (
+        fact.provenance,
+        map
+          (shape => (shape.writtenValueArity, shape.loweredCoreArity))
+          fact.callableShape,
+      ))
+      (omLookup "$extern$r11:intToString" facts.factExterns))
+
+test "legacy Core with no declaration facts decodes to an empty extern inventory" =
+  let (CProgram _ _ _ _ _ facts) = parseCProgram "(CProgram () () () ())"
+  expectEqual [] (omKeys facts.factExterns)

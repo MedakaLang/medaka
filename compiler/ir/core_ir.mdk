@@ -60,6 +60,8 @@ import frontend.ast.{
   noDeclLoc,
   noBinderId,
 }
+import support.ordmap.{OrdMap, omEmpty}
+import ir.extern_types.{ExternDeclFact}
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import support.util.{reverseL}
 
@@ -448,6 +450,7 @@ public export data DeclFacts = DeclFacts {
   factBinders : List BinderRow,
   factMethodResults : List MethodResultFact,
   factEntryOutcome : Option EntryFact,
+  factExterns : OrdMap ExternDeclFact,
 }
 
 export
@@ -458,6 +461,7 @@ noDeclFacts = DeclFacts {
   factBinders = [],
   factMethodResults = [],
   factEntryOutcome = None,
+  factExterns = omEmpty,
 }
 
 -- ── binder walk ──────────────────────────────────────────────────────────────
@@ -538,6 +542,7 @@ withBinderRows rows (CProgram groups ctorArs ctorTypes impls mctx facts) = CProg
     factBinders = rows,
     factMethodResults = facts.factMethodResults,
     factEntryOutcome = facts.factEntryOutcome,
+    factExterns = facts.factExterns,
   }
 
 -- Every binder id of [prog], in walk order.

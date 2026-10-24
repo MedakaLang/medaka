@@ -1,3 +1,5 @@
+import types.extern_source.{externSourceHeadRows}
+import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- TYPED driver for the Stage 2.4 LLVM de-risking spike (slice 6 — typeclass
 -- dispatch).  The typed analog of llvm_emit_main.mdk: it runs the SAME front end
 -- `medaka build` ships (desugar → elaborateModules: RKey/EDictAt route stamping
@@ -29,7 +31,7 @@ import types.typecheck.{
   checkedFfiExternTypeNames,
 }
 import types.private_mangle.{mangleUnitsEv}
-import types.program_facts.{factsOfElabWith}
+import types.program_facts.{factsOfElabSources, factsWithEvidence}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
@@ -40,7 +42,7 @@ import ir.core_ir_lower.{
   validateFfiExternTypeNames,
 }
 import ir.core_ir.{
-  CProgram(..), CBind(..), CClause(..), CExpr(..), DeclFacts(..)
+  CProgram(..), CBind(..), CClause(..), CExpr(..), DeclFacts(..), noDeclFacts
 }
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
@@ -103,6 +105,7 @@ emitGapIsolation =
         factRequires = [],
         factSupers = [],
         factEntryOutcome = None,
+        factExterns = noDeclFacts.factExterns,
         factBinders = [
           BinderRow {
             brId = mainId,
@@ -138,6 +141,8 @@ runEmit runtimeDecls preludeDecls userDecls =
     livePrelude
     [("__user__", userDecls)]
   let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let externFacts =
+    factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let mangled = coreD ++ flatMap snd modules2
   let input =
@@ -150,8 +155,9 @@ runEmit runtimeDecls preludeDecls userDecls =
       []
       []
       ""
-      (validateFfiExternTypeNames (checkedFfiExternTypeNames mangled))
-  let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) mangled
+      (validateFfiExternTypeNames
+        (externSourceHeadRows (optionOr [] externFacts.pfExternSources)))
+  let cp = lowerProgramEmitWith (factsWithEvidence evTableM externFacts) mangled
   emitProgram input (buildEmitPlan LlvmBackend cp) cp
 
 main = oracleMain ()

@@ -1,3 +1,4 @@
+import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- WasmGC TYPED driver for slice W5 (typeclass dispatch) — the WasmGC peer of
 -- entries/llvm_emit_typed_main.mdk.  Where wasm_emit_main.mdk (the W1–W4 scalar/
 -- ADT/closure spike) runs the PRELUDE-FREE annotate path (annotateProgram), which
@@ -40,15 +41,18 @@ import frontend.ast.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{defaultDriveInputs, elaborateModules}
+import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
 import types.private_mangle.{mangleUnitsEv}
-import types.program_facts.{ProgramFacts, emptyFacts, factsOfElabWith}
+import types.program_facts.{
+  ProgramFacts, emptyFacts, factsOfElabSources, factsWithEvidence
+}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir.{
   CProgram(..),
   EntryFact(..),
   MethodResultFact(..),
   noDeclFacts,
+  DeclFacts(..),
   CBind(..),
   CClause(..),
   CExpr(..),
@@ -81,6 +85,10 @@ import backend.wasm_emit.{
 }
 import entries.entry_support.{driveRuntime}
 import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
+import ir.extern_lower.{externVar, implicitRuntimeFacts}
+import ir.extern_types.{ExternDeclFact(..)}
+import types.extern_source.{runtimeExternSymbol}
+import support.ordmap.{OrdMap, omFromPairs, omEmpty, omLookup}
 
 -- Every emission here builds its own plan from the program it emits.
 emitProgram : WasmEmitInput -> CProgram -> String
@@ -147,12 +155,18 @@ typedElaboratedFacts : List Decl ->
   (List Decl, ProgramFacts)
 typedElaboratedFacts runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
-  let elab = elaborateModules defaultDriveInputs runtimeDecls livePrelude [
-    ("__user__", userDecls),
-  ]
+  let (elab, _, outputs) = elaborateModulesWithReport
+    defaultDriveInputs
+    False
+    None
+    runtimeDecls
+    livePrelude
+    [("__user__", userDecls)]
   let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let externFacts =
+    factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
-  (coreD ++ flatMap snd modules2, factsOfElabWith evTableM elab)
+  (coreD ++ flatMap snd modules2, factsWithEvidence evTableM externFacts)
 
 typedInput : List Decl -> List Decl -> List Decl -> WasmEmitInput
 typedInput runtimeDecls preludeDecls userDecls =
@@ -176,7 +190,18 @@ cprogram groups ctorArs ctorTypes impls =
       (stampCallModes
         (stampImplSymbols
           []
-          (CProgram groups ctorArs ctorTypes impls [] noDeclFacts))))
+          (CProgram groups ctorArs ctorTypes impls [] { noDeclFacts |
+            factExterns = runtimeFacts,
+          }))))
+
+runtimeFacts : OrdMap ExternDeclFact
+runtimeFacts =
+  omFromPairs (map (fact => (fact.symbol, fact)) implicitRuntimeFacts) omEmpty
+
+runtimeVar : String -> CExpr
+runtimeVar key = match omLookup (runtimeExternSymbol key) runtimeFacts
+  Some fact => externVar fact
+  None => panic ("synthetic runtime declaration missing: " ++ key)
 
 withMethodResultFacts : List MethodResultFact -> CProgram -> CProgram
 withMethodResultFacts methodResults (CProgram groups ctorArs ctorTypes impls mctx facts) = CProgram
@@ -591,22 +616,22 @@ featureStateBinds = [
   synthBind "featureRandomInt" [
     CClause
       [featureStateArg]
-      (mkApp (mkApp (CVar "randomInt" AGlobal) [CLit (LInt 0)]) [CLit (LInt 1)]),
+      (mkApp (mkApp (runtimeVar "randomInt") [CLit (LInt 0)]) [CLit (LInt 1)]),
   ],
   synthBind "featureHashInt" [
     CClause
       [featureStateArg]
-      (mkApp (CVar "hashInt" AGlobal) [CVar "x" (ALocal 0 0)]),
+      (mkApp (runtimeVar "hashInt") [CVar "x" (ALocal 0 0)]),
   ],
   synthBind "featureEPut" [
     CClause
       [featureStateArg]
-      (mkApp (CVar "ePutStr" AGlobal) [CLit (LString "feature ePut")]),
+      (mkApp (runtimeVar "ePutStr") [CLit (LString "feature ePut")]),
   ],
   synthBind "featurePanic" [
     CClause
       [featureStateArg]
-      (mkApp (CVar "panic" AGlobal) [CLit (LString "feature panic")]),
+      (mkApp (runtimeVar "panic") [CLit (LString "feature panic")]),
   ],
 ]
 
@@ -638,7 +663,7 @@ featureHashIntOnlyProgram =
       synthBind "featureHashIntOnly" [
         CClause
           [featureStateArg]
-          (mkApp (CVar "hashInt" AGlobal) [CVar "x" (ALocal 0 0)]),
+          (mkApp (runtimeVar "hashInt") [CVar "x" (ALocal 0 0)]),
       ],
       synthBind "main" [CClause [] (CLit (LInt 0))],
     ]
@@ -659,7 +684,7 @@ featureHashFloatProgram =
       synthBind "featureHashFloat" [
         CClause
           [featureStateArg]
-          (mkApp (CVar "hashFloat" AGlobal) [CLit (LFloat 3.14)]),
+          (mkApp (runtimeVar "hashFloat") [CLit (LFloat 3.14)]),
       ],
       synthBind "main" [CClause [] (CLit (LInt 0))],
     ]
@@ -674,12 +699,12 @@ featureHashFloatRecordUProgram =
       synthBind "featureHashFloatNearestFloat" [
         CClause
           [featureStateArg]
-          (mkApp (CVar "intToFloat" AGlobal) [CVar "x" (ALocal 0 0)]),
+          (mkApp (runtimeVar "intToFloat") [CVar "x" (ALocal 0 0)]),
       ],
       synthBind "featureHashFloatNearestHashInt" [
         CClause
           [featureStateArg]
-          (mkApp (CVar "hashInt" AGlobal) [CVar "x" (ALocal 0 0)]),
+          (mkApp (runtimeVar "hashInt") [CVar "x" (ALocal 0 0)]),
       ],
       synthBind "main" [CClause [] (CLit (LInt 0))],
     ]
@@ -694,7 +719,7 @@ featureHashFloatCensusProgram =
       synthBind "featureHashFloat" [
         CClause
           [featureStateArg]
-          (mkApp (CVar "hashFloat" AGlobal) [CLit (LFloat 3.14)]),
+          (mkApp (runtimeVar "hashFloat") [CLit (LFloat 3.14)]),
       ],
       synthBind "featureHashFloatIntentionalGap" [
         CClause [featureStateArg] (CVar "missingFeatureHashFloatCensus" AGlobal),
@@ -733,12 +758,12 @@ charFromCodeStateProgram =
       synthBind "charFromCodeApplied" [
         CClause
           [featureStateArg]
-          (mkApp (CVar "charFromCode" AGlobal) [CVar "x" (ALocal 0 0)]),
+          (mkApp (runtimeVar "charFromCode") [CVar "x" (ALocal 0 0)]),
       ],
       synthBind "charFromCodePointFree" [
         CClause
           [featureStateArg]
-          (CLet False PWild (CVar "charFromCode" AGlobal) (CLit (LInt 0))),
+          (CLet False PWild (runtimeVar "charFromCode") (CLit (LInt 0))),
       ],
       synthBind "main" [CClause [] (CLit (LInt 0))],
     ]
@@ -753,7 +778,7 @@ charFromCodeStateControlProgram =
       synthBind "charFromCodeNearestChar" [
         CClause
           [featureStateArg]
-          (mkApp (CVar "charToStr" AGlobal) [CLit (LChar "A")]),
+          (mkApp (runtimeVar "charToStr") [CLit (LChar "A")]),
       ],
       synthBind "charFromCodeNearestString" [
         CClause [featureStateArg] (CLit (LString "char-neighborhood")),
@@ -771,12 +796,12 @@ charFromCodeStateCensusProgram =
       synthBind "charFromCodeApplied" [
         CClause
           [featureStateArg]
-          (mkApp (CVar "charFromCode" AGlobal) [CVar "x" (ALocal 0 0)]),
+          (mkApp (runtimeVar "charFromCode") [CVar "x" (ALocal 0 0)]),
       ],
       synthBind "charFromCodePointFree" [
         CClause
           [featureStateArg]
-          (CLet False PWild (CVar "charFromCode" AGlobal) (CLit (LInt 0))),
+          (CLet False PWild (runtimeVar "charFromCode") (CLit (LInt 0))),
       ],
       synthBind "charFromCodeIntentionalGap" [
         CClause [featureStateArg] (CVar "missingCharFromCodeCensus" AGlobal),
@@ -901,7 +926,7 @@ leafCharClassP = leafRuntimeProgram [
   synthBind "leafCharClass" [
     CClause
       [leafRuntimeArg]
-      (mkApp (CVar "charIsAlpha" AGlobal) [CLit (LChar "a")]),
+      (mkApp (runtimeVar "charIsAlpha") [CLit (LChar "a")]),
   ],
 ]
 
@@ -910,7 +935,7 @@ leafCharClassU = leafRuntimeProgram [
   synthBind "leafCharClassNearestCode" [
     CClause
       [leafRuntimeArg]
-      (mkApp (CVar "charFromCode" AGlobal) [CLit (LInt 65)]),
+      (mkApp (runtimeVar "charFromCode") [CLit (LInt 65)]),
   ],
   synthBind "leafCharClassNearestString" [
     CClause
@@ -922,7 +947,7 @@ leafCharClassU = leafRuntimeProgram [
 leafFloatRngP : CProgram
 leafFloatRngP = leafRuntimeProgram [
   synthBind "leafFloatRng" [
-    CClause [leafRuntimeArg] (mkApp (CVar "randomFloat" AGlobal) [CLit LUnit]),
+    CClause [leafRuntimeArg] (mkApp (runtimeVar "randomFloat") [CLit LUnit]),
   ],
 ]
 
@@ -931,10 +956,10 @@ leafFloatRngU = leafRuntimeProgram [
   synthBind "leafFloatRngNearestInt" [
     CClause
       [leafRuntimeArg]
-      (mkApp (mkApp (CVar "randomInt" AGlobal) [CLit (LInt 0)]) [CLit (LInt 1)]),
+      (mkApp (mkApp (runtimeVar "randomInt") [CLit (LInt 0)]) [CLit (LInt 1)]),
   ],
   synthBind "leafFloatRngNearestFloat" [
-    CClause [leafRuntimeArg] (mkApp (CVar "intToFloat" AGlobal) [CLit (LInt 0)]),
+    CClause [leafRuntimeArg] (mkApp (runtimeVar "intToFloat") [CLit (LInt 0)]),
   ],
 ]
 
@@ -943,16 +968,14 @@ leafStrCodecP = leafRuntimeProgram [
   synthBind "leafStrCodec" [
     CClause
       [leafRuntimeArg]
-      (mkApp (CVar "stringToChars" AGlobal) [CLit (LString "héllo")]),
+      (mkApp (runtimeVar "stringToChars") [CLit (LString "héllo")]),
   ],
 ]
 
 leafStrCodecU : CProgram
 leafStrCodecU = leafRuntimeProgram [
   synthBind "leafStrCodecNearestChar" [
-    CClause
-      [leafRuntimeArg]
-      (mkApp (CVar "charToStr" AGlobal) [CLit (LChar "A")]),
+    CClause [leafRuntimeArg] (mkApp (runtimeVar "charToStr") [CLit (LChar "A")]),
   ],
   synthBind "leafStrCodecNearestArray" [
     CClause [leafRuntimeArg] (CArray [CLit (LInt 1)]),
@@ -988,7 +1011,7 @@ leafValueCmpU = leafRuntimeProgram [
   synthBind "leafValueCmpNearestStringCompare" [
     CClause
       [leafRuntimeArg]
-      (mkApp (mkApp (CVar "stringCompare" AGlobal) [CLit (LString "medaka")]) [
+      (mkApp (mkApp (runtimeVar "stringCompare") [CLit (LString "medaka")]) [
         CLit (LString "medaka"),
       ]),
   ],
@@ -1006,7 +1029,7 @@ leafFloatStrP = leafRuntimeProgram [
   synthBind "leafFloatStr" [
     CClause
       [leafRuntimeArg]
-      (mkApp (CVar "stringToFloat" AGlobal) [CLit (LString "3.14")]),
+      (mkApp (runtimeVar "stringToFloat") [CLit (LString "3.14")]),
   ],
 ]
 
@@ -1015,12 +1038,12 @@ leafFloatStrU = leafRuntimeProgram [
   synthBind "leafFloatStrNearestFloat" [
     CClause
       [leafRuntimeArg]
-      (mkApp (CVar "intToFloat" AGlobal) [CVar "x" (ALocal 0 0)]),
+      (mkApp (runtimeVar "intToFloat") [CVar "x" (ALocal 0 0)]),
   ],
   synthBind "leafFloatStrNearestStringIo" [
     CClause
       [leafRuntimeArg]
-      (mkApp (mkApp (CVar "readFile" AGlobal) [
+      (mkApp (mkApp (runtimeVar "readFile") [
         CLit (LString "floatstr-nearest"),
       ]) [
         wholeDomain,
@@ -1033,7 +1056,7 @@ leafFloatStrU = leafRuntimeProgram [
 leafArgsP : CProgram
 leafArgsP = leafRuntimeProgram [
   synthBind "leafArgs" [
-    CClause [leafRuntimeArg] (mkApp (CVar "args" AGlobal) [CLit LUnit]),
+    CClause [leafRuntimeArg] (mkApp (runtimeVar "args") [CLit LUnit]),
   ],
 ]
 
@@ -1042,7 +1065,7 @@ leafArgsU = leafRuntimeProgram [
   synthBind "leafArgsNearestIo" [
     CClause
       [leafRuntimeArg]
-      (mkApp (mkApp (CVar "readFile" AGlobal) [CLit (LString "args-nearest")]) [
+      (mkApp (mkApp (runtimeVar "readFile") [CLit (LString "args-nearest")]) [
         wholeDomain,
       ]),
   ],
@@ -1059,7 +1082,7 @@ leafFileBytesReadP = leafRuntimeProgram [
   synthBind "leafFileBytesRead" [
     CClause
       [leafRuntimeArg]
-      (mkApp (mkApp (CVar "readFileBytes" AGlobal) [
+      (mkApp (mkApp (runtimeVar "readFileBytes") [
         CLit (LString "filebytes-read-inert"),
       ]) [
         wholeDomain,
@@ -1072,7 +1095,7 @@ leafFileBytesWriteP = leafRuntimeProgram [
   synthBind "leafFileBytesWrite" [
     CClause
       [leafRuntimeArg]
-      (mkApp (mkApp (mkApp (CVar "writeFileBytes" AGlobal) [
+      (mkApp (mkApp (mkApp (runtimeVar "writeFileBytes") [
         CLit (LString "filebytes-write-inert"),
       ]) [
         CArray [CLit (LInt 1)],
@@ -1087,7 +1110,7 @@ leafFileBytesU = leafRuntimeProgram [
   synthBind "leafFileBytesNearestIoString" [
     CClause
       [leafRuntimeArg]
-      (mkApp (mkApp (CVar "readFile" AGlobal) [
+      (mkApp (mkApp (runtimeVar "readFile") [
         CLit (LString "filebytes-nearest"),
       ]) [
         wholeDomain,
@@ -1101,14 +1124,14 @@ leafFileBytesU = leafRuntimeProgram [
 leafMathP : CProgram
 leafMathP = leafRuntimeProgram [
   synthBind "leafMath" [
-    CClause [leafRuntimeArg] (mkApp (CVar "sin" AGlobal) [CLit (LFloat 0.0)]),
+    CClause [leafRuntimeArg] (mkApp (runtimeVar "sin") [CLit (LFloat 0.0)]),
   ],
 ]
 
 leafMathU : CProgram
 leafMathU = leafRuntimeProgram [
   synthBind "leafMathNearestSqrt" [
-    CClause [leafRuntimeArg] (mkApp (CVar "sqrt" AGlobal) [CLit (LFloat 4.0)]),
+    CClause [leafRuntimeArg] (mkApp (runtimeVar "sqrt") [CLit (LFloat 4.0)]),
   ],
 ]
 

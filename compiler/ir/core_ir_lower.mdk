@@ -10,6 +10,7 @@
 -- map (the IR deliberately stays close to the core AST so the equivalence gate
 -- is a clean diff, not a rewrite).
 
+import ir.extern_lower.{lowerExterns}
 import frontend.ast.{
   isWildPat,
   letBindName,
@@ -1066,13 +1067,16 @@ lowerProgramEmitPinnedWith facts pins prog = withFacts
     -- the let decisions are refolded after the record-pattern rewrite, which
     -- resolves the record patterns `patCanMiss` reads
     let rewritten = rewriteProgramRecPats fo raw
-    finishLowering
-      lowering
-      facts.pfBinders
-      (hoistNullaryMemo
-        (refoldProgram
-          (patCanMiss (siblingTable (cprogramCtorTypes raw)))
-          rewritten)))
+    lowerExterns
+      facts
+      prog
+      (finishLowering
+        lowering
+        facts.pfBinders
+        (hoistNullaryMemo
+          (refoldProgram
+            (patCanMiss (siblingTable (cprogramCtorTypes raw)))
+            rewritten))))
 
 -- The declaration facts an emitting lowering publishes (see `DeclFacts`): every
 -- instance's `requires` count, and the super count of each of their interfaces.
@@ -1089,6 +1093,7 @@ emitDeclFacts facts decls =
     factBinders = [],
     factMethodResults = methodResultFacts decls,
     factEntryOutcome = entryFact facts,
+    factExterns = omEmpty,
   }
 
 entryFact : ProgramFacts -> Option EntryFact

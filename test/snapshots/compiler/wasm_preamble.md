@@ -1,5 +1,5 @@
 # META
-source_lines=3256
+source_lines=3257
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
@@ -42,6 +42,7 @@ stages=DESUGAR,MARK
 -- deliberately leaves the `(module` paren OPEN.
 
 import support.util.{anyList, contains, joinWith}
+import types.private_mangle.{injectiveIdent}
 import backend.emit_plan.{JsImport(..)}
 
 export
@@ -2189,11 +2190,11 @@ jsffiImportLine imp =
 -- program defines under its own name can share either.
 export
 jsffiImportId : String -> String
-jsffiImportId name = "jsffi.import.\{name}"
+jsffiImportId name = "jsffi.import.\{injectiveIdent name}"
 
 export
 jsffiWrapperId : String -> String
-jsffiWrapperId name = "jsffi.wrap.\{name}"
+jsffiWrapperId name = "jsffi.wrap.\{injectiveIdent name}"
 
 -- `<jsName>:<P1>,...,<Pn>-><R>`, each head as declared.
 export
@@ -3260,6 +3261,7 @@ charFromCodeRuntimeLines = [
 ]
 # DESUGAR
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "JsImport" true))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
@@ -3507,9 +3509,9 @@ charFromCodeRuntimeLines = [
 (DTypeSig false "jsffiImportLine" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsffiImportLine" ((PVar "imp")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"jsffi\" \"")) (EApp (EVar "display") (EApp (EVar "jsImportField") (EVar "imp")))) (ELit (LString "\" (func $"))) (EApp (EVar "display") (EApp (EVar "jsffiImportId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "params"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))) (ELit (LString "))"))))))
 (DTypeSig true "jsffiImportId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiImportId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "jsffiImportId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
 (DTypeSig true "jsffiWrapperId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
 (DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
 (DTypeSig false "jsWireParam" (TyFun (TyCon "String") (TyCon "String")))
@@ -3626,6 +3628,7 @@ charFromCodeRuntimeLines = [
 (DFunDef false "charFromCodeRuntimeLines" () (EListLit (ELit (LString "  ;; -- W11b charFromCode (byte-identical to medaka_rt.c mdk_char_from_code) --")) (ELit (LString "  (func $mdk_char_from_code (param $cp i32) (result (ref eq))")) (ELit (LString "    ;; valid: 0 <= cp <= 0x10FFFF and not (0xD800 <= cp <= 0xDFFF).")) (ELit (LString "    (if (i32.and (i32.and (i32.ge_s (local.get $cp) (i32.const 0)) (i32.le_s (local.get $cp) (i32.const 1114111)))")) (ELit (LString "                 (i32.eqz (i32.and (i32.ge_s (local.get $cp) (i32.const 55296)) (i32.le_s (local.get $cp) (i32.const 57343)))))")) (ELit (LString "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (local.get $cp))))))")) (ELit (LString "    (ref.i31 (i32.const 1)))"))))
 # MARK
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "JsImport" true))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
@@ -3873,9 +3876,9 @@ charFromCodeRuntimeLines = [
 (DTypeSig false "jsffiImportLine" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsffiImportLine" ((PVar "imp")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"jsffi\" \"")) (EApp (EMethodRef "display") (EApp (EVar "jsImportField") (EVar "imp")))) (ELit (LString "\" (func $"))) (EApp (EMethodRef "display") (EApp (EVar "jsffiImportId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "params"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))) (ELit (LString "))"))))))
 (DTypeSig true "jsffiImportId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiImportId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "jsffiImportId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
 (DTypeSig true "jsffiWrapperId" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EVar "name")))) (ELit (LString ""))))
 (DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
 (DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
 (DTypeSig false "jsWireParam" (TyFun (TyCon "String") (TyCon "String")))
