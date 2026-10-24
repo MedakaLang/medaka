@@ -22,7 +22,7 @@ import list.{splitAt}
 import support.sexp_value.{
   SExp(..), SexpCursor, SexpError(..), cursorAdvance, cursorAtEnd, cursorAtom,
   cursorClose, cursorFail, cursorFailed, cursorInt, cursorList, cursorOf,
-  cursorOffset, cursorOpen, cursorPeek, cursorChar, isOpenByte
+  cursorOffset, cursorOpen, cursorPeek, cursorChar, isCloseByte, isOpenByte
 }
 
 -- ── entry points ────────────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ readFloat cur =
 readOpt : (SexpCursor -> a) -> SexpCursor -> Option a
 readOpt f cur =
   let _ = cursorOpen cur
-  if cursorPeek cur == 41 then
+  if isCloseByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     None
   else

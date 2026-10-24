@@ -1,5 +1,5 @@
 # META
-source_lines=2708
+source_lines=2695
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -45,11 +45,10 @@ import types.prelude_interface.{
   InterfaceKey, interfaceKeyOf, keysMatch, seedPreludeInterface
 }
 import types.prelude_elab.{
-  PreludeElab, binderRunIs, elabKeyOf, readElabFile, readElabKey, relocDecls,
-  seedPreludeElab
+  PreludeElab, elabKeyOf, readElabFile, readElabKey, relocDecls, seedPreludeElab
 }
 import types.prelude_decls.{
-  PreludeDecls(..), declsKeyOf, decodeDeclsBody, readDeclsFramed
+  PreludeDecls(..), acceptedDeclsBody, declsKeyOf, readDeclsFramed
 }
 import support.stage_count.{forwardStageLines}
 import io.{runCommandOk}
@@ -512,11 +511,8 @@ holdPreludeDecls inputs covered =
     _ => match decoded.value
       Some pd => pd
       None =>
-        let pd = match decodeDeclsBody covered
-          Ok v if describes v => Some v
-          Ok _ =>
-            preludeDeclsRef := Some (inputs, DVStale "file")
-            None
+        let pd = match acceptedDeclsBody covered
+          Ok v => Some v
           Err fault =>
             preludeDeclsRef := Some (inputs, DVStale (faultComponent fault))
             None
@@ -528,15 +524,6 @@ holdPreludeDecls inputs covered =
       (value ()))
   registerPreludeDecls inputs.pnCoreSrc (_ =>
     map (pd => placed pd.pdCoreBinders pd.pdCoreBase pd.pdCore) (value ()))
-
--- Whether each tree's minted binder ordinals are exactly the run its counters
--- claim, each once.  The digest covers the counters line, so only a writer that
--- lied passes the digest and fails here; a lie would shift every id minted after
--- the tree.
-describes : PreludeDecls -> Bool
-describes pd =
-  binderRunIs pd.pdRuntimeBinders pd.pdRuntimeBase pd.pdRuntime
-    && binderRunIs pd.pdCoreBinders pd.pdCoreBase pd.pdCore
 
 -- [decls], whose [count] minted binder ordinals run from [base], moved onto the
 -- next [count] ordinals of the counter.
@@ -2720,8 +2707,8 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "readInterfaceKey" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "seedPreludeInterface" false))))
-(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "binderRunIs" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "relocDecls" false) (mem "seedPreludeElab" false))))
-(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "declsKeyOf" false) (mem "decodeDeclsBody" false) (mem "readDeclsFramed" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "relocDecls" false) (mem "seedPreludeElab" false))))
+(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "acceptedDeclsBody" false) (mem "declsKeyOf" false) (mem "readDeclsFramed" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "forwardStageLines" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
@@ -2807,9 +2794,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "takePreludeDecls" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "takePreludeDecls" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeDeclsRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PCon "DVLoaded"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "True")) (arm (PCon "Some" (PTuple (PVar "seen") PWild)) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "False")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "covered")) (EApp (EVar "readPreludeDecls") (EVar "inputs"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EMatch (EVar "covered") (arm (PCon "Some" (PVar "body")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "holdPreludeDecls") (EVar "inputs")) (EVar "body"))) (DoExpr (EVar "True")))) (arm (PCon "None") () (EVar "False"))))))))
 (DTypeSig false "holdPreludeDecls" (TyFun (TyCon "PreludeInputs") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "holdPreludeDecls" ((PVar "inputs") (PVar "covered")) (EBlock (DoLet false false (PVar "decoded") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "value") (ELam (PWild) (EMatch (EFieldAccess (EVar "decoded") "value") (arm (PCon "Some" (PVar "pd")) () (EVar "pd")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "pd") (EMatch (EApp (EVar "decodeDeclsBody") (EVar "covered")) (arm (PCon "Ok" (PVar "v")) ((GBool (EApp (EVar "describes") (EVar "v")))) (EApp (EVar "Some") (EVar "v"))) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EApp (EVar "DVStale") (ELit (LString "file"))))))) (DoExpr (EVar "None")))) (arm (PCon "Err" (PVar "fault")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EApp (EVar "DVStale") (EApp (EVar "faultComponent") (EVar "fault"))))))) (DoExpr (EVar "None")))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "decoded")) (EApp (EVar "Some") (EVar "pd")))) (DoExpr (EVar "pd"))))))) (DoLet false false PWild (EApp (EApp (EVar "registerPreludeDecls") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (ELam (PWild) (EApp (EApp (EVar "map") (ELam ((PVar "pd")) (EApp (EApp (EApp (EVar "placed") (EFieldAccess (EVar "pd") "pdRuntimeBinders")) (EFieldAccess (EVar "pd") "pdRuntimeBase")) (EFieldAccess (EVar "pd") "pdRuntime")))) (EApp (EVar "value") (ELit LUnit)))))) (DoExpr (EApp (EApp (EVar "registerPreludeDecls") (EFieldAccess (EVar "inputs") "pnCoreSrc")) (ELam (PWild) (EApp (EApp (EVar "map") (ELam ((PVar "pd")) (EApp (EApp (EApp (EVar "placed") (EFieldAccess (EVar "pd") "pdCoreBinders")) (EFieldAccess (EVar "pd") "pdCoreBase")) (EFieldAccess (EVar "pd") "pdCore")))) (EApp (EVar "value") (ELit LUnit))))))))
-(DTypeSig false "describes" (TyFun (TyCon "PreludeDecls") (TyCon "Bool")))
-(DFunDef false "describes" ((PVar "pd")) (EBinOp "&&" (EApp (EApp (EApp (EVar "binderRunIs") (EFieldAccess (EVar "pd") "pdRuntimeBinders")) (EFieldAccess (EVar "pd") "pdRuntimeBase")) (EFieldAccess (EVar "pd") "pdRuntime")) (EApp (EApp (EApp (EVar "binderRunIs") (EFieldAccess (EVar "pd") "pdCoreBinders")) (EFieldAccess (EVar "pd") "pdCoreBase")) (EFieldAccess (EVar "pd") "pdCore"))))
+(DFunDef false "holdPreludeDecls" ((PVar "inputs") (PVar "covered")) (EBlock (DoLet false false (PVar "decoded") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "value") (ELam (PWild) (EMatch (EFieldAccess (EVar "decoded") "value") (arm (PCon "Some" (PVar "pd")) () (EVar "pd")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "pd") (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Ok" (PVar "v")) () (EApp (EVar "Some") (EVar "v"))) (arm (PCon "Err" (PVar "fault")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EApp (EVar "DVStale") (EApp (EVar "faultComponent") (EVar "fault"))))))) (DoExpr (EVar "None")))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "decoded")) (EApp (EVar "Some") (EVar "pd")))) (DoExpr (EVar "pd"))))))) (DoLet false false PWild (EApp (EApp (EVar "registerPreludeDecls") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (ELam (PWild) (EApp (EApp (EVar "map") (ELam ((PVar "pd")) (EApp (EApp (EApp (EVar "placed") (EFieldAccess (EVar "pd") "pdRuntimeBinders")) (EFieldAccess (EVar "pd") "pdRuntimeBase")) (EFieldAccess (EVar "pd") "pdRuntime")))) (EApp (EVar "value") (ELit LUnit)))))) (DoExpr (EApp (EApp (EVar "registerPreludeDecls") (EFieldAccess (EVar "inputs") "pnCoreSrc")) (ELam (PWild) (EApp (EApp (EVar "map") (ELam ((PVar "pd")) (EApp (EApp (EApp (EVar "placed") (EFieldAccess (EVar "pd") "pdCoreBinders")) (EFieldAccess (EVar "pd") "pdCoreBase")) (EFieldAccess (EVar "pd") "pdCore")))) (EApp (EVar "value") (ELit LUnit))))))))
 (DTypeSig false "placed" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "placed" ((PVar "count") (PVar "base") (PVar "decls")) (EBlock (DoLet false false (PVar "first") (EApp (EVar "reserveBinderOrdinals") (EVar "count"))) (DoExpr (EIf (EBinOp "==" (EVar "first") (EVar "base")) (EVar "decls") (EApp (EApp (EVar "relocDecls") (EBinOp "-" (EVar "first") (EVar "base"))) (EVar "decls"))))))
 (DTypeSig true "preludeDeclsVerdict" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "DeclsVerdict"))))
@@ -3059,8 +3044,8 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "readInterfaceKey" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "seedPreludeInterface" false))))
-(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "binderRunIs" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "relocDecls" false) (mem "seedPreludeElab" false))))
-(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "declsKeyOf" false) (mem "decodeDeclsBody" false) (mem "readDeclsFramed" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "relocDecls" false) (mem "seedPreludeElab" false))))
+(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "acceptedDeclsBody" false) (mem "declsKeyOf" false) (mem "readDeclsFramed" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "forwardStageLines" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
@@ -3146,9 +3131,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "takePreludeDecls" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "takePreludeDecls" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeDeclsRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PCon "DVLoaded"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "True")) (arm (PCon "Some" (PTuple (PVar "seen") PWild)) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "False")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "covered")) (EApp (EVar "readPreludeDecls") (EVar "inputs"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EMatch (EVar "covered") (arm (PCon "Some" (PVar "body")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "holdPreludeDecls") (EVar "inputs")) (EVar "body"))) (DoExpr (EVar "True")))) (arm (PCon "None") () (EVar "False"))))))))
 (DTypeSig false "holdPreludeDecls" (TyFun (TyCon "PreludeInputs") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "holdPreludeDecls" ((PVar "inputs") (PVar "covered")) (EBlock (DoLet false false (PVar "decoded") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "value") (ELam (PWild) (EMatch (EFieldAccess (EVar "decoded") "value") (arm (PCon "Some" (PVar "pd")) () (EVar "pd")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "pd") (EMatch (EApp (EVar "decodeDeclsBody") (EVar "covered")) (arm (PCon "Ok" (PVar "v")) ((GBool (EApp (EVar "describes") (EVar "v")))) (EApp (EVar "Some") (EVar "v"))) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EApp (EVar "DVStale") (ELit (LString "file"))))))) (DoExpr (EVar "None")))) (arm (PCon "Err" (PVar "fault")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EApp (EVar "DVStale") (EApp (EVar "faultComponent") (EVar "fault"))))))) (DoExpr (EVar "None")))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "decoded")) (EApp (EVar "Some") (EVar "pd")))) (DoExpr (EVar "pd"))))))) (DoLet false false PWild (EApp (EApp (EVar "registerPreludeDecls") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (ELam (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PVar "pd")) (EApp (EApp (EApp (EVar "placed") (EFieldAccess (EVar "pd") "pdRuntimeBinders")) (EFieldAccess (EVar "pd") "pdRuntimeBase")) (EFieldAccess (EVar "pd") "pdRuntime")))) (EApp (EVar "value") (ELit LUnit)))))) (DoExpr (EApp (EApp (EVar "registerPreludeDecls") (EFieldAccess (EVar "inputs") "pnCoreSrc")) (ELam (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PVar "pd")) (EApp (EApp (EApp (EVar "placed") (EFieldAccess (EVar "pd") "pdCoreBinders")) (EFieldAccess (EVar "pd") "pdCoreBase")) (EFieldAccess (EVar "pd") "pdCore")))) (EApp (EVar "value") (ELit LUnit))))))))
-(DTypeSig false "describes" (TyFun (TyCon "PreludeDecls") (TyCon "Bool")))
-(DFunDef false "describes" ((PVar "pd")) (EBinOp "&&" (EApp (EApp (EApp (EVar "binderRunIs") (EFieldAccess (EVar "pd") "pdRuntimeBinders")) (EFieldAccess (EVar "pd") "pdRuntimeBase")) (EFieldAccess (EVar "pd") "pdRuntime")) (EApp (EApp (EApp (EVar "binderRunIs") (EFieldAccess (EVar "pd") "pdCoreBinders")) (EFieldAccess (EVar "pd") "pdCoreBase")) (EFieldAccess (EVar "pd") "pdCore"))))
+(DFunDef false "holdPreludeDecls" ((PVar "inputs") (PVar "covered")) (EBlock (DoLet false false (PVar "decoded") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "value") (ELam (PWild) (EMatch (EFieldAccess (EVar "decoded") "value") (arm (PCon "Some" (PVar "pd")) () (EVar "pd")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "pd") (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Ok" (PVar "v")) () (EApp (EVar "Some") (EVar "v"))) (arm (PCon "Err" (PVar "fault")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EApp (EVar "DVStale") (EApp (EVar "faultComponent") (EVar "fault"))))))) (DoExpr (EVar "None")))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "decoded")) (EApp (EVar "Some") (EVar "pd")))) (DoExpr (EVar "pd"))))))) (DoLet false false PWild (EApp (EApp (EVar "registerPreludeDecls") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (ELam (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PVar "pd")) (EApp (EApp (EApp (EVar "placed") (EFieldAccess (EVar "pd") "pdRuntimeBinders")) (EFieldAccess (EVar "pd") "pdRuntimeBase")) (EFieldAccess (EVar "pd") "pdRuntime")))) (EApp (EVar "value") (ELit LUnit)))))) (DoExpr (EApp (EApp (EVar "registerPreludeDecls") (EFieldAccess (EVar "inputs") "pnCoreSrc")) (ELam (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PVar "pd")) (EApp (EApp (EApp (EVar "placed") (EFieldAccess (EVar "pd") "pdCoreBinders")) (EFieldAccess (EVar "pd") "pdCoreBase")) (EFieldAccess (EVar "pd") "pdCore")))) (EApp (EVar "value") (ELit LUnit))))))))
 (DTypeSig false "placed" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "placed" ((PVar "count") (PVar "base") (PVar "decls")) (EBlock (DoLet false false (PVar "first") (EApp (EVar "reserveBinderOrdinals") (EDictApp "count"))) (DoExpr (EIf (EBinOp "==" (EVar "first") (EVar "base")) (EVar "decls") (EApp (EApp (EVar "relocDecls") (EBinOp "-" (EVar "first") (EVar "base"))) (EVar "decls"))))))
 (DTypeSig true "preludeDeclsVerdict" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "DeclsVerdict"))))

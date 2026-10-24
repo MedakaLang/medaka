@@ -650,13 +650,18 @@ binderSpan decls =
   else
     (lo.value, 0 - 1)
 
+-- The longest binder run a file may claim, checked before the run's bitmap is
+-- allocated: the prelude mints a few thousand.
+maxBinderRun : Int
+maxBinderRun = 4194304
+
 -- Whether the minted binder ordinals of [decls] are exactly the [count] ordinals
 -- from [base], each once: in range, no repeat, and so no gap.  `binderSpan` sees
 -- only the run's ends and its size, which a changed or duplicated id leaves alone.
 export
 binderRunIs : Int -> Int -> List Decl -> Bool
 binderRunIs count base decls
-  | count < 0 = False
+  | count < 0 || count > maxBinderRun = False
   | otherwise =
     let seen = arrayMake count False
     let ok = Ref True

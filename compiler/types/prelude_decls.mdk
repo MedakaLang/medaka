@@ -28,7 +28,7 @@ import support.sexp_value.{
 }
 import types.interface_sexp.{InterfaceFault(..), sha256Hex}
 import types.prelude_elab.{
-  binderSpan, checkedFramed, failure, framedHeader, refuse
+  binderRunIs, binderSpan, checkedFramed, failure, framedHeader, refuse
 }
 import types.prelude_interface.{InterfaceKey(..)}
 
@@ -141,6 +141,27 @@ decodeDeclsBody covered = match S.indexOf "\n" covered
     Ok node => match countersOf node
       Err e => failure e
       Ok counters => decodeBody counters (S.drop (j + 1) covered)
+
+-- The value of the bytes a file's digest covers when it is also one a reader
+-- may seed from: its counters describe its trees.  The loader and `interface
+-- verify` both decide acceptance here.
+export
+acceptedDeclsBody : String -> Result InterfaceFault PreludeDecls
+acceptedDeclsBody covered = do
+  pd <- decodeDeclsBody covered
+  if describes pd then
+    Ok pd
+  else
+    refuse "counters" "the binder counters disagree with the trees"
+
+-- Whether each tree's minted binder ordinals are exactly the run its counters
+-- claim, each once.  The digest covers the counters line, so only a writer that
+-- lied passes the digest and fails here; a lie would shift every id minted after
+-- the tree.
+describes : PreludeDecls -> Bool
+describes pd =
+  binderRunIs pd.pdRuntimeBinders pd.pdRuntimeBase pd.pdRuntime
+    && binderRunIs pd.pdCoreBinders pd.pdCoreBase pd.pdCore
 
 countersOf : SExp -> Result SexpError (Int, Int, Int, Int)
 countersOf (SList [SAtom "counters", a, b, c, d]) = do

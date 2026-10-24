@@ -1,5 +1,5 @@
 # META
-source_lines=537
+source_lines=539
 stages=DESUGAR,MARK
 # SOURCE
 {- interface_cmd.mdk: `medaka interface write|show|verify`, the driver for the
@@ -44,7 +44,7 @@ import types.prelude_elab.{
 }
 import types.prelude_decls.{
   PreludeDecls(..), preludeDeclsOf, encodeDeclsFile, readDeclsFile, declsKeyOf,
-  readDeclsKey, renderDeclsFault
+  readDeclsFramed, acceptedDeclsBody, renderDeclsFault
 }
 import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
@@ -467,9 +467,11 @@ elabVerdictOf modulePath = match readFile (elabPath modulePath)
 declsVerdictOf : String -> <IO> Verdict
 declsVerdictOf modulePath = match readFile (declsPath modulePath)
   Err _ => Missing
-  Ok text => match readDeclsKey text
+  Ok text => match readDeclsFramed text
     Err fault => Stale (faultComponent fault)
-    Ok key => againstSources modulePath declsKeyOf key
+    Ok (key, covered) => match acceptedDeclsBody covered
+      Err fault => Stale (faultComponent fault)
+      Ok _ => againstSources modulePath declsKeyOf key
 
 -- How [modulePath]'s three files stand against the module's sources now: fresh
 -- only when all are, and a stale or missing elaborated-trees or declarations
@@ -556,7 +558,7 @@ runInterfaceCmd (sub :: _) =
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "renderAtom" false))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "PreludeInterfaceFile" true) (mem "InterfaceSection" true) (mem "encodeInterface" false) (mem "readInterface" false) (mem "renderFault" false) (mem "mergeSections" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" true) (mem "preludeElabOf" false) (mem "encodeElabFile" false) (mem "readElabFile" false) (mem "elabKeyOf" false) (mem "elabDigestOf" false) (mem "renderElabFault" false) (mem "readElabKey" false))))
-(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "preludeDeclsOf" false) (mem "encodeDeclsFile" false) (mem "readDeclsFile" false) (mem "declsKeyOf" false) (mem "readDeclsKey" false) (mem "renderDeclsFault" false))))
+(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "preludeDeclsOf" false) (mem "encodeDeclsFile" false) (mem "readDeclsFile" false) (mem "declsKeyOf" false) (mem "readDeclsFramed" false) (mem "acceptedDeclsBody" false) (mem "renderDeclsFault" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true) (mem "keysMatch" false) (mem "currentPreludeInterface" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ppPubScheme" false) (mem "CheckedProgram" true) (mem "TcReport" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "lookupProfile" false) (mem "selectedProfile" false))))
@@ -639,7 +641,7 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "elabVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "elabVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "elabPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "elabKeyOf")) (EVar "key")))))))
 (DTypeSig false "declsVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
-(DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsKey") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PVar "key")) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")))))))
+(DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsFramed") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "covered"))) () (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")))))))))
 (DTypeSig true "verdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "interfaceVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "elabVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "declsVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EVar "Fresh")) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "declarations (.mdkd) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "declarations (.mdkd) ")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "elaborated trees (.mdke) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "elaborated trees (.mdke) ")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "verifyCmd" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -673,7 +675,7 @@ runInterfaceCmd (sub :: _) =
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "renderAtom" false))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "PreludeInterfaceFile" true) (mem "InterfaceSection" true) (mem "encodeInterface" false) (mem "readInterface" false) (mem "renderFault" false) (mem "mergeSections" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" true) (mem "preludeElabOf" false) (mem "encodeElabFile" false) (mem "readElabFile" false) (mem "elabKeyOf" false) (mem "elabDigestOf" false) (mem "renderElabFault" false) (mem "readElabKey" false))))
-(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "preludeDeclsOf" false) (mem "encodeDeclsFile" false) (mem "readDeclsFile" false) (mem "declsKeyOf" false) (mem "readDeclsKey" false) (mem "renderDeclsFault" false))))
+(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "preludeDeclsOf" false) (mem "encodeDeclsFile" false) (mem "readDeclsFile" false) (mem "declsKeyOf" false) (mem "readDeclsFramed" false) (mem "acceptedDeclsBody" false) (mem "renderDeclsFault" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true) (mem "keysMatch" false) (mem "currentPreludeInterface" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ppPubScheme" false) (mem "CheckedProgram" true) (mem "TcReport" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "lookupProfile" false) (mem "selectedProfile" false))))
@@ -756,7 +758,7 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "elabVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "elabVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "elabPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "elabKeyOf")) (EVar "key")))))))
 (DTypeSig false "declsVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
-(DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsKey") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PVar "key")) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")))))))
+(DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsFramed") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "covered"))) () (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")))))))))
 (DTypeSig true "verdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "interfaceVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "elabVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "declsVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EVar "Fresh")) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "declarations (.mdkd) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "declarations (.mdkd) ")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "elaborated trees (.mdke) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "elaborated trees (.mdke) ")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "verifyCmd" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))

@@ -1,5 +1,5 @@
 # META
-source_lines=185
+source_lines=206
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's desugared declarations as a file.
@@ -32,7 +32,7 @@ import support.sexp_value.{
 }
 import types.interface_sexp.{InterfaceFault(..), sha256Hex}
 import types.prelude_elab.{
-  binderSpan, checkedFramed, failure, framedHeader, refuse
+  binderRunIs, binderSpan, checkedFramed, failure, framedHeader, refuse
 }
 import types.prelude_interface.{InterfaceKey(..)}
 
@@ -146,6 +146,27 @@ decodeDeclsBody covered = match S.indexOf "\n" covered
       Err e => failure e
       Ok counters => decodeBody counters (S.drop (j + 1) covered)
 
+-- The value of the bytes a file's digest covers when it is also one a reader
+-- may seed from: its counters describe its trees.  The loader and `interface
+-- verify` both decide acceptance here.
+export
+acceptedDeclsBody : String -> Result InterfaceFault PreludeDecls
+acceptedDeclsBody covered = do
+  pd <- decodeDeclsBody covered
+  if describes pd then
+    Ok pd
+  else
+    refuse "counters" "the binder counters disagree with the trees"
+
+-- Whether each tree's minted binder ordinals are exactly the run its counters
+-- claim, each once.  The digest covers the counters line, so only a writer that
+-- lied passes the digest and fails here; a lie would shift every id minted after
+-- the tree.
+describes : PreludeDecls -> Bool
+describes pd =
+  binderRunIs pd.pdRuntimeBinders pd.pdRuntimeBase pd.pdRuntime
+    && binderRunIs pd.pdCoreBinders pd.pdCoreBase pd.pdCore
+
 countersOf : SExp -> Result SexpError (Int, Int, Int, Int)
 countersOf (SList [SAtom "counters", a, b, c, d]) = do
   rn <- atomInt "counters" a
@@ -193,7 +214,7 @@ decodeBody (rn, rb, cn, cb) body
 (DUse false (UseAlias ("string") "S"))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "parseSExp" false) (mem "renderSExp" false))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceFault" true) (mem "sha256Hex" false))))
-(DUse false (UseGroup ("types" "prelude_elab") ((mem "binderSpan" false) (mem "checkedFramed" false) (mem "failure" false) (mem "framedHeader" false) (mem "refuse" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "binderRunIs" false) (mem "binderSpan" false) (mem "checkedFramed" false) (mem "failure" false) (mem "framedHeader" false) (mem "refuse" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))
 (DData Public "PreludeDecls" () ((variant "PreludeDecls" (ConNamed (field "pdRuntime" (TyApp (TyCon "List") (TyCon "Decl"))) (field "pdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "pdRuntimeBinders" (TyCon "Int")) (field "pdRuntimeBase" (TyCon "Int")) (field "pdCoreBinders" (TyCon "Int")) (field "pdCoreBase" (TyCon "Int"))))) ())
 (DTypeSig false "span" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
@@ -219,6 +240,10 @@ decodeBody (rn, rb, cn, cb) body
 (DFunDef false "readDeclsFile" ((PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EVar "readDeclsFramed") (EVar "text"))) (ELam ((PTuple (PVar "key") (PVar "covered"))) (EApp (EApp (EVar "andThen") (EApp (EVar "decodeDeclsBody") (EVar "covered"))) (ELam ((PVar "pd")) (EApp (EVar "Ok") (ETuple (EVar "key") (EVar "pd"))))))))
 (DTypeSig true "decodeDeclsBody" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "PreludeDecls"))))
 (DFunDef false "decodeDeclsBody" ((PVar "covered")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "covered")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "no counters line")))) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "j")) (EVar "covered"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EMatch (EApp (EVar "countersOf") (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "counters")) () (EApp (EApp (EVar "decodeBody") (EVar "counters")) (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "covered"))))))))))
+(DTypeSig true "acceptedDeclsBody" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "PreludeDecls"))))
+(DFunDef false "acceptedDeclsBody" ((PVar "covered")) (EApp (EApp (EVar "andThen") (EApp (EVar "decodeDeclsBody") (EVar "covered"))) (ELam ((PVar "pd")) (EIf (EApp (EVar "describes") (EVar "pd")) (EApp (EVar "Ok") (EVar "pd")) (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "the binder counters disagree with the trees")))))))
+(DTypeSig false "describes" (TyFun (TyCon "PreludeDecls") (TyCon "Bool")))
+(DFunDef false "describes" ((PVar "pd")) (EBinOp "&&" (EApp (EApp (EApp (EVar "binderRunIs") (EFieldAccess (EVar "pd") "pdRuntimeBinders")) (EFieldAccess (EVar "pd") "pdRuntimeBase")) (EFieldAccess (EVar "pd") "pdRuntime")) (EApp (EApp (EApp (EVar "binderRunIs") (EFieldAccess (EVar "pd") "pdCoreBinders")) (EFieldAccess (EVar "pd") "pdCoreBase")) (EFieldAccess (EVar "pd") "pdCore"))))
 (DTypeSig false "countersOf" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "countersOf" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "counters"))) (PVar "a") (PVar "b") (PVar "c") (PVar "d")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "a"))) (ELam ((PVar "rn")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "b"))) (ELam ((PVar "rb")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "c"))) (ELam ((PVar "cn")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "d"))) (ELam ((PVar "cb")) (EApp (EVar "Ok") (ETuple (EVar "rn") (EVar "rb") (EVar "cn") (EVar "cb"))))))))))))
 (DFunDef false "countersOf" (PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "counters"))) (fa "seWhat" (ELit (LString "expected a counters line of four numbers")))))))
@@ -230,7 +255,7 @@ decodeBody (rn, rb, cn, cb) body
 (DUse false (UseAlias ("string") "S"))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "parseSExp" false) (mem "renderSExp" false))))
 (DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceFault" true) (mem "sha256Hex" false))))
-(DUse false (UseGroup ("types" "prelude_elab") ((mem "binderSpan" false) (mem "checkedFramed" false) (mem "failure" false) (mem "framedHeader" false) (mem "refuse" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "binderRunIs" false) (mem "binderSpan" false) (mem "checkedFramed" false) (mem "failure" false) (mem "framedHeader" false) (mem "refuse" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))
 (DData Public "PreludeDecls" () ((variant "PreludeDecls" (ConNamed (field "pdRuntime" (TyApp (TyCon "List") (TyCon "Decl"))) (field "pdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "pdRuntimeBinders" (TyCon "Int")) (field "pdRuntimeBase" (TyCon "Int")) (field "pdCoreBinders" (TyCon "Int")) (field "pdCoreBase" (TyCon "Int"))))) ())
 (DTypeSig false "span" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
@@ -256,6 +281,10 @@ decodeBody (rn, rb, cn, cb) body
 (DFunDef false "readDeclsFile" ((PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readDeclsFramed") (EVar "text"))) (ELam ((PTuple (PVar "key") (PVar "covered"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "decodeDeclsBody") (EVar "covered"))) (ELam ((PVar "pd")) (EApp (EVar "Ok") (ETuple (EVar "key") (EVar "pd"))))))))
 (DTypeSig true "decodeDeclsBody" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "PreludeDecls"))))
 (DFunDef false "decodeDeclsBody" ((PVar "covered")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "covered")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "no counters line")))) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "j")) (EVar "covered"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EMatch (EApp (EVar "countersOf") (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "counters")) () (EApp (EApp (EVar "decodeBody") (EVar "counters")) (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "covered"))))))))))
+(DTypeSig true "acceptedDeclsBody" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "PreludeDecls"))))
+(DFunDef false "acceptedDeclsBody" ((PVar "covered")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "decodeDeclsBody") (EVar "covered"))) (ELam ((PVar "pd")) (EIf (EApp (EVar "describes") (EVar "pd")) (EApp (EVar "Ok") (EVar "pd")) (EApp (EApp (EVar "refuse") (ELit (LString "counters"))) (ELit (LString "the binder counters disagree with the trees")))))))
+(DTypeSig false "describes" (TyFun (TyCon "PreludeDecls") (TyCon "Bool")))
+(DFunDef false "describes" ((PVar "pd")) (EBinOp "&&" (EApp (EApp (EApp (EVar "binderRunIs") (EFieldAccess (EVar "pd") "pdRuntimeBinders")) (EFieldAccess (EVar "pd") "pdRuntimeBase")) (EFieldAccess (EVar "pd") "pdRuntime")) (EApp (EApp (EApp (EVar "binderRunIs") (EFieldAccess (EVar "pd") "pdCoreBinders")) (EFieldAccess (EVar "pd") "pdCoreBase")) (EFieldAccess (EVar "pd") "pdCore"))))
 (DTypeSig false "countersOf" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "countersOf" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "counters"))) (PVar "a") (PVar "b") (PVar "c") (PVar "d")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "a"))) (ELam ((PVar "rn")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "b"))) (ELam ((PVar "rb")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "c"))) (ELam ((PVar "cn")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "d"))) (ELam ((PVar "cb")) (EApp (EVar "Ok") (ETuple (EVar "rn") (EVar "rb") (EVar "cn") (EVar "cb"))))))))))))
 (DFunDef false "countersOf" (PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "counters"))) (fa "seWhat" (ELit (LString "expected a counters line of four numbers")))))))

@@ -1,14 +1,13 @@
 # META
-source_lines=86
+source_lines=85
 stages=DESUGAR,MARK
 # SOURCE
 -- Source-keyed memoization of the implicit prelude parse (#2234).
 --
 -- `stdlib/runtime.mdk` + `stdlib/core.mdk` are read once per invocation
--- (`readPreludeSources`, driver/build_cmd.mdk), and several stages need their
--- parse: the desugar cache (frontend/desugar_cache.mdk), `runCheck`
--- (tools/check.mdk), `checkRoute` (driver/medaka_cli.mdk) and `analyzeFrom`
--- (driver/diagnostics.mdk).  This memo makes them share one parse per source.
+-- (`readPreludeSources`, driver/build_cmd.mdk), and two stages need their
+-- parse: the desugar cache (frontend/desugar_cache.mdk) and `runCheck`
+-- (tools/check.mdk).  This memo makes them share one parse per source.
 --
 -- The prelude never goes through the loader, so `parseCachedLocated`
 -- (driver/loader.mdk) -- which memoizes `parseLocated` by source string for the

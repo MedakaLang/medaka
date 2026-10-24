@@ -41,11 +41,10 @@ import types.prelude_interface.{
   InterfaceKey, interfaceKeyOf, keysMatch, seedPreludeInterface
 }
 import types.prelude_elab.{
-  PreludeElab, binderRunIs, elabKeyOf, readElabFile, readElabKey, relocDecls,
-  seedPreludeElab
+  PreludeElab, elabKeyOf, readElabFile, readElabKey, relocDecls, seedPreludeElab
 }
 import types.prelude_decls.{
-  PreludeDecls(..), declsKeyOf, decodeDeclsBody, readDeclsFramed
+  PreludeDecls(..), acceptedDeclsBody, declsKeyOf, readDeclsFramed
 }
 import support.stage_count.{forwardStageLines}
 import io.{runCommandOk}
@@ -508,11 +507,8 @@ holdPreludeDecls inputs covered =
     _ => match decoded.value
       Some pd => pd
       None =>
-        let pd = match decodeDeclsBody covered
-          Ok v if describes v => Some v
-          Ok _ =>
-            preludeDeclsRef := Some (inputs, DVStale "file")
-            None
+        let pd = match acceptedDeclsBody covered
+          Ok v => Some v
           Err fault =>
             preludeDeclsRef := Some (inputs, DVStale (faultComponent fault))
             None
@@ -524,15 +520,6 @@ holdPreludeDecls inputs covered =
       (value ()))
   registerPreludeDecls inputs.pnCoreSrc (_ =>
     map (pd => placed pd.pdCoreBinders pd.pdCoreBase pd.pdCore) (value ()))
-
--- Whether each tree's minted binder ordinals are exactly the run its counters
--- claim, each once.  The digest covers the counters line, so only a writer that
--- lied passes the digest and fails here; a lie would shift every id minted after
--- the tree.
-describes : PreludeDecls -> Bool
-describes pd =
-  binderRunIs pd.pdRuntimeBinders pd.pdRuntimeBase pd.pdRuntime
-    && binderRunIs pd.pdCoreBinders pd.pdCoreBase pd.pdCore
 
 -- [decls], whose [count] minted binder ordinals run from [base], moved onto the
 -- next [count] ordinals of the counter.

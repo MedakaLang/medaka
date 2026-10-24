@@ -283,6 +283,8 @@ substringMatch needle haystack = isSome (stringIndexOf needle haystack)
 -- `cases` overrides the prop sample count (`--cases`, default 100 at the CLI);
 -- `filterOpt` restricts doctests/`test "…"`/`prop "…"` to names containing a
 -- substring (`--filter`, #2295).
+-- The prelude is read from the directory of `runtimeP`, so `coreP` must be the
+-- `core.mdk` beside it; any other path is refused.
 export
 runTest : List Engine ->
   String ->
@@ -292,8 +294,13 @@ runTest : List Engine ->
   Int ->
   Option String ->
   <IO> Bool
-runTest engines runtimeP coreP target roots cases filterOpt =
-  match carryProjectProfile None target
+runTest engines runtimeP coreP target roots cases filterOpt
+  | dirOf coreP /= dirOf runtimeP || baseOf coreP /= "core.mdk" =
+    let _ =
+      ePutStrLn
+        "error: `core.mdk` must be the one beside `runtime.mdk`, got `\{coreP}`"
+    False
+  | otherwise = match carryProjectProfile None target
     Err m =>
       let _ = ePutStrLn ("error: " ++ m)
       False

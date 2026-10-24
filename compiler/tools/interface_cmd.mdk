@@ -40,7 +40,7 @@ import types.prelude_elab.{
 }
 import types.prelude_decls.{
   PreludeDecls(..), preludeDeclsOf, encodeDeclsFile, readDeclsFile, declsKeyOf,
-  readDeclsKey, renderDeclsFault
+  readDeclsFramed, acceptedDeclsBody, renderDeclsFault
 }
 import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
@@ -463,9 +463,11 @@ elabVerdictOf modulePath = match readFile (elabPath modulePath)
 declsVerdictOf : String -> <IO> Verdict
 declsVerdictOf modulePath = match readFile (declsPath modulePath)
   Err _ => Missing
-  Ok text => match readDeclsKey text
+  Ok text => match readDeclsFramed text
     Err fault => Stale (faultComponent fault)
-    Ok key => againstSources modulePath declsKeyOf key
+    Ok (key, covered) => match acceptedDeclsBody covered
+      Err fault => Stale (faultComponent fault)
+      Ok _ => againstSources modulePath declsKeyOf key
 
 -- How [modulePath]'s three files stand against the module's sources now: fresh
 -- only when all are, and a stale or missing elaborated-trees or declarations
