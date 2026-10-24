@@ -1256,6 +1256,7 @@ evidenceProg body =
       factBinders = [],
       factEntryOutcome = None,
       factExterns = noDeclFacts.factExterns,
+      factManifests = [],
     }
 
 evidenceOf : Route -> CExpr
@@ -1550,6 +1551,7 @@ dropBinderTable (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
     factBinders = [],
     factEntryOutcome = facts.factEntryOutcome,
     factExterns = facts.factExterns,
+    factManifests = facts.factManifests,
   }
 
 restampBinder : String -> RuntimeType -> CProgram -> CProgram
@@ -1565,6 +1567,7 @@ restampBinder name ty (CProgram groups ctors ctorTypes impls mctx facts) = CProg
     factSupers = facts.factSupers,
     factEntryOutcome = facts.factEntryOutcome,
     factExterns = facts.factExterns,
+    factManifests = facts.factManifests,
     factBinders =
       map
         (row =>
@@ -1654,6 +1657,7 @@ intLetProg ty =
       factSupers = [],
       factEntryOutcome = None,
       factExterns = noDeclFacts.factExterns,
+      factManifests = [],
       factBinders = [
         BinderRow {
           brId = bid,
@@ -1754,6 +1758,7 @@ editRows edit (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
     factBinders = edit facts.factBinders,
     factEntryOutcome = facts.factEntryOutcome,
     factExterns = facts.factExterns,
+    factManifests = facts.factManifests,
   }
 
 test "(ad) a function whose row is missing or gives no return type is refused" = expectEach

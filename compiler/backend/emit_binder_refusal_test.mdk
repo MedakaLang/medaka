@@ -75,6 +75,7 @@ program paramRow =
       factSupers = [],
       factEntryOutcome = None,
       factExterns = noDeclFacts.factExterns,
+      factManifests = [],
       factBinders =
         [row "f" 1 RTValue (Some RTInt), row "main" 2 RTInt (Some RTInt)]
           ++ (if paramRow then [row "x" 3 RTInt None] else []),

@@ -1,3 +1,14 @@
+import types.capability_manifest.{
+  EntryKey(..),
+  ManifestRequest(..),
+  InvocationProtocol(..),
+  CapabilityManifest(..),
+  FrozenAtom(..),
+  FrozenAuthority(..),
+  FrozenVariable(..),
+}
+import types.effect_domain.{Param(..)}
+import frontend.ast.{TyConOrigin(..)}
 -- Structural S-expression dump of the Core IR (STAGE2-DESIGN §2.1).  Mirrors
 -- sexp.mdk's style (AST dump) so the format is familiar; cprogramToSexp is the
 -- canonical entry point and the frozen IR's serialization contract.
@@ -362,27 +373,35 @@ tablesSexp rows facts None = match (
   facts.factMethodResults,
   facts.factEntryOutcome,
   omKeys facts.factExterns,
+  facts.factManifests,
 )
-  ([], [], [], [], None, []) => []
-  (_, [], [], [], None, []) => [slist (map methodContextPairSexp rows)]
+  ([], [], [], [], None, [], []) => []
+  (_, [], [], [], None, [], []) => [slist (map methodContextPairSexp rows)]
   _ => [slist (map methodContextPairSexp rows), declFactsSexp facts]
 
 declFactsSexp : DeclFacts -> String
 declFactsSexp facts =
-  if not (isEmpty (omKeys facts.factExterns)) then
-    node "facts" [
-      slist (map (factPairSexp "rq") facts.factRequires),
-      slist (map (factPairSexp "sp") facts.factSupers),
-      slist (map methodResultSexp facts.factMethodResults),
-      optionOr "none" (map entryOutcomeSexp facts.factEntryOutcome),
-      node
-        "externs"
-        (map
-          (key => match omLookup key facts.factExterns
-            Some fact => externSexp fact
-            None => panic "extern inventory lost a row")
-          (omKeys facts.factExterns)),
-    ]
+  if not (isEmpty (omKeys facts.factExterns))
+    || not (isEmpty facts.factManifests) then
+    node
+      "facts"
+      ([
+          slist (map (factPairSexp "rq") facts.factRequires),
+          slist (map (factPairSexp "sp") facts.factSupers),
+          slist (map methodResultSexp facts.factMethodResults),
+          optionOr "none" (map entryOutcomeSexp facts.factEntryOutcome),
+          node
+            "externs"
+            (map
+              (key => match omLookup key facts.factExterns
+                Some fact => externSexp fact
+                None => panic "extern inventory lost a row")
+              (omKeys facts.factExterns)),
+        ]
+        ++ (if isEmpty facts.factManifests then
+          []
+        else
+          [node "manifests" (map manifestSexp facts.factManifests)]))
   else
     node
       "facts"
@@ -517,3 +536,55 @@ shapeSexp shape = node "abi" [
   escStr shape.resultHead,
   escStr shape.canonicalSignature,
 ]
+
+manifestSexp : CapabilityManifest -> String
+manifestSexp manifest = node "manifest" [
+  escStr manifest.request.entry.moduleId,
+  escStr manifest.request.entry.binding,
+  match manifest.request.protocol
+    HostInvocation => "host"
+    ExecutedMain => "executed",
+  slist (map frozenAtomSexp manifest.atoms),
+]
+
+frozenAtomSexp : FrozenAtom -> String
+frozenAtomSexp atom = node "atom" [
+  escStr atom.label,
+  match atom.origin
+    OriginBuiltin => "builtin"
+    OriginUnresolved => "unresolved"
+    OriginModule mid => node "module" [escStr mid],
+  manifestParamSexp atom.domainTop,
+  frozenAuthoritySexp atom.authority,
+]
+
+frozenAuthoritySexp : FrozenAuthority -> String
+frozenAuthoritySexp (FrozenConst p) = node "const" [manifestParamSexp p]
+frozenAuthoritySexp (FrozenVar v) = node "var" [
+  intToString v.localId,
+  manifestParamSexp v.domainTop,
+  boolStr v.patternOnly,
+  option "none" (name => node "some" [escStr name]) v.sourceName,
+]
+frozenAuthoritySexp (FrozenJoin members) =
+  node "join" (map frozenAuthoritySexp members)
+frozenAuthoritySexp (FrozenProduct axes) =
+  node
+    "product"
+    (map
+      ((name, authority) => slist [escStr name, frozenAuthoritySexp authority])
+      axes)
+
+manifestParamSexp : Param -> String
+manifestParamSexp PUnit = "unit"
+manifestParamSexp (PPrefix value) = node "prefix" [manifestStringSexp value]
+manifestParamSexp (PPath value) = node "path" [manifestStringSexp value]
+manifestParamSexp (PSet value) =
+  node "set" [option "none" (members => node "some" (map escStr members)) value]
+manifestParamSexp (PProduct axes) =
+  node
+    "axes"
+    (map ((name, value) => slist [escStr name, manifestParamSexp value]) axes)
+
+manifestStringSexp : Option String -> String
+manifestStringSexp = option "none" (value => node "some" [escStr value])

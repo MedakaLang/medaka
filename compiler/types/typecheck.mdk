@@ -359,6 +359,8 @@ import types.tc_types.{
   TraceSink(..),
   DriveInputs(..),
   DriveOutputs(..),
+  withPublishedManifests,
+  manifestDriverFor,
   Windowed(..),
   CSlot(..),
   PredicateSlotArgs(..),
@@ -540,9 +542,18 @@ import types.publish.{
   freezeNewest,
   EntryOutcome(..),
   graphReportWithOutcome,
+  publishSelected,
+  publishCore,
+  publishWithContexts,
+  publishedCore,
+  publishedEntrySchemes,
   ppPubScheme,
 }
 import types.entry_outcome.{
+  mainUseDiags,
+  printlnIface,
+  mainBodySpan,
+  driveOutputsNow,
   entryOutcomeNow,
   mainIsAsyncNow,
   mainAsyncPayloadIsUnitNow,
@@ -560,7 +571,7 @@ import types.registry.{
 }
 import frontend.desugar.{mapProg, mapChildren, mapExpr, exprSpanLoc, joinLocs}
 import frontend.marker.{localBoundNames}
-import types.value_main.{inMainBinding, mainUseSite, mainUsedMsg}
+import types.value_main.{inMainBinding}
 import frontend.resolve.{
   firstExprLoc,
   programIsCore,
@@ -9662,6 +9673,8 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 export
 defaultDriveInputs : DriveInputs
 defaultDriveInputs = DriveInputs {
+  diExecutedMainDriver = None,
+  diManifestRequests = [],
   diStdlibOwned = omEmpty,
   diFlatEntryIsStdlib = False,
   diTrace = None,
@@ -13140,26 +13153,7 @@ ownContext mctx n =
 -- [mctx] still holds that module's tables, and the next module's check
 -- mints its own record.
 publishOwn : ModuleCtx -> List (String, Scheme) -> List (String, PubScheme)
-publishOwn mctx = map (b => (
-  fst b,
-  PubScheme {
-    psScheme = snd b,
-    psContext = ownContext mctx (fst b),
-  },
-))
-
--- The prelude's schemes, each with the context [contexts] holds for it (the
--- snapshot `coreOwnContexts` took after the core pass).
-publishCore : OrdMap (List VecObl) ->
-  List (String, Scheme) ->
-  List (String, PubScheme)
-publishCore contexts = map (b => (
-  fst b,
-  PubScheme {
-    psScheme = snd b,
-    psContext = optionOr [] (omLookup (fst b) contexts),
-  },
-))
+publishOwn mctx = publishWithContexts (ownContext mctx)
 
 -- Core's own obligations, keyed by bare name (#837: the binding-id half of each
 -- key is dropped, as every cross-module reader looks a prelude name up by name).
@@ -53840,7 +53834,7 @@ checkModulesPartialLast inputs preludeKey runtimeDecls coreDecls0 modules0 =
   (
     partialAnalysis
       rows
-      (publishedCore coreClosed coreContexts coreSchemes)
+      (publishedCore coreClosed coreContexts coreSchemes.mbSchemes)
       (captureEntryTables lastCtx coreContexts modules),
     lastCtx,
   )
@@ -54536,18 +54530,40 @@ checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKe
   let dispositions =
     buildDispositions lastCtx.mcGraph lastCtx.mcGraph.declEnvsRef.value
   let outcome = entryOutcomeNow lastCtx (mainHasObligations lastCtx) autoPrint
+  let corePub = publishedCore coreClosed coreContexts coreSchemes.mbSchemes
+  let (requests, manifests, manifestDiags) =
+    publishSelected
+      lastCtx.mcGraph.effectDomains.value
+      (_ => lastInvocationOps (driveOutputsNow lastCtx outcome))
+      inputs.diManifestRequests
+      perMod
+      corePub
+      outcome
+      (manifestDriverFor inputs None)
+      valueMain
   let report =
     graphReportWithOutcome
       outcome
+      manifests
+      manifestDiags
       perMod
-      (publishedCore coreClosed coreContexts coreSchemes)
+      corePub
       []
       (drivenEvidence lastCtx.mcGraph)
       dispositions
       lastCtx.mcGraph.graphRun.binderRows.value
       None
       entryTables
-  ((report, driveOutputsNow lastCtx outcome), lastCtx.mcGraph)
+  (
+    (
+      report,
+      withPublishedManifests
+        requests
+        manifests
+        (driveOutputsNow lastCtx outcome),
+    ),
+    lastCtx.mcGraph,
+  )
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `driveGraphK GOutDiags`'s `foldModules` exactly:
@@ -54778,25 +54794,6 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
     -- test/run_check_agreement_fixtures/p0_17_missing_impl_method.mdk.
     restRows
 
-driveOutputsNow : ModuleCtx -> EntryOutcome -> DriveOutputs
-driveOutputsNow mctx outcome = DriveOutputs {
-  doEntryOutcome = outcome,
-  doHadTypeErrors = typeErrorsArmed mctx.mcGraph (),
-  doHadMatchWarnings = matchWarningsNow mctx,
-  doInvocationView = frozenInvocationView mctx.mcCells.invocationViewRef.value,
-  doGrantsEnabled = grantsEnabled mctx.mcGraph (),
-  doEffectDomains = mctx.mcGraph.effectDomains.value,
-  doStickyDiags = mctx.mcGraph.typeErrorsStickyDiags.value,
-  doIfaceExports = ifaceExportsIndex mctx.mcGraph (),
-  doFfiAliases = mctx.mcGraph.declEnvsRef.value.deData.deAliases,
-  doOrdIndex = mctx.mcGraph.declEnvsRef.value.deOrdIndex,
-  doEffvarNext = mctx.mcGraph.graphRun.effvarCounter.value,
-}
-
-frozenInvocationView : InvocationView -> InvocationView
-frozenInvocationView (InvocationView ctors pols kinds) =
-  InvocationView (map (c => snd (zonkScheme emptyZonk c)) ctors) pols kinds
-
 -- Drive the whole module graph ONCE: stamp type-constructor identity, run the
 -- shared preamble, check every module dependency-first through one worker, drain
 -- at graph end, and attach the whole-graph coherence verdict.  `sel` chooses what
@@ -54905,7 +54902,17 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       (attachDrainFindings (findings ++ wanted) (map freezeModDiags perModRaw))
   -- Before the tree arm's `dictPass`, which writes the record's slot tables.
   let entryTables = captureEntryTables lastCtx coreContexts modules
-  let corePub = publishedCore coreClosed coreContexts coreSchemes
+  let corePub = publishedCore coreClosed coreContexts coreSchemes.mbSchemes
+  let (requests, manifests, manifestDiags) =
+    publishSelected
+      lastCtx.mcGraph.effectDomains.value
+      (_ => lastInvocationOps (driveOutputsNow lastCtx outcome))
+      inputs.diManifestRequests
+      perMod
+      corePub
+      outcome
+      (manifestDriverFor inputs executes)
+      valueMain
   -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
   -- above is already complete at this point, on both arms alike.
   let dispositions =
@@ -54924,6 +54931,8 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
       gdReport =
         graphReportWithOutcome
           outcome
+          manifests
+          manifestDiags
           perMod
           corePub
           []
@@ -54933,7 +54942,11 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
           None
           entryTables,
       gdGraph = lastCtx.mcGraph,
-      gdOutputs = driveOutputsNow lastCtx outcome,
+      gdOutputs =
+        withPublishedManifests
+          requests
+          manifests
+          (driveOutputsNow lastCtx outcome),
     }
     GOutTrees =>
       -- The set `dictPass` prepends dict params for: the bare set plus every
@@ -54986,6 +54999,8 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
         gdReport =
           graphReportWithOutcome
             outcome
+            manifests
+            manifestDiags
             perMod
             corePub
             residual
@@ -54995,18 +55010,12 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
             (Some (coreD, modulesOut))
             entryTables,
         gdGraph = lastCtx.mcGraph,
-        gdOutputs = driveOutputsNow lastCtx outcome,
+        gdOutputs =
+          withPublishedManifests
+            requests
+            manifests
+            (driveOutputsNow lastCtx outcome),
       }
-
--- The prelude's published rows: the core pass's own when that pass closed core
--- (the diags arm), else frozen now with [contexts].
-publishedCore : Option (List (String, PubScheme)) ->
-  OrdMap (List VecObl) ->
-  ModuleBindings ->
-  List (String, PubScheme)
-publishedCore (Some rows) _ _ = rows
-publishedCore None contexts coreSchemes =
-  freezeRows (publishCore contexts coreSchemes.mbSchemes)
 
 -- The whole-graph coherence verdict, attached to the entry module's diagnostics —
 -- the tail `driveGraphK` and the chain memo both end with.  The narrower
@@ -55112,14 +55121,6 @@ driveErrs : List DrainFinding -> List ModDiags -> List TcDiag
 driveErrs findings perMod =
   map (f => f.dfDiag) findings ++ flatMap modDiagErrs perMod
 
--- Another binding's use of `main` is typed against the printing wrap's `main`
--- where run, build and test elaborate the wrapped program, so it is rejected.
-mainUseDiags : Option Loc -> List Decl -> List TcDiag
-mainUseDiags None _ = []
-mainUseDiags (Some site) entry = match mainUseSite site entry
-  Some at => [TcDiag "T-MAIN-USED" 1 (Some at) mainUsedMsg None None]
-  None => []
-
 -- The printing use of `main` is a closed boundary, as a test body is (see
 -- `settleClosedBody`): it instantiates `main`'s scheme with its context, poses
 -- `iface` at the instance, and publishes no polymorphic result.  So a numeric
@@ -55221,29 +55222,10 @@ autoPrintEvidence mctx mid scope iface tau =
   g.evTable := EvEntry ev (EvMany routes) :: g.evTable.value
   ev
 
--- The interface of `println`'s one-predicate context (`Display a => …`).
-printlnIface : List Decl -> Option IfaceRef
-printlnIface [] = None
-printlnIface ((DAttrib _ d) :: rest) = printlnIface (d :: rest)
-printlnIface ((DTypeSig _ "println" (TyConstrained [c] _) _) :: _) =
-  Some IfaceRef { irName = c.constraintHead, irOrigin = c.constraintOrigin }
-printlnIface (_ :: rest) = printlnIface rest
-
--- The span of `main`'s body, or of the binding when the body carries none.
-mainBodySpan : List Decl -> Option Loc
-mainBodySpan [] = None
-mainBodySpan ((DAttrib _ d) :: rest) = mainBodySpan (d :: rest)
-mainBodySpan ((DFunDef _ "main" [] body site _) :: _) = match body
-  ELoc l _ => Some l
-  _ => Some site
-mainBodySpan (_ :: rest) = mainBodySpan rest
-
 -- the entry module is last in dependency-first order
 export
 entryOwnSchemes : List (String, List (String, a)) -> List (String, a)
-entryOwnSchemes [] = []
-entryOwnSchemes [(_, ss)] = ss
-entryOwnSchemes (_ :: rest) = entryOwnSchemes rest
+entryOwnSchemes = publishedEntrySchemes
 
 -- ── multi-module `check` CLI report (DRIVER-COLLAPSE Phase 4, OPTION A) ─────
 -- The unified `medaka check` path for IMPORT-BEARING files: the caller loads the
@@ -55863,6 +55845,7 @@ elaborateModulesWithReportGraph inputs valueMain executes runtimeDecls coreDecls
         g.gdEvTable,
         g.gdDispositions,
         ElabFacts {
+          efManifests = g.gdOutputs.doManifests,
           efBinders = g.gdBinders,
           efEntryOutcome = g.gdOutputs.doEntryOutcome,
         },
