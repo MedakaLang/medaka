@@ -1,5 +1,5 @@
 # META
-source_lines=542
+source_lines=544
 stages=DESUGAR,MARK
 # SOURCE
 {- interface_cmd.mdk: `medaka interface write|show|verify`, the driver for the
@@ -472,9 +472,11 @@ declsVerdictOf modulePath = match readFile (declsPath modulePath)
   Err _ => Missing
   Ok text => match readDeclsFramed text
     Err fault => Stale (faultComponent fault)
-    Ok (key, covered) => match acceptedDeclsBody covered
-      Err fault => Stale (faultComponent fault)
-      Ok _ => againstSources modulePath declsKeyOf key
+    Ok (key, covered) => match againstSources modulePath declsKeyOf key
+      Fresh => match acceptedDeclsBody covered
+        Err fault => Stale (faultComponent fault)
+        Ok _ => Fresh
+      other => other
 
 -- How [modulePath]'s three files stand against the module's sources now: fresh
 -- only when all are, and a stale or missing elaborated-trees or declarations
@@ -646,7 +648,7 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "elabVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "elabVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "elabPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "elabKeyOf")) (EVar "key")))))))
 (DTypeSig false "declsVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
-(DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsFramed") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "covered"))) () (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")))))))))
+(DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsFramed") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "covered"))) () (EMatch (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" PWild) () (EVar "Fresh")))) (arm (PVar "other") () (EVar "other"))))))))
 (DTypeSig true "verdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "interfaceVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "elabVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "declsVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EVar "Fresh")) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "declarations (.mdkd) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "declarations (.mdkd) ")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "elaborated trees (.mdke) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "elaborated trees (.mdke) ")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "verifyCmd" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -765,7 +767,7 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "elabVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "elabVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "elabPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "elabKeyOf")) (EVar "key")))))))
 (DTypeSig false "declsVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
-(DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsFramed") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "covered"))) () (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")))))))))
+(DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsFramed") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "covered"))) () (EMatch (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" PWild) () (EVar "Fresh")))) (arm (PVar "other") () (EVar "other"))))))))
 (DTypeSig true "verdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "verdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "interfaceVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "elabVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EMatch (EApp (EVar "declsVerdictOf") (EVar "modulePath")) (arm (PCon "Fresh") () (EVar "Fresh")) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "declarations (.mdkd) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "declarations (.mdkd) ")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PCon "Missing") () (EApp (EVar "Stale") (ELit (LString "elaborated trees (.mdke) missing")))) (arm (PCon "Stale" (PVar "component")) () (EApp (EVar "Stale") (EBinOp "++" (EBinOp "++" (ELit (LString "elaborated trees (.mdke) ")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ""))))))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "verifyCmd" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))

@@ -1,5 +1,5 @@
 # META
-source_lines=2706
+source_lines=2707
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -484,6 +484,7 @@ lastPreludeStaleLine _ = match !preludeVerdictRef
 -- [inputs]' key there is nothing to report: the interface's own verdict covers it.
 readPreludeDecls : PreludeInputs -> <IO> (FileVerdict, Option String)
 readPreludeDecls inputs
+  | envOr "MEDAKA_NO_INTERFACE" "" /= "" = (FileDisabled, None)
   | not (interfaceHeaderFresh inputs) = (FileMissing, None)
   | otherwise =
     verdictOfFile
@@ -2803,7 +2804,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "lastPreludeStaleLine" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "lastPreludeStaleLine" (PWild) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple PWild (PVar "verdict"))) () (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "readPreludeDecls" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "readPreludeDecls" ((PVar "inputs")) (EIf (EApp (EVar "not") (EApp (EVar "interfaceHeaderFresh") (EVar "inputs"))) (ETuple (EVar "FileMissing") (EVar "None")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdkd"))) (EApp (EVar "FileStale") (ELit (LString "missing")))) (EVar "declsKeyOf")) (EVar "readDeclsFramed")) (EVar "inputs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "readPreludeDecls" ((PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "FileDisabled") (EVar "None")) (EIf (EApp (EVar "not") (EApp (EVar "interfaceHeaderFresh") (EVar "inputs"))) (ETuple (EVar "FileMissing") (EVar "None")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdkd"))) (EApp (EVar "FileStale") (ELit (LString "missing")))) (EVar "declsKeyOf")) (EVar "readDeclsFramed")) (EVar "inputs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "interfaceHeaderFresh" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "interfaceHeaderFresh" ((PVar "inputs")) (EIf (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (ELit (LString "core.mdki")))) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterfaceKey") (EVar "text")) (arm (PCon "Ok" (PVar "key")) () (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "key") "ikCompiler") (ELit (LString ""))) (EApp (EVar "isNone") (EApp (EApp (EVar "keysMatch") (EVar "key")) (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs")))))) (arm (PCon "Err" PWild) () (EVar "False"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "preludeDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "FileVerdict")))))
@@ -3141,7 +3142,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "lastPreludeStaleLine" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "lastPreludeStaleLine" (PWild) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple PWild (PVar "verdict"))) () (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "readPreludeDecls" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "readPreludeDecls" ((PVar "inputs")) (EIf (EApp (EVar "not") (EApp (EVar "interfaceHeaderFresh") (EVar "inputs"))) (ETuple (EVar "FileMissing") (EVar "None")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdkd"))) (EApp (EVar "FileStale") (ELit (LString "missing")))) (EVar "declsKeyOf")) (EVar "readDeclsFramed")) (EVar "inputs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "readPreludeDecls" ((PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "FileDisabled") (EVar "None")) (EIf (EApp (EVar "not") (EApp (EVar "interfaceHeaderFresh") (EVar "inputs"))) (ETuple (EVar "FileMissing") (EVar "None")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdkd"))) (EApp (EVar "FileStale") (ELit (LString "missing")))) (EVar "declsKeyOf")) (EVar "readDeclsFramed")) (EVar "inputs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "interfaceHeaderFresh" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "interfaceHeaderFresh" ((PVar "inputs")) (EIf (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (ELit (LString "core.mdki")))) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterfaceKey") (EVar "text")) (arm (PCon "Ok" (PVar "key")) () (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "key") "ikCompiler") (ELit (LString ""))) (EApp (EVar "isNone") (EApp (EApp (EVar "keysMatch") (EVar "key")) (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs")))))) (arm (PCon "Err" PWild) () (EVar "False"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "preludeDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "FileVerdict")))))

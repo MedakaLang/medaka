@@ -718,3 +718,42 @@ test "verify refuses a digest-valid declarations file that the loader would refu
           labelFail "the original" (expectEqual "fresh" (verifyDecls dir fresh)),
         ]
     _ => fail "write run failed")
+
+test "verify names the key component before it refuses a bad declarations body" = withStagedStdlib
+  (dir => match runCommandBatch "env" 1 [writeArgv dir]
+    [_] => match readFile "\{dir}/core.mdkd"
+      Err e => fail e
+      Ok fresh =>
+        let lying = redigested fresh (c =>
+          "(counters 0 0 0 0)" ++ S.drop (optionOr 0 (S.indexOf "\n" c)) c)
+        let junk = redigested fresh (_ => "(counters 0 0 0 0)\n(junk)\n")
+        let otherCompiler = S.replace "(compiler " "(compiler 0"
+        let otherSources = S.replace "(core.mdk " "(core.mdk 0"
+        let versioned = S.replace "(medaka-decls 4 " "(medaka-decls 99 "
+        let declared = c => "stale: declarations (.mdkd) \{c}"
+        expectAll [
+          labelFail
+            "compiler changed, counters lie"
+            (expectEqual
+              (declared "compiler")
+              (verifyDecls dir (otherCompiler lying))),
+          labelFail
+            "sources changed, counters lie"
+            (expectEqual
+              (declared "sources")
+              (verifyDecls dir (otherSources lying))),
+          labelFail
+            "compiler changed, body is not declarations"
+            (expectEqual
+              (declared "compiler")
+              (verifyDecls dir (otherCompiler junk))),
+          labelFail
+            "format changed, counters lie"
+            (expectEqual
+              (declared "format")
+              (verifyDecls dir (versioned (otherCompiler lying)))),
+          labelFail
+            "key fresh, counters lie"
+            (expectEqual (declared "file") (verifyDecls dir lying)),
+        ]
+    _ => fail "write run failed")

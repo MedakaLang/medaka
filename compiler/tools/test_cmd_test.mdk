@@ -6,7 +6,8 @@ import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import tools.doctest.{Engine(..)}
 import tools.test_cmd.{
-  treesUnread, childJobsPrefix, childGcMarkersPrefix, helperElabDiags, runTest
+  treesUnread, childJobsPrefix, childGcMarkersPrefix, helperElabDiags, runTest,
+  besideRuntime
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
@@ -18,7 +19,7 @@ import io.{runVerb}
 import string.{contains, indexOf, toInt, trim}
 import test.{
   Expectation, expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue,
-  fail
+  fail, labelFail
 }
 import test_process.{medakaBin, underRoot, withScratchDir}
 
@@ -304,6 +305,39 @@ test "runTest refuses a core.mdk that is not the one beside runtime.mdk" = withS
               100
               None)
       _ => fail "could not stage the scratch files")
+
+-- Spellings of the one directory are the same directory, and a symlink to it
+-- resolves to it; another directory's core.mdk stays refused.
+test "core.mdk is beside runtime.mdk under any spelling of their directory" = withScratchDir
+  (dir =>
+    let stdlib = underRoot "stdlib"
+    let link = "\{dir}/stdlink"
+    let linked = runCommandBatch "ln" 1 [["-s", stdlib, link]]
+    expectAll [
+      labelFail
+        "plain"
+        (expectTrue
+          (besideRuntime "\{stdlib}/runtime.mdk" "\{stdlib}/core.mdk")),
+      labelFail
+        "doubled slash"
+        (expectTrue
+          (besideRuntime "\{stdlib}//runtime.mdk" "\{stdlib}/core.mdk")),
+      labelFail
+        "dot segment"
+        (expectTrue
+          (besideRuntime "\{stdlib}/./runtime.mdk" "\{stdlib}/core.mdk")),
+      labelFail
+        "symlinked directory"
+        (expectTrue (besideRuntime "\{link}/runtime.mdk" "\{stdlib}/core.mdk")),
+      labelFail "the link was made" (expectEqual 1 (length linked)),
+      labelFail
+        "another directory"
+        (expectFalse (besideRuntime "\{stdlib}/runtime.mdk" "\{dir}/core.mdk")),
+      labelFail
+        "another file name"
+        (expectFalse
+          (besideRuntime "\{stdlib}/runtime.mdk" "\{stdlib}/list.mdk")),
+    ])
 
 test "medaka test runs a target against the core.mdk beside runtime.mdk" = withScratchDir
   (dir => match writeFile "\{dir}/target.mdk" "main = 1\n"

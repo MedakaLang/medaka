@@ -480,6 +480,7 @@ lastPreludeStaleLine _ = match !preludeVerdictRef
 -- [inputs]' key there is nothing to report: the interface's own verdict covers it.
 readPreludeDecls : PreludeInputs -> <IO> (FileVerdict, Option String)
 readPreludeDecls inputs
+  | envOr "MEDAKA_NO_INTERFACE" "" /= "" = (FileDisabled, None)
   | not (interfaceHeaderFresh inputs) = (FileMissing, None)
   | otherwise =
     verdictOfFile
