@@ -14,9 +14,11 @@
 -- keyed by this same `src` string, in a sibling `typecheck_cache.mdk` (or
 -- alongside this one) -- it should not need to rework this cache's shape.
 --
--- A process that loads the prelude's shipped declarations (`stdlib/core.mdkd`,
--- `driver/build_cmd.mdk`) registers a decoder per text instead, and neither
--- text is lexed, parsed or desugared.
+-- A process that loads the prelude's shipped declarations registers a decoder
+-- per text instead (`registerPreludeDecls`, called from
+-- `compiler/driver/build_cmd.mdk` for the runtime and core texts). A decoder
+-- that yields the tree stands in for the lex, parse and desugar of its text; one
+-- that yields `None` leaves the text to be parsed and desugared on first demand.
 --
 -- Bounded for the same reason `parse_cache.mdk` bounds its cache: an LSP
 -- session calls the prelude sites per request, and the limit keeps the assoc
