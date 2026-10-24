@@ -1,5 +1,5 @@
 # META
-source_lines=57805
+source_lines=57803
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -56926,19 +56926,17 @@ shadowBareName sm n = match lookupAssoc n sm
 -- lineage the cells it mints belong to and returns that run beside the marked
 -- trees; the driver it feeds (`checkModules`) takes the run as `diMarked` and keeps
 -- those cells when its preamble mints the graph.  The marking runs in a graph record
--- built as a mint builds one (the interners' lineage and catalog, every other field
--- fresh) and in the module record a drive starts from (`initialModuleCtx`), so the
--- cells it mints belong to no module, as in a process that marks before any drive.
+-- built by a mint with the default drive inputs (the interners' lineage and catalog,
+-- every other field fresh) and in the module record a drive starts from
+-- (`initialModuleCtx`), so the cells it mints belong to no module, as in a process
+-- that marks before any drive.
 -- The interners take the record's lineage, which the next mint continues.
 export
 markModules : List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl), GraphRun)
 markModules coreDecls modules =
-  let carried = interners.value
-  let base = initialGraphCtx builtinCtors (graphLineageRun None carried.lineage)
-  let gctx = GraphCtx { base | builtinExternNamesRef = carried.externCatalog }
-  let _ = noteInterners gctx
+  let gctx = mintGraphCtx defaultDriveInputs omEmpty
   let mctx = initialModuleCtx gctx
   let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
   let core2 = prePassDict mctx rpNames [] coreDecls
@@ -67076,7 +67074,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "shadowBareName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "shadowBareName" ((PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EVar "bare")) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig true "markModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "GraphRun")))))
-(DFunDef false "markModules" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "carried") (EFieldAccess (EVar "interners") "value")) (DoLet false false (PVar "base") (EApp (EApp (EVar "initialGraphCtx") (EVar "builtinCtors")) (EApp (EApp (EVar "graphLineageRun") (EVar "None")) (EFieldAccess (EVar "carried") "lineage")))) (DoLet false false (PVar "gctx") (EVariantUpdate "GraphCtx" (EVar "base") ((fa "builtinExternNamesRef" (EFieldAccess (EVar "carried") "externCatalog"))))) (DoLet false false PWild (EApp (EVar "noteInterners") (EVar "gctx"))) (DoLet false false (PVar "mctx") (EApp (EVar "initialModuleCtx") (EVar "gctx"))) (DoLet false false (PVar "rpNames") (EApp (EVar "returnPosMethodNames") (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))))) (DoLet false false (PVar "core2") (EApp (EApp (EApp (EApp (EVar "prePassDict") (EVar "mctx")) (EVar "rpNames")) (EListLit)) (EVar "coreDecls"))) (DoLet false false (PVar "modules2") (EApp (EApp (EVar "map") (EApp (EApp (EVar "prePassModulePair") (EVar "mctx")) (EVar "rpNames"))) (EVar "modules"))) (DoLet false false (PVar "marked") (EVariantUpdate "GraphRun" (EFieldAccess (EVar "gctx") "graphRun") ((fa "markedAhead" (EVar "True"))))) (DoExpr (ETuple (EVar "core2") (EVar "modules2") (EVar "marked")))))
+(DFunDef false "markModules" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "gctx") (EApp (EApp (EVar "mintGraphCtx") (EVar "defaultDriveInputs")) (EVar "omEmpty"))) (DoLet false false (PVar "mctx") (EApp (EVar "initialModuleCtx") (EVar "gctx"))) (DoLet false false (PVar "rpNames") (EApp (EVar "returnPosMethodNames") (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))))) (DoLet false false (PVar "core2") (EApp (EApp (EApp (EApp (EVar "prePassDict") (EVar "mctx")) (EVar "rpNames")) (EListLit)) (EVar "coreDecls"))) (DoLet false false (PVar "modules2") (EApp (EApp (EVar "map") (EApp (EApp (EVar "prePassModulePair") (EVar "mctx")) (EVar "rpNames"))) (EVar "modules"))) (DoLet false false (PVar "marked") (EVariantUpdate "GraphRun" (EFieldAccess (EVar "gctx") "graphRun") ((fa "markedAhead" (EVar "True"))))) (DoExpr (ETuple (EVar "core2") (EVar "modules2") (EVar "marked")))))
 (DTypeSig false "elabModuleStamp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx")))))))))
 (DFunDef false "elabModuleStamp" ((PVar "prev") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (EVar "mid")) (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (EVar "accData")) (EVar "implDecls")) (EVar "prog")))
 (DTypeSig false "moduleStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))
@@ -76500,7 +76498,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "shadowBareName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "shadowBareName" ((PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EVar "bare")) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig true "markModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "GraphRun")))))
-(DFunDef false "markModules" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "carried") (EFieldAccess (EVar "interners") "value")) (DoLet false false (PVar "base") (EApp (EApp (EVar "initialGraphCtx") (EVar "builtinCtors")) (EApp (EApp (EVar "graphLineageRun") (EVar "None")) (EFieldAccess (EVar "carried") "lineage")))) (DoLet false false (PVar "gctx") (EVariantUpdate "GraphCtx" (EVar "base") ((fa "builtinExternNamesRef" (EFieldAccess (EVar "carried") "externCatalog"))))) (DoLet false false PWild (EApp (EVar "noteInterners") (EVar "gctx"))) (DoLet false false (PVar "mctx") (EApp (EVar "initialModuleCtx") (EVar "gctx"))) (DoLet false false (PVar "rpNames") (EApp (EVar "returnPosMethodNames") (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))))) (DoLet false false (PVar "core2") (EApp (EApp (EApp (EApp (EVar "prePassDict") (EVar "mctx")) (EVar "rpNames")) (EListLit)) (EVar "coreDecls"))) (DoLet false false (PVar "modules2") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prePassModulePair") (EVar "mctx")) (EVar "rpNames"))) (EVar "modules"))) (DoLet false false (PVar "marked") (EVariantUpdate "GraphRun" (EFieldAccess (EVar "gctx") "graphRun") ((fa "markedAhead" (EVar "True"))))) (DoExpr (ETuple (EVar "core2") (EVar "modules2") (EVar "marked")))))
+(DFunDef false "markModules" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "gctx") (EApp (EApp (EVar "mintGraphCtx") (EVar "defaultDriveInputs")) (EVar "omEmpty"))) (DoLet false false (PVar "mctx") (EApp (EVar "initialModuleCtx") (EVar "gctx"))) (DoLet false false (PVar "rpNames") (EApp (EVar "returnPosMethodNames") (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))))) (DoLet false false (PVar "core2") (EApp (EApp (EApp (EApp (EVar "prePassDict") (EVar "mctx")) (EVar "rpNames")) (EListLit)) (EVar "coreDecls"))) (DoLet false false (PVar "modules2") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prePassModulePair") (EVar "mctx")) (EVar "rpNames"))) (EVar "modules"))) (DoLet false false (PVar "marked") (EVariantUpdate "GraphRun" (EFieldAccess (EVar "gctx") "graphRun") ((fa "markedAhead" (EVar "True"))))) (DoExpr (ETuple (EVar "core2") (EVar "modules2") (EVar "marked")))))
 (DTypeSig false "elabModuleStamp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx")))))))))
 (DFunDef false "elabModuleStamp" ((PVar "prev") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (EVar "mid")) (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (EVar "accData")) (EVar "implDecls")) (EVar "prog")))
 (DTypeSig false "moduleStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))

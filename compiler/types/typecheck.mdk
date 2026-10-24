@@ -56922,19 +56922,17 @@ shadowBareName sm n = match lookupAssoc n sm
 -- lineage the cells it mints belong to and returns that run beside the marked
 -- trees; the driver it feeds (`checkModules`) takes the run as `diMarked` and keeps
 -- those cells when its preamble mints the graph.  The marking runs in a graph record
--- built as a mint builds one (the interners' lineage and catalog, every other field
--- fresh) and in the module record a drive starts from (`initialModuleCtx`), so the
--- cells it mints belong to no module, as in a process that marks before any drive.
+-- built by a mint with the default drive inputs (the interners' lineage and catalog,
+-- every other field fresh) and in the module record a drive starts from
+-- (`initialModuleCtx`), so the cells it mints belong to no module, as in a process
+-- that marks before any drive.
 -- The interners take the record's lineage, which the next mint continues.
 export
 markModules : List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl), GraphRun)
 markModules coreDecls modules =
-  let carried = interners.value
-  let base = initialGraphCtx builtinCtors (graphLineageRun None carried.lineage)
-  let gctx = GraphCtx { base | builtinExternNamesRef = carried.externCatalog }
-  let _ = noteInterners gctx
+  let gctx = mintGraphCtx defaultDriveInputs omEmpty
   let mctx = initialModuleCtx gctx
   let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
   let core2 = prePassDict mctx rpNames [] coreDecls

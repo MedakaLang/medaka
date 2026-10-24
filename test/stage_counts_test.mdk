@@ -35,7 +35,8 @@
 import json.{Json(..), jArray, jObject, stringify}
 import list.{filterMap, nub, sort}
 import string.{
-  byteLength, contains, lines, split, startsWith, toInt, trim, unlines, words
+  byteLength, contains, lines, replace, split, startsWith, toInt, trim, unlines,
+  words
 }
 import test.{
   Expectation,
@@ -235,6 +236,10 @@ lspProbes dir =
   let sibRel = "lsp_project/m6.mdk"
   let sibUri = uriOf sibRel
   let sibText = readText (fixture sibRel)
+  let entryUri = uriOf "leaf_edit/le_entry.mdk"
+  let entryText = readText (fixture "leaf_edit/le_entry.mdk")
+  let leafUri = uriOf "leaf_edit/le_leaf.mdk"
+  let leafText = readText (fixture "leaf_edit/le_leaf.mdk")
   [
     lspRows dir "a_references" "m1.mdk" (open ++ [refs] ++ tail),
     lspRows
@@ -259,6 +264,19 @@ lspProbes dir =
       "Int"
       ([initializeMsg, initializedMsg, didOpenMsg sibUri sibText]
         ++ [posRequest 2 "textDocument/hover" sibUri 4 9]
+        ++ tail),
+    lspRows
+      dir
+      "e_leaf_edit"
+      "Int"
+      ([
+          initializeMsg,
+          initializedMsg,
+          didOpenMsg entryUri entryText,
+          didOpenMsg leafUri leafText,
+          didChangeMsg leafUri (replace "= 1" "= 2" leafText),
+          posRequest 2 "textDocument/hover" entryUri 3 14,
+        ]
         ++ tail),
   ]
 
