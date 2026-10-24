@@ -3129,8 +3129,8 @@ public export data ModuleSeed = ModuleSeed {
 --     per call instead).
 --
 -- Two things a hit does not do, neither of them load-bearing: it retains
--- `pmfConstrainedBodyVars` (every `=>`-constrained prelude name with its body's
--- EVars) for the process lifetime, where the parent recomputed it transiently;
+-- `pmfConstrainedNames` (every `=>`-constrained prelude name) for the process
+-- lifetime, where the parent recomputed it transiently;
 -- and it does not re-walk the prelude, so `opBump` (`support/opcount.mdk`, default
 -- off, profiler-only) counts the prelude's steps once per process rather than once
 -- per analyze.
@@ -3435,7 +3435,7 @@ public export data PreludeMarkFacts = PreludeMarkFacts {
   pmfMethodConstraints : List String,
   pmfArgDispatch : List (String, Int),
   pmfArgDispatchById : List ((IfaceRef, String), Int),
-  pmfConstrainedBodyVars : List (String, List String),
+  pmfConstrainedNames : List String,
 }
 
 -- ── Marking on the schedule (ARCH §E) ────────────────────────────────────────

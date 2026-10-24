@@ -1,5 +1,5 @@
 # META
-source_lines=2338
+source_lines=2337
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -70,7 +70,7 @@ import frontend.parser.{
   declPosChildLocs,
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import support.char.{isIdentChar}
 import support.util.{maxI, utf8Len, joinWith, startsWith, contains, allList}
 import string.{stripCR, toInt}
@@ -731,8 +731,7 @@ docEnv runtimeSrc coreSrc src =
     Err _ => None
     Ok userRaw =>
       let userDecls = desugar userRaw
-      let preludeKey =
-        Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
+      let preludeKey = Some (preludeGeneration runtimeSrc coreSrc)
       let report = checkOneReportK (driveInputsFor
         !selectedProfile
         False
@@ -2347,7 +2346,7 @@ unit = ()
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false) (mem "manifestPathOf" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false) (mem "toInt" false))))
@@ -2498,7 +2497,7 @@ unit = ()
 (DFunDef false "defZipLocOr" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "jRangeOfLoc") (EVar "l")))
 (DFunDef false "defZipLocOr" ((PCon "None") (PVar "p")) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EApp (EVar "declPosEndLine") (EVar "p"))) (ELit (LInt 0))))
 (DTypeSig false "docEnv" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "HoverEnv"))))))
-(DFunDef false "docEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneReportK") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "False")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "reportEnv") (EVar "report"))))))))))
+(DFunDef false "docEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "runtimeSrc")) (EVar "coreSrc")))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneReportK") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "False")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "reportEnv") (EVar "report"))))))))))
 (DTypeSig false "reportEnv" (TyFun (TyCon "TcReport") (TyCon "HoverEnv")))
 (DFunDef false "reportEnv" ((PVar "report")) (EBlock (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes") PWild PWild) (EApp (EVar "entrySplit") (EVar "report"))) (DoExpr (EApp (EApp (EVar "hoverEnvOf") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (EFieldAccess (EVar "report") "trPartial")))))
 (DTypeSig false "docEnvFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyApp (TyCon "Option") (TyCon "HoverEnv"))))))))
@@ -2830,7 +2829,7 @@ unit = ()
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false) (mem "manifestPathOf" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false) (mem "toInt" false))))
@@ -2981,7 +2980,7 @@ unit = ()
 (DFunDef false "defZipLocOr" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "jRangeOfLoc") (EVar "l")))
 (DFunDef false "defZipLocOr" ((PCon "None") (PVar "p")) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EApp (EVar "declPosEndLine") (EVar "p"))) (ELit (LInt 0))))
 (DTypeSig false "docEnv" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "HoverEnv"))))))
-(DFunDef false "docEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneReportK") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "False")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "reportEnv") (EVar "report"))))))))))
+(DFunDef false "docEnv" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "runtimeSrc")) (EVar "coreSrc")))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneReportK") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "False")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "reportEnv") (EVar "report"))))))))))
 (DTypeSig false "reportEnv" (TyFun (TyCon "TcReport") (TyCon "HoverEnv")))
 (DFunDef false "reportEnv" ((PVar "report")) (EBlock (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes") PWild PWild) (EApp (EVar "entrySplit") (EVar "report"))) (DoExpr (EApp (EApp (EVar "hoverEnvOf") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (EFieldAccess (EVar "report") "trPartial")))))
 (DTypeSig false "docEnvFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyApp (TyCon "Option") (TyCon "HoverEnv"))))))))

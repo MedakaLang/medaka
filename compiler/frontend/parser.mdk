@@ -252,6 +252,11 @@ setLocStateWith src lineStarts offs =
   locLineStartsRef := lineStarts
   locOffsRef := offs
 
+-- The state no located parse has touched.  The non-located entry points restore
+-- it, so what they produce is a function of their source alone.
+resetLocState : Unit -> Unit
+resetLocState _ = setLocStateWith "" (arrayFromList [0]) (arrayFromList [])
+
 -- start char offset of token `i` (0 when out of range / unset).
 tokOffsetAt : Int -> Int
 tokOffsetAt i =
@@ -5897,7 +5902,7 @@ parse src =
   match firstLexError toks 0
     Some (_, msg) => panic msg
     None =>
-      guardOffsRef := arrayFromList []
+      resetLocState ()
       resultDecls toks (runP parseProgram toks 0)
 
 -- Position-populating parse entry for B.10.2b (LSP).  Sets the loc-state refs
@@ -6480,7 +6485,9 @@ semicolonMsg =
 export
 parseResult : String -> Result ParseError (List Decl)
 parseResult src = match tokenizeWithOffsets src
-  (tokList, offList) => parseResultWith src tokList offList
+  (tokList, offList) =>
+    resetLocState ()
+    parseResultWith src tokList offList
 
 -- `parseResult` over an ALREADY-tokenized stream: `tokList` and `offPairs` must
 -- be `tokenizeWithOffsetPairs src` (its pair starts are `tokenizeWithOffsets`'s
@@ -6491,6 +6498,7 @@ parseResultPairs : String ->
   List (Int, Int) ->
   Result ParseError (List Decl)
 parseResultPairs src tokList offPairs =
+  resetLocState ()
   parseResultWith src tokList (map fst offPairs)
 
 -- Non-panicking located parse: the `parseResult` of `parseLocated`.  Sets the

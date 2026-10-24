@@ -1,27 +1,23 @@
--- Source-keyed memoization of the IMPLICIT PRELUDE parse (#2234).
+-- Source-keyed memoization of the implicit prelude parse (#2234).
 --
--- `stdlib/runtime.mdk` + `stdlib/core.mdk` are read once per invocation (through
--- `readPreludeFile`, driver/build_cmd.mdk) but were PARSED four times each on the
--- `medaka check` path: `readPreludeFile`'s own validating `parseResult` (whose
--- `Ok` payload it threw away, keeping only the source text), then three separate
--- `parse` calls -- `runCheck` (tools/check.mdk), `checkRoute` (driver/medaka_cli.mdk)
--- and `analyzeFrom` (driver/diagnostics.mdk).  Measured at base b6d029cd, those
--- eight parse invocations were 54.15% of a hello-world `medaka check`.
+-- `stdlib/runtime.mdk` + `stdlib/core.mdk` are read once per invocation
+-- (`readPreludeSources`, driver/build_cmd.mdk), and two stages need their
+-- parse: the desugar cache (frontend/desugar_cache.mdk) and `runCheck`
+-- (tools/check.mdk).  This memo makes them share one parse per source.
 --
 -- The prelude never goes through the loader, so `parseCachedLocated`
--- (driver/loader.mdk) -- which already memoizes `parseLocated` by source string
--- for the LSP's dep graph -- does not cover it.  This module is that memo for the
+-- (driver/loader.mdk) -- which memoizes `parseLocated` by source string for the
+-- LSP's dep graph -- does not cover it.  This module is that memo for the
 -- prelude's non-located `parse`, with the same shape and the same justification:
 -- the cache is keyed on SOURCE CONTENT, and equal source parses to equal decls.
 --
 -- Why a module-global `Ref` rather than a threaded one (loader.mdk threads its
--- cache through `loadProgramFilesLocatedCached`): the prelude parse sites are
--- eleven `readPreludeFile` call-site PAIRS across two driver files plus the whole
--- `analyzeFrom` surface, so a threaded cache would mean re-signing every one of
--- them.  A process-global memo is the same lifetime the prelude source itself
--- has, and `interners` (types/typecheck.mdk) and `locSrcRef`
--- (frontend/parser.mdk) are the established precedent for compiler-global
--- session state.
+-- cache through `loadProgramFilesLocatedCached`): the prelude parse sites span
+-- the driver files plus the whole `analyzeFrom` surface, so a threaded cache
+-- would mean re-signing every one of them.  A process-global memo is the same
+-- lifetime the prelude source itself has, and `interners` (types/typecheck.mdk)
+-- and `locSrcRef` (frontend/parser.mdk) are the established precedent for
+-- compiler-global session state.
 --
 -- WHAT THIS IS NOT FOR.  Only the prelude.  Do NOT route the LOCATED entries
 -- (`parseLocated`/`parseLocatedResult`) or user-module parses through here: those
@@ -31,10 +27,10 @@
 -- which is exactly why the cache is confined to the two prelude files, whose
 -- decls no diagnostic is ever rendered against.
 --
--- Bounded for the same reason loader.mdk bounds its cache: an LSP session calls
--- `readPreludeFile` per request, and the limit keeps the assoc list from growing
--- if the prelude source is ever edited underneath a long-lived process.  Two
--- prelude files plus slack.
+-- Bounded for the same reason loader.mdk bounds its cache: an LSP session reads
+-- the prelude sources per request, and the limit keeps the assoc list from
+-- growing if the prelude source is ever edited underneath a long-lived process.
+-- Two prelude files plus slack.
 
 import frontend.ast.{Decl}
 import frontend.parser.{parse}

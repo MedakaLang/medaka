@@ -363,53 +363,45 @@ visibilityCount ls =
       (l => sum (map (p => countOccurrences p l) visibilityPatterns))
       (filter isCodeLine ls))
 
+-- [root]'s import closure against `closure.<root>.golden`.
+closurePin : String -> <IO> Expectation
+closurePin root =
+  pin
+    "closure.\{root}.golden"
+    (closureOf (buildGraph loadModules) root)
+
 test "arch_boundaries: declaration-visibility counts match visibility.golden" =
   pin "visibility.golden" (countRows "visibility." visibilityCount loadModules)
 
 test "arch_boundaries: frontend.ast closure matches its golden" =
-  pin
-    "closure.frontend.ast.golden"
-    (closureOf (buildGraph loadModules) "frontend.ast")
+  closurePin "frontend.ast"
 
 test "arch_boundaries: frontend.visibility closure matches its golden" =
-  pin
-    "closure.frontend.visibility.golden"
-    (closureOf (buildGraph loadModules) "frontend.visibility")
+  closurePin "frontend.visibility"
 
 test "arch_boundaries: types.repr closure matches its golden" =
-  pin
-    "closure.types.repr.golden"
-    (closureOf (buildGraph loadModules) "types.repr")
+  closurePin "types.repr"
 
 test "arch_boundaries: types.tc_types closure matches its golden" =
-  pin
-    "closure.types.tc_types.golden"
-    (closureOf (buildGraph loadModules) "types.tc_types")
+  closurePin "types.tc_types"
 
 test "arch_boundaries: types.prelude_interface closure matches its golden" =
-  pin
-    "closure.types.prelude_interface.golden"
-    (closureOf (buildGraph loadModules) "types.prelude_interface")
+  closurePin "types.prelude_interface"
 
 test "arch_boundaries: types.interface_sexp closure matches its golden" =
-  pin
-    "closure.types.interface_sexp.golden"
-    (closureOf (buildGraph loadModules) "types.interface_sexp")
+  closurePin "types.interface_sexp"
 
 test "arch_boundaries: types.prelude_elab closure matches its golden" =
-  pin
-    "closure.types.prelude_elab.golden"
-    (closureOf (buildGraph loadModules) "types.prelude_elab")
+  closurePin "types.prelude_elab"
+
+test "arch_boundaries: types.prelude_decls closure matches its golden" =
+  closurePin "types.prelude_decls"
 
 test "arch_boundaries: frontend.ast_codec closure matches its golden" =
-  pin
-    "closure.frontend.ast_codec.golden"
-    (closureOf (buildGraph loadModules) "frontend.ast_codec")
+  closurePin "frontend.ast_codec"
 
 test "arch_boundaries: ir.core_ir closure matches its golden" =
-  pin
-    "closure.ir.core_ir.golden"
-    (closureOf (buildGraph loadModules) "ir.core_ir")
+  closurePin "ir.core_ir"
 
 -- Defined names (column-0, first word not a declaration keyword): an
 -- identifier `[a-z_][A-Za-z0-9_']*` or a parenthesised operator.
@@ -811,6 +803,8 @@ sideNames = [
   "preludeCacheRef",
   "preludeElabCacheRef",
   "preludeEvidenceRef",
+  "desugarCacheRef",
+  "desugarGenRef",
   "program_facts.currentFacts",
 ]
 

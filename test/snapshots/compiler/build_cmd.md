@@ -1,5 +1,5 @@
 # META
-source_lines=2523
+source_lines=2707
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -31,18 +31,25 @@ stages=DESUGAR,MARK
 import list.{take}
 import support.util.{stringTrim, joinWith, joinNl, lookupAssoc}
 import string.{words, contains, startsWith, endsWith, split}
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{
+  desugaredPrelude, preludeGeneration, registerPreludeDecls
+}
+import frontend.desugar.{reserveBinderOrdinals}
 import frontend.ast.{Decl}
 import types.tc_types.{DriveInputs(..)}
 import types.interface_sexp.{
-  InterfaceSection, InterfaceFault(..), readInterface, cacheOfSections,
-  formatVersion, sha256Hex
+  InterfaceSection, InterfaceFault(..), readInterface, readInterfaceKey,
+  cacheOfSections, formatVersion, sha256Hex
 }
 import types.prelude_interface.{
   InterfaceKey, interfaceKeyOf, keysMatch, seedPreludeInterface
 }
 import types.prelude_elab.{
-  PreludeElab, elabKeyOf, readElabFile, readElabKey, seedPreludeElab
+  PreludeElab, elabKeyOf, readElabFile, readElabKey, relocDecls, seedPreludeElab
+}
+import types.prelude_decls.{
+  PreludeDecls(..), PreludeTree(..), acceptedDeclsBody, declsKeyOf,
+  readDeclsFramed
 }
 import support.stage_count.{forwardStageLines}
 import io.{runCommandOk}
@@ -249,17 +256,62 @@ defaultMedakaEmitter = joinPath exeDir "medaka_emitter"
 -- it as a String, and the memo reaches them without re-signing any of them.
 export
 readPreludeFile : String -> <IO> Result String String
-readPreludeFile path = match readFile path
+readPreludeFile path = do
+  src <- readPreludeText path
+  validatedPrelude path src
+
+readPreludeText : String -> <IO> Result String String
+readPreludeText path = match readFile path
   Err e =>
     Err
       "error: cannot read the stdlib prelude at `\{path}`: \{e}; set MEDAKA_ROOT to your medaka checkout"
-  Ok src => match parseResult src
-    Err pe =>
-      Err
-        "\{ppDiagCliSrc src path (parseErrDiag path pe)}\n  (while loading the implicit prelude)"
-    Ok decls =>
-      let _ = notePreludeParse src decls
-      Ok src
+  Ok src => Ok src
+
+validatedPrelude : String -> String -> Result String String
+validatedPrelude path src = match parseResult src
+  Err pe =>
+    Err
+      "\{ppDiagCliSrc src path (parseErrDiag path pe)}\n  (while loading the implicit prelude)"
+  Ok decls =>
+    let _ = notePreludeParse src decls
+    Ok src
+
+-- The two prelude texts in [stdlibDir], `runtime.mdk` then `core.mdk`, as the
+-- inputs the running binary reads the prelude's files for, for a verb that
+-- drives them.  When `core.mdkd` is fresh for them the desugar memo takes
+-- its trees and neither text is parsed: the file's key holds both texts' hashes,
+-- and `medaka interface write` writes no file for a text that does not parse.
+-- Otherwise each is parsed as `readPreludeFile` parses it, and a failure is
+-- reported in the same order: the runtime text's parse error before an
+-- unreadable core.
+export
+readPreludeSources : String -> <IO> Result String PreludeInputs
+readPreludeSources stdlibDir =
+  readPreludeSourcesAs (buildFingerprint ()) stdlibDir
+
+-- `readPreludeSources` for the files [compiler] wrote: a binary built without
+-- an identity of its own (a test) names the writer it trusts.
+export
+readPreludeSourcesAs : String -> String -> <IO> Result String PreludeInputs
+readPreludeSourcesAs compiler stdlibDir =
+  let rtPath = joinPath stdlibDir "runtime.mdk"
+  let corePath = joinPath stdlibDir "core.mdk"
+  do
+    rsrc <- readPreludeText rtPath
+    match readPreludeText corePath
+      Err e => do
+        _ <- validatedPrelude rtPath rsrc
+        Err e
+      Ok csrc =>
+        let inputs = { shippedInputs stdlibDir rsrc csrc |
+          pnCompiler = compiler,
+        }
+        if takePreludeDecls inputs then
+          Ok inputs
+        else do
+          _ <- validatedPrelude rtPath rsrc
+          _ <- validatedPrelude corePath csrc
+          Ok inputs
 
 -- ---- the prelude interface file ----
 -- `<stdlib>/core.mdki` (written by `medaka interface write`) holds core's
@@ -267,11 +319,17 @@ readPreludeFile path = match readFile path
 -- drives skip core's check; any other verdict leaves the drives to check
 -- `core.mdk` as they always did.
 
-public export data PreludeVerdict =
-  | PVLoaded (List InterfaceSection)
-  | PVMissing
-  | PVStale String
-  | PVDisabled
+-- How one of the prelude's side files stands against the two texts and the
+-- running compiler's identity.  `FileMissing` is also what a declarations file
+-- reads as beside an interface that does not carry the inputs' key.
+public export data FileVerdict =
+  | FileLoaded
+  | FileMissing
+  | FileStale String
+  | FileDisabled
+
+-- The side files, for the line a stale one is reported by.
+public export data SideFile = InterfaceFile | TreesFile | DeclsFile
 
 -- What a prelude interface is read for: the stdlib directory holding
 -- `core.mdki`, the two prelude texts, and the running compiler's identity (the
@@ -313,19 +371,19 @@ preludeInterfaceKey coreName inputs =
 -- identity is its own build fingerprint.
 export
 shippedInputs : String -> String -> String -> PreludeInputs
-shippedInputs stdlibDir rsrc csrc = PreludeInputs {
+shippedInputs stdlibDir rsrc csrc =
+  shippedInputsFor (buildFingerprint ()) stdlibDir rsrc csrc
+
+-- `shippedInputs` for a host whose compiler identity comes from elsewhere than
+-- `buildFingerprint` (the playground reads it from a shipped file).
+export
+shippedInputsFor : String -> String -> String -> String -> PreludeInputs
+shippedInputsFor compiler stdlibDir rsrc csrc = PreludeInputs {
   pnStdlibDir = stdlibDir,
   pnRuntimeSrc = rsrc,
   pnCoreSrc = csrc,
-  pnCompiler = buildFingerprint (),
+  pnCompiler = compiler,
 }
-
--- The generation the desugar cache gives the two prelude texts, the pair the
--- prelude caches and a drive's `diPreludeKey` are keyed by.
-export
-preludeGeneration : String -> String -> (Int, Int)
-preludeGeneration rsrc csrc =
-  (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
 
 -- The stale component a file that does not decode names: its format version
 -- when that is what was refused, else the file itself.
@@ -334,74 +392,209 @@ faultComponent : InterfaceFault -> String
 faultComponent (WrongFormat _) = "format"
 faultComponent (Malformed _) = "file"
 
--- How `<stdlibDir>/core.mdki` stands against the two prelude texts and the
--- running compiler's identity.  `MEDAKA_NO_INTERFACE` set to anything disables
--- it.
+-- How `<stdlibDir>/[file]` stands against [inputs], with what [read] decodes
+-- from it when it is fresh.  [read] gives the key the text was written under,
+-- [keyOf] takes that kind of file's key off the interface's, and [absent] is
+-- the verdict of a file that cannot be read.  `MEDAKA_NO_INTERFACE` set to
+-- anything disables every one of them.
+verdictOfFile : String ->
+  FileVerdict ->
+  (InterfaceKey -> InterfaceKey) ->
+  (String -> Result InterfaceFault (InterfaceKey, a)) ->
+  PreludeInputs ->
+  <IO> (FileVerdict, Option a)
+verdictOfFile file absent keyOf read inputs
+  | envOr "MEDAKA_NO_INTERFACE" "" /= "" = (FileDisabled, None)
+  | otherwise = match readFile (joinPath inputs.pnStdlibDir file)
+    Err _ => (absent, None)
+    Ok text => match read text
+      Err fault => (FileStale (faultComponent fault), None)
+      Ok (key, _) if inputs.pnCompiler == "" || key.ikCompiler == "" =>
+        (FileStale "compiler", None)
+      Ok (key, value) =>
+        match keysMatch key (keyOf (preludeInterfaceKey "core.mdk" inputs))
+          None => (FileLoaded, Some value)
+          Some component => (FileStale component, None)
+
+-- How `<stdlibDir>/core.mdki` stands against [inputs].
 export
-readPreludeInterface : PreludeInputs -> <IO> PreludeVerdict
-readPreludeInterface inputs
-  | envOr "MEDAKA_NO_INTERFACE" "" /= "" = PVDisabled
-  | otherwise = match readFile (joinPath inputs.pnStdlibDir "core.mdki")
-    Err _ => PVMissing
-    Ok text => match readInterface text
-      Err fault => PVStale (faultComponent fault)
-      Ok (f, _) if inputs.pnCompiler == "" || f.ifKey.ikCompiler == "" =>
-        PVStale "compiler"
-      Ok (f, _) =>
-        let expected = preludeInterfaceKey "core.mdk" inputs
-        match keysMatch f.ifKey expected
-          None => PVLoaded f.ifSections
-          Some component => PVStale component
+readPreludeInterface : PreludeInputs -> <IO> FileVerdict
+readPreludeInterface inputs = fst (interfaceSections inputs)
+
+interfaceSections : PreludeInputs ->
+  <IO> (FileVerdict, Option (List InterfaceSection))
+interfaceSections inputs =
+  verdictOfFile
+    "core.mdki"
+    FileMissing
+    (key => key)
+    (text =>
+      map (fr => ((fst fr).ifKey, (fst fr).ifSections)) (readInterface text))
+    inputs
 
 -- The verdict of this process's last load, with the inputs it was read for.
-preludeVerdictRef : Ref (Option (PreludeInputs, PreludeVerdict))
+preludeVerdictRef : Ref (Option (PreludeInputs, FileVerdict))
 preludeVerdictRef = Ref None
 
 -- `readPreludeInterface`, once per process per input, seeding the prelude
 -- cache on a load under the generation the desugar cache gives the two texts.
 export
-loadPreludeInterface : PreludeInputs -> <IO> PreludeVerdict
+loadPreludeInterface : PreludeInputs -> <IO> FileVerdict
 loadPreludeInterface inputs = match !preludeVerdictRef
   Some (seen, verdict) if seen == inputs => verdict
   _ =>
-    let verdict = readPreludeInterface inputs
-    let _ = match verdict
-      PVLoaded sections =>
+    let (verdict, sections) = interfaceSections inputs
+    let _ = match sections
+      Some found =>
         seedPreludeInterface
-          (
-            desugaredPreludeKey inputs.pnRuntimeSrc,
-            desugaredPreludeKey inputs.pnCoreSrc,
-          )
-          (cacheOfSections sections)
-      _ => ()
+          (preludeGeneration inputs.pnRuntimeSrc inputs.pnCoreSrc)
+          (cacheOfSections found)
+      None => ()
     preludeVerdictRef := Some (inputs, verdict)
     verdict
 
--- The one line a check-family verb prints for [verdict], if any.
+-- The one line a verb prints for [verdict] of [file], if any.
 export
-preludeStaleLine : PreludeVerdict -> Option String
-preludeStaleLine (PVStale component) =
+staleLine : SideFile -> FileVerdict -> Option String
+staleLine InterfaceFile (FileStale component) =
   Some "prelude interface stale: checking stdlib/core.mdk (\{component})"
-preludeStaleLine _ = None
+staleLine TreesFile (FileStale component) =
+  Some "prelude trees stale: elaborating stdlib/core.mdk (\{component})"
+staleLine DeclsFile (FileStale component) =
+  Some "prelude decls stale: parsing stdlib/core.mdk (\{component})"
+staleLine _ _ = None
 
--- That line for this process's last load.
+-- The interface's line for this process's last load.
 export
 lastPreludeStaleLine : Unit -> Option String
 lastPreludeStaleLine _ = match !preludeVerdictRef
-  Some (_, verdict) => preludeStaleLine verdict
+  Some (_, verdict) => staleLine InterfaceFile verdict
   None => None
+
+-- ---- the prelude's desugared declarations ----
+-- `<stdlib>/core.mdkd`, written beside `core.mdki` by the same `medaka interface
+-- write`, holds both texts' desugared declarations.  A process that finds it
+-- fresh beside a `core.mdki` whose header is fresh parses neither text: the
+-- desugar memo holds a decoder per text, run on that text's first demand.  The
+-- key is read off the two headers against the source hashes, never through a
+-- desugar, so the generation every prelude cache keys by is the decoded one.
+
+-- How `<stdlibDir>/core.mdkd` stands against [inputs], with the bytes its digest
+-- covers when it is fresh.  Beside a `core.mdki` whose header does not carry
+-- [inputs]' key there is nothing to report: the interface's own verdict covers it.
+readPreludeDecls : PreludeInputs -> <IO> (FileVerdict, Option String)
+readPreludeDecls inputs
+  | envOr "MEDAKA_NO_INTERFACE" "" /= "" = (FileDisabled, None)
+  | not (interfaceHeaderFresh inputs) = (FileMissing, None)
+  | otherwise =
+    verdictOfFile
+      "core.mdkd"
+      (FileStale "missing")
+      declsKeyOf
+      readDeclsFramed
+      inputs
+
+-- Whether `<stdlibDir>/core.mdki`'s header line carries the key [inputs] expect.
+interfaceHeaderFresh : PreludeInputs -> <IO> Bool
+interfaceHeaderFresh inputs
+  | inputs.pnCompiler == "" = False
+  | otherwise = match readFile (joinPath inputs.pnStdlibDir "core.mdki")
+    Err _ => False
+    Ok text => match readInterfaceKey text
+      Ok key =>
+        key.ikCompiler /= ""
+          && isNone (keysMatch key (preludeInterfaceKey "core.mdk" inputs))
+      Err _ => False
+
+-- The verdict of this process's load of the declarations, with its inputs.  A
+-- body that fails to decode on first demand turns it stale.
+preludeDeclsRef : Ref (Option (PreludeInputs, FileVerdict))
+preludeDeclsRef = Ref None
+
+-- Hand `core.mdkd`'s trees for [inputs] to the desugar memo, once per process
+-- per input; whether they were taken.
+takePreludeDecls : PreludeInputs -> <IO> Bool
+takePreludeDecls inputs = match !preludeDeclsRef
+  Some (seen, FileLoaded) if seen == inputs => True
+  Some (seen, _) if seen == inputs => False
+  _ =>
+    let (verdict, covered) = readPreludeDecls inputs
+    preludeDeclsRef := Some (inputs, verdict)
+    match covered
+      Some body =>
+        holdPreludeDecls inputs body
+        True
+      None => False
+
+-- One decoder per text over the digest-checked [covered] bytes.  The body is
+-- decoded once, on the first demand of either text, and each tree is moved onto
+-- the binder counter as it stands at that text's own demand, as a desugar there
+-- would have minted it.
+holdPreludeDecls : PreludeInputs -> String -> Unit
+holdPreludeDecls inputs covered =
+  let decoded = Ref None
+  let value =
+    _ => match decoded.value
+      Some pd => pd
+      None =>
+        let pd = match acceptedDeclsBody covered
+          Ok v => Some v
+          Err fault =>
+            preludeDeclsRef := Some (inputs, FileStale (faultComponent fault))
+            None
+        decoded := Some pd
+        pd
+  registerPreludeTree inputs.pnRuntimeSrc (pd => pd.pdRuntime) value
+  registerPreludeTree inputs.pnCoreSrc (pd => pd.pdCore) value
+
+-- The decoder of [src]'s declarations: [pick] takes its tree out of what
+-- [value] decodes.
+registerPreludeTree : String ->
+  (PreludeDecls -> PreludeTree) ->
+  (Unit -> Option PreludeDecls) ->
+  Unit
+registerPreludeTree src pick value =
+  registerPreludeDecls src (_ => map (pd => placed (pick pd)) (value ()))
+
+-- [tree]'s declarations, whose binder ordinals run from its base, moved onto the
+-- next ordinals of the counter.
+placed : PreludeTree -> List Decl
+placed tree =
+  let first = reserveBinderOrdinals tree.ptBinders
+  if first == tree.ptBase then
+    tree.ptDecls
+  else
+    relocDecls (first - tree.ptBase) tree.ptDecls
+
+-- The declarations' verdict for [inputs]: this process's load, or for a process
+-- that did not load them (a `test` supervisor), the files read now.
+export
+preludeDeclsVerdict : PreludeInputs -> <IO> FileVerdict
+preludeDeclsVerdict inputs = match !preludeDeclsRef
+  Some (seen, verdict) if seen == inputs => verdict
+  _ => fst (readPreludeDecls inputs)
+
+-- How a verb reports one of the prelude files' stale lines: under MEDAKA_STRICT
+-- a stop through [stop]; staged through [staging] when the verb's machine channel
+-- is stderr (`run --json`, docs/ops/CLI-CONFORMANCE.md section 4); else one line
+-- of prose on stderr.
+export
+reportStaleLine : (String -> <IO> Unit) ->
+  Option (String -> Unit) ->
+  Option String ->
+  <IO> Unit
+reportStaleLine _ _ None = ()
+reportStaleLine stop staging (Some msg)
+  | envOr "MEDAKA_STRICT" "" /= "" = stop msg
+  | otherwise = match staging
+    Some stage => stage msg
+    None => ePutStrLn msg
 
 -- ---- the prelude's elaborated trees ----
 -- `<stdlib>/core.mdke`, written beside `core.mdki` by the same `medaka interface
 -- write`, holds core's elaborated, dict-passed trees.  A process that loads it
 -- holds them, and a tree-arm drive that also hits the interface skips core's
 -- pass; any other verdict leaves the drives to elaborate `core.mdk`.
-public export data TreesVerdict =
-  | TVLoaded
-  | TVMissing
-  | TVStale String
-  | TVDisabled
-
 -- The environment variable an emitter child reads the compiler identity from.
 -- The child is built without one, so the `medaka` that spawns it hands over its
 -- own: the two are built together, and the files were written by that `medaka`.
@@ -414,27 +607,25 @@ preludeCompilerEnv = "MEDAKA_PRELUDE_COMPILER"
 -- verb whose own process takes no trees reports the verdict and nothing more.
 readPreludeTrees : Bool ->
   PreludeInputs ->
-  <IO> (TreesVerdict, Option PreludeElab)
-readPreludeTrees decode inputs
-  | envOr "MEDAKA_NO_INTERFACE" "" /= "" = (TVDisabled, None)
-  | otherwise = match readFile (joinPath inputs.pnStdlibDir "core.mdke")
-    Err _ => (TVMissing, None)
-    Ok text =>
-      let read =
+  <IO> (FileVerdict, Option PreludeElab)
+readPreludeTrees decode inputs =
+  let (verdict, value) =
+    verdictOfFile
+      "core.mdke"
+      FileMissing
+      elabKeyOf
+      (text =>
         if decode then
           map (kv => (fst kv, Some (snd kv))) (readElabFile text)
         else
-          map (k => (k, None)) (readElabKey text)
-      match read
-        Err fault => (TVStale (faultComponent fault), None)
-        Ok (key, _) if inputs.pnCompiler == "" || key.ikCompiler == "" =>
-          (TVStale "compiler", None)
-        Ok (key, value) =>
-          match (keysMatch
-            key
-            (elabKeyOf (preludeInterfaceKey "core.mdk" inputs)))
-            None => withInterface decode inputs value
-            Some component => (TVStale component, None)
+          map (k => (k, None)) (readElabKey text))
+      inputs
+  let held = match value
+    Some v => v
+    None => None
+  match verdict
+    FileLoaded => withInterface decode inputs held
+    _ => (verdict, None)
 
 -- A fresh trees file is only a hit beside an interface that loads: the tree arm
 -- joins the trees to the interface's cache, so the loss of either one is the
@@ -442,25 +633,25 @@ readPreludeTrees decode inputs
 withInterface : Bool ->
   PreludeInputs ->
   Option PreludeElab ->
-  <IO> (TreesVerdict, Option PreludeElab)
+  <IO> (FileVerdict, Option PreludeElab)
 withInterface decode inputs value =
   match (if decode then
     loadPreludeInterface inputs
   else
     readPreludeInterface inputs)
-    PVLoaded _ => (TVLoaded, value)
-    PVMissing => (TVStale "interface", None)
-    PVStale component => (TVStale "interface \{component}", None)
-    PVDisabled => (TVDisabled, None)
+    FileLoaded => (FileLoaded, value)
+    FileMissing => (FileStale "interface", None)
+    FileStale component => (FileStale "interface \{component}", None)
+    FileDisabled => (FileDisabled, None)
 
 -- The verdict of this process's load of the trees, with the inputs it was for.
-preludeTreesRef : Ref (Option (PreludeInputs, TreesVerdict))
+preludeTreesRef : Ref (Option (PreludeInputs, FileVerdict))
 preludeTreesRef = Ref None
 
 -- `readPreludeTrees`, once per process per input, holding the trees on a load
 -- under the generation the desugar cache gives the two texts.
 export
-loadPreludeElab : PreludeInputs -> <IO> TreesVerdict
+loadPreludeElab : PreludeInputs -> <IO> FileVerdict
 loadPreludeElab inputs = match !preludeTreesRef
   Some (seen, verdict) if seen == inputs => verdict
   _ =>
@@ -498,15 +689,8 @@ keyedInputs key inputs = { inputs | diPreludeKey = Some key }
 
 -- The verdict alone, for a verb that reports it while its children take the trees.
 export
-checkPreludeElab : PreludeInputs -> <IO> TreesVerdict
+checkPreludeElab : PreludeInputs -> <IO> FileVerdict
 checkPreludeElab inputs = fst (readPreludeTrees False inputs)
-
--- The one line a tree-arm verb prints for [verdict], if any.
-export
-preludeTreesLine : TreesVerdict -> Option String
-preludeTreesLine (TVStale component) =
-  Some "prelude trees stale: elaborating stdlib/core.mdk (\{component})"
-preludeTreesLine _ = None
 
 -- ---- the trailing-Unit auto-print trim ----
 -- The interpreter auto-prints main's Unit as a trailing "()\n"; the emitter's
@@ -2529,12 +2713,14 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false) (mem "split" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false) (mem "registerPreludeDecls" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "reserveBinderOrdinals" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
+(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "readInterfaceKey" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "seedPreludeInterface" false))))
-(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "seedPreludeElab" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "relocDecls" false) (mem "seedPreludeElab" false))))
+(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "PreludeTree" true) (mem "acceptedDeclsBody" false) (mem "declsKeyOf" false) (mem "readDeclsFramed" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "forwardStageLines" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
@@ -2574,8 +2760,17 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "defaultMedakaEmitter" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "defaultMedakaEmitter" () (EApp (EApp (EVar "joinPath") (EVar "exeDir")) (ELit (LString "medaka_emitter"))))
 (DTypeSig true "readPreludeFile" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "readPreludeFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: cannot read the stdlib prelude at `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "; set MEDAKA_ROOT to your medaka checkout"))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "pe")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "pe"))))) (ELit (LString "\n  (while loading the implicit prelude)"))))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EApp (EVar "Ok") (EVar "src")))))))))
-(DData Public "PreludeVerdict" () ((variant "PVLoaded" (ConPos (TyApp (TyCon "List") (TyCon "InterfaceSection")))) (variant "PVMissing" (ConPos)) (variant "PVStale" (ConPos (TyCon "String"))) (variant "PVDisabled" (ConPos))) ())
+(DFunDef false "readPreludeFile" ((PVar "path")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeText") (EVar "path"))) (ELam ((PVar "src")) (EApp (EApp (EVar "validatedPrelude") (EVar "path")) (EVar "src")))))
+(DTypeSig false "readPreludeText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "readPreludeText" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: cannot read the stdlib prelude at `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "; set MEDAKA_ROOT to your medaka checkout"))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EVar "src")))))
+(DTypeSig false "validatedPrelude" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "validatedPrelude" ((PVar "path") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "pe")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "pe"))))) (ELit (LString "\n  (while loading the implicit prelude)"))))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EApp (EVar "Ok") (EVar "src")))))))
+(DTypeSig true "readPreludeSources" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeInputs")))))
+(DFunDef false "readPreludeSources" ((PVar "stdlibDir")) (EApp (EApp (EVar "readPreludeSourcesAs") (EApp (EVar "buildFingerprint") (ELit LUnit))) (EVar "stdlibDir")))
+(DTypeSig true "readPreludeSourcesAs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeInputs"))))))
+(DFunDef false "readPreludeSourcesAs" ((PVar "compiler") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "rtPath") (EApp (EApp (EVar "joinPath") (EVar "stdlibDir")) (ELit (LString "runtime.mdk")))) (DoLet false false (PVar "corePath") (EApp (EApp (EVar "joinPath") (EVar "stdlibDir")) (ELit (LString "core.mdk")))) (DoExpr (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeText") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EMatch (EApp (EVar "readPreludeText") (EVar "corePath")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "rtPath")) (EVar "rsrc"))) (ELam (PWild) (EApp (EVar "Err") (EVar "e"))))) (arm (PCon "Ok" (PVar "csrc")) () (EBlock (DoLet false false (PVar "inputs") (ERecordUpdate (EApp (EApp (EApp (EVar "shippedInputs") (EVar "stdlibDir")) (EVar "rsrc")) (EVar "csrc")) ((fa "pnCompiler" (EVar "compiler"))))) (DoExpr (EIf (EApp (EVar "takePreludeDecls") (EVar "inputs")) (EApp (EVar "Ok") (EVar "inputs")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "rtPath")) (EVar "rsrc"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "corePath")) (EVar "csrc"))) (ELam (PWild) (EApp (EVar "Ok") (EVar "inputs"))))))))))))))))
+(DData Public "FileVerdict" () ((variant "FileLoaded" (ConPos)) (variant "FileMissing" (ConPos)) (variant "FileStale" (ConPos (TyCon "String"))) (variant "FileDisabled" (ConPos))) ())
+(DData Public "SideFile" () ((variant "InterfaceFile" (ConPos)) (variant "TreesFile" (ConPos)) (variant "DeclsFile" (ConPos))) ())
 (DData Public "PreludeInputs" () ((variant "PreludeInputs" (ConNamed (field "pnStdlibDir" (TyCon "String")) (field "pnRuntimeSrc" (TyCon "String")) (field "pnCoreSrc" (TyCon "String")) (field "pnCompiler" (TyCon "String"))))) ())
 (DImpl true "Eq" ((TyCon "PreludeInputs")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "PreludeInputs" ((rf "pnStdlibDir" (PVar "__a0")) (rf "pnRuntimeSrc" (PVar "__a1")) (rf "pnCoreSrc" (PVar "__a2")) (rf "pnCompiler" (PVar "__a3"))) false) (PRec "PreludeInputs" ((rf "pnStdlibDir" (PVar "__b0")) (rf "pnRuntimeSrc" (PVar "__b1")) (rf "pnCoreSrc" (PVar "__b2")) (rf "pnCompiler" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))))))))
 (DTypeSig false "preludeSourceHashesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -2585,33 +2780,57 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "preludeInterfaceKey" (TyFun (TyCon "String") (TyFun (TyCon "PreludeInputs") (TyCon "InterfaceKey"))))
 (DFunDef false "preludeInterfaceKey" ((PVar "coreName") (PVar "inputs")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "formatVersion")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnRuntimeSrc"))) (ETuple (EVar "coreName") (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnCoreSrc"))))) (EFieldAccess (EVar "inputs") "pnCompiler")))
 (DTypeSig true "shippedInputs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PreludeInputs")))))
-(DFunDef false "shippedInputs" ((PVar "stdlibDir") (PVar "rsrc") (PVar "csrc")) (ERecordCreate "PreludeInputs" ((fa "pnStdlibDir" (EVar "stdlibDir")) (fa "pnRuntimeSrc" (EVar "rsrc")) (fa "pnCoreSrc" (EVar "csrc")) (fa "pnCompiler" (EApp (EVar "buildFingerprint") (ELit LUnit))))))
-(DTypeSig true "preludeGeneration" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "preludeGeneration" ((PVar "rsrc") (PVar "csrc")) (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))
+(DFunDef false "shippedInputs" ((PVar "stdlibDir") (PVar "rsrc") (PVar "csrc")) (EApp (EApp (EApp (EApp (EVar "shippedInputsFor") (EApp (EVar "buildFingerprint") (ELit LUnit))) (EVar "stdlibDir")) (EVar "rsrc")) (EVar "csrc")))
+(DTypeSig true "shippedInputsFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PreludeInputs"))))))
+(DFunDef false "shippedInputsFor" ((PVar "compiler") (PVar "stdlibDir") (PVar "rsrc") (PVar "csrc")) (ERecordCreate "PreludeInputs" ((fa "pnStdlibDir" (EVar "stdlibDir")) (fa "pnRuntimeSrc" (EVar "rsrc")) (fa "pnCoreSrc" (EVar "csrc")) (fa "pnCompiler" (EVar "compiler")))))
 (DTypeSig true "faultComponent" (TyFun (TyCon "InterfaceFault") (TyCon "String")))
 (DFunDef false "faultComponent" ((PCon "WrongFormat" PWild)) (ELit (LString "format")))
 (DFunDef false "faultComponent" ((PCon "Malformed" PWild)) (ELit (LString "file")))
-(DTypeSig true "readPreludeInterface" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "PreludeVerdict"))))
-(DFunDef false "readPreludeInterface" ((PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (EVar "PVDisabled") (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (ELit (LString "core.mdki")))) (arm (PCon "Err" PWild) () (EVar "PVMissing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterface") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "PVStale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "f") PWild)) ((GBool (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "f") "ifKey") "ikCompiler") (ELit (LString "")))))) (EApp (EVar "PVStale") (ELit (LString "compiler")))) (arm (PCon "Ok" (PTuple (PVar "f") PWild)) () (EBlock (DoLet false false (PVar "expected") (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs"))) (DoExpr (EMatch (EApp (EApp (EVar "keysMatch") (EFieldAccess (EVar "f") "ifKey")) (EVar "expected")) (arm (PCon "None") () (EApp (EVar "PVLoaded") (EFieldAccess (EVar "f") "ifSections"))) (arm (PCon "Some" (PVar "component")) () (EApp (EVar "PVStale") (EVar "component")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "preludeVerdictRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "PreludeVerdict")))))
+(DTypeSig false "verdictOfFile" (TyFun (TyCon "String") (TyFun (TyCon "FileVerdict") (TyFun (TyFun (TyCon "InterfaceKey") (TyCon "InterfaceKey")) (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyVar "a")))) (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyVar "a"))))))))))
+(DFunDef false "verdictOfFile" ((PVar "file") (PVar "absent") (PVar "keyOf") (PVar "read") (PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "FileDisabled") (EVar "None")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (EVar "file"))) (arm (PCon "Err" PWild) () (ETuple (EVar "absent") (EVar "None"))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "read") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (ETuple (EApp (EVar "FileStale") (EApp (EVar "faultComponent") (EVar "fault"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) ((GBool (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "key") "ikCompiler") (ELit (LString "")))))) (ETuple (EApp (EVar "FileStale") (ELit (LString "compiler"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "value"))) () (EMatch (EApp (EApp (EVar "keysMatch") (EVar "key")) (EApp (EVar "keyOf") (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs")))) (arm (PCon "None") () (ETuple (EVar "FileLoaded") (EApp (EVar "Some") (EVar "value")))) (arm (PCon "Some" (PVar "component")) () (ETuple (EApp (EVar "FileStale") (EVar "component")) (EVar "None")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "readPreludeInterface" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "FileVerdict"))))
+(DFunDef false "readPreludeInterface" ((PVar "inputs")) (EApp (EVar "fst") (EApp (EVar "interfaceSections") (EVar "inputs"))))
+(DTypeSig false "interfaceSections" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "InterfaceSection")))))))
+(DFunDef false "interfaceSections" ((PVar "inputs")) (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdki"))) (EVar "FileMissing")) (ELam ((PVar "key")) (EVar "key"))) (ELam ((PVar "text")) (EApp (EApp (EVar "map") (ELam ((PVar "fr")) (ETuple (EFieldAccess (EApp (EVar "fst") (EVar "fr")) "ifKey") (EFieldAccess (EApp (EVar "fst") (EVar "fr")) "ifSections")))) (EApp (EVar "readInterface") (EVar "text"))))) (EVar "inputs")))
+(DTypeSig false "preludeVerdictRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "FileVerdict")))))
 (DFunDef false "preludeVerdictRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "loadPreludeInterface" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "PreludeVerdict"))))
-(DFunDef false "loadPreludeInterface" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EBlock (DoLet false false (PVar "verdict") (EApp (EVar "readPreludeInterface") (EVar "inputs"))) (DoLet false false PWild (EMatch (EVar "verdict") (arm (PCon "PVLoaded" (PVar "sections")) () (EApp (EApp (EVar "seedPreludeInterface") (ETuple (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "inputs") "pnCoreSrc")))) (EApp (EVar "cacheOfSections") (EVar "sections")))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeVerdictRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EVar "verdict"))))))
-(DTypeSig true "preludeStaleLine" (TyFun (TyCon "PreludeVerdict") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "preludeStaleLine" ((PCon "PVStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude interface stale: checking stdlib/core.mdk (")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ")")))))
-(DFunDef false "preludeStaleLine" (PWild) (EVar "None"))
+(DTypeSig true "loadPreludeInterface" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "FileVerdict"))))
+(DFunDef false "loadPreludeInterface" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "sections")) (EApp (EVar "interfaceSections") (EVar "inputs"))) (DoLet false false PWild (EMatch (EVar "sections") (arm (PCon "Some" (PVar "found")) () (EApp (EApp (EVar "seedPreludeInterface") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (EFieldAccess (EVar "inputs") "pnCoreSrc"))) (EApp (EVar "cacheOfSections") (EVar "found")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeVerdictRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EVar "verdict"))))))
+(DTypeSig true "staleLine" (TyFun (TyCon "SideFile") (TyFun (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "staleLine" ((PCon "InterfaceFile") (PCon "FileStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude interface stale: checking stdlib/core.mdk (")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ")")))))
+(DFunDef false "staleLine" ((PCon "TreesFile") (PCon "FileStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude trees stale: elaborating stdlib/core.mdk (")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ")")))))
+(DFunDef false "staleLine" ((PCon "DeclsFile") (PCon "FileStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude decls stale: parsing stdlib/core.mdk (")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ")")))))
+(DFunDef false "staleLine" (PWild PWild) (EVar "None"))
 (DTypeSig true "lastPreludeStaleLine" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "lastPreludeStaleLine" (PWild) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple PWild (PVar "verdict"))) () (EApp (EVar "preludeStaleLine") (EVar "verdict"))) (arm (PCon "None") () (EVar "None"))))
-(DData Public "TreesVerdict" () ((variant "TVLoaded" (ConPos)) (variant "TVMissing" (ConPos)) (variant "TVStale" (ConPos (TyCon "String"))) (variant "TVDisabled" (ConPos))) ())
+(DFunDef false "lastPreludeStaleLine" (PWild) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple PWild (PVar "verdict"))) () (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict"))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig false "readPreludeDecls" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "readPreludeDecls" ((PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "FileDisabled") (EVar "None")) (EIf (EApp (EVar "not") (EApp (EVar "interfaceHeaderFresh") (EVar "inputs"))) (ETuple (EVar "FileMissing") (EVar "None")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdkd"))) (EApp (EVar "FileStale") (ELit (LString "missing")))) (EVar "declsKeyOf")) (EVar "readDeclsFramed")) (EVar "inputs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "interfaceHeaderFresh" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "interfaceHeaderFresh" ((PVar "inputs")) (EIf (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (ELit (LString "core.mdki")))) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterfaceKey") (EVar "text")) (arm (PCon "Ok" (PVar "key")) () (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "key") "ikCompiler") (ELit (LString ""))) (EApp (EVar "isNone") (EApp (EApp (EVar "keysMatch") (EVar "key")) (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs")))))) (arm (PCon "Err" PWild) () (EVar "False"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "preludeDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "FileVerdict")))))
+(DFunDef false "preludeDeclsRef" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig false "takePreludeDecls" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "takePreludeDecls" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeDeclsRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PCon "FileLoaded"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "True")) (arm (PCon "Some" (PTuple (PVar "seen") PWild)) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "False")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "covered")) (EApp (EVar "readPreludeDecls") (EVar "inputs"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EMatch (EVar "covered") (arm (PCon "Some" (PVar "body")) () (EBlock (DoExpr (EApp (EApp (EVar "holdPreludeDecls") (EVar "inputs")) (EVar "body"))) (DoExpr (EVar "True")))) (arm (PCon "None") () (EVar "False"))))))))
+(DTypeSig false "holdPreludeDecls" (TyFun (TyCon "PreludeInputs") (TyFun (TyCon "String") (TyCon "Unit"))))
+(DFunDef false "holdPreludeDecls" ((PVar "inputs") (PVar "covered")) (EBlock (DoLet false false (PVar "decoded") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "value") (ELam (PWild) (EMatch (EFieldAccess (EVar "decoded") "value") (arm (PCon "Some" (PVar "pd")) () (EVar "pd")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "pd") (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Ok" (PVar "v")) () (EApp (EVar "Some") (EVar "v"))) (arm (PCon "Err" (PVar "fault")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EApp (EVar "FileStale") (EApp (EVar "faultComponent") (EVar "fault"))))))) (DoExpr (EVar "None")))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "decoded")) (EApp (EVar "Some") (EVar "pd")))) (DoExpr (EVar "pd"))))))) (DoExpr (EApp (EApp (EApp (EVar "registerPreludeTree") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (ELam ((PVar "pd")) (EFieldAccess (EVar "pd") "pdRuntime"))) (EVar "value"))) (DoExpr (EApp (EApp (EApp (EVar "registerPreludeTree") (EFieldAccess (EVar "inputs") "pnCoreSrc")) (ELam ((PVar "pd")) (EFieldAccess (EVar "pd") "pdCore"))) (EVar "value")))))
+(DTypeSig false "registerPreludeTree" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "PreludeDecls") (TyCon "PreludeTree")) (TyFun (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "PreludeDecls"))) (TyCon "Unit")))))
+(DFunDef false "registerPreludeTree" ((PVar "src") (PVar "pick") (PVar "value")) (EApp (EApp (EVar "registerPreludeDecls") (EVar "src")) (ELam (PWild) (EApp (EApp (EVar "map") (ELam ((PVar "pd")) (EApp (EVar "placed") (EApp (EVar "pick") (EVar "pd"))))) (EApp (EVar "value") (ELit LUnit))))))
+(DTypeSig false "placed" (TyFun (TyCon "PreludeTree") (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "placed" ((PVar "tree")) (EBlock (DoLet false false (PVar "first") (EApp (EVar "reserveBinderOrdinals") (EFieldAccess (EVar "tree") "ptBinders"))) (DoExpr (EIf (EBinOp "==" (EVar "first") (EFieldAccess (EVar "tree") "ptBase")) (EFieldAccess (EVar "tree") "ptDecls") (EApp (EApp (EVar "relocDecls") (EBinOp "-" (EVar "first") (EFieldAccess (EVar "tree") "ptBase"))) (EFieldAccess (EVar "tree") "ptDecls"))))))
+(DTypeSig true "preludeDeclsVerdict" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "FileVerdict"))))
+(DFunDef false "preludeDeclsVerdict" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeDeclsRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EApp (EVar "fst") (EApp (EVar "readPreludeDecls") (EVar "inputs"))))))
+(DTypeSig true "reportStaleLine" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "String") (TyCon "Unit"))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "reportStaleLine" (PWild PWild (PCon "None")) (ELit LUnit))
+(DFunDef false "reportStaleLine" ((PVar "stop") (PVar "staging") (PCon "Some" (PVar "msg"))) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "stop") (EVar "msg")) (EIf (EVar "otherwise") (EMatch (EVar "staging") (arm (PCon "Some" (PVar "stage")) () (EApp (EVar "stage") (EVar "msg"))) (arm (PCon "None") () (EApp (EVar "ePutStrLn") (EVar "msg")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "preludeCompilerEnv" (TyCon "String"))
 (DFunDef false "preludeCompilerEnv" () (ELit (LString "MEDAKA_PRELUDE_COMPILER")))
-(DTypeSig false "readPreludeTrees" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab")))))))
-(DFunDef false "readPreludeTrees" ((PVar "decode") (PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "TVDisabled") (EVar "None")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (ELit (LString "core.mdke")))) (arm (PCon "Err" PWild) () (ETuple (EVar "TVMissing") (EVar "None"))) (arm (PCon "Ok" (PVar "text")) () (EBlock (DoLet false false (PVar "read") (EIf (EVar "decode") (EApp (EApp (EVar "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EVar "kv")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "kv")))))) (EApp (EVar "readElabFile") (EVar "text"))) (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EVar "None")))) (EApp (EVar "readElabKey") (EVar "text"))))) (DoExpr (EMatch (EVar "read") (arm (PCon "Err" (PVar "fault")) () (ETuple (EApp (EVar "TVStale") (EApp (EVar "faultComponent") (EVar "fault"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) ((GBool (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "key") "ikCompiler") (ELit (LString "")))))) (ETuple (EApp (EVar "TVStale") (ELit (LString "compiler"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "value"))) () (EMatch (EApp (EApp (EVar "keysMatch") (EVar "key")) (EApp (EVar "elabKeyOf") (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "withInterface") (EVar "decode")) (EVar "inputs")) (EVar "value"))) (arm (PCon "Some" (PVar "component")) () (ETuple (EApp (EVar "TVStale") (EVar "component")) (EVar "None")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "withInterface" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyEffect ("IO") None (TyTuple (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab"))))))))
-(DFunDef false "withInterface" ((PVar "decode") (PVar "inputs") (PVar "value")) (EMatch (EIf (EVar "decode") (EApp (EVar "loadPreludeInterface") (EVar "inputs")) (EApp (EVar "readPreludeInterface") (EVar "inputs"))) (arm (PCon "PVLoaded" PWild) () (ETuple (EVar "TVLoaded") (EVar "value"))) (arm (PCon "PVMissing") () (ETuple (EApp (EVar "TVStale") (ELit (LString "interface"))) (EVar "None"))) (arm (PCon "PVStale" (PVar "component")) () (ETuple (EApp (EVar "TVStale") (EBinOp "++" (EBinOp "++" (ELit (LString "interface ")) (EApp (EVar "display") (EVar "component"))) (ELit (LString "")))) (EVar "None"))) (arm (PCon "PVDisabled") () (ETuple (EVar "TVDisabled") (EVar "None")))))
-(DTypeSig false "preludeTreesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "TreesVerdict")))))
+(DTypeSig false "readPreludeTrees" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab")))))))
+(DFunDef false "readPreludeTrees" ((PVar "decode") (PVar "inputs")) (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "value")) (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdke"))) (EVar "FileMissing")) (EVar "elabKeyOf")) (ELam ((PVar "text")) (EIf (EVar "decode") (EApp (EApp (EVar "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EVar "kv")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "kv")))))) (EApp (EVar "readElabFile") (EVar "text"))) (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EVar "None")))) (EApp (EVar "readElabKey") (EVar "text")))))) (EVar "inputs"))) (DoLet false false (PVar "held") (EMatch (EVar "value") (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "None")))) (DoExpr (EMatch (EVar "verdict") (arm (PCon "FileLoaded") () (EApp (EApp (EApp (EVar "withInterface") (EVar "decode")) (EVar "inputs")) (EVar "held"))) (arm PWild () (ETuple (EVar "verdict") (EVar "None")))))))
+(DTypeSig false "withInterface" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab"))))))))
+(DFunDef false "withInterface" ((PVar "decode") (PVar "inputs") (PVar "value")) (EMatch (EIf (EVar "decode") (EApp (EVar "loadPreludeInterface") (EVar "inputs")) (EApp (EVar "readPreludeInterface") (EVar "inputs"))) (arm (PCon "FileLoaded") () (ETuple (EVar "FileLoaded") (EVar "value"))) (arm (PCon "FileMissing") () (ETuple (EApp (EVar "FileStale") (ELit (LString "interface"))) (EVar "None"))) (arm (PCon "FileStale" (PVar "component")) () (ETuple (EApp (EVar "FileStale") (EBinOp "++" (EBinOp "++" (ELit (LString "interface ")) (EApp (EVar "display") (EVar "component"))) (ELit (LString "")))) (EVar "None"))) (arm (PCon "FileDisabled") () (ETuple (EVar "FileDisabled") (EVar "None")))))
+(DTypeSig false "preludeTreesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "FileVerdict")))))
 (DFunDef false "preludeTreesRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "loadPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
+(DTypeSig true "loadPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "FileVerdict"))))
 (DFunDef false "loadPreludeElab" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "value")) (EApp (EApp (EVar "readPreludeTrees") (EVar "True")) (EVar "inputs"))) (DoLet false false PWild (EMatch (EVar "value") (arm (PCon "Some" (PVar "pe")) () (EApp (EApp (EVar "seedPreludeElab") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (EFieldAccess (EVar "inputs") "pnCoreSrc"))) (EVar "pe"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeTreesRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EVar "verdict"))))))
 (DTypeSig true "treesLoaded" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "treesLoaded" ((PLit LUnit)) (EApp (EVar "isSome") (EUnOp "!" (EVar "preludeTreesRef"))))
@@ -2619,11 +2838,8 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "withHeldPrelude" ((PVar "coreDecls") (PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "held") PWild)) () (EIf (EBinOp "==" (EApp (EVar "length") (EVar "coreDecls")) (EApp (EVar "length") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "held") "pnCoreSrc")))) (EApp (EApp (EVar "keyedInputs") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "held") "pnRuntimeSrc")) (EFieldAccess (EVar "held") "pnCoreSrc"))) (EVar "inputs")) (EVar "inputs"))) (arm (PCon "None") () (EVar "inputs"))))
 (DTypeSig false "keyedInputs" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "DriveInputs") (TyCon "DriveInputs"))))
 (DFunDef false "keyedInputs" ((PVar "key") (PVar "inputs")) (ERecordUpdate (EVar "inputs") ((fa "diPreludeKey" (EApp (EVar "Some") (EVar "key"))))))
-(DTypeSig true "checkPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
+(DTypeSig true "checkPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "FileVerdict"))))
 (DFunDef false "checkPreludeElab" ((PVar "inputs")) (EApp (EVar "fst") (EApp (EApp (EVar "readPreludeTrees") (EVar "False")) (EVar "inputs"))))
-(DTypeSig true "preludeTreesLine" (TyFun (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "preludeTreesLine" ((PCon "TVStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude trees stale: elaborating stdlib/core.mdk (")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ")")))))
-(DFunDef false "preludeTreesLine" (PWild) (EVar "None"))
 (DTypeSig false "stripTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripTrailingUnit" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")) (ELit (LString "()\n")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
@@ -2835,12 +3051,14 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false) (mem "split" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false) (mem "registerPreludeDecls" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "reserveBinderOrdinals" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
+(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "readInterfaceKey" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "seedPreludeInterface" false))))
-(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "seedPreludeElab" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "relocDecls" false) (mem "seedPreludeElab" false))))
+(DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "PreludeTree" true) (mem "acceptedDeclsBody" false) (mem "declsKeyOf" false) (mem "readDeclsFramed" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "forwardStageLines" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
@@ -2880,8 +3098,17 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "defaultMedakaEmitter" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "defaultMedakaEmitter" () (EApp (EApp (EVar "joinPath") (EVar "exeDir")) (ELit (LString "medaka_emitter"))))
 (DTypeSig true "readPreludeFile" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "readPreludeFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: cannot read the stdlib prelude at `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "; set MEDAKA_ROOT to your medaka checkout"))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "pe")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "pe"))))) (ELit (LString "\n  (while loading the implicit prelude)"))))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EApp (EVar "Ok") (EVar "src")))))))))
-(DData Public "PreludeVerdict" () ((variant "PVLoaded" (ConPos (TyApp (TyCon "List") (TyCon "InterfaceSection")))) (variant "PVMissing" (ConPos)) (variant "PVStale" (ConPos (TyCon "String"))) (variant "PVDisabled" (ConPos))) ())
+(DFunDef false "readPreludeFile" ((PVar "path")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeText") (EVar "path"))) (ELam ((PVar "src")) (EApp (EApp (EVar "validatedPrelude") (EVar "path")) (EVar "src")))))
+(DTypeSig false "readPreludeText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "readPreludeText" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: cannot read the stdlib prelude at `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "; set MEDAKA_ROOT to your medaka checkout"))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EVar "src")))))
+(DTypeSig false "validatedPrelude" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "validatedPrelude" ((PVar "path") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "pe")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "pe"))))) (ELit (LString "\n  (while loading the implicit prelude)"))))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EApp (EVar "Ok") (EVar "src")))))))
+(DTypeSig true "readPreludeSources" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeInputs")))))
+(DFunDef false "readPreludeSources" ((PVar "stdlibDir")) (EApp (EApp (EVar "readPreludeSourcesAs") (EApp (EVar "buildFingerprint") (ELit LUnit))) (EVar "stdlibDir")))
+(DTypeSig true "readPreludeSourcesAs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "PreludeInputs"))))))
+(DFunDef false "readPreludeSourcesAs" ((PVar "compiler") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "rtPath") (EApp (EApp (EVar "joinPath") (EVar "stdlibDir")) (ELit (LString "runtime.mdk")))) (DoLet false false (PVar "corePath") (EApp (EApp (EVar "joinPath") (EVar "stdlibDir")) (ELit (LString "core.mdk")))) (DoExpr (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeText") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EMatch (EApp (EVar "readPreludeText") (EVar "corePath")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "rtPath")) (EVar "rsrc"))) (ELam (PWild) (EApp (EVar "Err") (EVar "e"))))) (arm (PCon "Ok" (PVar "csrc")) () (EBlock (DoLet false false (PVar "inputs") (ERecordUpdate (EApp (EApp (EApp (EVar "shippedInputs") (EVar "stdlibDir")) (EVar "rsrc")) (EVar "csrc")) ((fa "pnCompiler" (EVar "compiler"))))) (DoExpr (EIf (EApp (EVar "takePreludeDecls") (EVar "inputs")) (EApp (EVar "Ok") (EVar "inputs")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "rtPath")) (EVar "rsrc"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "validatedPrelude") (EVar "corePath")) (EVar "csrc"))) (ELam (PWild) (EApp (EVar "Ok") (EVar "inputs"))))))))))))))))
+(DData Public "FileVerdict" () ((variant "FileLoaded" (ConPos)) (variant "FileMissing" (ConPos)) (variant "FileStale" (ConPos (TyCon "String"))) (variant "FileDisabled" (ConPos))) ())
+(DData Public "SideFile" () ((variant "InterfaceFile" (ConPos)) (variant "TreesFile" (ConPos)) (variant "DeclsFile" (ConPos))) ())
 (DData Public "PreludeInputs" () ((variant "PreludeInputs" (ConNamed (field "pnStdlibDir" (TyCon "String")) (field "pnRuntimeSrc" (TyCon "String")) (field "pnCoreSrc" (TyCon "String")) (field "pnCompiler" (TyCon "String"))))) ())
 (DImpl true "Eq" ((TyCon "PreludeInputs")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "PreludeInputs" ((rf "pnStdlibDir" (PVar "__a0")) (rf "pnRuntimeSrc" (PVar "__a1")) (rf "pnCoreSrc" (PVar "__a2")) (rf "pnCompiler" (PVar "__a3"))) false) (PRec "PreludeInputs" ((rf "pnStdlibDir" (PVar "__b0")) (rf "pnRuntimeSrc" (PVar "__b1")) (rf "pnCoreSrc" (PVar "__b2")) (rf "pnCompiler" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))))))))
 (DTypeSig false "preludeSourceHashesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -2891,33 +3118,57 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "preludeInterfaceKey" (TyFun (TyCon "String") (TyFun (TyCon "PreludeInputs") (TyCon "InterfaceKey"))))
 (DFunDef false "preludeInterfaceKey" ((PVar "coreName") (PVar "inputs")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "formatVersion")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnRuntimeSrc"))) (ETuple (EVar "coreName") (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnCoreSrc"))))) (EFieldAccess (EVar "inputs") "pnCompiler")))
 (DTypeSig true "shippedInputs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PreludeInputs")))))
-(DFunDef false "shippedInputs" ((PVar "stdlibDir") (PVar "rsrc") (PVar "csrc")) (ERecordCreate "PreludeInputs" ((fa "pnStdlibDir" (EVar "stdlibDir")) (fa "pnRuntimeSrc" (EVar "rsrc")) (fa "pnCoreSrc" (EVar "csrc")) (fa "pnCompiler" (EApp (EVar "buildFingerprint") (ELit LUnit))))))
-(DTypeSig true "preludeGeneration" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "preludeGeneration" ((PVar "rsrc") (PVar "csrc")) (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))
+(DFunDef false "shippedInputs" ((PVar "stdlibDir") (PVar "rsrc") (PVar "csrc")) (EApp (EApp (EApp (EApp (EVar "shippedInputsFor") (EApp (EVar "buildFingerprint") (ELit LUnit))) (EVar "stdlibDir")) (EVar "rsrc")) (EVar "csrc")))
+(DTypeSig true "shippedInputsFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PreludeInputs"))))))
+(DFunDef false "shippedInputsFor" ((PVar "compiler") (PVar "stdlibDir") (PVar "rsrc") (PVar "csrc")) (ERecordCreate "PreludeInputs" ((fa "pnStdlibDir" (EVar "stdlibDir")) (fa "pnRuntimeSrc" (EVar "rsrc")) (fa "pnCoreSrc" (EVar "csrc")) (fa "pnCompiler" (EVar "compiler")))))
 (DTypeSig true "faultComponent" (TyFun (TyCon "InterfaceFault") (TyCon "String")))
 (DFunDef false "faultComponent" ((PCon "WrongFormat" PWild)) (ELit (LString "format")))
 (DFunDef false "faultComponent" ((PCon "Malformed" PWild)) (ELit (LString "file")))
-(DTypeSig true "readPreludeInterface" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "PreludeVerdict"))))
-(DFunDef false "readPreludeInterface" ((PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (EVar "PVDisabled") (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (ELit (LString "core.mdki")))) (arm (PCon "Err" PWild) () (EVar "PVMissing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterface") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "PVStale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "f") PWild)) ((GBool (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "f") "ifKey") "ikCompiler") (ELit (LString "")))))) (EApp (EVar "PVStale") (ELit (LString "compiler")))) (arm (PCon "Ok" (PTuple (PVar "f") PWild)) () (EBlock (DoLet false false (PVar "expected") (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs"))) (DoExpr (EMatch (EApp (EApp (EVar "keysMatch") (EFieldAccess (EVar "f") "ifKey")) (EVar "expected")) (arm (PCon "None") () (EApp (EVar "PVLoaded") (EFieldAccess (EVar "f") "ifSections"))) (arm (PCon "Some" (PVar "component")) () (EApp (EVar "PVStale") (EVar "component")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "preludeVerdictRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "PreludeVerdict")))))
+(DTypeSig false "verdictOfFile" (TyFun (TyCon "String") (TyFun (TyCon "FileVerdict") (TyFun (TyFun (TyCon "InterfaceKey") (TyCon "InterfaceKey")) (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyVar "a")))) (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyVar "a"))))))))))
+(DFunDef false "verdictOfFile" ((PVar "file") (PVar "absent") (PVar "keyOf") (PVar "read") (PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "FileDisabled") (EVar "None")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (EVar "file"))) (arm (PCon "Err" PWild) () (ETuple (EVar "absent") (EVar "None"))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "read") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (ETuple (EApp (EVar "FileStale") (EApp (EVar "faultComponent") (EVar "fault"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) ((GBool (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "key") "ikCompiler") (ELit (LString "")))))) (ETuple (EApp (EVar "FileStale") (ELit (LString "compiler"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "value"))) () (EMatch (EApp (EApp (EVar "keysMatch") (EVar "key")) (EApp (EVar "keyOf") (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs")))) (arm (PCon "None") () (ETuple (EVar "FileLoaded") (EApp (EVar "Some") (EVar "value")))) (arm (PCon "Some" (PVar "component")) () (ETuple (EApp (EVar "FileStale") (EVar "component")) (EVar "None")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "readPreludeInterface" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "FileVerdict"))))
+(DFunDef false "readPreludeInterface" ((PVar "inputs")) (EApp (EVar "fst") (EApp (EVar "interfaceSections") (EVar "inputs"))))
+(DTypeSig false "interfaceSections" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "InterfaceSection")))))))
+(DFunDef false "interfaceSections" ((PVar "inputs")) (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdki"))) (EVar "FileMissing")) (ELam ((PVar "key")) (EVar "key"))) (ELam ((PVar "text")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "fr")) (ETuple (EFieldAccess (EApp (EVar "fst") (EVar "fr")) "ifKey") (EFieldAccess (EApp (EVar "fst") (EVar "fr")) "ifSections")))) (EApp (EVar "readInterface") (EVar "text"))))) (EVar "inputs")))
+(DTypeSig false "preludeVerdictRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "FileVerdict")))))
 (DFunDef false "preludeVerdictRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "loadPreludeInterface" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "PreludeVerdict"))))
-(DFunDef false "loadPreludeInterface" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EBlock (DoLet false false (PVar "verdict") (EApp (EVar "readPreludeInterface") (EVar "inputs"))) (DoLet false false PWild (EMatch (EVar "verdict") (arm (PCon "PVLoaded" (PVar "sections")) () (EApp (EApp (EVar "seedPreludeInterface") (ETuple (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (EApp (EVar "desugaredPreludeKey") (EFieldAccess (EVar "inputs") "pnCoreSrc")))) (EApp (EVar "cacheOfSections") (EVar "sections")))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeVerdictRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EVar "verdict"))))))
-(DTypeSig true "preludeStaleLine" (TyFun (TyCon "PreludeVerdict") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "preludeStaleLine" ((PCon "PVStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude interface stale: checking stdlib/core.mdk (")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ")")))))
-(DFunDef false "preludeStaleLine" (PWild) (EVar "None"))
+(DTypeSig true "loadPreludeInterface" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "FileVerdict"))))
+(DFunDef false "loadPreludeInterface" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "sections")) (EApp (EVar "interfaceSections") (EVar "inputs"))) (DoLet false false PWild (EMatch (EVar "sections") (arm (PCon "Some" (PVar "found")) () (EApp (EApp (EVar "seedPreludeInterface") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (EFieldAccess (EVar "inputs") "pnCoreSrc"))) (EApp (EVar "cacheOfSections") (EVar "found")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeVerdictRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EVar "verdict"))))))
+(DTypeSig true "staleLine" (TyFun (TyCon "SideFile") (TyFun (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "staleLine" ((PCon "InterfaceFile") (PCon "FileStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude interface stale: checking stdlib/core.mdk (")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ")")))))
+(DFunDef false "staleLine" ((PCon "TreesFile") (PCon "FileStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude trees stale: elaborating stdlib/core.mdk (")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ")")))))
+(DFunDef false "staleLine" ((PCon "DeclsFile") (PCon "FileStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude decls stale: parsing stdlib/core.mdk (")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ")")))))
+(DFunDef false "staleLine" (PWild PWild) (EVar "None"))
 (DTypeSig true "lastPreludeStaleLine" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "lastPreludeStaleLine" (PWild) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple PWild (PVar "verdict"))) () (EApp (EVar "preludeStaleLine") (EVar "verdict"))) (arm (PCon "None") () (EVar "None"))))
-(DData Public "TreesVerdict" () ((variant "TVLoaded" (ConPos)) (variant "TVMissing" (ConPos)) (variant "TVStale" (ConPos (TyCon "String"))) (variant "TVDisabled" (ConPos))) ())
+(DFunDef false "lastPreludeStaleLine" (PWild) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple PWild (PVar "verdict"))) () (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict"))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig false "readPreludeDecls" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "readPreludeDecls" ((PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "FileDisabled") (EVar "None")) (EIf (EApp (EVar "not") (EApp (EVar "interfaceHeaderFresh") (EVar "inputs"))) (ETuple (EVar "FileMissing") (EVar "None")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdkd"))) (EApp (EVar "FileStale") (ELit (LString "missing")))) (EVar "declsKeyOf")) (EVar "readDeclsFramed")) (EVar "inputs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "interfaceHeaderFresh" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "interfaceHeaderFresh" ((PVar "inputs")) (EIf (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (ELit (LString "core.mdki")))) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterfaceKey") (EVar "text")) (arm (PCon "Ok" (PVar "key")) () (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "key") "ikCompiler") (ELit (LString ""))) (EApp (EVar "isNone") (EApp (EApp (EVar "keysMatch") (EVar "key")) (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs")))))) (arm (PCon "Err" PWild) () (EVar "False"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "preludeDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "FileVerdict")))))
+(DFunDef false "preludeDeclsRef" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig false "takePreludeDecls" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "takePreludeDecls" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeDeclsRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PCon "FileLoaded"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "True")) (arm (PCon "Some" (PTuple (PVar "seen") PWild)) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "False")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "covered")) (EApp (EVar "readPreludeDecls") (EVar "inputs"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EMatch (EVar "covered") (arm (PCon "Some" (PVar "body")) () (EBlock (DoExpr (EApp (EApp (EVar "holdPreludeDecls") (EVar "inputs")) (EVar "body"))) (DoExpr (EVar "True")))) (arm (PCon "None") () (EVar "False"))))))))
+(DTypeSig false "holdPreludeDecls" (TyFun (TyCon "PreludeInputs") (TyFun (TyCon "String") (TyCon "Unit"))))
+(DFunDef false "holdPreludeDecls" ((PVar "inputs") (PVar "covered")) (EBlock (DoLet false false (PVar "decoded") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "value") (ELam (PWild) (EMatch (EFieldAccess (EVar "decoded") "value") (arm (PCon "Some" (PVar "pd")) () (EVar "pd")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "pd") (EMatch (EApp (EVar "acceptedDeclsBody") (EVar "covered")) (arm (PCon "Ok" (PVar "v")) () (EApp (EVar "Some") (EVar "v"))) (arm (PCon "Err" (PVar "fault")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EApp (EVar "FileStale") (EApp (EVar "faultComponent") (EVar "fault"))))))) (DoExpr (EVar "None")))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "decoded")) (EApp (EVar "Some") (EVar "pd")))) (DoExpr (EVar "pd"))))))) (DoExpr (EApp (EApp (EApp (EVar "registerPreludeTree") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (ELam ((PVar "pd")) (EFieldAccess (EVar "pd") "pdRuntime"))) (EVar "value"))) (DoExpr (EApp (EApp (EApp (EVar "registerPreludeTree") (EFieldAccess (EVar "inputs") "pnCoreSrc")) (ELam ((PVar "pd")) (EFieldAccess (EVar "pd") "pdCore"))) (EVar "value")))))
+(DTypeSig false "registerPreludeTree" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "PreludeDecls") (TyCon "PreludeTree")) (TyFun (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "PreludeDecls"))) (TyCon "Unit")))))
+(DFunDef false "registerPreludeTree" ((PVar "src") (PVar "pick") (PVar "value")) (EApp (EApp (EVar "registerPreludeDecls") (EVar "src")) (ELam (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PVar "pd")) (EApp (EVar "placed") (EApp (EVar "pick") (EVar "pd"))))) (EApp (EVar "value") (ELit LUnit))))))
+(DTypeSig false "placed" (TyFun (TyCon "PreludeTree") (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "placed" ((PVar "tree")) (EBlock (DoLet false false (PVar "first") (EApp (EVar "reserveBinderOrdinals") (EFieldAccess (EVar "tree") "ptBinders"))) (DoExpr (EIf (EBinOp "==" (EVar "first") (EFieldAccess (EVar "tree") "ptBase")) (EFieldAccess (EVar "tree") "ptDecls") (EApp (EApp (EVar "relocDecls") (EBinOp "-" (EVar "first") (EFieldAccess (EVar "tree") "ptBase"))) (EFieldAccess (EVar "tree") "ptDecls"))))))
+(DTypeSig true "preludeDeclsVerdict" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "FileVerdict"))))
+(DFunDef false "preludeDeclsVerdict" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeDeclsRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EApp (EVar "fst") (EApp (EVar "readPreludeDecls") (EVar "inputs"))))))
+(DTypeSig true "reportStaleLine" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))) (TyFun (TyApp (TyCon "Option") (TyFun (TyCon "String") (TyCon "Unit"))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "reportStaleLine" (PWild PWild (PCon "None")) (ELit LUnit))
+(DFunDef false "reportStaleLine" ((PVar "stop") (PVar "staging") (PCon "Some" (PVar "msg"))) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "stop") (EVar "msg")) (EIf (EVar "otherwise") (EMatch (EVar "staging") (arm (PCon "Some" (PVar "stage")) () (EApp (EVar "stage") (EVar "msg"))) (arm (PCon "None") () (EApp (EVar "ePutStrLn") (EVar "msg")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "preludeCompilerEnv" (TyCon "String"))
 (DFunDef false "preludeCompilerEnv" () (ELit (LString "MEDAKA_PRELUDE_COMPILER")))
-(DTypeSig false "readPreludeTrees" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab")))))))
-(DFunDef false "readPreludeTrees" ((PVar "decode") (PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "TVDisabled") (EVar "None")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EFieldAccess (EVar "inputs") "pnStdlibDir")) (ELit (LString "core.mdke")))) (arm (PCon "Err" PWild) () (ETuple (EVar "TVMissing") (EVar "None"))) (arm (PCon "Ok" (PVar "text")) () (EBlock (DoLet false false (PVar "read") (EIf (EVar "decode") (EApp (EApp (EMethodRef "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EVar "kv")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "kv")))))) (EApp (EVar "readElabFile") (EVar "text"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EVar "None")))) (EApp (EVar "readElabKey") (EVar "text"))))) (DoExpr (EMatch (EVar "read") (arm (PCon "Err" (PVar "fault")) () (ETuple (EApp (EVar "TVStale") (EApp (EVar "faultComponent") (EVar "fault"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) ((GBool (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "inputs") "pnCompiler") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "key") "ikCompiler") (ELit (LString "")))))) (ETuple (EApp (EVar "TVStale") (ELit (LString "compiler"))) (EVar "None"))) (arm (PCon "Ok" (PTuple (PVar "key") (PVar "value"))) () (EMatch (EApp (EApp (EVar "keysMatch") (EVar "key")) (EApp (EVar "elabKeyOf") (EApp (EApp (EVar "preludeInterfaceKey") (ELit (LString "core.mdk"))) (EVar "inputs")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "withInterface") (EVar "decode")) (EVar "inputs")) (EVar "value"))) (arm (PCon "Some" (PVar "component")) () (ETuple (EApp (EVar "TVStale") (EVar "component")) (EVar "None")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "withInterface" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyEffect ("IO") None (TyTuple (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab"))))))))
-(DFunDef false "withInterface" ((PVar "decode") (PVar "inputs") (PVar "value")) (EMatch (EIf (EVar "decode") (EApp (EVar "loadPreludeInterface") (EVar "inputs")) (EApp (EVar "readPreludeInterface") (EVar "inputs"))) (arm (PCon "PVLoaded" PWild) () (ETuple (EVar "TVLoaded") (EVar "value"))) (arm (PCon "PVMissing") () (ETuple (EApp (EVar "TVStale") (ELit (LString "interface"))) (EVar "None"))) (arm (PCon "PVStale" (PVar "component")) () (ETuple (EApp (EVar "TVStale") (EBinOp "++" (EBinOp "++" (ELit (LString "interface ")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString "")))) (EVar "None"))) (arm (PCon "PVDisabled") () (ETuple (EVar "TVDisabled") (EVar "None")))))
-(DTypeSig false "preludeTreesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "TreesVerdict")))))
+(DTypeSig false "readPreludeTrees" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab")))))))
+(DFunDef false "readPreludeTrees" ((PVar "decode") (PVar "inputs")) (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "value")) (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdke"))) (EVar "FileMissing")) (EVar "elabKeyOf")) (ELam ((PVar "text")) (EIf (EVar "decode") (EApp (EApp (EMethodRef "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EVar "kv")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "kv")))))) (EApp (EVar "readElabFile") (EVar "text"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EVar "None")))) (EApp (EVar "readElabKey") (EVar "text")))))) (EVar "inputs"))) (DoLet false false (PVar "held") (EMatch (EVar "value") (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "None")))) (DoExpr (EMatch (EVar "verdict") (arm (PCon "FileLoaded") () (EApp (EApp (EApp (EVar "withInterface") (EVar "decode")) (EVar "inputs")) (EVar "held"))) (arm PWild () (ETuple (EVar "verdict") (EVar "None")))))))
+(DTypeSig false "withInterface" (TyFun (TyCon "Bool") (TyFun (TyCon "PreludeInputs") (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "PreludeElab"))))))))
+(DFunDef false "withInterface" ((PVar "decode") (PVar "inputs") (PVar "value")) (EMatch (EIf (EVar "decode") (EApp (EVar "loadPreludeInterface") (EVar "inputs")) (EApp (EVar "readPreludeInterface") (EVar "inputs"))) (arm (PCon "FileLoaded") () (ETuple (EVar "FileLoaded") (EVar "value"))) (arm (PCon "FileMissing") () (ETuple (EApp (EVar "FileStale") (ELit (LString "interface"))) (EVar "None"))) (arm (PCon "FileStale" (PVar "component")) () (ETuple (EApp (EVar "FileStale") (EBinOp "++" (EBinOp "++" (ELit (LString "interface ")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString "")))) (EVar "None"))) (arm (PCon "FileDisabled") () (ETuple (EVar "FileDisabled") (EVar "None")))))
+(DTypeSig false "preludeTreesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "PreludeInputs") (TyCon "FileVerdict")))))
 (DFunDef false "preludeTreesRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "loadPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
+(DTypeSig true "loadPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "FileVerdict"))))
 (DFunDef false "loadPreludeElab" ((PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "seen") (PVar "verdict"))) ((GBool (EBinOp "==" (EVar "seen") (EVar "inputs")))) (EVar "verdict")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "verdict") (PVar "value")) (EApp (EApp (EVar "readPreludeTrees") (EVar "True")) (EVar "inputs"))) (DoLet false false PWild (EMatch (EVar "value") (arm (PCon "Some" (PVar "pe")) () (EApp (EApp (EVar "seedPreludeElab") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "inputs") "pnRuntimeSrc")) (EFieldAccess (EVar "inputs") "pnCoreSrc"))) (EVar "pe"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeTreesRef")) (EApp (EVar "Some") (ETuple (EVar "inputs") (EVar "verdict"))))) (DoExpr (EVar "verdict"))))))
 (DTypeSig true "treesLoaded" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "treesLoaded" ((PLit LUnit)) (EApp (EVar "isSome") (EUnOp "!" (EVar "preludeTreesRef"))))
@@ -2925,11 +3176,8 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "withHeldPrelude" ((PVar "coreDecls") (PVar "inputs")) (EMatch (EUnOp "!" (EVar "preludeTreesRef")) (arm (PCon "Some" (PTuple (PVar "held") PWild)) () (EIf (EBinOp "==" (EApp (EMethodRef "length") (EVar "coreDecls")) (EApp (EMethodRef "length") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "held") "pnCoreSrc")))) (EApp (EApp (EVar "keyedInputs") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "held") "pnRuntimeSrc")) (EFieldAccess (EVar "held") "pnCoreSrc"))) (EVar "inputs")) (EVar "inputs"))) (arm (PCon "None") () (EVar "inputs"))))
 (DTypeSig false "keyedInputs" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "DriveInputs") (TyCon "DriveInputs"))))
 (DFunDef false "keyedInputs" ((PVar "key") (PVar "inputs")) (ERecordUpdate (EVar "inputs") ((fa "diPreludeKey" (EApp (EVar "Some") (EVar "key"))))))
-(DTypeSig true "checkPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "TreesVerdict"))))
+(DTypeSig true "checkPreludeElab" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "FileVerdict"))))
 (DFunDef false "checkPreludeElab" ((PVar "inputs")) (EApp (EVar "fst") (EApp (EApp (EVar "readPreludeTrees") (EVar "False")) (EVar "inputs"))))
-(DTypeSig true "preludeTreesLine" (TyFun (TyCon "TreesVerdict") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "preludeTreesLine" ((PCon "TVStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude trees stale: elaborating stdlib/core.mdk (")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ")")))))
-(DFunDef false "preludeTreesLine" (PWild) (EVar "None"))
 (DTypeSig false "stripTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripTrailingUnit" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")) (ELit (LString "()\n")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))

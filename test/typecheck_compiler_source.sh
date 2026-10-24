@@ -316,6 +316,7 @@ compiler/tools/native_props_test.mdk
 compiler/tools/prop_plan.mdk
 compiler/tools/prop_runner_test.mdk
 compiler/types/interface_sexp.mdk
+compiler/types/prelude_elab_test.mdk
 compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
 compiler/types/typecheck.mdk"

@@ -21,7 +21,7 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 | `marker.mdk` | Rewrites interface-method and constrained-function occurrences to marked nodes; not on `check`/`run`/`build` (typecheck marks per binding group) | `markWithPrelude` |
 | `exhaust.mdk` | Guard-fall-through check on the raw pre-desugar AST via the pattern-matrix `useful` recursion; match exhaustiveness is in `types/` | `checkGuardExhaustiveness` |
 | `parse_cache.mdk` | Source-keyed memo of the implicit prelude parse | `parsePrelude` |
-| `desugar_cache.mdk` | Source-keyed memo of the desugared prelude, a sibling tier above `parse_cache` | `desugaredPrelude` |
+| `desugar_cache.mdk` | Source-keyed memo of the desugared prelude, a sibling tier above `parse_cache`, bounded at four entries. An entry is either a tree minted under a fresh generation, or a pending decoder for the text's shipped tree (`registerPreludeDecls`) that runs on the text's first demand and falls back to parse and desugar when it yields nothing. `preludeGeneration` returns the generation pair of the two prelude texts, the key the prelude caches are keyed by | `desugaredPrelude`, `desugaredPreludeKey`, `preludeGeneration`, `registerPreludeDecls` |
 
 ## Laws that bind it
 - **A1** — frontend imports only `support/` (and stdlib); it must not know Core IR, LLVM or any CLI verb.

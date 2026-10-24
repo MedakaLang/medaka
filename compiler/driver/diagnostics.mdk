@@ -28,7 +28,7 @@ import frontend.parser.{
   parseErrorCol,
   parseErrorMessage,
 }
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.parse_cache.{takeFirstN}
 import frontend.desugar.{desugar, checkDerives}
 import frontend.resolve.{
@@ -1039,8 +1039,7 @@ analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard =
   -- the identity of those two trees, for the typechecker's prelude interface cache
   -- (`checkCoreMemoized`, types/typecheck.mdk): the prelude is typechecked once
   -- per process, not once per call.
-  let preludeKey =
-    Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
+  let preludeKey = Some (preludeGeneration runtimeSrc coreSrc)
   -- Oracle superset = target + prelude (runtime + core) so exhaustiveness of a
   -- multi-clause function over a prelude ADT (Result/Option/…) isn't false-flagged.
   let guardWarns = checkGuardExhaustivenessWith (raw ++ runtimeP ++ coreP) raw
@@ -1233,10 +1232,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
   FrontGraph mods pairs =>
     let rt = desugaredPrelude fi.fiRuntimeSrc
     let core = desugaredPrelude fi.fiCoreSrc
-    let preludeKey = Some (
-      desugaredPreludeKey fi.fiRuntimeSrc,
-      desugaredPreludeKey fi.fiCoreSrc,
-    )
+    let preludeKey = Some (preludeGeneration fi.fiRuntimeSrc fi.fiCoreSrc)
     let driveIn = FrontDriveIn {
       fdInputs = fi.fiInputs,
       fdPreludeKey = preludeKey,
@@ -1964,8 +1960,7 @@ projectEntryAnalysisOr kept cacheRef parseCacheRef read entry roots runtimeSrc c
   -- #2719 (a1): the SAME prelude key `analyzeProject` mints, so hover/completion
   -- shares the process-wide prelude interface instead of re-typechecking and
   -- re-solving runtime + core on every request.
-  let preludeKey =
-    Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
+  let preludeKey = Some (preludeGeneration runtimeSrc coreSrc)
   match loadProgramFilesLocatedCached parseCacheRef wread entry roots
     Err _ => None
     Ok mods => match kept (graphIdOf mods)
@@ -2781,14 +2776,15 @@ export
 pendingStaleNotice : Ref (Option String)
 pendingStaleNotice = Ref None
 
--- The stale-trees line `run` prints when it elaborates `core.mdk` because
--- `stdlib/core.mdke` did not load, deferred the same way.
+-- The stale lines `run` prints for the prelude's shipped files (`core.mdke`,
+-- `core.mdkd`), deferred the same way: each is the envelope field it lands in
+-- and the line, in the order they were staged.
 export
-pendingTreesNotice : Ref (Option String)
-pendingTreesNotice = Ref None
+pendingPreludeNotices : Ref (List (String, String))
+pendingPreludeNotices = Ref []
 
 -- The extra top-level envelope fields the deferred notices amount to: the
--- two staleness verdicts staged above, plus whatever `MEDAKA_PERF=1` buffered into
+-- staleness verdicts staged above, plus whatever `MEDAKA_PERF=1` buffered into
 -- `support.timer`'s sink (verbatim `[perf]` lines — the identical strings the
 -- consumer would have seen on stderr, just inside the document).  Empty when
 -- neither fired ⇒ the envelope is byte-identical to today's.
@@ -2798,13 +2794,12 @@ runEnvelopeFields _ =
   let staleF = match !pendingStaleNotice
     None => []
     Some msg => [("staleBinary", JString msg)]
-  let treesF = match !pendingTreesNotice
-    None => []
-    Some msg => [("stalePreludeTrees", JString msg)]
+  let preludeF =
+    map ((field, msg) => (field, JString msg)) !pendingPreludeNotices
   let perfF = match takePerfSink ()
     [] => []
     ls => [("perf", JArray (arrayFromList (map (l => JString l) ls)))]
-  staleF ++ treesF ++ perfF
+  staleF ++ preludeF ++ perfF
 
 -- Emit the ONE `run --json` envelope on stderr — or nothing at all when there
 -- is nothing to say (no diagnostics AND no notices), which keeps a clean run on

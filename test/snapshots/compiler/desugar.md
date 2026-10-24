@@ -1,5 +1,5 @@
 # META
-source_lines=1362
+source_lines=1371
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -1257,6 +1257,15 @@ freshBinderId mid =
   binderOrdinalRef := n + 1
   BinderId mid n
 
+-- The first of [n] ordinals taken past the counter as one run, for a tree whose
+-- binders were minted elsewhere and are moved onto the run.
+export
+reserveBinderOrdinals : Int -> Int
+reserveBinderOrdinals n =
+  let first = !binderOrdinalRef
+  binderOrdinalRef := first + n
+  first
+
 stampBinderIds : String -> List Decl -> List Decl
 stampBinderIds mid prog = map (stampDecl mid) prog
 
@@ -1811,6 +1820,8 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "binderOrdinalRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig true "freshBinderId" (TyFun (TyCon "String") (TyCon "BinderId")))
 (DFunDef false "freshBinderId" ((PVar "mid")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "binderOrdinalRef"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "binderOrdinalRef")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "BinderId") (EVar "mid")) (EVar "n")))))
+(DTypeSig true "reserveBinderOrdinals" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "reserveBinderOrdinals" ((PVar "n")) (EBlock (DoLet false false (PVar "first") (EUnOp "!" (EVar "binderOrdinalRef"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "binderOrdinalRef")) (EBinOp "+" (EVar "first") (EVar "n")))) (DoExpr (EVar "first"))))
 (DTypeSig false "stampBinderIds" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampBinderIds" ((PVar "mid") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EVar "stampDecl") (EVar "mid"))) (EVar "prog")))
 (DTypeSig false "stampDecl" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl"))))
@@ -2312,6 +2323,8 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "binderOrdinalRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig true "freshBinderId" (TyFun (TyCon "String") (TyCon "BinderId")))
 (DFunDef false "freshBinderId" ((PVar "mid")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "binderOrdinalRef"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "binderOrdinalRef")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "BinderId") (EVar "mid")) (EVar "n")))))
+(DTypeSig true "reserveBinderOrdinals" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "reserveBinderOrdinals" ((PVar "n")) (EBlock (DoLet false false (PVar "first") (EUnOp "!" (EVar "binderOrdinalRef"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "binderOrdinalRef")) (EBinOp "+" (EVar "first") (EVar "n")))) (DoExpr (EVar "first"))))
 (DTypeSig false "stampBinderIds" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampBinderIds" ((PVar "mid") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampDecl") (EVar "mid"))) (EVar "prog")))
 (DTypeSig false "stampDecl" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl"))))

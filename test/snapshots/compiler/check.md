@@ -39,7 +39,7 @@ import frontend.resolve.{
   importedCtorDecls,
 }
 import frontend.exhaust.{exhaustToLinesWith}
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import types.typecheck.{
   defaultDriveInputs,
   checkOneToLinesWithRuntimeK,
@@ -123,7 +123,7 @@ cleanReport rsrc csrc runtimeP coreP raw desugared =
   let schemes =
     checkOneToLinesWithRuntimeK
       defaultDriveInputs
-      (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+      (Some (preludeGeneration rsrc csrc))
       (desugaredPrelude rsrc)
       (desugaredPrelude csrc)
       desugared
@@ -216,7 +216,7 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveToLines" false) (mem "singleFileImportErrors" false) (mem "ppResError" false) (mem "importedCtorDecls" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "exhaustToLinesWith" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkOneToLinesWithRuntimeK" false) (mem "checkOneErrorsWithRuntime" false) (mem "entryReportFromDiags" false) (mem "ModDiags" false))))
 (DTypeSig true "runCheck" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "runCheck" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EApp (EApp (EApp (EVar "runCheckFromDecls") (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "parse") (EVar "tsrc"))))
@@ -229,7 +229,7 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DFunDef false "reportFor" ((PLit (LString "")) (PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cleanReport") (EVar "rsrc")) (EVar "csrc")) (EVar "runtimeP")) (EVar "coreP")) (EVar "raw")) (EVar "desugared")))
 (DFunDef false "reportFor" ((PVar "resDiags") PWild PWild PWild PWild PWild PWild) (EVar "resDiags"))
 (DTypeSig false "cleanReport" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))))))
-(DFunDef false "cleanReport" ((PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EVar "exhaustToLinesWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntimeK") (EVar "defaultDriveInputs")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "desugared"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EVar "schemes")))))
+(DFunDef false "cleanReport" ((PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EVar "exhaustToLinesWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntimeK") (EVar "defaultDriveInputs")) (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc")))) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "desugared"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EVar "schemes")))))
 (DTypeSig false "joinNonEmpty" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "joinNonEmpty" ((PLit (LString "")) (PVar "b")) (EVar "b"))
 (DFunDef false "joinNonEmpty" ((PVar "a") (PLit (LString ""))) (EVar "a"))
@@ -253,7 +253,7 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveToLines" false) (mem "singleFileImportErrors" false) (mem "ppResError" false) (mem "importedCtorDecls" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "exhaustToLinesWith" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkOneToLinesWithRuntimeK" false) (mem "checkOneErrorsWithRuntime" false) (mem "entryReportFromDiags" false) (mem "ModDiags" false))))
 (DTypeSig true "runCheck" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "runCheck" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EApp (EApp (EApp (EVar "runCheckFromDecls") (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "parse") (EVar "tsrc"))))
@@ -266,7 +266,7 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DFunDef false "reportFor" ((PLit (LString "")) (PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cleanReport") (EVar "rsrc")) (EVar "csrc")) (EVar "runtimeP")) (EVar "coreP")) (EVar "raw")) (EVar "desugared")))
 (DFunDef false "reportFor" ((PVar "resDiags") PWild PWild PWild PWild PWild PWild) (EVar "resDiags"))
 (DTypeSig false "cleanReport" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))))))
-(DFunDef false "cleanReport" ((PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EVar "exhaustToLinesWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntimeK") (EVar "defaultDriveInputs")) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "desugared"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EVar "schemes")))))
+(DFunDef false "cleanReport" ((PVar "rsrc") (PVar "csrc") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EVar "exhaustToLinesWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkOneToLinesWithRuntimeK") (EVar "defaultDriveInputs")) (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc")))) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "desugared"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EVar "schemes")))))
 (DTypeSig false "joinNonEmpty" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "joinNonEmpty" ((PLit (LString "")) (PVar "b")) (EVar "b"))
 (DFunDef false "joinNonEmpty" ((PVar "a") (PLit (LString ""))) (EVar "a"))

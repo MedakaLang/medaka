@@ -1,13 +1,27 @@
 -- Unit tests for the clang profile a build's link takes (build_cmd.mdk's
 -- `profileClang`): which opt flag, and whether ThinLTO detection runs.  Also
 -- the static-libgc link flags (`gcStaticLibs`) and their shared-library
--- fallback (`gcSharedLibs`).
+-- fallback (`gcSharedLibs`), and the prelude texts' loader
+-- (`readPreludeSources`): the shipped declarations it hands the desugar memo.
 
-import test.{expectAll, expectEqual}
+import test.{Expectation, expectAll, expectEqual, fail, labelFail}
+import test_process.{underRoot, withScratchDir}
+import list.{get, indexed}
 import driver.build_cmd.{
   BuildProfile(..), profileClang, gcStaticLibs, gcSharedLibs,
-  scratchCandidatesFrom
+  scratchCandidatesFrom, readPreludeSourcesAs, staleLine, SideFile(..),
+  preludeDeclsVerdict, PreludeInputs(..)
 }
+import frontend.ast.{Decl(..), Ty(..), noDeclLoc}
+import frontend.desugar.{desugar, reserveBinderOrdinals}
+import frontend.desugar_cache.{desugaredPrelude}
+import frontend.parse_cache.{parsePrelude}
+import types.framed_test_support.{treeText, withDigestOf}
+import types.prelude_decls.{
+  PreludeDecls(..), PreludeTree(..), encodeDeclsFile, readDeclsFile
+}
+import types.prelude_interface.{InterfaceKey(..)}
+import types.prelude_elab.{binderSpan, relocDecls}
 
 test "a normal build keeps the opt level it was given and runs LTO detection" = expectAll
   [
@@ -74,3 +88,185 @@ test "an explicit TMPDIR is the only candidate, with no fallback to /tmp" =
   expectEqual
     ["/home/u/scratch"]
     (scratchCandidatesFrom "/home/u/scratch" "/var/tmp/medaka-scratch")
+
+-- ── the prelude texts' loader ───────────────────────────────────────────────
+-- Each case copies the stdlib's prelude files into a directory of its own with
+-- a `core.mdkd` of the case's making, written under the real file's key.  A
+-- tree the file hands over ends in a marker declaration no desugar produces, so
+-- the tree the memo returns came from the file exactly when it ends in it.
+
+-- The prelude texts, the shipped interface, the shipped declarations' key and
+-- value.
+data Shipped = Shipped {
+  shRuntime : String,
+  shCore : String,
+  shInterface : String,
+  shKey : InterfaceKey,
+  shDecls : PreludeDecls,
+}
+
+shipped : Unit -> <Env "MEDAKA_ROOT", FileRead> Option Shipped
+shipped _ = match (
+  readFile (underRoot "stdlib/runtime.mdk"),
+  readFile (underRoot "stdlib/core.mdk"),
+  readFile (underRoot "stdlib/core.mdki"),
+  readFile (underRoot "stdlib/core.mdkd"),
+)
+  (Ok rsrc, Ok csrc, Ok iface, Ok decls) => match readDeclsFile decls
+    Ok (key, pd) => Some Shipped {
+      shRuntime = rsrc,
+      shCore = csrc,
+      shInterface = iface,
+      shKey = key,
+      shDecls = pd,
+    }
+    Err _ => None
+  _ => None
+
+marker : Decl
+marker = DTypeSig False "seededMarker" (TyVar "a") noDeclLoc
+
+-- The shipped file with its core tree ending in the marker.
+marked : Shipped -> String
+marked sh = encodeDeclsFile sh.shKey { sh.shDecls |
+  pdCore =
+    { sh.shDecls.pdCore | ptDecls = sh.shDecls.pdCore.ptDecls ++ [marker] },
+}
+
+-- A marked file whose counters line claims one core binder more than the tree
+-- holds: the digest covers the lie.
+lying : Shipped -> String
+lying sh = encodeDeclsFile sh.shKey { sh.shDecls |
+  pdCore = { sh.shDecls.pdCore |
+    ptDecls = sh.shDecls.pdCore.ptDecls ++ [marker],
+    ptBinders = sh.shDecls.pdCore.ptBinders + 1,
+  },
+}
+
+-- Whether [d] holds a minted binder id.
+mintsBinders : Decl -> Bool
+mintsBinders d = match binderSpan [d]
+  Some run => run.brCount > 0
+  None => False
+
+-- A marked file whose middle binder-carrying declaration has every id moved up by
+-- one: the run's ends, its size and the counters line are as they were, an id is
+-- minted twice and another not at all, and the digest covers the lie.
+shifted : Shipped -> String
+shifted sh =
+  let carrying =
+    map
+      fst
+      (filter (p => mintsBinders (snd p)) (indexed sh.shDecls.pdCore.ptDecls))
+  let mid = optionOr 0 (get (length carrying / 2) carrying)
+  encodeDeclsFile sh.shKey { sh.shDecls |
+    pdCore = { sh.shDecls.pdCore |
+      ptDecls =
+        flatMap
+          (p => if fst p == mid then relocDecls 1 [snd p] else [snd p])
+          (indexed sh.shDecls.pdCore.ptDecls),
+    },
+  }
+
+-- A file whose digest matches a body that is not two declaration lists.
+undecodable : Shipped -> String
+undecodable sh =
+  withDigestOf (marked sh) "(counters 0 0 0 0)\n(not declarations)\n"
+
+-- The memo holds four texts, so four others make it forget the prelude's.
+forgetPrelude : Unit -> Unit
+forgetPrelude _ =
+  let _ = map (n => desugaredPrelude "-- forget \{intToString n}") [1, 2, 3, 4]
+  ()
+
+-- What the loader over [dir], holding [decls] as its `core.mdkd`, hands the memo
+-- for core once [shift] more binder ordinals are taken: core's tree, the counter
+-- before and after the demand, and the stale line the verb would print.
+loadedAt : Shipped ->
+  String ->
+  String ->
+  Int ->
+  <IO> Option (List Decl, Int, Int, Option String)
+loadedAt sh dir decls shift =
+  let _ = forgetPrelude ()
+  let written = do
+    _ <- makeDir dir
+    _ <- writeFile "\{dir}/runtime.mdk" sh.shRuntime
+    _ <- writeFile "\{dir}/core.mdk" sh.shCore
+    _ <- writeFile "\{dir}/core.mdki" sh.shInterface
+    writeFile "\{dir}/core.mdkd" decls
+  match written
+    Err _ => None
+    Ok _ => match readPreludeSourcesAs sh.shKey.ikCompiler dir
+      Err _ => None
+      Ok inputs =>
+        let _ = reserveBinderOrdinals shift
+        let before = reserveBinderOrdinals 0
+        let _ = desugaredPrelude inputs.pnRuntimeSrc
+        let core = desugaredPrelude inputs.pnCoreSrc
+        let after = reserveBinderOrdinals 0
+        Some (
+          core,
+          before,
+          after,
+          staleLine DeclsFile (preludeDeclsVerdict inputs),
+        )
+
+-- Core desugared in-process now, moved back onto the run that starts at [first].
+desugaredOnto : Int -> String -> List Decl
+desugaredOnto first csrc =
+  let at = reserveBinderOrdinals 0
+  relocDecls (first - at) (desugar (parsePrelude csrc))
+
+-- A seeded miss after [shift] more ordinals: the file's tree, moved onto the
+-- counter where it stood, is the in-process desugar's there, and the counter
+-- moves past it by the file's count, as the desugar's would.
+seededAt : Shipped -> String -> Int -> <IO> Expectation
+seededAt sh dir shift = match loadedAt sh dir (marked sh) shift
+  None => fail "the loader did not read the copied prelude"
+  Some (core, before, after, line) => expectAll [
+    labelFail
+      "the tree is the file's, moved onto the counter"
+      (expectEqual
+        (treeText (desugaredOnto before sh.shCore ++ [marker]))
+        (treeText core)),
+    labelFail
+      "the counter moves by the file's count"
+      (expectEqual (before + sh.shDecls.pdCore.ptBinders) after),
+    labelFail "no stale line" (expectEqual None line),
+  ]
+
+-- A file the digest passes that cannot be taken: the text is desugared instead,
+-- and the verb's line names the file.
+refusedAt : Shipped -> String -> String -> <IO> Expectation
+refusedAt sh dir decls = match loadedAt sh dir decls 0
+  None => fail "the loader did not read the copied prelude"
+  Some (core, before, _, line) => expectAll [
+    labelFail
+      "the tree is the in-process desugar's"
+      (expectEqual (treeText (desugaredOnto before sh.shCore)) (treeText core)),
+    labelFail
+      "the line"
+      (expectEqual
+        (Some "prelude decls stale: parsing stdlib/core.mdk (file)")
+        line),
+  ]
+
+-- One process, so the cases run in order: shift 0 first, while the counter
+-- still stands where the writer's did.
+test "a seeded miss is the in-process desugar at shifts 0 and 1000, and a refused body is parsed" =
+  match shipped ()
+    None => fail "could not read the shipped prelude files"
+    Some sh => withScratchDir (dir =>
+      let atZero = seededAt sh "\{dir}/a" 0
+      let atThousand = seededAt sh "\{dir}/b" 1000
+      let undecoded = refusedAt sh "\{dir}/c" (undecodable sh)
+      let lied = refusedAt sh "\{dir}/d" (lying sh)
+      let moved = refusedAt sh "\{dir}/e" (shifted sh)
+      expectAll [
+        labelFail "shift 0" atZero,
+        labelFail "shift 1000" atThousand,
+        labelFail "a body that does not decode" undecoded,
+        labelFail "counters that do not describe the tree" lied,
+        labelFail "an id changed in range, the counters unchanged" moved,
+      ])

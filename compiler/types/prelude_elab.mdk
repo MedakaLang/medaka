@@ -161,9 +161,15 @@ binderLine : List BinderRow -> String
 binderLine rows = renderSExp (SList (map sexpBinder rows))
 
 headerNode : InterfaceKey -> String -> SExp
-headerNode key digest = SList [
-  SAtom "medaka-elab",
-  SAtom (intToString formatVersion),
+headerNode = framedHeader "medaka-elab" formatVersion
+
+-- The header line of a framed file: [tag], [version], the key's sources and
+-- compiler, and the digest of the bytes after the line.
+export
+framedHeader : String -> Int -> InterfaceKey -> String -> SExp
+framedHeader tag version key digest = SList [
+  SAtom tag,
+  SAtom (intToString version),
   SList [
     SAtom "sources",
     SList (map (s => SList [SAtom (fst s), SAtom (snd s)]) key.ikSources),
@@ -194,31 +200,39 @@ encodeElabFile key pe =
   let covered = coveredText pe
   "\{renderSExp (headerNode key (sha256Hex covered))}\n\{covered}"
 
--- The digest a file's covered text has: the SHA-256 of the bytes after the
--- first line.
+-- The digest a framed file's covered text has: the SHA-256 of the bytes after
+-- the first line.
 export
-elabDigestOf : String -> String
-elabDigestOf text = sha256Hex (bodyOf text)
+framedDigestOf : String -> String
+framedDigestOf text = sha256Hex (bodyOf text)
+
+-- Why a file of the kind [noun], written at [version], is refused.
+export
+renderFramedFault : String -> Int -> InterfaceFault -> String
+renderFramedFault noun version (WrongFormat v) =
+  "\{noun} format version \{v}, this compiler reads \{version}"
+renderFramedFault noun _ (Malformed e) = "\{e.sePath}: \{e.seWhat} (\{noun})"
 
 export
 renderElabFault : InterfaceFault -> String
-renderElabFault (WrongFormat v) =
-  "elaborated-trees format version \{v}, this compiler reads \{formatVersion}"
-renderElabFault (Malformed e) = "\{e.sePath}: \{e.seWhat} (elaborated trees)"
+renderElabFault fault = renderFramedFault "elaborated trees" formatVersion fault
 
+export
 refuse : String -> String -> Result InterfaceFault a
 refuse path what =
   Err (Malformed SexpError { seOffset = 0, sePath = path, seWhat = what })
 
+export
 failure : SexpError -> Result InterfaceFault a
 failure e = Err (Malformed e)
 
 -- The version the header declares, when it declares one.
-declaredVersion : SExp -> Option Int
-declaredVersion (SList ((SAtom "medaka-elab") :: v :: _)) = match atomInt "" v
-  Ok n => Some n
-  Err _ => None
-declaredVersion _ = None
+declaredVersion : String -> SExp -> Option Int
+declaredVersion tag (SList ((SAtom t) :: v :: _))
+  | t == tag = match atomInt "" v
+    Ok n => Some n
+    Err _ => None
+declaredVersion _ _ = None
 
 -- The key and the digest a header claims.
 data Header = Header { hKey : InterfaceKey, hDigest : String }
@@ -231,9 +245,9 @@ data Counters = Counters {
   cBinderBase : Int,
 }
 
-headerOf : SExp -> Result SexpError Header
-headerOf (SList [SAtom "medaka-elab", v, SList [SAtom "sources", srcs], SList [SAtom "compiler", c], SList [SAtom "digest", d]]) =
-  do
+headerOf : String -> SExp -> Result SexpError Header
+headerOf tag (SList [SAtom t, v, SList [SAtom "sources", srcs], SList [SAtom "compiler", c], SList [SAtom "digest", d]])
+  | t == tag = do
     version <- atomInt "header/version" v
     sources <- traverse sourceOf (listItems srcs)
     compiler <- expectAtom "header/compiler" c
@@ -246,10 +260,10 @@ headerOf (SList [SAtom "medaka-elab", v, SList [SAtom "sources", srcs], SList [S
       },
       hDigest = digest,
     }
-headerOf _ = Err SexpError {
+headerOf tag _ = Err SexpError {
   seOffset = 0,
   sePath = "header",
-  seWhat = "expected a medaka-elab header of five fields",
+  seWhat = "expected a \{tag} header of five fields",
 }
 
 countersOf : SExp -> Result SexpError Counters
@@ -307,23 +321,55 @@ readBinder cur =
     brSigned = signed,
   }
 
+-- The first line of [text] read as one s-expression, and the text after it;
+-- [what] is why there is no such line.
+export
+firstLine : String -> String -> String -> Result InterfaceFault (SExp, String)
+firstLine path what text = match S.indexOf "\n" text
+  None => refuse path what
+  Some i => match parseSExp (S.take i text)
+    Err e => failure e
+    Ok node => Ok (node, S.drop (i + 1) text)
+
 -- The header a file claims and the bytes its digest covers, after the version
 -- and the digest are checked and before any of the covered bytes is decoded.
 checkedFile : String -> Result InterfaceFault (Header, String)
-checkedFile text = match S.indexOf "\n" text
-  None => refuse "file" "no header line"
-  Some i => match parseSExp (S.take i text)
-    Err e => failure e
-    Ok node => match declaredVersion node
-      Some v if v /= formatVersion => Err (WrongFormat v)
-      _ => match headerOf node
-        Err e => failure e
-        Ok h =>
-          let covered = bodyOf text
-          if sha256Hex covered /= h.hDigest then
-            refuse "header/digest" "the body does not match the digest"
-          else
-            Ok (h, covered)
+checkedFile = checkedHeader "medaka-elab" formatVersion
+
+-- The key a file framed under [tag] at [version] claims and the bytes its
+-- digest covers, after the version and the digest are checked.
+export
+checkedFramed : String ->
+  Int ->
+  String ->
+  Result InterfaceFault (InterfaceKey, String)
+checkedFramed tag version text =
+  map ((h, covered) => (h.hKey, covered)) (checkedHeader tag version text)
+
+checkedHeader : String ->
+  Int ->
+  String ->
+  Result InterfaceFault (Header, String)
+checkedHeader tag version text = do
+  (node, covered) <- firstLine "file" "no header line" text
+  checkedNode tag version node covered
+
+-- [node] is the first line of a file whose digest covers [covered].  Kept out of
+-- `checkedHeader`'s `do`: a guarded final `match` there that reads a parameter of
+-- the enclosing function does not compile (the emitter reports it unbound).
+checkedNode : String ->
+  Int ->
+  SExp ->
+  String ->
+  Result InterfaceFault (Header, String)
+checkedNode tag version node covered = match declaredVersion tag node
+  Some v if v /= version => Err (WrongFormat v)
+  _ => do
+    h <- mapErr Malformed (headerOf tag node)
+    if sha256Hex covered /= h.hDigest then
+      refuse "header/digest" "the body does not match the digest"
+    else
+      Ok (h, covered)
 
 -- The value of a file, or why it is refused: the version first, then the
 -- header, then the digest, then the counters line, then the body, and last the
@@ -338,13 +384,10 @@ readElabFile text = do
 decodeCovered : InterfaceKey ->
   String ->
   Result InterfaceFault (InterfaceKey, PreludeElab)
-decodeCovered key covered = match S.indexOf "\n" covered
-  None => refuse "counters" "no counters line"
-  Some j => match parseSExp (S.take j covered)
-    Err e => failure e
-    Ok node => match countersOf node
-      Err e => failure e
-      Ok counters => decodeBody key counters (S.drop (j + 1) covered)
+decodeCovered key covered = do
+  (node, rest) <- firstLine "counters" "no counters line" covered
+  counters <- mapErr Malformed (countersOf node)
+  decodeBody key counters rest
 
 decodeBody : InterfaceKey ->
   Counters ->
@@ -440,7 +483,8 @@ aboveCounter _ _ = False
 
 -- The key a file's header claims, after its version, header and digest are
 -- checked, without decoding the body: what a process that will not take the
--- trees itself needs to say whether they are fresh.
+-- trees itself needs to say whether they are fresh.  A file whose counters lie
+-- under a recomputed digest reads as fresh here; `readElabFile` refuses it.
 export
 readElabKey : String -> Result InterfaceFault InterfaceKey
 readElabKey text = map ((h, _) => h.hKey) (checkedFile text)
@@ -452,7 +496,10 @@ readElabKey text = map ((h, _) => h.hKey) (checkedFile text)
 -- less the file's.  Desugar mints core's ordinals in one contiguous run, so the
 -- reader's core holds exactly the file's count of them from its first.
 
--- [decls] with [f] applied to every binder id they carry, minted or not.
+-- [decls] with [f] applied to every binder id they carry, minted or not.  The
+-- walkers name every constructor, so one added to the AST is a non-exhaustive
+-- match here until it is placed: the arms that carry no binder hand their node
+-- back unchanged.
 mapBinders : (BinderId -> BinderId) -> List Decl -> List Decl
 mapBinders f decls = map (relocDecl f) decls
 
@@ -473,7 +520,13 @@ relocDecl o (DProp pub name params body) =
   DProp pub name params (relocExpr o body)
 relocDecl o (DTest pub name body) = DTest pub name (relocExpr o body)
 relocDecl o (DAttrib attrs d) = DAttrib attrs (relocDecl o d)
-relocDecl _ d = d
+relocDecl _ (d@(DTypeSig _ _ _ _)) = d
+relocDecl _ (d@(DExtern _)) = d
+relocDecl _ (d@(DData {  })) = d
+relocDecl _ (d@(DUse _ _ _)) = d
+relocDecl _ (d@(DEffect _ _ _ _ _ _)) = d
+relocDecl _ (d@(DTypeAlias {  })) = d
+relocDecl _ (d@(DNewtype {  })) = d
 
 relocIfaceMethod : (BinderId -> BinderId) -> IfaceMethod -> IfaceMethod
 relocIfaceMethod o (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
@@ -482,7 +535,7 @@ relocIfaceMethod o (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
     ty
     (Some (MethodDefault (map (relocPat o) ps) (relocExpr o e)))
     mloc
-relocIfaceMethod _ m = m
+relocIfaceMethod _ (m@(IfaceMethod _ _ None _)) = m
 
 relocImplMethod : (BinderId -> BinderId) -> ImplMethod -> ImplMethod
 relocImplMethod o (ImplMethod n ps e) =
@@ -503,7 +556,9 @@ relocPat o (PCons h t) = PCons (relocPat o h) (relocPat o t)
 relocPat o (PTuple ps) = PTuple (map (relocPat o) ps)
 relocPat o (PList ps) = PList (map (relocPat o) ps)
 relocPat o (PRec c fields open) = PRec c (map (relocField o) fields) open
-relocPat _ p = p
+relocPat _ PWild = PWild
+relocPat _ (p@(PLit _)) = p
+relocPat _ (p@(PRng _ _ _)) = p
 
 relocField : (BinderId -> BinderId) -> RecPatField -> RecPatField
 relocField o (RecPatField n l bid sub) =
@@ -551,7 +606,17 @@ relocExpr o (EMapLit n kvs) =
   EMapLit n (map ((k, v) => (relocExpr o k, relocExpr o v)) kvs)
 relocExpr o (ESetLit n es) = ESetLit n (map (relocExpr o) es)
 relocExpr o (EAsPat n x) = EAsPat n (relocExpr o x)
-relocExpr _ e = e
+relocExpr _ (e@(ELit _)) = e
+relocExpr _ (e@(EVar _)) = e
+relocExpr _ (e@(ESection (SecBare _))) = e
+relocExpr _ (e@(EMethodRef _)) = e
+relocExpr _ (e@(EDictApp _)) = e
+relocExpr _ (e@(EVarAt _ _)) = e
+relocExpr _ (e@(EVarId _ _)) = e
+relocExpr _ (e@(EMethodAt _ _ _)) = e
+relocExpr _ (e@(EDictAt _ _)) = e
+relocExpr _ (e@(ENumLit _ _ _)) = e
+relocExpr _ (e@(EWideLit _ _ _ _)) = e
 
 relocArm : (BinderId -> BinderId) -> Arm -> Arm
 relocArm o (Arm p gs b) =
@@ -577,12 +642,19 @@ relocAssign o (FieldAssign n v) = FieldAssign n (relocExpr o v)
 
 relocInterp : (BinderId -> BinderId) -> InterpPart -> InterpPart
 relocInterp o (InterpExpr e) = InterpExpr (relocExpr o e)
-relocInterp _ p = p
+relocInterp _ (p@(InterpStr _)) = p
 
--- The first minted binder ordinal of [decls] and how many there are, or a
--- count of -1 when the minted ordinals are not one contiguous run.  The walk
--- that relocates is the census: [note] hands every id back unchanged.
-binderSpan : List Decl -> (Int, Int)
+-- The ordinals a tree minted: the first of them and how many there are.
+public export data BinderRun = BinderRun {
+  brFirst : Int,
+  brCount : Int,
+} deriving (Eq, Debug)
+
+-- The run [decls] minted (`BinderRun 0 0` for none), or `None` when the minted
+-- ordinals are not one contiguous run.  The walk that relocates is the census:
+-- [note] hands every id back unchanged.
+export
+binderSpan : List Decl -> Option BinderRun
 binderSpan decls =
   let lo = Ref (0 - 1)
   let hi = Ref (0 - 1)
@@ -596,10 +668,50 @@ binderSpan decls =
         bid
       _ => bid
   let _ = mapBinders note decls
-  if hi.value - lo.value + 1 == count.value then
-    (lo.value, count.value)
+  if count.value == 0 then
+    Some BinderRun { brFirst = 0, brCount = 0 }
+  else if hi.value - lo.value + 1 == count.value then
+    Some BinderRun { brFirst = lo.value, brCount = count.value }
   else
-    (lo.value, 0 - 1)
+    None
+
+-- The longest binder run a file may claim, checked before the run's bitmap is
+-- allocated: the prelude mints a few thousand.
+maxBinderRun : Int
+maxBinderRun = 4194304
+
+-- Whether the minted binder ordinals of [decls] are exactly [run]'s ordinals,
+-- each once: in range, no repeat, and so no gap.  `binderSpan` sees only the
+-- run's ends and its size, which a changed or duplicated id leaves alone.
+export
+binderRunIs : BinderRun -> List Decl -> Bool
+binderRunIs run decls
+  | run.brCount < 0 || run.brCount > maxBinderRun = False
+  | otherwise =
+    let count = run.brCount
+    let base = run.brFirst
+    let seen = arrayMake count False
+    let ok = Ref True
+    let taken = Ref 0
+    let note =
+      bid => match bid
+        BinderId _ i if i >= 0 =>
+          let j = i - base
+          let _ =
+            if j < 0 || j >= count || arrayGetUnsafe j seen then
+              ok := False
+            else
+              arraySetUnsafe j True seen
+          taken := taken.value + 1
+          bid
+        _ => bid
+    let _ = mapBinders note decls
+    ok.value && taken.value == count
+
+-- [decls] with every minted binder ordinal moved by [offset].
+export
+relocDecls : Int -> List Decl -> List Decl
+relocDecls offset decls = mapBinders (relocId offset) decls
 
 relocated : Int -> PreludeElab -> PreludeElab
 relocated offset pe =
@@ -646,14 +758,12 @@ export
 preludeElabFor : (Int, Int) -> List Decl -> Option PreludeElab
 preludeElabFor generation core = match !preludeElabCacheRef
   Some (seen, pe, True) if seen == generation => Some pe
-  Some (seen, pe, False) if seen == generation =>
-    let (first, count) = binderSpan core
-    if count /= pe.peBinderCount then
-      None
-    else
-      let moved = relocated (first - pe.peBinderBase) pe
+  Some (seen, pe, False) if seen == generation => match binderSpan core
+    Some run if run.brCount == pe.peBinderCount =>
+      let moved = relocated (run.brFirst - pe.peBinderBase) pe
       preludeElabCacheRef := Some (generation, moved, True)
       Some moved
+    _ => None
   _ => None
 
 -- A tree-arm drive's published evidence and binder rows, with the rows of the

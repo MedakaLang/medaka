@@ -1253,6 +1253,15 @@ freshBinderId mid =
   binderOrdinalRef := n + 1
   BinderId mid n
 
+-- The first of [n] ordinals taken past the counter as one run, for a tree whose
+-- binders were minted elsewhere and are moved onto the run.
+export
+reserveBinderOrdinals : Int -> Int
+reserveBinderOrdinals n =
+  let first = !binderOrdinalRef
+  binderOrdinalRef := first + n
+  first
+
 stampBinderIds : String -> List Decl -> List Decl
 stampBinderIds mid prog = map (stampDecl mid) prog
 

@@ -1,5 +1,5 @@
 # META
-source_lines=1790
+source_lines=2114
 stages=DESUGAR,MARK
 # SOURCE
 -- A faithful, fail-closed codec for the elaborated AST and the evidence rows.
@@ -26,7 +26,7 @@ import list.{splitAt}
 import support.sexp_value.{
   SExp(..), SexpCursor, SexpError(..), cursorAdvance, cursorAtEnd, cursorAtom,
   cursorClose, cursorFail, cursorFailed, cursorInt, cursorList, cursorOf,
-  cursorOffset, cursorOpen, cursorPeek, cursorChar
+  cursorOffset, cursorOpen, cursorPeek, cursorChar, isCloseByte, isOpenByte
 }
 
 -- ── entry points ────────────────────────────────────────────────────────────
@@ -125,6 +125,16 @@ sexpBinderId : BinderId -> SExp
 sexpBinderId (BinderId "" n) = sexpInt n
 sexpBinderId (BinderId m n) = SList [SAtom m, sexpInt n]
 
+-- The bare atoms `t`, `f` and `z`.
+isTrueChar : Int -> Bool
+isTrueChar c = c == 116
+
+isFalseChar : Int -> Bool
+isFalseChar c = c == 102
+
+isPlaceholderChar : Int -> Bool
+isPlaceholderChar c = c == 122
+
 -- Big-endian bytes as the number they spell.
 wordOf : List Int -> Int
 wordOf bytes = fold (acc b => acc * 256 + b) 0 bytes
@@ -143,7 +153,12 @@ export
 readBool : SexpCursor -> Bool
 readBool cur =
   let c = cursorChar cur
-  if c == 116 then True else if c == 102 then False else cursorFail cur False
+  if isTrueChar c then
+    True
+  else if isFalseChar c then
+    False
+  else
+    cursorFail cur False
 
 readFloat : SexpCursor -> Float
 readFloat cur =
@@ -159,7 +174,7 @@ readFloat cur =
 readOpt : (SexpCursor -> a) -> SexpCursor -> Option a
 readOpt f cur =
   let _ = cursorOpen cur
-  if cursorPeek cur == 41 then
+  if isCloseByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     None
   else
@@ -177,7 +192,7 @@ readPair fa fb cur =
 
 readLoc : SexpCursor -> Loc
 readLoc cur =
-  if cursorPeek cur == 40 then
+  if isOpenByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     let f = readString cur
     let a = readInt cur
@@ -186,14 +201,14 @@ readLoc cur =
     let d = readInt cur
     let _ = cursorClose cur
     Loc f a b c d
-  else if cursorChar cur == 122 then
+  else if isPlaceholderChar (cursorChar cur) then
     Loc "" 1 0 1 0
   else
     cursorFail cur dfltLoc
 
 readEvId : SexpCursor -> EvId
 readEvId cur =
-  if cursorPeek cur == 40 then
+  if isOpenByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     let m = readString cur
     let n = readInt cur
@@ -205,7 +220,7 @@ readEvId cur =
 export
 readBinderId : SexpCursor -> BinderId
 readBinderId cur =
-  if cursorPeek cur == 40 then
+  if isOpenByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     let m = readString cur
     let n = readInt cur
@@ -214,50 +229,402 @@ readBinderId cur =
   else
     BinderId "" (readInt cur)
 
+-- A value of a type with several constructors is `(k field...)` or the bare
+-- `k`; [tagged] reads the first, [bare] the second. `readExpr` and `readPat`
+-- spell the same shell out: the call through two closures costs measurably more
+-- on the decode hot path (compiler/PERF-RESULTS.md, "Decoder hot-path shapes").
+readTagged : (Int -> SexpCursor -> a) ->
+  (Int -> SexpCursor -> a) ->
+  SexpCursor ->
+  a
+readTagged tagged bare cur =
+  if isOpenByte (cursorPeek cur) then
+    let _ = cursorAdvance cur
+    let v = tagged (cursorInt cur) cur
+    let _ = cursorClose cur
+    v
+  else
+    bare (cursorInt cur) cur
+
+-- The reader for a form the type has no constructor for.
+refuse : a -> Int -> SexpCursor -> a
+refuse dflt _ cur = cursorFail cur dflt
+
+-- ── tags ───────────────────────────────────────────────────────────────────
+-- Constructor numbers, shared by writers and readers. A tag is a function of
+-- `()`, not an `Int` constant: a top-level `Int` is a lazily forced global, so a
+-- guard on one costs far more than a call to a constant function
+-- (compiler/PERF-RESULTS.md, "Decoder hot-path shapes").
+tagAtom : Int -> SExp
+tagAtom n = SAtom (intToString n)
+
+-- Lit
+tagLInt : Unit -> Int
+tagLInt () = 0
+tagLFloat : Unit -> Int
+tagLFloat () = 1
+tagLU64 : Unit -> Int
+tagLU64 () = 2
+tagLI64 : Unit -> Int
+tagLI64 () = 3
+tagLString : Unit -> Int
+tagLString () = 4
+tagLChar : Unit -> Int
+tagLChar () = 5
+tagLBool : Unit -> Int
+tagLBool () = 6
+tagLUnit : Unit -> Int
+tagLUnit () = 7
+
+-- TyConOrigin
+tagOriginUnresolved : Unit -> Int
+tagOriginUnresolved () = 0
+tagOriginBuiltin : Unit -> Int
+tagOriginBuiltin () = 1
+tagOriginModule : Unit -> Int
+tagOriginModule () = 2
+
+-- Ty
+tagTyCon : Unit -> Int
+tagTyCon () = 0
+tagTyVar : Unit -> Int
+tagTyVar () = 1
+tagTyApp : Unit -> Int
+tagTyApp () = 2
+tagTyFun : Unit -> Int
+tagTyFun () = 3
+tagTyTuple : Unit -> Int
+tagTyTuple () = 4
+tagTyEffect : Unit -> Int
+tagTyEffect () = 5
+tagTyConstrained : Unit -> Int
+tagTyConstrained () = 6
+tagTyNamed : Unit -> Int
+tagTyNamed () = 7
+tagTyQual : Unit -> Int
+tagTyQual () = 8
+tagTyRow : Unit -> Int
+tagTyRow () = 9
+tagTyAuth : Unit -> Int
+tagTyAuth () = 10
+
+-- EffParamTy
+tagEPTop : Unit -> Int
+tagEPTop () = 0
+tagEPLit : Unit -> Int
+tagEPLit () = 1
+tagEPName : Unit -> Int
+tagEPName () = 2
+tagEPSet : Unit -> Int
+tagEPSet () = 3
+tagEPProduct : Unit -> Int
+tagEPProduct () = 4
+
+-- KindAnn
+tagKindType : Unit -> Int
+tagKindType () = 0
+tagKindEffect : Unit -> Int
+tagKindEffect () = 1
+tagKindAuthority : Unit -> Int
+tagKindAuthority () = 2
+tagKindArrow : Unit -> Int
+tagKindArrow () = 3
+
+-- Route
+tagRNone : Unit -> Int
+tagRNone () = 0
+tagRKey : Unit -> Int
+tagRKey () = 1
+tagRDict : Unit -> Int
+tagRDict () = 2
+tagRDictFwd : Unit -> Int
+tagRDictFwd () = 3
+tagRLocal : Unit -> Int
+tagRLocal () = 4
+tagRScalar : Unit -> Int
+tagRScalar () = 5
+tagRProj : Unit -> Int
+tagRProj () = 6
+
+-- EvVal
+tagEvOne : Unit -> Int
+tagEvOne () = 0
+tagEvMany : Unit -> Int
+tagEvMany () = 1
+tagEvMethod : Unit -> Int
+tagEvMethod () = 2
+tagEvLit : Unit -> Int
+tagEvLit () = 3
+tagEvHead : Unit -> Int
+tagEvHead () = 4
+
+-- Addr
+tagALocal : Unit -> Int
+tagALocal () = 0
+tagAGlobal : Unit -> Int
+tagAGlobal () = 1
+
+-- Pat
+tagPVar : Unit -> Int
+tagPVar () = 0
+tagPWild : Unit -> Int
+tagPWild () = 1
+tagPLit : Unit -> Int
+tagPLit () = 2
+tagPCon : Unit -> Int
+tagPCon () = 3
+tagPCons : Unit -> Int
+tagPCons () = 4
+tagPTuple : Unit -> Int
+tagPTuple () = 5
+tagPList : Unit -> Int
+tagPList () = 6
+tagPAs : Unit -> Int
+tagPAs () = 7
+tagPRng : Unit -> Int
+tagPRng () = 8
+tagPRec : Unit -> Int
+tagPRec () = 9
+
+-- Guard
+tagGBool : Unit -> Int
+tagGBool () = 0
+tagGBind : Unit -> Int
+tagGBind () = 1
+
+-- DoStmt
+tagDoExpr : Unit -> Int
+tagDoExpr () = 0
+tagDoBind : Unit -> Int
+tagDoBind () = 1
+tagDoLet : Unit -> Int
+tagDoLet () = 2
+tagDoAssign : Unit -> Int
+tagDoAssign () = 3
+tagDoFieldAssign : Unit -> Int
+tagDoFieldAssign () = 4
+
+-- InterpPart
+tagInterpStr : Unit -> Int
+tagInterpStr () = 0
+tagInterpExpr : Unit -> Int
+tagInterpExpr () = 1
+
+-- Section
+tagSecBare : Unit -> Int
+tagSecBare () = 0
+tagSecRight : Unit -> Int
+tagSecRight () = 1
+tagSecLeft : Unit -> Int
+tagSecLeft () = 2
+
+-- Expr
+tagELit : Unit -> Int
+tagELit () = 0
+tagEVar : Unit -> Int
+tagEVar () = 1
+tagEApp : Unit -> Int
+tagEApp () = 2
+tagELam : Unit -> Int
+tagELam () = 3
+tagELet : Unit -> Int
+tagELet () = 4
+tagEMatch : Unit -> Int
+tagEMatch () = 5
+tagEIf : Unit -> Int
+tagEIf () = 6
+tagEBinOp : Unit -> Int
+tagEBinOp () = 7
+tagEUnOp : Unit -> Int
+tagEUnOp () = 8
+tagEInfix : Unit -> Int
+tagEInfix () = 9
+tagEFieldAccess : Unit -> Int
+tagEFieldAccess () = 10
+tagETuple : Unit -> Int
+tagETuple () = 11
+tagEListLit : Unit -> Int
+tagEListLit () = 12
+tagEArrayLit : Unit -> Int
+tagEArrayLit () = 13
+tagERangeList : Unit -> Int
+tagERangeList () = 14
+tagERangeArray : Unit -> Int
+tagERangeArray () = 15
+tagESlice : Unit -> Int
+tagESlice () = 16
+tagELetGroup : Unit -> Int
+tagELetGroup () = 17
+tagESection : Unit -> Int
+tagESection () = 18
+tagEIndex : Unit -> Int
+tagEIndex () = 19
+tagEAnnot : Unit -> Int
+tagEAnnot () = 20
+tagEHeadAnnot : Unit -> Int
+tagEHeadAnnot () = 21
+tagEBlock : Unit -> Int
+tagEBlock () = 22
+tagEDo : Unit -> Int
+tagEDo () = 23
+tagEStringInterp : Unit -> Int
+tagEStringInterp () = 24
+tagEGuards : Unit -> Int
+tagEGuards () = 25
+tagERecordCreate : Unit -> Int
+tagERecordCreate () = 26
+tagERecordUpdate : Unit -> Int
+tagERecordUpdate () = 27
+tagEVariantUpdate : Unit -> Int
+tagEVariantUpdate () = 28
+tagEMapLit : Unit -> Int
+tagEMapLit () = 29
+tagESetLit : Unit -> Int
+tagESetLit () = 30
+tagEAsPat : Unit -> Int
+tagEAsPat () = 31
+tagEMethodRef : Unit -> Int
+tagEMethodRef () = 32
+tagEDictApp : Unit -> Int
+tagEDictApp () = 33
+tagEVarAt : Unit -> Int
+tagEVarAt () = 34
+tagEVarId : Unit -> Int
+tagEVarId () = 35
+tagEMethodAt : Unit -> Int
+tagEMethodAt () = 36
+tagEDictAt : Unit -> Int
+tagEDictAt () = 37
+tagELoc : Unit -> Int
+tagELoc () = 38
+tagEDoOrigin : Unit -> Int
+tagEDoOrigin () = 39
+tagENumLit : Unit -> Int
+tagENumLit () = 40
+tagEWideLit : Unit -> Int
+tagEWideLit () = 41
+
+-- UsePath
+tagUseName : Unit -> Int
+tagUseName () = 0
+tagUseGroup : Unit -> Int
+tagUseGroup () = 1
+tagUseWild : Unit -> Int
+tagUseWild () = 2
+tagUseAlias : Unit -> Int
+tagUseAlias () = 3
+
+-- DataVis
+tagVisPrivate : Unit -> Int
+tagVisPrivate () = 0
+tagVisAbstract : Unit -> Int
+tagVisAbstract () = 1
+tagVisPublic : Unit -> Int
+tagVisPublic () = 2
+
+-- ConPayload
+tagConPos : Unit -> Int
+tagConPos () = 0
+tagConNamed : Unit -> Int
+tagConNamed () = 1
+
+-- Attr
+tagAttrDeprecated : Unit -> Int
+tagAttrDeprecated () = 0
+tagAttrInline : Unit -> Int
+tagAttrInline () = 1
+tagAttrMustUse : Unit -> Int
+tagAttrMustUse () = 2
+tagAttrNoInline : Unit -> Int
+tagAttrNoInline () = 3
+
+-- Decl
+tagDTypeSig : Unit -> Int
+tagDTypeSig () = 0
+tagDExtern : Unit -> Int
+tagDExtern () = 1
+tagDFunDef : Unit -> Int
+tagDFunDef () = 2
+tagDData : Unit -> Int
+tagDData () = 3
+tagDUse : Unit -> Int
+tagDUse () = 4
+tagDEffect : Unit -> Int
+tagDEffect () = 5
+tagDProp : Unit -> Int
+tagDProp () = 6
+tagDTest : Unit -> Int
+tagDTest () = 7
+tagDInterface : Unit -> Int
+tagDInterface () = 8
+tagDImpl : Unit -> Int
+tagDImpl () = 9
+tagDTypeAlias : Unit -> Int
+tagDTypeAlias () = 10
+tagDNewtype : Unit -> Int
+tagDNewtype () = 11
+tagDLetGroup : Unit -> Int
+tagDLetGroup () = 12
+tagDAttrib : Unit -> Int
+tagDAttrib () = 13
+
 -- ── writers ────────────────────────────────────────────────────────────────
 
 sexpLit : Lit -> SExp
-sexpLit (LInt a0) = SList [SAtom "0", sexpInt a0]
-sexpLit (LFloat a0) = SList [SAtom "1", sexpFloat a0]
-sexpLit (LU64 a0 a1) = SList [SAtom "2", sexpInt a0, sexpInt a1]
-sexpLit (LI64 a0 a1) = SList [SAtom "3", sexpInt a0, sexpInt a1]
-sexpLit (LString a0) = SList [SAtom "4", sexpString a0]
-sexpLit (LChar a0) = SList [SAtom "5", sexpString a0]
-sexpLit (LBool a0) = SList [SAtom "6", sexpBool a0]
-sexpLit LUnit = SAtom "7"
+sexpLit (LInt a0) = SList [tagAtom (tagLInt ()), sexpInt a0]
+sexpLit (LFloat a0) = SList [tagAtom (tagLFloat ()), sexpFloat a0]
+sexpLit (LU64 a0 a1) = SList [tagAtom (tagLU64 ()), sexpInt a0, sexpInt a1]
+sexpLit (LI64 a0 a1) = SList [tagAtom (tagLI64 ()), sexpInt a0, sexpInt a1]
+sexpLit (LString a0) = SList [tagAtom (tagLString ()), sexpString a0]
+sexpLit (LChar a0) = SList [tagAtom (tagLChar ()), sexpString a0]
+sexpLit (LBool a0) = SList [tagAtom (tagLBool ()), sexpBool a0]
+sexpLit LUnit = tagAtom (tagLUnit ())
 
 sexpTyConOrigin : TyConOrigin -> SExp
-sexpTyConOrigin OriginUnresolved = SAtom "0"
-sexpTyConOrigin OriginBuiltin = SAtom "1"
-sexpTyConOrigin (OriginModule a0) = SList [SAtom "2", sexpString a0]
+sexpTyConOrigin OriginUnresolved = tagAtom (tagOriginUnresolved ())
+sexpTyConOrigin OriginBuiltin = tagAtom (tagOriginBuiltin ())
+sexpTyConOrigin (OriginModule a0) =
+  SList [tagAtom (tagOriginModule ()), sexpString a0]
 
 sexpTy : Ty -> SExp
-sexpTy (TyCon { tyConName = a0, tyConLoc = a1, tyConOrigin = a2 }) =
-  SList [SAtom "0", sexpString a0, sexpOpt sexpLoc a1, sexpTyConOrigin a2]
-sexpTy (TyVar a0) = SList [SAtom "1", sexpString a0]
-sexpTy (TyApp a0 a1) = SList [SAtom "2", sexpTy a0, sexpTy a1]
-sexpTy (TyFun a0 a1) = SList [SAtom "3", sexpTy a0, sexpTy a1]
-sexpTy (TyTuple a0) = SList [SAtom "4", sexpList sexpTy a0]
+sexpTy (TyCon { tyConName = a0, tyConLoc = a1, tyConOrigin = a2 }) = SList [
+  tagAtom (tagTyCon ()),
+  sexpString a0,
+  sexpOpt sexpLoc a1,
+  sexpTyConOrigin a2,
+]
+sexpTy (TyVar a0) = SList [tagAtom (tagTyVar ()), sexpString a0]
+sexpTy (TyApp a0 a1) = SList [tagAtom (tagTyApp ()), sexpTy a0, sexpTy a1]
+sexpTy (TyFun a0 a1) = SList [tagAtom (tagTyFun ()), sexpTy a0, sexpTy a1]
+sexpTy (TyTuple a0) = SList [tagAtom (tagTyTuple ()), sexpList sexpTy a0]
 sexpTy (TyEffect a0 a1 a2) = SList [
-  SAtom "5",
+  tagAtom (tagTyEffect ()),
   sexpList sexpEffAtomTy a0,
   sexpList sexpString a1,
   sexpTy a2,
 ]
 sexpTy (TyConstrained a0 a1) =
-  SList [SAtom "6", sexpList sexpConstraint a0, sexpTy a1]
-sexpTy (TyNamed a0 a1 a2) =
-  SList [SAtom "7", sexpString a0, sexpTy a1, sexpOpt sexpEffAtomTy a2]
-sexpTy (TyQual a0 a1 a2) =
-  SList [SAtom "8", sexpTy a0, sexpList sexpEffParamTy a1, sexpOpt sexpLoc a2]
+  SList [tagAtom (tagTyConstrained ()), sexpList sexpConstraint a0, sexpTy a1]
+sexpTy (TyNamed a0 a1 a2) = SList [
+  tagAtom (tagTyNamed ()),
+  sexpString a0,
+  sexpTy a1,
+  sexpOpt sexpEffAtomTy a2,
+]
+sexpTy (TyQual a0 a1 a2) = SList [
+  tagAtom (tagTyQual ()),
+  sexpTy a0,
+  sexpList sexpEffParamTy a1,
+  sexpOpt sexpLoc a2,
+]
 sexpTy (TyRow a0 a1 a2) = SList [
-  SAtom "9",
+  tagAtom (tagTyRow ()),
   sexpList sexpEffAtomTy a0,
   sexpList sexpString a1,
   sexpOpt sexpLoc a2,
 ]
 sexpTy (TyAuth a0 a1) =
-  SList [SAtom "10", sexpList sexpEffParamTy a0, sexpOpt sexpLoc a1]
+  SList [tagAtom (tagTyAuth ()), sexpList sexpEffParamTy a0, sexpOpt sexpLoc a1]
 
 sexpEffAtomTy : EffAtomTy -> SExp
 sexpEffAtomTy (EffAtomTy { eatLabel = a0, eatOrigin = a1, eatParam = a2, eatLoc = a3, eatPattern = a4 }) = SList
@@ -270,106 +637,132 @@ sexpEffAtomTy (EffAtomTy { eatLabel = a0, eatOrigin = a1, eatParam = a2, eatLoc 
   ]
 
 sexpEffParamTy : EffParamTy -> SExp
-sexpEffParamTy EPTop = SAtom "0"
-sexpEffParamTy (EPLit a0) = SList [SAtom "1", sexpString a0]
-sexpEffParamTy (EPName a0) = SList [SAtom "2", sexpString a0]
-sexpEffParamTy (EPSet a0) = SList [SAtom "3", sexpList sexpString a0]
-sexpEffParamTy (EPProduct a0) =
-  SList [SAtom "4", sexpList (sexpPair sexpString sexpEffParamTy) a0]
+sexpEffParamTy EPTop = tagAtom (tagEPTop ())
+sexpEffParamTy (EPLit a0) = SList [tagAtom (tagEPLit ()), sexpString a0]
+sexpEffParamTy (EPName a0) = SList [tagAtom (tagEPName ()), sexpString a0]
+sexpEffParamTy (EPSet a0) =
+  SList [tagAtom (tagEPSet ()), sexpList sexpString a0]
+sexpEffParamTy (EPProduct a0) = SList [
+  tagAtom (tagEPProduct ()),
+  sexpList (sexpPair sexpString sexpEffParamTy) a0,
+]
 
 sexpConstraint : Constraint -> SExp
 sexpConstraint (Constraint { constraintHead = a0, constraintArgs = a1, constraintOrigin = a2 }) =
   SList [sexpString a0, sexpList sexpTy a1, sexpTyConOrigin a2]
 
 sexpKindAnn : KindAnn -> SExp
-sexpKindAnn KindType = SAtom "0"
-sexpKindAnn KindEffect = SAtom "1"
+sexpKindAnn KindType = tagAtom (tagKindType ())
+sexpKindAnn KindEffect = tagAtom (tagKindEffect ())
 sexpKindAnn (KindAuthority a0 a1 a2 a3) = SList [
-  SAtom "2",
+  tagAtom (tagKindAuthority ()),
   sexpString a0,
   sexpTyConOrigin a1,
   sexpBool a2,
   sexpOpt sexpLoc a3,
 ]
 sexpKindAnn (KindArrow a0 a1) =
-  SList [SAtom "3", sexpKindAnn a0, sexpKindAnn a1]
+  SList [tagAtom (tagKindArrow ()), sexpKindAnn a0, sexpKindAnn a1]
 
 sexpRoute : Route -> SExp
-sexpRoute RNone = SAtom "0"
-sexpRoute (RKey a0 a1 a2) =
-  SList [SAtom "1", sexpString a0, sexpList sexpRoute a1, sexpList sexpRoute a2]
-sexpRoute (RDict a0) = SList [SAtom "2", sexpString a0]
-sexpRoute (RDictFwd a0) = SList [SAtom "3", sexpString a0]
+sexpRoute RNone = tagAtom (tagRNone ())
+sexpRoute (RKey a0 a1 a2) = SList [
+  tagAtom (tagRKey ()),
+  sexpString a0,
+  sexpList sexpRoute a1,
+  sexpList sexpRoute a2,
+]
+sexpRoute (RDict a0) = SList [tagAtom (tagRDict ()), sexpString a0]
+sexpRoute (RDictFwd a0) = SList [tagAtom (tagRDictFwd ()), sexpString a0]
 sexpRoute (RLocal a0 a1) =
-  SList [SAtom "4", sexpString a0, sexpList sexpRoute a1]
-sexpRoute (RScalar a0) = SList [SAtom "5", sexpString a0]
-sexpRoute (RProj a0 a1) = SList [SAtom "6", sexpRoute a0, sexpList sexpInt a1]
+  SList [tagAtom (tagRLocal ()), sexpString a0, sexpList sexpRoute a1]
+sexpRoute (RScalar a0) = SList [tagAtom (tagRScalar ()), sexpString a0]
+sexpRoute (RProj a0 a1) =
+  SList [tagAtom (tagRProj ()), sexpRoute a0, sexpList sexpInt a1]
 
 sexpEvVal : EvVal -> SExp
-sexpEvVal (EvOne a0) = SList [SAtom "0", sexpRoute a0]
-sexpEvVal (EvMany a0) = SList [SAtom "1", sexpList sexpRoute a0]
+sexpEvVal (EvOne a0) = SList [tagAtom (tagEvOne ()), sexpRoute a0]
+sexpEvVal (EvMany a0) = SList [tagAtom (tagEvMany ()), sexpList sexpRoute a0]
 sexpEvVal (EvMethod a0 a1 a2 a3 a4) = SList [
-  SAtom "2",
+  tagAtom (tagEvMethod ()),
   sexpString a0,
   sexpInt a1,
   sexpRoute a2,
   sexpList sexpRoute a3,
   sexpList sexpRoute a4,
 ]
-sexpEvVal (EvLit a0 a1) = SList [SAtom "3", sexpOpt sexpFloat a0, sexpRoute a1]
-sexpEvVal (EvHead a0) = SList [SAtom "4", sexpString a0]
+sexpEvVal (EvLit a0 a1) =
+  SList [tagAtom (tagEvLit ()), sexpOpt sexpFloat a0, sexpRoute a1]
+sexpEvVal (EvHead a0) = SList [tagAtom (tagEvHead ()), sexpString a0]
 
 sexpEvEntry : EvEntry -> SExp
 sexpEvEntry (EvEntry a0 a1) = SList [sexpEvId a0, sexpEvVal a1]
 
 sexpAddr : Addr -> SExp
-sexpAddr (ALocal a0 a1) = SList [SAtom "0", sexpInt a0, sexpInt a1]
-sexpAddr AGlobal = SAtom "1"
+sexpAddr (ALocal a0 a1) = SList [tagAtom (tagALocal ()), sexpInt a0, sexpInt a1]
+sexpAddr AGlobal = tagAtom (tagAGlobal ())
 
 sexpPat : Pat -> SExp
 sexpPat (PVar a0 a1 a2) =
-  SList [SAtom "0", sexpString a0, sexpLoc a1, sexpBinderId a2]
-sexpPat PWild = SAtom "1"
-sexpPat (PLit a0) = SList [SAtom "2", sexpLit a0]
-sexpPat (PCon a0 a1) = SList [SAtom "3", sexpString a0, sexpList sexpPat a1]
-sexpPat (PCons a0 a1) = SList [SAtom "4", sexpPat a0, sexpPat a1]
-sexpPat (PTuple a0) = SList [SAtom "5", sexpList sexpPat a0]
-sexpPat (PList a0) = SList [SAtom "6", sexpList sexpPat a0]
-sexpPat (PAs a0 a1 a2 a3) =
-  SList [SAtom "7", sexpString a0, sexpLoc a1, sexpBinderId a2, sexpPat a3]
-sexpPat (PRng a0 a1 a2) = SList [SAtom "8", sexpLit a0, sexpLit a1, sexpBool a2]
-sexpPat (PRec a0 a1 a2) =
-  SList [SAtom "9", sexpString a0, sexpList sexpRecPatField a1, sexpBool a2]
+  SList [tagAtom (tagPVar ()), sexpString a0, sexpLoc a1, sexpBinderId a2]
+sexpPat PWild = tagAtom (tagPWild ())
+sexpPat (PLit a0) = SList [tagAtom (tagPLit ()), sexpLit a0]
+sexpPat (PCon a0 a1) =
+  SList [tagAtom (tagPCon ()), sexpString a0, sexpList sexpPat a1]
+sexpPat (PCons a0 a1) = SList [tagAtom (tagPCons ()), sexpPat a0, sexpPat a1]
+sexpPat (PTuple a0) = SList [tagAtom (tagPTuple ()), sexpList sexpPat a0]
+sexpPat (PList a0) = SList [tagAtom (tagPList ()), sexpList sexpPat a0]
+sexpPat (PAs a0 a1 a2 a3) = SList [
+  tagAtom (tagPAs ()),
+  sexpString a0,
+  sexpLoc a1,
+  sexpBinderId a2,
+  sexpPat a3,
+]
+sexpPat (PRng a0 a1 a2) =
+  SList [tagAtom (tagPRng ()), sexpLit a0, sexpLit a1, sexpBool a2]
+sexpPat (PRec a0 a1 a2) = SList [
+  tagAtom (tagPRec ()),
+  sexpString a0,
+  sexpList sexpRecPatField a1,
+  sexpBool a2,
+]
 
 sexpRecPatField : RecPatField -> SExp
 sexpRecPatField (RecPatField a0 a1 a2 a3) =
   SList [sexpString a0, sexpLoc a1, sexpBinderId a2, sexpOpt sexpPat a3]
 
 sexpGuard : Guard -> SExp
-sexpGuard (GBool a0) = SList [SAtom "0", sexpExpr a0]
-sexpGuard (GBind a0 a1) = SList [SAtom "1", sexpPat a0, sexpExpr a1]
+sexpGuard (GBool a0) = SList [tagAtom (tagGBool ()), sexpExpr a0]
+sexpGuard (GBind a0 a1) = SList [tagAtom (tagGBind ()), sexpPat a0, sexpExpr a1]
 
 sexpArm : Arm -> SExp
 sexpArm (Arm a0 a1 a2) = SList [sexpPat a0, sexpList sexpGuard a1, sexpExpr a2]
 
 sexpDoStmt : DoStmt -> SExp
-sexpDoStmt (DoExpr a0) = SList [SAtom "0", sexpExpr a0]
-sexpDoStmt (DoBind a0 a1) = SList [SAtom "1", sexpPat a0, sexpExpr a1]
+sexpDoStmt (DoExpr a0) = SList [tagAtom (tagDoExpr ()), sexpExpr a0]
+sexpDoStmt (DoBind a0 a1) =
+  SList [tagAtom (tagDoBind ()), sexpPat a0, sexpExpr a1]
 sexpDoStmt (DoLet a0 a1 a2 a3 a4) = SList [
-  SAtom "2",
+  tagAtom (tagDoLet ()),
   sexpBool a0,
   sexpBool a1,
   sexpPat a2,
   sexpExpr a3,
   sexpLoc a4,
 ]
-sexpDoStmt (DoAssign a0 a1) = SList [SAtom "3", sexpString a0, sexpExpr a1]
-sexpDoStmt (DoFieldAssign a0 a1 a2) =
-  SList [SAtom "4", sexpString a0, sexpList sexpString a1, sexpExpr a2]
+sexpDoStmt (DoAssign a0 a1) =
+  SList [tagAtom (tagDoAssign ()), sexpString a0, sexpExpr a1]
+sexpDoStmt (DoFieldAssign a0 a1 a2) = SList [
+  tagAtom (tagDoFieldAssign ()),
+  sexpString a0,
+  sexpList sexpString a1,
+  sexpExpr a2,
+]
 
 sexpInterpPart : InterpPart -> SExp
-sexpInterpPart (InterpStr a0) = SList [SAtom "0", sexpString a0]
-sexpInterpPart (InterpExpr a0) = SList [SAtom "1", sexpExpr a0]
+sexpInterpPart (InterpStr a0) = SList [tagAtom (tagInterpStr ()), sexpString a0]
+sexpInterpPart (InterpExpr a0) = SList [tagAtom (tagInterpExpr ()), sexpExpr a0]
 
 sexpGuardArm : GuardArm -> SExp
 sexpGuardArm (GuardArm a0 a1) = SList [sexpList sexpGuard a0, sexpExpr a1]
@@ -378,9 +771,11 @@ sexpFieldAssign : FieldAssign -> SExp
 sexpFieldAssign (FieldAssign a0 a1) = SList [sexpString a0, sexpExpr a1]
 
 sexpSection : Section -> SExp
-sexpSection (SecBare a0) = SList [SAtom "0", sexpString a0]
-sexpSection (SecRight a0 a1) = SList [SAtom "1", sexpString a0, sexpExpr a1]
-sexpSection (SecLeft a0 a1) = SList [SAtom "2", sexpExpr a0, sexpString a1]
+sexpSection (SecBare a0) = SList [tagAtom (tagSecBare ()), sexpString a0]
+sexpSection (SecRight a0 a1) =
+  SList [tagAtom (tagSecRight ()), sexpString a0, sexpExpr a1]
+sexpSection (SecLeft a0 a1) =
+  SList [tagAtom (tagSecLeft ()), sexpExpr a0, sexpString a1]
 
 sexpFunClause : FunClause -> SExp
 sexpFunClause (FunClause a0 a1) = SList [sexpList sexpPat a0, sexpExpr a1]
@@ -390,84 +785,131 @@ sexpLetBind (LetBind a0 a1 a2 a3) =
   SList [sexpString a0, sexpList sexpFunClause a1, sexpLoc a2, sexpBinderId a3]
 
 sexpExpr : Expr -> SExp
-sexpExpr (ELit a0) = SList [SAtom "0", sexpLit a0]
-sexpExpr (EVar a0) = SList [SAtom "1", sexpString a0]
-sexpExpr (EApp a0 a1) = SList [SAtom "2", sexpExpr a0, sexpExpr a1]
-sexpExpr (ELam a0 a1) = SList [SAtom "3", sexpList sexpPat a0, sexpExpr a1]
+sexpExpr (ELit a0) = SList [tagAtom (tagELit ()), sexpLit a0]
+sexpExpr (EVar a0) = SList [tagAtom (tagEVar ()), sexpString a0]
+sexpExpr (EApp a0 a1) = SList [tagAtom (tagEApp ()), sexpExpr a0, sexpExpr a1]
+sexpExpr (ELam a0 a1) =
+  SList [tagAtom (tagELam ()), sexpList sexpPat a0, sexpExpr a1]
 sexpExpr (ELet a0 a1 a2 a3 a4) = SList [
-  SAtom "4",
+  tagAtom (tagELet ()),
   sexpLoc a0,
   sexpBool a1,
   sexpPat a2,
   sexpExpr a3,
   sexpExpr a4,
 ]
-sexpExpr (EMatch a0 a1) = SList [SAtom "5", sexpExpr a0, sexpList sexpArm a1]
+sexpExpr (EMatch a0 a1) =
+  SList [tagAtom (tagEMatch ()), sexpExpr a0, sexpList sexpArm a1]
 sexpExpr (EIf a0 a1 a2) =
-  SList [SAtom "6", sexpExpr a0, sexpExpr a1, sexpExpr a2]
-sexpExpr (EBinOp a0 a1 a2 a3) =
-  SList [SAtom "7", sexpString a0, sexpExpr a1, sexpExpr a2, sexpEvId a3]
+  SList [tagAtom (tagEIf ()), sexpExpr a0, sexpExpr a1, sexpExpr a2]
+sexpExpr (EBinOp a0 a1 a2 a3) = SList [
+  tagAtom (tagEBinOp ()),
+  sexpString a0,
+  sexpExpr a1,
+  sexpExpr a2,
+  sexpEvId a3,
+]
 sexpExpr (EUnOp a0 a1 a2) =
-  SList [SAtom "8", sexpString a0, sexpExpr a1, sexpEvId a2]
+  SList [tagAtom (tagEUnOp ()), sexpString a0, sexpExpr a1, sexpEvId a2]
 sexpExpr (EInfix a0 a1 a2) =
-  SList [SAtom "9", sexpString a0, sexpExpr a1, sexpExpr a2]
+  SList [tagAtom (tagEInfix ()), sexpString a0, sexpExpr a1, sexpExpr a2]
 sexpExpr (EFieldAccess a0 a1 a2) =
-  SList [SAtom "10", sexpExpr a0, sexpString a1, sexpEvId a2]
-sexpExpr (ETuple a0) = SList [SAtom "11", sexpList sexpExpr a0]
-sexpExpr (EListLit a0) = SList [SAtom "12", sexpList sexpExpr a0]
-sexpExpr (EArrayLit a0) = SList [SAtom "13", sexpList sexpExpr a0]
+  SList [tagAtom (tagEFieldAccess ()), sexpExpr a0, sexpString a1, sexpEvId a2]
+sexpExpr (ETuple a0) = SList [tagAtom (tagETuple ()), sexpList sexpExpr a0]
+sexpExpr (EListLit a0) = SList [tagAtom (tagEListLit ()), sexpList sexpExpr a0]
+sexpExpr (EArrayLit a0) =
+  SList [tagAtom (tagEArrayLit ()), sexpList sexpExpr a0]
 sexpExpr (ERangeList a0 a1 a2) =
-  SList [SAtom "14", sexpExpr a0, sexpExpr a1, sexpBool a2]
+  SList [tagAtom (tagERangeList ()), sexpExpr a0, sexpExpr a1, sexpBool a2]
 sexpExpr (ERangeArray a0 a1 a2) =
-  SList [SAtom "15", sexpExpr a0, sexpExpr a1, sexpBool a2]
-sexpExpr (ESlice a0 a1 a2 a3) =
-  SList [SAtom "16", sexpExpr a0, sexpExpr a1, sexpExpr a2, sexpBool a3]
+  SList [tagAtom (tagERangeArray ()), sexpExpr a0, sexpExpr a1, sexpBool a2]
+sexpExpr (ESlice a0 a1 a2 a3) = SList [
+  tagAtom (tagESlice ()),
+  sexpExpr a0,
+  sexpExpr a1,
+  sexpExpr a2,
+  sexpBool a3,
+]
 sexpExpr (ELetGroup a0 a1) =
-  SList [SAtom "17", sexpList sexpLetBind a0, sexpExpr a1]
-sexpExpr (ESection a0) = SList [SAtom "18", sexpSection a0]
-sexpExpr (EIndex a0 a1) = SList [SAtom "19", sexpExpr a0, sexpExpr a1]
-sexpExpr (EAnnot a0 a1) = SList [SAtom "20", sexpExpr a0, sexpTy a1]
-sexpExpr (EHeadAnnot a0 a1) = SList [SAtom "21", sexpExpr a0, sexpTy a1]
-sexpExpr (EBlock a0) = SList [SAtom "22", sexpList sexpDoStmt a0]
-sexpExpr (EDo a0 a1) = SList [SAtom "23", sexpBool a0, sexpList sexpDoStmt a1]
-sexpExpr (EStringInterp a0) = SList [SAtom "24", sexpList sexpInterpPart a0]
-sexpExpr (EGuards a0) = SList [SAtom "25", sexpList sexpGuardArm a0]
-sexpExpr (ERecordCreate a0 a1) =
-  SList [SAtom "26", sexpString a0, sexpList sexpFieldAssign a1]
-sexpExpr (ERecordUpdate a0 a1 a2) =
-  SList [SAtom "27", sexpExpr a0, sexpList sexpFieldAssign a1, sexpEvId a2]
-sexpExpr (EVariantUpdate a0 a1 a2) =
-  SList [SAtom "28", sexpString a0, sexpExpr a1, sexpList sexpFieldAssign a2]
-sexpExpr (EMapLit a0 a1) =
-  SList [SAtom "29", sexpString a0, sexpList (sexpPair sexpExpr sexpExpr) a1]
+  SList [tagAtom (tagELetGroup ()), sexpList sexpLetBind a0, sexpExpr a1]
+sexpExpr (ESection a0) = SList [tagAtom (tagESection ()), sexpSection a0]
+sexpExpr (EIndex a0 a1) =
+  SList [tagAtom (tagEIndex ()), sexpExpr a0, sexpExpr a1]
+sexpExpr (EAnnot a0 a1) = SList [tagAtom (tagEAnnot ()), sexpExpr a0, sexpTy a1]
+sexpExpr (EHeadAnnot a0 a1) =
+  SList [tagAtom (tagEHeadAnnot ()), sexpExpr a0, sexpTy a1]
+sexpExpr (EBlock a0) = SList [tagAtom (tagEBlock ()), sexpList sexpDoStmt a0]
+sexpExpr (EDo a0 a1) =
+  SList [tagAtom (tagEDo ()), sexpBool a0, sexpList sexpDoStmt a1]
+sexpExpr (EStringInterp a0) =
+  SList [tagAtom (tagEStringInterp ()), sexpList sexpInterpPart a0]
+sexpExpr (EGuards a0) =
+  SList [tagAtom (tagEGuards ()), sexpList sexpGuardArm a0]
+sexpExpr (ERecordCreate a0 a1) = SList [
+  tagAtom (tagERecordCreate ()),
+  sexpString a0,
+  sexpList sexpFieldAssign a1,
+]
+sexpExpr (ERecordUpdate a0 a1 a2) = SList [
+  tagAtom (tagERecordUpdate ()),
+  sexpExpr a0,
+  sexpList sexpFieldAssign a1,
+  sexpEvId a2,
+]
+sexpExpr (EVariantUpdate a0 a1 a2) = SList [
+  tagAtom (tagEVariantUpdate ()),
+  sexpString a0,
+  sexpExpr a1,
+  sexpList sexpFieldAssign a2,
+]
+sexpExpr (EMapLit a0 a1) = SList [
+  tagAtom (tagEMapLit ()),
+  sexpString a0,
+  sexpList (sexpPair sexpExpr sexpExpr) a1,
+]
 sexpExpr (ESetLit a0 a1) =
-  SList [SAtom "30", sexpString a0, sexpList sexpExpr a1]
-sexpExpr (EAsPat a0 a1) = SList [SAtom "31", sexpString a0, sexpExpr a1]
-sexpExpr (EMethodRef a0) = SList [SAtom "32", sexpString a0]
-sexpExpr (EDictApp a0) = SList [SAtom "33", sexpString a0]
-sexpExpr (EVarAt a0 a1) = SList [SAtom "34", sexpString a0, sexpAddr a1]
-sexpExpr (EVarId a0 a1) = SList [SAtom "35", sexpString a0, sexpInt a1]
+  SList [tagAtom (tagESetLit ()), sexpString a0, sexpList sexpExpr a1]
+sexpExpr (EAsPat a0 a1) =
+  SList [tagAtom (tagEAsPat ()), sexpString a0, sexpExpr a1]
+sexpExpr (EMethodRef a0) = SList [tagAtom (tagEMethodRef ()), sexpString a0]
+sexpExpr (EDictApp a0) = SList [tagAtom (tagEDictApp ()), sexpString a0]
+sexpExpr (EVarAt a0 a1) =
+  SList [tagAtom (tagEVarAt ()), sexpString a0, sexpAddr a1]
+sexpExpr (EVarId a0 a1) =
+  SList [tagAtom (tagEVarId ()), sexpString a0, sexpInt a1]
 sexpExpr (EMethodAt a0 a1 a2) =
-  SList [SAtom "36", sexpString a0, sexpString a1, sexpEvId a2]
-sexpExpr (EDictAt a0 a1) = SList [SAtom "37", sexpString a0, sexpEvId a1]
-sexpExpr (ELoc a0 a1) = SList [SAtom "38", sexpLoc a0, sexpExpr a1]
-sexpExpr (EDoOrigin a0 a1) = SList [SAtom "39", sexpLoc a0, sexpExpr a1]
+  SList [tagAtom (tagEMethodAt ()), sexpString a0, sexpString a1, sexpEvId a2]
+sexpExpr (EDictAt a0 a1) =
+  SList [tagAtom (tagEDictAt ()), sexpString a0, sexpEvId a1]
+sexpExpr (ELoc a0 a1) = SList [tagAtom (tagELoc ()), sexpLoc a0, sexpExpr a1]
+sexpExpr (EDoOrigin a0 a1) =
+  SList [tagAtom (tagEDoOrigin ()), sexpLoc a0, sexpExpr a1]
 sexpExpr (ENumLit a0 a1 a2) =
-  SList [SAtom "40", sexpInt a0, sexpEvId a1, sexpString a2]
-sexpExpr (EWideLit a0 a1 a2 a3) =
-  SList [SAtom "41", sexpInt a0, sexpInt a1, sexpEvId a2, sexpString a3]
+  SList [tagAtom (tagENumLit ()), sexpInt a0, sexpEvId a1, sexpString a2]
+sexpExpr (EWideLit a0 a1 a2 a3) = SList [
+  tagAtom (tagEWideLit ()),
+  sexpInt a0,
+  sexpInt a1,
+  sexpEvId a2,
+  sexpString a3,
+]
 
 sexpUseMember : UseMember -> SExp
 sexpUseMember (UseMember a0 a1 a2 a3) =
   SList [sexpString a0, sexpBool a1, sexpLoc a2, sexpOpt sexpString a3]
 
 sexpUsePath : UsePath -> SExp
-sexpUsePath (UseName a0) = SList [SAtom "0", sexpList sexpString a0]
-sexpUsePath (UseGroup a0 a1) =
-  SList [SAtom "1", sexpList sexpString a0, sexpList sexpUseMember a1]
-sexpUsePath (UseWild a0) = SList [SAtom "2", sexpList sexpString a0]
+sexpUsePath (UseName a0) =
+  SList [tagAtom (tagUseName ()), sexpList sexpString a0]
+sexpUsePath (UseGroup a0 a1) = SList [
+  tagAtom (tagUseGroup ()),
+  sexpList sexpString a0,
+  sexpList sexpUseMember a1,
+]
+sexpUsePath (UseWild a0) =
+  SList [tagAtom (tagUseWild ()), sexpList sexpString a0]
 sexpUsePath (UseAlias a0 a1) =
-  SList [SAtom "3", sexpList sexpString a0, sexpString a1]
+  SList [tagAtom (tagUseAlias ()), sexpList sexpString a0, sexpString a1]
 
 sexpPropParam : PropParam -> SExp
 sexpPropParam (PropParam a0 a1 a2) =
@@ -498,26 +940,27 @@ sexpImplMethod (ImplMethod a0 a1 a2) =
   SList [sexpString a0, sexpList sexpPat a1, sexpExpr a2]
 
 sexpDataVis : DataVis -> SExp
-sexpDataVis VisPrivate = SAtom "0"
-sexpDataVis VisAbstract = SAtom "1"
-sexpDataVis VisPublic = SAtom "2"
+sexpDataVis VisPrivate = tagAtom (tagVisPrivate ())
+sexpDataVis VisAbstract = tagAtom (tagVisAbstract ())
+sexpDataVis VisPublic = tagAtom (tagVisPublic ())
 
 sexpField : Field -> SExp
 sexpField (Field a0 a1) = SList [sexpString a0, sexpTy a1]
 
 sexpConPayload : ConPayload -> SExp
-sexpConPayload (ConPos a0) = SList [SAtom "0", sexpList sexpTy a0]
+sexpConPayload (ConPos a0) = SList [tagAtom (tagConPos ()), sexpList sexpTy a0]
 sexpConPayload (ConNamed a0 a1) =
-  SList [SAtom "1", sexpList sexpField a0, sexpBool a1]
+  SList [tagAtom (tagConNamed ()), sexpList sexpField a0, sexpBool a1]
 
 sexpVariant : Variant -> SExp
 sexpVariant (Variant a0 a1) = SList [sexpString a0, sexpConPayload a1]
 
 sexpAttr : Attr -> SExp
-sexpAttr (AttrDeprecated a0) = SList [SAtom "0", sexpOpt sexpString a0]
-sexpAttr AttrInline = SAtom "1"
-sexpAttr AttrMustUse = SAtom "2"
-sexpAttr AttrNoInline = SAtom "3"
+sexpAttr (AttrDeprecated a0) =
+  SList [tagAtom (tagAttrDeprecated ()), sexpOpt sexpString a0]
+sexpAttr AttrInline = tagAtom (tagAttrInline ())
+sexpAttr AttrMustUse = tagAtom (tagAttrMustUse ())
+sexpAttr AttrNoInline = tagAtom (tagAttrNoInline ())
 
 sexpDeriveRef : DeriveRef -> SExp
 sexpDeriveRef (DeriveRef a0 a1) = SList [sexpString a0, sexpOpt sexpLoc a1]
@@ -537,11 +980,16 @@ sexpExternBind (ExternBind { ebHost = a0, ebSymbol = a1, ebLoc = a2 }) =
   SList [sexpString a0, sexpString a1, sexpLoc a2]
 
 sexpDecl : Decl -> SExp
-sexpDecl (DTypeSig a0 a1 a2 a3) =
-  SList [SAtom "0", sexpBool a0, sexpString a1, sexpTy a2, sexpLoc a3]
-sexpDecl (DExtern a0) = SList [SAtom "1", sexpExternDecl a0]
+sexpDecl (DTypeSig a0 a1 a2 a3) = SList [
+  tagAtom (tagDTypeSig ()),
+  sexpBool a0,
+  sexpString a1,
+  sexpTy a2,
+  sexpLoc a3,
+]
+sexpDecl (DExtern a0) = SList [tagAtom (tagDExtern ()), sexpExternDecl a0]
 sexpDecl (DFunDef a0 a1 a2 a3 a4 a5) = SList [
-  SAtom "2",
+  tagAtom (tagDFunDef ()),
   sexpBool a0,
   sexpString a1,
   sexpList sexpPat a2,
@@ -551,7 +999,7 @@ sexpDecl (DFunDef a0 a1 a2 a3 a4 a5) = SList [
 ]
 sexpDecl (DData { dataVis = a0, dataName = a1, dataParams = a2, dataParamKinds = a3, dataCtors = a4, dataCtorBinders = a5, dataDerives = a6, dataOrigin = a7, dataExtern = a8, dataNameLoc = a9 }) = SList
   [
-    SAtom "3",
+    tagAtom (tagDData ()),
     sexpDataVis a0,
     sexpString a1,
     sexpList sexpString a2,
@@ -564,9 +1012,9 @@ sexpDecl (DData { dataVis = a0, dataName = a1, dataParams = a2, dataParamKinds =
     sexpOpt sexpLoc a9,
   ]
 sexpDecl (DUse a0 a1 a2) =
-  SList [SAtom "4", sexpBool a0, sexpUsePath a1, sexpLoc a2]
+  SList [tagAtom (tagDUse ()), sexpBool a0, sexpUsePath a1, sexpLoc a2]
 sexpDecl (DEffect a0 a1 a2 a3 a4 a5) = SList [
-  SAtom "5",
+  tagAtom (tagDEffect ()),
   sexpBool a0,
   sexpString a1,
   sexpOpt sexpString a2,
@@ -575,17 +1023,17 @@ sexpDecl (DEffect a0 a1 a2 a3 a4 a5) = SList [
   sexpOpt sexpLoc a5,
 ]
 sexpDecl (DProp a0 a1 a2 a3) = SList [
-  SAtom "6",
+  tagAtom (tagDProp ()),
   sexpBool a0,
   sexpString a1,
   sexpList sexpPropParam a2,
   sexpExpr a3,
 ]
 sexpDecl (DTest a0 a1 a2) =
-  SList [SAtom "7", sexpBool a0, sexpString a1, sexpExpr a2]
+  SList [tagAtom (tagDTest ()), sexpBool a0, sexpString a1, sexpExpr a2]
 sexpDecl (DInterface { pub = a0, def = a1, name = a2, typarams = a3, typaramKinds = a4, supers = a5, methods = a6, ifaceOrigin = a7, ifaceNameLoc = a8 }) = SList
   [
-    SAtom "8",
+    tagAtom (tagDInterface ()),
     sexpBool a0,
     sexpBool a1,
     sexpString a2,
@@ -598,7 +1046,7 @@ sexpDecl (DInterface { pub = a0, def = a1, name = a2, typarams = a3, typaramKind
   ]
 sexpDecl (DImpl { pub = a0, iface = a1, tys = a2, reqs = a3, methods = a4, implOrigin = a5, implIfaceLoc = a6 }) = SList
   [
-    SAtom "9",
+    tagAtom (tagDImpl ()),
     sexpBool a0,
     sexpString a1,
     sexpList sexpTy a2,
@@ -609,7 +1057,7 @@ sexpDecl (DImpl { pub = a0, iface = a1, tys = a2, reqs = a3, methods = a4, implO
   ]
 sexpDecl (DTypeAlias { tyAliasPub = a0, tyAliasName = a1, tyAliasParams = a2, tyAliasParamKinds = a3, tyAliasRhs = a4, tyAliasOrigin = a5, tyAliasNameLoc = a6 }) = SList
   [
-    SAtom "10",
+    tagAtom (tagDTypeAlias ()),
     sexpBool a0,
     sexpString a1,
     sexpList sexpString a2,
@@ -620,7 +1068,7 @@ sexpDecl (DTypeAlias { tyAliasPub = a0, tyAliasName = a1, tyAliasParams = a2, ty
   ]
 sexpDecl (DNewtype { newtypePub = a0, newtypeName = a1, newtypeParams = a2, newtypeParamKinds = a3, newtypeCtor = a4, newtypeCtorBinders = a5, newtypeFieldTy = a6, newtypeDerives = a7, newtypeOrigin = a8, newtypeNameLoc = a9 }) = SList
   [
-    SAtom "11",
+    tagAtom (tagDNewtype ()),
     sexpBool a0,
     sexpString a1,
     sexpList sexpString a2,
@@ -633,8 +1081,9 @@ sexpDecl (DNewtype { newtypePub = a0, newtypeName = a1, newtypeParams = a2, newt
     sexpOpt sexpLoc a9,
   ]
 sexpDecl (DLetGroup a0 a1) =
-  SList [SAtom "12", sexpBool a0, sexpList sexpLetBind a1]
-sexpDecl (DAttrib a0 a1) = SList [SAtom "13", sexpList sexpAttr a0, sexpDecl a1]
+  SList [tagAtom (tagDLetGroup ()), sexpBool a0, sexpList sexpLetBind a1]
+sexpDecl (DAttrib a0 a1) =
+  SList [tagAtom (tagDAttrib ()), sexpList sexpAttr a0, sexpDecl a1]
 
 -- ── placeholders for a refused read ────────────────────────────────────────
 -- A reader that refuses still has to return a value of its type; the cursor's
@@ -704,128 +1153,109 @@ dfltDecl = DTypeSig False "" dfltTy dfltLoc
 -- ── readers ────────────────────────────────────────────────────────────────
 
 readLit : SexpCursor -> Lit
-readLit cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readLitTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readLitBare (cursorInt cur) cur
+readLit cur = readTagged readLitTagged readLitBare cur
 
 readLitBare : Int -> SexpCursor -> Lit
-readLitBare 7 _ = LUnit
-readLitBare _ cur = cursorFail cur dfltLit
+readLitBare t cur
+  | t == tagLUnit () = LUnit
+  | otherwise = cursorFail cur dfltLit
 
 readLitTagged : Int -> SexpCursor -> Lit
-readLitTagged 0 cur =
-  let a0 = readInt cur
-  LInt a0
-readLitTagged 1 cur =
-  let a0 = readFloat cur
-  LFloat a0
-readLitTagged 2 cur =
-  let a0 = readInt cur
-  let a1 = readInt cur
-  LU64 a0 a1
-readLitTagged 3 cur =
-  let a0 = readInt cur
-  let a1 = readInt cur
-  LI64 a0 a1
-readLitTagged 4 cur =
-  let a0 = readString cur
-  LString a0
-readLitTagged 5 cur =
-  let a0 = readString cur
-  LChar a0
-readLitTagged 6 cur =
-  let a0 = readBool cur
-  LBool a0
-readLitTagged _ cur = cursorFail cur dfltLit
+readLitTagged t cur
+  | t == tagLInt () =
+    let a0 = readInt cur
+    LInt a0
+  | t == tagLFloat () =
+    let a0 = readFloat cur
+    LFloat a0
+  | t == tagLU64 () =
+    let a0 = readInt cur
+    let a1 = readInt cur
+    LU64 a0 a1
+  | t == tagLI64 () =
+    let a0 = readInt cur
+    let a1 = readInt cur
+    LI64 a0 a1
+  | t == tagLString () =
+    let a0 = readString cur
+    LString a0
+  | t == tagLChar () =
+    let a0 = readString cur
+    LChar a0
+  | t == tagLBool () =
+    let a0 = readBool cur
+    LBool a0
+  | otherwise = cursorFail cur dfltLit
 
 readTyConOrigin : SexpCursor -> TyConOrigin
-readTyConOrigin cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readTyConOriginTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readTyConOriginBare (cursorInt cur) cur
+readTyConOrigin cur = readTagged readTyConOriginTagged readTyConOriginBare cur
 
 readTyConOriginBare : Int -> SexpCursor -> TyConOrigin
-readTyConOriginBare 0 _ = OriginUnresolved
-readTyConOriginBare 1 _ = OriginBuiltin
-readTyConOriginBare _ cur = cursorFail cur dfltTyConOrigin
+readTyConOriginBare t cur
+  | t == tagOriginUnresolved () = OriginUnresolved
+  | t == tagOriginBuiltin () = OriginBuiltin
+  | otherwise = cursorFail cur dfltTyConOrigin
 
 readTyConOriginTagged : Int -> SexpCursor -> TyConOrigin
-readTyConOriginTagged 2 cur =
-  let a0 = readString cur
-  OriginModule a0
-readTyConOriginTagged _ cur = cursorFail cur dfltTyConOrigin
+readTyConOriginTagged t cur
+  | t == tagOriginModule () =
+    let a0 = readString cur
+    OriginModule a0
+  | otherwise = cursorFail cur dfltTyConOrigin
 
 readTy : SexpCursor -> Ty
-readTy cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readTyTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readTyBare (cursorInt cur) cur
-
-readTyBare : Int -> SexpCursor -> Ty
-readTyBare _ cur = cursorFail cur dfltTy
+readTy cur = readTagged readTyTagged (refuse dfltTy) cur
 
 readTyTagged : Int -> SexpCursor -> Ty
-readTyTagged 0 cur =
-  let a0 = readString cur
-  let a1 = readOpt readLoc cur
-  let a2 = readTyConOrigin cur
-  TyCon { tyConName = a0, tyConLoc = a1, tyConOrigin = a2 }
-readTyTagged 1 cur =
-  let a0 = readString cur
-  TyVar a0
-readTyTagged 2 cur =
-  let a0 = readTy cur
-  let a1 = readTy cur
-  TyApp a0 a1
-readTyTagged 3 cur =
-  let a0 = readTy cur
-  let a1 = readTy cur
-  TyFun a0 a1
-readTyTagged 4 cur =
-  let a0 = cursorList readTy cur
-  TyTuple a0
-readTyTagged 5 cur =
-  let a0 = cursorList readEffAtomTy cur
-  let a1 = cursorList readString cur
-  let a2 = readTy cur
-  TyEffect a0 a1 a2
-readTyTagged 6 cur =
-  let a0 = cursorList readConstraint cur
-  let a1 = readTy cur
-  TyConstrained a0 a1
-readTyTagged 7 cur =
-  let a0 = readString cur
-  let a1 = readTy cur
-  let a2 = readOpt readEffAtomTy cur
-  TyNamed a0 a1 a2
-readTyTagged 8 cur =
-  let a0 = readTy cur
-  let a1 = cursorList readEffParamTy cur
-  let a2 = readOpt readLoc cur
-  TyQual a0 a1 a2
-readTyTagged 9 cur =
-  let a0 = cursorList readEffAtomTy cur
-  let a1 = cursorList readString cur
-  let a2 = readOpt readLoc cur
-  TyRow a0 a1 a2
-readTyTagged 10 cur =
-  let a0 = cursorList readEffParamTy cur
-  let a1 = readOpt readLoc cur
-  TyAuth a0 a1
-readTyTagged _ cur = cursorFail cur dfltTy
+readTyTagged t cur
+  | t == tagTyCon () =
+    let a0 = readString cur
+    let a1 = readOpt readLoc cur
+    let a2 = readTyConOrigin cur
+    TyCon { tyConName = a0, tyConLoc = a1, tyConOrigin = a2 }
+  | t == tagTyVar () =
+    let a0 = readString cur
+    TyVar a0
+  | t == tagTyApp () =
+    let a0 = readTy cur
+    let a1 = readTy cur
+    TyApp a0 a1
+  | t == tagTyFun () =
+    let a0 = readTy cur
+    let a1 = readTy cur
+    TyFun a0 a1
+  | t == tagTyTuple () =
+    let a0 = cursorList readTy cur
+    TyTuple a0
+  | t == tagTyEffect () =
+    let a0 = cursorList readEffAtomTy cur
+    let a1 = cursorList readString cur
+    let a2 = readTy cur
+    TyEffect a0 a1 a2
+  | t == tagTyConstrained () =
+    let a0 = cursorList readConstraint cur
+    let a1 = readTy cur
+    TyConstrained a0 a1
+  | t == tagTyNamed () =
+    let a0 = readString cur
+    let a1 = readTy cur
+    let a2 = readOpt readEffAtomTy cur
+    TyNamed a0 a1 a2
+  | t == tagTyQual () =
+    let a0 = readTy cur
+    let a1 = cursorList readEffParamTy cur
+    let a2 = readOpt readLoc cur
+    TyQual a0 a1 a2
+  | t == tagTyRow () =
+    let a0 = cursorList readEffAtomTy cur
+    let a1 = cursorList readString cur
+    let a2 = readOpt readLoc cur
+    TyRow a0 a1 a2
+  | t == tagTyAuth () =
+    let a0 = cursorList readEffParamTy cur
+    let a1 = readOpt readLoc cur
+    TyAuth a0 a1
+  | otherwise = cursorFail cur dfltTy
 
 readEffAtomTy : SexpCursor -> EffAtomTy
 readEffAtomTy cur =
@@ -845,33 +1275,28 @@ readEffAtomTy cur =
   }
 
 readEffParamTy : SexpCursor -> EffParamTy
-readEffParamTy cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readEffParamTyTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readEffParamTyBare (cursorInt cur) cur
+readEffParamTy cur = readTagged readEffParamTyTagged readEffParamTyBare cur
 
 readEffParamTyBare : Int -> SexpCursor -> EffParamTy
-readEffParamTyBare 0 _ = EPTop
-readEffParamTyBare _ cur = cursorFail cur dfltEffParamTy
+readEffParamTyBare t cur
+  | t == tagEPTop () = EPTop
+  | otherwise = cursorFail cur dfltEffParamTy
 
 readEffParamTyTagged : Int -> SexpCursor -> EffParamTy
-readEffParamTyTagged 1 cur =
-  let a0 = readString cur
-  EPLit a0
-readEffParamTyTagged 2 cur =
-  let a0 = readString cur
-  EPName a0
-readEffParamTyTagged 3 cur =
-  let a0 = cursorList readString cur
-  EPSet a0
-readEffParamTyTagged 4 cur =
-  let a0 = cursorList (readPair readString readEffParamTy) cur
-  EPProduct a0
-readEffParamTyTagged _ cur = cursorFail cur dfltEffParamTy
+readEffParamTyTagged t cur
+  | t == tagEPLit () =
+    let a0 = readString cur
+    EPLit a0
+  | t == tagEPName () =
+    let a0 = readString cur
+    EPName a0
+  | t == tagEPSet () =
+    let a0 = cursorList readString cur
+    EPSet a0
+  | t == tagEPProduct () =
+    let a0 = cursorList (readPair readString readEffParamTy) cur
+    EPProduct a0
+  | otherwise = cursorFail cur dfltEffParamTy
 
 readConstraint : SexpCursor -> Constraint
 readConstraint cur =
@@ -883,107 +1308,88 @@ readConstraint cur =
   Constraint { constraintHead = a0, constraintArgs = a1, constraintOrigin = a2 }
 
 readKindAnn : SexpCursor -> KindAnn
-readKindAnn cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readKindAnnTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readKindAnnBare (cursorInt cur) cur
+readKindAnn cur = readTagged readKindAnnTagged readKindAnnBare cur
 
 readKindAnnBare : Int -> SexpCursor -> KindAnn
-readKindAnnBare 0 _ = KindType
-readKindAnnBare 1 _ = KindEffect
-readKindAnnBare _ cur = cursorFail cur dfltKindAnn
+readKindAnnBare t cur
+  | t == tagKindType () = KindType
+  | t == tagKindEffect () = KindEffect
+  | otherwise = cursorFail cur dfltKindAnn
 
 readKindAnnTagged : Int -> SexpCursor -> KindAnn
-readKindAnnTagged 2 cur =
-  let a0 = readString cur
-  let a1 = readTyConOrigin cur
-  let a2 = readBool cur
-  let a3 = readOpt readLoc cur
-  KindAuthority a0 a1 a2 a3
-readKindAnnTagged 3 cur =
-  let a0 = readKindAnn cur
-  let a1 = readKindAnn cur
-  KindArrow a0 a1
-readKindAnnTagged _ cur = cursorFail cur dfltKindAnn
+readKindAnnTagged t cur
+  | t == tagKindAuthority () =
+    let a0 = readString cur
+    let a1 = readTyConOrigin cur
+    let a2 = readBool cur
+    let a3 = readOpt readLoc cur
+    KindAuthority a0 a1 a2 a3
+  | t == tagKindArrow () =
+    let a0 = readKindAnn cur
+    let a1 = readKindAnn cur
+    KindArrow a0 a1
+  | otherwise = cursorFail cur dfltKindAnn
 
 readRoute : SexpCursor -> Route
-readRoute cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readRouteTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readRouteBare (cursorInt cur) cur
+readRoute cur = readTagged readRouteTagged readRouteBare cur
 
 readRouteBare : Int -> SexpCursor -> Route
-readRouteBare 0 _ = RNone
-readRouteBare _ cur = cursorFail cur dfltRoute
+readRouteBare t cur
+  | t == tagRNone () = RNone
+  | otherwise = cursorFail cur dfltRoute
 
 readRouteTagged : Int -> SexpCursor -> Route
-readRouteTagged 1 cur =
-  let a0 = readString cur
-  let a1 = cursorList readRoute cur
-  let a2 = cursorList readRoute cur
-  RKey a0 a1 a2
-readRouteTagged 2 cur =
-  let a0 = readString cur
-  RDict a0
-readRouteTagged 3 cur =
-  let a0 = readString cur
-  RDictFwd a0
-readRouteTagged 4 cur =
-  let a0 = readString cur
-  let a1 = cursorList readRoute cur
-  RLocal a0 a1
-readRouteTagged 5 cur =
-  let a0 = readString cur
-  RScalar a0
-readRouteTagged 6 cur =
-  let a0 = readRoute cur
-  let a1 = cursorList readInt cur
-  RProj a0 a1
-readRouteTagged _ cur = cursorFail cur dfltRoute
+readRouteTagged t cur
+  | t == tagRKey () =
+    let a0 = readString cur
+    let a1 = cursorList readRoute cur
+    let a2 = cursorList readRoute cur
+    RKey a0 a1 a2
+  | t == tagRDict () =
+    let a0 = readString cur
+    RDict a0
+  | t == tagRDictFwd () =
+    let a0 = readString cur
+    RDictFwd a0
+  | t == tagRLocal () =
+    let a0 = readString cur
+    let a1 = cursorList readRoute cur
+    RLocal a0 a1
+  | t == tagRScalar () =
+    let a0 = readString cur
+    RScalar a0
+  | t == tagRProj () =
+    let a0 = readRoute cur
+    let a1 = cursorList readInt cur
+    RProj a0 a1
+  | otherwise = cursorFail cur dfltRoute
 
 readEvVal : SexpCursor -> EvVal
-readEvVal cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readEvValTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readEvValBare (cursorInt cur) cur
-
-readEvValBare : Int -> SexpCursor -> EvVal
-readEvValBare _ cur = cursorFail cur dfltEvVal
+readEvVal cur = readTagged readEvValTagged (refuse dfltEvVal) cur
 
 readEvValTagged : Int -> SexpCursor -> EvVal
-readEvValTagged 0 cur =
-  let a0 = readRoute cur
-  EvOne a0
-readEvValTagged 1 cur =
-  let a0 = cursorList readRoute cur
-  EvMany a0
-readEvValTagged 2 cur =
-  let a0 = readString cur
-  let a1 = readInt cur
-  let a2 = readRoute cur
-  let a3 = cursorList readRoute cur
-  let a4 = cursorList readRoute cur
-  EvMethod a0 a1 a2 a3 a4
-readEvValTagged 3 cur =
-  let a0 = readOpt readFloat cur
-  let a1 = readRoute cur
-  EvLit a0 a1
-readEvValTagged 4 cur =
-  let a0 = readString cur
-  EvHead a0
-readEvValTagged _ cur = cursorFail cur dfltEvVal
+readEvValTagged t cur
+  | t == tagEvOne () =
+    let a0 = readRoute cur
+    EvOne a0
+  | t == tagEvMany () =
+    let a0 = cursorList readRoute cur
+    EvMany a0
+  | t == tagEvMethod () =
+    let a0 = readString cur
+    let a1 = readInt cur
+    let a2 = readRoute cur
+    let a3 = cursorList readRoute cur
+    let a4 = cursorList readRoute cur
+    EvMethod a0 a1 a2 a3 a4
+  | t == tagEvLit () =
+    let a0 = readOpt readFloat cur
+    let a1 = readRoute cur
+    EvLit a0 a1
+  | t == tagEvHead () =
+    let a0 = readString cur
+    EvHead a0
+  | otherwise = cursorFail cur dfltEvVal
 
 readEvEntry : SexpCursor -> EvEntry
 readEvEntry cur =
@@ -994,29 +1400,24 @@ readEvEntry cur =
   EvEntry a0 a1
 
 readAddr : SexpCursor -> Addr
-readAddr cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readAddrTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readAddrBare (cursorInt cur) cur
+readAddr cur = readTagged readAddrTagged readAddrBare cur
 
 readAddrBare : Int -> SexpCursor -> Addr
-readAddrBare 1 _ = AGlobal
-readAddrBare _ cur = cursorFail cur dfltAddr
+readAddrBare t cur
+  | t == tagAGlobal () = AGlobal
+  | otherwise = cursorFail cur dfltAddr
 
 readAddrTagged : Int -> SexpCursor -> Addr
-readAddrTagged 0 cur =
-  let a0 = readInt cur
-  let a1 = readInt cur
-  ALocal a0 a1
-readAddrTagged _ cur = cursorFail cur dfltAddr
+readAddrTagged t cur
+  | t == tagALocal () =
+    let a0 = readInt cur
+    let a1 = readInt cur
+    ALocal a0 a1
+  | otherwise = cursorFail cur dfltAddr
 
 readPat : SexpCursor -> Pat
 readPat cur =
-  if cursorPeek cur == 40 then
+  if isOpenByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     let v = readPatTagged (cursorInt cur) cur
     let _ = cursorClose cur
@@ -1025,49 +1426,51 @@ readPat cur =
     readPatBare (cursorInt cur) cur
 
 readPatBare : Int -> SexpCursor -> Pat
-readPatBare 1 _ = PWild
-readPatBare _ cur = cursorFail cur dfltPat
+readPatBare t cur
+  | t == tagPWild () = PWild
+  | otherwise = cursorFail cur dfltPat
 
 readPatTagged : Int -> SexpCursor -> Pat
-readPatTagged 0 cur =
-  let a0 = readString cur
-  let a1 = readLoc cur
-  let a2 = readBinderId cur
-  PVar a0 a1 a2
-readPatTagged 2 cur =
-  let a0 = readLit cur
-  PLit a0
-readPatTagged 3 cur =
-  let a0 = readString cur
-  let a1 = cursorList readPat cur
-  PCon a0 a1
-readPatTagged 4 cur =
-  let a0 = readPat cur
-  let a1 = readPat cur
-  PCons a0 a1
-readPatTagged 5 cur =
-  let a0 = cursorList readPat cur
-  PTuple a0
-readPatTagged 6 cur =
-  let a0 = cursorList readPat cur
-  PList a0
-readPatTagged 7 cur =
-  let a0 = readString cur
-  let a1 = readLoc cur
-  let a2 = readBinderId cur
-  let a3 = readPat cur
-  PAs a0 a1 a2 a3
-readPatTagged 8 cur =
-  let a0 = readLit cur
-  let a1 = readLit cur
-  let a2 = readBool cur
-  PRng a0 a1 a2
-readPatTagged 9 cur =
-  let a0 = readString cur
-  let a1 = cursorList readRecPatField cur
-  let a2 = readBool cur
-  PRec a0 a1 a2
-readPatTagged _ cur = cursorFail cur dfltPat
+readPatTagged t cur
+  | t == tagPVar () =
+    let a0 = readString cur
+    let a1 = readLoc cur
+    let a2 = readBinderId cur
+    PVar a0 a1 a2
+  | t == tagPLit () =
+    let a0 = readLit cur
+    PLit a0
+  | t == tagPCon () =
+    let a0 = readString cur
+    let a1 = cursorList readPat cur
+    PCon a0 a1
+  | t == tagPCons () =
+    let a0 = readPat cur
+    let a1 = readPat cur
+    PCons a0 a1
+  | t == tagPTuple () =
+    let a0 = cursorList readPat cur
+    PTuple a0
+  | t == tagPList () =
+    let a0 = cursorList readPat cur
+    PList a0
+  | t == tagPAs () =
+    let a0 = readString cur
+    let a1 = readLoc cur
+    let a2 = readBinderId cur
+    let a3 = readPat cur
+    PAs a0 a1 a2 a3
+  | t == tagPRng () =
+    let a0 = readLit cur
+    let a1 = readLit cur
+    let a2 = readBool cur
+    PRng a0 a1 a2
+  | t == tagPRec () =
+    let a0 = readString cur
+    let a1 = cursorList readRecPatField cur
+    let a2 = readBool cur
+    PRec a0 a1 a2
+  | otherwise = cursorFail cur dfltPat
 
 readRecPatField : SexpCursor -> RecPatField
 readRecPatField cur =
@@ -1080,27 +1483,18 @@ readRecPatField cur =
   RecPatField a0 a1 a2 a3
 
 readGuard : SexpCursor -> Guard
-readGuard cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readGuardTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readGuardBare (cursorInt cur) cur
-
-readGuardBare : Int -> SexpCursor -> Guard
-readGuardBare _ cur = cursorFail cur dfltGuard
+readGuard cur = readTagged readGuardTagged (refuse dfltGuard) cur
 
 readGuardTagged : Int -> SexpCursor -> Guard
-readGuardTagged 0 cur =
-  let a0 = readExpr cur
-  GBool a0
-readGuardTagged 1 cur =
-  let a0 = readPat cur
-  let a1 = readExpr cur
-  GBind a0 a1
-readGuardTagged _ cur = cursorFail cur dfltGuard
+readGuardTagged t cur
+  | t == tagGBool () =
+    let a0 = readExpr cur
+    GBool a0
+  | t == tagGBind () =
+    let a0 = readPat cur
+    let a1 = readExpr cur
+    GBind a0 a1
+  | otherwise = cursorFail cur dfltGuard
 
 readArm : SexpCursor -> Arm
 readArm cur =
@@ -1112,65 +1506,47 @@ readArm cur =
   Arm a0 a1 a2
 
 readDoStmt : SexpCursor -> DoStmt
-readDoStmt cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readDoStmtTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readDoStmtBare (cursorInt cur) cur
-
-readDoStmtBare : Int -> SexpCursor -> DoStmt
-readDoStmtBare _ cur = cursorFail cur dfltDoStmt
+readDoStmt cur = readTagged readDoStmtTagged (refuse dfltDoStmt) cur
 
 readDoStmtTagged : Int -> SexpCursor -> DoStmt
-readDoStmtTagged 0 cur =
-  let a0 = readExpr cur
-  DoExpr a0
-readDoStmtTagged 1 cur =
-  let a0 = readPat cur
-  let a1 = readExpr cur
-  DoBind a0 a1
-readDoStmtTagged 2 cur =
-  let a0 = readBool cur
-  let a1 = readBool cur
-  let a2 = readPat cur
-  let a3 = readExpr cur
-  let a4 = readLoc cur
-  DoLet a0 a1 a2 a3 a4
-readDoStmtTagged 3 cur =
-  let a0 = readString cur
-  let a1 = readExpr cur
-  DoAssign a0 a1
-readDoStmtTagged 4 cur =
-  let a0 = readString cur
-  let a1 = cursorList readString cur
-  let a2 = readExpr cur
-  DoFieldAssign a0 a1 a2
-readDoStmtTagged _ cur = cursorFail cur dfltDoStmt
+readDoStmtTagged t cur
+  | t == tagDoExpr () =
+    let a0 = readExpr cur
+    DoExpr a0
+  | t == tagDoBind () =
+    let a0 = readPat cur
+    let a1 = readExpr cur
+    DoBind a0 a1
+  | t == tagDoLet () =
+    let a0 = readBool cur
+    let a1 = readBool cur
+    let a2 = readPat cur
+    let a3 = readExpr cur
+    let a4 = readLoc cur
+    DoLet a0 a1 a2 a3 a4
+  | t == tagDoAssign () =
+    let a0 = readString cur
+    let a1 = readExpr cur
+    DoAssign a0 a1
+  | t == tagDoFieldAssign () =
+    let a0 = readString cur
+    let a1 = cursorList readString cur
+    let a2 = readExpr cur
+    DoFieldAssign a0 a1 a2
+  | otherwise = cursorFail cur dfltDoStmt
 
 readInterpPart : SexpCursor -> InterpPart
-readInterpPart cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readInterpPartTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readInterpPartBare (cursorInt cur) cur
-
-readInterpPartBare : Int -> SexpCursor -> InterpPart
-readInterpPartBare _ cur = cursorFail cur dfltInterpPart
+readInterpPart cur = readTagged readInterpPartTagged (refuse dfltInterpPart) cur
 
 readInterpPartTagged : Int -> SexpCursor -> InterpPart
-readInterpPartTagged 0 cur =
-  let a0 = readString cur
-  InterpStr a0
-readInterpPartTagged 1 cur =
-  let a0 = readExpr cur
-  InterpExpr a0
-readInterpPartTagged _ cur = cursorFail cur dfltInterpPart
+readInterpPartTagged t cur
+  | t == tagInterpStr () =
+    let a0 = readString cur
+    InterpStr a0
+  | t == tagInterpExpr () =
+    let a0 = readExpr cur
+    InterpExpr a0
+  | otherwise = cursorFail cur dfltInterpPart
 
 readGuardArm : SexpCursor -> GuardArm
 readGuardArm cur =
@@ -1189,31 +1565,22 @@ readFieldAssign cur =
   FieldAssign a0 a1
 
 readSection : SexpCursor -> Section
-readSection cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readSectionTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readSectionBare (cursorInt cur) cur
-
-readSectionBare : Int -> SexpCursor -> Section
-readSectionBare _ cur = cursorFail cur dfltSection
+readSection cur = readTagged readSectionTagged (refuse dfltSection) cur
 
 readSectionTagged : Int -> SexpCursor -> Section
-readSectionTagged 0 cur =
-  let a0 = readString cur
-  SecBare a0
-readSectionTagged 1 cur =
-  let a0 = readString cur
-  let a1 = readExpr cur
-  SecRight a0 a1
-readSectionTagged 2 cur =
-  let a0 = readExpr cur
-  let a1 = readString cur
-  SecLeft a0 a1
-readSectionTagged _ cur = cursorFail cur dfltSection
+readSectionTagged t cur
+  | t == tagSecBare () =
+    let a0 = readString cur
+    SecBare a0
+  | t == tagSecRight () =
+    let a0 = readString cur
+    let a1 = readExpr cur
+    SecRight a0 a1
+  | t == tagSecLeft () =
+    let a0 = readExpr cur
+    let a1 = readString cur
+    SecLeft a0 a1
+  | otherwise = cursorFail cur dfltSection
 
 readFunClause : SexpCursor -> FunClause
 readFunClause cur =
@@ -1235,195 +1602,193 @@ readLetBind cur =
 
 readExpr : SexpCursor -> Expr
 readExpr cur =
-  if cursorPeek cur == 40 then
+  if isOpenByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     let v = readExprTagged (cursorInt cur) cur
     let _ = cursorClose cur
     v
   else
-    readExprBare (cursorInt cur) cur
-
-readExprBare : Int -> SexpCursor -> Expr
-readExprBare _ cur = cursorFail cur dfltExpr
+    cursorFail cur dfltExpr
 
 readExprTagged : Int -> SexpCursor -> Expr
-readExprTagged 0 cur =
-  let a0 = readLit cur
-  ELit a0
-readExprTagged 1 cur =
-  let a0 = readString cur
-  EVar a0
-readExprTagged 2 cur =
-  let a0 = readExpr cur
-  let a1 = readExpr cur
-  EApp a0 a1
-readExprTagged 3 cur =
-  let a0 = cursorList readPat cur
-  let a1 = readExpr cur
-  ELam a0 a1
-readExprTagged 4 cur =
-  let a0 = readLoc cur
-  let a1 = readBool cur
-  let a2 = readPat cur
-  let a3 = readExpr cur
-  let a4 = readExpr cur
-  ELet a0 a1 a2 a3 a4
-readExprTagged 5 cur =
-  let a0 = readExpr cur
-  let a1 = cursorList readArm cur
-  EMatch a0 a1
-readExprTagged 6 cur =
-  let a0 = readExpr cur
-  let a1 = readExpr cur
-  let a2 = readExpr cur
-  EIf a0 a1 a2
-readExprTagged 7 cur =
-  let a0 = readString cur
-  let a1 = readExpr cur
-  let a2 = readExpr cur
-  let a3 = readEvId cur
-  EBinOp a0 a1 a2 a3
-readExprTagged 8 cur =
-  let a0 = readString cur
-  let a1 = readExpr cur
-  let a2 = readEvId cur
-  EUnOp a0 a1 a2
-readExprTagged 9 cur =
-  let a0 = readString cur
-  let a1 = readExpr cur
-  let a2 = readExpr cur
-  EInfix a0 a1 a2
-readExprTagged 10 cur =
-  let a0 = readExpr cur
-  let a1 = readString cur
-  let a2 = readEvId cur
-  EFieldAccess a0 a1 a2
-readExprTagged 11 cur =
-  let a0 = cursorList readExpr cur
-  ETuple a0
-readExprTagged 12 cur =
-  let a0 = cursorList readExpr cur
-  EListLit a0
-readExprTagged 13 cur =
-  let a0 = cursorList readExpr cur
-  EArrayLit a0
-readExprTagged 14 cur =
-  let a0 = readExpr cur
-  let a1 = readExpr cur
-  let a2 = readBool cur
-  ERangeList a0 a1 a2
-readExprTagged 15 cur =
-  let a0 = readExpr cur
-  let a1 = readExpr cur
-  let a2 = readBool cur
-  ERangeArray a0 a1 a2
-readExprTagged 16 cur =
-  let a0 = readExpr cur
-  let a1 = readExpr cur
-  let a2 = readExpr cur
-  let a3 = readBool cur
-  ESlice a0 a1 a2 a3
-readExprTagged 17 cur =
-  let a0 = cursorList readLetBind cur
-  let a1 = readExpr cur
-  ELetGroup a0 a1
-readExprTagged 18 cur =
-  let a0 = readSection cur
-  ESection a0
-readExprTagged 19 cur =
-  let a0 = readExpr cur
-  let a1 = readExpr cur
-  EIndex a0 a1
-readExprTagged 20 cur =
-  let a0 = readExpr cur
-  let a1 = readTy cur
-  EAnnot a0 a1
-readExprTagged 21 cur =
-  let a0 = readExpr cur
-  let a1 = readTy cur
-  EHeadAnnot a0 a1
-readExprTagged 22 cur =
-  let a0 = cursorList readDoStmt cur
-  EBlock a0
-readExprTagged 23 cur =
-  let a0 = readBool cur
-  let a1 = cursorList readDoStmt cur
-  EDo a0 a1
-readExprTagged 24 cur =
-  let a0 = cursorList readInterpPart cur
-  EStringInterp a0
-readExprTagged 25 cur =
-  let a0 = cursorList readGuardArm cur
-  EGuards a0
-readExprTagged 26 cur =
-  let a0 = readString cur
-  let a1 = cursorList readFieldAssign cur
-  ERecordCreate a0 a1
-readExprTagged 27 cur =
-  let a0 = readExpr cur
-  let a1 = cursorList readFieldAssign cur
-  let a2 = readEvId cur
-  ERecordUpdate a0 a1 a2
-readExprTagged 28 cur =
-  let a0 = readString cur
-  let a1 = readExpr cur
-  let a2 = cursorList readFieldAssign cur
-  EVariantUpdate a0 a1 a2
-readExprTagged 29 cur =
-  let a0 = readString cur
-  let a1 = cursorList (readPair readExpr readExpr) cur
-  EMapLit a0 a1
-readExprTagged 30 cur =
-  let a0 = readString cur
-  let a1 = cursorList readExpr cur
-  ESetLit a0 a1
-readExprTagged 31 cur =
-  let a0 = readString cur
-  let a1 = readExpr cur
-  EAsPat a0 a1
-readExprTagged 32 cur =
-  let a0 = readString cur
-  EMethodRef a0
-readExprTagged 33 cur =
-  let a0 = readString cur
-  EDictApp a0
-readExprTagged 34 cur =
-  let a0 = readString cur
-  let a1 = readAddr cur
-  EVarAt a0 a1
-readExprTagged 35 cur =
-  let a0 = readString cur
-  let a1 = readInt cur
-  EVarId a0 a1
-readExprTagged 36 cur =
-  let a0 = readString cur
-  let a1 = readString cur
-  let a2 = readEvId cur
-  EMethodAt a0 a1 a2
-readExprTagged 37 cur =
-  let a0 = readString cur
-  let a1 = readEvId cur
-  EDictAt a0 a1
-readExprTagged 38 cur =
-  let a0 = readLoc cur
-  let a1 = readExpr cur
-  ELoc a0 a1
-readExprTagged 39 cur =
-  let a0 = readLoc cur
-  let a1 = readExpr cur
-  EDoOrigin a0 a1
-readExprTagged 40 cur =
-  let a0 = readInt cur
-  let a1 = readEvId cur
-  let a2 = readString cur
-  ENumLit a0 a1 a2
-readExprTagged 41 cur =
-  let a0 = readInt cur
-  let a1 = readInt cur
-  let a2 = readEvId cur
-  let a3 = readString cur
-  EWideLit a0 a1 a2 a3
-readExprTagged _ cur = cursorFail cur dfltExpr
+readExprTagged t cur
+  | t == tagELit () =
+    let a0 = readLit cur
+    ELit a0
+  | t == tagEVar () =
+    let a0 = readString cur
+    EVar a0
+  | t == tagEApp () =
+    let a0 = readExpr cur
+    let a1 = readExpr cur
+    EApp a0 a1
+  | t == tagELam () =
+    let a0 = cursorList readPat cur
+    let a1 = readExpr cur
+    ELam a0 a1
+  | t == tagELet () =
+    let a0 = readLoc cur
+    let a1 = readBool cur
+    let a2 = readPat cur
+    let a3 = readExpr cur
+    let a4 = readExpr cur
+    ELet a0 a1 a2 a3 a4
+  | t == tagEMatch () =
+    let a0 = readExpr cur
+    let a1 = cursorList readArm cur
+    EMatch a0 a1
+  | t == tagEIf () =
+    let a0 = readExpr cur
+    let a1 = readExpr cur
+    let a2 = readExpr cur
+    EIf a0 a1 a2
+  | t == tagEBinOp () =
+    let a0 = readString cur
+    let a1 = readExpr cur
+    let a2 = readExpr cur
+    let a3 = readEvId cur
+    EBinOp a0 a1 a2 a3
+  | t == tagEUnOp () =
+    let a0 = readString cur
+    let a1 = readExpr cur
+    let a2 = readEvId cur
+    EUnOp a0 a1 a2
+  | t == tagEInfix () =
+    let a0 = readString cur
+    let a1 = readExpr cur
+    let a2 = readExpr cur
+    EInfix a0 a1 a2
+  | t == tagEFieldAccess () =
+    let a0 = readExpr cur
+    let a1 = readString cur
+    let a2 = readEvId cur
+    EFieldAccess a0 a1 a2
+  | t == tagETuple () =
+    let a0 = cursorList readExpr cur
+    ETuple a0
+  | t == tagEListLit () =
+    let a0 = cursorList readExpr cur
+    EListLit a0
+  | t == tagEArrayLit () =
+    let a0 = cursorList readExpr cur
+    EArrayLit a0
+  | t == tagERangeList () =
+    let a0 = readExpr cur
+    let a1 = readExpr cur
+    let a2 = readBool cur
+    ERangeList a0 a1 a2
+  | t == tagERangeArray () =
+    let a0 = readExpr cur
+    let a1 = readExpr cur
+    let a2 = readBool cur
+    ERangeArray a0 a1 a2
+  | t == tagESlice () =
+    let a0 = readExpr cur
+    let a1 = readExpr cur
+    let a2 = readExpr cur
+    let a3 = readBool cur
+    ESlice a0 a1 a2 a3
+  | t == tagELetGroup () =
+    let a0 = cursorList readLetBind cur
+    let a1 = readExpr cur
+    ELetGroup a0 a1
+  | t == tagESection () =
+    let a0 = readSection cur
+    ESection a0
+  | t == tagEIndex () =
+    let a0 = readExpr cur
+    let a1 = readExpr cur
+    EIndex a0 a1
+  | t == tagEAnnot () =
+    let a0 = readExpr cur
+    let a1 = readTy cur
+    EAnnot a0 a1
+  | t == tagEHeadAnnot () =
+    let a0 = readExpr cur
+    let a1 = readTy cur
+    EHeadAnnot a0 a1
+  | t == tagEBlock () =
+    let a0 = cursorList readDoStmt cur
+    EBlock a0
+  | t == tagEDo () =
+    let a0 = readBool cur
+    let a1 = cursorList readDoStmt cur
+    EDo a0 a1
+  | t == tagEStringInterp () =
+    let a0 = cursorList readInterpPart cur
+    EStringInterp a0
+  | t == tagEGuards () =
+    let a0 = cursorList readGuardArm cur
+    EGuards a0
+  | t == tagERecordCreate () =
+    let a0 = readString cur
+    let a1 = cursorList readFieldAssign cur
+    ERecordCreate a0 a1
+  | t == tagERecordUpdate () =
+    let a0 = readExpr cur
+    let a1 = cursorList readFieldAssign cur
+    let a2 = readEvId cur
+    ERecordUpdate a0 a1 a2
+  | t == tagEVariantUpdate () =
+    let a0 = readString cur
+    let a1 = readExpr cur
+    let a2 = cursorList readFieldAssign cur
+    EVariantUpdate a0 a1 a2
+  | t == tagEMapLit () =
+    let a0 = readString cur
+    let a1 = cursorList (readPair readExpr readExpr) cur
+    EMapLit a0 a1
+  | t == tagESetLit () =
+    let a0 = readString cur
+    let a1 = cursorList readExpr cur
+    ESetLit a0 a1
+  | t == tagEAsPat () =
+    let a0 = readString cur
+    let a1 = readExpr cur
+    EAsPat a0 a1
+  | t == tagEMethodRef () =
+    let a0 = readString cur
+    EMethodRef a0
+  | t == tagEDictApp () =
+    let a0 = readString cur
+    EDictApp a0
+  | t == tagEVarAt () =
+    let a0 = readString cur
+    let a1 = readAddr cur
+    EVarAt a0 a1
+  | t == tagEVarId () =
+    let a0 = readString cur
+    let a1 = readInt cur
+    EVarId a0 a1
+  | t == tagEMethodAt () =
+    let a0 = readString cur
+    let a1 = readString cur
+    let a2 = readEvId cur
+    EMethodAt a0 a1 a2
+  | t == tagEDictAt () =
+    let a0 = readString cur
+    let a1 = readEvId cur
+    EDictAt a0 a1
+  | t == tagELoc () =
+    let a0 = readLoc cur
+    let a1 = readExpr cur
+    ELoc a0 a1
+  | t == tagEDoOrigin () =
+    let a0 = readLoc cur
+    let a1 = readExpr cur
+    EDoOrigin a0 a1
+  | t == tagENumLit () =
+    let a0 = readInt cur
+    let a1 = readEvId cur
+    let a2 = readString cur
+    ENumLit a0 a1 a2
+  | t == tagEWideLit () =
+    let a0 = readInt cur
+    let a1 = readInt cur
+    let a2 = readEvId cur
+    let a3 = readString cur
+    EWideLit a0 a1 a2 a3
+  | otherwise = cursorFail cur dfltExpr
 
 readUseMember : SexpCursor -> UseMember
 readUseMember cur =
@@ -1436,34 +1801,25 @@ readUseMember cur =
   UseMember a0 a1 a2 a3
 
 readUsePath : SexpCursor -> UsePath
-readUsePath cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readUsePathTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readUsePathBare (cursorInt cur) cur
-
-readUsePathBare : Int -> SexpCursor -> UsePath
-readUsePathBare _ cur = cursorFail cur dfltUsePath
+readUsePath cur = readTagged readUsePathTagged (refuse dfltUsePath) cur
 
 readUsePathTagged : Int -> SexpCursor -> UsePath
-readUsePathTagged 0 cur =
-  let a0 = cursorList readString cur
-  UseName a0
-readUsePathTagged 1 cur =
-  let a0 = cursorList readString cur
-  let a1 = cursorList readUseMember cur
-  UseGroup a0 a1
-readUsePathTagged 2 cur =
-  let a0 = cursorList readString cur
-  UseWild a0
-readUsePathTagged 3 cur =
-  let a0 = cursorList readString cur
-  let a1 = readString cur
-  UseAlias a0 a1
-readUsePathTagged _ cur = cursorFail cur dfltUsePath
+readUsePathTagged t cur
+  | t == tagUseName () =
+    let a0 = cursorList readString cur
+    UseName a0
+  | t == tagUseGroup () =
+    let a0 = cursorList readString cur
+    let a1 = cursorList readUseMember cur
+    UseGroup a0 a1
+  | t == tagUseWild () =
+    let a0 = cursorList readString cur
+    UseWild a0
+  | t == tagUseAlias () =
+    let a0 = cursorList readString cur
+    let a1 = readString cur
+    UseAlias a0 a1
+  | otherwise = cursorFail cur dfltUsePath
 
 readPropParam : SexpCursor -> PropParam
 readPropParam cur =
@@ -1520,23 +1876,14 @@ readImplMethod cur =
   ImplMethod a0 a1 a2
 
 readDataVis : SexpCursor -> DataVis
-readDataVis cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readDataVisTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readDataVisBare (cursorInt cur) cur
+readDataVis cur = readTagged (refuse dfltDataVis) readDataVisBare cur
 
 readDataVisBare : Int -> SexpCursor -> DataVis
-readDataVisBare 0 _ = VisPrivate
-readDataVisBare 1 _ = VisAbstract
-readDataVisBare 2 _ = VisPublic
-readDataVisBare _ cur = cursorFail cur dfltDataVis
-
-readDataVisTagged : Int -> SexpCursor -> DataVis
-readDataVisTagged _ cur = cursorFail cur dfltDataVis
+readDataVisBare t cur
+  | t == tagVisPrivate () = VisPrivate
+  | t == tagVisAbstract () = VisAbstract
+  | t == tagVisPublic () = VisPublic
+  | otherwise = cursorFail cur dfltDataVis
 
 readField : SexpCursor -> Field
 readField cur =
@@ -1547,27 +1894,18 @@ readField cur =
   Field a0 a1
 
 readConPayload : SexpCursor -> ConPayload
-readConPayload cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readConPayloadTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readConPayloadBare (cursorInt cur) cur
-
-readConPayloadBare : Int -> SexpCursor -> ConPayload
-readConPayloadBare _ cur = cursorFail cur dfltConPayload
+readConPayload cur = readTagged readConPayloadTagged (refuse dfltConPayload) cur
 
 readConPayloadTagged : Int -> SexpCursor -> ConPayload
-readConPayloadTagged 0 cur =
-  let a0 = cursorList readTy cur
-  ConPos a0
-readConPayloadTagged 1 cur =
-  let a0 = cursorList readField cur
-  let a1 = readBool cur
-  ConNamed a0 a1
-readConPayloadTagged _ cur = cursorFail cur dfltConPayload
+readConPayloadTagged t cur
+  | t == tagConPos () =
+    let a0 = cursorList readTy cur
+    ConPos a0
+  | t == tagConNamed () =
+    let a0 = cursorList readField cur
+    let a1 = readBool cur
+    ConNamed a0 a1
+  | otherwise = cursorFail cur dfltConPayload
 
 readVariant : SexpCursor -> Variant
 readVariant cur =
@@ -1578,26 +1916,21 @@ readVariant cur =
   Variant a0 a1
 
 readAttr : SexpCursor -> Attr
-readAttr cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readAttrTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readAttrBare (cursorInt cur) cur
+readAttr cur = readTagged readAttrTagged readAttrBare cur
 
 readAttrBare : Int -> SexpCursor -> Attr
-readAttrBare 1 _ = AttrInline
-readAttrBare 2 _ = AttrMustUse
-readAttrBare 3 _ = AttrNoInline
-readAttrBare _ cur = cursorFail cur dfltAttr
+readAttrBare t cur
+  | t == tagAttrInline () = AttrInline
+  | t == tagAttrMustUse () = AttrMustUse
+  | t == tagAttrNoInline () = AttrNoInline
+  | otherwise = cursorFail cur dfltAttr
 
 readAttrTagged : Int -> SexpCursor -> Attr
-readAttrTagged 0 cur =
-  let a0 = readOpt readString cur
-  AttrDeprecated a0
-readAttrTagged _ cur = cursorFail cur dfltAttr
+readAttrTagged t cur
+  | t == tagAttrDeprecated () =
+    let a0 = readOpt readString cur
+    AttrDeprecated a0
+  | otherwise = cursorFail cur dfltAttr
 
 readDeriveRef : SexpCursor -> DeriveRef
 readDeriveRef cur =
@@ -1628,175 +1961,166 @@ readExternBind cur =
   ExternBind { ebHost = a0, ebSymbol = a1, ebLoc = a2 }
 
 readDecl : SexpCursor -> Decl
-readDecl cur =
-  if cursorPeek cur == 40 then
-    let _ = cursorAdvance cur
-    let v = readDeclTagged (cursorInt cur) cur
-    let _ = cursorClose cur
-    v
-  else
-    readDeclBare (cursorInt cur) cur
-
-readDeclBare : Int -> SexpCursor -> Decl
-readDeclBare _ cur = cursorFail cur dfltDecl
+readDecl cur = readTagged readDeclTagged (refuse dfltDecl) cur
 
 readDeclTagged : Int -> SexpCursor -> Decl
-readDeclTagged 0 cur =
-  let a0 = readBool cur
-  let a1 = readString cur
-  let a2 = readTy cur
-  let a3 = readLoc cur
-  DTypeSig a0 a1 a2 a3
-readDeclTagged 1 cur =
-  let a0 = readExternDecl cur
-  DExtern a0
-readDeclTagged 2 cur =
-  let a0 = readBool cur
-  let a1 = readString cur
-  let a2 = cursorList readPat cur
-  let a3 = readExpr cur
-  let a4 = readLoc cur
-  let a5 = readBinderId cur
-  DFunDef a0 a1 a2 a3 a4 a5
-readDeclTagged 3 cur =
-  let a0 = readDataVis cur
-  let a1 = readString cur
-  let a2 = cursorList readString cur
-  let a3 = cursorList (readOpt readKindAnn) cur
-  let a4 = cursorList readVariant cur
-  let a5 = cursorList (cursorList (readPair readString readKindAnn)) cur
-  let a6 = cursorList readDeriveRef cur
-  let a7 = readTyConOrigin cur
-  let a8 = readBool cur
-  let a9 = readOpt readLoc cur
-  DData {
-    dataVis = a0,
-    dataName = a1,
-    dataParams = a2,
-    dataParamKinds = a3,
-    dataCtors = a4,
-    dataCtorBinders = a5,
-    dataDerives = a6,
-    dataOrigin = a7,
-    dataExtern = a8,
-    dataNameLoc = a9,
-  }
-readDeclTagged 4 cur =
-  let a0 = readBool cur
-  let a1 = readUsePath cur
-  let a2 = readLoc cur
-  DUse a0 a1 a2
-readDeclTagged 5 cur =
-  let a0 = readBool cur
-  let a1 = readString cur
-  let a2 = readOpt readString cur
-  let a3 = cursorList (readPair readString readString) cur
-  let a4 = readTyConOrigin cur
-  let a5 = readOpt readLoc cur
-  DEffect a0 a1 a2 a3 a4 a5
-readDeclTagged 6 cur =
-  let a0 = readBool cur
-  let a1 = readString cur
-  let a2 = cursorList readPropParam cur
-  let a3 = readExpr cur
-  DProp a0 a1 a2 a3
-readDeclTagged 7 cur =
-  let a0 = readBool cur
-  let a1 = readString cur
-  let a2 = readExpr cur
-  DTest a0 a1 a2
-readDeclTagged 8 cur =
-  let a0 = readBool cur
-  let a1 = readBool cur
-  let a2 = readString cur
-  let a3 = cursorList readString cur
-  let a4 = cursorList (readOpt readKindAnn) cur
-  let a5 = cursorList readSuper cur
-  let a6 = cursorList readIfaceMethod cur
-  let a7 = readTyConOrigin cur
-  let a8 = readOpt readLoc cur
-  DInterface {
-    pub = a0,
-    def = a1,
-    name = a2,
-    typarams = a3,
-    typaramKinds = a4,
-    supers = a5,
-    methods = a6,
-    ifaceOrigin = a7,
-    ifaceNameLoc = a8,
-  }
-readDeclTagged 9 cur =
-  let a0 = readBool cur
-  let a1 = readString cur
-  let a2 = cursorList readTy cur
-  let a3 = cursorList readRequire cur
-  let a4 = cursorList readImplMethod cur
-  let a5 = readTyConOrigin cur
-  let a6 = readOpt readLoc cur
-  DImpl {
-    pub = a0,
-    iface = a1,
-    tys = a2,
-    reqs = a3,
-    methods = a4,
-    implOrigin = a5,
-    implIfaceLoc = a6,
-  }
-readDeclTagged 10 cur =
-  let a0 = readBool cur
-  let a1 = readString cur
-  let a2 = cursorList readString cur
-  let a3 = cursorList (readOpt readKindAnn) cur
-  let a4 = readTy cur
-  let a5 = readTyConOrigin cur
-  let a6 = readOpt readLoc cur
-  DTypeAlias {
-    tyAliasPub = a0,
-    tyAliasName = a1,
-    tyAliasParams = a2,
-    tyAliasParamKinds = a3,
-    tyAliasRhs = a4,
-    tyAliasOrigin = a5,
-    tyAliasNameLoc = a6,
-  }
-readDeclTagged 11 cur =
-  let a0 = readBool cur
-  let a1 = readString cur
-  let a2 = cursorList readString cur
-  let a3 = cursorList (readOpt readKindAnn) cur
-  let a4 = readString cur
-  let a5 = cursorList (readPair readString readKindAnn) cur
-  let a6 = readTy cur
-  let a7 = cursorList readDeriveRef cur
-  let a8 = readTyConOrigin cur
-  let a9 = readOpt readLoc cur
-  DNewtype {
-    newtypePub = a0,
-    newtypeName = a1,
-    newtypeParams = a2,
-    newtypeParamKinds = a3,
-    newtypeCtor = a4,
-    newtypeCtorBinders = a5,
-    newtypeFieldTy = a6,
-    newtypeDerives = a7,
-    newtypeOrigin = a8,
-    newtypeNameLoc = a9,
-  }
-readDeclTagged 12 cur =
-  let a0 = readBool cur
-  let a1 = cursorList readLetBind cur
-  DLetGroup a0 a1
-readDeclTagged 13 cur =
-  let a0 = cursorList readAttr cur
-  let a1 = readDecl cur
-  DAttrib a0 a1
-readDeclTagged _ cur = cursorFail cur dfltDecl
+readDeclTagged t cur
+  | t == tagDTypeSig () =
+    let a0 = readBool cur
+    let a1 = readString cur
+    let a2 = readTy cur
+    let a3 = readLoc cur
+    DTypeSig a0 a1 a2 a3
+  | t == tagDExtern () =
+    let a0 = readExternDecl cur
+    DExtern a0
+  | t == tagDFunDef () =
+    let a0 = readBool cur
+    let a1 = readString cur
+    let a2 = cursorList readPat cur
+    let a3 = readExpr cur
+    let a4 = readLoc cur
+    let a5 = readBinderId cur
+    DFunDef a0 a1 a2 a3 a4 a5
+  | t == tagDData () =
+    let a0 = readDataVis cur
+    let a1 = readString cur
+    let a2 = cursorList readString cur
+    let a3 = cursorList (readOpt readKindAnn) cur
+    let a4 = cursorList readVariant cur
+    let a5 = cursorList (cursorList (readPair readString readKindAnn)) cur
+    let a6 = cursorList readDeriveRef cur
+    let a7 = readTyConOrigin cur
+    let a8 = readBool cur
+    let a9 = readOpt readLoc cur
+    DData {
+      dataVis = a0,
+      dataName = a1,
+      dataParams = a2,
+      dataParamKinds = a3,
+      dataCtors = a4,
+      dataCtorBinders = a5,
+      dataDerives = a6,
+      dataOrigin = a7,
+      dataExtern = a8,
+      dataNameLoc = a9,
+    }
+  | t == tagDUse () =
+    let a0 = readBool cur
+    let a1 = readUsePath cur
+    let a2 = readLoc cur
+    DUse a0 a1 a2
+  | t == tagDEffect () =
+    let a0 = readBool cur
+    let a1 = readString cur
+    let a2 = readOpt readString cur
+    let a3 = cursorList (readPair readString readString) cur
+    let a4 = readTyConOrigin cur
+    let a5 = readOpt readLoc cur
+    DEffect a0 a1 a2 a3 a4 a5
+  | t == tagDProp () =
+    let a0 = readBool cur
+    let a1 = readString cur
+    let a2 = cursorList readPropParam cur
+    let a3 = readExpr cur
+    DProp a0 a1 a2 a3
+  | t == tagDTest () =
+    let a0 = readBool cur
+    let a1 = readString cur
+    let a2 = readExpr cur
+    DTest a0 a1 a2
+  | t == tagDInterface () =
+    let a0 = readBool cur
+    let a1 = readBool cur
+    let a2 = readString cur
+    let a3 = cursorList readString cur
+    let a4 = cursorList (readOpt readKindAnn) cur
+    let a5 = cursorList readSuper cur
+    let a6 = cursorList readIfaceMethod cur
+    let a7 = readTyConOrigin cur
+    let a8 = readOpt readLoc cur
+    DInterface {
+      pub = a0,
+      def = a1,
+      name = a2,
+      typarams = a3,
+      typaramKinds = a4,
+      supers = a5,
+      methods = a6,
+      ifaceOrigin = a7,
+      ifaceNameLoc = a8,
+    }
+  | t == tagDImpl () =
+    let a0 = readBool cur
+    let a1 = readString cur
+    let a2 = cursorList readTy cur
+    let a3 = cursorList readRequire cur
+    let a4 = cursorList readImplMethod cur
+    let a5 = readTyConOrigin cur
+    let a6 = readOpt readLoc cur
+    DImpl {
+      pub = a0,
+      iface = a1,
+      tys = a2,
+      reqs = a3,
+      methods = a4,
+      implOrigin = a5,
+      implIfaceLoc = a6,
+    }
+  | t == tagDTypeAlias () =
+    let a0 = readBool cur
+    let a1 = readString cur
+    let a2 = cursorList readString cur
+    let a3 = cursorList (readOpt readKindAnn) cur
+    let a4 = readTy cur
+    let a5 = readTyConOrigin cur
+    let a6 = readOpt readLoc cur
+    DTypeAlias {
+      tyAliasPub = a0,
+      tyAliasName = a1,
+      tyAliasParams = a2,
+      tyAliasParamKinds = a3,
+      tyAliasRhs = a4,
+      tyAliasOrigin = a5,
+      tyAliasNameLoc = a6,
+    }
+  | t == tagDNewtype () =
+    let a0 = readBool cur
+    let a1 = readString cur
+    let a2 = cursorList readString cur
+    let a3 = cursorList (readOpt readKindAnn) cur
+    let a4 = readString cur
+    let a5 = cursorList (readPair readString readKindAnn) cur
+    let a6 = readTy cur
+    let a7 = cursorList readDeriveRef cur
+    let a8 = readTyConOrigin cur
+    let a9 = readOpt readLoc cur
+    DNewtype {
+      newtypePub = a0,
+      newtypeName = a1,
+      newtypeParams = a2,
+      newtypeParamKinds = a3,
+      newtypeCtor = a4,
+      newtypeCtorBinders = a5,
+      newtypeFieldTy = a6,
+      newtypeDerives = a7,
+      newtypeOrigin = a8,
+      newtypeNameLoc = a9,
+    }
+  | t == tagDLetGroup () =
+    let a0 = readBool cur
+    let a1 = cursorList readLetBind cur
+    DLetGroup a0 a1
+  | t == tagDAttrib () =
+    let a0 = cursorList readAttr cur
+    let a1 = readDecl cur
+    DAttrib a0 a1
+  | otherwise = cursorFail cur dfltDecl
 # DESUGAR
 (DUse false (UseWild ("frontend" "ast")))
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
 (DUse false (UseGroup ("list") ((mem "splitAt" false))))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "SexpError" true) (mem "cursorAdvance" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false))))
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "SexpError" true) (mem "cursorAdvance" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false) (mem "isCloseByte" false) (mem "isOpenByte" false))))
 (DTypeSig true "declsSExp" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SExp")))
 (DFunDef false "declsSExp" ((PVar "ds")) (EApp (EApp (EVar "sexpList") (EVar "sexpDecl")) (EVar "ds")))
 (DTypeSig true "evEntriesSExp" (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyCon "SExp")))
@@ -1837,6 +2161,12 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig true "sexpBinderId" (TyFun (TyCon "BinderId") (TyCon "SExp")))
 (DFunDef false "sexpBinderId" ((PCon "BinderId" (PLit (LString "")) (PVar "n"))) (EApp (EVar "sexpInt") (EVar "n")))
 (DFunDef false "sexpBinderId" ((PCon "BinderId" (PVar "m") (PVar "n"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EVar "m")) (EApp (EVar "sexpInt") (EVar "n")))))
+(DTypeSig false "isTrueChar" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isTrueChar" ((PVar "c")) (EBinOp "==" (EVar "c") (ELit (LInt 116))))
+(DTypeSig false "isFalseChar" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isFalseChar" ((PVar "c")) (EBinOp "==" (EVar "c") (ELit (LInt 102))))
+(DTypeSig false "isPlaceholderChar" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isPlaceholderChar" ((PVar "c")) (EBinOp "==" (EVar "c") (ELit (LInt 122))))
 (DTypeSig false "wordOf" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "wordOf" ((PVar "bytes")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "b")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 256))) (EVar "b")))) (ELit (LInt 0))) (EVar "bytes")))
 (DTypeSig false "bytesOfWord" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))
@@ -1846,167 +2176,445 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "readString" (TyFun (TyCon "SexpCursor") (TyCon "String")))
 (DFunDef false "readString" ((PVar "cur")) (EApp (EVar "cursorAtom") (EVar "cur")))
 (DTypeSig true "readBool" (TyFun (TyCon "SexpCursor") (TyCon "Bool")))
-(DFunDef false "readBool" ((PVar "cur")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cursorChar") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 116))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LInt 102))) (EVar "False") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "False")))))))
+(DFunDef false "readBool" ((PVar "cur")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cursorChar") (EVar "cur"))) (DoExpr (EIf (EApp (EVar "isTrueChar") (EVar "c")) (EVar "True") (EIf (EApp (EVar "isFalseChar") (EVar "c")) (EVar "False") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "False")))))))
 (DTypeSig false "readFloat" (TyFun (TyCon "SexpCursor") (TyCon "Float")))
 (DFunDef false "readFloat" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "hi") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "lo") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "hi") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (ELit (LInt 4294967295)))) (EBinOp "<" (EVar "lo") (ELit (LInt 0)))) (EBinOp ">" (EVar "lo") (ELit (LInt 4294967295)))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit (LFloat 0.0))) (EApp (EApp (EVar "bytesToFloat64") (EApp (EVar "fromList") (EBinOp "++" (EApp (EVar "bytesOfWord") (EVar "hi")) (EApp (EVar "bytesOfWord") (EVar "lo"))))) (ELit (LInt 0)))))))
 (DTypeSig false "readOpt" (TyFun (TyFun (TyCon "SexpCursor") (TyVar "a")) (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "readOpt" ((PVar "f") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 41))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EVar "v"))))))))
+(DFunDef false "readOpt" ((PVar "f") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EVar "v"))))))))
 (DTypeSig false "readPair" (TyFun (TyFun (TyCon "SexpCursor") (TyVar "a")) (TyFun (TyFun (TyCon "SexpCursor") (TyVar "b")) (TyFun (TyCon "SexpCursor") (TyTuple (TyVar "a") (TyVar "b"))))))
 (DFunDef false "readPair" ((PVar "fa") (PVar "fb") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a") (EApp (EVar "fa") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "fb") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "a") (EVar "b")))))
 (DTypeSig false "readLoc" (TyFun (TyCon "SexpCursor") (TyCon "Loc")))
-(DFunDef false "readLoc" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "f") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "c") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "d") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))) (EIf (EBinOp "==" (EApp (EVar "cursorChar") (EVar "cur")) (ELit (LInt 122))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLoc")))))
+(DFunDef false "readLoc" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "f") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "c") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "d") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))) (EIf (EApp (EVar "isPlaceholderChar") (EApp (EVar "cursorChar") (EVar "cur"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLoc")))))
 (DTypeSig false "readEvId" (TyFun (TyCon "SexpCursor") (TyCon "EvId")))
-(DFunDef false "readEvId" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "EvId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
+(DFunDef false "readEvId" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "EvId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
 (DTypeSig true "readBinderId" (TyFun (TyCon "SexpCursor") (TyCon "BinderId")))
-(DFunDef false "readBinderId" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "BinderId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "BinderId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
+(DFunDef false "readBinderId" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "BinderId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "BinderId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
+(DTypeSig false "readTagged" (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyVar "a"))) (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyVar "a"))) (TyFun (TyCon "SexpCursor") (TyVar "a")))))
+(DFunDef false "readTagged" ((PVar "tagged") (PVar "bare") (PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "tagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "bare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DTypeSig false "refuse" (TyFun (TyVar "a") (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyVar "a")))))
+(DFunDef false "refuse" ((PVar "dflt") PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dflt")))
+(DTypeSig false "tagAtom" (TyFun (TyCon "Int") (TyCon "SExp")))
+(DFunDef false "tagAtom" ((PVar "n")) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "n"))))
+(DTypeSig false "tagLInt" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLInt" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagLFloat" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLFloat" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagLU64" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLU64" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagLI64" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLI64" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagLString" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLString" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagLChar" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLChar" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagLBool" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLBool" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagLUnit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLUnit" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagOriginUnresolved" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagOriginUnresolved" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagOriginBuiltin" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagOriginBuiltin" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagOriginModule" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagOriginModule" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagTyCon" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyCon" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagTyVar" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyVar" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagTyApp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyApp" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagTyFun" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyFun" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagTyTuple" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyTuple" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagTyEffect" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyEffect" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagTyConstrained" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyConstrained" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagTyNamed" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyNamed" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagTyQual" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyQual" ((PLit LUnit)) (ELit (LInt 8)))
+(DTypeSig false "tagTyRow" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyRow" ((PLit LUnit)) (ELit (LInt 9)))
+(DTypeSig false "tagTyAuth" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyAuth" ((PLit LUnit)) (ELit (LInt 10)))
+(DTypeSig false "tagEPTop" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEPTop" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagEPLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEPLit" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagEPName" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEPName" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagEPSet" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEPSet" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagEPProduct" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEPProduct" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagKindType" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagKindType" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagKindEffect" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagKindEffect" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagKindAuthority" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagKindAuthority" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagKindArrow" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagKindArrow" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagRNone" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRNone" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagRKey" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRKey" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagRDict" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRDict" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagRDictFwd" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRDictFwd" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagRLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRLocal" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagRScalar" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRScalar" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagRProj" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRProj" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagEvOne" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEvOne" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagEvMany" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEvMany" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagEvMethod" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEvMethod" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagEvLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEvLit" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagEvHead" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEvHead" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagALocal" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagALocal" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagAGlobal" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagAGlobal" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagPVar" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPVar" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagPWild" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPWild" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagPLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPLit" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagPCon" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPCon" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagPCons" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPCons" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagPTuple" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPTuple" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagPList" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPList" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagPAs" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPAs" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagPRng" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPRng" ((PLit LUnit)) (ELit (LInt 8)))
+(DTypeSig false "tagPRec" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPRec" ((PLit LUnit)) (ELit (LInt 9)))
+(DTypeSig false "tagGBool" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagGBool" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagGBind" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagGBind" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagDoExpr" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDoExpr" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagDoBind" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDoBind" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagDoLet" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDoLet" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagDoAssign" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDoAssign" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagDoFieldAssign" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDoFieldAssign" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagInterpStr" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagInterpStr" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagInterpExpr" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagInterpExpr" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagSecBare" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagSecBare" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagSecRight" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagSecRight" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagSecLeft" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagSecLeft" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagELit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagELit" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagEVar" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEVar" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagEApp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEApp" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagELam" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagELam" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagELet" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagELet" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagEMatch" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEMatch" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagEIf" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEIf" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagEBinOp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEBinOp" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagEUnOp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEUnOp" ((PLit LUnit)) (ELit (LInt 8)))
+(DTypeSig false "tagEInfix" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEInfix" ((PLit LUnit)) (ELit (LInt 9)))
+(DTypeSig false "tagEFieldAccess" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEFieldAccess" ((PLit LUnit)) (ELit (LInt 10)))
+(DTypeSig false "tagETuple" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagETuple" ((PLit LUnit)) (ELit (LInt 11)))
+(DTypeSig false "tagEListLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEListLit" ((PLit LUnit)) (ELit (LInt 12)))
+(DTypeSig false "tagEArrayLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEArrayLit" ((PLit LUnit)) (ELit (LInt 13)))
+(DTypeSig false "tagERangeList" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagERangeList" ((PLit LUnit)) (ELit (LInt 14)))
+(DTypeSig false "tagERangeArray" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagERangeArray" ((PLit LUnit)) (ELit (LInt 15)))
+(DTypeSig false "tagESlice" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagESlice" ((PLit LUnit)) (ELit (LInt 16)))
+(DTypeSig false "tagELetGroup" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagELetGroup" ((PLit LUnit)) (ELit (LInt 17)))
+(DTypeSig false "tagESection" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagESection" ((PLit LUnit)) (ELit (LInt 18)))
+(DTypeSig false "tagEIndex" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEIndex" ((PLit LUnit)) (ELit (LInt 19)))
+(DTypeSig false "tagEAnnot" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEAnnot" ((PLit LUnit)) (ELit (LInt 20)))
+(DTypeSig false "tagEHeadAnnot" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEHeadAnnot" ((PLit LUnit)) (ELit (LInt 21)))
+(DTypeSig false "tagEBlock" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEBlock" ((PLit LUnit)) (ELit (LInt 22)))
+(DTypeSig false "tagEDo" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEDo" ((PLit LUnit)) (ELit (LInt 23)))
+(DTypeSig false "tagEStringInterp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEStringInterp" ((PLit LUnit)) (ELit (LInt 24)))
+(DTypeSig false "tagEGuards" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEGuards" ((PLit LUnit)) (ELit (LInt 25)))
+(DTypeSig false "tagERecordCreate" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagERecordCreate" ((PLit LUnit)) (ELit (LInt 26)))
+(DTypeSig false "tagERecordUpdate" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagERecordUpdate" ((PLit LUnit)) (ELit (LInt 27)))
+(DTypeSig false "tagEVariantUpdate" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEVariantUpdate" ((PLit LUnit)) (ELit (LInt 28)))
+(DTypeSig false "tagEMapLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEMapLit" ((PLit LUnit)) (ELit (LInt 29)))
+(DTypeSig false "tagESetLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagESetLit" ((PLit LUnit)) (ELit (LInt 30)))
+(DTypeSig false "tagEAsPat" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEAsPat" ((PLit LUnit)) (ELit (LInt 31)))
+(DTypeSig false "tagEMethodRef" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEMethodRef" ((PLit LUnit)) (ELit (LInt 32)))
+(DTypeSig false "tagEDictApp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEDictApp" ((PLit LUnit)) (ELit (LInt 33)))
+(DTypeSig false "tagEVarAt" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEVarAt" ((PLit LUnit)) (ELit (LInt 34)))
+(DTypeSig false "tagEVarId" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEVarId" ((PLit LUnit)) (ELit (LInt 35)))
+(DTypeSig false "tagEMethodAt" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEMethodAt" ((PLit LUnit)) (ELit (LInt 36)))
+(DTypeSig false "tagEDictAt" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEDictAt" ((PLit LUnit)) (ELit (LInt 37)))
+(DTypeSig false "tagELoc" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagELoc" ((PLit LUnit)) (ELit (LInt 38)))
+(DTypeSig false "tagEDoOrigin" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEDoOrigin" ((PLit LUnit)) (ELit (LInt 39)))
+(DTypeSig false "tagENumLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagENumLit" ((PLit LUnit)) (ELit (LInt 40)))
+(DTypeSig false "tagEWideLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEWideLit" ((PLit LUnit)) (ELit (LInt 41)))
+(DTypeSig false "tagUseName" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagUseName" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagUseGroup" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagUseGroup" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagUseWild" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagUseWild" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagUseAlias" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagUseAlias" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagVisPrivate" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagVisPrivate" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagVisAbstract" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagVisAbstract" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagVisPublic" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagVisPublic" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagConPos" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagConPos" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagConNamed" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagConNamed" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagAttrDeprecated" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagAttrDeprecated" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagAttrInline" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagAttrInline" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagAttrMustUse" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagAttrMustUse" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagAttrNoInline" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagAttrNoInline" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagDTypeSig" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDTypeSig" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagDExtern" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDExtern" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagDFunDef" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDFunDef" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagDData" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDData" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagDUse" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDUse" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagDEffect" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDEffect" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagDProp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDProp" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagDTest" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDTest" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagDInterface" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDInterface" ((PLit LUnit)) (ELit (LInt 8)))
+(DTypeSig false "tagDImpl" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDImpl" ((PLit LUnit)) (ELit (LInt 9)))
+(DTypeSig false "tagDTypeAlias" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDTypeAlias" ((PLit LUnit)) (ELit (LInt 10)))
+(DTypeSig false "tagDNewtype" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDNewtype" ((PLit LUnit)) (ELit (LInt 11)))
+(DTypeSig false "tagDLetGroup" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDLetGroup" ((PLit LUnit)) (ELit (LInt 12)))
+(DTypeSig false "tagDAttrib" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDAttrib" ((PLit LUnit)) (ELit (LInt 13)))
 (DTypeSig false "sexpLit" (TyFun (TyCon "Lit") (TyCon "SExp")))
-(DFunDef false "sexpLit" ((PCon "LInt" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpInt") (EVar "a0")))))
-(DFunDef false "sexpLit" ((PCon "LFloat" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpFloat") (EVar "a0")))))
-(DFunDef false "sexpLit" ((PCon "LU64" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
-(DFunDef false "sexpLit" ((PCon "LI64" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
-(DFunDef false "sexpLit" ((PCon "LString" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpLit" ((PCon "LChar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpLit" ((PCon "LBool" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EVar "sexpBool") (EVar "a0")))))
-(DFunDef false "sexpLit" ((PCon "LUnit")) (EApp (EVar "SAtom") (ELit (LString "7"))))
+(DFunDef false "sexpLit" ((PCon "LInt" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLInt") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LFloat" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLFloat") (ELit LUnit))) (EApp (EVar "sexpFloat") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LU64" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLU64") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
+(DFunDef false "sexpLit" ((PCon "LI64" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLI64") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
+(DFunDef false "sexpLit" ((PCon "LString" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLString") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LChar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLChar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LBool" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLBool") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LUnit")) (EApp (EVar "tagAtom") (EApp (EVar "tagLUnit") (ELit LUnit))))
 (DTypeSig false "sexpTyConOrigin" (TyFun (TyCon "TyConOrigin") (TyCon "SExp")))
-(DFunDef false "sexpTyConOrigin" ((PCon "OriginUnresolved")) (EApp (EVar "SAtom") (ELit (LString "0"))))
-(DFunDef false "sexpTyConOrigin" ((PCon "OriginBuiltin")) (EApp (EVar "SAtom") (ELit (LString "1"))))
-(DFunDef false "sexpTyConOrigin" ((PCon "OriginModule" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpTyConOrigin" ((PCon "OriginUnresolved")) (EApp (EVar "tagAtom") (EApp (EVar "tagOriginUnresolved") (ELit LUnit))))
+(DFunDef false "sexpTyConOrigin" ((PCon "OriginBuiltin")) (EApp (EVar "tagAtom") (EApp (EVar "tagOriginBuiltin") (ELit LUnit))))
+(DFunDef false "sexpTyConOrigin" ((PCon "OriginModule" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagOriginModule") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
 (DTypeSig false "sexpTy" (TyFun (TyCon "Ty") (TyCon "SExp")))
-(DFunDef false "sexpTy" ((PRec "TyCon" ((rf "tyConName" (PVar "a0")) (rf "tyConLoc" (PVar "a1")) (rf "tyConOrigin" (PVar "a2"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a1")) (EApp (EVar "sexpTyConOrigin") (EVar "a2")))))
-(DFunDef false "sexpTy" ((PCon "TyVar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpTy" ((PCon "TyApp" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
-(DFunDef false "sexpTy" ((PCon "TyFun" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
-(DFunDef false "sexpTy" ((PCon "TyTuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a0")))))
-(DFunDef false "sexpTy" ((PCon "TyEffect" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffAtomTy")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EVar "sexpTy") (EVar "a2")))))
-(DFunDef false "sexpTy" ((PCon "TyConstrained" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EApp (EVar "sexpList") (EVar "sexpConstraint")) (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
-(DFunDef false "sexpTy" ((PCon "TyNamed" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "7"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpEffAtomTy")) (EVar "a2")))))
-(DFunDef false "sexpTy" ((PCon "TyQual" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "8"))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpEffParamTy")) (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a2")))))
-(DFunDef false "sexpTy" ((PCon "TyRow" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "9"))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffAtomTy")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a2")))))
-(DFunDef false "sexpTy" ((PCon "TyAuth" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "10"))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffParamTy")) (EVar "a0")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a1")))))
+(DFunDef false "sexpTy" ((PRec "TyCon" ((rf "tyConName" (PVar "a0")) (rf "tyConLoc" (PVar "a1")) (rf "tyConOrigin" (PVar "a2"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyCon") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a1")) (EApp (EVar "sexpTyConOrigin") (EVar "a2")))))
+(DFunDef false "sexpTy" ((PCon "TyVar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyVar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpTy" ((PCon "TyApp" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyApp") (ELit LUnit))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
+(DFunDef false "sexpTy" ((PCon "TyFun" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyFun") (ELit LUnit))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
+(DFunDef false "sexpTy" ((PCon "TyTuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyTuple") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a0")))))
+(DFunDef false "sexpTy" ((PCon "TyEffect" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyEffect") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffAtomTy")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EVar "sexpTy") (EVar "a2")))))
+(DFunDef false "sexpTy" ((PCon "TyConstrained" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyConstrained") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpConstraint")) (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
+(DFunDef false "sexpTy" ((PCon "TyNamed" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyNamed") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpEffAtomTy")) (EVar "a2")))))
+(DFunDef false "sexpTy" ((PCon "TyQual" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyQual") (ELit LUnit))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpEffParamTy")) (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a2")))))
+(DFunDef false "sexpTy" ((PCon "TyRow" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyRow") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffAtomTy")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a2")))))
+(DFunDef false "sexpTy" ((PCon "TyAuth" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyAuth") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffParamTy")) (EVar "a0")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a1")))))
 (DTypeSig false "sexpEffAtomTy" (TyFun (TyCon "EffAtomTy") (TyCon "SExp")))
 (DFunDef false "sexpEffAtomTy" ((PRec "EffAtomTy" ((rf "eatLabel" (PVar "a0")) (rf "eatOrigin" (PVar "a1")) (rf "eatParam" (PVar "a2")) (rf "eatLoc" (PVar "a3")) (rf "eatPattern" (PVar "a4"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTyConOrigin") (EVar "a1")) (EApp (EVar "sexpEffParamTy") (EVar "a2")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a3")) (EApp (EVar "sexpBool") (EVar "a4")))))
 (DTypeSig false "sexpEffParamTy" (TyFun (TyCon "EffParamTy") (TyCon "SExp")))
-(DFunDef false "sexpEffParamTy" ((PCon "EPTop")) (EApp (EVar "SAtom") (ELit (LString "0"))))
-(DFunDef false "sexpEffParamTy" ((PCon "EPLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpEffParamTy" ((PCon "EPName" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpEffParamTy" ((PCon "EPSet" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
-(DFunDef false "sexpEffParamTy" ((PCon "EPProduct" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpEffParamTy"))) (EVar "a0")))))
+(DFunDef false "sexpEffParamTy" ((PCon "EPTop")) (EApp (EVar "tagAtom") (EApp (EVar "tagEPTop") (ELit LUnit))))
+(DFunDef false "sexpEffParamTy" ((PCon "EPLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEPLit") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpEffParamTy" ((PCon "EPName" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEPName") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpEffParamTy" ((PCon "EPSet" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEPSet") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
+(DFunDef false "sexpEffParamTy" ((PCon "EPProduct" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEPProduct") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpEffParamTy"))) (EVar "a0")))))
 (DTypeSig false "sexpConstraint" (TyFun (TyCon "Constraint") (TyCon "SExp")))
 (DFunDef false "sexpConstraint" ((PRec "Constraint" ((rf "constraintHead" (PVar "a0")) (rf "constraintArgs" (PVar "a1")) (rf "constraintOrigin" (PVar "a2"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a1")) (EApp (EVar "sexpTyConOrigin") (EVar "a2")))))
 (DTypeSig false "sexpKindAnn" (TyFun (TyCon "KindAnn") (TyCon "SExp")))
-(DFunDef false "sexpKindAnn" ((PCon "KindType")) (EApp (EVar "SAtom") (ELit (LString "0"))))
-(DFunDef false "sexpKindAnn" ((PCon "KindEffect")) (EApp (EVar "SAtom") (ELit (LString "1"))))
-(DFunDef false "sexpKindAnn" ((PCon "KindAuthority" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTyConOrigin") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a3")))))
-(DFunDef false "sexpKindAnn" ((PCon "KindArrow" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpKindAnn") (EVar "a0")) (EApp (EVar "sexpKindAnn") (EVar "a1")))))
+(DFunDef false "sexpKindAnn" ((PCon "KindType")) (EApp (EVar "tagAtom") (EApp (EVar "tagKindType") (ELit LUnit))))
+(DFunDef false "sexpKindAnn" ((PCon "KindEffect")) (EApp (EVar "tagAtom") (EApp (EVar "tagKindEffect") (ELit LUnit))))
+(DFunDef false "sexpKindAnn" ((PCon "KindAuthority" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagKindAuthority") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTyConOrigin") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a3")))))
+(DFunDef false "sexpKindAnn" ((PCon "KindArrow" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagKindArrow") (ELit LUnit))) (EApp (EVar "sexpKindAnn") (EVar "a0")) (EApp (EVar "sexpKindAnn") (EVar "a1")))))
 (DTypeSig false "sexpRoute" (TyFun (TyCon "Route") (TyCon "SExp")))
-(DFunDef false "sexpRoute" ((PCon "RNone")) (EApp (EVar "SAtom") (ELit (LString "0"))))
-(DFunDef false "sexpRoute" ((PCon "RKey" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a2")))))
-(DFunDef false "sexpRoute" ((PCon "RDict" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpRoute" ((PCon "RDictFwd" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpRoute" ((PCon "RLocal" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a1")))))
-(DFunDef false "sexpRoute" ((PCon "RScalar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpRoute" ((PCon "RProj" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EVar "sexpRoute") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpInt")) (EVar "a1")))))
+(DFunDef false "sexpRoute" ((PCon "RNone")) (EApp (EVar "tagAtom") (EApp (EVar "tagRNone") (ELit LUnit))))
+(DFunDef false "sexpRoute" ((PCon "RKey" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRKey") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a2")))))
+(DFunDef false "sexpRoute" ((PCon "RDict" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRDict") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpRoute" ((PCon "RDictFwd" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRDictFwd") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpRoute" ((PCon "RLocal" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRLocal") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a1")))))
+(DFunDef false "sexpRoute" ((PCon "RScalar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRScalar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpRoute" ((PCon "RProj" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRProj") (ELit LUnit))) (EApp (EVar "sexpRoute") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpInt")) (EVar "a1")))))
 (DTypeSig false "sexpEvVal" (TyFun (TyCon "EvVal") (TyCon "SExp")))
-(DFunDef false "sexpEvVal" ((PCon "EvOne" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpRoute") (EVar "a0")))))
-(DFunDef false "sexpEvVal" ((PCon "EvMany" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a0")))))
-(DFunDef false "sexpEvVal" ((PCon "EvMethod" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")) (EApp (EVar "sexpRoute") (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a4")))))
-(DFunDef false "sexpEvVal" ((PCon "EvLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EApp (EVar "sexpOpt") (EVar "sexpFloat")) (EVar "a0")) (EApp (EVar "sexpRoute") (EVar "a1")))))
-(DFunDef false "sexpEvVal" ((PCon "EvHead" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpEvVal" ((PCon "EvOne" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEvOne") (ELit LUnit))) (EApp (EVar "sexpRoute") (EVar "a0")))))
+(DFunDef false "sexpEvVal" ((PCon "EvMany" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEvMany") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a0")))))
+(DFunDef false "sexpEvVal" ((PCon "EvMethod" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEvMethod") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")) (EApp (EVar "sexpRoute") (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a4")))))
+(DFunDef false "sexpEvVal" ((PCon "EvLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEvLit") (ELit LUnit))) (EApp (EApp (EVar "sexpOpt") (EVar "sexpFloat")) (EVar "a0")) (EApp (EVar "sexpRoute") (EVar "a1")))))
+(DFunDef false "sexpEvVal" ((PCon "EvHead" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEvHead") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
 (DTypeSig false "sexpEvEntry" (TyFun (TyCon "EvEntry") (TyCon "SExp")))
 (DFunDef false "sexpEvEntry" ((PCon "EvEntry" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpEvId") (EVar "a0")) (EApp (EVar "sexpEvVal") (EVar "a1")))))
 (DTypeSig false "sexpAddr" (TyFun (TyCon "Addr") (TyCon "SExp")))
-(DFunDef false "sexpAddr" ((PCon "ALocal" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
-(DFunDef false "sexpAddr" ((PCon "AGlobal")) (EApp (EVar "SAtom") (ELit (LString "1"))))
+(DFunDef false "sexpAddr" ((PCon "ALocal" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagALocal") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
+(DFunDef false "sexpAddr" ((PCon "AGlobal")) (EApp (EVar "tagAtom") (EApp (EVar "tagAGlobal") (ELit LUnit))))
 (DTypeSig false "sexpPat" (TyFun (TyCon "Pat") (TyCon "SExp")))
-(DFunDef false "sexpPat" ((PCon "PVar" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpBinderId") (EVar "a2")))))
-(DFunDef false "sexpPat" ((PCon "PWild")) (EApp (EVar "SAtom") (ELit (LString "1"))))
-(DFunDef false "sexpPat" ((PCon "PLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpLit") (EVar "a0")))))
-(DFunDef false "sexpPat" ((PCon "PCon" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a1")))))
-(DFunDef false "sexpPat" ((PCon "PCons" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpPat") (EVar "a1")))))
-(DFunDef false "sexpPat" ((PCon "PTuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")))))
-(DFunDef false "sexpPat" ((PCon "PList" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")))))
-(DFunDef false "sexpPat" ((PCon "PAs" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "7"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpBinderId") (EVar "a2")) (EApp (EVar "sexpPat") (EVar "a3")))))
-(DFunDef false "sexpPat" ((PCon "PRng" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "8"))) (EApp (EVar "sexpLit") (EVar "a0")) (EApp (EVar "sexpLit") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
-(DFunDef false "sexpPat" ((PCon "PRec" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "9"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRecPatField")) (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
+(DFunDef false "sexpPat" ((PCon "PVar" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPVar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpBinderId") (EVar "a2")))))
+(DFunDef false "sexpPat" ((PCon "PWild")) (EApp (EVar "tagAtom") (EApp (EVar "tagPWild") (ELit LUnit))))
+(DFunDef false "sexpPat" ((PCon "PLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPLit") (ELit LUnit))) (EApp (EVar "sexpLit") (EVar "a0")))))
+(DFunDef false "sexpPat" ((PCon "PCon" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPCon") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a1")))))
+(DFunDef false "sexpPat" ((PCon "PCons" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPCons") (ELit LUnit))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpPat") (EVar "a1")))))
+(DFunDef false "sexpPat" ((PCon "PTuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPTuple") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")))))
+(DFunDef false "sexpPat" ((PCon "PList" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPList") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")))))
+(DFunDef false "sexpPat" ((PCon "PAs" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPAs") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpBinderId") (EVar "a2")) (EApp (EVar "sexpPat") (EVar "a3")))))
+(DFunDef false "sexpPat" ((PCon "PRng" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPRng") (ELit LUnit))) (EApp (EVar "sexpLit") (EVar "a0")) (EApp (EVar "sexpLit") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
+(DFunDef false "sexpPat" ((PCon "PRec" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPRec") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRecPatField")) (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
 (DTypeSig false "sexpRecPatField" (TyFun (TyCon "RecPatField") (TyCon "SExp")))
 (DFunDef false "sexpRecPatField" ((PCon "RecPatField" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpBinderId") (EVar "a2")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpPat")) (EVar "a3")))))
 (DTypeSig false "sexpGuard" (TyFun (TyCon "Guard") (TyCon "SExp")))
-(DFunDef false "sexpGuard" ((PCon "GBool" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpExpr") (EVar "a0")))))
-(DFunDef false "sexpGuard" ((PCon "GBind" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpGuard" ((PCon "GBool" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagGBool") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")))))
+(DFunDef false "sexpGuard" ((PCon "GBind" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagGBind") (ELit LUnit))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
 (DTypeSig false "sexpArm" (TyFun (TyCon "Arm") (TyCon "SExp")))
 (DFunDef false "sexpArm" ((PCon "Arm" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpGuard")) (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
 (DTypeSig false "sexpDoStmt" (TyFun (TyCon "DoStmt") (TyCon "SExp")))
-(DFunDef false "sexpDoStmt" ((PCon "DoExpr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpExpr") (EVar "a0")))))
-(DFunDef false "sexpDoStmt" ((PCon "DoBind" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpDoStmt" ((PCon "DoLet" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpPat") (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpLoc") (EVar "a4")))))
-(DFunDef false "sexpDoStmt" ((PCon "DoAssign" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpDoStmt" ((PCon "DoFieldAssign" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
+(DFunDef false "sexpDoStmt" ((PCon "DoExpr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDoExpr") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")))))
+(DFunDef false "sexpDoStmt" ((PCon "DoBind" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDoBind") (ELit LUnit))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpDoStmt" ((PCon "DoLet" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDoLet") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpPat") (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpLoc") (EVar "a4")))))
+(DFunDef false "sexpDoStmt" ((PCon "DoAssign" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDoAssign") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpDoStmt" ((PCon "DoFieldAssign" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDoFieldAssign") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
 (DTypeSig false "sexpInterpPart" (TyFun (TyCon "InterpPart") (TyCon "SExp")))
-(DFunDef false "sexpInterpPart" ((PCon "InterpStr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpInterpPart" ((PCon "InterpExpr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpExpr") (EVar "a0")))))
+(DFunDef false "sexpInterpPart" ((PCon "InterpStr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagInterpStr") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpInterpPart" ((PCon "InterpExpr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagInterpExpr") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")))))
 (DTypeSig false "sexpGuardArm" (TyFun (TyCon "GuardArm") (TyCon "SExp")))
 (DFunDef false "sexpGuardArm" ((PCon "GuardArm" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EApp (EVar "sexpList") (EVar "sexpGuard")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
 (DTypeSig false "sexpFieldAssign" (TyFun (TyCon "FieldAssign") (TyCon "SExp")))
 (DFunDef false "sexpFieldAssign" ((PCon "FieldAssign" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
 (DTypeSig false "sexpSection" (TyFun (TyCon "Section") (TyCon "SExp")))
-(DFunDef false "sexpSection" ((PCon "SecBare" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpSection" ((PCon "SecRight" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpSection" ((PCon "SecLeft" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")))))
+(DFunDef false "sexpSection" ((PCon "SecBare" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagSecBare") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpSection" ((PCon "SecRight" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagSecRight") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpSection" ((PCon "SecLeft" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagSecLeft") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")))))
 (DTypeSig false "sexpFunClause" (TyFun (TyCon "FunClause") (TyCon "SExp")))
 (DFunDef false "sexpFunClause" ((PCon "FunClause" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
 (DTypeSig false "sexpLetBind" (TyFun (TyCon "LetBind") (TyCon "SExp")))
 (DFunDef false "sexpLetBind" ((PCon "LetBind" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpFunClause")) (EVar "a1")) (EApp (EVar "sexpLoc") (EVar "a2")) (EApp (EVar "sexpBinderId") (EVar "a3")))))
 (DTypeSig false "sexpExpr" (TyFun (TyCon "Expr") (TyCon "SExp")))
-(DFunDef false "sexpExpr" ((PCon "ELit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpLit") (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EVar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EApp" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ELam" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ELet" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpPat") (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpExpr") (EVar "a4")))))
-(DFunDef false "sexpExpr" ((PCon "EMatch" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpArm")) (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EIf" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EBinOp" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "7"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")) (EApp (EVar "sexpEvId") (EVar "a3")))))
-(DFunDef false "sexpExpr" ((PCon "EUnOp" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "8"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EInfix" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "9"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EFieldAccess" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "10"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "ETuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "11"))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EListLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "12"))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EArrayLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "13"))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "ERangeList" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "14"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "ERangeArray" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "15"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "ESlice" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "16"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")) (EApp (EVar "sexpBool") (EVar "a3")))))
-(DFunDef false "sexpExpr" ((PCon "ELetGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "17"))) (EApp (EApp (EVar "sexpList") (EVar "sexpLetBind")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ESection" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "18"))) (EApp (EVar "sexpSection") (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EIndex" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "19"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EAnnot" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "20"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EHeadAnnot" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "21"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EBlock" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "22"))) (EApp (EApp (EVar "sexpList") (EVar "sexpDoStmt")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EDo" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "23"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpDoStmt")) (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EStringInterp" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "24"))) (EApp (EApp (EVar "sexpList") (EVar "sexpInterpPart")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EGuards" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "25"))) (EApp (EApp (EVar "sexpList") (EVar "sexpGuardArm")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "ERecordCreate" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "26"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ERecordUpdate" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "27"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EVariantUpdate" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "28"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EMapLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "29"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpExpr")) (EVar "sexpExpr"))) (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ESetLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "30"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EAsPat" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "31"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EMethodRef" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "32"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EDictApp" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "33"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EVarAt" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "34"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpAddr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EVarId" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "35"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EMethodAt" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "36"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EDictAt" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "37"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpEvId") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ELoc" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "38"))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EDoOrigin" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "39"))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ENumLit" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "40"))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpEvId") (EVar "a1")) (EApp (EVar "sexpString") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EWideLit" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "41"))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")) (EApp (EVar "sexpString") (EVar "a3")))))
+(DFunDef false "sexpExpr" ((PCon "ELit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagELit") (ELit LUnit))) (EApp (EVar "sexpLit") (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EVar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEVar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EApp" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEApp") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ELam" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagELam") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ELet" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagELet") (ELit LUnit))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpPat") (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpExpr") (EVar "a4")))))
+(DFunDef false "sexpExpr" ((PCon "EMatch" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEMatch") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpArm")) (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EIf" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEIf") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EBinOp" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEBinOp") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")) (EApp (EVar "sexpEvId") (EVar "a3")))))
+(DFunDef false "sexpExpr" ((PCon "EUnOp" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEUnOp") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EInfix" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEInfix") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EFieldAccess" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEFieldAccess") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "ETuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagETuple") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EListLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEListLit") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EArrayLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEArrayLit") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "ERangeList" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagERangeList") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "ERangeArray" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagERangeArray") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "ESlice" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagESlice") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")) (EApp (EVar "sexpBool") (EVar "a3")))))
+(DFunDef false "sexpExpr" ((PCon "ELetGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagELetGroup") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpLetBind")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ESection" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagESection") (ELit LUnit))) (EApp (EVar "sexpSection") (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EIndex" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEIndex") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EAnnot" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEAnnot") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EHeadAnnot" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEHeadAnnot") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EBlock" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEBlock") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpDoStmt")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EDo" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEDo") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpDoStmt")) (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EStringInterp" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEStringInterp") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpInterpPart")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EGuards" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEGuards") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpGuardArm")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "ERecordCreate" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagERecordCreate") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ERecordUpdate" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagERecordUpdate") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EVariantUpdate" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEVariantUpdate") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EMapLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEMapLit") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpExpr")) (EVar "sexpExpr"))) (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ESetLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagESetLit") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EAsPat" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEAsPat") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EMethodRef" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEMethodRef") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EDictApp" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEDictApp") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EVarAt" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEVarAt") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpAddr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EVarId" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEVarId") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EMethodAt" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEMethodAt") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EDictAt" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEDictAt") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpEvId") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ELoc" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagELoc") (ELit LUnit))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EDoOrigin" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEDoOrigin") (ELit LUnit))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ENumLit" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagENumLit") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpEvId") (EVar "a1")) (EApp (EVar "sexpString") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EWideLit" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEWideLit") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")) (EApp (EVar "sexpString") (EVar "a3")))))
 (DTypeSig false "sexpUseMember" (TyFun (TyCon "UseMember") (TyCon "SExp")))
 (DFunDef false "sexpUseMember" ((PCon "UseMember" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpLoc") (EVar "a2")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpString")) (EVar "a3")))))
 (DTypeSig false "sexpUsePath" (TyFun (TyCon "UsePath") (TyCon "SExp")))
-(DFunDef false "sexpUsePath" ((PCon "UseName" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
-(DFunDef false "sexpUsePath" ((PCon "UseGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpUseMember")) (EVar "a1")))))
-(DFunDef false "sexpUsePath" ((PCon "UseWild" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
-(DFunDef false "sexpUsePath" ((PCon "UseAlias" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")))))
+(DFunDef false "sexpUsePath" ((PCon "UseName" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagUseName") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
+(DFunDef false "sexpUsePath" ((PCon "UseGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagUseGroup") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpUseMember")) (EVar "a1")))))
+(DFunDef false "sexpUsePath" ((PCon "UseWild" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagUseWild") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
+(DFunDef false "sexpUsePath" ((PCon "UseAlias" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagUseAlias") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")))))
 (DTypeSig false "sexpPropParam" (TyFun (TyCon "PropParam") (TyCon "SExp")))
 (DFunDef false "sexpPropParam" ((PCon "PropParam" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpTy") (EVar "a2")))))
 (DTypeSig false "sexpMethodDefault" (TyFun (TyCon "MethodDefault") (TyCon "SExp")))
@@ -2020,21 +2628,21 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "sexpImplMethod" (TyFun (TyCon "ImplMethod") (TyCon "SExp")))
 (DFunDef false "sexpImplMethod" ((PCon "ImplMethod" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
 (DTypeSig false "sexpDataVis" (TyFun (TyCon "DataVis") (TyCon "SExp")))
-(DFunDef false "sexpDataVis" ((PCon "VisPrivate")) (EApp (EVar "SAtom") (ELit (LString "0"))))
-(DFunDef false "sexpDataVis" ((PCon "VisAbstract")) (EApp (EVar "SAtom") (ELit (LString "1"))))
-(DFunDef false "sexpDataVis" ((PCon "VisPublic")) (EApp (EVar "SAtom") (ELit (LString "2"))))
+(DFunDef false "sexpDataVis" ((PCon "VisPrivate")) (EApp (EVar "tagAtom") (EApp (EVar "tagVisPrivate") (ELit LUnit))))
+(DFunDef false "sexpDataVis" ((PCon "VisAbstract")) (EApp (EVar "tagAtom") (EApp (EVar "tagVisAbstract") (ELit LUnit))))
+(DFunDef false "sexpDataVis" ((PCon "VisPublic")) (EApp (EVar "tagAtom") (EApp (EVar "tagVisPublic") (ELit LUnit))))
 (DTypeSig false "sexpField" (TyFun (TyCon "Field") (TyCon "SExp")))
 (DFunDef false "sexpField" ((PCon "Field" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
 (DTypeSig false "sexpConPayload" (TyFun (TyCon "ConPayload") (TyCon "SExp")))
-(DFunDef false "sexpConPayload" ((PCon "ConPos" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a0")))))
-(DFunDef false "sexpConPayload" ((PCon "ConNamed" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EApp (EVar "sexpList") (EVar "sexpField")) (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")))))
+(DFunDef false "sexpConPayload" ((PCon "ConPos" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagConPos") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a0")))))
+(DFunDef false "sexpConPayload" ((PCon "ConNamed" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagConNamed") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpField")) (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")))))
 (DTypeSig false "sexpVariant" (TyFun (TyCon "Variant") (TyCon "SExp")))
 (DFunDef false "sexpVariant" ((PCon "Variant" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpConPayload") (EVar "a1")))))
 (DTypeSig false "sexpAttr" (TyFun (TyCon "Attr") (TyCon "SExp")))
-(DFunDef false "sexpAttr" ((PCon "AttrDeprecated" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EApp (EVar "sexpOpt") (EVar "sexpString")) (EVar "a0")))))
-(DFunDef false "sexpAttr" ((PCon "AttrInline")) (EApp (EVar "SAtom") (ELit (LString "1"))))
-(DFunDef false "sexpAttr" ((PCon "AttrMustUse")) (EApp (EVar "SAtom") (ELit (LString "2"))))
-(DFunDef false "sexpAttr" ((PCon "AttrNoInline")) (EApp (EVar "SAtom") (ELit (LString "3"))))
+(DFunDef false "sexpAttr" ((PCon "AttrDeprecated" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagAttrDeprecated") (ELit LUnit))) (EApp (EApp (EVar "sexpOpt") (EVar "sexpString")) (EVar "a0")))))
+(DFunDef false "sexpAttr" ((PCon "AttrInline")) (EApp (EVar "tagAtom") (EApp (EVar "tagAttrInline") (ELit LUnit))))
+(DFunDef false "sexpAttr" ((PCon "AttrMustUse")) (EApp (EVar "tagAtom") (EApp (EVar "tagAttrMustUse") (ELit LUnit))))
+(DFunDef false "sexpAttr" ((PCon "AttrNoInline")) (EApp (EVar "tagAtom") (EApp (EVar "tagAttrNoInline") (ELit LUnit))))
 (DTypeSig false "sexpDeriveRef" (TyFun (TyCon "DeriveRef") (TyCon "SExp")))
 (DFunDef false "sexpDeriveRef" ((PCon "DeriveRef" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a1")))))
 (DTypeSig false "sexpExternDecl" (TyFun (TyCon "ExternDecl") (TyCon "SExp")))
@@ -2042,20 +2650,20 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "sexpExternBind" (TyFun (TyCon "ExternBind") (TyCon "SExp")))
 (DFunDef false "sexpExternBind" ((PRec "ExternBind" ((rf "ebHost" (PVar "a0")) (rf "ebSymbol" (PVar "a1")) (rf "ebLoc" (PVar "a2"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpLoc") (EVar "a2")))))
 (DTypeSig false "sexpDecl" (TyFun (TyCon "Decl") (TyCon "SExp")))
-(DFunDef false "sexpDecl" ((PCon "DTypeSig" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpTy") (EVar "a2")) (EApp (EVar "sexpLoc") (EVar "a3")))))
-(DFunDef false "sexpDecl" ((PCon "DExtern" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpExternDecl") (EVar "a0")))))
-(DFunDef false "sexpDecl" ((PCon "DFunDef" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4") (PVar "a5"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpLoc") (EVar "a4")) (EApp (EVar "sexpBinderId") (EVar "a5")))))
-(DFunDef false "sexpDecl" ((PRec "DData" ((rf "dataVis" (PVar "a0")) (rf "dataName" (PVar "a1")) (rf "dataParams" (PVar "a2")) (rf "dataParamKinds" (PVar "a3")) (rf "dataCtors" (PVar "a4")) (rf "dataCtorBinders" (PVar "a5")) (rf "dataDerives" (PVar "a6")) (rf "dataOrigin" (PVar "a7")) (rf "dataExtern" (PVar "a8")) (rf "dataNameLoc" (PVar "a9"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpDataVis") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpVariant")) (EVar "a4")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpKindAnn")))) (EVar "a5")) (EApp (EApp (EVar "sexpList") (EVar "sexpDeriveRef")) (EVar "a6")) (EApp (EVar "sexpTyConOrigin") (EVar "a7")) (EApp (EVar "sexpBool") (EVar "a8")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a9")))))
-(DFunDef false "sexpDecl" ((PCon "DUse" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpUsePath") (EVar "a1")) (EApp (EVar "sexpLoc") (EVar "a2")))))
-(DFunDef false "sexpDecl" ((PCon "DEffect" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4") (PVar "a5"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpString"))) (EVar "a3")) (EApp (EVar "sexpTyConOrigin") (EVar "a4")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a5")))))
-(DFunDef false "sexpDecl" ((PCon "DProp" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpPropParam")) (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")))))
-(DFunDef false "sexpDecl" ((PCon "DTest" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "7"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
-(DFunDef false "sexpDecl" ((PRec "DInterface" ((rf "pub" (PVar "a0")) (rf "def" (PVar "a1")) (rf "name" (PVar "a2")) (rf "typarams" (PVar "a3")) (rf "typaramKinds" (PVar "a4")) (rf "supers" (PVar "a5")) (rf "methods" (PVar "a6")) (rf "ifaceOrigin" (PVar "a7")) (rf "ifaceNameLoc" (PVar "a8"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "8"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpString") (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a4")) (EApp (EApp (EVar "sexpList") (EVar "sexpSuper")) (EVar "a5")) (EApp (EApp (EVar "sexpList") (EVar "sexpIfaceMethod")) (EVar "a6")) (EApp (EVar "sexpTyConOrigin") (EVar "a7")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a8")))))
-(DFunDef false "sexpDecl" ((PRec "DImpl" ((rf "pub" (PVar "a0")) (rf "iface" (PVar "a1")) (rf "tys" (PVar "a2")) (rf "reqs" (PVar "a3")) (rf "methods" (PVar "a4")) (rf "implOrigin" (PVar "a5")) (rf "implIfaceLoc" (PVar "a6"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "9"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpRequire")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpImplMethod")) (EVar "a4")) (EApp (EVar "sexpTyConOrigin") (EVar "a5")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a6")))))
-(DFunDef false "sexpDecl" ((PRec "DTypeAlias" ((rf "tyAliasPub" (PVar "a0")) (rf "tyAliasName" (PVar "a1")) (rf "tyAliasParams" (PVar "a2")) (rf "tyAliasParamKinds" (PVar "a3")) (rf "tyAliasRhs" (PVar "a4")) (rf "tyAliasOrigin" (PVar "a5")) (rf "tyAliasNameLoc" (PVar "a6"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "10"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EVar "sexpTy") (EVar "a4")) (EApp (EVar "sexpTyConOrigin") (EVar "a5")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a6")))))
-(DFunDef false "sexpDecl" ((PRec "DNewtype" ((rf "newtypePub" (PVar "a0")) (rf "newtypeName" (PVar "a1")) (rf "newtypeParams" (PVar "a2")) (rf "newtypeParamKinds" (PVar "a3")) (rf "newtypeCtor" (PVar "a4")) (rf "newtypeCtorBinders" (PVar "a5")) (rf "newtypeFieldTy" (PVar "a6")) (rf "newtypeDerives" (PVar "a7")) (rf "newtypeOrigin" (PVar "a8")) (rf "newtypeNameLoc" (PVar "a9"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "11"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EVar "sexpString") (EVar "a4")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpKindAnn"))) (EVar "a5")) (EApp (EVar "sexpTy") (EVar "a6")) (EApp (EApp (EVar "sexpList") (EVar "sexpDeriveRef")) (EVar "a7")) (EApp (EVar "sexpTyConOrigin") (EVar "a8")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a9")))))
-(DFunDef false "sexpDecl" ((PCon "DLetGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "12"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpLetBind")) (EVar "a1")))))
-(DFunDef false "sexpDecl" ((PCon "DAttrib" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "13"))) (EApp (EApp (EVar "sexpList") (EVar "sexpAttr")) (EVar "a0")) (EApp (EVar "sexpDecl") (EVar "a1")))))
+(DFunDef false "sexpDecl" ((PCon "DTypeSig" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDTypeSig") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpTy") (EVar "a2")) (EApp (EVar "sexpLoc") (EVar "a3")))))
+(DFunDef false "sexpDecl" ((PCon "DExtern" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDExtern") (ELit LUnit))) (EApp (EVar "sexpExternDecl") (EVar "a0")))))
+(DFunDef false "sexpDecl" ((PCon "DFunDef" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4") (PVar "a5"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDFunDef") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpLoc") (EVar "a4")) (EApp (EVar "sexpBinderId") (EVar "a5")))))
+(DFunDef false "sexpDecl" ((PRec "DData" ((rf "dataVis" (PVar "a0")) (rf "dataName" (PVar "a1")) (rf "dataParams" (PVar "a2")) (rf "dataParamKinds" (PVar "a3")) (rf "dataCtors" (PVar "a4")) (rf "dataCtorBinders" (PVar "a5")) (rf "dataDerives" (PVar "a6")) (rf "dataOrigin" (PVar "a7")) (rf "dataExtern" (PVar "a8")) (rf "dataNameLoc" (PVar "a9"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDData") (ELit LUnit))) (EApp (EVar "sexpDataVis") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpVariant")) (EVar "a4")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpKindAnn")))) (EVar "a5")) (EApp (EApp (EVar "sexpList") (EVar "sexpDeriveRef")) (EVar "a6")) (EApp (EVar "sexpTyConOrigin") (EVar "a7")) (EApp (EVar "sexpBool") (EVar "a8")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a9")))))
+(DFunDef false "sexpDecl" ((PCon "DUse" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDUse") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpUsePath") (EVar "a1")) (EApp (EVar "sexpLoc") (EVar "a2")))))
+(DFunDef false "sexpDecl" ((PCon "DEffect" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4") (PVar "a5"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDEffect") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpString"))) (EVar "a3")) (EApp (EVar "sexpTyConOrigin") (EVar "a4")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a5")))))
+(DFunDef false "sexpDecl" ((PCon "DProp" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDProp") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpPropParam")) (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")))))
+(DFunDef false "sexpDecl" ((PCon "DTest" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDTest") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
+(DFunDef false "sexpDecl" ((PRec "DInterface" ((rf "pub" (PVar "a0")) (rf "def" (PVar "a1")) (rf "name" (PVar "a2")) (rf "typarams" (PVar "a3")) (rf "typaramKinds" (PVar "a4")) (rf "supers" (PVar "a5")) (rf "methods" (PVar "a6")) (rf "ifaceOrigin" (PVar "a7")) (rf "ifaceNameLoc" (PVar "a8"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDInterface") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpString") (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a4")) (EApp (EApp (EVar "sexpList") (EVar "sexpSuper")) (EVar "a5")) (EApp (EApp (EVar "sexpList") (EVar "sexpIfaceMethod")) (EVar "a6")) (EApp (EVar "sexpTyConOrigin") (EVar "a7")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a8")))))
+(DFunDef false "sexpDecl" ((PRec "DImpl" ((rf "pub" (PVar "a0")) (rf "iface" (PVar "a1")) (rf "tys" (PVar "a2")) (rf "reqs" (PVar "a3")) (rf "methods" (PVar "a4")) (rf "implOrigin" (PVar "a5")) (rf "implIfaceLoc" (PVar "a6"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDImpl") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpRequire")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpImplMethod")) (EVar "a4")) (EApp (EVar "sexpTyConOrigin") (EVar "a5")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a6")))))
+(DFunDef false "sexpDecl" ((PRec "DTypeAlias" ((rf "tyAliasPub" (PVar "a0")) (rf "tyAliasName" (PVar "a1")) (rf "tyAliasParams" (PVar "a2")) (rf "tyAliasParamKinds" (PVar "a3")) (rf "tyAliasRhs" (PVar "a4")) (rf "tyAliasOrigin" (PVar "a5")) (rf "tyAliasNameLoc" (PVar "a6"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDTypeAlias") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EVar "sexpTy") (EVar "a4")) (EApp (EVar "sexpTyConOrigin") (EVar "a5")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a6")))))
+(DFunDef false "sexpDecl" ((PRec "DNewtype" ((rf "newtypePub" (PVar "a0")) (rf "newtypeName" (PVar "a1")) (rf "newtypeParams" (PVar "a2")) (rf "newtypeParamKinds" (PVar "a3")) (rf "newtypeCtor" (PVar "a4")) (rf "newtypeCtorBinders" (PVar "a5")) (rf "newtypeFieldTy" (PVar "a6")) (rf "newtypeDerives" (PVar "a7")) (rf "newtypeOrigin" (PVar "a8")) (rf "newtypeNameLoc" (PVar "a9"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDNewtype") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EVar "sexpString") (EVar "a4")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpKindAnn"))) (EVar "a5")) (EApp (EVar "sexpTy") (EVar "a6")) (EApp (EApp (EVar "sexpList") (EVar "sexpDeriveRef")) (EVar "a7")) (EApp (EVar "sexpTyConOrigin") (EVar "a8")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a9")))))
+(DFunDef false "sexpDecl" ((PCon "DLetGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDLetGroup") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpLetBind")) (EVar "a1")))))
+(DFunDef false "sexpDecl" ((PCon "DAttrib" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDAttrib") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpAttr")) (EVar "a0")) (EApp (EVar "sexpDecl") (EVar "a1")))))
 (DTypeSig false "dfltLoc" (TyCon "Loc"))
 (DFunDef false "dfltLoc" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))))
 (DTypeSig false "dfltLit" (TyCon "Lit"))
@@ -2097,228 +2705,99 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "dfltDecl" (TyCon "Decl"))
 (DFunDef false "dfltDecl" () (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "False")) (ELit (LString ""))) (EVar "dfltTy")) (EVar "dfltLoc")))
 (DTypeSig false "readLit" (TyFun (TyCon "SexpCursor") (TyCon "Lit")))
-(DFunDef false "readLit" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readLitTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readLitBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readLit" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readLitTagged")) (EVar "readLitBare")) (EVar "cur")))
 (DTypeSig false "readLitBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Lit"))))
-(DFunDef false "readLitBare" ((PLit (LInt 7)) PWild) (EVar "LUnit"))
-(DFunDef false "readLitBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")))
+(DFunDef false "readLitBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLUnit") (ELit LUnit))) (EVar "LUnit") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readLitTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Lit"))))
-(DFunDef false "readLitTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EVar "LInt") (EVar "a0")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readFloat") (EVar "cur"))) (DoExpr (EApp (EVar "LFloat") (EVar "a0")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LU64") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LI64") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LString") (EVar "a0")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LChar") (EVar "a0")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EVar "LBool") (EVar "a0")))))
-(DFunDef false "readLitTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")))
+(DFunDef false "readLitTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLInt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EVar "LInt") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLFloat") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readFloat") (EVar "cur"))) (DoExpr (EApp (EVar "LFloat") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLU64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LU64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLI64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LI64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLString") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LString") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLChar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LChar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLBool") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EVar "LBool") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
 (DTypeSig false "readTyConOrigin" (TyFun (TyCon "SexpCursor") (TyCon "TyConOrigin")))
-(DFunDef false "readTyConOrigin" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readTyConOriginTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readTyConOriginBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readTyConOrigin" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readTyConOriginTagged")) (EVar "readTyConOriginBare")) (EVar "cur")))
 (DTypeSig false "readTyConOriginBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "TyConOrigin"))))
-(DFunDef false "readTyConOriginBare" ((PLit (LInt 0)) PWild) (EVar "OriginUnresolved"))
-(DFunDef false "readTyConOriginBare" ((PLit (LInt 1)) PWild) (EVar "OriginBuiltin"))
-(DFunDef false "readTyConOriginBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTyConOrigin")))
+(DFunDef false "readTyConOriginBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagOriginUnresolved") (ELit LUnit))) (EVar "OriginUnresolved") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagOriginBuiltin") (ELit LUnit))) (EVar "OriginBuiltin") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTyConOrigin")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readTyConOriginTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "TyConOrigin"))))
-(DFunDef false "readTyConOriginTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "OriginModule") (EVar "a0")))))
-(DFunDef false "readTyConOriginTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTyConOrigin")))
+(DFunDef false "readTyConOriginTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagOriginModule") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "OriginModule") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTyConOrigin")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readTy" (TyFun (TyCon "SexpCursor") (TyCon "Ty")))
-(DFunDef false "readTy" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readTyTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readTyBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readTyBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Ty"))))
-(DFunDef false "readTyBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTy")))
+(DFunDef false "readTy" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readTyTagged")) (EApp (EVar "refuse") (EVar "dfltTy"))) (EVar "cur")))
 (DTypeSig false "readTyTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Ty"))))
-(DFunDef false "readTyTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoExpr (ERecordCreate "TyCon" ((fa "tyConName" (EVar "a0")) (fa "tyConLoc" (EVar "a1")) (fa "tyConOrigin" (EVar "a2")))))))
-(DFunDef false "readTyTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "TyVar") (EVar "a0")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyApp") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyFun") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoExpr (EApp (EVar "TyTuple") (EVar "a0")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffAtomTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyEffect") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readConstraint")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyConstrained") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 7)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readEffAtomTy")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyNamed") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 8)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readEffParamTy")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyQual") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 9)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffAtomTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyRow") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 10)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffParamTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyAuth") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readTyTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTy")))
+(DFunDef false "readTyTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyCon") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoExpr (ERecordCreate "TyCon" ((fa "tyConName" (EVar "a0")) (fa "tyConLoc" (EVar "a1")) (fa "tyConOrigin" (EVar "a2")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyVar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "TyVar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyApp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyApp") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyFun") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyFun") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyTuple") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoExpr (EApp (EVar "TyTuple") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyEffect") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffAtomTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyEffect") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyConstrained") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readConstraint")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyConstrained") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyNamed") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readEffAtomTy")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyNamed") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyQual") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readEffParamTy")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyQual") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyRow") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffAtomTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyRow") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyAuth") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffParamTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyAuth") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTy")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))
 (DTypeSig false "readEffAtomTy" (TyFun (TyCon "SexpCursor") (TyCon "EffAtomTy")))
 (DFunDef false "readEffAtomTy" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEffParamTy") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "a0")) (fa "eatOrigin" (EVar "a1")) (fa "eatParam" (EVar "a2")) (fa "eatLoc" (EVar "a3")) (fa "eatPattern" (EVar "a4")))))))
 (DTypeSig false "readEffParamTy" (TyFun (TyCon "SexpCursor") (TyCon "EffParamTy")))
-(DFunDef false "readEffParamTy" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readEffParamTyTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readEffParamTyBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readEffParamTy" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readEffParamTyTagged")) (EVar "readEffParamTyBare")) (EVar "cur")))
 (DTypeSig false "readEffParamTyBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "EffParamTy"))))
-(DFunDef false "readEffParamTyBare" ((PLit (LInt 0)) PWild) (EVar "EPTop"))
-(DFunDef false "readEffParamTyBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEffParamTy")))
+(DFunDef false "readEffParamTyBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEPTop") (ELit LUnit))) (EVar "EPTop") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEffParamTy")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readEffParamTyTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "EffParamTy"))))
-(DFunDef false "readEffParamTyTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EPLit") (EVar "a0")))))
-(DFunDef false "readEffParamTyTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EPName") (EVar "a0")))))
-(DFunDef false "readEffParamTyTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "EPSet") (EVar "a0")))))
-(DFunDef false "readEffParamTyTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readEffParamTy"))) (EVar "cur"))) (DoExpr (EApp (EVar "EPProduct") (EVar "a0")))))
-(DFunDef false "readEffParamTyTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEffParamTy")))
+(DFunDef false "readEffParamTyTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEPLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EPLit") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEPName") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EPName") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEPSet") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "EPSet") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEPProduct") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readEffParamTy"))) (EVar "cur"))) (DoExpr (EApp (EVar "EPProduct") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEffParamTy")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "readConstraint" (TyFun (TyCon "SexpCursor") (TyCon "Constraint")))
 (DFunDef false "readConstraint" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "Constraint" ((fa "constraintHead" (EVar "a0")) (fa "constraintArgs" (EVar "a1")) (fa "constraintOrigin" (EVar "a2")))))))
 (DTypeSig false "readKindAnn" (TyFun (TyCon "SexpCursor") (TyCon "KindAnn")))
-(DFunDef false "readKindAnn" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readKindAnnTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readKindAnnBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readKindAnn" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readKindAnnTagged")) (EVar "readKindAnnBare")) (EVar "cur")))
 (DTypeSig false "readKindAnnBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "KindAnn"))))
-(DFunDef false "readKindAnnBare" ((PLit (LInt 0)) PWild) (EVar "KindType"))
-(DFunDef false "readKindAnnBare" ((PLit (LInt 1)) PWild) (EVar "KindEffect"))
-(DFunDef false "readKindAnnBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltKindAnn")))
+(DFunDef false "readKindAnnBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagKindType") (ELit LUnit))) (EVar "KindType") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagKindEffect") (ELit LUnit))) (EVar "KindEffect") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltKindAnn")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readKindAnnTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "KindAnn"))))
-(DFunDef false "readKindAnnTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "KindAuthority") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readKindAnnTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readKindAnn") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readKindAnn") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "KindArrow") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readKindAnnTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltKindAnn")))
+(DFunDef false "readKindAnnTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagKindAuthority") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "KindAuthority") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagKindArrow") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readKindAnn") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readKindAnn") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "KindArrow") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltKindAnn")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readRoute" (TyFun (TyCon "SexpCursor") (TyCon "Route")))
-(DFunDef false "readRoute" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readRouteTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readRouteBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readRoute" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readRouteTagged")) (EVar "readRouteBare")) (EVar "cur")))
 (DTypeSig false "readRouteBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Route"))))
-(DFunDef false "readRouteBare" ((PLit (LInt 0)) PWild) (EVar "RNone"))
-(DFunDef false "readRouteBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltRoute")))
+(DFunDef false "readRouteBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRNone") (ELit LUnit))) (EVar "RNone") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltRoute")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readRouteTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Route"))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "RKey") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RDict") (EVar "a0")))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RDictFwd") (EVar "a0")))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "RLocal") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RScalar") (EVar "a0")))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readRoute") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readInt")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "RProj") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readRouteTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltRoute")))
+(DFunDef false "readRouteTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRKey") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "RKey") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRDict") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RDict") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRDictFwd") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RDictFwd") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRLocal") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "RLocal") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRScalar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RScalar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRProj") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readRoute") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readInt")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "RProj") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltRoute")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "readEvVal" (TyFun (TyCon "SexpCursor") (TyCon "EvVal")))
-(DFunDef false "readEvVal" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readEvValTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readEvValBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readEvValBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "EvVal"))))
-(DFunDef false "readEvValBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEvVal")))
+(DFunDef false "readEvVal" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readEvValTagged")) (EApp (EVar "refuse") (EVar "dfltEvVal"))) (EVar "cur")))
 (DTypeSig false "readEvValTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "EvVal"))))
-(DFunDef false "readEvValTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readRoute") (EVar "cur"))) (DoExpr (EApp (EVar "EvOne") (EVar "a0")))))
-(DFunDef false "readEvValTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EVar "EvMany") (EVar "a0")))))
-(DFunDef false "readEvValTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readRoute") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))))
-(DFunDef false "readEvValTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "readOpt") (EVar "readFloat")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readRoute") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvLit") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readEvValTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EvHead") (EVar "a0")))))
-(DFunDef false "readEvValTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEvVal")))
+(DFunDef false "readEvValTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEvOne") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readRoute") (EVar "cur"))) (DoExpr (EApp (EVar "EvOne") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEvMany") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EVar "EvMany") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEvMethod") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readRoute") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEvLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "readOpt") (EVar "readFloat")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readRoute") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvLit") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEvHead") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EvHead") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEvVal")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "readEvEntry" (TyFun (TyCon "SexpCursor") (TyCon "EvEntry")))
 (DFunDef false "readEvEntry" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readEvId") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readEvVal") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvEntry") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readAddr" (TyFun (TyCon "SexpCursor") (TyCon "Addr")))
-(DFunDef false "readAddr" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readAddrTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readAddrBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readAddr" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readAddrTagged")) (EVar "readAddrBare")) (EVar "cur")))
 (DTypeSig false "readAddrBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Addr"))))
-(DFunDef false "readAddrBare" ((PLit (LInt 1)) PWild) (EVar "AGlobal"))
-(DFunDef false "readAddrBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAddr")))
+(DFunDef false "readAddrBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagAGlobal") (ELit LUnit))) (EVar "AGlobal") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAddr")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readAddrTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Addr"))))
-(DFunDef false "readAddrTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ALocal") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readAddrTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAddr")))
+(DFunDef false "readAddrTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagALocal") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ALocal") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAddr")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readPat" (TyFun (TyCon "SexpCursor") (TyCon "Pat")))
-(DFunDef false "readPat" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readPatTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readPatBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readPat" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readPatTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readPatBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
 (DTypeSig false "readPatBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Pat"))))
-(DFunDef false "readPatBare" ((PLit (LInt 1)) PWild) (EVar "PWild"))
-(DFunDef false "readPatBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltPat")))
+(DFunDef false "readPatBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPWild") (ELit LUnit))) (EVar "PWild") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltPat")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readPatTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Pat"))))
-(DFunDef false "readPatTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBinderId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PVar") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoExpr (EApp (EVar "PLit") (EVar "a0")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "PCon") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readPat") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "PCons") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EVar "PTuple") (EVar "a0")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EVar "PList") (EVar "a0")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 7)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBinderId") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readPat") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 8)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLit") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PRng") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 9)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRecPatField")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PRec") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readPatTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltPat")))
+(DFunDef false "readPatTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPVar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBinderId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PVar") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoExpr (EApp (EVar "PLit") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPCon") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "PCon") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPCons") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readPat") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "PCons") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPTuple") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EVar "PTuple") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPList") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EVar "PList") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPAs") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBinderId") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readPat") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPRng") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLit") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PRng") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPRec") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRecPatField")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PRec") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltPat")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))
 (DTypeSig false "readRecPatField" (TyFun (TyCon "SexpCursor") (TyCon "RecPatField")))
 (DFunDef false "readRecPatField" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBinderId") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "readOpt") (EVar "readPat")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
 (DTypeSig false "readGuard" (TyFun (TyCon "SexpCursor") (TyCon "Guard")))
-(DFunDef false "readGuard" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readGuardTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readGuardBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readGuardBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Guard"))))
-(DFunDef false "readGuardBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltGuard")))
+(DFunDef false "readGuard" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readGuardTagged")) (EApp (EVar "refuse") (EVar "dfltGuard"))) (EVar "cur")))
 (DTypeSig false "readGuardTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Guard"))))
-(DFunDef false "readGuardTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "GBool") (EVar "a0")))))
-(DFunDef false "readGuardTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "GBind") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readGuardTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltGuard")))
+(DFunDef false "readGuardTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagGBool") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "GBool") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagGBind") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "GBind") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltGuard")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readArm" (TyFun (TyCon "SexpCursor") (TyCon "Arm")))
 (DFunDef false "readArm" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readGuard")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
 (DTypeSig false "readDoStmt" (TyFun (TyCon "SexpCursor") (TyCon "DoStmt")))
-(DFunDef false "readDoStmt" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readDoStmtTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readDoStmtBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readDoStmtBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "DoStmt"))))
-(DFunDef false "readDoStmtBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDoStmt")))
+(DFunDef false "readDoStmt" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readDoStmtTagged")) (EApp (EVar "refuse") (EVar "dfltDoStmt"))) (EVar "cur")))
 (DTypeSig false "readDoStmtTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "DoStmt"))))
-(DFunDef false "readDoStmtTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "DoExpr") (EVar "a0")))))
-(DFunDef false "readDoStmtTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DoBind") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readDoStmtTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))))
-(DFunDef false "readDoStmtTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DoAssign") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readDoStmtTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readDoStmtTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDoStmt")))
+(DFunDef false "readDoStmtTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDoExpr") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "DoExpr") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDoBind") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DoBind") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDoLet") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDoAssign") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DoAssign") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDoFieldAssign") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDoStmt")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "readInterpPart" (TyFun (TyCon "SexpCursor") (TyCon "InterpPart")))
-(DFunDef false "readInterpPart" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readInterpPartTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readInterpPartBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readInterpPartBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "InterpPart"))))
-(DFunDef false "readInterpPartBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltInterpPart")))
+(DFunDef false "readInterpPart" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readInterpPartTagged")) (EApp (EVar "refuse") (EVar "dfltInterpPart"))) (EVar "cur")))
 (DTypeSig false "readInterpPartTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "InterpPart"))))
-(DFunDef false "readInterpPartTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "InterpStr") (EVar "a0")))))
-(DFunDef false "readInterpPartTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "InterpExpr") (EVar "a0")))))
-(DFunDef false "readInterpPartTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltInterpPart")))
+(DFunDef false "readInterpPartTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagInterpStr") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "InterpStr") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagInterpExpr") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "InterpExpr") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltInterpPart")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readGuardArm" (TyFun (TyCon "SexpCursor") (TyCon "GuardArm")))
 (DFunDef false "readGuardArm" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readGuard")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "GuardArm") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readFieldAssign" (TyFun (TyCon "SexpCursor") (TyCon "FieldAssign")))
 (DFunDef false "readFieldAssign" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "FieldAssign") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readSection" (TyFun (TyCon "SexpCursor") (TyCon "Section")))
-(DFunDef false "readSection" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readSectionTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readSectionBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readSectionBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Section"))))
-(DFunDef false "readSectionBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltSection")))
+(DFunDef false "readSection" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readSectionTagged")) (EApp (EVar "refuse") (EVar "dfltSection"))) (EVar "cur")))
 (DTypeSig false "readSectionTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Section"))))
-(DFunDef false "readSectionTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "SecBare") (EVar "a0")))))
-(DFunDef false "readSectionTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "SecRight") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readSectionTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "SecLeft") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readSectionTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltSection")))
+(DFunDef false "readSectionTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagSecBare") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "SecBare") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagSecRight") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "SecRight") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagSecLeft") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "SecLeft") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltSection")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "readFunClause" (TyFun (TyCon "SexpCursor") (TyCon "FunClause")))
 (DFunDef false "readFunClause" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "FunClause") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readLetBind" (TyFun (TyCon "SexpCursor") (TyCon "LetBind")))
 (DFunDef false "readLetBind" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readFunClause")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readBinderId") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
 (DTypeSig false "readExpr" (TyFun (TyCon "SexpCursor") (TyCon "Expr")))
-(DFunDef false "readExpr" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readExprTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readExprBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readExprBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Expr"))))
-(DFunDef false "readExprBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltExpr")))
+(DFunDef false "readExpr" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readExprTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltExpr"))))
 (DTypeSig false "readExprTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Expr"))))
-(DFunDef false "readExprTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoExpr (EApp (EVar "ELit") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EVar") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EApp") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELam") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readArm")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EMatch") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EIf") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 7)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 8)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EUnOp") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 9)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EInfix") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 10)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 11)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "ETuple") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 12)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "EListLit") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 13)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "EArrayLit") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 14)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERangeList") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 15)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERangeArray") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 16)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 17)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readLetBind")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 18)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readSection") (EVar "cur"))) (DoExpr (EApp (EVar "ESection") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 19)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EIndex") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 20)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EAnnot") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 21)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EHeadAnnot") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 22)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readDoStmt")) (EVar "cur"))) (DoExpr (EApp (EVar "EBlock") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 23)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readDoStmt")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDo") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 24)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readInterpPart")) (EVar "cur"))) (DoExpr (EApp (EVar "EStringInterp") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 25)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readGuardArm")) (EVar "cur"))) (DoExpr (EApp (EVar "EGuards") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 26)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ERecordCreate") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 27)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 28)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EVariantUpdate") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 29)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readExpr")) (EVar "readExpr"))) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EMapLit") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 30)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ESetLit") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 31)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EAsPat") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 32)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EMethodRef") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 33)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EDictApp") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 34)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readAddr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EVarAt") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 35)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EVarId") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 36)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EMethodAt") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 37)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDictAt") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 38)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELoc") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 39)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDoOrigin") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 40)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readEvId") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ENumLit") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 41)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readExprTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltExpr")))
+(DFunDef false "readExprTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagELit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoExpr (EApp (EVar "ELit") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEVar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EVar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEApp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EApp") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagELam") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELam") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagELet") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEMatch") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readArm")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EMatch") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEIf") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EIf") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEBinOp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEUnOp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EUnOp") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEInfix") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EInfix") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEFieldAccess") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagETuple") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "ETuple") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEListLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "EListLit") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEArrayLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "EArrayLit") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagERangeList") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERangeList") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagERangeArray") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERangeArray") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagESlice") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagELetGroup") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readLetBind")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagESection") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readSection") (EVar "cur"))) (DoExpr (EApp (EVar "ESection") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEIndex") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EIndex") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEAnnot") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EAnnot") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEHeadAnnot") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EHeadAnnot") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEBlock") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readDoStmt")) (EVar "cur"))) (DoExpr (EApp (EVar "EBlock") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEDo") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readDoStmt")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDo") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEStringInterp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readInterpPart")) (EVar "cur"))) (DoExpr (EApp (EVar "EStringInterp") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEGuards") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readGuardArm")) (EVar "cur"))) (DoExpr (EApp (EVar "EGuards") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagERecordCreate") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ERecordCreate") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagERecordUpdate") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEVariantUpdate") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EVariantUpdate") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEMapLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readExpr")) (EVar "readExpr"))) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EMapLit") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagESetLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ESetLit") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEAsPat") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EAsPat") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEMethodRef") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EMethodRef") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEDictApp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EDictApp") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEVarAt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readAddr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EVarAt") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEVarId") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EVarId") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEMethodAt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EMethodAt") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEDictAt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDictAt") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagELoc") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELoc") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEDoOrigin") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDoOrigin") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagENumLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readEvId") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ENumLit") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEWideLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltExpr")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))))))))))))))))))))))))))))))))))))
 (DTypeSig false "readUseMember" (TyFun (TyCon "SexpCursor") (TyCon "UseMember")))
 (DFunDef false "readUseMember" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "readOpt") (EVar "readString")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
 (DTypeSig false "readUsePath" (TyFun (TyCon "SexpCursor") (TyCon "UsePath")))
-(DFunDef false "readUsePath" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readUsePathTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readUsePathBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readUsePathBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "UsePath"))))
-(DFunDef false "readUsePathBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltUsePath")))
+(DFunDef false "readUsePath" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readUsePathTagged")) (EApp (EVar "refuse") (EVar "dfltUsePath"))) (EVar "cur")))
 (DTypeSig false "readUsePathTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "UsePath"))))
-(DFunDef false "readUsePathTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "UseName") (EVar "a0")))))
-(DFunDef false "readUsePathTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readUseMember")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "UseGroup") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readUsePathTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "UseWild") (EVar "a0")))))
-(DFunDef false "readUsePathTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "UseAlias") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readUsePathTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltUsePath")))
+(DFunDef false "readUsePathTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagUseName") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "UseName") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagUseGroup") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readUseMember")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "UseGroup") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagUseWild") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "UseWild") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagUseAlias") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "UseAlias") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltUsePath")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "readPropParam" (TyFun (TyCon "SexpCursor") (TyCon "PropParam")))
 (DFunDef false "readPropParam" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PropParam") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
 (DTypeSig false "readMethodDefault" (TyFun (TyCon "SexpCursor") (TyCon "MethodDefault")))
@@ -2332,36 +2811,23 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "readImplMethod" (TyFun (TyCon "SexpCursor") (TyCon "ImplMethod")))
 (DFunDef false "readImplMethod" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ImplMethod") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
 (DTypeSig false "readDataVis" (TyFun (TyCon "SexpCursor") (TyCon "DataVis")))
-(DFunDef false "readDataVis" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readDataVisTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readDataVisBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readDataVis" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EApp (EVar "refuse") (EVar "dfltDataVis"))) (EVar "readDataVisBare")) (EVar "cur")))
 (DTypeSig false "readDataVisBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "DataVis"))))
-(DFunDef false "readDataVisBare" ((PLit (LInt 0)) PWild) (EVar "VisPrivate"))
-(DFunDef false "readDataVisBare" ((PLit (LInt 1)) PWild) (EVar "VisAbstract"))
-(DFunDef false "readDataVisBare" ((PLit (LInt 2)) PWild) (EVar "VisPublic"))
-(DFunDef false "readDataVisBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDataVis")))
-(DTypeSig false "readDataVisTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "DataVis"))))
-(DFunDef false "readDataVisTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDataVis")))
+(DFunDef false "readDataVisBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagVisPrivate") (ELit LUnit))) (EVar "VisPrivate") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagVisAbstract") (ELit LUnit))) (EVar "VisAbstract") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagVisPublic") (ELit LUnit))) (EVar "VisPublic") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDataVis")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "readField" (TyFun (TyCon "SexpCursor") (TyCon "Field")))
 (DFunDef false "readField" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "Field") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readConPayload" (TyFun (TyCon "SexpCursor") (TyCon "ConPayload")))
-(DFunDef false "readConPayload" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readConPayloadTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readConPayloadBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readConPayloadBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "ConPayload"))))
-(DFunDef false "readConPayloadBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltConPayload")))
+(DFunDef false "readConPayload" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readConPayloadTagged")) (EApp (EVar "refuse") (EVar "dfltConPayload"))) (EVar "cur")))
 (DTypeSig false "readConPayloadTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "ConPayload"))))
-(DFunDef false "readConPayloadTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoExpr (EApp (EVar "ConPos") (EVar "a0")))))
-(DFunDef false "readConPayloadTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readField")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ConNamed") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readConPayloadTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltConPayload")))
+(DFunDef false "readConPayloadTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagConPos") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoExpr (EApp (EVar "ConPos") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagConNamed") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readField")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ConNamed") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltConPayload")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readVariant" (TyFun (TyCon "SexpCursor") (TyCon "Variant")))
 (DFunDef false "readVariant" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readConPayload") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "Variant") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readAttr" (TyFun (TyCon "SexpCursor") (TyCon "Attr")))
-(DFunDef false "readAttr" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readAttrTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readAttrBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readAttr" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readAttrTagged")) (EVar "readAttrBare")) (EVar "cur")))
 (DTypeSig false "readAttrBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Attr"))))
-(DFunDef false "readAttrBare" ((PLit (LInt 1)) PWild) (EVar "AttrInline"))
-(DFunDef false "readAttrBare" ((PLit (LInt 2)) PWild) (EVar "AttrMustUse"))
-(DFunDef false "readAttrBare" ((PLit (LInt 3)) PWild) (EVar "AttrNoInline"))
-(DFunDef false "readAttrBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAttr")))
+(DFunDef false "readAttrBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagAttrInline") (ELit LUnit))) (EVar "AttrInline") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagAttrMustUse") (ELit LUnit))) (EVar "AttrMustUse") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagAttrNoInline") (ELit LUnit))) (EVar "AttrNoInline") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAttr")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "readAttrTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Attr"))))
-(DFunDef false "readAttrTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "readOpt") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "AttrDeprecated") (EVar "a0")))))
-(DFunDef false "readAttrTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAttr")))
+(DFunDef false "readAttrTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagAttrDeprecated") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "readOpt") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "AttrDeprecated") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAttr")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readDeriveRef" (TyFun (TyCon "SexpCursor") (TyCon "DeriveRef")))
 (DFunDef false "readDeriveRef" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DeriveRef") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readExternDecl" (TyFun (TyCon "SexpCursor") (TyCon "ExternDecl")))
@@ -2369,30 +2835,14 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "readExternBind" (TyFun (TyCon "SexpCursor") (TyCon "ExternBind")))
 (DFunDef false "readExternBind" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "ExternBind" ((fa "ebHost" (EVar "a0")) (fa "ebSymbol" (EVar "a1")) (fa "ebLoc" (EVar "a2")))))))
 (DTypeSig false "readDecl" (TyFun (TyCon "SexpCursor") (TyCon "Decl")))
-(DFunDef false "readDecl" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readDeclTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readDeclBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readDeclBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Decl"))))
-(DFunDef false "readDeclBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDecl")))
+(DFunDef false "readDecl" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readDeclTagged")) (EApp (EVar "refuse") (EVar "dfltDecl"))) (EVar "cur")))
 (DTypeSig false "readDeclTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Decl"))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExternDecl") (EVar "cur"))) (DoExpr (EApp (EVar "DExtern") (EVar "a0")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readBinderId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")) (EVar "a5")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readDataVis") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readVariant")) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readKindAnn")))) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "cursorList") (EVar "readDeriveRef")) (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a9") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DData" ((fa "dataVis" (EVar "a0")) (fa "dataName" (EVar "a1")) (fa "dataParams" (EVar "a2")) (fa "dataParamKinds" (EVar "a3")) (fa "dataCtors" (EVar "a4")) (fa "dataCtorBinders" (EVar "a5")) (fa "dataDerives" (EVar "a6")) (fa "dataOrigin" (EVar "a7")) (fa "dataExtern" (EVar "a8")) (fa "dataNameLoc" (EVar "a9")))))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readUsePath") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DUse") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readString"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")) (EVar "a5")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readPropParam")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 7)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DTest") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 8)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EVar "readSuper")) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "cursorList") (EVar "readIfaceMethod")) (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DInterface" ((fa "pub" (EVar "a0")) (fa "def" (EVar "a1")) (fa "name" (EVar "a2")) (fa "typarams" (EVar "a3")) (fa "typaramKinds" (EVar "a4")) (fa "supers" (EVar "a5")) (fa "methods" (EVar "a6")) (fa "ifaceOrigin" (EVar "a7")) (fa "ifaceNameLoc" (EVar "a8")))))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 9)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readRequire")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readImplMethod")) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DImpl" ((fa "pub" (EVar "a0")) (fa "iface" (EVar "a1")) (fa "tys" (EVar "a2")) (fa "reqs" (EVar "a3")) (fa "methods" (EVar "a4")) (fa "implOrigin" (EVar "a5")) (fa "implIfaceLoc" (EVar "a6")))))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 10)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "a0")) (fa "tyAliasName" (EVar "a1")) (fa "tyAliasParams" (EVar "a2")) (fa "tyAliasParamKinds" (EVar "a3")) (fa "tyAliasRhs" (EVar "a4")) (fa "tyAliasOrigin" (EVar "a5")) (fa "tyAliasNameLoc" (EVar "a6")))))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 11)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EApp (EVar "cursorList") (EVar "readDeriveRef")) (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a9") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "a0")) (fa "newtypeName" (EVar "a1")) (fa "newtypeParams" (EVar "a2")) (fa "newtypeParamKinds" (EVar "a3")) (fa "newtypeCtor" (EVar "a4")) (fa "newtypeCtorBinders" (EVar "a5")) (fa "newtypeFieldTy" (EVar "a6")) (fa "newtypeDerives" (EVar "a7")) (fa "newtypeOrigin" (EVar "a8")) (fa "newtypeNameLoc" (EVar "a9")))))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 12)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readLetBind")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DLetGroup") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 13)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readAttr")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readDecl") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DAttrib") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readDeclTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDecl")))
+(DFunDef false "readDeclTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDTypeSig") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDExtern") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExternDecl") (EVar "cur"))) (DoExpr (EApp (EVar "DExtern") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDFunDef") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readBinderId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")) (EVar "a5")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDData") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readDataVis") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readVariant")) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readKindAnn")))) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "cursorList") (EVar "readDeriveRef")) (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a9") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DData" ((fa "dataVis" (EVar "a0")) (fa "dataName" (EVar "a1")) (fa "dataParams" (EVar "a2")) (fa "dataParamKinds" (EVar "a3")) (fa "dataCtors" (EVar "a4")) (fa "dataCtorBinders" (EVar "a5")) (fa "dataDerives" (EVar "a6")) (fa "dataOrigin" (EVar "a7")) (fa "dataExtern" (EVar "a8")) (fa "dataNameLoc" (EVar "a9")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDUse") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readUsePath") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DUse") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDEffect") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readString"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")) (EVar "a5")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDProp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readPropParam")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDTest") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DTest") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDInterface") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EVar "readSuper")) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "cursorList") (EVar "readIfaceMethod")) (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DInterface" ((fa "pub" (EVar "a0")) (fa "def" (EVar "a1")) (fa "name" (EVar "a2")) (fa "typarams" (EVar "a3")) (fa "typaramKinds" (EVar "a4")) (fa "supers" (EVar "a5")) (fa "methods" (EVar "a6")) (fa "ifaceOrigin" (EVar "a7")) (fa "ifaceNameLoc" (EVar "a8")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDImpl") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readRequire")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readImplMethod")) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DImpl" ((fa "pub" (EVar "a0")) (fa "iface" (EVar "a1")) (fa "tys" (EVar "a2")) (fa "reqs" (EVar "a3")) (fa "methods" (EVar "a4")) (fa "implOrigin" (EVar "a5")) (fa "implIfaceLoc" (EVar "a6")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDTypeAlias") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "a0")) (fa "tyAliasName" (EVar "a1")) (fa "tyAliasParams" (EVar "a2")) (fa "tyAliasParamKinds" (EVar "a3")) (fa "tyAliasRhs" (EVar "a4")) (fa "tyAliasOrigin" (EVar "a5")) (fa "tyAliasNameLoc" (EVar "a6")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDNewtype") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EApp (EVar "cursorList") (EVar "readDeriveRef")) (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a9") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "a0")) (fa "newtypeName" (EVar "a1")) (fa "newtypeParams" (EVar "a2")) (fa "newtypeParamKinds" (EVar "a3")) (fa "newtypeCtor" (EVar "a4")) (fa "newtypeCtorBinders" (EVar "a5")) (fa "newtypeFieldTy" (EVar "a6")) (fa "newtypeDerives" (EVar "a7")) (fa "newtypeOrigin" (EVar "a8")) (fa "newtypeNameLoc" (EVar "a9")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDLetGroup") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readLetBind")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DLetGroup") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDAttrib") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readAttr")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readDecl") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DAttrib") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDecl")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))))))))
 # MARK
 (DUse false (UseWild ("frontend" "ast")))
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
 (DUse false (UseGroup ("list") ((mem "splitAt" false))))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "SexpError" true) (mem "cursorAdvance" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false))))
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "SexpError" true) (mem "cursorAdvance" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false) (mem "isCloseByte" false) (mem "isOpenByte" false))))
 (DTypeSig true "declsSExp" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SExp")))
 (DFunDef false "declsSExp" ((PVar "ds")) (EApp (EApp (EVar "sexpList") (EVar "sexpDecl")) (EVar "ds")))
 (DTypeSig true "evEntriesSExp" (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyCon "SExp")))
@@ -2433,6 +2883,12 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig true "sexpBinderId" (TyFun (TyCon "BinderId") (TyCon "SExp")))
 (DFunDef false "sexpBinderId" ((PCon "BinderId" (PLit (LString "")) (PVar "n"))) (EApp (EVar "sexpInt") (EVar "n")))
 (DFunDef false "sexpBinderId" ((PCon "BinderId" (PVar "m") (PVar "n"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EVar "m")) (EApp (EVar "sexpInt") (EVar "n")))))
+(DTypeSig false "isTrueChar" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isTrueChar" ((PVar "c")) (EBinOp "==" (EVar "c") (ELit (LInt 116))))
+(DTypeSig false "isFalseChar" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isFalseChar" ((PVar "c")) (EBinOp "==" (EVar "c") (ELit (LInt 102))))
+(DTypeSig false "isPlaceholderChar" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isPlaceholderChar" ((PVar "c")) (EBinOp "==" (EVar "c") (ELit (LInt 122))))
 (DTypeSig false "wordOf" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "wordOf" ((PVar "bytes")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "b")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 256))) (EVar "b")))) (ELit (LInt 0))) (EVar "bytes")))
 (DTypeSig false "bytesOfWord" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))
@@ -2442,167 +2898,445 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "readString" (TyFun (TyCon "SexpCursor") (TyCon "String")))
 (DFunDef false "readString" ((PVar "cur")) (EApp (EVar "cursorAtom") (EVar "cur")))
 (DTypeSig true "readBool" (TyFun (TyCon "SexpCursor") (TyCon "Bool")))
-(DFunDef false "readBool" ((PVar "cur")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cursorChar") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 116))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LInt 102))) (EVar "False") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "False")))))))
+(DFunDef false "readBool" ((PVar "cur")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cursorChar") (EVar "cur"))) (DoExpr (EIf (EApp (EVar "isTrueChar") (EVar "c")) (EVar "True") (EIf (EApp (EVar "isFalseChar") (EVar "c")) (EVar "False") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "False")))))))
 (DTypeSig false "readFloat" (TyFun (TyCon "SexpCursor") (TyCon "Float")))
 (DFunDef false "readFloat" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "hi") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "lo") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "hi") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (ELit (LInt 4294967295)))) (EBinOp "<" (EVar "lo") (ELit (LInt 0)))) (EBinOp ">" (EVar "lo") (ELit (LInt 4294967295)))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit (LFloat 0.0))) (EApp (EApp (EVar "bytesToFloat64") (EApp (EVar "fromList") (EBinOp "++" (EApp (EVar "bytesOfWord") (EVar "hi")) (EApp (EVar "bytesOfWord") (EVar "lo"))))) (ELit (LInt 0)))))))
 (DTypeSig false "readOpt" (TyFun (TyFun (TyCon "SexpCursor") (TyVar "a")) (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "readOpt" ((PVar "f") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 41))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EVar "v"))))))))
+(DFunDef false "readOpt" ((PVar "f") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EVar "v"))))))))
 (DTypeSig false "readPair" (TyFun (TyFun (TyCon "SexpCursor") (TyVar "a")) (TyFun (TyFun (TyCon "SexpCursor") (TyVar "b")) (TyFun (TyCon "SexpCursor") (TyTuple (TyVar "a") (TyVar "b"))))))
 (DFunDef false "readPair" ((PVar "fa") (PVar "fb") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a") (EApp (EVar "fa") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "fb") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "a") (EVar "b")))))
 (DTypeSig false "readLoc" (TyFun (TyCon "SexpCursor") (TyCon "Loc")))
-(DFunDef false "readLoc" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "f") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "c") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "d") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))) (EIf (EBinOp "==" (EApp (EVar "cursorChar") (EVar "cur")) (ELit (LInt 122))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLoc")))))
+(DFunDef false "readLoc" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "f") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "c") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "d") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))) (EIf (EApp (EVar "isPlaceholderChar") (EApp (EVar "cursorChar") (EVar "cur"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLoc")))))
 (DTypeSig false "readEvId" (TyFun (TyCon "SexpCursor") (TyCon "EvId")))
-(DFunDef false "readEvId" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "EvId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
+(DFunDef false "readEvId" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "EvId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
 (DTypeSig true "readBinderId" (TyFun (TyCon "SexpCursor") (TyCon "BinderId")))
-(DFunDef false "readBinderId" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "BinderId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "BinderId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
+(DFunDef false "readBinderId" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "m") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "n") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "BinderId") (EVar "m")) (EVar "n")))) (EApp (EApp (EVar "BinderId") (ELit (LString ""))) (EApp (EVar "readInt") (EVar "cur")))))
+(DTypeSig false "readTagged" (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyVar "a"))) (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyVar "a"))) (TyFun (TyCon "SexpCursor") (TyVar "a")))))
+(DFunDef false "readTagged" ((PVar "tagged") (PVar "bare") (PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "tagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "bare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DTypeSig false "refuse" (TyFun (TyVar "a") (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyVar "a")))))
+(DFunDef false "refuse" ((PVar "dflt") PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dflt")))
+(DTypeSig false "tagAtom" (TyFun (TyCon "Int") (TyCon "SExp")))
+(DFunDef false "tagAtom" ((PVar "n")) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "n"))))
+(DTypeSig false "tagLInt" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLInt" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagLFloat" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLFloat" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagLU64" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLU64" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagLI64" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLI64" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagLString" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLString" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagLChar" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLChar" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagLBool" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLBool" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagLUnit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagLUnit" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagOriginUnresolved" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagOriginUnresolved" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagOriginBuiltin" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagOriginBuiltin" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagOriginModule" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagOriginModule" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagTyCon" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyCon" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagTyVar" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyVar" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagTyApp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyApp" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagTyFun" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyFun" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagTyTuple" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyTuple" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagTyEffect" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyEffect" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagTyConstrained" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyConstrained" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagTyNamed" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyNamed" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagTyQual" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyQual" ((PLit LUnit)) (ELit (LInt 8)))
+(DTypeSig false "tagTyRow" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyRow" ((PLit LUnit)) (ELit (LInt 9)))
+(DTypeSig false "tagTyAuth" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagTyAuth" ((PLit LUnit)) (ELit (LInt 10)))
+(DTypeSig false "tagEPTop" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEPTop" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagEPLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEPLit" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagEPName" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEPName" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagEPSet" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEPSet" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagEPProduct" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEPProduct" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagKindType" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagKindType" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagKindEffect" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagKindEffect" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagKindAuthority" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagKindAuthority" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagKindArrow" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagKindArrow" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagRNone" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRNone" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagRKey" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRKey" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagRDict" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRDict" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagRDictFwd" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRDictFwd" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagRLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRLocal" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagRScalar" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRScalar" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagRProj" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagRProj" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagEvOne" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEvOne" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagEvMany" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEvMany" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagEvMethod" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEvMethod" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagEvLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEvLit" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagEvHead" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEvHead" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagALocal" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagALocal" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagAGlobal" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagAGlobal" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagPVar" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPVar" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagPWild" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPWild" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagPLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPLit" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagPCon" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPCon" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagPCons" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPCons" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagPTuple" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPTuple" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagPList" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPList" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagPAs" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPAs" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagPRng" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPRng" ((PLit LUnit)) (ELit (LInt 8)))
+(DTypeSig false "tagPRec" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagPRec" ((PLit LUnit)) (ELit (LInt 9)))
+(DTypeSig false "tagGBool" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagGBool" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagGBind" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagGBind" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagDoExpr" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDoExpr" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagDoBind" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDoBind" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagDoLet" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDoLet" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagDoAssign" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDoAssign" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagDoFieldAssign" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDoFieldAssign" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagInterpStr" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagInterpStr" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagInterpExpr" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagInterpExpr" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagSecBare" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagSecBare" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagSecRight" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagSecRight" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagSecLeft" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagSecLeft" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagELit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagELit" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagEVar" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEVar" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagEApp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEApp" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagELam" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagELam" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagELet" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagELet" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagEMatch" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEMatch" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagEIf" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEIf" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagEBinOp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEBinOp" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagEUnOp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEUnOp" ((PLit LUnit)) (ELit (LInt 8)))
+(DTypeSig false "tagEInfix" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEInfix" ((PLit LUnit)) (ELit (LInt 9)))
+(DTypeSig false "tagEFieldAccess" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEFieldAccess" ((PLit LUnit)) (ELit (LInt 10)))
+(DTypeSig false "tagETuple" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagETuple" ((PLit LUnit)) (ELit (LInt 11)))
+(DTypeSig false "tagEListLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEListLit" ((PLit LUnit)) (ELit (LInt 12)))
+(DTypeSig false "tagEArrayLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEArrayLit" ((PLit LUnit)) (ELit (LInt 13)))
+(DTypeSig false "tagERangeList" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagERangeList" ((PLit LUnit)) (ELit (LInt 14)))
+(DTypeSig false "tagERangeArray" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagERangeArray" ((PLit LUnit)) (ELit (LInt 15)))
+(DTypeSig false "tagESlice" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagESlice" ((PLit LUnit)) (ELit (LInt 16)))
+(DTypeSig false "tagELetGroup" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagELetGroup" ((PLit LUnit)) (ELit (LInt 17)))
+(DTypeSig false "tagESection" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagESection" ((PLit LUnit)) (ELit (LInt 18)))
+(DTypeSig false "tagEIndex" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEIndex" ((PLit LUnit)) (ELit (LInt 19)))
+(DTypeSig false "tagEAnnot" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEAnnot" ((PLit LUnit)) (ELit (LInt 20)))
+(DTypeSig false "tagEHeadAnnot" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEHeadAnnot" ((PLit LUnit)) (ELit (LInt 21)))
+(DTypeSig false "tagEBlock" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEBlock" ((PLit LUnit)) (ELit (LInt 22)))
+(DTypeSig false "tagEDo" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEDo" ((PLit LUnit)) (ELit (LInt 23)))
+(DTypeSig false "tagEStringInterp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEStringInterp" ((PLit LUnit)) (ELit (LInt 24)))
+(DTypeSig false "tagEGuards" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEGuards" ((PLit LUnit)) (ELit (LInt 25)))
+(DTypeSig false "tagERecordCreate" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagERecordCreate" ((PLit LUnit)) (ELit (LInt 26)))
+(DTypeSig false "tagERecordUpdate" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagERecordUpdate" ((PLit LUnit)) (ELit (LInt 27)))
+(DTypeSig false "tagEVariantUpdate" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEVariantUpdate" ((PLit LUnit)) (ELit (LInt 28)))
+(DTypeSig false "tagEMapLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEMapLit" ((PLit LUnit)) (ELit (LInt 29)))
+(DTypeSig false "tagESetLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagESetLit" ((PLit LUnit)) (ELit (LInt 30)))
+(DTypeSig false "tagEAsPat" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEAsPat" ((PLit LUnit)) (ELit (LInt 31)))
+(DTypeSig false "tagEMethodRef" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEMethodRef" ((PLit LUnit)) (ELit (LInt 32)))
+(DTypeSig false "tagEDictApp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEDictApp" ((PLit LUnit)) (ELit (LInt 33)))
+(DTypeSig false "tagEVarAt" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEVarAt" ((PLit LUnit)) (ELit (LInt 34)))
+(DTypeSig false "tagEVarId" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEVarId" ((PLit LUnit)) (ELit (LInt 35)))
+(DTypeSig false "tagEMethodAt" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEMethodAt" ((PLit LUnit)) (ELit (LInt 36)))
+(DTypeSig false "tagEDictAt" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEDictAt" ((PLit LUnit)) (ELit (LInt 37)))
+(DTypeSig false "tagELoc" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagELoc" ((PLit LUnit)) (ELit (LInt 38)))
+(DTypeSig false "tagEDoOrigin" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEDoOrigin" ((PLit LUnit)) (ELit (LInt 39)))
+(DTypeSig false "tagENumLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagENumLit" ((PLit LUnit)) (ELit (LInt 40)))
+(DTypeSig false "tagEWideLit" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagEWideLit" ((PLit LUnit)) (ELit (LInt 41)))
+(DTypeSig false "tagUseName" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagUseName" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagUseGroup" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagUseGroup" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagUseWild" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagUseWild" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagUseAlias" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagUseAlias" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagVisPrivate" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagVisPrivate" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagVisAbstract" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagVisAbstract" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagVisPublic" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagVisPublic" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagConPos" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagConPos" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagConNamed" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagConNamed" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagAttrDeprecated" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagAttrDeprecated" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagAttrInline" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagAttrInline" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagAttrMustUse" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagAttrMustUse" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagAttrNoInline" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagAttrNoInline" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagDTypeSig" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDTypeSig" ((PLit LUnit)) (ELit (LInt 0)))
+(DTypeSig false "tagDExtern" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDExtern" ((PLit LUnit)) (ELit (LInt 1)))
+(DTypeSig false "tagDFunDef" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDFunDef" ((PLit LUnit)) (ELit (LInt 2)))
+(DTypeSig false "tagDData" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDData" ((PLit LUnit)) (ELit (LInt 3)))
+(DTypeSig false "tagDUse" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDUse" ((PLit LUnit)) (ELit (LInt 4)))
+(DTypeSig false "tagDEffect" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDEffect" ((PLit LUnit)) (ELit (LInt 5)))
+(DTypeSig false "tagDProp" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDProp" ((PLit LUnit)) (ELit (LInt 6)))
+(DTypeSig false "tagDTest" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDTest" ((PLit LUnit)) (ELit (LInt 7)))
+(DTypeSig false "tagDInterface" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDInterface" ((PLit LUnit)) (ELit (LInt 8)))
+(DTypeSig false "tagDImpl" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDImpl" ((PLit LUnit)) (ELit (LInt 9)))
+(DTypeSig false "tagDTypeAlias" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDTypeAlias" ((PLit LUnit)) (ELit (LInt 10)))
+(DTypeSig false "tagDNewtype" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDNewtype" ((PLit LUnit)) (ELit (LInt 11)))
+(DTypeSig false "tagDLetGroup" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDLetGroup" ((PLit LUnit)) (ELit (LInt 12)))
+(DTypeSig false "tagDAttrib" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "tagDAttrib" ((PLit LUnit)) (ELit (LInt 13)))
 (DTypeSig false "sexpLit" (TyFun (TyCon "Lit") (TyCon "SExp")))
-(DFunDef false "sexpLit" ((PCon "LInt" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpInt") (EVar "a0")))))
-(DFunDef false "sexpLit" ((PCon "LFloat" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpFloat") (EVar "a0")))))
-(DFunDef false "sexpLit" ((PCon "LU64" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
-(DFunDef false "sexpLit" ((PCon "LI64" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
-(DFunDef false "sexpLit" ((PCon "LString" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpLit" ((PCon "LChar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpLit" ((PCon "LBool" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EVar "sexpBool") (EVar "a0")))))
-(DFunDef false "sexpLit" ((PCon "LUnit")) (EApp (EVar "SAtom") (ELit (LString "7"))))
+(DFunDef false "sexpLit" ((PCon "LInt" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLInt") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LFloat" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLFloat") (ELit LUnit))) (EApp (EVar "sexpFloat") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LU64" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLU64") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
+(DFunDef false "sexpLit" ((PCon "LI64" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLI64") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
+(DFunDef false "sexpLit" ((PCon "LString" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLString") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LChar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLChar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LBool" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagLBool") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")))))
+(DFunDef false "sexpLit" ((PCon "LUnit")) (EApp (EVar "tagAtom") (EApp (EVar "tagLUnit") (ELit LUnit))))
 (DTypeSig false "sexpTyConOrigin" (TyFun (TyCon "TyConOrigin") (TyCon "SExp")))
-(DFunDef false "sexpTyConOrigin" ((PCon "OriginUnresolved")) (EApp (EVar "SAtom") (ELit (LString "0"))))
-(DFunDef false "sexpTyConOrigin" ((PCon "OriginBuiltin")) (EApp (EVar "SAtom") (ELit (LString "1"))))
-(DFunDef false "sexpTyConOrigin" ((PCon "OriginModule" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpTyConOrigin" ((PCon "OriginUnresolved")) (EApp (EVar "tagAtom") (EApp (EVar "tagOriginUnresolved") (ELit LUnit))))
+(DFunDef false "sexpTyConOrigin" ((PCon "OriginBuiltin")) (EApp (EVar "tagAtom") (EApp (EVar "tagOriginBuiltin") (ELit LUnit))))
+(DFunDef false "sexpTyConOrigin" ((PCon "OriginModule" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagOriginModule") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
 (DTypeSig false "sexpTy" (TyFun (TyCon "Ty") (TyCon "SExp")))
-(DFunDef false "sexpTy" ((PRec "TyCon" ((rf "tyConName" (PVar "a0")) (rf "tyConLoc" (PVar "a1")) (rf "tyConOrigin" (PVar "a2"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a1")) (EApp (EVar "sexpTyConOrigin") (EVar "a2")))))
-(DFunDef false "sexpTy" ((PCon "TyVar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpTy" ((PCon "TyApp" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
-(DFunDef false "sexpTy" ((PCon "TyFun" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
-(DFunDef false "sexpTy" ((PCon "TyTuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a0")))))
-(DFunDef false "sexpTy" ((PCon "TyEffect" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffAtomTy")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EVar "sexpTy") (EVar "a2")))))
-(DFunDef false "sexpTy" ((PCon "TyConstrained" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EApp (EVar "sexpList") (EVar "sexpConstraint")) (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
-(DFunDef false "sexpTy" ((PCon "TyNamed" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "7"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpEffAtomTy")) (EVar "a2")))))
-(DFunDef false "sexpTy" ((PCon "TyQual" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "8"))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpEffParamTy")) (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a2")))))
-(DFunDef false "sexpTy" ((PCon "TyRow" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "9"))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffAtomTy")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a2")))))
-(DFunDef false "sexpTy" ((PCon "TyAuth" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "10"))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffParamTy")) (EVar "a0")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a1")))))
+(DFunDef false "sexpTy" ((PRec "TyCon" ((rf "tyConName" (PVar "a0")) (rf "tyConLoc" (PVar "a1")) (rf "tyConOrigin" (PVar "a2"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyCon") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a1")) (EApp (EVar "sexpTyConOrigin") (EVar "a2")))))
+(DFunDef false "sexpTy" ((PCon "TyVar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyVar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpTy" ((PCon "TyApp" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyApp") (ELit LUnit))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
+(DFunDef false "sexpTy" ((PCon "TyFun" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyFun") (ELit LUnit))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
+(DFunDef false "sexpTy" ((PCon "TyTuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyTuple") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a0")))))
+(DFunDef false "sexpTy" ((PCon "TyEffect" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyEffect") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffAtomTy")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EVar "sexpTy") (EVar "a2")))))
+(DFunDef false "sexpTy" ((PCon "TyConstrained" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyConstrained") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpConstraint")) (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
+(DFunDef false "sexpTy" ((PCon "TyNamed" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyNamed") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpEffAtomTy")) (EVar "a2")))))
+(DFunDef false "sexpTy" ((PCon "TyQual" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyQual") (ELit LUnit))) (EApp (EVar "sexpTy") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpEffParamTy")) (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a2")))))
+(DFunDef false "sexpTy" ((PCon "TyRow" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyRow") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffAtomTy")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a2")))))
+(DFunDef false "sexpTy" ((PCon "TyAuth" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagTyAuth") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpEffParamTy")) (EVar "a0")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a1")))))
 (DTypeSig false "sexpEffAtomTy" (TyFun (TyCon "EffAtomTy") (TyCon "SExp")))
 (DFunDef false "sexpEffAtomTy" ((PRec "EffAtomTy" ((rf "eatLabel" (PVar "a0")) (rf "eatOrigin" (PVar "a1")) (rf "eatParam" (PVar "a2")) (rf "eatLoc" (PVar "a3")) (rf "eatPattern" (PVar "a4"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTyConOrigin") (EVar "a1")) (EApp (EVar "sexpEffParamTy") (EVar "a2")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a3")) (EApp (EVar "sexpBool") (EVar "a4")))))
 (DTypeSig false "sexpEffParamTy" (TyFun (TyCon "EffParamTy") (TyCon "SExp")))
-(DFunDef false "sexpEffParamTy" ((PCon "EPTop")) (EApp (EVar "SAtom") (ELit (LString "0"))))
-(DFunDef false "sexpEffParamTy" ((PCon "EPLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpEffParamTy" ((PCon "EPName" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpEffParamTy" ((PCon "EPSet" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
-(DFunDef false "sexpEffParamTy" ((PCon "EPProduct" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpEffParamTy"))) (EVar "a0")))))
+(DFunDef false "sexpEffParamTy" ((PCon "EPTop")) (EApp (EVar "tagAtom") (EApp (EVar "tagEPTop") (ELit LUnit))))
+(DFunDef false "sexpEffParamTy" ((PCon "EPLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEPLit") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpEffParamTy" ((PCon "EPName" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEPName") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpEffParamTy" ((PCon "EPSet" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEPSet") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
+(DFunDef false "sexpEffParamTy" ((PCon "EPProduct" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEPProduct") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpEffParamTy"))) (EVar "a0")))))
 (DTypeSig false "sexpConstraint" (TyFun (TyCon "Constraint") (TyCon "SExp")))
 (DFunDef false "sexpConstraint" ((PRec "Constraint" ((rf "constraintHead" (PVar "a0")) (rf "constraintArgs" (PVar "a1")) (rf "constraintOrigin" (PVar "a2"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a1")) (EApp (EVar "sexpTyConOrigin") (EVar "a2")))))
 (DTypeSig false "sexpKindAnn" (TyFun (TyCon "KindAnn") (TyCon "SExp")))
-(DFunDef false "sexpKindAnn" ((PCon "KindType")) (EApp (EVar "SAtom") (ELit (LString "0"))))
-(DFunDef false "sexpKindAnn" ((PCon "KindEffect")) (EApp (EVar "SAtom") (ELit (LString "1"))))
-(DFunDef false "sexpKindAnn" ((PCon "KindAuthority" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTyConOrigin") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a3")))))
-(DFunDef false "sexpKindAnn" ((PCon "KindArrow" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpKindAnn") (EVar "a0")) (EApp (EVar "sexpKindAnn") (EVar "a1")))))
+(DFunDef false "sexpKindAnn" ((PCon "KindType")) (EApp (EVar "tagAtom") (EApp (EVar "tagKindType") (ELit LUnit))))
+(DFunDef false "sexpKindAnn" ((PCon "KindEffect")) (EApp (EVar "tagAtom") (EApp (EVar "tagKindEffect") (ELit LUnit))))
+(DFunDef false "sexpKindAnn" ((PCon "KindAuthority" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagKindAuthority") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTyConOrigin") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a3")))))
+(DFunDef false "sexpKindAnn" ((PCon "KindArrow" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagKindArrow") (ELit LUnit))) (EApp (EVar "sexpKindAnn") (EVar "a0")) (EApp (EVar "sexpKindAnn") (EVar "a1")))))
 (DTypeSig false "sexpRoute" (TyFun (TyCon "Route") (TyCon "SExp")))
-(DFunDef false "sexpRoute" ((PCon "RNone")) (EApp (EVar "SAtom") (ELit (LString "0"))))
-(DFunDef false "sexpRoute" ((PCon "RKey" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a2")))))
-(DFunDef false "sexpRoute" ((PCon "RDict" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpRoute" ((PCon "RDictFwd" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpRoute" ((PCon "RLocal" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a1")))))
-(DFunDef false "sexpRoute" ((PCon "RScalar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpRoute" ((PCon "RProj" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EVar "sexpRoute") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpInt")) (EVar "a1")))))
+(DFunDef false "sexpRoute" ((PCon "RNone")) (EApp (EVar "tagAtom") (EApp (EVar "tagRNone") (ELit LUnit))))
+(DFunDef false "sexpRoute" ((PCon "RKey" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRKey") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a2")))))
+(DFunDef false "sexpRoute" ((PCon "RDict" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRDict") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpRoute" ((PCon "RDictFwd" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRDictFwd") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpRoute" ((PCon "RLocal" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRLocal") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a1")))))
+(DFunDef false "sexpRoute" ((PCon "RScalar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRScalar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpRoute" ((PCon "RProj" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagRProj") (ELit LUnit))) (EApp (EVar "sexpRoute") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpInt")) (EVar "a1")))))
 (DTypeSig false "sexpEvVal" (TyFun (TyCon "EvVal") (TyCon "SExp")))
-(DFunDef false "sexpEvVal" ((PCon "EvOne" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpRoute") (EVar "a0")))))
-(DFunDef false "sexpEvVal" ((PCon "EvMany" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a0")))))
-(DFunDef false "sexpEvVal" ((PCon "EvMethod" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")) (EApp (EVar "sexpRoute") (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a4")))))
-(DFunDef false "sexpEvVal" ((PCon "EvLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EApp (EVar "sexpOpt") (EVar "sexpFloat")) (EVar "a0")) (EApp (EVar "sexpRoute") (EVar "a1")))))
-(DFunDef false "sexpEvVal" ((PCon "EvHead" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpEvVal" ((PCon "EvOne" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEvOne") (ELit LUnit))) (EApp (EVar "sexpRoute") (EVar "a0")))))
+(DFunDef false "sexpEvVal" ((PCon "EvMany" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEvMany") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a0")))))
+(DFunDef false "sexpEvVal" ((PCon "EvMethod" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEvMethod") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")) (EApp (EVar "sexpRoute") (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpRoute")) (EVar "a4")))))
+(DFunDef false "sexpEvVal" ((PCon "EvLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEvLit") (ELit LUnit))) (EApp (EApp (EVar "sexpOpt") (EVar "sexpFloat")) (EVar "a0")) (EApp (EVar "sexpRoute") (EVar "a1")))))
+(DFunDef false "sexpEvVal" ((PCon "EvHead" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEvHead") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
 (DTypeSig false "sexpEvEntry" (TyFun (TyCon "EvEntry") (TyCon "SExp")))
 (DFunDef false "sexpEvEntry" ((PCon "EvEntry" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpEvId") (EVar "a0")) (EApp (EVar "sexpEvVal") (EVar "a1")))))
 (DTypeSig false "sexpAddr" (TyFun (TyCon "Addr") (TyCon "SExp")))
-(DFunDef false "sexpAddr" ((PCon "ALocal" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
-(DFunDef false "sexpAddr" ((PCon "AGlobal")) (EApp (EVar "SAtom") (ELit (LString "1"))))
+(DFunDef false "sexpAddr" ((PCon "ALocal" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagALocal") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
+(DFunDef false "sexpAddr" ((PCon "AGlobal")) (EApp (EVar "tagAtom") (EApp (EVar "tagAGlobal") (ELit LUnit))))
 (DTypeSig false "sexpPat" (TyFun (TyCon "Pat") (TyCon "SExp")))
-(DFunDef false "sexpPat" ((PCon "PVar" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpBinderId") (EVar "a2")))))
-(DFunDef false "sexpPat" ((PCon "PWild")) (EApp (EVar "SAtom") (ELit (LString "1"))))
-(DFunDef false "sexpPat" ((PCon "PLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpLit") (EVar "a0")))))
-(DFunDef false "sexpPat" ((PCon "PCon" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a1")))))
-(DFunDef false "sexpPat" ((PCon "PCons" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpPat") (EVar "a1")))))
-(DFunDef false "sexpPat" ((PCon "PTuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")))))
-(DFunDef false "sexpPat" ((PCon "PList" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")))))
-(DFunDef false "sexpPat" ((PCon "PAs" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "7"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpBinderId") (EVar "a2")) (EApp (EVar "sexpPat") (EVar "a3")))))
-(DFunDef false "sexpPat" ((PCon "PRng" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "8"))) (EApp (EVar "sexpLit") (EVar "a0")) (EApp (EVar "sexpLit") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
-(DFunDef false "sexpPat" ((PCon "PRec" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "9"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRecPatField")) (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
+(DFunDef false "sexpPat" ((PCon "PVar" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPVar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpBinderId") (EVar "a2")))))
+(DFunDef false "sexpPat" ((PCon "PWild")) (EApp (EVar "tagAtom") (EApp (EVar "tagPWild") (ELit LUnit))))
+(DFunDef false "sexpPat" ((PCon "PLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPLit") (ELit LUnit))) (EApp (EVar "sexpLit") (EVar "a0")))))
+(DFunDef false "sexpPat" ((PCon "PCon" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPCon") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a1")))))
+(DFunDef false "sexpPat" ((PCon "PCons" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPCons") (ELit LUnit))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpPat") (EVar "a1")))))
+(DFunDef false "sexpPat" ((PCon "PTuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPTuple") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")))))
+(DFunDef false "sexpPat" ((PCon "PList" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPList") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")))))
+(DFunDef false "sexpPat" ((PCon "PAs" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPAs") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpBinderId") (EVar "a2")) (EApp (EVar "sexpPat") (EVar "a3")))))
+(DFunDef false "sexpPat" ((PCon "PRng" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPRng") (ELit LUnit))) (EApp (EVar "sexpLit") (EVar "a0")) (EApp (EVar "sexpLit") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
+(DFunDef false "sexpPat" ((PCon "PRec" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagPRec") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpRecPatField")) (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
 (DTypeSig false "sexpRecPatField" (TyFun (TyCon "RecPatField") (TyCon "SExp")))
 (DFunDef false "sexpRecPatField" ((PCon "RecPatField" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpBinderId") (EVar "a2")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpPat")) (EVar "a3")))))
 (DTypeSig false "sexpGuard" (TyFun (TyCon "Guard") (TyCon "SExp")))
-(DFunDef false "sexpGuard" ((PCon "GBool" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpExpr") (EVar "a0")))))
-(DFunDef false "sexpGuard" ((PCon "GBind" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpGuard" ((PCon "GBool" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagGBool") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")))))
+(DFunDef false "sexpGuard" ((PCon "GBind" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagGBind") (ELit LUnit))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
 (DTypeSig false "sexpArm" (TyFun (TyCon "Arm") (TyCon "SExp")))
 (DFunDef false "sexpArm" ((PCon "Arm" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpGuard")) (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
 (DTypeSig false "sexpDoStmt" (TyFun (TyCon "DoStmt") (TyCon "SExp")))
-(DFunDef false "sexpDoStmt" ((PCon "DoExpr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpExpr") (EVar "a0")))))
-(DFunDef false "sexpDoStmt" ((PCon "DoBind" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpDoStmt" ((PCon "DoLet" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpPat") (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpLoc") (EVar "a4")))))
-(DFunDef false "sexpDoStmt" ((PCon "DoAssign" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpDoStmt" ((PCon "DoFieldAssign" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
+(DFunDef false "sexpDoStmt" ((PCon "DoExpr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDoExpr") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")))))
+(DFunDef false "sexpDoStmt" ((PCon "DoBind" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDoBind") (ELit LUnit))) (EApp (EVar "sexpPat") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpDoStmt" ((PCon "DoLet" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDoLet") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpPat") (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpLoc") (EVar "a4")))))
+(DFunDef false "sexpDoStmt" ((PCon "DoAssign" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDoAssign") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpDoStmt" ((PCon "DoFieldAssign" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDoFieldAssign") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
 (DTypeSig false "sexpInterpPart" (TyFun (TyCon "InterpPart") (TyCon "SExp")))
-(DFunDef false "sexpInterpPart" ((PCon "InterpStr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpInterpPart" ((PCon "InterpExpr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpExpr") (EVar "a0")))))
+(DFunDef false "sexpInterpPart" ((PCon "InterpStr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagInterpStr") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpInterpPart" ((PCon "InterpExpr" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagInterpExpr") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")))))
 (DTypeSig false "sexpGuardArm" (TyFun (TyCon "GuardArm") (TyCon "SExp")))
 (DFunDef false "sexpGuardArm" ((PCon "GuardArm" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EApp (EVar "sexpList") (EVar "sexpGuard")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
 (DTypeSig false "sexpFieldAssign" (TyFun (TyCon "FieldAssign") (TyCon "SExp")))
 (DFunDef false "sexpFieldAssign" ((PCon "FieldAssign" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
 (DTypeSig false "sexpSection" (TyFun (TyCon "Section") (TyCon "SExp")))
-(DFunDef false "sexpSection" ((PCon "SecBare" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpSection" ((PCon "SecRight" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpSection" ((PCon "SecLeft" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")))))
+(DFunDef false "sexpSection" ((PCon "SecBare" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagSecBare") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpSection" ((PCon "SecRight" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagSecRight") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpSection" ((PCon "SecLeft" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagSecLeft") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")))))
 (DTypeSig false "sexpFunClause" (TyFun (TyCon "FunClause") (TyCon "SExp")))
 (DFunDef false "sexpFunClause" ((PCon "FunClause" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
 (DTypeSig false "sexpLetBind" (TyFun (TyCon "LetBind") (TyCon "SExp")))
 (DFunDef false "sexpLetBind" ((PCon "LetBind" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpFunClause")) (EVar "a1")) (EApp (EVar "sexpLoc") (EVar "a2")) (EApp (EVar "sexpBinderId") (EVar "a3")))))
 (DTypeSig false "sexpExpr" (TyFun (TyCon "Expr") (TyCon "SExp")))
-(DFunDef false "sexpExpr" ((PCon "ELit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpLit") (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EVar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EApp" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ELam" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ELet" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpPat") (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpExpr") (EVar "a4")))))
-(DFunDef false "sexpExpr" ((PCon "EMatch" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpArm")) (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EIf" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EBinOp" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "7"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")) (EApp (EVar "sexpEvId") (EVar "a3")))))
-(DFunDef false "sexpExpr" ((PCon "EUnOp" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "8"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EInfix" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "9"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EFieldAccess" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "10"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "ETuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "11"))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EListLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "12"))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EArrayLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "13"))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "ERangeList" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "14"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "ERangeArray" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "15"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "ESlice" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "16"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")) (EApp (EVar "sexpBool") (EVar "a3")))))
-(DFunDef false "sexpExpr" ((PCon "ELetGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "17"))) (EApp (EApp (EVar "sexpList") (EVar "sexpLetBind")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ESection" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "18"))) (EApp (EVar "sexpSection") (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EIndex" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "19"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EAnnot" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "20"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EHeadAnnot" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "21"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EBlock" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "22"))) (EApp (EApp (EVar "sexpList") (EVar "sexpDoStmt")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EDo" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "23"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpDoStmt")) (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EStringInterp" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "24"))) (EApp (EApp (EVar "sexpList") (EVar "sexpInterpPart")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EGuards" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "25"))) (EApp (EApp (EVar "sexpList") (EVar "sexpGuardArm")) (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "ERecordCreate" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "26"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ERecordUpdate" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "27"))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EVariantUpdate" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "28"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EMapLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "29"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpExpr")) (EVar "sexpExpr"))) (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ESetLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "30"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EAsPat" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "31"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EMethodRef" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "32"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EDictApp" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "33"))) (EApp (EVar "sexpString") (EVar "a0")))))
-(DFunDef false "sexpExpr" ((PCon "EVarAt" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "34"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpAddr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EVarId" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "35"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EMethodAt" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "36"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EDictAt" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "37"))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpEvId") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ELoc" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "38"))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "EDoOrigin" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "39"))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
-(DFunDef false "sexpExpr" ((PCon "ENumLit" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "40"))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpEvId") (EVar "a1")) (EApp (EVar "sexpString") (EVar "a2")))))
-(DFunDef false "sexpExpr" ((PCon "EWideLit" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "41"))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")) (EApp (EVar "sexpString") (EVar "a3")))))
+(DFunDef false "sexpExpr" ((PCon "ELit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagELit") (ELit LUnit))) (EApp (EVar "sexpLit") (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EVar" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEVar") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EApp" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEApp") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ELam" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagELam") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ELet" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagELet") (ELit LUnit))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpPat") (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpExpr") (EVar "a4")))))
+(DFunDef false "sexpExpr" ((PCon "EMatch" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEMatch") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpArm")) (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EIf" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEIf") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EBinOp" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEBinOp") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")) (EApp (EVar "sexpEvId") (EVar "a3")))))
+(DFunDef false "sexpExpr" ((PCon "EUnOp" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEUnOp") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EInfix" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEInfix") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EFieldAccess" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEFieldAccess") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "ETuple" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagETuple") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EListLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEListLit") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EArrayLit" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEArrayLit") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "ERangeList" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagERangeList") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "ERangeArray" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagERangeArray") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpBool") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "ESlice" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagESlice") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")) (EApp (EVar "sexpBool") (EVar "a3")))))
+(DFunDef false "sexpExpr" ((PCon "ELetGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagELetGroup") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpLetBind")) (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ESection" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagESection") (ELit LUnit))) (EApp (EVar "sexpSection") (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EIndex" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEIndex") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EAnnot" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEAnnot") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EHeadAnnot" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEHeadAnnot") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EBlock" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEBlock") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpDoStmt")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EDo" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEDo") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpDoStmt")) (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EStringInterp" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEStringInterp") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpInterpPart")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EGuards" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEGuards") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpGuardArm")) (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "ERecordCreate" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagERecordCreate") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ERecordUpdate" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagERecordUpdate") (ELit LUnit))) (EApp (EVar "sexpExpr") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EVariantUpdate" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEVariantUpdate") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpFieldAssign")) (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EMapLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEMapLit") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpExpr")) (EVar "sexpExpr"))) (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ESetLit" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagESetLit") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpExpr")) (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EAsPat" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEAsPat") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EMethodRef" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEMethodRef") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EDictApp" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEDictApp") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")))))
+(DFunDef false "sexpExpr" ((PCon "EVarAt" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEVarAt") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpAddr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EVarId" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEVarId") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EMethodAt" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEMethodAt") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EDictAt" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEDictAt") (ELit LUnit))) (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpEvId") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ELoc" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagELoc") (ELit LUnit))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "EDoOrigin" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEDoOrigin") (ELit LUnit))) (EApp (EVar "sexpLoc") (EVar "a0")) (EApp (EVar "sexpExpr") (EVar "a1")))))
+(DFunDef false "sexpExpr" ((PCon "ENumLit" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagENumLit") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpEvId") (EVar "a1")) (EApp (EVar "sexpString") (EVar "a2")))))
+(DFunDef false "sexpExpr" ((PCon "EWideLit" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagEWideLit") (ELit LUnit))) (EApp (EVar "sexpInt") (EVar "a0")) (EApp (EVar "sexpInt") (EVar "a1")) (EApp (EVar "sexpEvId") (EVar "a2")) (EApp (EVar "sexpString") (EVar "a3")))))
 (DTypeSig false "sexpUseMember" (TyFun (TyCon "UseMember") (TyCon "SExp")))
 (DFunDef false "sexpUseMember" ((PCon "UseMember" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpLoc") (EVar "a2")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpString")) (EVar "a3")))))
 (DTypeSig false "sexpUsePath" (TyFun (TyCon "UsePath") (TyCon "SExp")))
-(DFunDef false "sexpUsePath" ((PCon "UseName" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
-(DFunDef false "sexpUsePath" ((PCon "UseGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpUseMember")) (EVar "a1")))))
-(DFunDef false "sexpUsePath" ((PCon "UseWild" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
-(DFunDef false "sexpUsePath" ((PCon "UseAlias" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")))))
+(DFunDef false "sexpUsePath" ((PCon "UseName" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagUseName") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
+(DFunDef false "sexpUsePath" ((PCon "UseGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagUseGroup") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpUseMember")) (EVar "a1")))))
+(DFunDef false "sexpUsePath" ((PCon "UseWild" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagUseWild") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")))))
+(DFunDef false "sexpUsePath" ((PCon "UseAlias" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagUseAlias") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")))))
 (DTypeSig false "sexpPropParam" (TyFun (TyCon "PropParam") (TyCon "SExp")))
 (DFunDef false "sexpPropParam" ((PCon "PropParam" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpLoc") (EVar "a1")) (EApp (EVar "sexpTy") (EVar "a2")))))
 (DTypeSig false "sexpMethodDefault" (TyFun (TyCon "MethodDefault") (TyCon "SExp")))
@@ -2616,21 +3350,21 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "sexpImplMethod" (TyFun (TyCon "ImplMethod") (TyCon "SExp")))
 (DFunDef false "sexpImplMethod" ((PCon "ImplMethod" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
 (DTypeSig false "sexpDataVis" (TyFun (TyCon "DataVis") (TyCon "SExp")))
-(DFunDef false "sexpDataVis" ((PCon "VisPrivate")) (EApp (EVar "SAtom") (ELit (LString "0"))))
-(DFunDef false "sexpDataVis" ((PCon "VisAbstract")) (EApp (EVar "SAtom") (ELit (LString "1"))))
-(DFunDef false "sexpDataVis" ((PCon "VisPublic")) (EApp (EVar "SAtom") (ELit (LString "2"))))
+(DFunDef false "sexpDataVis" ((PCon "VisPrivate")) (EApp (EVar "tagAtom") (EApp (EVar "tagVisPrivate") (ELit LUnit))))
+(DFunDef false "sexpDataVis" ((PCon "VisAbstract")) (EApp (EVar "tagAtom") (EApp (EVar "tagVisAbstract") (ELit LUnit))))
+(DFunDef false "sexpDataVis" ((PCon "VisPublic")) (EApp (EVar "tagAtom") (EApp (EVar "tagVisPublic") (ELit LUnit))))
 (DTypeSig false "sexpField" (TyFun (TyCon "Field") (TyCon "SExp")))
 (DFunDef false "sexpField" ((PCon "Field" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpTy") (EVar "a1")))))
 (DTypeSig false "sexpConPayload" (TyFun (TyCon "ConPayload") (TyCon "SExp")))
-(DFunDef false "sexpConPayload" ((PCon "ConPos" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a0")))))
-(DFunDef false "sexpConPayload" ((PCon "ConNamed" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EApp (EVar "sexpList") (EVar "sexpField")) (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")))))
+(DFunDef false "sexpConPayload" ((PCon "ConPos" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagConPos") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a0")))))
+(DFunDef false "sexpConPayload" ((PCon "ConNamed" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagConNamed") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpField")) (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")))))
 (DTypeSig false "sexpVariant" (TyFun (TyCon "Variant") (TyCon "SExp")))
 (DFunDef false "sexpVariant" ((PCon "Variant" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpConPayload") (EVar "a1")))))
 (DTypeSig false "sexpAttr" (TyFun (TyCon "Attr") (TyCon "SExp")))
-(DFunDef false "sexpAttr" ((PCon "AttrDeprecated" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EApp (EVar "sexpOpt") (EVar "sexpString")) (EVar "a0")))))
-(DFunDef false "sexpAttr" ((PCon "AttrInline")) (EApp (EVar "SAtom") (ELit (LString "1"))))
-(DFunDef false "sexpAttr" ((PCon "AttrMustUse")) (EApp (EVar "SAtom") (ELit (LString "2"))))
-(DFunDef false "sexpAttr" ((PCon "AttrNoInline")) (EApp (EVar "SAtom") (ELit (LString "3"))))
+(DFunDef false "sexpAttr" ((PCon "AttrDeprecated" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagAttrDeprecated") (ELit LUnit))) (EApp (EApp (EVar "sexpOpt") (EVar "sexpString")) (EVar "a0")))))
+(DFunDef false "sexpAttr" ((PCon "AttrInline")) (EApp (EVar "tagAtom") (EApp (EVar "tagAttrInline") (ELit LUnit))))
+(DFunDef false "sexpAttr" ((PCon "AttrMustUse")) (EApp (EVar "tagAtom") (EApp (EVar "tagAttrMustUse") (ELit LUnit))))
+(DFunDef false "sexpAttr" ((PCon "AttrNoInline")) (EApp (EVar "tagAtom") (EApp (EVar "tagAttrNoInline") (ELit LUnit))))
 (DTypeSig false "sexpDeriveRef" (TyFun (TyCon "DeriveRef") (TyCon "SExp")))
 (DFunDef false "sexpDeriveRef" ((PCon "DeriveRef" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a1")))))
 (DTypeSig false "sexpExternDecl" (TyFun (TyCon "ExternDecl") (TyCon "SExp")))
@@ -2638,20 +3372,20 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "sexpExternBind" (TyFun (TyCon "ExternBind") (TyCon "SExp")))
 (DFunDef false "sexpExternBind" ((PRec "ExternBind" ((rf "ebHost" (PVar "a0")) (rf "ebSymbol" (PVar "a1")) (rf "ebLoc" (PVar "a2"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpString") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpLoc") (EVar "a2")))))
 (DTypeSig false "sexpDecl" (TyFun (TyCon "Decl") (TyCon "SExp")))
-(DFunDef false "sexpDecl" ((PCon "DTypeSig" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "0"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpTy") (EVar "a2")) (EApp (EVar "sexpLoc") (EVar "a3")))))
-(DFunDef false "sexpDecl" ((PCon "DExtern" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "1"))) (EApp (EVar "sexpExternDecl") (EVar "a0")))))
-(DFunDef false "sexpDecl" ((PCon "DFunDef" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4") (PVar "a5"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "2"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpLoc") (EVar "a4")) (EApp (EVar "sexpBinderId") (EVar "a5")))))
-(DFunDef false "sexpDecl" ((PRec "DData" ((rf "dataVis" (PVar "a0")) (rf "dataName" (PVar "a1")) (rf "dataParams" (PVar "a2")) (rf "dataParamKinds" (PVar "a3")) (rf "dataCtors" (PVar "a4")) (rf "dataCtorBinders" (PVar "a5")) (rf "dataDerives" (PVar "a6")) (rf "dataOrigin" (PVar "a7")) (rf "dataExtern" (PVar "a8")) (rf "dataNameLoc" (PVar "a9"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "3"))) (EApp (EVar "sexpDataVis") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpVariant")) (EVar "a4")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpKindAnn")))) (EVar "a5")) (EApp (EApp (EVar "sexpList") (EVar "sexpDeriveRef")) (EVar "a6")) (EApp (EVar "sexpTyConOrigin") (EVar "a7")) (EApp (EVar "sexpBool") (EVar "a8")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a9")))))
-(DFunDef false "sexpDecl" ((PCon "DUse" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "4"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpUsePath") (EVar "a1")) (EApp (EVar "sexpLoc") (EVar "a2")))))
-(DFunDef false "sexpDecl" ((PCon "DEffect" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4") (PVar "a5"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "5"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpString"))) (EVar "a3")) (EApp (EVar "sexpTyConOrigin") (EVar "a4")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a5")))))
-(DFunDef false "sexpDecl" ((PCon "DProp" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "6"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpPropParam")) (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")))))
-(DFunDef false "sexpDecl" ((PCon "DTest" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "7"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
-(DFunDef false "sexpDecl" ((PRec "DInterface" ((rf "pub" (PVar "a0")) (rf "def" (PVar "a1")) (rf "name" (PVar "a2")) (rf "typarams" (PVar "a3")) (rf "typaramKinds" (PVar "a4")) (rf "supers" (PVar "a5")) (rf "methods" (PVar "a6")) (rf "ifaceOrigin" (PVar "a7")) (rf "ifaceNameLoc" (PVar "a8"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "8"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpString") (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a4")) (EApp (EApp (EVar "sexpList") (EVar "sexpSuper")) (EVar "a5")) (EApp (EApp (EVar "sexpList") (EVar "sexpIfaceMethod")) (EVar "a6")) (EApp (EVar "sexpTyConOrigin") (EVar "a7")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a8")))))
-(DFunDef false "sexpDecl" ((PRec "DImpl" ((rf "pub" (PVar "a0")) (rf "iface" (PVar "a1")) (rf "tys" (PVar "a2")) (rf "reqs" (PVar "a3")) (rf "methods" (PVar "a4")) (rf "implOrigin" (PVar "a5")) (rf "implIfaceLoc" (PVar "a6"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "9"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpRequire")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpImplMethod")) (EVar "a4")) (EApp (EVar "sexpTyConOrigin") (EVar "a5")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a6")))))
-(DFunDef false "sexpDecl" ((PRec "DTypeAlias" ((rf "tyAliasPub" (PVar "a0")) (rf "tyAliasName" (PVar "a1")) (rf "tyAliasParams" (PVar "a2")) (rf "tyAliasParamKinds" (PVar "a3")) (rf "tyAliasRhs" (PVar "a4")) (rf "tyAliasOrigin" (PVar "a5")) (rf "tyAliasNameLoc" (PVar "a6"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "10"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EVar "sexpTy") (EVar "a4")) (EApp (EVar "sexpTyConOrigin") (EVar "a5")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a6")))))
-(DFunDef false "sexpDecl" ((PRec "DNewtype" ((rf "newtypePub" (PVar "a0")) (rf "newtypeName" (PVar "a1")) (rf "newtypeParams" (PVar "a2")) (rf "newtypeParamKinds" (PVar "a3")) (rf "newtypeCtor" (PVar "a4")) (rf "newtypeCtorBinders" (PVar "a5")) (rf "newtypeFieldTy" (PVar "a6")) (rf "newtypeDerives" (PVar "a7")) (rf "newtypeOrigin" (PVar "a8")) (rf "newtypeNameLoc" (PVar "a9"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "11"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EVar "sexpString") (EVar "a4")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpKindAnn"))) (EVar "a5")) (EApp (EVar "sexpTy") (EVar "a6")) (EApp (EApp (EVar "sexpList") (EVar "sexpDeriveRef")) (EVar "a7")) (EApp (EVar "sexpTyConOrigin") (EVar "a8")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a9")))))
-(DFunDef false "sexpDecl" ((PCon "DLetGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "12"))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpLetBind")) (EVar "a1")))))
-(DFunDef false "sexpDecl" ((PCon "DAttrib" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "13"))) (EApp (EApp (EVar "sexpList") (EVar "sexpAttr")) (EVar "a0")) (EApp (EVar "sexpDecl") (EVar "a1")))))
+(DFunDef false "sexpDecl" ((PCon "DTypeSig" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDTypeSig") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpTy") (EVar "a2")) (EApp (EVar "sexpLoc") (EVar "a3")))))
+(DFunDef false "sexpDecl" ((PCon "DExtern" (PVar "a0"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDExtern") (ELit LUnit))) (EApp (EVar "sexpExternDecl") (EVar "a0")))))
+(DFunDef false "sexpDecl" ((PCon "DFunDef" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4") (PVar "a5"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDFunDef") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpPat")) (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")) (EApp (EVar "sexpLoc") (EVar "a4")) (EApp (EVar "sexpBinderId") (EVar "a5")))))
+(DFunDef false "sexpDecl" ((PRec "DData" ((rf "dataVis" (PVar "a0")) (rf "dataName" (PVar "a1")) (rf "dataParams" (PVar "a2")) (rf "dataParamKinds" (PVar "a3")) (rf "dataCtors" (PVar "a4")) (rf "dataCtorBinders" (PVar "a5")) (rf "dataDerives" (PVar "a6")) (rf "dataOrigin" (PVar "a7")) (rf "dataExtern" (PVar "a8")) (rf "dataNameLoc" (PVar "a9"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDData") (ELit LUnit))) (EApp (EVar "sexpDataVis") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpVariant")) (EVar "a4")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpKindAnn")))) (EVar "a5")) (EApp (EApp (EVar "sexpList") (EVar "sexpDeriveRef")) (EVar "a6")) (EApp (EVar "sexpTyConOrigin") (EVar "a7")) (EApp (EVar "sexpBool") (EVar "a8")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a9")))))
+(DFunDef false "sexpDecl" ((PCon "DUse" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDUse") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpUsePath") (EVar "a1")) (EApp (EVar "sexpLoc") (EVar "a2")))))
+(DFunDef false "sexpDecl" ((PCon "DEffect" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3") (PVar "a4") (PVar "a5"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDEffect") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpString"))) (EVar "a3")) (EApp (EVar "sexpTyConOrigin") (EVar "a4")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a5")))))
+(DFunDef false "sexpDecl" ((PCon "DProp" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDProp") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpPropParam")) (EVar "a2")) (EApp (EVar "sexpExpr") (EVar "a3")))))
+(DFunDef false "sexpDecl" ((PCon "DTest" (PVar "a0") (PVar "a1") (PVar "a2"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDTest") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EVar "sexpExpr") (EVar "a2")))))
+(DFunDef false "sexpDecl" ((PRec "DInterface" ((rf "pub" (PVar "a0")) (rf "def" (PVar "a1")) (rf "name" (PVar "a2")) (rf "typarams" (PVar "a3")) (rf "typaramKinds" (PVar "a4")) (rf "supers" (PVar "a5")) (rf "methods" (PVar "a6")) (rf "ifaceOrigin" (PVar "a7")) (rf "ifaceNameLoc" (PVar "a8"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDInterface") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpBool") (EVar "a1")) (EApp (EVar "sexpString") (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a4")) (EApp (EApp (EVar "sexpList") (EVar "sexpSuper")) (EVar "a5")) (EApp (EApp (EVar "sexpList") (EVar "sexpIfaceMethod")) (EVar "a6")) (EApp (EVar "sexpTyConOrigin") (EVar "a7")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a8")))))
+(DFunDef false "sexpDecl" ((PRec "DImpl" ((rf "pub" (PVar "a0")) (rf "iface" (PVar "a1")) (rf "tys" (PVar "a2")) (rf "reqs" (PVar "a3")) (rf "methods" (PVar "a4")) (rf "implOrigin" (PVar "a5")) (rf "implIfaceLoc" (PVar "a6"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDImpl") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpTy")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EVar "sexpRequire")) (EVar "a3")) (EApp (EApp (EVar "sexpList") (EVar "sexpImplMethod")) (EVar "a4")) (EApp (EVar "sexpTyConOrigin") (EVar "a5")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a6")))))
+(DFunDef false "sexpDecl" ((PRec "DTypeAlias" ((rf "tyAliasPub" (PVar "a0")) (rf "tyAliasName" (PVar "a1")) (rf "tyAliasParams" (PVar "a2")) (rf "tyAliasParamKinds" (PVar "a3")) (rf "tyAliasRhs" (PVar "a4")) (rf "tyAliasOrigin" (PVar "a5")) (rf "tyAliasNameLoc" (PVar "a6"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDTypeAlias") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EVar "sexpTy") (EVar "a4")) (EApp (EVar "sexpTyConOrigin") (EVar "a5")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a6")))))
+(DFunDef false "sexpDecl" ((PRec "DNewtype" ((rf "newtypePub" (PVar "a0")) (rf "newtypeName" (PVar "a1")) (rf "newtypeParams" (PVar "a2")) (rf "newtypeParamKinds" (PVar "a3")) (rf "newtypeCtor" (PVar "a4")) (rf "newtypeCtorBinders" (PVar "a5")) (rf "newtypeFieldTy" (PVar "a6")) (rf "newtypeDerives" (PVar "a7")) (rf "newtypeOrigin" (PVar "a8")) (rf "newtypeNameLoc" (PVar "a9"))) false)) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDNewtype") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EVar "sexpString") (EVar "a1")) (EApp (EApp (EVar "sexpList") (EVar "sexpString")) (EVar "a2")) (EApp (EApp (EVar "sexpList") (EApp (EVar "sexpOpt") (EVar "sexpKindAnn"))) (EVar "a3")) (EApp (EVar "sexpString") (EVar "a4")) (EApp (EApp (EVar "sexpList") (EApp (EApp (EVar "sexpPair") (EVar "sexpString")) (EVar "sexpKindAnn"))) (EVar "a5")) (EApp (EVar "sexpTy") (EVar "a6")) (EApp (EApp (EVar "sexpList") (EVar "sexpDeriveRef")) (EVar "a7")) (EApp (EVar "sexpTyConOrigin") (EVar "a8")) (EApp (EApp (EVar "sexpOpt") (EVar "sexpLoc")) (EVar "a9")))))
+(DFunDef false "sexpDecl" ((PCon "DLetGroup" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDLetGroup") (ELit LUnit))) (EApp (EVar "sexpBool") (EVar "a0")) (EApp (EApp (EVar "sexpList") (EVar "sexpLetBind")) (EVar "a1")))))
+(DFunDef false "sexpDecl" ((PCon "DAttrib" (PVar "a0") (PVar "a1"))) (EApp (EVar "SList") (EListLit (EApp (EVar "tagAtom") (EApp (EVar "tagDAttrib") (ELit LUnit))) (EApp (EApp (EVar "sexpList") (EVar "sexpAttr")) (EVar "a0")) (EApp (EVar "sexpDecl") (EVar "a1")))))
 (DTypeSig false "dfltLoc" (TyCon "Loc"))
 (DFunDef false "dfltLoc" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))))
 (DTypeSig false "dfltLit" (TyCon "Lit"))
@@ -2693,228 +3427,99 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "dfltDecl" (TyCon "Decl"))
 (DFunDef false "dfltDecl" () (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "False")) (ELit (LString ""))) (EVar "dfltTy")) (EVar "dfltLoc")))
 (DTypeSig false "readLit" (TyFun (TyCon "SexpCursor") (TyCon "Lit")))
-(DFunDef false "readLit" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readLitTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readLitBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readLit" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readLitTagged")) (EVar "readLitBare")) (EVar "cur")))
 (DTypeSig false "readLitBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Lit"))))
-(DFunDef false "readLitBare" ((PLit (LInt 7)) PWild) (EVar "LUnit"))
-(DFunDef false "readLitBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")))
+(DFunDef false "readLitBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLUnit") (ELit LUnit))) (EVar "LUnit") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readLitTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Lit"))))
-(DFunDef false "readLitTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EVar "LInt") (EVar "a0")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readFloat") (EVar "cur"))) (DoExpr (EApp (EVar "LFloat") (EVar "a0")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LU64") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LI64") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LString") (EVar "a0")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LChar") (EVar "a0")))))
-(DFunDef false "readLitTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EVar "LBool") (EVar "a0")))))
-(DFunDef false "readLitTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")))
+(DFunDef false "readLitTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLInt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EVar "LInt") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLFloat") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readFloat") (EVar "cur"))) (DoExpr (EApp (EVar "LFloat") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLU64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LU64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLI64") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "LI64") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLString") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LString") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLChar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "LChar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagLBool") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EVar "LBool") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltLit")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
 (DTypeSig false "readTyConOrigin" (TyFun (TyCon "SexpCursor") (TyCon "TyConOrigin")))
-(DFunDef false "readTyConOrigin" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readTyConOriginTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readTyConOriginBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readTyConOrigin" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readTyConOriginTagged")) (EVar "readTyConOriginBare")) (EVar "cur")))
 (DTypeSig false "readTyConOriginBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "TyConOrigin"))))
-(DFunDef false "readTyConOriginBare" ((PLit (LInt 0)) PWild) (EVar "OriginUnresolved"))
-(DFunDef false "readTyConOriginBare" ((PLit (LInt 1)) PWild) (EVar "OriginBuiltin"))
-(DFunDef false "readTyConOriginBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTyConOrigin")))
+(DFunDef false "readTyConOriginBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagOriginUnresolved") (ELit LUnit))) (EVar "OriginUnresolved") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagOriginBuiltin") (ELit LUnit))) (EVar "OriginBuiltin") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTyConOrigin")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readTyConOriginTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "TyConOrigin"))))
-(DFunDef false "readTyConOriginTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "OriginModule") (EVar "a0")))))
-(DFunDef false "readTyConOriginTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTyConOrigin")))
+(DFunDef false "readTyConOriginTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagOriginModule") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "OriginModule") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTyConOrigin")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readTy" (TyFun (TyCon "SexpCursor") (TyCon "Ty")))
-(DFunDef false "readTy" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readTyTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readTyBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readTyBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Ty"))))
-(DFunDef false "readTyBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTy")))
+(DFunDef false "readTy" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readTyTagged")) (EApp (EVar "refuse") (EVar "dfltTy"))) (EVar "cur")))
 (DTypeSig false "readTyTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Ty"))))
-(DFunDef false "readTyTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoExpr (ERecordCreate "TyCon" ((fa "tyConName" (EVar "a0")) (fa "tyConLoc" (EVar "a1")) (fa "tyConOrigin" (EVar "a2")))))))
-(DFunDef false "readTyTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "TyVar") (EVar "a0")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyApp") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyFun") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoExpr (EApp (EVar "TyTuple") (EVar "a0")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffAtomTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyEffect") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readConstraint")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyConstrained") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 7)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readEffAtomTy")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyNamed") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 8)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readEffParamTy")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyQual") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 9)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffAtomTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyRow") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readTyTagged" ((PLit (LInt 10)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffParamTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyAuth") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readTyTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTy")))
+(DFunDef false "readTyTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyCon") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoExpr (ERecordCreate "TyCon" ((fa "tyConName" (EVar "a0")) (fa "tyConLoc" (EVar "a1")) (fa "tyConOrigin" (EVar "a2")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyVar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "TyVar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyApp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyApp") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyFun") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyFun") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyTuple") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoExpr (EApp (EVar "TyTuple") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyEffect") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffAtomTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyEffect") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyConstrained") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readConstraint")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyConstrained") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyNamed") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readEffAtomTy")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyNamed") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyQual") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readEffParamTy")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyQual") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyRow") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffAtomTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "TyRow") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagTyAuth") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readEffParamTy")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "TyAuth") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltTy")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))
 (DTypeSig false "readEffAtomTy" (TyFun (TyCon "SexpCursor") (TyCon "EffAtomTy")))
 (DFunDef false "readEffAtomTy" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEffParamTy") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "a0")) (fa "eatOrigin" (EVar "a1")) (fa "eatParam" (EVar "a2")) (fa "eatLoc" (EVar "a3")) (fa "eatPattern" (EVar "a4")))))))
 (DTypeSig false "readEffParamTy" (TyFun (TyCon "SexpCursor") (TyCon "EffParamTy")))
-(DFunDef false "readEffParamTy" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readEffParamTyTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readEffParamTyBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readEffParamTy" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readEffParamTyTagged")) (EVar "readEffParamTyBare")) (EVar "cur")))
 (DTypeSig false "readEffParamTyBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "EffParamTy"))))
-(DFunDef false "readEffParamTyBare" ((PLit (LInt 0)) PWild) (EVar "EPTop"))
-(DFunDef false "readEffParamTyBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEffParamTy")))
+(DFunDef false "readEffParamTyBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEPTop") (ELit LUnit))) (EVar "EPTop") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEffParamTy")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readEffParamTyTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "EffParamTy"))))
-(DFunDef false "readEffParamTyTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EPLit") (EVar "a0")))))
-(DFunDef false "readEffParamTyTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EPName") (EVar "a0")))))
-(DFunDef false "readEffParamTyTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "EPSet") (EVar "a0")))))
-(DFunDef false "readEffParamTyTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readEffParamTy"))) (EVar "cur"))) (DoExpr (EApp (EVar "EPProduct") (EVar "a0")))))
-(DFunDef false "readEffParamTyTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEffParamTy")))
+(DFunDef false "readEffParamTyTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEPLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EPLit") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEPName") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EPName") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEPSet") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "EPSet") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEPProduct") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readEffParamTy"))) (EVar "cur"))) (DoExpr (EApp (EVar "EPProduct") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEffParamTy")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "readConstraint" (TyFun (TyCon "SexpCursor") (TyCon "Constraint")))
 (DFunDef false "readConstraint" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "Constraint" ((fa "constraintHead" (EVar "a0")) (fa "constraintArgs" (EVar "a1")) (fa "constraintOrigin" (EVar "a2")))))))
 (DTypeSig false "readKindAnn" (TyFun (TyCon "SexpCursor") (TyCon "KindAnn")))
-(DFunDef false "readKindAnn" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readKindAnnTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readKindAnnBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readKindAnn" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readKindAnnTagged")) (EVar "readKindAnnBare")) (EVar "cur")))
 (DTypeSig false "readKindAnnBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "KindAnn"))))
-(DFunDef false "readKindAnnBare" ((PLit (LInt 0)) PWild) (EVar "KindType"))
-(DFunDef false "readKindAnnBare" ((PLit (LInt 1)) PWild) (EVar "KindEffect"))
-(DFunDef false "readKindAnnBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltKindAnn")))
+(DFunDef false "readKindAnnBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagKindType") (ELit LUnit))) (EVar "KindType") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagKindEffect") (ELit LUnit))) (EVar "KindEffect") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltKindAnn")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readKindAnnTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "KindAnn"))))
-(DFunDef false "readKindAnnTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "KindAuthority") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readKindAnnTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readKindAnn") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readKindAnn") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "KindArrow") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readKindAnnTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltKindAnn")))
+(DFunDef false "readKindAnnTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagKindAuthority") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "KindAuthority") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagKindArrow") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readKindAnn") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readKindAnn") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "KindArrow") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltKindAnn")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readRoute" (TyFun (TyCon "SexpCursor") (TyCon "Route")))
-(DFunDef false "readRoute" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readRouteTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readRouteBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readRoute" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readRouteTagged")) (EVar "readRouteBare")) (EVar "cur")))
 (DTypeSig false "readRouteBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Route"))))
-(DFunDef false "readRouteBare" ((PLit (LInt 0)) PWild) (EVar "RNone"))
-(DFunDef false "readRouteBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltRoute")))
+(DFunDef false "readRouteBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRNone") (ELit LUnit))) (EVar "RNone") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltRoute")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readRouteTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Route"))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "RKey") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RDict") (EVar "a0")))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RDictFwd") (EVar "a0")))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "RLocal") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RScalar") (EVar "a0")))))
-(DFunDef false "readRouteTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readRoute") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readInt")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "RProj") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readRouteTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltRoute")))
+(DFunDef false "readRouteTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRKey") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "RKey") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRDict") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RDict") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRDictFwd") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RDictFwd") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRLocal") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "RLocal") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRScalar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "RScalar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagRProj") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readRoute") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readInt")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "RProj") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltRoute")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "readEvVal" (TyFun (TyCon "SexpCursor") (TyCon "EvVal")))
-(DFunDef false "readEvVal" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readEvValTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readEvValBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readEvValBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "EvVal"))))
-(DFunDef false "readEvValBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEvVal")))
+(DFunDef false "readEvVal" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readEvValTagged")) (EApp (EVar "refuse") (EVar "dfltEvVal"))) (EVar "cur")))
 (DTypeSig false "readEvValTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "EvVal"))))
-(DFunDef false "readEvValTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readRoute") (EVar "cur"))) (DoExpr (EApp (EVar "EvOne") (EVar "a0")))))
-(DFunDef false "readEvValTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EVar "EvMany") (EVar "a0")))))
-(DFunDef false "readEvValTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readRoute") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))))
-(DFunDef false "readEvValTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "readOpt") (EVar "readFloat")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readRoute") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvLit") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readEvValTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EvHead") (EVar "a0")))))
-(DFunDef false "readEvValTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEvVal")))
+(DFunDef false "readEvValTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEvOne") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readRoute") (EVar "cur"))) (DoExpr (EApp (EVar "EvOne") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEvMany") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EVar "EvMany") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEvMethod") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readRoute") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readRoute")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEvLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "readOpt") (EVar "readFloat")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readRoute") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvLit") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEvHead") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EvHead") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltEvVal")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "readEvEntry" (TyFun (TyCon "SexpCursor") (TyCon "EvEntry")))
 (DFunDef false "readEvEntry" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readEvId") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readEvVal") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EvEntry") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readAddr" (TyFun (TyCon "SexpCursor") (TyCon "Addr")))
-(DFunDef false "readAddr" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readAddrTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readAddrBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readAddr" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readAddrTagged")) (EVar "readAddrBare")) (EVar "cur")))
 (DTypeSig false "readAddrBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Addr"))))
-(DFunDef false "readAddrBare" ((PLit (LInt 1)) PWild) (EVar "AGlobal"))
-(DFunDef false "readAddrBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAddr")))
+(DFunDef false "readAddrBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagAGlobal") (ELit LUnit))) (EVar "AGlobal") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAddr")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readAddrTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Addr"))))
-(DFunDef false "readAddrTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ALocal") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readAddrTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAddr")))
+(DFunDef false "readAddrTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagALocal") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ALocal") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAddr")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readPat" (TyFun (TyCon "SexpCursor") (TyCon "Pat")))
-(DFunDef false "readPat" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readPatTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readPatBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readPat" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readPatTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readPatBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
 (DTypeSig false "readPatBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Pat"))))
-(DFunDef false "readPatBare" ((PLit (LInt 1)) PWild) (EVar "PWild"))
-(DFunDef false "readPatBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltPat")))
+(DFunDef false "readPatBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPWild") (ELit LUnit))) (EVar "PWild") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltPat")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readPatTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Pat"))))
-(DFunDef false "readPatTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBinderId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PVar") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoExpr (EApp (EVar "PLit") (EVar "a0")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "PCon") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readPat") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "PCons") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EVar "PTuple") (EVar "a0")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EVar "PList") (EVar "a0")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 7)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBinderId") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readPat") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 8)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLit") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PRng") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readPatTagged" ((PLit (LInt 9)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRecPatField")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PRec") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readPatTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltPat")))
+(DFunDef false "readPatTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPVar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBinderId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PVar") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoExpr (EApp (EVar "PLit") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPCon") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "PCon") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPCons") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readPat") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "PCons") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPTuple") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EVar "PTuple") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPList") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoExpr (EApp (EVar "PList") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPAs") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBinderId") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readPat") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPRng") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLit") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PRng") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagPRec") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readRecPatField")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PRec") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltPat")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))
 (DTypeSig false "readRecPatField" (TyFun (TyCon "SexpCursor") (TyCon "RecPatField")))
 (DFunDef false "readRecPatField" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBinderId") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "readOpt") (EVar "readPat")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
 (DTypeSig false "readGuard" (TyFun (TyCon "SexpCursor") (TyCon "Guard")))
-(DFunDef false "readGuard" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readGuardTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readGuardBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readGuardBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Guard"))))
-(DFunDef false "readGuardBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltGuard")))
+(DFunDef false "readGuard" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readGuardTagged")) (EApp (EVar "refuse") (EVar "dfltGuard"))) (EVar "cur")))
 (DTypeSig false "readGuardTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Guard"))))
-(DFunDef false "readGuardTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "GBool") (EVar "a0")))))
-(DFunDef false "readGuardTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "GBind") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readGuardTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltGuard")))
+(DFunDef false "readGuardTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagGBool") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "GBool") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagGBind") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "GBind") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltGuard")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readArm" (TyFun (TyCon "SexpCursor") (TyCon "Arm")))
 (DFunDef false "readArm" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readGuard")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
 (DTypeSig false "readDoStmt" (TyFun (TyCon "SexpCursor") (TyCon "DoStmt")))
-(DFunDef false "readDoStmt" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readDoStmtTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readDoStmtBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readDoStmtBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "DoStmt"))))
-(DFunDef false "readDoStmtBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDoStmt")))
+(DFunDef false "readDoStmt" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readDoStmtTagged")) (EApp (EVar "refuse") (EVar "dfltDoStmt"))) (EVar "cur")))
 (DTypeSig false "readDoStmtTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "DoStmt"))))
-(DFunDef false "readDoStmtTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "DoExpr") (EVar "a0")))))
-(DFunDef false "readDoStmtTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DoBind") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readDoStmtTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))))
-(DFunDef false "readDoStmtTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DoAssign") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readDoStmtTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readDoStmtTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDoStmt")))
+(DFunDef false "readDoStmtTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDoExpr") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "DoExpr") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDoBind") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DoBind") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDoLet") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDoAssign") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DoAssign") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDoFieldAssign") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDoStmt")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "readInterpPart" (TyFun (TyCon "SexpCursor") (TyCon "InterpPart")))
-(DFunDef false "readInterpPart" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readInterpPartTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readInterpPartBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readInterpPartBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "InterpPart"))))
-(DFunDef false "readInterpPartBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltInterpPart")))
+(DFunDef false "readInterpPart" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readInterpPartTagged")) (EApp (EVar "refuse") (EVar "dfltInterpPart"))) (EVar "cur")))
 (DTypeSig false "readInterpPartTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "InterpPart"))))
-(DFunDef false "readInterpPartTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "InterpStr") (EVar "a0")))))
-(DFunDef false "readInterpPartTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "InterpExpr") (EVar "a0")))))
-(DFunDef false "readInterpPartTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltInterpPart")))
+(DFunDef false "readInterpPartTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagInterpStr") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "InterpStr") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagInterpExpr") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EVar "InterpExpr") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltInterpPart")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readGuardArm" (TyFun (TyCon "SexpCursor") (TyCon "GuardArm")))
 (DFunDef false "readGuardArm" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readGuard")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "GuardArm") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readFieldAssign" (TyFun (TyCon "SexpCursor") (TyCon "FieldAssign")))
 (DFunDef false "readFieldAssign" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "FieldAssign") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readSection" (TyFun (TyCon "SexpCursor") (TyCon "Section")))
-(DFunDef false "readSection" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readSectionTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readSectionBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readSectionBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Section"))))
-(DFunDef false "readSectionBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltSection")))
+(DFunDef false "readSection" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readSectionTagged")) (EApp (EVar "refuse") (EVar "dfltSection"))) (EVar "cur")))
 (DTypeSig false "readSectionTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Section"))))
-(DFunDef false "readSectionTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "SecBare") (EVar "a0")))))
-(DFunDef false "readSectionTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "SecRight") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readSectionTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "SecLeft") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readSectionTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltSection")))
+(DFunDef false "readSectionTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagSecBare") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "SecBare") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagSecRight") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "SecRight") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagSecLeft") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "SecLeft") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltSection")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "readFunClause" (TyFun (TyCon "SexpCursor") (TyCon "FunClause")))
 (DFunDef false "readFunClause" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "FunClause") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readLetBind" (TyFun (TyCon "SexpCursor") (TyCon "LetBind")))
 (DFunDef false "readLetBind" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readFunClause")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readBinderId") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
 (DTypeSig false "readExpr" (TyFun (TyCon "SexpCursor") (TyCon "Expr")))
-(DFunDef false "readExpr" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readExprTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readExprBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readExprBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Expr"))))
-(DFunDef false "readExprBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltExpr")))
+(DFunDef false "readExpr" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readExprTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltExpr"))))
 (DTypeSig false "readExprTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Expr"))))
-(DFunDef false "readExprTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoExpr (EApp (EVar "ELit") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EVar") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EApp") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELam") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readArm")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EMatch") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EIf") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 7)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 8)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EUnOp") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 9)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EInfix") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 10)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 11)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "ETuple") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 12)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "EListLit") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 13)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "EArrayLit") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 14)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERangeList") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 15)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERangeArray") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 16)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 17)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readLetBind")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 18)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readSection") (EVar "cur"))) (DoExpr (EApp (EVar "ESection") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 19)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EIndex") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 20)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EAnnot") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 21)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EHeadAnnot") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 22)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readDoStmt")) (EVar "cur"))) (DoExpr (EApp (EVar "EBlock") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 23)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readDoStmt")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDo") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 24)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readInterpPart")) (EVar "cur"))) (DoExpr (EApp (EVar "EStringInterp") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 25)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readGuardArm")) (EVar "cur"))) (DoExpr (EApp (EVar "EGuards") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 26)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ERecordCreate") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 27)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 28)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EVariantUpdate") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 29)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readExpr")) (EVar "readExpr"))) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EMapLit") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 30)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ESetLit") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 31)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EAsPat") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 32)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EMethodRef") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 33)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EDictApp") (EVar "a0")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 34)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readAddr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EVarAt") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 35)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EVarId") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 36)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EMethodAt") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 37)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDictAt") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 38)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELoc") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 39)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDoOrigin") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 40)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readEvId") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ENumLit") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readExprTagged" ((PLit (LInt 41)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readExprTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltExpr")))
+(DFunDef false "readExprTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagELit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLit") (EVar "cur"))) (DoExpr (EApp (EVar "ELit") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEVar") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EVar") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEApp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EApp") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagELam") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELam") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagELet") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readPat") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEMatch") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readArm")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EMatch") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEIf") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EIf") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEBinOp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEUnOp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EUnOp") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEInfix") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EInfix") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEFieldAccess") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagETuple") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "ETuple") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEListLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "EListLit") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEArrayLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EVar "EArrayLit") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagERangeList") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERangeList") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagERangeArray") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERangeArray") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagESlice") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagELetGroup") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readLetBind")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagESection") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readSection") (EVar "cur"))) (DoExpr (EApp (EVar "ESection") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEIndex") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EIndex") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEAnnot") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EAnnot") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEHeadAnnot") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EHeadAnnot") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEBlock") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readDoStmt")) (EVar "cur"))) (DoExpr (EApp (EVar "EBlock") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEDo") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readDoStmt")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDo") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEStringInterp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readInterpPart")) (EVar "cur"))) (DoExpr (EApp (EVar "EStringInterp") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEGuards") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readGuardArm")) (EVar "cur"))) (DoExpr (EApp (EVar "EGuards") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagERecordCreate") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ERecordCreate") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagERecordUpdate") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEVariantUpdate") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readFieldAssign")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EVariantUpdate") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEMapLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readExpr")) (EVar "readExpr"))) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EMapLit") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagESetLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readExpr")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ESetLit") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEAsPat") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EAsPat") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEMethodRef") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EMethodRef") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEDictApp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EVar "EDictApp") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEVarAt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readAddr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EVarAt") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEVarId") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EVarId") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEMethodAt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "EMethodAt") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEDictAt") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readEvId") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDictAt") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagELoc") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ELoc") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEDoOrigin") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "EDoOrigin") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagENumLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readEvId") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ENumLit") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagEWideLit") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readInt") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readEvId") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltExpr")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))))))))))))))))))))))))))))))))))))
 (DTypeSig false "readUseMember" (TyFun (TyCon "SexpCursor") (TyCon "UseMember")))
 (DFunDef false "readUseMember" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "readOpt") (EVar "readString")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
 (DTypeSig false "readUsePath" (TyFun (TyCon "SexpCursor") (TyCon "UsePath")))
-(DFunDef false "readUsePath" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readUsePathTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readUsePathBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readUsePathBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "UsePath"))))
-(DFunDef false "readUsePathBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltUsePath")))
+(DFunDef false "readUsePath" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readUsePathTagged")) (EApp (EVar "refuse") (EVar "dfltUsePath"))) (EVar "cur")))
 (DTypeSig false "readUsePathTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "UsePath"))))
-(DFunDef false "readUsePathTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "UseName") (EVar "a0")))))
-(DFunDef false "readUsePathTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readUseMember")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "UseGroup") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readUsePathTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "UseWild") (EVar "a0")))))
-(DFunDef false "readUsePathTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "UseAlias") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readUsePathTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltUsePath")))
+(DFunDef false "readUsePathTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagUseName") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "UseName") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagUseGroup") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readUseMember")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "UseGroup") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagUseWild") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "UseWild") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagUseAlias") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "UseAlias") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltUsePath")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "readPropParam" (TyFun (TyCon "SexpCursor") (TyCon "PropParam")))
 (DFunDef false "readPropParam" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "PropParam") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
 (DTypeSig false "readMethodDefault" (TyFun (TyCon "SexpCursor") (TyCon "MethodDefault")))
@@ -2928,36 +3533,23 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "readImplMethod" (TyFun (TyCon "SexpCursor") (TyCon "ImplMethod")))
 (DFunDef false "readImplMethod" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "ImplMethod") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
 (DTypeSig false "readDataVis" (TyFun (TyCon "SexpCursor") (TyCon "DataVis")))
-(DFunDef false "readDataVis" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readDataVisTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readDataVisBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readDataVis" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EApp (EVar "refuse") (EVar "dfltDataVis"))) (EVar "readDataVisBare")) (EVar "cur")))
 (DTypeSig false "readDataVisBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "DataVis"))))
-(DFunDef false "readDataVisBare" ((PLit (LInt 0)) PWild) (EVar "VisPrivate"))
-(DFunDef false "readDataVisBare" ((PLit (LInt 1)) PWild) (EVar "VisAbstract"))
-(DFunDef false "readDataVisBare" ((PLit (LInt 2)) PWild) (EVar "VisPublic"))
-(DFunDef false "readDataVisBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDataVis")))
-(DTypeSig false "readDataVisTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "DataVis"))))
-(DFunDef false "readDataVisTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDataVis")))
+(DFunDef false "readDataVisBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagVisPrivate") (ELit LUnit))) (EVar "VisPrivate") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagVisAbstract") (ELit LUnit))) (EVar "VisAbstract") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagVisPublic") (ELit LUnit))) (EVar "VisPublic") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDataVis")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "readField" (TyFun (TyCon "SexpCursor") (TyCon "Field")))
 (DFunDef false "readField" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "Field") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readConPayload" (TyFun (TyCon "SexpCursor") (TyCon "ConPayload")))
-(DFunDef false "readConPayload" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readConPayloadTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readConPayloadBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readConPayloadBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "ConPayload"))))
-(DFunDef false "readConPayloadBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltConPayload")))
+(DFunDef false "readConPayload" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readConPayloadTagged")) (EApp (EVar "refuse") (EVar "dfltConPayload"))) (EVar "cur")))
 (DTypeSig false "readConPayloadTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "ConPayload"))))
-(DFunDef false "readConPayloadTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoExpr (EApp (EVar "ConPos") (EVar "a0")))))
-(DFunDef false "readConPayloadTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readField")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ConNamed") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readConPayloadTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltConPayload")))
+(DFunDef false "readConPayloadTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagConPos") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoExpr (EApp (EVar "ConPos") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagConNamed") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readField")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "ConNamed") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltConPayload")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "readVariant" (TyFun (TyCon "SexpCursor") (TyCon "Variant")))
 (DFunDef false "readVariant" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readConPayload") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "Variant") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readAttr" (TyFun (TyCon "SexpCursor") (TyCon "Attr")))
-(DFunDef false "readAttr" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readAttrTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readAttrBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
+(DFunDef false "readAttr" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readAttrTagged")) (EVar "readAttrBare")) (EVar "cur")))
 (DTypeSig false "readAttrBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Attr"))))
-(DFunDef false "readAttrBare" ((PLit (LInt 1)) PWild) (EVar "AttrInline"))
-(DFunDef false "readAttrBare" ((PLit (LInt 2)) PWild) (EVar "AttrMustUse"))
-(DFunDef false "readAttrBare" ((PLit (LInt 3)) PWild) (EVar "AttrNoInline"))
-(DFunDef false "readAttrBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAttr")))
+(DFunDef false "readAttrBare" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagAttrInline") (ELit LUnit))) (EVar "AttrInline") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagAttrMustUse") (ELit LUnit))) (EVar "AttrMustUse") (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagAttrNoInline") (ELit LUnit))) (EVar "AttrNoInline") (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAttr")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "readAttrTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Attr"))))
-(DFunDef false "readAttrTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "readOpt") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "AttrDeprecated") (EVar "a0")))))
-(DFunDef false "readAttrTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAttr")))
+(DFunDef false "readAttrTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagAttrDeprecated") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "readOpt") (EVar "readString")) (EVar "cur"))) (DoExpr (EApp (EVar "AttrDeprecated") (EVar "a0")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltAttr")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readDeriveRef" (TyFun (TyCon "SexpCursor") (TyCon "DeriveRef")))
 (DFunDef false "readDeriveRef" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DeriveRef") (EVar "a0")) (EVar "a1")))))
 (DTypeSig false "readExternDecl" (TyFun (TyCon "SexpCursor") (TyCon "ExternDecl")))
@@ -2965,22 +3557,6 @@ readDeclTagged _ cur = cursorFail cur dfltDecl
 (DTypeSig false "readExternBind" (TyFun (TyCon "SexpCursor") (TyCon "ExternBind")))
 (DFunDef false "readExternBind" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a0") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "ExternBind" ((fa "ebHost" (EVar "a0")) (fa "ebSymbol" (EVar "a1")) (fa "ebLoc" (EVar "a2")))))))
 (DTypeSig false "readDecl" (TyFun (TyCon "SexpCursor") (TyCon "Decl")))
-(DFunDef false "readDecl" ((PVar "cur")) (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 40))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoLet false false (PVar "v") (EApp (EApp (EVar "readDeclTagged") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EVar "v"))) (EApp (EApp (EVar "readDeclBare") (EApp (EVar "cursorInt") (EVar "cur"))) (EVar "cur"))))
-(DTypeSig false "readDeclBare" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Decl"))))
-(DFunDef false "readDeclBare" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDecl")))
+(DFunDef false "readDecl" ((PVar "cur")) (EApp (EApp (EApp (EVar "readTagged") (EVar "readDeclTagged")) (EApp (EVar "refuse") (EVar "dfltDecl"))) (EVar "cur")))
 (DTypeSig false "readDeclTagged" (TyFun (TyCon "Int") (TyFun (TyCon "SexpCursor") (TyCon "Decl"))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 0)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 1)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExternDecl") (EVar "cur"))) (DoExpr (EApp (EVar "DExtern") (EVar "a0")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 2)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readBinderId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")) (EVar "a5")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 3)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readDataVis") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readVariant")) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readKindAnn")))) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "cursorList") (EVar "readDeriveRef")) (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a9") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DData" ((fa "dataVis" (EVar "a0")) (fa "dataName" (EVar "a1")) (fa "dataParams" (EVar "a2")) (fa "dataParamKinds" (EVar "a3")) (fa "dataCtors" (EVar "a4")) (fa "dataCtorBinders" (EVar "a5")) (fa "dataDerives" (EVar "a6")) (fa "dataOrigin" (EVar "a7")) (fa "dataExtern" (EVar "a8")) (fa "dataNameLoc" (EVar "a9")))))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 4)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readUsePath") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DUse") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 5)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readString"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")) (EVar "a5")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 6)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readPropParam")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 7)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DTest") (EVar "a0")) (EVar "a1")) (EVar "a2")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 8)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EVar "readSuper")) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "cursorList") (EVar "readIfaceMethod")) (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DInterface" ((fa "pub" (EVar "a0")) (fa "def" (EVar "a1")) (fa "name" (EVar "a2")) (fa "typarams" (EVar "a3")) (fa "typaramKinds" (EVar "a4")) (fa "supers" (EVar "a5")) (fa "methods" (EVar "a6")) (fa "ifaceOrigin" (EVar "a7")) (fa "ifaceNameLoc" (EVar "a8")))))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 9)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readRequire")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readImplMethod")) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DImpl" ((fa "pub" (EVar "a0")) (fa "iface" (EVar "a1")) (fa "tys" (EVar "a2")) (fa "reqs" (EVar "a3")) (fa "methods" (EVar "a4")) (fa "implOrigin" (EVar "a5")) (fa "implIfaceLoc" (EVar "a6")))))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 10)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "a0")) (fa "tyAliasName" (EVar "a1")) (fa "tyAliasParams" (EVar "a2")) (fa "tyAliasParamKinds" (EVar "a3")) (fa "tyAliasRhs" (EVar "a4")) (fa "tyAliasOrigin" (EVar "a5")) (fa "tyAliasNameLoc" (EVar "a6")))))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 11)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EApp (EVar "cursorList") (EVar "readDeriveRef")) (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a9") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "a0")) (fa "newtypeName" (EVar "a1")) (fa "newtypeParams" (EVar "a2")) (fa "newtypeParamKinds" (EVar "a3")) (fa "newtypeCtor" (EVar "a4")) (fa "newtypeCtorBinders" (EVar "a5")) (fa "newtypeFieldTy" (EVar "a6")) (fa "newtypeDerives" (EVar "a7")) (fa "newtypeOrigin" (EVar "a8")) (fa "newtypeNameLoc" (EVar "a9")))))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 12)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readLetBind")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DLetGroup") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readDeclTagged" ((PLit (LInt 13)) (PVar "cur")) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readAttr")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readDecl") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DAttrib") (EVar "a0")) (EVar "a1")))))
-(DFunDef false "readDeclTagged" (PWild (PVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDecl")))
+(DFunDef false "readDeclTagged" ((PVar "t") (PVar "cur")) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDTypeSig") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDExtern") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readExternDecl") (EVar "cur"))) (DoExpr (EApp (EVar "DExtern") (EVar "a0")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDFunDef") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readPat")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readLoc") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readBinderId") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")) (EVar "a5")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDData") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readDataVis") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readVariant")) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readKindAnn")))) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "cursorList") (EVar "readDeriveRef")) (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a9") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DData" ((fa "dataVis" (EVar "a0")) (fa "dataName" (EVar "a1")) (fa "dataParams" (EVar "a2")) (fa "dataParamKinds" (EVar "a3")) (fa "dataCtors" (EVar "a4")) (fa "dataCtorBinders" (EVar "a5")) (fa "dataDerives" (EVar "a6")) (fa "dataOrigin" (EVar "a7")) (fa "dataExtern" (EVar "a8")) (fa "dataNameLoc" (EVar "a9")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDUse") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readUsePath") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DUse") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDEffect") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "readOpt") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readString"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")) (EVar "a4")) (EVar "a5")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDProp") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readPropParam")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "a0")) (EVar "a1")) (EVar "a2")) (EVar "a3")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDTest") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readExpr") (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EVar "DTest") (EVar "a0")) (EVar "a1")) (EVar "a2")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDInterface") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EVar "readSuper")) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "cursorList") (EVar "readIfaceMethod")) (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DInterface" ((fa "pub" (EVar "a0")) (fa "def" (EVar "a1")) (fa "name" (EVar "a2")) (fa "typarams" (EVar "a3")) (fa "typaramKinds" (EVar "a4")) (fa "supers" (EVar "a5")) (fa "methods" (EVar "a6")) (fa "ifaceOrigin" (EVar "a7")) (fa "ifaceNameLoc" (EVar "a8")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDImpl") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readTy")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EVar "readRequire")) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EApp (EVar "cursorList") (EVar "readImplMethod")) (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DImpl" ((fa "pub" (EVar "a0")) (fa "iface" (EVar "a1")) (fa "tys" (EVar "a2")) (fa "reqs" (EVar "a3")) (fa "methods" (EVar "a4")) (fa "implOrigin" (EVar "a5")) (fa "implIfaceLoc" (EVar "a6")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDTypeAlias") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "a0")) (fa "tyAliasName" (EVar "a1")) (fa "tyAliasParams" (EVar "a2")) (fa "tyAliasParamKinds" (EVar "a3")) (fa "tyAliasRhs" (EVar "a4")) (fa "tyAliasOrigin" (EVar "a5")) (fa "tyAliasNameLoc" (EVar "a6")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDNewtype") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a2") (EApp (EApp (EVar "cursorList") (EVar "readString")) (EVar "cur"))) (DoLet false false (PVar "a3") (EApp (EApp (EVar "cursorList") (EApp (EVar "readOpt") (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a4") (EApp (EVar "readString") (EVar "cur"))) (DoLet false false (PVar "a5") (EApp (EApp (EVar "cursorList") (EApp (EApp (EVar "readPair") (EVar "readString")) (EVar "readKindAnn"))) (EVar "cur"))) (DoLet false false (PVar "a6") (EApp (EVar "readTy") (EVar "cur"))) (DoLet false false (PVar "a7") (EApp (EApp (EVar "cursorList") (EVar "readDeriveRef")) (EVar "cur"))) (DoLet false false (PVar "a8") (EApp (EVar "readTyConOrigin") (EVar "cur"))) (DoLet false false (PVar "a9") (EApp (EApp (EVar "readOpt") (EVar "readLoc")) (EVar "cur"))) (DoExpr (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "a0")) (fa "newtypeName" (EVar "a1")) (fa "newtypeParams" (EVar "a2")) (fa "newtypeParamKinds" (EVar "a3")) (fa "newtypeCtor" (EVar "a4")) (fa "newtypeCtorBinders" (EVar "a5")) (fa "newtypeFieldTy" (EVar "a6")) (fa "newtypeDerives" (EVar "a7")) (fa "newtypeOrigin" (EVar "a8")) (fa "newtypeNameLoc" (EVar "a9")))))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDLetGroup") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EApp (EVar "cursorList") (EVar "readLetBind")) (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DLetGroup") (EVar "a0")) (EVar "a1")))) (EIf (EBinOp "==" (EVar "t") (EApp (EVar "tagDAttrib") (ELit LUnit))) (EBlock (DoLet false false (PVar "a0") (EApp (EApp (EVar "cursorList") (EVar "readAttr")) (EVar "cur"))) (DoLet false false (PVar "a1") (EApp (EVar "readDecl") (EVar "cur"))) (DoExpr (EApp (EApp (EVar "DAttrib") (EVar "a0")) (EVar "a1")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "dfltDecl")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))))))))
