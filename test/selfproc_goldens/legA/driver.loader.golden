@@ -15,7 +15,6 @@ collectLibsIn : String -> List String -> List (String, String)
 cycleChain : String -> List String -> List String
 cycleSite : List (String, String) -> List String -> String -> String -> <IO> Option (String, Loc)
 directImports : List Decl -> List String
-dropKey : String -> List (String, List Decl) -> List (String, List Decl)
 dropPathTriple : (String, String, List Decl) -> (String, List Decl)
 dropPrefix : Int -> String -> String
 entryModIdOf : List (String, List Decl) -> String
@@ -30,6 +29,8 @@ findModuleOrEntryFile : List (String, String) -> List String -> String -> String
 findProjectRoot : String -> <IO> Option String
 findProjectRootOrSelf : String -> <IO> String
 findRootGo : String -> <IO> Option String
+finishCachedLoad : Ref (Map String (List Decl)) -> Result LoadError (List String, List (String, String, List Decl)) -> Result LoadError (List (String, String, List Decl))
+finishLoad : Result LoadError (List String, List (String, String, List Decl)) -> Result LoadError (List (String, String, List Decl))
 importModId : UsePath -> String
 joinArrow : List String -> String
 joinPathL : String -> String -> String
@@ -41,12 +42,12 @@ loadErrorMessage : LoadError -> String
 loadProgram : String -> List String -> <IO> Result String (List (String, List Decl))
 loadProgramE : String -> List String -> <IO> Result LoadError (List (String, List Decl))
 loadProgramFilesE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
-loadProgramFilesLocatedCached : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result String (List (String, String, List Decl))
-loadProgramFilesLocatedCachedE : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
+loadProgramFilesLocatedCached : Ref (Map String (List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result String (List (String, String, List Decl))
+loadProgramFilesLocatedCachedE : Ref (Map String (List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
+loadedPairs : List (String, String, List Decl) -> List (String, String)
 loadedSourceOf : String -> Option String
-loadedSourcesLimit : Int
-loadedSourcesRef : Ref (List (String, String))
+loadedSourcesRef : Ref (Map String String)
 manifestAllowsInternal : String -> <IO> Bool
 manifestSiteRoot : String -> <IO> Option String
 mdkBaseName : String -> Option String
@@ -56,8 +57,7 @@ moduleIdsUnder : String -> String -> <IO> List String
 noteLoadedSource : String -> String -> Unit
 parentDir : String -> String
 parentGo : String -> Int -> String
-parseCacheLimit : Int
-parseCachedLocated : Ref (List (String, List Decl)) -> String -> Result ParseError (List Decl)
+parseCachedLocated : Ref (Map String (List Decl)) -> String -> Result ParseError (List Decl)
 parsedModule : (String -> Result ParseError (List Decl)) -> String -> String -> String -> Result LoadError (String, String, List Decl)
 projectTrustedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
 rawValAfterEq : String -> String
@@ -69,12 +69,15 @@ readSource : String -> <FileRead> Result String String
 readSourceE : String -> <FileRead> Result (Option String) String
 relUnderRoots : List String -> String -> String
 resolveDepFile : List (String, String) -> String -> <IO> Option (String, String)
+retainParsed : Ref (Map String (List Decl)) -> List String -> Unit
+retainedEntries : Map String (List Decl) -> List String -> List (String, List Decl)
 revLookupRoot : String -> List (String, String) -> <IO> Option String
 rewriteDecl : List (String, String) -> List String -> Decl -> <IO> Decl
 rewriteDecls : List (String, String) -> List String -> List Decl -> <IO> List Decl
 rewriteUsePath : String -> UsePath -> UsePath
 scanAllowInternal : Bool -> List String -> Bool
 scanSiteRoot : Bool -> List String -> Option String
+settleLoad : List (String, String, List Decl) -> List String
 slashToDot : String -> String
 sourceNotUtf8Message : String -> String
 splitDot : String -> List String
@@ -83,7 +86,6 @@ splitOnChar : String -> String -> List String
 stdlibOwnedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
 stdlibOwnership : String -> List String -> String -> List (String, List Decl) -> <IO> (Bool, List String)
 stripSuffixStr : String -> String -> String
-takeFirst : Int -> List a -> List a
 takeTo : String -> List String -> List String
 trustedModsGo : List (String, String) -> List String -> String -> List String -> List String -> <IO> List String
 underDir : String -> String -> Bool

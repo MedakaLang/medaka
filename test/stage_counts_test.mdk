@@ -503,3 +503,59 @@ test "stage_counts: build refuses a private import on every route" = withScratch
         fail "build with a stray MEDAKA_DIAG_JSON exited \{strayCode}",
       expectTrue (contains "unknown module: support.path" strayErr),
     ])
+
+-- ── a graph past the old parse and desugar memo bounds ─────────────────────
+
+-- Module [i] of an [n]-module chain: it imports module [i + 1] and exports a
+-- value built on that module's.
+chainModuleSrc : Int -> Int -> String
+chainModuleSrc n i =
+  if i + 1 < n then
+    "import m\{i + 1}.{v\{i + 1}}\nexport\nv\{i} : Int\nv\{i} = v\{i + 1} + 1\n"
+  else
+    "export\nv\{i} : Int\nv\{i} = 1\n"
+
+-- Writes modules [i], [i + 1], ... of the [n]-module chain beside the entry.
+writeChain : String -> Int -> Int -> <FileWrite> Result String Unit
+writeChain dir n i =
+  if i >= n then
+    writeFile "\{dir}/main.mdk" chainEntry
+  else match writeFile "\{dir}/m\{i}.mdk" (chainModuleSrc n i)
+    Err e => Err e
+    Ok _ => writeChain dir n (i + 1)
+
+chainEntry : String
+chainEntry = "import m1.{v1}\n\nmain = println v1\n"
+
+-- The `parse.prescan` count of a `lsp.<name>` row set.
+prescanOf : String -> List String -> Int
+prescanOf name rows =
+  sum
+    (filterMap
+      (r => match split "\t" r
+        [k, n] => if k == "lsp.\{name}.parse.prescan" then toInt n else None
+        _ => None)
+      rows)
+
+test "stage_counts: a 30-module graph's second analyze parses only the edited entry" = withScratchDir
+  (dir => match writeChain dir 30 1
+    Err e => fail "could not write the chain: \{e}"
+    Ok _ =>
+      let uri = "file://\{dir}/main.mdk"
+      let open = [initializeMsg, initializedMsg, didOpenMsg uri chainEntry]
+      let tail = [shutdownMsg, exitMsg]
+      let (rowsOne, okOne) =
+        lspRows dir "chain_open" "publishDiagnostics" (open ++ tail)
+      let (rowsTwo, okTwo) =
+        lspRows
+          dir
+          "chain_edit"
+          "publishDiagnostics"
+          (open ++ [didChangeMsg uri (chainEntry ++ "-- edit\n")] ++ tail)
+      expectAll [
+        okOne,
+        okTwo,
+        expectEqual
+          1
+          (prescanOf "chain_edit" rowsTwo - prescanOf "chain_open" rowsOne),
+      ])

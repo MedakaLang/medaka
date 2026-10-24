@@ -128,6 +128,7 @@ import json.{
   stringify,
 }
 import support.path.{dirOf, joinPath}
+import support.ordmap.{OrdMap, omEmpty}
 import driver.build_cmd.{loadPreludeInterface, shippedInputsFor}
 import support.char.{isIdentChar, isDigit}
 import entries.entry_support.{
@@ -345,8 +346,8 @@ dropPath (mid, _, decls) = (mid, decls)
 -- map.mdk, …) is parsed once per session, not once per keystroke — the same
 -- reuse the LSP gets from its session-lived cache.  Bounded (MRU, 24 entries)
 -- inside the loader, so a long editing session cannot grow it.
-playgroundParseCache : Ref (List (String, List Decl))
-playgroundParseCache = Ref []
+playgroundParseCache : Ref (OrdMap (List Decl))
+playgroundParseCache = Ref omEmpty
 
 -- Read core.mdk, seeding the prelude cache first when the host shipped an
 -- interface for it.

@@ -7,6 +7,7 @@
    The same program is clean under no profile and refused under `wasmgc/edge`,
    and the refusal is the one `medaka check` prints. -}
 
+import support.ordmap.{omEmpty}
 import driver.build_cmd.{makeTempDir, cleanupTempDir}
 import driver.diagnostics.{analyzeProject, stdlibExportsReader, Diag(..)}
 import driver.profile_select.{carryProjectProfile}
@@ -46,7 +47,7 @@ analyzedIn rsrc csrc manifestText = match makeTempDir ()
         True
         []
         (Ref [])
-        (Ref [])
+        (Ref omEmpty)
         (_ => None)
         entry
         [dir, stdlibDir]
