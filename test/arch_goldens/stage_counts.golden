@@ -330,8 +330,8 @@ lsp.b_references_twice.typecheck.drive	1
 lsp.b_references_twice.typecheck.module	8
 lsp.c_didchange.exit	0
 lsp.c_didchange.desugar	5
-lsp.c_didchange.exhaust.guards	8
-lsp.c_didchange.exhaust.oracle	14
+lsp.c_didchange.exhaust.guards	5
+lsp.c_didchange.exhaust.oracle	11
 lsp.c_didchange.lex.pairs	5
 lsp.c_didchange.load.cached	4
 lsp.c_didchange.parse.prescan	5

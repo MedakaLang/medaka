@@ -18,7 +18,7 @@ import driver.diagnostics.{
   analyzeToLines, analyzeProjectFull, analyzeProjectReport, analyzeProjectKeyed,
   noStdlibExports, graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom,
   frontEnd, checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
-  FrontOutput(..), Diag(..)
+  FrontOutput(..), Diag(..), foldCachedIdentity, resolveCachedIdentity
 }
 import types.typecheck.{defaultDriveInputs}
 import frontend.ast.{Decl}
@@ -29,7 +29,7 @@ import list.{sort, somes}
 import path.{dirname, stem}
 import string.{endsWith, lines, trim, unlines}
 import test.{
-  Expectation, expectAll, expectEach, expectEqual, expectFalse,
+  Expectation, expectAll, expectEach, expectEqual, expectFalse, expectNotEqual,
   expectNoFindings, expectTrue, fail
 }
 import types.publish.{
@@ -426,4 +426,105 @@ test "a graph of 70 modules serves every module but the entry on the second anal
           ),
         ]
       Err e => fail "could not write the chain: \{e}")
+    _ => fail "could not read the prelude pair"
+
+-- ── the per-module pass caches ─────────────────────────────────────────────
+
+-- A three-module graph: `fcm` names one constructor of `fcshapes`' type in a clause
+-- function, and the entry imports both.  [second] is the type's other constructor.
+foldShapesSrc : String -> String
+foldShapesSrc second = "public export data Shape = Circle Int | \{second} Int\n"
+
+foldMidSrc : String
+foldMidSrc = unlines [
+  "import fcshapes.{Shape(..)}",
+  "export",
+  "area : Shape -> Int",
+  "area (Circle r) = r",
+]
+
+foldMainSrc : String
+foldMainSrc = unlines [
+  "import fcm.{area}",
+  "import fcshapes.{Shape(..)}",
+  "main = println (debug (area (Circle 2)))",
+]
+
+-- One analyze of the entry in [dir], [read] answering before the disk: `fcm`'s
+-- diagnostics, and the identities the fold's and the resolve pass's caches hold for
+-- `fcm` afterwards.
+foldAnalyze : String ->
+  String ->
+  String ->
+  (String -> Option String) ->
+  <IO> (List String, (Option Int, Option Int))
+foldAnalyze rsrc csrc dir read =
+  let (_, buckets) =
+    analyzeProjectKeyed
+      noStdlibExports
+      True
+      []
+      (Ref [])
+      (Ref omEmpty)
+      read
+      "\{dir}/fcmain.mdk"
+      [dir, "stdlib"]
+      rsrc
+      csrc
+  (
+    map
+      diagText
+      (flatMap snd (filter (b => endsWith "/fcm.mdk" (fst b)) buckets)),
+    (foldCachedIdentity "fcm", resolveCachedIdentity "fcm"),
+  )
+
+-- `fcshapes` with its second constructor renamed, the disk for every other file.
+renamedShapes : String -> Option String
+renamedShapes path =
+  if endsWith "/fcshapes.mdk" path then Some (foldShapesSrc "Rect") else None
+
+missingClause : String -> String
+missingClause ctor =
+  "W-NONEXHAUSTIVE-CLAUSES: non-exhaustive clauses of `area`: missing `\{ctor} _`; add a `\{ctor} _` clause"
+
+foldCacheCheck : String -> String -> String -> <IO, FileWrite> Expectation
+foldCacheCheck rsrc csrc dir = match (
+  writeFile "\{dir}/fcshapes.mdk" (foldShapesSrc "Square"),
+  writeFile "\{dir}/fcm.mdk" foldMidSrc,
+  writeFile "\{dir}/fcmain.mdk" foldMainSrc,
+)
+  (Ok _, Ok _, Ok _) =>
+    let (cold, coldId) = foldAnalyze rsrc csrc dir (_ => None)
+    let (served, servedId) = foldAnalyze rsrc csrc dir (_ => None)
+    let (renamed, renamedId) = foldAnalyze rsrc csrc dir renamedShapes
+    expectEach [
+      (
+        "the first analyze folds fcm",
+        expectEqual [missingClause "Square"] cold,
+      ),
+      ("fcm has a fold entry", expectTrue (isSome (fst coldId))),
+      ("fcm has a resolve entry", expectTrue (isSome (snd coldId))),
+      (
+        "the second analyze serves both of fcm's entries",
+        expectEqual coldId servedId,
+      ),
+      ("the served diagnostics are the computed ones", expectEqual cold served),
+      (
+        "a renamed constructor in fcm's import refolds fcm",
+        expectNotEqual (fst coldId) (fst renamedId),
+      ),
+      (
+        "and resolves fcm again",
+        expectNotEqual (snd coldId) (snd renamedId),
+      ),
+      (
+        "fcm reports the import's new constructor",
+        expectEqual [missingClause "Rect"] renamed,
+      ),
+    ]
+  _ => fail "could not write the fold fixture"
+
+test "the pass caches serve an unchanged module and recompute it when its import's constructors change" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) => withScratchDir (foldCacheCheck rsrc csrc)
     _ => fail "could not read the prelude pair"

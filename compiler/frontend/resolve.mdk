@@ -3505,15 +3505,26 @@ importedCtorDeclsGo : ModuleExports ->
   List (String, List Decl)
 importedCtorDeclsGo _ _ _ [] = []
 importedCtorDeclsGo coreExp pool known ((mid, prog) :: rest) =
+  let (decls, exp) = importedCtorDeclsStep coreExp pool known (mid, prog)
+  (mid, decls)
+    :: importedCtorDeclsGo coreExp pool (omInsert exp.modId exp known) rest
+
+-- One module of `importedCtorDecls`: the decls declaring a constructor its imports
+-- bind, and its exports, which the modules after it read through [known].
+export
+importedCtorDeclsStep : ModuleExports ->
+  OrdMap (List Decl) ->
+  OrdMap ModuleExports ->
+  (String, List Decl) ->
+  (List Decl, ModuleExports)
+importedCtorDeclsStep coreExp pool known (mid, prog) =
   let paths = usePathsOf prog
   let decls =
     ctorDeclsBoundBy pool known (filterList (p => not (isAliasPath p)) paths)
       ++ ctorDeclsBoundBy pool known (filterList isAliasPath paths)
   -- values are left without interface methods: they are read through `env`,
   -- and nothing a constructor answer reads depends on them
-  let exp = buildExportsWith coreExp known mid prog []
-  (mid, decls)
-    :: importedCtorDeclsGo coreExp pool (omInsert exp.modId exp known) rest
+  (decls, buildExportsWith coreExp known mid prog [])
 
 isAliasPath : UsePath -> Bool
 isAliasPath (UseAlias _ _) = True
