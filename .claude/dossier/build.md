@@ -7,6 +7,8 @@ The prelude interface `stdlib/core.mdki` is rewritten by `make medaka` (and by C
 
 The elaborated-prelude file `stdlib/core.mdke` is a second staleness surface with the same key: stale makes `run`/`build`/`test`/`check-policy`/`manifest`/`repl` elaborate core again, silently when missing and with one `prelude trees stale: …` stderr line per verb (exit 1 under `MEDAKA_STRICT=1`) otherwise; a fresh `core.mdke` beside a missing or stale `core.mdki` is the same stale line (component `interface …`), since the tree arm needs both files; the counters line is under the digest and is checked against the rows; the `medaka_emitter` child has no baked fingerprint, so it takes the compiler identity from `MEDAKA_PRELUDE_COMPILER`, set by the spawning `medaka`.
 
+The declarations file `stdlib/core.mdkd` is a third staleness surface with the same key: a stale or missing one makes the prelude-loading verbs parse and desugar the runtime and core texts again, one `prelude decls stale: parsing stdlib/core.mdk (<component>)` stderr line per verb (exit 1 under `MEDAKA_STRICT`).
+
 ## [B-STDERR] Warning-on-stderr, both directions load-bearing
 
 Measured on a deliberately stale `medaka run`: stdout carries the program's value alone, exit 0,
