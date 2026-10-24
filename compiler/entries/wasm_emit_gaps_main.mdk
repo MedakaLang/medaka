@@ -1,3 +1,5 @@
+import backend.emit_plan.{prepareWasmPlan}
+import support.ordmap.{omEmpty}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- WasmGC GAP-CENSUS driver — copy of wasm_emit_modules_main.mdk, but instead of
 -- emitting WAT it runs emitProgramGaps over the whole module graph and prints one
@@ -83,11 +85,9 @@ runEmit inputs runtimeDecls coreDecls modules =
   let input = makeWasmEmitInput (runtimeDomain (externDecls runtimeDecls)) []
   let cp =
     lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
-  let gaps =
-    emitProgramGaps
-      input
-      (buildEmitPlan WasmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
-      cp
+  let (plan, prepared) =
+    prepareWasmPlan (runtimeDomain (externDecls runtimeDecls)) omEmpty cp
+  let gaps = emitProgramGaps input plan prepared
   printGaps gaps
 
 printGaps : List String -> <IO> Unit

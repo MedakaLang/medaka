@@ -1,3 +1,5 @@
+import backend.emit_plan.{prepareWasmPlan}
+import backend.wasm_emit.{inputCtorFloatFieldsW}
 import backend.extern_requirements.{
   ExternRequirements(..), ExternRequirement(..), RequirementBinding(..)
 }
@@ -226,8 +228,9 @@ test "(e) record mode logs one event per refused extern, and no unbound-variable
   let decls = grantWholeDomain (desugar (parse recordSrc))
   let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
-  let (_, events) =
-    wasmRecord input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
+  let (wasmPlan, prepared) =
+    prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
+  let (_, events) = wasmRecord input wasmPlan prepared
   let expected = map ("main\t" ++ _) (refusalLines WasmBackend recordSrc)
   expectAll [
     labelFail
@@ -236,12 +239,7 @@ test "(e) record mode logs one event per refused extern, and no unbound-variable
     labelFail "record emission" (expectEqual expected events),
     labelFail
       "gap census"
-      (expectEqual
-        expected
-        (emitProgramGaps
-          input
-          (buildEmitPlan WasmBackend PreludeFreeRuntime cp)
-          cp)),
+      (expectEqual expected (emitProgramGaps input wasmPlan prepared)),
   ]
 
 assertSnapshotSrc : String
@@ -404,8 +402,9 @@ ffiNoJsEvents checked =
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
   checkedTarget := checked
-  let (_, events) =
-    wasmRecord input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
+  let (wasmPlan, prepared) =
+    prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
+  let (_, events) = wasmRecord input wasmPlan prepared
   checkedTarget := None
   events
 

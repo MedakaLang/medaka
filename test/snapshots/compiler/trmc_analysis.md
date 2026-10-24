@@ -1,5 +1,5 @@
 # META
-source_lines=1709
+source_lines=1745
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -27,6 +27,7 @@ import ir.core_ir.{
   CImplBody(..),
 }
 import support.util.{
+  lenKey,
   contains,
   listLen,
   filterList,
@@ -1711,10 +1712,45 @@ anyListM _ [] = False
 anyListM p (x :: rest) =
   let h = p x
   if h then True else anyListM p rest
+
+-- The self-recursive TRMC verdict.  `eligibleFns` holds every top-level function, and
+-- `eligibleImpls` every impl group (one `(method, key)` pair, its clauses in program
+-- order), whose clauses `trmcEligible` accepts with a uniform count of leading
+-- dictionary parameters.
+--
+-- The verdict is the same on both backends, and each realizes every eligible
+-- function as a destination-passing loop.  What differs is only the cell a
+-- constructor leaf links.  LLVM allocates every leaf through its constructor
+-- tag.  Wasm picks the struct per function: the built-in list cell when the
+-- leaves are `::` (`ctorTailIsCons`), the user constructor's struct otherwise.
+-- A dispatch-group member is emitted by its group, not by this verdict.
+--
+-- A constructor is a name in the program's constructor table.  Wasm's own table
+-- also answers for reserved and synthetic names the program may not declare
+-- (`Some`, `Ok`, `Err`, `Cons`, `Tup<n>`).  None of them can head a leaf whose
+-- last field is the self-call: `Some (f x)` returned by `f` would need
+-- `Option T = T`, and the list and tuple cells lower to `::` and tuple nodes, not
+-- applications.  So, for a typechecked program, the one table gives both backends
+-- the verdict they computed.  Untyped input (the `wasm_emit_main` probe) can head
+-- such a leaf, and there the plan's verdict is the narrower one.
+public export data TrmcVerdicts = TrmcVerdicts {
+  eligibleFns : OrdMap Unit,
+  eligibleImpls : OrdMap Unit,
+}
+
+-- does the TRMC verdict hold for top-level function [name]?
+export
+isTrmcFn : TrmcVerdicts -> String -> Bool
+isTrmcFn v name = omHasKey name v.eligibleFns
+
+-- does the TRMC verdict hold for the impl group of [method] at instance [key]?
+export
+isTrmcImpl : TrmcVerdicts -> String -> String -> Bool
+isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "startsWith" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "startsWith" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DData Public "SelfRef" () ((variant "SelfByVar" (ConPos (TyCon "String"))) (variant "SelfByMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
 (DTypeSig true "flattenApp" (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr"))))))
@@ -2174,10 +2210,15 @@ anyListM p (x :: rest) =
 (DTypeSig false "anyListM" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "anyListM" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyListM" ((PVar "p") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "h") (EApp (EVar "p") (EVar "x"))) (DoExpr (EIf (EVar "h") (EVar "True") (EApp (EApp (EVar "anyListM") (EVar "p")) (EVar "rest"))))))
+(DData Public "TrmcVerdicts" () ((variant "TrmcVerdicts" (ConNamed (field "eligibleFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "eligibleImpls" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DTypeSig true "isTrmcFn" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isTrmcFn" ((PVar "v") (PVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "v") "eligibleFns")))
+(DTypeSig true "isTrmcImpl" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "isTrmcImpl" ((PVar "v") (PVar "method") (PVar "key")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (EApp (EVar "lenKey") (EVar "method")) (EVar "key"))) (EFieldAccess (EVar "v") "eligibleImpls")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "startsWith" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "startsWith" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DData Public "SelfRef" () ((variant "SelfByVar" (ConPos (TyCon "String"))) (variant "SelfByMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
 (DTypeSig true "flattenApp" (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr"))))))
@@ -2637,3 +2678,8 @@ anyListM p (x :: rest) =
 (DTypeSig false "anyListM" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "anyListM" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyListM" ((PVar "p") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "h") (EApp (EVar "p") (EVar "x"))) (DoExpr (EIf (EVar "h") (EVar "True") (EApp (EApp (EVar "anyListM") (EVar "p")) (EVar "rest"))))))
+(DData Public "TrmcVerdicts" () ((variant "TrmcVerdicts" (ConNamed (field "eligibleFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "eligibleImpls" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DTypeSig true "isTrmcFn" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isTrmcFn" ((PVar "v") (PVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "v") "eligibleFns")))
+(DTypeSig true "isTrmcImpl" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "isTrmcImpl" ((PVar "v") (PVar "method") (PVar "key")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (EApp (EVar "lenKey") (EVar "method")) (EVar "key"))) (EFieldAccess (EVar "v") "eligibleImpls")))

@@ -1,3 +1,5 @@
+import backend.emit_plan.{prepareWasmPlan}
+import backend.wasm_emit.{inputCtorFloatFieldsW}
 import types.extern_source.{externSourceHeadRows}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- Single-file per-stage timing driver for the self-hosted front-end.
@@ -506,14 +508,12 @@ wasmStage on True outputs runtimeDecls live cprog declsOp =
   let tWe0 = now ()
   let aWe0 = allocSnap ()
   let oWe0 = opSnap ()
-  let _ =
-    wasmText
-      input
-      (buildEmitPlan
-        WasmBackend
-        (runtimeDomain (externDecls runtimeDecls))
-        cprog)
+  let (plan, prepared) =
+    prepareWasmPlan
+      (runtimeDomain (externDecls runtimeDecls))
+      (inputCtorFloatFieldsW input)
       cprog
+  let _ = wasmText input plan prepared
   let tWe1 = now ()
   emitPhaseAO
     on

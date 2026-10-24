@@ -1,3 +1,4 @@
+import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
 --
 -- This IS the canonical LLVM backend (STAGE2-DESIGN.md §2.4). Originally
@@ -310,9 +311,6 @@ import types.route_key.{numIntWord}
 import backend.emit_plan.{
   EmitPlan(..),
   lookupMethodResult,
-  TrmcVerdicts,
-  isTrmcFn,
-  isTrmcImpl,
   planEntryMainIsUnit,
   planEntryMainIsFloat,
 }

@@ -1,3 +1,5 @@
+import backend.emit_plan.{prepareWasmPlan}
+import support.ordmap.{omEmpty}
 -- Each emitter refuses a program with a binder its binder table has no row for,
 -- before it emits anything, through `core_validate.validateForEmission`.
 -- The refusal is a panic, which
@@ -87,10 +89,8 @@ llvmText cp =
 
 wasmText : CProgram -> String
 wasmText cp =
-  wasmEmit
-    (makeWasmEmitInput PreludeFreeRuntime [])
-    (buildEmitPlan WasmBackend PreludeFreeRuntime cp)
-    cp
+  let (plan, prepared) = prepareWasmPlan PreludeFreeRuntime omEmpty cp
+  wasmEmit (makeWasmEmitInput PreludeFreeRuntime []) plan prepared
 
 -- What the refusal says about `x`.
 refusal : String

@@ -1,3 +1,5 @@
+import backend.emit_plan.{prepareWasmPlan}
+import backend.wasm_emit.{inputCtorFloatFieldsW}
 -- Sibling test for `compiler/backend/wasm_emit.mdk`'s string-literal segments ([P-TEST-SIBLING]).
 --
 -- Each program is prelude-free, lowered without typechecking, and emitted through
@@ -34,8 +36,9 @@ watOf src =
   let decls = grantWholeDomain (desugar (parse src))
   let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
-  let (text, _) =
-    emitProgramRecord input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
+  let (plan, prepared) =
+    prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
+  let (text, _) = emitProgramRecord input plan prepared
   text
 
 -- the (segment id, escaped payload) of one `(data $strseg_N "…")` line

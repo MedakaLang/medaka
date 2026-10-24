@@ -1,7 +1,12 @@
 # META
-source_lines=720
+source_lines=383
 stages=DESUGAR,MARK
 # SOURCE
+import backend.wasm_demand.{
+  JsImport(..), WasmDemand(..), WasmDemandInputs(..), WasmDemandPlan,
+  planWasmDemand, ctorFloatFieldIndex
+}
+import backend.wasm_names.{uniqueBinders}
 -- The per-emission plan: facts about the lowered program that both backends read
 -- and neither recomputes.  Built once, right after lowering, from the program an
 -- emitter is about to receive.
@@ -54,6 +59,7 @@ import support.util.{lenKey, reverseL, filterList, listLen}
 import backend.wasm_reach.{wasmReachFilter}
 import backend.emit_support.{eagerReachMap, lazyGlobalNames}
 import backend.trmc_analysis.{
+  TrmcVerdicts(..),
   SelfRef(..),
   flattenApp,
   DispGroup,
@@ -101,77 +107,43 @@ public export data EmitPlan = EmitPlan {
   trmc : TrmcVerdicts,
   dispGroups : List DispGroup,
   wasmDemand : WasmDemand,
+  wasmInputs : WasmDemandInputs,
+  wasmPhysical : Option WasmDemandPlan,
   hostKeys : List String,
   jsImports : List JsImport,
 }
 
--- A reached user extern's `js` binding (docs/spec/WASM-SEMANTICS.md section
--- 3.1): its Medaka name, the JS name it binds, and its declared parameter and
--- result heads (`Array` is `Array Int`).
-public export data JsImport = JsImport {
-  medakaName : String,
-  jsName : String,
-  params : List String,
-  result : String,
-}
-
 public export data ReachUnits = ReachUnits { total : Int, kept : Int }
-
--- One walk of every binding and impl body (`wasmDemandOf`).  `uses` holds, once
--- each, the catalog demands (`wasmUses`) of every runtime extern the program
--- names and the demands its literals, collection forms and `++`/`::` make.
--- `refBox` is a `Ref` cell, `divGuard` a `/` or `%`, and `tupleArities` the
--- distinct tuple arities, first seen first.  A name demands what its extern
--- does only where the emitter would lower it as that extern (`DemandScope`), so a
--- binder that shares an extern's name demands nothing.
-public export data WasmDemand = WasmDemand {
-  uses : List WasmUse,
-  refBox : Bool,
-  divGuard : Bool,
-  tupleArities : List Int,
-}
-
--- The self-recursive TRMC verdict.  `eligibleFns` holds every top-level function, and
--- `eligibleImpls` every impl group (one `(method, key)` pair, its clauses in program
--- order), whose clauses `trmcEligible` accepts with a uniform count of leading
--- dictionary parameters.
---
--- The verdict is the same on both backends, and each realizes every eligible
--- function as a destination-passing loop.  What differs is only the cell a
--- constructor leaf links.  LLVM allocates every leaf through its constructor
--- tag.  Wasm picks the struct per function: the built-in list cell when the
--- leaves are `::` (`ctorTailIsCons`), the user constructor's struct otherwise.
--- A dispatch-group member is emitted by its group, not by this verdict.
---
--- A constructor is a name in the program's constructor table.  Wasm's own table
--- also answers for reserved and synthetic names the program may not declare
--- (`Some`, `Ok`, `Err`, `Cons`, `Tup<n>`).  None of them can head a leaf whose
--- last field is the self-call: `Some (f x)` returned by `f` would need
--- `Option T = T`, and the list and tuple cells lower to `::` and tuple nodes, not
--- applications.  So, for a typechecked program, the one table gives both backends
--- the verdict they computed.  Untyped input (the `wasm_emit_main` probe) can head
--- such a leaf, and there the plan's verdict is the narrower one.
-public export data TrmcVerdicts = TrmcVerdicts {
-  eligibleFns : OrdMap Unit,
-  eligibleImpls : OrdMap Unit,
-}
 
 export
 buildEmitPlan : Backend -> RuntimeExternDomain -> CProgram -> EmitPlan
-buildEmitPlan target domain prog = planOver target domain None prog
+buildEmitPlan target domain prog = planOver target domain None omEmpty prog
 
 -- The wasm modules entries' builder: reach first, then every plan field over the
 -- reached program, which is also the program the emitter must receive. The
 -- complete runtime domain is retained separately from the reached selection.
 export
-buildEmitPlanReached : RuntimeExternDomain -> CProgram -> (EmitPlan, CProgram)
-buildEmitPlanReached domain prog =
+buildEmitPlanReached : RuntimeExternDomain ->
+  OrdMap (List Int) ->
+  CProgram ->
+  (EmitPlan, CProgram)
+buildEmitPlanReached domain ctorFields prog =
   let reached = wasmReachFilter prog
   let units = ReachUnits {
     total = programUnitCount prog,
     kept = programUnitCount reached,
   }
-  (planOver WasmBackend domain (Some units) reached, reached)
+  let prepared = uniqueBinders reached
+  (planOver WasmBackend domain (Some units) ctorFields prepared, prepared)
+
+export
+prepareWasmPlan : RuntimeExternDomain ->
+  OrdMap (List Int) ->
+  CProgram ->
+  (EmitPlan, CProgram)
+prepareWasmPlan domain ctorFields prog =
+  let prepared = uniqueBinders prog
+  (planOver WasmBackend domain None ctorFields prepared, prepared)
 
 programUnitCount : CProgram -> Int
 programUnitCount (CProgram groups _ _ impls _ _) =
@@ -180,25 +152,36 @@ programUnitCount (CProgram groups _ _ impls _ _) =
 planOver : Backend ->
   RuntimeExternDomain ->
   Option ReachUnits ->
+  OrdMap (List Int) ->
   CProgram ->
   EmitPlan
-planOver target domain reach prog =
+planOver target domain reach ctorFields prog =
   let (CProgram groups ctorArs _ impls _ facts) = prog
   -- first entry wins on a repeated constructor name, as in both emitters' tables
   let ctors = omFromPairs (reverseL ctorArs) omEmpty
   let fns = filterList isTopFn groups
   let requirements = planExterns target domain prog
-  let (demand, keys, _) = match target
-    WasmBackend =>
-      wasmDemandOf
-        facts.factExterns
-        (omFromPairs (reverseL (hostRows "js" (externHeadRows prog))) omEmpty)
-        groups
-        impls
-    LlvmBackend => (noDemand, [], [])
-    EvalBackend => (noDemand, [], [])
   let lazy = lazyGlobalNames groups
   let eager = eagerReachMap groups
+  let globalInit = planGlobals prog lazy eager
+  let trmc = TrmcVerdicts {
+    eligibleFns =
+      omFromNames
+        (map bindName (filterList (b => selfTrmcBind ctors b) fns))
+        omEmpty,
+    eligibleImpls = trmcImplKeys ctors impls,
+  }
+  let dispatch = planDispatchGroups ctors fns groups impls
+  let inputs = WasmDemandInputs {
+    ctorFloatFields = ctorFields,
+    lazyGlobals = lazy,
+    globalInit = globalInit,
+    trmcVerdicts = trmc,
+    dispatchGroups = dispatch,
+  }
+  let physical = match target
+    WasmBackend => Some (planWasmDemand inputs prog requirements)
+    _ => None
   EmitPlan {
     target = target,
     externRequirements = requirements,
@@ -207,28 +190,20 @@ planOver target domain reach prog =
     wasmOnlyReach = reach,
     lazyGlobals = lazy,
     eagerReach = eager,
-    globalInit = planGlobals prog lazy eager,
-    trmc = TrmcVerdicts {
-      eligibleFns =
-        omFromNames
-          (map bindName (filterList (b => selfTrmcBind ctors b) fns))
-          omEmpty,
-      eligibleImpls = trmcImplKeys ctors impls,
-    },
-    dispGroups = planDispatchGroups ctors fns groups impls,
-    wasmDemand = demand,
-    hostKeys = keys,
-    jsImports = match target
-      WasmBackend =>
-        map
-          ((symbol, (host, (params, result))) => JsImport {
-            medakaName = symbol,
-            jsName = host,
-            params = params,
-            result = result,
-          })
-          (requirementHostRows requirements)
-      _ => [],
+    globalInit = globalInit,
+    trmc = trmc,
+    dispGroups = dispatch,
+    wasmDemand = match physical
+      Some p => p.sourceDemand
+      None => noDemand,
+    wasmInputs = inputs,
+    wasmPhysical = physical,
+    hostKeys = match physical
+      Some p => p.sourceHostKeys
+      None => [],
+    jsImports = match physical
+      Some p => p.jsImports
+      None => [],
   }
 
 export
@@ -264,16 +239,6 @@ lookupMethodResult : OrdMap (OrdMap MethodResultFact) ->
 lookupMethodResult index iface method = match omLookup iface index
   Some methods => omLookup method methods
   None => None
-
--- does the TRMC verdict hold for top-level function [name]?
-export
-isTrmcFn : TrmcVerdicts -> String -> Bool
-isTrmcFn v name = omHasKey name v.eligibleFns
-
--- does the TRMC verdict hold for the impl group of [method] at instance [key]?
-export
-isTrmcImpl : TrmcVerdicts -> String -> String -> Bool
-isTrmcImpl v method key = omHasKey (implGroupKey method key) v.eligibleImpls
 
 -- a function binding: it takes parameters, and it is not `main`
 isTopFn : CBind -> Bool
@@ -420,309 +385,9 @@ data DemandScope = DemandScope {
   jsBinds : OrdMap (String, (List String, String)),
   externFacts : OrdMap ExternDeclFact,
 }
-
-wasmDemandOf : OrdMap ExternDeclFact ->
-  OrdMap (String, (List String, String)) ->
-  List CBind ->
-  List CImplEntry ->
-  (WasmDemand, List String, List JsImport)
-wasmDemandOf externFacts jsBinds groups impls =
-  let start = DemandAcc {
-    seenUses = [],
-    seenKeys = omEmpty,
-    seenJs = omEmpty,
-    seenRefBox = False,
-    seenDivGuard = False,
-    seenArities = [],
-  }
-  let tops = filterList (b => bindName b /= "main") groups
-  let sc = DemandScope {
-    locals = omEmpty,
-    topFns =
-      omFromNames
-        (map bindName (filterList (b => not (isValBind b)) tops))
-        omEmpty,
-    topVals = omFromNames (map bindName (filterList isValBind tops)) omEmpty,
-    jsBinds = jsBinds,
-    externFacts = externFacts,
-  }
-  let acc = walkEach (dImpl sc) (walkEach (dBind sc) start groups) impls
-  (
-    WasmDemand {
-      uses = reverseL acc.seenUses,
-      refBox = acc.seenRefBox,
-      divGuard = acc.seenDivGuard,
-      tupleArities = reverseL acc.seenArities,
-    },
-    omKeys acc.seenKeys,
-    filterMap (k => omLookup k acc.seenJs) (omKeys acc.seenJs),
-  )
-
-walkEach : (DemandAcc -> a -> DemandAcc) -> DemandAcc -> List a -> DemandAcc
-walkEach _ acc [] = acc
-walkEach f acc (x :: xs) = walkEach f (f acc x) xs
-
--- `seenUses` holds at most one entry per `WasmUse` constructor, so the scan is
--- bounded.
-noteUse : DemandAcc -> WasmUse -> DemandAcc
-noteUse acc u =
-  if any (== u) acc.seenUses then
-    acc
-  else
-    { acc | seenUses = u :: acc.seenUses }
-
-noteKey : DemandAcc -> String -> DemandAcc
-noteKey acc k =
-  if omHasKey k acc.seenKeys then
-    acc
-  else
-    { acc | seenKeys = omInsert k () acc.seenKeys }
-
-noteArity : DemandAcc -> Int -> DemandAcc
-noteArity acc n =
-  if any (== n) acc.seenArities then
-    acc
-  else
-    { acc | seenArities = n :: acc.seenArities }
-
-noteRefBox : DemandAcc -> DemandAcc
-noteRefBox acc = if acc.seenRefBox then acc else { acc | seenRefBox = True }
-
--- an occurrence of a name: every demand and host key the catalog lists for it
-noteName : DemandAcc -> String -> DemandAcc
-noteName acc "Ref" = noteRefBox acc
-noteName acc "$withFileReadBound" = noteFileBound acc
-noteName acc "$withFileWriteBound" = noteFileBound acc
-noteName acc name =
-  walkEach
-    noteArity
-    (walkEach
-      noteKey
-      (walkEach noteUse acc (wasmUses name))
-      (wasmHostKeys name))
-    (wasmTupleArities name)
-
--- a name the emitter lowers as an extern: a user `js` binding, else a catalog
--- extern
-noteExtern : DemandScope -> DemandAcc -> String -> DemandAcc
-noteExtern sc acc name = match omLookup name sc.jsBinds
-  None => match externRuntimeKey sc.externFacts name
-    Some key => noteName acc key
-    None =>
-      if name == "$withFileReadBound" || name == "$withFileWriteBound" then
-        noteFileBound acc
-      else
-        acc
-  Some (js, (params, result)) =>
-    if omHasKey name acc.seenJs then
-      acc
-    else
-      let imp = JsImport {
-        medakaName = name,
-        jsName = js,
-        params = params,
-        result = result,
-      }
-      noteJsResult
-        (walkEach
-          noteJsParam
-          { acc | seenJs = omInsert name imp acc.seenJs }
-          params)
-        result
-
--- What one parameter head of a `js` import needs (WASM-SEMANTICS section 3.1): a
--- `String` or `Array` crosses on the path channel, an `Array` comes back on the
--- result channel, and a boxed head needs its type.
-noteJsParam : DemandAcc -> String -> DemandAcc
-noteJsParam acc "String" = walkEach noteKey (noteUse acc UseStr) jsPathKeys
-noteJsParam acc "Array" =
-  walkEach noteKey (noteUse acc UseArray) (jsPathKeys ++ jsResultKeys)
-noteJsParam acc head = noteJsBoxed acc head
-
--- What a `js` import's result head needs: a `String` comes back on the result
--- channel.
-noteJsResult : DemandAcc -> String -> DemandAcc
-noteJsResult acc "String" = walkEach noteKey (noteUse acc UseStr) jsResultKeys
-noteJsResult acc head = noteJsBoxed acc head
-
-noteJsBoxed : DemandAcc -> String -> DemandAcc
-noteJsBoxed acc "Float" = noteUse acc UseFloat
-noteJsBoxed acc "U64" = noteUse acc UseU64
-noteJsBoxed acc "I64" = noteUse acc UseI64
-noteJsBoxed acc _ = acc
-
-jsPathKeys : List String
-jsPathKeys = ["mdk_path_reset", "mdk_path_push"]
-
-jsResultKeys : List String
-jsResultKeys = ["mdk_result_len", "mdk_result_byte"]
-
--- a declared file bound pushes its grant, a cons list of $str elements
-noteFileBound : DemandAcc -> DemandAcc
-noteFileBound acc =
-  walkEach noteKey (noteUse (noteUse acc UseStr) UseList) fileBoundHostKeys
-
-noteTag : DemandAcc -> String -> DemandAcc
-noteTag acc "U64" = noteUse acc UseU64
-noteTag acc "I64" = noteUse acc UseI64
-noteTag acc _ = acc
-
--- `++` is runtime-dispatched ($mdk_append): the $str leaf concat and the cons list.
-noteBinop : DemandAcc -> String -> DemandAcc
-noteBinop acc "++" = noteUse (noteUse (noteUse acc UseStrLeaf) UseStr) UseList
-noteBinop acc "::" = noteUse acc UseList
-noteBinop acc "/" = { acc | seenDivGuard = True }
-noteBinop acc "%" = { acc | seenDivGuard = True }
-noteBinop acc _ = acc
-
--- the emitter's value-global partition (`isValBind` in wasm_emit.mdk)
-isValBind : CBind -> Bool
-isValBind (CBind _ [CClause [] _] _ _) = True
-isValBind _ = False
-
--- [sc] with every variable [pats] bind in scope
-bindIn : DemandScope -> List Pat -> DemandScope
-bindIn sc pats = match patVarsList pats
-  [] => sc
-  names => { sc | locals = omFromNames names sc.locals }
-
-isLocal : DemandScope -> String -> Bool
-isLocal sc x = omHasKey x sc.locals
-
-isCoreFn : DemandScope -> String -> Bool
-isCoreFn sc x = omHasKey ("core__" ++ x) sc.topFns
-
--- a name read as a value
-dVar : DemandScope -> DemandAcc -> String -> DemandAcc
-dVar sc acc x =
-  if isLocal sc x
-    || omHasKey x sc.topVals
-    || omHasKey x sc.topFns
-    || isCoreFn sc x then
-    acc
-  else
-    noteExtern sc acc x
-
-dBind : DemandScope -> DemandAcc -> CBind -> DemandAcc
-dBind sc acc (CBind _ clauses _ _) = walkEach (dClause sc) acc clauses
-
--- a clause's parameter patterns, then its body with them in scope
-dClause : DemandScope -> DemandAcc -> CClause -> DemandAcc
-dClause sc acc (CClause pats body) =
-  dExpr (bindIn sc pats) (walkEach dPat acc pats) body
-
-dImpl : DemandScope -> DemandAcc -> CImplEntry -> DemandAcc
-dImpl sc acc (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ pats b)) =
-  dExpr (bindIn sc pats) (walkEach dPat acc pats) b
-dImpl sc acc (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ pats b)) =
-  dExpr (bindIn sc pats) (walkEach dPat acc pats) b
-
-dExpr : DemandScope -> DemandAcc -> CExpr -> DemandAcc
-dExpr sc acc (CList es) = walkEach (dExpr sc) (noteUse acc UseList) es
-dExpr sc acc (CRangeList lo hi _) =
-  dExpr sc (dExpr sc (noteUse acc UseList) lo) hi
-dExpr sc acc (CTuple es) = walkEach (dExpr sc) (noteArity acc (listLen es)) es
-dExpr sc acc (CArray es) = walkEach (dExpr sc) (noteUse acc UseArray) es
-dExpr sc acc (CRangeArray lo hi _) =
-  dExpr sc (dExpr sc (noteUse acc UseArray) lo) hi
-dExpr sc acc (CIndex a i) = dExpr sc (dExpr sc (noteUse acc UseArray) a) i
-dExpr sc acc (CSlice a lo hi _) =
-  dExpr sc (dExpr sc (dExpr sc (noteUse acc UseArray) a) lo) hi
-dExpr sc acc (CRecord _ fields) = walkEach (dField sc) acc fields
-dExpr sc acc (CFieldAccess ex _ _ _) = dExpr sc acc ex
-dExpr sc acc (CRecordUpdate _ base fields) =
-  walkEach (dField sc) (dExpr sc acc base) fields
-dExpr sc acc (CVariantUpdate _ base fields) =
-  walkEach (dField sc) (dExpr sc acc base) fields
-dExpr sc acc (app@(CApp _ _ _)) =
-  let (hd, args) = flattenApp app []
-  walkEach (dExpr sc) (dAppHead sc acc hd) args
-dExpr sc acc (CVar x _) = dVar sc acc x
-dExpr _ acc (CLit (LFloat _)) = noteUse acc UseFloat
-dExpr _ acc (CLit (LU64 _ _)) = noteUse acc UseU64
-dExpr _ acc (CLit (LI64 _ _)) = noteUse acc UseI64
-dExpr _ acc (CLit (LString _)) = noteUse acc UseStr
-dExpr _ acc (CLit (LChar _)) = noteUse acc UseStr
-dExpr sc acc (CLam pats b) = dExpr (bindIn sc pats) acc b
-dExpr sc acc (CBinPrim op l r tag _) =
-  dExpr sc (dExpr sc (noteBinop (noteTag acc tag) op) l) r
-dExpr sc acc (CUnOp _ x) = dExpr sc acc x
-dExpr sc acc (CIf c t f) = dExpr sc (dExpr sc (dExpr sc acc c) t) f
-dExpr sc acc (CLet r pat a b) =
-  let inner = bindIn sc [pat]
-  dExpr inner (dExpr (if r then inner else sc) (dPat acc pat) a) b
-dExpr sc acc (CBlock stmts) = dStmts sc acc stmts
-dExpr sc acc (CDecision scrut arms tree) =
-  dTree (walkEach (dArm sc) (dExpr sc acc scrut) arms) tree
-dExpr sc acc (CMatch scrut arms) = walkEach (dArm sc) (dExpr sc acc scrut) arms
-dExpr sc acc (CLetGroup binds b) =
-  let inner = { sc | locals = omFromNames (map bindName binds) sc.locals }
-  dExpr inner (walkEach (dBind inner) acc binds) b
-dExpr _ acc _ = acc
-
--- an applied name: a local is a closure call, a `core__` function a call to it
-dAppHead : DemandScope -> DemandAcc -> CExpr -> DemandAcc
-dAppHead sc acc (CVar f _) =
-  if isLocal sc f || not (omHasKey f sc.topFns) && isCoreFn sc f then
-    acc
-  else if externRuntimeKey sc.externFacts f == Some "setRef" then
-    noteRefBox acc
-  else
-    noteExtern sc acc f
-dAppHead sc acc h = dExpr sc acc h
-
-dField : DemandScope -> DemandAcc -> CField -> DemandAcc
-dField sc acc (CField _ _ e) = dExpr sc acc e
-
--- an arm's pattern binds its guards and body; a `Pat <- e` guard binds the
--- guards after it and the body
-dArm : DemandScope -> DemandAcc -> CArm -> DemandAcc
-dArm sc acc (CArm pat guards body) =
-  dGuarded (bindIn sc [pat]) (dPat acc pat) guards body
-
-dGuarded : DemandScope -> DemandAcc -> List CGuard -> CExpr -> DemandAcc
-dGuarded sc acc [] body = dExpr sc acc body
-dGuarded sc acc ((CGBool g) :: rest) body =
-  dGuarded sc (dExpr sc acc g) rest body
-dGuarded sc acc ((CGBind p e) :: rest) body =
-  dGuarded (bindIn sc [p]) (dExpr sc (dPat acc p) e) rest body
-
--- a block's `let` binds the statements after it, and its own right side when
--- it is `rec`
-dStmts : DemandScope -> DemandAcc -> List CStmt -> DemandAcc
-dStmts _ acc [] = acc
-dStmts sc acc ((CSExpr e) :: rest) = dStmts sc (dExpr sc acc e) rest
-dStmts sc acc ((CSLet r pat e) :: rest) =
-  let inner = bindIn sc [pat]
-  dStmts inner (dExpr (if r then inner else sc) (dPat acc pat) e) rest
-dStmts sc acc ((CSAssign _ e) :: rest) = dStmts sc (dExpr sc acc e) rest
-
--- a pattern's collection heads: a cons or list pattern is a list, a tuple
--- pattern its arity
-dPat : DemandAcc -> Pat -> DemandAcc
-dPat acc (PCons h t) = dPat (dPat (noteUse acc UseList) h) t
-dPat acc (PList ps) = walkEach dPat (noteUse acc UseList) ps
-dPat acc (PTuple ps) = walkEach dPat (noteArity acc (listLen ps)) ps
-dPat acc (PCon _ args) = walkEach dPat acc args
-dPat acc (PAs _ _ _ p) = dPat acc p
-dPat acc _ = acc
-
--- a decision tree's switch heads, the lowered shape of list and tuple patterns
-dTree : DemandAcc -> CTree -> DemandAcc
-dTree acc (CTGuard _ fail) = dTree acc fail
-dTree acc (CTDrop sub) = dTree acc sub
-dTree acc (CTSwitch branches dft) = dTree (walkEach dBranch acc branches) dft
-dTree acc _ = acc
-
-dBranch : DemandAcc -> CTBranch -> DemandAcc
-dBranch acc (CTBranch h sub) = dTree (dSwitchHead acc h) sub
-
-dSwitchHead : DemandAcc -> CHead -> DemandAcc
-dSwitchHead acc HCons = noteUse acc UseList
-dSwitchHead acc HNil = noteUse acc UseList
-dSwitchHead acc (HTuple n) = noteArity acc n
-dSwitchHead acc _ = acc
 # DESUGAR
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true) (mem "WasmDemand" true) (mem "WasmDemandInputs" true) (mem "WasmDemandPlan" false) (mem "planWasmDemand" false) (mem "ctorFloatFieldIndex" false))))
+(DUse false (UseGroup ("backend" "wasm_names") ((mem "uniqueBinders" false))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "planExterns" false) (mem "requirementHostRows" false))))
 (DUse false (UseGroup ("backend" "global_plan") ((mem "GlobalInitPlan" false) (mem "planGlobals" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
@@ -735,20 +400,19 @@ dSwitchHead acc _ = acc
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "lazyGlobalNames" false))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false) (mem "patVarsList" false))))
-(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "target" (TyCon "Backend")) (field "externRequirements" (TyCon "ExternRequirements")) (field "entryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport")))))) ())
-(DData Public "JsImport" () ((variant "JsImport" (ConNamed (field "medakaName" (TyCon "String")) (field "jsName" (TyCon "String")) (field "params" (TyApp (TyCon "List") (TyCon "String"))) (field "result" (TyCon "String"))))) ())
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" true) (mem "SelfRef" true) (mem "flattenApp" false) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false) (mem "patVarsList" false))))
+(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "target" (TyCon "Backend")) (field "externRequirements" (TyCon "ExternRequirements")) (field "entryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "wasmInputs" (TyCon "WasmDemandInputs")) (field "wasmPhysical" (TyApp (TyCon "Option") (TyCon "WasmDemandPlan"))) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport")))))) ())
 (DData Public "ReachUnits" () ((variant "ReachUnits" (ConNamed (field "total" (TyCon "Int")) (field "kept" (TyCon "Int"))))) ())
-(DData Public "WasmDemand" () ((variant "WasmDemand" (ConNamed (field "uses" (TyApp (TyCon "List") (TyCon "WasmUse"))) (field "refBox" (TyCon "Bool")) (field "divGuard" (TyCon "Bool")) (field "tupleArities" (TyApp (TyCon "List") (TyCon "Int")))))) ())
-(DData Public "TrmcVerdicts" () ((variant "TrmcVerdicts" (ConNamed (field "eligibleFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "eligibleImpls" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeSig true "buildEmitPlan" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "CProgram") (TyCon "EmitPlan")))))
-(DFunDef false "buildEmitPlan" ((PVar "target") (PVar "domain") (PVar "prog")) (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "target")) (EVar "domain")) (EVar "None")) (EVar "prog")))
-(DTypeSig true "buildEmitPlanReached" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "CProgram") (TyTuple (TyCon "EmitPlan") (TyCon "CProgram")))))
-(DFunDef false "buildEmitPlanReached" ((PVar "domain") (PVar "prog")) (EBlock (DoLet false false (PVar "reached") (EApp (EVar "wasmReachFilter") (EVar "prog"))) (DoLet false false (PVar "units") (ERecordCreate "ReachUnits" ((fa "total" (EApp (EVar "programUnitCount") (EVar "prog"))) (fa "kept" (EApp (EVar "programUnitCount") (EVar "reached")))))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "WasmBackend")) (EVar "domain")) (EApp (EVar "Some") (EVar "units"))) (EVar "reached")) (EVar "reached")))))
+(DFunDef false "buildEmitPlan" ((PVar "target") (PVar "domain") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "target")) (EVar "domain")) (EVar "None")) (EVar "omEmpty")) (EVar "prog")))
+(DTypeSig true "buildEmitPlanReached" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyTuple (TyCon "EmitPlan") (TyCon "CProgram"))))))
+(DFunDef false "buildEmitPlanReached" ((PVar "domain") (PVar "ctorFields") (PVar "prog")) (EBlock (DoLet false false (PVar "reached") (EApp (EVar "wasmReachFilter") (EVar "prog"))) (DoLet false false (PVar "units") (ERecordCreate "ReachUnits" ((fa "total" (EApp (EVar "programUnitCount") (EVar "prog"))) (fa "kept" (EApp (EVar "programUnitCount") (EVar "reached")))))) (DoLet false false (PVar "prepared") (EApp (EVar "uniqueBinders") (EVar "reached"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "WasmBackend")) (EVar "domain")) (EApp (EVar "Some") (EVar "units"))) (EVar "ctorFields")) (EVar "prepared")) (EVar "prepared")))))
+(DTypeSig true "prepareWasmPlan" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyTuple (TyCon "EmitPlan") (TyCon "CProgram"))))))
+(DFunDef false "prepareWasmPlan" ((PVar "domain") (PVar "ctorFields") (PVar "prog")) (EBlock (DoLet false false (PVar "prepared") (EApp (EVar "uniqueBinders") (EVar "prog"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "WasmBackend")) (EVar "domain")) (EVar "None")) (EVar "ctorFields")) (EVar "prepared")) (EVar "prepared")))))
 (DTypeSig false "programUnitCount" (TyFun (TyCon "CProgram") (TyCon "Int")))
 (DFunDef false "programUnitCount" ((PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild PWild)) (EBinOp "+" (EApp (EVar "listLen") (EVar "groups")) (EApp (EVar "listLen") (EVar "impls"))))
-(DTypeSig false "planOver" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "Option") (TyCon "ReachUnits")) (TyFun (TyCon "CProgram") (TyCon "EmitPlan"))))))
-(DFunDef false "planOver" ((PVar "target") (PVar "domain") (PVar "reach") (PVar "prog")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") (PVar "ctorArs") PWild (PVar "impls") PWild (PVar "facts")) (EVar "prog")) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoLet false false (PVar "requirements") (EApp (EApp (EApp (EVar "planExterns") (EVar "target")) (EVar "domain")) (EVar "prog"))) (DoLet false false (PTuple (PVar "demand") (PVar "keys") PWild) (EMatch (EVar "target") (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "wasmDemandOf") (EFieldAccess (EVar "facts") "factExterns")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "hostRows") (ELit (LString "js"))) (EApp (EVar "externHeadRows") (EVar "prog"))))) (EVar "omEmpty"))) (EVar "groups")) (EVar "impls"))) (arm (PCon "LlvmBackend") () (ETuple (EVar "noDemand") (EListLit) (EListLit))) (arm (PCon "EvalBackend") () (ETuple (EVar "noDemand") (EListLit) (EListLit))))) (DoLet false false (PVar "lazy") (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (DoLet false false (PVar "eager") (EApp (EVar "eagerReachMap") (EVar "groups"))) (DoExpr (ERecordCreate "EmitPlan" ((fa "target" (EVar "target")) (fa "externRequirements" (EVar "requirements")) (fa "entryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "methodResults" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (fa "wasmOnlyReach" (EVar "reach")) (fa "lazyGlobals" (EVar "lazy")) (fa "eagerReach" (EVar "eager")) (fa "globalInit" (EApp (EApp (EApp (EVar "planGlobals") (EVar "prog")) (EVar "lazy")) (EVar "eager"))) (fa "trmc" (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")))))) (fa "dispGroups" (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))) (fa "wasmDemand" (EVar "demand")) (fa "hostKeys" (EVar "keys")) (fa "jsImports" (EMatch (EVar "target") (arm (PCon "WasmBackend") () (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "symbol") (PTuple (PVar "host") (PTuple (PVar "params") (PVar "result"))))) (ERecordCreate "JsImport" ((fa "medakaName" (EVar "symbol")) (fa "jsName" (EVar "host")) (fa "params" (EVar "params")) (fa "result" (EVar "result")))))) (EApp (EVar "requirementHostRows") (EVar "requirements")))) (arm PWild () (EListLit)))))))))
+(DTypeSig false "planOver" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "Option") (TyCon "ReachUnits")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyCon "EmitPlan")))))))
+(DFunDef false "planOver" ((PVar "target") (PVar "domain") (PVar "reach") (PVar "ctorFields") (PVar "prog")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") (PVar "ctorArs") PWild (PVar "impls") PWild (PVar "facts")) (EVar "prog")) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoLet false false (PVar "requirements") (EApp (EApp (EApp (EVar "planExterns") (EVar "target")) (EVar "domain")) (EVar "prog"))) (DoLet false false (PVar "lazy") (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (DoLet false false (PVar "eager") (EApp (EVar "eagerReachMap") (EVar "groups"))) (DoLet false false (PVar "globalInit") (EApp (EApp (EApp (EVar "planGlobals") (EVar "prog")) (EVar "lazy")) (EVar "eager"))) (DoLet false false (PVar "trmc") (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")))))) (DoLet false false (PVar "dispatch") (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "inputs") (ERecordCreate "WasmDemandInputs" ((fa "ctorFloatFields" (EVar "ctorFields")) (fa "lazyGlobals" (EVar "lazy")) (fa "globalInit" (EVar "globalInit")) (fa "trmcVerdicts" (EVar "trmc")) (fa "dispatchGroups" (EVar "dispatch"))))) (DoLet false false (PVar "physical") (EMatch (EVar "target") (arm (PCon "WasmBackend") () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "planWasmDemand") (EVar "inputs")) (EVar "prog")) (EVar "requirements")))) (arm PWild () (EVar "None")))) (DoExpr (ERecordCreate "EmitPlan" ((fa "target" (EVar "target")) (fa "externRequirements" (EVar "requirements")) (fa "entryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "methodResults" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (fa "wasmOnlyReach" (EVar "reach")) (fa "lazyGlobals" (EVar "lazy")) (fa "eagerReach" (EVar "eager")) (fa "globalInit" (EVar "globalInit")) (fa "trmc" (EVar "trmc")) (fa "dispGroups" (EVar "dispatch")) (fa "wasmDemand" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceDemand")) (arm (PCon "None") () (EVar "noDemand")))) (fa "wasmInputs" (EVar "inputs")) (fa "wasmPhysical" (EVar "physical")) (fa "hostKeys" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceHostKeys")) (arm (PCon "None") () (EListLit)))) (fa "jsImports" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "jsImports")) (arm (PCon "None") () (EListLit)))))))))
 (DTypeSig true "planEntryMainIsUnit" (TyFun (TyCon "EmitPlan") (TyCon "Bool")))
 (DFunDef false "planEntryMainIsUnit" ((PVar "plan")) (EMatch (EFieldAccess (EVar "plan") "entryOutcome") (arm (PCon "Some" (PVar "outcome")) () (EFieldAccess (EVar "outcome") "entryMainIsUnit")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "planEntryMainIsFloat" (TyFun (TyCon "EmitPlan") (TyCon "Bool")))
@@ -759,10 +423,6 @@ dSwitchHead acc _ = acc
 (DFunDef false "insertMethodResult" ((PVar "acc") (PVar "row")) (EBlock (DoLet false false (PVar "methods") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "row") "iface")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "row") "iface")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "row") "method")) (EVar "row")) (EVar "methods"))) (EVar "acc")))))
 (DTypeSig true "lookupMethodResult" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodResultFact"))))))
 (DFunDef false "lookupMethodResult" ((PVar "index") (PVar "iface") (PVar "method")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "iface")) (EVar "index")) (arm (PCon "Some" (PVar "methods")) () (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "methods"))) (arm (PCon "None") () (EVar "None"))))
-(DTypeSig true "isTrmcFn" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isTrmcFn" ((PVar "v") (PVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "v") "eligibleFns")))
-(DTypeSig true "isTrmcImpl" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "isTrmcImpl" ((PVar "v") (PVar "method") (PVar "key")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implGroupKey") (EVar "method")) (EVar "key"))) (EFieldAccess (EVar "v") "eligibleImpls")))
 (DTypeSig false "isTopFn" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isTopFn" ((PCon "CBind" (PLit (LString "main")) PWild PWild PWild)) (EVar "False"))
 (DFunDef false "isTopFn" ((PCon "CBind" PWild (PCons (PCon "CClause" (PCons PWild PWild) PWild) PWild) PWild PWild)) (EVar "True"))
@@ -800,137 +460,9 @@ dSwitchHead acc _ = acc
 (DFunDef false "noDemand" () (ERecordCreate "WasmDemand" ((fa "uses" (EListLit)) (fa "refBox" (EVar "False")) (fa "divGuard" (EVar "False")) (fa "tupleArities" (EListLit)))))
 (DData Private "DemandAcc" () ((variant "DemandAcc" (ConNamed (field "seenUses" (TyApp (TyCon "List") (TyCon "WasmUse"))) (field "seenKeys" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "seenJs" (TyApp (TyCon "OrdMap") (TyCon "JsImport"))) (field "seenRefBox" (TyCon "Bool")) (field "seenDivGuard" (TyCon "Bool")) (field "seenArities" (TyApp (TyCon "List") (TyCon "Int")))))) ())
 (DData Private "DemandScope" () ((variant "DemandScope" (ConNamed (field "locals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "topFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "topVals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "jsBinds" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (field "externFacts" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")))))) ())
-(DTypeSig false "wasmDemandOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyTuple (TyCon "WasmDemand") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "JsImport"))))))))
-(DFunDef false "wasmDemandOf" ((PVar "externFacts") (PVar "jsBinds") (PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "start") (ERecordCreate "DemandAcc" ((fa "seenUses" (EListLit)) (fa "seenKeys" (EVar "omEmpty")) (fa "seenJs" (EVar "omEmpty")) (fa "seenRefBox" (EVar "False")) (fa "seenDivGuard" (EVar "False")) (fa "seenArities" (EListLit))))) (DoLet false false (PVar "tops") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "/=" (EApp (EVar "bindName") (EVar "b")) (ELit (LString "main"))))) (EVar "groups"))) (DoLet false false (PVar "sc") (ERecordCreate "DemandScope" ((fa "locals" (EVar "omEmpty")) (fa "topFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isValBind") (EVar "b"))))) (EVar "tops")))) (EVar "omEmpty"))) (fa "topVals" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (EVar "isValBind")) (EVar "tops")))) (EVar "omEmpty"))) (fa "jsBinds" (EVar "jsBinds")) (fa "externFacts" (EVar "externFacts"))))) (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dImpl") (EVar "sc"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dBind") (EVar "sc"))) (EVar "start")) (EVar "groups"))) (EVar "impls"))) (DoExpr (ETuple (ERecordCreate "WasmDemand" ((fa "uses" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenUses"))) (fa "refBox" (EFieldAccess (EVar "acc") "seenRefBox")) (fa "divGuard" (EFieldAccess (EVar "acc") "seenDivGuard")) (fa "tupleArities" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenArities"))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "seenKeys")) (EApp (EApp (EVar "filterMap") (ELam ((PVar "k")) (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EVar "acc") "seenJs")))) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "seenJs")))))))
-(DTypeSig false "walkEach" (TyFun (TyFun (TyCon "DemandAcc") (TyFun (TyVar "a") (TyCon "DemandAcc"))) (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "DemandAcc")))))
-(DFunDef false "walkEach" (PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "walkEach" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs")))
-(DTypeSig false "noteUse" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "WasmUse") (TyCon "DemandAcc"))))
-(DFunDef false "noteUse" ((PVar "acc") (PVar "u")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "u")))) (EFieldAccess (EVar "acc") "seenUses")) (EVar "acc") (ERecordUpdate (EVar "acc") ((fa "seenUses" (EBinOp "::" (EVar "u") (EFieldAccess (EVar "acc") "seenUses")))))))
-(DTypeSig false "noteKey" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteKey" ((PVar "acc") (PVar "k")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "k")) (EFieldAccess (EVar "acc") "seenKeys")) (EVar "acc") (ERecordUpdate (EVar "acc") ((fa "seenKeys" (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ELit LUnit)) (EFieldAccess (EVar "acc") "seenKeys")))))))
-(DTypeSig false "noteArity" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "Int") (TyCon "DemandAcc"))))
-(DFunDef false "noteArity" ((PVar "acc") (PVar "n")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "n")))) (EFieldAccess (EVar "acc") "seenArities")) (EVar "acc") (ERecordUpdate (EVar "acc") ((fa "seenArities" (EBinOp "::" (EVar "n") (EFieldAccess (EVar "acc") "seenArities")))))))
-(DTypeSig false "noteRefBox" (TyFun (TyCon "DemandAcc") (TyCon "DemandAcc")))
-(DFunDef false "noteRefBox" ((PVar "acc")) (EIf (EFieldAccess (EVar "acc") "seenRefBox") (EVar "acc") (ERecordUpdate (EVar "acc") ((fa "seenRefBox" (EVar "True"))))))
-(DTypeSig false "noteName" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteName" ((PVar "acc") (PLit (LString "Ref"))) (EApp (EVar "noteRefBox") (EVar "acc")))
-(DFunDef false "noteName" ((PVar "acc") (PLit (LString "$withFileReadBound"))) (EApp (EVar "noteFileBound") (EVar "acc")))
-(DFunDef false "noteName" ((PVar "acc") (PLit (LString "$withFileWriteBound"))) (EApp (EVar "noteFileBound") (EVar "acc")))
-(DFunDef false "noteName" ((PVar "acc") (PVar "name")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteArity")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteUse")) (EVar "acc")) (EApp (EVar "wasmUses") (EVar "name")))) (EApp (EVar "wasmHostKeys") (EVar "name")))) (EApp (EVar "wasmTupleArities") (EVar "name"))))
-(DTypeSig false "noteExtern" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc")))))
-(DFunDef false "noteExtern" ((PVar "sc") (PVar "acc") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "sc") "jsBinds")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "sc") "externFacts")) (EVar "name")) (arm (PCon "Some" (PVar "key")) () (EApp (EApp (EVar "noteName") (EVar "acc")) (EVar "key"))) (arm (PCon "None") () (EIf (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "name") (ELit (LString "$withFileWriteBound")))) (EApp (EVar "noteFileBound") (EVar "acc")) (EVar "acc"))))) (arm (PCon "Some" (PTuple (PVar "js") (PTuple (PVar "params") (PVar "result")))) () (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "acc") "seenJs")) (EVar "acc") (EBlock (DoLet false false (PVar "imp") (ERecordCreate "JsImport" ((fa "medakaName" (EVar "name")) (fa "jsName" (EVar "js")) (fa "params" (EVar "params")) (fa "result" (EVar "result"))))) (DoExpr (EApp (EApp (EVar "noteJsResult") (EApp (EApp (EApp (EVar "walkEach") (EVar "noteJsParam")) (ERecordUpdate (EVar "acc") ((fa "seenJs" (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "imp")) (EFieldAccess (EVar "acc") "seenJs")))))) (EVar "params"))) (EVar "result"))))))))
-(DTypeSig false "noteJsParam" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteJsParam" ((PVar "acc") (PLit (LString "String"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr"))) (EVar "jsPathKeys")))
-(DFunDef false "noteJsParam" ((PVar "acc") (PLit (LString "Array"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EBinOp "++" (EVar "jsPathKeys") (EVar "jsResultKeys"))))
-(DFunDef false "noteJsParam" ((PVar "acc") (PVar "head")) (EApp (EApp (EVar "noteJsBoxed") (EVar "acc")) (EVar "head")))
-(DTypeSig false "noteJsResult" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteJsResult" ((PVar "acc") (PLit (LString "String"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr"))) (EVar "jsResultKeys")))
-(DFunDef false "noteJsResult" ((PVar "acc") (PVar "head")) (EApp (EApp (EVar "noteJsBoxed") (EVar "acc")) (EVar "head")))
-(DTypeSig false "noteJsBoxed" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteJsBoxed" ((PVar "acc") (PLit (LString "Float"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseFloat")))
-(DFunDef false "noteJsBoxed" ((PVar "acc") (PLit (LString "U64"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseU64")))
-(DFunDef false "noteJsBoxed" ((PVar "acc") (PLit (LString "I64"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseI64")))
-(DFunDef false "noteJsBoxed" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "jsPathKeys" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "jsPathKeys" () (EListLit (ELit (LString "mdk_path_reset")) (ELit (LString "mdk_path_push"))))
-(DTypeSig false "jsResultKeys" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "jsResultKeys" () (EListLit (ELit (LString "mdk_result_len")) (ELit (LString "mdk_result_byte"))))
-(DTypeSig false "noteFileBound" (TyFun (TyCon "DemandAcc") (TyCon "DemandAcc")))
-(DFunDef false "noteFileBound" ((PVar "acc")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EVar "noteUse") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr"))) (EVar "UseList"))) (EVar "fileBoundHostKeys")))
-(DTypeSig false "noteTag" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteTag" ((PVar "acc") (PLit (LString "U64"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseU64")))
-(DFunDef false "noteTag" ((PVar "acc") (PLit (LString "I64"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseI64")))
-(DFunDef false "noteTag" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "noteBinop" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "++"))) (EApp (EApp (EVar "noteUse") (EApp (EApp (EVar "noteUse") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStrLeaf"))) (EVar "UseStr"))) (EVar "UseList")))
-(DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "::"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList")))
-(DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "/"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
-(DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "%"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
-(DFunDef false "noteBinop" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "isValBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
-(DFunDef false "isValBind" ((PCon "CBind" PWild (PList (PCon "CClause" (PList) PWild)) PWild PWild)) (EVar "True"))
-(DFunDef false "isValBind" (PWild) (EVar "False"))
-(DTypeSig false "bindIn" (TyFun (TyCon "DemandScope") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "DemandScope"))))
-(DFunDef false "bindIn" ((PVar "sc") (PVar "pats")) (EMatch (EApp (EVar "patVarsList") (EVar "pats")) (arm (PList) () (EVar "sc")) (arm (PVar "names") () (ERecordUpdate (EVar "sc") ((fa "locals" (EApp (EApp (EVar "omFromNames") (EVar "names")) (EFieldAccess (EVar "sc") "locals"))))))))
-(DTypeSig false "isLocal" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isLocal" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "locals")))
-(DTypeSig false "isCoreFn" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isCoreFn" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EFieldAccess (EVar "sc") "topFns")))
-(DTypeSig false "dVar" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc")))))
-(DFunDef false "dVar" ((PVar "sc") (PVar "acc") (PVar "x")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topVals"))) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "x"))) (EVar "acc") (EApp (EApp (EApp (EVar "noteExtern") (EVar "sc")) (EVar "acc")) (EVar "x"))))
-(DTypeSig false "dBind" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CBind") (TyCon "DemandAcc")))))
-(DFunDef false "dBind" ((PVar "sc") (PVar "acc") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dClause") (EVar "sc"))) (EVar "acc")) (EVar "clauses")))
-(DTypeSig false "dClause" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CClause") (TyCon "DemandAcc")))))
-(DFunDef false "dClause" ((PVar "sc") (PVar "acc") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "body")))
-(DTypeSig false "dImpl" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CImplEntry") (TyCon "DemandAcc")))))
-(DFunDef false "dImpl" ((PVar "sc") (PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
-(DFunDef false "dImpl" ((PVar "sc") (PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
-(DTypeSig false "dExpr" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc")))))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteArity") (EVar "acc")) (EApp (EVar "listLen") (EVar "es")))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "i")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EVar "acc")) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "ex")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "base"))) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "base"))) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EApp (EVar "dAppHead") (EVar "sc")) (EVar "acc")) (EVar "hd"))) (EVar "args")))))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EApp (EVar "dVar") (EVar "sc")) (EVar "acc")) (EVar "x")))
-(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LFloat" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseFloat")))
-(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LU64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseU64")))
-(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LI64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseI64")))
-(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LString" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
-(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LChar" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLam" (PVar "pats") (PVar "b"))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EVar "acc")) (EVar "b")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteBinop") (EApp (EApp (EVar "noteTag") (EVar "acc")) (EVar "tag"))) (EVar "op"))) (EVar "l"))) (EVar "r")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "x")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "c"))) (EVar "t"))) (EVar "f")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (DoExpr (EApp (EApp (EApp (EVar "dExpr") (EVar "inner")) (EApp (EApp (EApp (EVar "dExpr") (EIf (EVar "r") (EVar "inner") (EVar "sc"))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "a"))) (EVar "b")))))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EVar "acc")) (EVar "stmts")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms"))) (EVar "tree")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBlock (DoLet false false (PVar "inner") (ERecordUpdate (EVar "sc") ((fa "locals" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EVar "binds"))) (EFieldAccess (EVar "sc") "locals")))))) (DoExpr (EApp (EApp (EApp (EVar "dExpr") (EVar "inner")) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dBind") (EVar "inner"))) (EVar "acc")) (EVar "binds"))) (EVar "b")))))
-(DFunDef false "dExpr" (PWild (PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "dAppHead" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc")))))
-(DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PCon "CVar" (PVar "f") PWild)) (EIf (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "f")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "f")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "f")))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "sc") "externFacts")) (EVar "f")) (EApp (EVar "Some") (ELit (LString "setRef")))) (EApp (EVar "noteRefBox") (EVar "acc")) (EApp (EApp (EApp (EVar "noteExtern") (EVar "sc")) (EVar "acc")) (EVar "f")))))
-(DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PVar "h")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "h")))
-(DTypeSig false "dField" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CField") (TyCon "DemandAcc")))))
-(DFunDef false "dField" ((PVar "sc") (PVar "acc") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e")))
-(DTypeSig false "dArm" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CArm") (TyCon "DemandAcc")))))
-(DFunDef false "dArm" ((PVar "sc") (PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "guards")) (EVar "body")))
-(DTypeSig false "dGuarded" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyCon "DemandAcc"))))))
-(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PList) (PVar "body")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "body")))
-(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "g"))) (EVar "rest")) (EVar "body")))
-(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "p")))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "p"))) (EVar "e"))) (EVar "rest")) (EVar "body")))
-(DTypeSig false "dStmts" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "DemandAcc")))))
-(DFunDef false "dStmts" (PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e"))) (EVar "rest")))
-(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSLet" (PVar "r") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (DoExpr (EApp (EApp (EApp (EVar "dStmts") (EVar "inner")) (EApp (EApp (EApp (EVar "dExpr") (EIf (EVar "r") (EVar "inner") (EVar "sc"))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "e"))) (EVar "rest")))))
-(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSAssign" PWild (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e"))) (EVar "rest")))
-(DTypeSig false "dPat" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "Pat") (TyCon "DemandAcc"))))
-(DFunDef false "dPat" ((PVar "acc") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "dPat") (EApp (EApp (EVar "dPat") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "h"))) (EVar "t")))
-(DFunDef false "dPat" ((PVar "acc") (PCon "PList" (PVar "ps"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "ps")))
-(DFunDef false "dPat" ((PVar "acc") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EApp (EApp (EVar "noteArity") (EVar "acc")) (EApp (EVar "listLen") (EVar "ps")))) (EVar "ps")))
-(DFunDef false "dPat" ((PVar "acc") (PCon "PCon" PWild (PVar "args"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "args")))
-(DFunDef false "dPat" ((PVar "acc") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "p")))
-(DFunDef false "dPat" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "dTree" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CTree") (TyCon "DemandAcc"))))
-(DFunDef false "dTree" ((PVar "acc") (PCon "CTGuard" PWild (PVar "fail"))) (EApp (EApp (EVar "dTree") (EVar "acc")) (EVar "fail")))
-(DFunDef false "dTree" ((PVar "acc") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EVar "dTree") (EVar "acc")) (EVar "sub")))
-(DFunDef false "dTree" ((PVar "acc") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EApp (EVar "walkEach") (EVar "dBranch")) (EVar "acc")) (EVar "branches"))) (EVar "dft")))
-(DFunDef false "dTree" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "dBranch" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CTBranch") (TyCon "DemandAcc"))))
-(DFunDef false "dBranch" ((PVar "acc") (PCon "CTBranch" (PVar "h") (PVar "sub"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EVar "dSwitchHead") (EVar "acc")) (EVar "h"))) (EVar "sub")))
-(DTypeSig false "dSwitchHead" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CHead") (TyCon "DemandAcc"))))
-(DFunDef false "dSwitchHead" ((PVar "acc") (PCon "HCons")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList")))
-(DFunDef false "dSwitchHead" ((PVar "acc") (PCon "HNil")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList")))
-(DFunDef false "dSwitchHead" ((PVar "acc") (PCon "HTuple" (PVar "n"))) (EApp (EApp (EVar "noteArity") (EVar "acc")) (EVar "n")))
-(DFunDef false "dSwitchHead" ((PVar "acc") PWild) (EVar "acc"))
 # MARK
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true) (mem "WasmDemand" true) (mem "WasmDemandInputs" true) (mem "WasmDemandPlan" false) (mem "planWasmDemand" false) (mem "ctorFloatFieldIndex" false))))
+(DUse false (UseGroup ("backend" "wasm_names") ((mem "uniqueBinders" false))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "planExterns" false) (mem "requirementHostRows" false))))
 (DUse false (UseGroup ("backend" "global_plan") ((mem "GlobalInitPlan" false) (mem "planGlobals" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
@@ -943,20 +475,19 @@ dSwitchHead acc _ = acc
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "lazyGlobalNames" false))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false) (mem "patVarsList" false))))
-(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "target" (TyCon "Backend")) (field "externRequirements" (TyCon "ExternRequirements")) (field "entryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport")))))) ())
-(DData Public "JsImport" () ((variant "JsImport" (ConNamed (field "medakaName" (TyCon "String")) (field "jsName" (TyCon "String")) (field "params" (TyApp (TyCon "List") (TyCon "String"))) (field "result" (TyCon "String"))))) ())
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" true) (mem "SelfRef" true) (mem "flattenApp" false) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false) (mem "patVarsList" false))))
+(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "target" (TyCon "Backend")) (field "externRequirements" (TyCon "ExternRequirements")) (field "entryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "wasmInputs" (TyCon "WasmDemandInputs")) (field "wasmPhysical" (TyApp (TyCon "Option") (TyCon "WasmDemandPlan"))) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport")))))) ())
 (DData Public "ReachUnits" () ((variant "ReachUnits" (ConNamed (field "total" (TyCon "Int")) (field "kept" (TyCon "Int"))))) ())
-(DData Public "WasmDemand" () ((variant "WasmDemand" (ConNamed (field "uses" (TyApp (TyCon "List") (TyCon "WasmUse"))) (field "refBox" (TyCon "Bool")) (field "divGuard" (TyCon "Bool")) (field "tupleArities" (TyApp (TyCon "List") (TyCon "Int")))))) ())
-(DData Public "TrmcVerdicts" () ((variant "TrmcVerdicts" (ConNamed (field "eligibleFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "eligibleImpls" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeSig true "buildEmitPlan" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "CProgram") (TyCon "EmitPlan")))))
-(DFunDef false "buildEmitPlan" ((PVar "target") (PVar "domain") (PVar "prog")) (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "target")) (EVar "domain")) (EVar "None")) (EVar "prog")))
-(DTypeSig true "buildEmitPlanReached" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "CProgram") (TyTuple (TyCon "EmitPlan") (TyCon "CProgram")))))
-(DFunDef false "buildEmitPlanReached" ((PVar "domain") (PVar "prog")) (EBlock (DoLet false false (PVar "reached") (EApp (EVar "wasmReachFilter") (EVar "prog"))) (DoLet false false (PVar "units") (ERecordCreate "ReachUnits" ((fa "total" (EApp (EVar "programUnitCount") (EVar "prog"))) (fa "kept" (EApp (EVar "programUnitCount") (EVar "reached")))))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "WasmBackend")) (EVar "domain")) (EApp (EVar "Some") (EVar "units"))) (EVar "reached")) (EVar "reached")))))
+(DFunDef false "buildEmitPlan" ((PVar "target") (PVar "domain") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "target")) (EVar "domain")) (EVar "None")) (EVar "omEmpty")) (EVar "prog")))
+(DTypeSig true "buildEmitPlanReached" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyTuple (TyCon "EmitPlan") (TyCon "CProgram"))))))
+(DFunDef false "buildEmitPlanReached" ((PVar "domain") (PVar "ctorFields") (PVar "prog")) (EBlock (DoLet false false (PVar "reached") (EApp (EVar "wasmReachFilter") (EVar "prog"))) (DoLet false false (PVar "units") (ERecordCreate "ReachUnits" ((fa "total" (EApp (EVar "programUnitCount") (EVar "prog"))) (fa "kept" (EApp (EVar "programUnitCount") (EVar "reached")))))) (DoLet false false (PVar "prepared") (EApp (EVar "uniqueBinders") (EVar "reached"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "WasmBackend")) (EVar "domain")) (EApp (EVar "Some") (EVar "units"))) (EVar "ctorFields")) (EVar "prepared")) (EVar "prepared")))))
+(DTypeSig true "prepareWasmPlan" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyTuple (TyCon "EmitPlan") (TyCon "CProgram"))))))
+(DFunDef false "prepareWasmPlan" ((PVar "domain") (PVar "ctorFields") (PVar "prog")) (EBlock (DoLet false false (PVar "prepared") (EApp (EVar "uniqueBinders") (EVar "prog"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "WasmBackend")) (EVar "domain")) (EVar "None")) (EVar "ctorFields")) (EVar "prepared")) (EVar "prepared")))))
 (DTypeSig false "programUnitCount" (TyFun (TyCon "CProgram") (TyCon "Int")))
 (DFunDef false "programUnitCount" ((PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild PWild)) (EBinOp "+" (EApp (EVar "listLen") (EVar "groups")) (EApp (EVar "listLen") (EVar "impls"))))
-(DTypeSig false "planOver" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "Option") (TyCon "ReachUnits")) (TyFun (TyCon "CProgram") (TyCon "EmitPlan"))))))
-(DFunDef false "planOver" ((PVar "target") (PVar "domain") (PVar "reach") (PVar "prog")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") (PVar "ctorArs") PWild (PVar "impls") PWild (PVar "facts")) (EVar "prog")) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoLet false false (PVar "requirements") (EApp (EApp (EApp (EVar "planExterns") (EVar "target")) (EVar "domain")) (EVar "prog"))) (DoLet false false (PTuple (PVar "demand") (PVar "keys") PWild) (EMatch (EVar "target") (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "wasmDemandOf") (EFieldAccess (EVar "facts") "factExterns")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "hostRows") (ELit (LString "js"))) (EApp (EVar "externHeadRows") (EVar "prog"))))) (EVar "omEmpty"))) (EVar "groups")) (EVar "impls"))) (arm (PCon "LlvmBackend") () (ETuple (EVar "noDemand") (EListLit) (EListLit))) (arm (PCon "EvalBackend") () (ETuple (EVar "noDemand") (EListLit) (EListLit))))) (DoLet false false (PVar "lazy") (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (DoLet false false (PVar "eager") (EApp (EVar "eagerReachMap") (EVar "groups"))) (DoExpr (ERecordCreate "EmitPlan" ((fa "target" (EVar "target")) (fa "externRequirements" (EVar "requirements")) (fa "entryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "methodResults" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (fa "wasmOnlyReach" (EVar "reach")) (fa "lazyGlobals" (EVar "lazy")) (fa "eagerReach" (EVar "eager")) (fa "globalInit" (EApp (EApp (EApp (EVar "planGlobals") (EVar "prog")) (EVar "lazy")) (EVar "eager"))) (fa "trmc" (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")))))) (fa "dispGroups" (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))) (fa "wasmDemand" (EVar "demand")) (fa "hostKeys" (EVar "keys")) (fa "jsImports" (EMatch (EVar "target") (arm (PCon "WasmBackend") () (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "symbol") (PTuple (PVar "host") (PTuple (PVar "params") (PVar "result"))))) (ERecordCreate "JsImport" ((fa "medakaName" (EVar "symbol")) (fa "jsName" (EVar "host")) (fa "params" (EVar "params")) (fa "result" (EVar "result")))))) (EApp (EVar "requirementHostRows") (EVar "requirements")))) (arm PWild () (EListLit)))))))))
+(DTypeSig false "planOver" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "Option") (TyCon "ReachUnits")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyCon "EmitPlan")))))))
+(DFunDef false "planOver" ((PVar "target") (PVar "domain") (PVar "reach") (PVar "ctorFields") (PVar "prog")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") (PVar "ctorArs") PWild (PVar "impls") PWild (PVar "facts")) (EVar "prog")) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoLet false false (PVar "requirements") (EApp (EApp (EApp (EVar "planExterns") (EVar "target")) (EVar "domain")) (EVar "prog"))) (DoLet false false (PVar "lazy") (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (DoLet false false (PVar "eager") (EApp (EVar "eagerReachMap") (EVar "groups"))) (DoLet false false (PVar "globalInit") (EApp (EApp (EApp (EVar "planGlobals") (EVar "prog")) (EVar "lazy")) (EVar "eager"))) (DoLet false false (PVar "trmc") (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")))))) (DoLet false false (PVar "dispatch") (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "inputs") (ERecordCreate "WasmDemandInputs" ((fa "ctorFloatFields" (EVar "ctorFields")) (fa "lazyGlobals" (EVar "lazy")) (fa "globalInit" (EVar "globalInit")) (fa "trmcVerdicts" (EVar "trmc")) (fa "dispatchGroups" (EVar "dispatch"))))) (DoLet false false (PVar "physical") (EMatch (EVar "target") (arm (PCon "WasmBackend") () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "planWasmDemand") (EVar "inputs")) (EVar "prog")) (EVar "requirements")))) (arm PWild () (EVar "None")))) (DoExpr (ERecordCreate "EmitPlan" ((fa "target" (EVar "target")) (fa "externRequirements" (EVar "requirements")) (fa "entryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "methodResults" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (fa "wasmOnlyReach" (EVar "reach")) (fa "lazyGlobals" (EVar "lazy")) (fa "eagerReach" (EVar "eager")) (fa "globalInit" (EVar "globalInit")) (fa "trmc" (EVar "trmc")) (fa "dispGroups" (EVar "dispatch")) (fa "wasmDemand" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceDemand")) (arm (PCon "None") () (EVar "noDemand")))) (fa "wasmInputs" (EVar "inputs")) (fa "wasmPhysical" (EVar "physical")) (fa "hostKeys" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceHostKeys")) (arm (PCon "None") () (EListLit)))) (fa "jsImports" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "jsImports")) (arm (PCon "None") () (EListLit)))))))))
 (DTypeSig true "planEntryMainIsUnit" (TyFun (TyCon "EmitPlan") (TyCon "Bool")))
 (DFunDef false "planEntryMainIsUnit" ((PVar "plan")) (EMatch (EFieldAccess (EVar "plan") "entryOutcome") (arm (PCon "Some" (PVar "outcome")) () (EFieldAccess (EVar "outcome") "entryMainIsUnit")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "planEntryMainIsFloat" (TyFun (TyCon "EmitPlan") (TyCon "Bool")))
@@ -967,10 +498,6 @@ dSwitchHead acc _ = acc
 (DFunDef false "insertMethodResult" ((PVar "acc") (PVar "row")) (EBlock (DoLet false false (PVar "methods") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "row") "iface")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "row") "iface")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "row") "method")) (EVar "row")) (EVar "methods"))) (EVar "acc")))))
 (DTypeSig true "lookupMethodResult" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodResultFact"))))))
 (DFunDef false "lookupMethodResult" ((PVar "index") (PVar "iface") (PVar "method")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "iface")) (EMethodRef "index")) (arm (PCon "Some" (PVar "methods")) () (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "methods"))) (arm (PCon "None") () (EVar "None"))))
-(DTypeSig true "isTrmcFn" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isTrmcFn" ((PVar "v") (PVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "v") "eligibleFns")))
-(DTypeSig true "isTrmcImpl" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "isTrmcImpl" ((PVar "v") (PVar "method") (PVar "key")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implGroupKey") (EVar "method")) (EVar "key"))) (EFieldAccess (EVar "v") "eligibleImpls")))
 (DTypeSig false "isTopFn" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isTopFn" ((PCon "CBind" (PLit (LString "main")) PWild PWild PWild)) (EVar "False"))
 (DFunDef false "isTopFn" ((PCon "CBind" PWild (PCons (PCon "CClause" (PCons PWild PWild) PWild) PWild) PWild PWild)) (EVar "True"))
@@ -1008,133 +535,3 @@ dSwitchHead acc _ = acc
 (DFunDef false "noDemand" () (ERecordCreate "WasmDemand" ((fa "uses" (EListLit)) (fa "refBox" (EVar "False")) (fa "divGuard" (EVar "False")) (fa "tupleArities" (EListLit)))))
 (DData Private "DemandAcc" () ((variant "DemandAcc" (ConNamed (field "seenUses" (TyApp (TyCon "List") (TyCon "WasmUse"))) (field "seenKeys" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "seenJs" (TyApp (TyCon "OrdMap") (TyCon "JsImport"))) (field "seenRefBox" (TyCon "Bool")) (field "seenDivGuard" (TyCon "Bool")) (field "seenArities" (TyApp (TyCon "List") (TyCon "Int")))))) ())
 (DData Private "DemandScope" () ((variant "DemandScope" (ConNamed (field "locals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "topFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "topVals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "jsBinds" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (field "externFacts" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")))))) ())
-(DTypeSig false "wasmDemandOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyTuple (TyCon "WasmDemand") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "JsImport"))))))))
-(DFunDef false "wasmDemandOf" ((PVar "externFacts") (PVar "jsBinds") (PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "start") (ERecordCreate "DemandAcc" ((fa "seenUses" (EListLit)) (fa "seenKeys" (EVar "omEmpty")) (fa "seenJs" (EVar "omEmpty")) (fa "seenRefBox" (EVar "False")) (fa "seenDivGuard" (EVar "False")) (fa "seenArities" (EListLit))))) (DoLet false false (PVar "tops") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "/=" (EApp (EVar "bindName") (EVar "b")) (ELit (LString "main"))))) (EVar "groups"))) (DoLet false false (PVar "sc") (ERecordCreate "DemandScope" ((fa "locals" (EVar "omEmpty")) (fa "topFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isValBind") (EVar "b"))))) (EVar "tops")))) (EVar "omEmpty"))) (fa "topVals" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (EVar "isValBind")) (EVar "tops")))) (EVar "omEmpty"))) (fa "jsBinds" (EVar "jsBinds")) (fa "externFacts" (EVar "externFacts"))))) (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dImpl") (EVar "sc"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dBind") (EVar "sc"))) (EVar "start")) (EVar "groups"))) (EVar "impls"))) (DoExpr (ETuple (ERecordCreate "WasmDemand" ((fa "uses" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenUses"))) (fa "refBox" (EFieldAccess (EVar "acc") "seenRefBox")) (fa "divGuard" (EFieldAccess (EVar "acc") "seenDivGuard")) (fa "tupleArities" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenArities"))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "seenKeys")) (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "k")) (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EVar "acc") "seenJs")))) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "seenJs")))))))
-(DTypeSig false "walkEach" (TyFun (TyFun (TyCon "DemandAcc") (TyFun (TyVar "a") (TyCon "DemandAcc"))) (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "DemandAcc")))))
-(DFunDef false "walkEach" (PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "walkEach" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs")))
-(DTypeSig false "noteUse" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "WasmUse") (TyCon "DemandAcc"))))
-(DFunDef false "noteUse" ((PVar "acc") (PVar "u")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "u")))) (EFieldAccess (EVar "acc") "seenUses")) (EVar "acc") (ERecordUpdate (EVar "acc") ((fa "seenUses" (EBinOp "::" (EVar "u") (EFieldAccess (EVar "acc") "seenUses")))))))
-(DTypeSig false "noteKey" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteKey" ((PVar "acc") (PVar "k")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "k")) (EFieldAccess (EVar "acc") "seenKeys")) (EVar "acc") (ERecordUpdate (EVar "acc") ((fa "seenKeys" (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ELit LUnit)) (EFieldAccess (EVar "acc") "seenKeys")))))))
-(DTypeSig false "noteArity" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "Int") (TyCon "DemandAcc"))))
-(DFunDef false "noteArity" ((PVar "acc") (PVar "n")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "n")))) (EFieldAccess (EVar "acc") "seenArities")) (EVar "acc") (ERecordUpdate (EVar "acc") ((fa "seenArities" (EBinOp "::" (EVar "n") (EFieldAccess (EVar "acc") "seenArities")))))))
-(DTypeSig false "noteRefBox" (TyFun (TyCon "DemandAcc") (TyCon "DemandAcc")))
-(DFunDef false "noteRefBox" ((PVar "acc")) (EIf (EFieldAccess (EVar "acc") "seenRefBox") (EVar "acc") (ERecordUpdate (EVar "acc") ((fa "seenRefBox" (EVar "True"))))))
-(DTypeSig false "noteName" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteName" ((PVar "acc") (PLit (LString "Ref"))) (EApp (EVar "noteRefBox") (EVar "acc")))
-(DFunDef false "noteName" ((PVar "acc") (PLit (LString "$withFileReadBound"))) (EApp (EVar "noteFileBound") (EVar "acc")))
-(DFunDef false "noteName" ((PVar "acc") (PLit (LString "$withFileWriteBound"))) (EApp (EVar "noteFileBound") (EVar "acc")))
-(DFunDef false "noteName" ((PVar "acc") (PVar "name")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteArity")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteUse")) (EVar "acc")) (EApp (EVar "wasmUses") (EVar "name")))) (EApp (EVar "wasmHostKeys") (EVar "name")))) (EApp (EVar "wasmTupleArities") (EVar "name"))))
-(DTypeSig false "noteExtern" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc")))))
-(DFunDef false "noteExtern" ((PVar "sc") (PVar "acc") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "sc") "jsBinds")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "sc") "externFacts")) (EVar "name")) (arm (PCon "Some" (PVar "key")) () (EApp (EApp (EVar "noteName") (EVar "acc")) (EVar "key"))) (arm (PCon "None") () (EIf (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "name") (ELit (LString "$withFileWriteBound")))) (EApp (EVar "noteFileBound") (EVar "acc")) (EVar "acc"))))) (arm (PCon "Some" (PTuple (PVar "js") (PTuple (PVar "params") (PVar "result")))) () (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "acc") "seenJs")) (EVar "acc") (EBlock (DoLet false false (PVar "imp") (ERecordCreate "JsImport" ((fa "medakaName" (EVar "name")) (fa "jsName" (EVar "js")) (fa "params" (EVar "params")) (fa "result" (EVar "result"))))) (DoExpr (EApp (EApp (EVar "noteJsResult") (EApp (EApp (EApp (EVar "walkEach") (EVar "noteJsParam")) (ERecordUpdate (EVar "acc") ((fa "seenJs" (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "imp")) (EFieldAccess (EVar "acc") "seenJs")))))) (EVar "params"))) (EVar "result"))))))))
-(DTypeSig false "noteJsParam" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteJsParam" ((PVar "acc") (PLit (LString "String"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr"))) (EVar "jsPathKeys")))
-(DFunDef false "noteJsParam" ((PVar "acc") (PLit (LString "Array"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EBinOp "++" (EVar "jsPathKeys") (EVar "jsResultKeys"))))
-(DFunDef false "noteJsParam" ((PVar "acc") (PVar "head")) (EApp (EApp (EVar "noteJsBoxed") (EVar "acc")) (EVar "head")))
-(DTypeSig false "noteJsResult" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteJsResult" ((PVar "acc") (PLit (LString "String"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr"))) (EVar "jsResultKeys")))
-(DFunDef false "noteJsResult" ((PVar "acc") (PVar "head")) (EApp (EApp (EVar "noteJsBoxed") (EVar "acc")) (EVar "head")))
-(DTypeSig false "noteJsBoxed" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteJsBoxed" ((PVar "acc") (PLit (LString "Float"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseFloat")))
-(DFunDef false "noteJsBoxed" ((PVar "acc") (PLit (LString "U64"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseU64")))
-(DFunDef false "noteJsBoxed" ((PVar "acc") (PLit (LString "I64"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseI64")))
-(DFunDef false "noteJsBoxed" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "jsPathKeys" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "jsPathKeys" () (EListLit (ELit (LString "mdk_path_reset")) (ELit (LString "mdk_path_push"))))
-(DTypeSig false "jsResultKeys" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "jsResultKeys" () (EListLit (ELit (LString "mdk_result_len")) (ELit (LString "mdk_result_byte"))))
-(DTypeSig false "noteFileBound" (TyFun (TyCon "DemandAcc") (TyCon "DemandAcc")))
-(DFunDef false "noteFileBound" ((PVar "acc")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EVar "noteUse") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr"))) (EVar "UseList"))) (EVar "fileBoundHostKeys")))
-(DTypeSig false "noteTag" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteTag" ((PVar "acc") (PLit (LString "U64"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseU64")))
-(DFunDef false "noteTag" ((PVar "acc") (PLit (LString "I64"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseI64")))
-(DFunDef false "noteTag" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "noteBinop" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
-(DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "++"))) (EApp (EApp (EVar "noteUse") (EApp (EApp (EVar "noteUse") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStrLeaf"))) (EVar "UseStr"))) (EVar "UseList")))
-(DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "::"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList")))
-(DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "/"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
-(DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "%"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
-(DFunDef false "noteBinop" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "isValBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
-(DFunDef false "isValBind" ((PCon "CBind" PWild (PList (PCon "CClause" (PList) PWild)) PWild PWild)) (EVar "True"))
-(DFunDef false "isValBind" (PWild) (EVar "False"))
-(DTypeSig false "bindIn" (TyFun (TyCon "DemandScope") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "DemandScope"))))
-(DFunDef false "bindIn" ((PVar "sc") (PVar "pats")) (EMatch (EApp (EVar "patVarsList") (EVar "pats")) (arm (PList) () (EVar "sc")) (arm (PVar "names") () (ERecordUpdate (EVar "sc") ((fa "locals" (EApp (EApp (EVar "omFromNames") (EVar "names")) (EFieldAccess (EVar "sc") "locals"))))))))
-(DTypeSig false "isLocal" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isLocal" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "locals")))
-(DTypeSig false "isCoreFn" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isCoreFn" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EFieldAccess (EVar "sc") "topFns")))
-(DTypeSig false "dVar" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc")))))
-(DFunDef false "dVar" ((PVar "sc") (PVar "acc") (PVar "x")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topVals"))) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "x"))) (EVar "acc") (EApp (EApp (EApp (EVar "noteExtern") (EVar "sc")) (EVar "acc")) (EVar "x"))))
-(DTypeSig false "dBind" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CBind") (TyCon "DemandAcc")))))
-(DFunDef false "dBind" ((PVar "sc") (PVar "acc") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dClause") (EVar "sc"))) (EVar "acc")) (EVar "clauses")))
-(DTypeSig false "dClause" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CClause") (TyCon "DemandAcc")))))
-(DFunDef false "dClause" ((PVar "sc") (PVar "acc") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "body")))
-(DTypeSig false "dImpl" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CImplEntry") (TyCon "DemandAcc")))))
-(DFunDef false "dImpl" ((PVar "sc") (PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
-(DFunDef false "dImpl" ((PVar "sc") (PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
-(DTypeSig false "dExpr" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc")))))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteArity") (EVar "acc")) (EApp (EVar "listLen") (EVar "es")))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "i")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EVar "acc")) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "ex")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "base"))) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "base"))) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EApp (EVar "dAppHead") (EVar "sc")) (EVar "acc")) (EVar "hd"))) (EVar "args")))))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EApp (EVar "dVar") (EVar "sc")) (EVar "acc")) (EVar "x")))
-(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LFloat" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseFloat")))
-(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LU64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseU64")))
-(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LI64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseI64")))
-(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LString" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
-(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LChar" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLam" (PVar "pats") (PVar "b"))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EVar "acc")) (EVar "b")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteBinop") (EApp (EApp (EVar "noteTag") (EVar "acc")) (EVar "tag"))) (EVar "op"))) (EVar "l"))) (EVar "r")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "x")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "c"))) (EVar "t"))) (EVar "f")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (DoExpr (EApp (EApp (EApp (EVar "dExpr") (EVar "inner")) (EApp (EApp (EApp (EVar "dExpr") (EIf (EVar "r") (EVar "inner") (EVar "sc"))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "a"))) (EVar "b")))))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EVar "acc")) (EVar "stmts")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms"))) (EVar "tree")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms")))
-(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBlock (DoLet false false (PVar "inner") (ERecordUpdate (EVar "sc") ((fa "locals" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EVar "binds"))) (EFieldAccess (EVar "sc") "locals")))))) (DoExpr (EApp (EApp (EApp (EVar "dExpr") (EVar "inner")) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dBind") (EVar "inner"))) (EVar "acc")) (EVar "binds"))) (EVar "b")))))
-(DFunDef false "dExpr" (PWild (PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "dAppHead" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc")))))
-(DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PCon "CVar" (PVar "f") PWild)) (EIf (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "f")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "f")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "f")))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "sc") "externFacts")) (EVar "f")) (EApp (EVar "Some") (ELit (LString "setRef")))) (EApp (EVar "noteRefBox") (EVar "acc")) (EApp (EApp (EApp (EVar "noteExtern") (EVar "sc")) (EVar "acc")) (EVar "f")))))
-(DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PVar "h")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "h")))
-(DTypeSig false "dField" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CField") (TyCon "DemandAcc")))))
-(DFunDef false "dField" ((PVar "sc") (PVar "acc") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e")))
-(DTypeSig false "dArm" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CArm") (TyCon "DemandAcc")))))
-(DFunDef false "dArm" ((PVar "sc") (PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "guards")) (EVar "body")))
-(DTypeSig false "dGuarded" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyCon "DemandAcc"))))))
-(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PList) (PVar "body")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "body")))
-(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "g"))) (EVar "rest")) (EVar "body")))
-(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "p")))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "p"))) (EVar "e"))) (EVar "rest")) (EVar "body")))
-(DTypeSig false "dStmts" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "DemandAcc")))))
-(DFunDef false "dStmts" (PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e"))) (EVar "rest")))
-(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSLet" (PVar "r") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (DoExpr (EApp (EApp (EApp (EVar "dStmts") (EVar "inner")) (EApp (EApp (EApp (EVar "dExpr") (EIf (EVar "r") (EVar "inner") (EVar "sc"))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "e"))) (EVar "rest")))))
-(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSAssign" PWild (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e"))) (EVar "rest")))
-(DTypeSig false "dPat" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "Pat") (TyCon "DemandAcc"))))
-(DFunDef false "dPat" ((PVar "acc") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "dPat") (EApp (EApp (EVar "dPat") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "h"))) (EVar "t")))
-(DFunDef false "dPat" ((PVar "acc") (PCon "PList" (PVar "ps"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "ps")))
-(DFunDef false "dPat" ((PVar "acc") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EApp (EApp (EVar "noteArity") (EVar "acc")) (EApp (EVar "listLen") (EVar "ps")))) (EVar "ps")))
-(DFunDef false "dPat" ((PVar "acc") (PCon "PCon" PWild (PVar "args"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "args")))
-(DFunDef false "dPat" ((PVar "acc") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "p")))
-(DFunDef false "dPat" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "dTree" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CTree") (TyCon "DemandAcc"))))
-(DFunDef false "dTree" ((PVar "acc") (PCon "CTGuard" PWild (PVar "fail"))) (EApp (EApp (EVar "dTree") (EVar "acc")) (EVar "fail")))
-(DFunDef false "dTree" ((PVar "acc") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EVar "dTree") (EVar "acc")) (EMethodRef "sub")))
-(DFunDef false "dTree" ((PVar "acc") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EApp (EVar "walkEach") (EVar "dBranch")) (EVar "acc")) (EVar "branches"))) (EVar "dft")))
-(DFunDef false "dTree" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "dBranch" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CTBranch") (TyCon "DemandAcc"))))
-(DFunDef false "dBranch" ((PVar "acc") (PCon "CTBranch" (PVar "h") (PVar "sub"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EVar "dSwitchHead") (EVar "acc")) (EVar "h"))) (EMethodRef "sub")))
-(DTypeSig false "dSwitchHead" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CHead") (TyCon "DemandAcc"))))
-(DFunDef false "dSwitchHead" ((PVar "acc") (PCon "HCons")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList")))
-(DFunDef false "dSwitchHead" ((PVar "acc") (PCon "HNil")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList")))
-(DFunDef false "dSwitchHead" ((PVar "acc") (PCon "HTuple" (PVar "n"))) (EApp (EApp (EVar "noteArity") (EVar "acc")) (EVar "n")))
-(DFunDef false "dSwitchHead" ((PVar "acc") PWild) (EVar "acc"))
