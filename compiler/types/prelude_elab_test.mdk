@@ -20,7 +20,8 @@ import support.sexp_value.{SexpError(..)}
 import types.interface_sexp.{InterfaceFault(..), sha256Hex}
 import types.prelude_elab.{
   PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile, elabKeyOf,
-  seedPreludeElab, preludeElabHit, formatVersion, binderSpan, relocDecls
+  seedPreludeElab, preludeElabHit, formatVersion, binderSpan, relocDecls,
+  readElabKey
 }
 import types.prelude_interface.{InterfaceKey(..), interfaceKeyOf, keysMatch}
 import types.publish.{CheckedProgram(..), TcReport(..)}
@@ -263,6 +264,33 @@ test "counters that do not describe the rows are refused, each naming its class"
                     "(counters \{pe.peEvCounter - 1} "
                     text)))),
         ]
+
+-- The header-only reader the build and test parents use takes a digest-valid file
+-- whose counters lie as fresh; the full decode the emitter child uses refuses it.
+test "a counter lowered under a recomputed digest passes the header read and fails the decode" =
+  match coreElab ()
+    None => fail "could not elaborate core"
+    Some pe =>
+      let text = encodeElabFile testKey pe
+      let lied = match S.indexOf "\n" text
+        None => text
+        Some i =>
+          let body =
+            S.replace
+              "(counters \{pe.peEvCounter} "
+              "(counters \{topRow pe.peEvidence} "
+              (S.drop (i + 1) text)
+          withBody (S.take i text ++ "\n" ++ body) ""
+      expectAll [
+        labelFail
+          "the header read accepts it"
+          (expectEqual "ok" (verdict (readElabKey lied))),
+        labelFail
+          "the full decode refuses it"
+          (expectEqual
+            "counters/evidence: an evidence row is at or above the evidence counter"
+            (why (readElabFile lied))),
+      ]
 
 -- The held value's evidence counter is 0, so the prelude segment it installs
 -- covers no ordinal any later drive of this process mints.

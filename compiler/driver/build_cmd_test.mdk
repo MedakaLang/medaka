@@ -6,6 +6,7 @@
 
 import test.{Expectation, expectAll, expectEqual, fail, labelFail}
 import test_process.{underRoot, withScratchDir}
+import list.{get, indexed}
 import string as S
 import driver.build_cmd.{
   BuildProfile(..), profileClang, gcStaticLibs, gcSharedLibs,
@@ -21,7 +22,7 @@ import support.sexp_value.{renderSExp}
 import types.interface_sexp.{sha256Hex}
 import types.prelude_decls.{PreludeDecls(..), encodeDeclsFile, readDeclsFile}
 import types.prelude_interface.{InterfaceKey(..)}
-import types.prelude_elab.{relocDecls}
+import types.prelude_elab.{binderSpan, relocDecls}
 
 test "a normal build keeps the opt level it was given and runs LTO detection" = expectAll
   [
@@ -143,6 +144,23 @@ lying sh = encodeDeclsFile sh.shKey { sh.shDecls |
   pdCoreBinders = sh.shDecls.pdCoreBinders + 1,
 }
 
+-- A marked file whose middle binder-carrying declaration has every id moved up by
+-- one: the run's ends, its size and the counters line are as they were, an id is
+-- minted twice and another not at all, and the digest covers the lie.
+shifted : Shipped -> String
+shifted sh =
+  let carrying =
+    map
+      fst
+      (filter (p => snd (binderSpan [snd p]) > 0) (indexed sh.shDecls.pdCore))
+  let mid = optionOr 0 (get (length carrying / 2) carrying)
+  encodeDeclsFile sh.shKey { sh.shDecls |
+    pdCore =
+      flatMap
+        (p => if fst p == mid then relocDecls 1 [snd p] else [snd p])
+        (indexed sh.shDecls.pdCore),
+  }
+
 -- A file whose digest matches a body that is not two declaration lists.
 undecodable : Shipped -> String
 undecodable sh =
@@ -244,9 +262,11 @@ test "a seeded miss is the in-process desugar at shifts 0 and 1000, and a refuse
       let atThousand = seededAt sh "\{dir}/b" 1000
       let undecoded = refusedAt sh "\{dir}/c" (undecodable sh)
       let lied = refusedAt sh "\{dir}/d" (lying sh)
+      let moved = refusedAt sh "\{dir}/e" (shifted sh)
       expectAll [
         labelFail "shift 0" atZero,
         labelFail "shift 1000" atThousand,
         labelFail "a body that does not decode" undecoded,
         labelFail "counters that do not describe the tree" lied,
+        labelFail "an id changed in range, the counters unchanged" moved,
       ])
