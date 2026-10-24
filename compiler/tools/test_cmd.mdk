@@ -294,7 +294,7 @@ runTest : List Engine ->
   Option String ->
   <IO> Bool
 runTest engines runtimeP coreP target roots cases filterOpt
-  | dirOf coreP /= dirOf runtimeP || baseOf coreP /= "core.mdk" =
+  | not (besideRuntime runtimeP coreP) =
     ePutStrLn
       "error: `core.mdk` must be the one beside `runtime.mdk`, got `\{coreP}`"
     False
@@ -303,6 +303,15 @@ runTest engines runtimeP coreP target roots cases filterOpt
       ePutStrLn ("error: " ++ m)
       False
     Ok _ => runTestUnderProfile engines runtimeP target roots cases filterOpt
+
+-- Is [coreP] the `core.mdk` in the directory [runtimeP] is in?  The directories
+-- are compared resolved, so `//`, `.` and a symlinked directory name the same
+-- place however they are spelled.
+export
+besideRuntime : String -> String -> <IO> Bool
+besideRuntime runtimeP coreP =
+  baseOf coreP == "core.mdk"
+    && canonicalizePath (dirOf coreP) == canonicalizePath (dirOf runtimeP)
 
 -- `runTest` once the target's project profile is the selected one.
 runTestUnderProfile : List Engine ->

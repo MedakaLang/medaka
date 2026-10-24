@@ -468,9 +468,11 @@ declsVerdictOf modulePath = match readFile (declsPath modulePath)
   Err _ => Missing
   Ok text => match readDeclsFramed text
     Err fault => Stale (faultComponent fault)
-    Ok (key, covered) => match acceptedDeclsBody covered
-      Err fault => Stale (faultComponent fault)
-      Ok _ => againstSources modulePath declsKeyOf key
+    Ok (key, covered) => match againstSources modulePath declsKeyOf key
+      Fresh => match acceptedDeclsBody covered
+        Err fault => Stale (faultComponent fault)
+        Ok _ => Fresh
+      other => other
 
 -- How [modulePath]'s three files stand against the module's sources now: fresh
 -- only when all are, and a stale or missing elaborated-trees or declarations

@@ -542,6 +542,19 @@ takeShippedPrelude stagingFor prelude =
       (loadPreludeElab prelude)
   reportDecls (stagingFor "stalePreludeDecls") runAbort prelude
 
+-- The same two reports from the files' headers alone, for a `run` that stops
+-- before it uses the prelude: nothing is loaded or decoded.
+reportShippedHeaders : (String -> Option (String -> Unit)) ->
+  PreludeInputs ->
+  <IO> Unit
+reportShippedHeaders stagingFor prelude =
+  let _ =
+    reportTrees
+      (stagingFor "stalePreludeTrees")
+      runAbort
+      (checkPreludeElab prelude)
+  reportDecls (stagingFor "stalePreludeDecls") runAbort prelude
+
 -- The trees' verdict for a verb whose emitter children take them (`build`,
 -- `test`), read without decoding them; the children print nothing.  The
 -- declarations' verdict is this process's own.
@@ -2890,7 +2903,7 @@ runRunCmd argv =
       -- a pure error-rendering function).
       let modsWithPath = match loadProgramFilesLocatedE (_ => None) target roots
         Err lerr =>
-          let _ = takeShippedPrelude (deferredInto jsonMode) prelude
+          let _ = reportShippedHeaders (deferredInto jsonMode) prelude
           let _ = orExit (mapErr (ppParseError tsrc target) (parseResult tsrc))
           let _ = runAbort (moduleLoadErrText tsrc target stdlibDir lerr)
           panic "unreachable"
