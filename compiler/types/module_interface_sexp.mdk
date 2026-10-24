@@ -74,8 +74,8 @@ fileTag = "medaka-module"
 
 -- ── writing ─────────────────────────────────────────────────────────────────
 
-keyFields : ModuleKey -> List SExp
-keyFields k = [
+moduleHeaderFields : ModuleKey -> List SExp
+moduleHeaderFields k = [
   tagged "module" [SAtom k.mkModule],
   tagged "source" [SAtom k.mkSource],
   tagged "imports" [listSExp (pairSExp SAtom SAtom) k.mkImports],
@@ -123,6 +123,8 @@ binderNode row = SList [
   boolNode row.brSigned,
 ]
 
+-- A binder's return type is a list of at most one element, not `optionSExp`'s
+-- `none`/`some` pair: `decBinder` reads it back with the list reader.
 optionList : Option SExp -> SExp
 optionList None = SList []
 optionList (Some x) = SList [x]
@@ -185,7 +187,8 @@ encodeModuleSections key sections
     framedFile
       fileTag
       moduleFormatVersion
-      (keyFields key ++ [tagged "sections" [intNode (length sections)]])
+      (moduleHeaderFields key
+        ++ [tagged "sections" [intNode (length sections)]])
       (stringJoin "" (map sectionLine sections))
 
 -- The file for one interface valid under every join.
@@ -387,7 +390,7 @@ readHeaderFields [SList [SAtom "module", m], SList [SAtom "source", s], SList [S
   do
     modId <- expectAtom "header/module" m
     source <- expectAtom "header/source" s
-    imports <- decList decPairAtoms "header/imports" imps
+    imports <- listOfSExp decPairAtoms "header/imports" imps
     graph <- expectAtom "header/graph" g
     count <- atomInt "header/sections" n
     Ok (
@@ -404,9 +407,6 @@ readHeaderFields _ = Err SexpError {
   sePath = "header",
   seWhat = "expected the module, source, imports, graph and sections fields",
 }
-
-decList : Reader a -> Reader (List a)
-decList = listOfSExp
 
 -- The component a key differs from [expected] in, if it does.
 export
@@ -452,6 +452,8 @@ decodeModuleSections gate text = do
   else
     Ok (key, sections)
 
+-- `interface_frame.gated` over a `ModuleKey`: that gate is typed on `InterfaceKey`,
+-- and this one has already run, so it takes the component it found.
 stale : Option String -> Result InterfaceFault Unit
 stale None = Ok ()
 stale (Some component) = Err (StaleKey component)

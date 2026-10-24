@@ -3493,21 +3493,21 @@ importedCtorDecls : List Decl ->
   List (String, List Decl)
 importedCtorDecls preludeDecls mods pool =
   importedCtorDeclsGo
-    (coreExports preludeDecls)
-    (omFromPairs pool omEmpty)
+    (importedCtorDeclsStep
+      (coreExports preludeDecls)
+      (omFromPairs pool omEmpty))
     omEmpty
     mods
 
-importedCtorDeclsGo : ModuleExports ->
-  OrdMap (List Decl) ->
+-- [step] is `importedCtorDeclsStep` with the prelude's exports and the pool bound.
+importedCtorDeclsGo : (OrdMap ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)) ->
   OrdMap ModuleExports ->
   List (String, List Decl) ->
   List (String, List Decl)
-importedCtorDeclsGo _ _ _ [] = []
-importedCtorDeclsGo coreExp pool known ((mid, prog) :: rest) =
-  let (decls, exp) = importedCtorDeclsStep coreExp pool known (mid, prog)
-  (mid, decls)
-    :: importedCtorDeclsGo coreExp pool (omInsert exp.modId exp known) rest
+importedCtorDeclsGo _ _ [] = []
+importedCtorDeclsGo step known ((mid, prog) :: rest) =
+  let (decls, exp) = step known (mid, prog)
+  (mid, decls) :: importedCtorDeclsGo step (omInsert exp.modId exp known) rest
 
 -- One module of `importedCtorDecls`: the decls declaring a constructor its imports
 -- bind, and its exports, which the modules after it read through [known].

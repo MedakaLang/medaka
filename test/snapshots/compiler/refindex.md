@@ -101,8 +101,8 @@ import frontend.parser.{
 import driver.loader.{
   loadProgramFilesLocatedCached,
   moduleIdOfPath,
-  importModId,
 }
+import frontend.visibility.{useModId}
 import support.util.{zipL, startsWith, endsWith, splitOnChar}
 import support.path.{joinPath}
 import support.ordmap.{omEmpty}
@@ -1691,7 +1691,7 @@ midPathsOf root =
 directImportIds : List Decl -> List String
 directImportIds [] = []
 directImportIds ((DUse _ path _) :: rest) =
-  let m = importModId path
+  let m = useModId path
   if m == "core" then directImportIds rest else m :: directImportIds rest
 directImportIds ((DAttrib _ inner) :: rest) = directImportIds (inner :: rest)
 directImportIds (_ :: rest) = directImportIds rest
@@ -1900,7 +1900,8 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "variantName" false) (mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "Positions" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false) (mem "importModId" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false))))
@@ -2373,7 +2374,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "midPathsOf" ((PVar "root")) (EApp (EApp (EVar "map") (ELam ((PVar "path")) (ETuple (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "root"))) (EVar "path")) (EVar "path")))) (EApp (EVar "enumerateMdkFiles") (EVar "root"))))
 (DTypeSig false "directImportIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "directImportIds" ((PList)) (EListLit))
-(DFunDef false "directImportIds" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "importModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "m") (ELit (LString "core"))) (EApp (EVar "directImportIds") (EVar "rest")) (EBinOp "::" (EVar "m") (EApp (EVar "directImportIds") (EVar "rest")))))))
+(DFunDef false "directImportIds" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "m") (ELit (LString "core"))) (EApp (EVar "directImportIds") (EVar "rest")) (EBinOp "::" (EVar "m") (EApp (EVar "directImportIds") (EVar "rest")))))))
 (DFunDef false "directImportIds" ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EVar "directImportIds") (EBinOp "::" (EVar "inner") (EVar "rest"))))
 (DFunDef false "directImportIds" ((PCons PWild (PVar "rest"))) (EApp (EVar "directImportIds") (EVar "rest")))
 (DTypeSig false "registerMidPaths" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit")))))
@@ -2433,7 +2434,8 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "variantName" false) (mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "Positions" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false) (mem "importModId" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false))))
@@ -2906,7 +2908,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "midPathsOf" ((PVar "root")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "path")) (ETuple (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "root"))) (EVar "path")) (EVar "path")))) (EApp (EVar "enumerateMdkFiles") (EVar "root"))))
 (DTypeSig false "directImportIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "directImportIds" ((PList)) (EListLit))
-(DFunDef false "directImportIds" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "importModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "m") (ELit (LString "core"))) (EApp (EVar "directImportIds") (EVar "rest")) (EBinOp "::" (EVar "m") (EApp (EVar "directImportIds") (EVar "rest")))))))
+(DFunDef false "directImportIds" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "m") (ELit (LString "core"))) (EApp (EVar "directImportIds") (EVar "rest")) (EBinOp "::" (EVar "m") (EApp (EVar "directImportIds") (EVar "rest")))))))
 (DFunDef false "directImportIds" ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EVar "directImportIds") (EBinOp "::" (EVar "inner") (EVar "rest"))))
 (DFunDef false "directImportIds" ((PCons PWild (PVar "rest"))) (EApp (EVar "directImportIds") (EVar "rest")))
 (DTypeSig false "registerMidPaths" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit")))))

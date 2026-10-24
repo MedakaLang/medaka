@@ -557,6 +557,7 @@ import types.registry.{
 }
 import frontend.desugar.{mapProg, mapChildren, mapExpr, exprSpanLoc, joinLocs}
 import frontend.marker.{localBoundNames}
+import frontend.visibility.{useModuleIds}
 import types.value_main.{inMainBinding, mainUseSite, mainUsedMsg}
 import frontend.resolve.{
   firstExprLoc,
@@ -53518,7 +53519,7 @@ mintGraphCtx inputs admitted =
     graphAdmittedMethodsRef = Ref admitted,
     builtinExternNamesRef = carried.externCatalog,
   }
-  let _ = noteInterners gctx
+  noteInterners gctx
   gctx
 
 -- [admitted]: the per-module method admissions `renameAliasedMethods` computed for
@@ -53664,7 +53665,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
         checkCoreMemoized initial preludeKey runtimeDecls coreDecls runtimeSeed
       -- The graph record the drive continues from, with the interface thawed into
       -- it.  Nothing holds `initial` past this point.
-      let _ = noteInterners coreCtx.mcGraph
+      noteInterners coreCtx.mcGraph
       (
         bindings,
         Some published,
@@ -53676,7 +53677,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
       Some (pe, pi) =>
         let (bindings, published, coreCtx) =
           continueFromInterface gctx gctx.graphRun pi
-        let _ = noteInterners coreCtx.mcGraph
+        noteInterners coreCtx.mcGraph
         (
           bindings,
           Some published,
@@ -54457,7 +54458,7 @@ diagsServeStep st mid prog prev =
         mkImports =
           map
             (m => (m, optionOr "" (omLookup m st.ssIdents)))
-            (dedup (flatMap importIdsOf prog)),
+            (dedup (useModuleIds prog)),
         mkGraph = st.ssGraph,
       }
       match moduleCacheHit key
@@ -54477,10 +54478,6 @@ diagsServeStep st mid prog prev =
             else
               recordChecked next key before mctx own done)
     _ => ServeCheck (_ _ done => (done, diagsServe (unrecordedState next mid)))
-
-importIdsOf : Decl -> List String
-importIdsOf (DAttrib _ d) = importIdsOf d
-importIdsOf d = useModuleId d
 
 -- A served row extends the frozen prefix when every row before it is frozen.
 servedState : ServeState -> String -> ModuleInterface -> ServeState
@@ -54522,7 +54519,7 @@ recordChecked st key before mctx own done =
           own
           before
           mctx
-      let _ = recordModuleInterface mi
+      recordModuleInterface mi
       (
         (mid, (marked, published, errs, warns)) :: older,
         diagsServe { st |
@@ -54761,7 +54758,7 @@ driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecl
     graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules
   let serve =
     map (k => diagsServe (serveStateOf coreCtx.mcGraph modules k)) keyed
-  let _ = if isSome serve then raiseToHighWater coreCtx.mcGraph
+  if isSome serve then raiseToHighWater coreCtx.mcGraph
   -- #154 PR-C: the worker reads BOTH accData (buildOracle `prog ++ accData`) and
   -- accAll (checkModuleFullImpl implDecls), and
   -- both are order-observable (oracle first-wins, implDecls scan order), so both
@@ -54789,7 +54786,7 @@ driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecl
   -- are the ones a check of it leaves.
   let findings =
     if isSome serve then checkGraphFinish lastCtx else drainStampQueue lastCtx
-  let _ = if isSome serve then noteHighWater lastCtx.mcGraph
+  if isSome serve then noteHighWater lastCtx.mcGraph
   let servedCount = optionOr 0 (map (policy => policy.msServed) served)
   -- D3 / WS-2 part-2: attach any cross-module coherence conflict to the ENTRY
   -- module's diagnostics (last in dependency-first order), so LSP/analyzeProject

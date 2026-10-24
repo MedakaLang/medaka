@@ -1,24 +1,26 @@
 -- The module interface file: a recorded interface written, read back and
 -- replayed, and the files a reader must refuse.  Drives run through
--- `checkModulesChainReportForGraph` with source keys, as the keyed callers do;
+-- `keyedDrive` with source keys, as the keyed callers do;
 -- each test uses module ids of its own, because the module cache is keyed by
 -- module id and lives for the process.
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectGreaterThan,
-  expectSatisfies, expectTrue, fail, labelFail
+  expectSatisfies, fail, labelFail
 }
 import frontend.ast.{Loc(..)}
-import frontend.desugar.{desugar}
-import frontend.parser.{parse, parseLocated}
-import list.{filter, take}
+import frontend.ast.{BinderId(..)}
+import frontend.ast_codec.{evEntriesSExp}
+import list.{take}
 import string as S
 import support.sexp_value.{SExp(..), parseSExp, renderSExp}
 import support.util.{joinNl}
 import types.framed_test_support.{withDigestOf}
 import types.interface_frame.{InterfaceFault(..)}
 import types.module_interface_test.{
-  diagCode, entrySrc, freshGraph, interfaceOf, leafSrc, midSrc, render,
-  renderBinding, renderFrozenBinding, renderRow
+  freshGraph, interfaceOf, renderBinding, renderFrozenBinding
+}
+import types.module_interface_test_support.{
+  bareDrive, chainDrive, entrySrc, leafSrc, render, renderRow
 }
 import types.module_interface.{
   ModuleInterface(..), FrozenExport(..), ModuleKey(..), applyModuleInterface,
@@ -31,11 +33,8 @@ import types.module_interface_sexp.{
 import types.publish.{
   ModDiags, PubScheme(..), TcDiag(..), TcReport(..), ppPubScheme
 }
-import types.repr.{ppSchemeCon}
-import types.tc_types.{
-  DriveOutputs(..), ExportBinding(..), GraphCtx(..), MethodGrant(..)
-}
-import types.typecheck.{defaultDriveInputs, checkModulesChainReportForGraph}
+import types.runtime_types.{BinderRow(..), RuntimeType}
+import types.tc_types.{DriveOutputs(..), GraphCtx(..), MethodGrant(..)}
 
 -- ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -70,47 +69,22 @@ richEntrySrc lib = joinNl [
   "older = birthday (Person \"a\" 1)",
 ]
 
--- One keyed drive over the modules [p]_leaf, [p]_mid and [p]_entry.
-chainDrive : String -> Int -> String -> (List String, Int)
-chainDrive p seed chainKey =
-  let midText = midSrc "\{p}_leaf"
-  let entryText = entrySrc "\{p}_mid"
-  let ((report, outputs), _) =
-    checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      (Some (seed, seed + 1))
-      chainKey
-      [Some leafSrc, Some midText, None]
-      []
-      (desugar (parse ""))
-      [
-        ("\{p}_leaf", desugar (parseLocated leafSrc)),
-        ("\{p}_mid", desugar (parseLocated midText)),
-        ("\{p}_entry", desugar (parseLocated entryText)),
-      ]
-  (render report, outputs.doServedModules)
+-- The chain drive over the modules [p]_leaf, [p]_mid and [p]_entry.
+chainDriveOf : String -> Int -> String -> (List String, Int)
+chainDriveOf p seed chainKey =
+  let (rendered, served, _) =
+    chainDrive p seed chainKey leafSrc (entrySrc "\{p}_mid")
+  (rendered, served)
 
 -- One keyed drive over [p]_lib and [p]_entry.
 richDrive : String -> Int -> String -> (List String, Int)
 richDrive p seed chainKey =
-  let entryText = richEntrySrc "\{p}_lib"
-  let ((report, outputs), _) =
-    checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      (Some (seed, seed + 1))
-      chainKey
-      [Some richSrc, None]
-      []
-      (desugar (parse ""))
-      [
-        ("\{p}_lib", desugar (parseLocated richSrc)),
-        ("\{p}_entry", desugar (parseLocated entryText)),
-      ]
+  let ((report, outputs), _) = bareDrive seed chainKey [
+    ("\{p}_lib", richSrc),
+    ("\{p}_entry", richEntrySrc "\{p}_lib"),
+  ]
   (render report, outputs.doServedModules)
 
--- A graph record whose drive checked one unrelated module.
 -- What a fault says, as text: the verdict a reader names.
 verdict : Result InterfaceFault a -> String
 verdict (Ok _) = "ok"
@@ -121,38 +95,53 @@ verdict (Err (Malformed e)) = "malformed \{e.sePath}: \{e.seWhat}"
 -- ── round trips ─────────────────────────────────────────────────────────────
 
 -- [mi] written, read back, written again and replayed into a fresh record.
-roundTripRows : ModuleInterface -> Int -> List (String, Bool)
+roundTripRows : ModuleInterface -> Int -> List Expectation
 roundTripRows mi seed = match decodeModuleInterface (encodeModuleInterface mi)
-  Err fault => [("decode: \{verdict (Err fault)}", False)]
+  Err fault => [fail "decode: \{verdict (Err fault)}"]
   Ok back =>
     let g1 = freshGraph "rtfresh\{intToString seed}a" seed
     let g2 = freshGraph "rtfresh\{intToString seed}b" (seed + 1)
     let (row1, exports1) = applyModuleInterface g1 mi
     let (row2, exports2) = applyModuleInterface g2 back
     [
-      (
-        "the key",
-        moduleKeyText back.miKey == moduleKeyText mi.miKey,
-      ),
-      (
-        "writing the read value gives the same text",
-        encodeModuleInterface back == encodeModuleInterface mi,
-      ),
-      ("the serial", back.miSerial == mi.miSerial),
-      ("the row prints alike", renderRow row1 == renderRow row2),
-      (
-        "the bindings print alike",
-        map renderBinding exports1 == map renderBinding exports2,
-      ),
-      (
-        "the frozen exports print alike",
-        map renderFrozenBinding mi.miExports
-          == map renderFrozenBinding back.miExports,
-      ),
-      ("the function names", back.miFunNames == mi.miFunNames),
-      ("the binder rows", length back.miBinders == length mi.miBinders),
-      ("the evidence rows", length back.miEvTable == length mi.miEvTable),
+      labelFail
+        "the key"
+        (expectEqual (moduleKeyText mi.miKey) (moduleKeyText back.miKey)),
+      labelFail
+        "writing the read value gives the same text"
+        (expectEqual (encodeModuleInterface mi) (encodeModuleInterface back)),
+      labelFail "the serial" (expectEqual mi.miSerial back.miSerial),
+      labelFail
+        "the row prints alike"
+        (expectEqual (renderRow row1) (renderRow row2)),
+      labelFail
+        "the bindings print alike"
+        (expectEqual (map renderBinding exports1) (map renderBinding exports2)),
+      labelFail
+        "the frozen exports print alike"
+        (expectEqual
+          (map renderFrozenBinding mi.miExports)
+          (map renderFrozenBinding back.miExports)),
+      labelFail
+        "the function names"
+        (expectEqual mi.miFunNames back.miFunNames),
+      labelFail
+        "the binder rows"
+        (expectEqual
+          (map binderFacts mi.miBinders)
+          (map binderFacts back.miBinders)),
+      labelFail
+        "the evidence rows"
+        (expectEqual
+          (renderSExp (evEntriesSExp mi.miEvTable))
+          (renderSExp (evEntriesSExp back.miEvTable))),
     ]
+
+-- Everything a binder row holds, as a comparable tuple.
+binderFacts : BinderRow ->
+  ((String, Int, String), (RuntimeType, Option RuntimeType, Bool))
+binderFacts b = match b.brId
+  BinderId m n => ((m, n, b.brName), (b.brType, b.brReturns, b.brSigned))
 
 -- [mi] with the tables a small drive leaves empty filled in by hand.
 withExtras : ModuleInterface -> ModuleInterface
@@ -178,16 +167,12 @@ withExtras mi = { mi |
   miSerial = 41,
 }
 
-rowsExpectation : List (String, Bool) -> Expectation
-rowsExpectation rows =
-  expectAll (map (r => labelFail (fst r) (expectTrue (snd r))) rows)
-
 test "interfaces recorded from a three-module chain round-trip" =
-  let _ = chainDrive "mc" 7701 "mc-k"
+  let _ = chainDriveOf "mc" 7701 "mc-k"
   match (interfaceOf "mc_leaf", interfaceOf "mc_mid")
     (Some leaf, Some mid) => expectAll [
-      labelFail "leaf" (rowsExpectation (roundTripRows leaf 7710)),
-      labelFail "mid" (rowsExpectation (roundTripRows mid 7712)),
+      labelFail "leaf" (expectAll (roundTripRows leaf 7710)),
+      labelFail "mid" (expectAll (roundTripRows mid 7712)),
       labelFail
         "the mid module's key names its import"
         (expectEqual 1 (length mid.miKey.mkImports)),
@@ -202,7 +187,7 @@ test "an interface with constructors, a record, an interface and an impl round-t
   match interfaceOf "mr_lib"
     None => fail "the library recorded no interface"
     Some lib => expectAll [
-      labelFail "round trip" (rowsExpectation (roundTripRows lib 7730)),
+      labelFail "round trip" (expectAll (roundTripRows lib 7730)),
       labelFail "constructors" (expectGreaterThan 0 (length lib.miDataCtors)),
       labelFail
         "dispatch rows"
@@ -213,7 +198,7 @@ test "an interface with constructors, a record, an interface and an impl round-t
         (expectGreaterThan 0 (length lib.miExistentials)),
       labelFail
         "fields the drive leaves empty"
-        (rowsExpectation (roundTripRows (withExtras lib) 7740)),
+        (expectAll (roundTripRows (withExtras lib) 7740)),
       labelFail "binders" (expectGreaterThan 0 (length lib.miBinders)),
       labelFail "evidence" (expectGreaterThan 0 (length lib.miEvTable)),
     ]
@@ -221,15 +206,15 @@ test "an interface with constructors, a record, an interface and an impl round-t
 -- A drive whose interfaces were all read back from their files prints what
 -- the drive that recorded them printed, and serves the same modules.
 test "a drive over decoded interfaces prints what the recording drive printed" =
-  let (cold, coldServed) = chainDrive "md" 7741 "md-k"
+  let (cold, coldServed) = chainDriveOf "md" 7741 "md-k"
   match (interfaceOf "md_leaf", interfaceOf "md_mid")
     (Some leaf, Some mid) => match (
       decodeModuleInterface (encodeModuleInterface leaf),
       decodeModuleInterface (encodeModuleInterface mid),
     )
       (Ok l, Ok m) =>
-        let _ = seedModuleInterfaces [l, m]
-        let (warm, warmServed) = chainDrive "md" 7741 "md-k"
+        seedModuleInterfaces [l, m]
+        let (warm, warmServed) = chainDriveOf "md" 7741 "md-k"
         expectEach [
           ("the recording drive serves nothing", expectEqual 0 coldServed),
           ("the decoded drive serves both", expectEqual 2 warmServed),
@@ -249,7 +234,7 @@ otherGraph k = { k | mkGraph = k.mkGraph ++ "x" }
 
 recorded : Unit -> Option (ModuleInterface, String)
 recorded _ =
-  let _ = chainDrive "mf" 7751 "mf-k"
+  let _ = chainDriveOf "mf" 7751 "mf-k"
   map (mi => (mi, encodeModuleInterface mi)) (interfaceOf "mf_mid")
 
 -- [text] with the field [old] of its header replaced.

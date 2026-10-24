@@ -1,5 +1,5 @@
 # META
-source_lines=399
+source_lines=409
 stages=DESUGAR,MARK
 # SOURCE
 -- One module's checked diagnostics-arm contribution as a value, the key it is
@@ -41,7 +41,9 @@ import frontend.ast.{TabKey, DataVis, Variant, EvTable, Ident}
 import list.{drop, take, mapAccumL}
 import map as M
 import map.{Map(..)}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
+import support.ordmap.{
+  OrdMap, omEmpty, omInsert, omLookup, omHasKey, omRestrict
+}
 import support.util.{joinNl, lenKey, listLen, isNonEmptyL}
 import types.prelude_interface.{
   freezeScheme, thawScheme, zonkSlot, zonkMethodSlot, zonkRecord, mapSlots
@@ -385,6 +387,14 @@ recordModuleInterface : ModuleInterface -> Unit
 recordModuleInterface mi =
   moduleCacheRef := withInterface moduleCacheRef.value mi
 
+-- Drops the interfaces of every module outside [mids], so the cache is bounded by
+-- the graph last analyzed rather than by every module id ever loaded.
+export
+retainModuleInterfaces : List String -> Unit
+retainModuleInterfaces mids =
+  let cache = moduleCacheRef.value
+  moduleCacheRef := { cache | mcEntries = omRestrict mids cache.mcEntries }
+
 -- Adds interfaces read from elsewhere.  The serials handed out afterwards start
 -- above theirs.
 export
@@ -406,7 +416,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "take" false) (mem "mapAccumL" false))))
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omRestrict" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "lenKey" false) (mem "listLen" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "freezeScheme" false) (mem "thawScheme" false) (mem "zonkSlot" false) (mem "zonkMethodSlot" false) (mem "zonkRecord" false) (mem "mapSlots" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ModDiags" false) (mem "PubScheme" true) (mem "TcDiag" false) (mem "emptyZonk" false) (mem "zonkScheme" false) (mem "zonkVecObl" false))))
@@ -451,6 +461,8 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DFunDef false "moduleCacheHit" ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "key") "mkModule")) (EFieldAccess (EFieldAccess (EVar "moduleCacheRef") "value") "mcEntries")) (arm (PCon "Some" (PVar "mi")) () (EIf (EBinOp "==" (EFieldAccess (EVar "mi") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))) (EApp (EVar "Some") (EVar "mi")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig true "recordModuleInterface" (TyFun (TyCon "ModuleInterface") (TyCon "Unit")))
 (DFunDef false "recordModuleInterface" ((PVar "mi")) (EApp (EApp (EVar "setRef") (EVar "moduleCacheRef")) (EApp (EApp (EVar "withInterface") (EFieldAccess (EVar "moduleCacheRef") "value")) (EVar "mi"))))
+(DTypeSig true "retainModuleInterfaces" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))
+(DFunDef false "retainModuleInterfaces" ((PVar "mids")) (EBlock (DoLet false false (PVar "cache") (EFieldAccess (EVar "moduleCacheRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "moduleCacheRef")) (ERecordUpdate (EVar "cache") ((fa "mcEntries" (EApp (EApp (EVar "omRestrict") (EVar "mids")) (EFieldAccess (EVar "cache") "mcEntries")))))))))
 (DTypeSig true "seedModuleInterfaces" (TyFun (TyApp (TyCon "List") (TyCon "ModuleInterface")) (TyCon "Unit")))
 (DFunDef false "seedModuleInterfaces" ((PVar "mis")) (EApp (EApp (EVar "setRef") (EVar "moduleCacheRef")) (EApp (EApp (EApp (EVar "fold") (EVar "withInterface")) (EFieldAccess (EVar "moduleCacheRef") "value")) (EVar "mis"))))
 (DTypeSig false "withInterface" (TyFun (TyCon "ModuleCache") (TyFun (TyCon "ModuleInterface") (TyCon "ModuleCache"))))
@@ -462,7 +474,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "take" false) (mem "mapAccumL" false))))
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omRestrict" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "lenKey" false) (mem "listLen" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "freezeScheme" false) (mem "thawScheme" false) (mem "zonkSlot" false) (mem "zonkMethodSlot" false) (mem "zonkRecord" false) (mem "mapSlots" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ModDiags" false) (mem "PubScheme" true) (mem "TcDiag" false) (mem "emptyZonk" false) (mem "zonkScheme" false) (mem "zonkVecObl" false))))
@@ -507,6 +519,8 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DFunDef false "moduleCacheHit" ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "key") "mkModule")) (EFieldAccess (EFieldAccess (EVar "moduleCacheRef") "value") "mcEntries")) (arm (PCon "Some" (PVar "mi")) () (EIf (EBinOp "==" (EFieldAccess (EVar "mi") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))) (EApp (EVar "Some") (EVar "mi")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig true "recordModuleInterface" (TyFun (TyCon "ModuleInterface") (TyCon "Unit")))
 (DFunDef false "recordModuleInterface" ((PVar "mi")) (EApp (EApp (EVar "setRef") (EVar "moduleCacheRef")) (EApp (EApp (EVar "withInterface") (EFieldAccess (EVar "moduleCacheRef") "value")) (EVar "mi"))))
+(DTypeSig true "retainModuleInterfaces" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))
+(DFunDef false "retainModuleInterfaces" ((PVar "mids")) (EBlock (DoLet false false (PVar "cache") (EFieldAccess (EVar "moduleCacheRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "moduleCacheRef")) (ERecordUpdate (EVar "cache") ((fa "mcEntries" (EApp (EApp (EVar "omRestrict") (EVar "mids")) (EFieldAccess (EVar "cache") "mcEntries")))))))))
 (DTypeSig true "seedModuleInterfaces" (TyFun (TyApp (TyCon "List") (TyCon "ModuleInterface")) (TyCon "Unit")))
 (DFunDef false "seedModuleInterfaces" ((PVar "mis")) (EApp (EApp (EVar "setRef") (EVar "moduleCacheRef")) (EApp (EApp (EApp (EMethodRef "fold") (EVar "withInterface")) (EFieldAccess (EVar "moduleCacheRef") "value")) (EVar "mis"))))
 (DTypeSig false "withInterface" (TyFun (TyCon "ModuleCache") (TyFun (TyCon "ModuleInterface") (TyCon "ModuleCache"))))

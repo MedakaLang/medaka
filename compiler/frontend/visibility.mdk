@@ -128,6 +128,17 @@ useModId (UseGroup ns _) = joinDot ns
 useModId (UseWild ns) = joinDot ns
 useModId (UseAlias ns _) = joinDot ns
 
+-- The module ids [prog] imports, `DAttrib`-wrapped imports included.
+export
+useModuleIds : List Decl -> List String
+useModuleIds prog = flatMap declUseIds prog
+
+export
+declUseIds : Decl -> List String
+declUseIds (DUse _ path _) = [useModId path]
+declUseIds (DAttrib _ d) = declUseIds d
+declUseIds _ = []
+
 -- The public interface of a resolved module
 -- (exp_fields is dropped — consumers only read field OWNERS).
 public export data ModuleExports = ModuleExports {

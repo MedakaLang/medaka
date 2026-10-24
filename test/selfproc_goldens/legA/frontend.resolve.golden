@@ -192,7 +192,7 @@ importNamesIn : ExpNs String -> Map String ModuleExports -> UsePath -> List Stri
 importValueBindings : UsePath -> ModuleExports -> List (String, String)
 importValueDecls : Map String ModuleExports -> UsePath -> List (String, String)
 importedCtorDecls : List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
-importedCtorDeclsGo : ModuleExports -> Map String (List Decl) -> Map String ModuleExports -> List (String, List Decl) -> List (String, List Decl)
+importedCtorDeclsGo : (Map String ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)) -> Map String ModuleExports -> List (String, List Decl) -> List (String, List Decl)
 importedCtorDeclsStep : ModuleExports -> Map String (List Decl) -> Map String ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)
 importedEffectOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
 importedEffects : Map String ModuleExports -> List Decl -> List String

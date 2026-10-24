@@ -11,6 +11,7 @@ carriedValuesFrom : ModuleExports -> List (String, String) -> List String
 coreExports : List Decl -> ModuleExports
 ctorNames : List Decl -> List String
 dataRecordNames : List Decl -> List String
+declUseIds : Decl -> List String
 directIn : ExpNs a -> List Decl -> List a
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
 effectNames : List Decl -> List String
@@ -59,6 +60,7 @@ typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsOf : String -> ModuleExports -> Option (List String)
 typeOfCtor : String -> ModuleExports -> Option String
 useModId : UsePath -> String
+useModuleIds : List Decl -> List String
 valueDeclOf : ModuleExports -> Map String (String, String) -> String -> (String, String)
 valueDeclsOf : ModuleExports -> Map String (String, String)
 variantFieldOwners : Variant -> List (String, String)

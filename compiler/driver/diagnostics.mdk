@@ -47,7 +47,7 @@ import frontend.resolve.{
   hintableUnboundNames,
   exportedValueNames,
 }
-import frontend.visibility.{ModuleExports, coreExports}
+import frontend.visibility.{ModuleExports, coreExports, useModuleIds}
 import list.{drop, last}
 import support.ordmap.{
   OrdMap,
@@ -58,6 +58,7 @@ import support.ordmap.{
   omFromPairs,
   omKeys,
   omSize,
+  omRestrict,
 }
 import frontend.exhaust.{checkGuardExhaustivenessWith}
 import frontend.marker.{
@@ -82,6 +83,7 @@ import types.typecheck.{
 }
 import types.tc_types.{DriveInputs(..), DriveOutputs(..), emptyDriveOutputs}
 import types.target_profile.{selectedProfile}
+import types.module_interface.{retainModuleInterfaces}
 -- #2738: the two colliding signatures are SURFACE types, and this is the one
 -- surface-type renderer in the tree (`tools/doc.mdk`'s `ppTyP` is private to the
 -- doc generator).  Imported here, at the driver, rather than into
@@ -104,7 +106,6 @@ import driver.loader.{
   availableModulesHint,
   availableModuleIds,
   fileOfModuleId,
-  importModId,
   modIdToPath,
 }
 import support.path.{dirOf}
@@ -121,6 +122,7 @@ import support.util.{
   joinDot,
   isSome,
   lenKey,
+  reverseL,
 }
 import support.timer.{takePerfSink}
 import json.{Json(..), jObject, stringify}
@@ -2084,9 +2086,13 @@ resolvePass exportsFor allowInternal trustedMods preludeKey rt core served known
     core
     served
     (omInsert exp.modId exp known)
-    (omInsert mid ident ids)
+    (withIdentity mid ident ids)
     rest
     (pushDiags path diags buckets)
+
+-- [ids] with [mid]'s identity, when its pass handed one out.
+withIdentity : String -> Option Int -> OrdMap Int -> OrdMap Int
+withIdentity mid ident ids = option ids (i => omInsert mid i ids) ident
 
 boolKey : Bool -> String
 boolKey True = "T"
@@ -2149,6 +2155,12 @@ typecheckPassReport steps inputs runtimeP coreP preludeKey chainKey mods modPair
   -- (a bare method name resolve left unbound would panic in `inferMethodAt`).
   -- The blocked set is closed under importers, so what remains is closed under
   -- imports and still checks in dependency order.
+  -- A rejected graph still records the interfaces and pass entries of the modules
+  -- it checks, and a later accepted graph serves them.  That is sound because a
+  -- served module's key carries the graph part: the subset's `chainGraphKey`
+  -- equals the full graph's only when the blocked modules declare no impl and no
+  -- constrained signature, which are the only things they could add to what a
+  -- checked module reads.
   let blocked = resolveBlockedMods buckets omEmpty mods
   let checkedMods = filterList ((mid, _, _) => not (omHasKey mid blocked)) mods
   let checkedPairs =
@@ -2202,6 +2214,7 @@ checkChainReport : ChainSteps ->
   List (String, List Decl) ->
   (TcReport, DriveOutputs)
 checkChainReport steps inputs valueMain preludeKey chainKey runtimeP coreP mods pairs =
+  narrowInterfaces steps mods
   checkModulesChainReportFor
     inputs
     valueMain
@@ -2211,6 +2224,14 @@ checkChainReport steps inputs valueMain preludeKey chainKey runtimeP coreP mods 
     runtimeP
     coreP
     pairs
+
+-- A recording drive keeps the interfaces of its own graph's modules and no others.
+narrowInterfaces : ChainSteps -> List (String, String, List Decl) -> Unit
+narrowInterfaces RecordSteps mods = retainModuleInterfaces (map modIdOf mods)
+narrowInterfaces NoSteps _ = ()
+
+modIdOf : (String, String, List Decl) -> String
+modIdOf (mid, _, _) = mid
 
 -- With no step keys the drive's fold records nothing.
 stepKeysFor : ChainSteps ->
@@ -2228,10 +2249,9 @@ stepKeysFor NoSteps _ = []
 -- below reaches it the same way for `medaka test`.  Both drivers' diagnostics
 -- must bucket, filter and order identically, which is why there is one fold.
 -- `modPairs` is passed in rather than re-derived: the keyed drive's source keys
--- need it, and desugaring the graph twice was the cost this split would otherwise
--- add.  [served] is the chain key of a caller whose analyze serves each module's
--- raw-tree diagnostics from `passCacheRef` (`foldServeKey`), `None` for one that
--- folds every module afresh.
+-- need it, so the graph is desugared once.  [served] is the chain key of a caller
+-- whose analyze serves each module's raw-tree diagnostics from `passCacheRef`
+-- (`foldServeKey`), `None` for one that folds every module afresh.
 typecheckDiagsFold : DriveOutputs ->
   Option String ->
   List Decl ->
@@ -2307,7 +2327,9 @@ resolvedBuckets : (List String -> <e> List (String, List String)) ->
   <e> List (String, List Diag)
 resolvedBuckets exportsFor allowInternal trustedMods preludeKey chainKey runtimeP coreP mods modPairs =
   -- A keyed prelude serves each module's verdict from `passCacheRef`; unkeyed,
-  -- nothing is served or recorded, and no key is built.
+  -- nothing is served or recorded, and no key is built.  The caches keep this
+  -- graph's modules and no others.
+  if isSome preludeKey then retainPassEntries (map modIdOf mods)
   resolvePass
     exportsFor
     allowInternal
@@ -2478,18 +2500,11 @@ resolveBlockedMods buckets blocked ((mid, path, prog) :: rest) =
   let rejected = match lookupBucket path buckets
     Some ds => resolveRejected ds
     None => False
-  let blocks =
-    rejected || anyList (m => omHasKey m blocked) (moduleImportIds prog)
+  let blocks = rejected || anyList (m => omHasKey m blocked) (useModuleIds prog)
   resolveBlockedMods
     buckets
     (if blocks then omInsert mid () blocked else blocked)
     rest
-
-moduleImportIds : List Decl -> List String
-moduleImportIds [] = []
-moduleImportIds ((DUse _ path _) :: rest) =
-  importModId path :: moduleImportIds rest
-moduleImportIds (_ :: rest) = moduleImportIds rest
 
 -- (mid, desugaredDecls) lookup, sibling of `lookupTcDiags`: the already-desugared
 -- decls of a module (the caller's `modPairs`), instead of re-desugaring or reading raw.
@@ -2530,7 +2545,7 @@ foldModuleTc passes graph known ids ((mid, path, prog) :: rest) tcByMid buckets 
     passes
     graph
     (omInsert exp.modId exp known)
-    (omInsert mid ident ids)
+    (withIdentity mid ident ids)
     rest
     tcByMid
     (pushDiags path (rawDiags ++ errDiags ++ warnDiags) buckets)
@@ -2580,23 +2595,28 @@ rawTreeDiags passes known (mid, _, prog) =
   )
 
 -- ── the per-module pass caches ──────────────────────────────────────────────
--- A session's analyze serves a module's resolve verdict and its raw-tree
--- diagnostics, each with the exports the modules after it read, from the analyze
--- that last computed them, when nothing they read has changed: the module's own
+-- An analyze under a keyed prelude serves a module's resolve verdict from the
+-- analyze that last computed it, and records on a miss, whichever verb drives it
+-- (the LSP, the playground, `check --json`, `build --json`, `medaka test`, MCP).
+-- The raw-tree diagnostics' entries are served and recorded only by a drive that
+-- records steps (`RecordSteps`: the LSP and the playground).  Each entry carries
+-- the exports the modules after it read, and is served when nothing it read has
+-- changed: the module's own
 -- decls (its path and the exact source the loader parsed), its imports' exports
 -- and constructor declarations through re-export chains, and what the pass reads of
 -- the whole graph (the key's graph part: `resolvePass`, `foldGraphPart`).  A key's
 -- imports are the identities of the modules its decls import, and a module's
 -- identity is new whenever its pass computes it afresh, so a change anywhere in the
 -- import closure reaches the module.  Each pass keeps one entry per module id, the
--- newest, with no count cap.  An entry holds strings, string lists and maps of them
+-- newest, for the modules of the graph last resolved: a keyed resolve drops the
+-- entries of every other module.  An entry holds strings, string lists and maps of them
 -- (`ModuleExports`, `Diag`): no `Decl`, no `Ref`, no `Scheme`, so it lies outside
 -- the admissibility rule of `types/module_interface.mdk`.
 data PassKey = PassKey {
   pkGraph : String,
   pkPath : String,
   pkSource : String,
-  pkImports : List Int,
+  pkImports : List (Option Int),
 } deriving (Eq)
 
 data PassEntry = PassEntry {
@@ -2626,6 +2646,14 @@ passEntries : PassKind -> PassCaches -> OrdMap PassEntry
 passEntries ResolveKind c = c.pcResolve
 passEntries FoldKind c = c.pcFold
 
+retainPassEntries : List String -> Unit
+retainPassEntries mids =
+  let c = passCacheRef.value
+  passCacheRef := { c |
+    pcResolve = omRestrict mids c.pcResolve,
+    pcFold = omRestrict mids c.pcFold,
+  }
+
 keepPassEntry : PassKind -> String -> PassEntry -> Unit
 keepPassEntry kind mid entry =
   let c = passCacheRef.value
@@ -2654,15 +2682,6 @@ resolveCachedIdentity : String -> Option Int
 resolveCachedIdentity mid =
   map (e => e.peIdentity) (omLookup mid passCacheRef.value.pcResolve)
 
--- The module ids [prog] imports, `DAttrib`-wrapped imports included.
-importIdsOf : List Decl -> List String
-importIdsOf prog = flatMap importIdsOfDecl prog
-
-importIdsOfDecl : Decl -> List String
-importIdsOfDecl (DUse _ path _) = [importModId path]
-importIdsOfDecl (DAttrib _ d) = importIdsOfDecl d
-importIdsOfDecl _ = []
-
 -- [compute] of one module with its identity in [kind]'s pass: served when [graph]
 -- is `Some` and the module's entry was recorded under the same graph part, path,
 -- source and import identities; otherwise computed, and under `Some` recorded with
@@ -2672,37 +2691,37 @@ servedPass : PassKind ->
   OrdMap Int ->
   (String, String, List Decl) ->
   (Unit -> <e> (List Diag, ModuleExports)) ->
-  <e> (List Diag, ModuleExports, Int)
+  <e> (List Diag, ModuleExports, Option Int)
 servedPass _ None _ _ compute =
   let (diags, exp) = compute ()
-  (diags, exp, 0)
+  (diags, exp, None)
 servedPass kind (Some g) ids (mid, path, prog) compute =
   match loadedSourceOf path
     None =>
       let (diags, exp) = compute ()
-      (diags, exp, freshPassIdentity ())
+      (diags, exp, Some (freshPassIdentity ()))
     Some src =>
       let key = PassKey {
         pkGraph = g,
         pkPath = path,
         pkSource = src,
-        pkImports = map (i => optionOr 0 (omLookup i ids)) (importIdsOf prog),
+        pkImports = map (i => omLookup i ids) (useModuleIds prog),
       }
       let hit = match omLookup mid (passEntries kind passCacheRef.value)
         Some e => if e.peKey == key then Some e else None
         None => None
       match hit
-        Some e => (e.peDiags, e.peExports, e.peIdentity)
+        Some e => (e.peDiags, e.peExports, Some e.peIdentity)
         None =>
           let (diags, exp) = compute ()
           let ident = freshPassIdentity ()
-          let _ = keepPassEntry kind mid PassEntry {
+          keepPassEntry kind mid PassEntry {
             peKey = key,
             peIdentity = ident,
             peDiags = diags,
             peExports = exp,
           }
-          (diags, exp, ident)
+          (diags, exp, Some ident)
 
 -- What every module's raw-tree diagnostics read of the whole graph, beside the
 -- chain key [chainFull] (the prelude generation, the entry and the roots the
@@ -2718,10 +2737,11 @@ foldGraphPart : String ->
   List (String, List Decl) ->
   Option String
 foldGraphPart chainFull outputs mods modPairs =
+  let pool = omFromPairs (reverseL modPairs) omEmpty
   let declarers =
     filterList
       ((mid, _, _) =>
-        anyList declaresInterface (lookupDesugaredMod mid modPairs))
+        anyList declaresInterface (optionOr [] (omLookup mid pool)))
       mods
   let rows =
     map

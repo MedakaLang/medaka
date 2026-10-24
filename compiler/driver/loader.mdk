@@ -26,6 +26,7 @@ import frontend.parser.{
   parseErrorCol,
   parseErrorMessage,
 }
+import frontend.visibility.{useModId}
 import support.util.{
   contains,
   listLen,
@@ -414,18 +415,12 @@ resolveDepFile deps modId = match splitOnChar "." modId
 
 -- "core" is the implicit prelude — its names are already in scope, so an
 -- `import core.{…}` is a no-op the loader must skip (else it duplicates).
-export
-importModId : UsePath -> String
-importModId (UseName ns) =
-  if listLen ns > 1 then joinDot (initList ns) else lastOr "" ns
-importModId (UseGroup ns _) = joinDot ns
-importModId (UseWild ns) = joinDot ns
-importModId (UseAlias ns _) = joinDot ns
-
+-- Only top-level imports load a module: an attributed one is inert here and in
+-- resolve, so this walk does not look through `DAttrib`.
 directImports : List Decl -> List String
 directImports [] = []
 directImports ((DUse _ path _) :: rest) =
-  let m = importModId path
+  let m = useModId path
   if m == "core" then directImports rest else m :: directImports rest
 directImports (_ :: rest) = directImports rest
 
@@ -437,7 +432,7 @@ directImports (_ :: rest) = directImports rest
 -- `Option Loc`
 -- through every loader signature, the CLI/diagnostics call site re-scans the
 -- ENTRY file's own (already-parsed, already-located) decls for the `DUse`
--- whose `importModId` is the failed module id and borrows its span.  Correct
+-- whose `useModId` is the failed module id and borrows its span.  Correct
 -- for the common case (the entry directly imports the bad module); a bad
 -- import nested in a transitive dependency degrades to no location, same as
 -- before this change.
@@ -461,7 +456,7 @@ export
 findImportLoc : String -> List Decl -> Option Loc
 findImportLoc _ [] = None
 findImportLoc mid ((DUse _ path loc) :: rest) =
-  if importModId path == mid then Some loc else findImportLoc mid rest
+  if useModId path == mid then Some loc else findImportLoc mid rest
 findImportLoc mid ((DAttrib _ d) :: rest) = findImportLoc mid (d :: rest)
 findImportLoc mid (_ :: rest) = findImportLoc mid rest
 
@@ -939,10 +934,10 @@ canonicalPathId deps roots path =
       let c = moduleIdOfPath [cr] cPath
       if canonRoundTrips deps roots c cPath then c else fallback
 
--- rewrite a UsePath so its `importModId` yields the canonical id `c`, preserving
+-- rewrite a UsePath so its `useModId` yields the canonical id `c`, preserving
 -- the imported member list / wildcard / alias / single name.  (For UseName the
 -- imported NAME is the last segment; the module path is the prefix — so appending
--- the original last segment onto `splitDot c` makes `importModId` recover `c`.)
+-- the original last segment onto `splitDot c` makes `useModId` recover `c`.)
 rewriteUsePath : String -> UsePath -> UsePath
 rewriteUsePath c (UseName ns) = UseName (splitDot c ++ [lastOr "" ns])
 rewriteUsePath c (UseGroup _ ms) = UseGroup (splitDot c) ms
@@ -953,7 +948,7 @@ rewriteUsePath c (UseAlias _ a) = UseAlias (splitDot c) a
 -- its canonical modId (core + already-canonical imports stay byte-identical).
 rewriteDecl : List (String, String) -> List String -> Decl -> <IO> Decl
 rewriteDecl deps roots (DUse exported path loc) =
-  let m = importModId path
+  let m = useModId path
   if m == "core" then
     DUse exported path loc
   else
@@ -1533,7 +1528,7 @@ finishCachedLoad : Ref (OrdMap (List Decl)) ->
   Result LoadError (List String, List (String, String, List Decl)) ->
   Result LoadError (List (String, String, List Decl))
 finishCachedLoad parseCacheRef (Ok (_, acc)) =
-  let _ = retainParsed parseCacheRef (settleLoad acc)
+  retainParsed parseCacheRef (settleLoad acc)
   Ok acc
 finishCachedLoad _ (Err e) = Err e
 

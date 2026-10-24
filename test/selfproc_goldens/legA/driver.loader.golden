@@ -31,7 +31,6 @@ findProjectRootOrSelf : String -> <IO> String
 findRootGo : String -> <IO> Option String
 finishCachedLoad : Ref (Map String (List Decl)) -> Result LoadError (List String, List (String, String, List Decl)) -> Result LoadError (List (String, String, List Decl))
 finishLoad : Result LoadError (List String, List (String, String, List Decl)) -> Result LoadError (List (String, String, List Decl))
-importModId : UsePath -> String
 joinArrow : List String -> String
 joinPathL : String -> String -> String
 joinSlash : List String -> String

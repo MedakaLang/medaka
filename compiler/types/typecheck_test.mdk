@@ -85,6 +85,7 @@ import types.tc_types.{
   ModuleCtx(..),
   TraceSink(..),
 }
+import types.module_interface_test_support.{noValueMain}
 import types.publish.{TcReport(..), CheckedProgram(..)}
 import types.typecheck.{
   defaultDriveInputs,
@@ -2416,7 +2417,7 @@ returnMemoObservedGraph prefixSource entrySource stepKey =
   let ((report, outputs), gctx) =
     checkModulesChainReportForGraph
       defaultDriveInputs
-      False
+      noValueMain
       (Some (1091, 1093))
       "method-return-request-fence"
       [Some stepKey, None]
@@ -2973,7 +2974,7 @@ chainDiagsGraph inputs preludeKey chainKey stepKeys runtimeDecls coreDecls modul
   let ((report, _), gctx) =
     checkModulesChainReportForGraph
       inputs
-      False
+      noValueMain
       preludeKey
       chainKey
       stepKeys
