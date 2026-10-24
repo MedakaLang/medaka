@@ -1,5 +1,5 @@
 # META
-source_lines=58080
+source_lines=58032
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -9901,16 +9901,13 @@ defaultDriveInputs = DriveInputs {
 -- let a user exempt their own externs from the stamp by writing one manifest line.
 export
 driveInputsFor : Option TargetProfile -> Bool -> List String -> DriveInputs
-driveInputsFor profile flatEntry mods = DriveInputs {
+driveInputsFor profile flatEntry mods = { defaultDriveInputs |
   diStdlibOwned = namesToSet mods omEmpty,
   diFlatEntryIsStdlib = flatEntry,
-  diTrace = None,
   diIoJoinGrants = ioJoinGrants profile,
   diProfileName = match profile
     None => ""
     Some p => profileName p,
-  diMarked = None,
-  diPreludeKey = None,
 }
 
 -- A sink with every gate off and fresh buffers; each `begin*` turns one gate on.
@@ -27658,8 +27655,7 @@ clauseIsValue env (FunClause _ _) = True
 -- present here too.
 --
 -- The dict-name set is the module path's own: elaborateModules computes it via
--- `moduleDictNames` (the prelude's constrained names — the ones whose body reaches
--- a return-position method first, then the rest — followed by the module graph's
+-- `moduleDictNames` (the prelude's constrained names followed by the module graph's
 -- FULL `constrainedSigNames`), rather than taking an externally built list.  This
 -- wrapper therefore takes `coreDecls` SEPARATE (not pre-flattened into prog),
 -- exactly as elaborateModules expects.  The grader for the Flat-vs-Module relation
@@ -56744,59 +56740,16 @@ lastComponent [] = ""
 lastComponent [x] = x
 lastComponent (_ :: rest) = lastComponent rest
 
--- Every `=>`-constrained prelude signature name with the EVars of its own
--- definition body, in `constrainedSigNames` order.  The one prelude-only input of
--- the set below, and its expensive one: it walks every prelude body once per
--- candidate.
-preludeConstrainedBodyVars : List Decl -> List (String, List String)
-preludeConstrainedBodyVars preludeDecls =
-  map (n => (n, declBodyVars n preludeDecls)) (constrainedSigNames preludeDecls)
-
--- E6: the `=>`-constrained-function dict-name set for the module emit path,
--- mirroring the single-file driver (llvm_emit_typed_main.runEmit): prelude return-
--- AND arg-position constrained fns (clamp/debugListItems/displayListItems/…) plus
--- every module's own constrained signatures.  Both eval and emit paths return the
--- same set; guarded so prePass/dictPass both see the SAME set.
---
--- The first two are `preludeReturnPosDictNames` (the prelude names whose own body
--- reaches a return-position method) and `preludeArgPosDictNames` (the rest), term
--- for term, with their two inputs held APART: the prelude's constrained names with
--- their body EVars, and the GRAPH's return-position method names.  Only the first
--- is prelude-only, so holding them apart is what lets a driver with a prelude key
--- derive it once per process and re-derive only the second per analyze.
-moduleDictNames : List (String, List String) ->
-  List String ->
-  List (String, List Decl) ->
-  List String
-moduleDictNames bodyVars rpNames modules =
-  let rpSet = map fst (filterList (p => anyMember (snd p) rpNames) bodyVars)
-  rpSet
-    ++ filterList (n => not (contains n rpSet)) (map fst bodyVars)
-    ++ constrainedSigNames (flatMap snd modules)
--- EVAL path: even with arg-position stamping OFF, the constrained prelude/module
--- fns MUST be dict-passed.  DRIVER-COLLAPSE Phase 2: the MODULE part now uses the
--- FULL constrainedSigNames (every `=>`-constrained module signature), mirroring flat
--- the former caller's `constrainedSigNames userDecls` set — not the return-position
--- subset.  Rationale: dictPass adds a leading dict PARAM to every fn whose
--- constrained signature is in scopePredicateSlots (all constrained sigs), so the prePass
--- MARK set must match or a fn like `quad : Monoid a => a -> a` (body calls another
--- constrained fn, NOT a return-position method directly) gets the PARAM but its call
--- sites are unmarked → `unbound identifier: $dict_quad_0`.  The PRELUDE part stays
--- return-position-only (preludeReturnPosDictNames): arg-position prelude helpers
--- (neq/elem/clamp) keep arg-tag dispatch in ceval and sweeping them in re-triggers
--- the prop-shrinker `neq`-hang.  User modules have no such hazard (flat already
--- dict-passes their full constrained set).  #55 background: their bodies route a
--- return-position method (`fromInt`/`pure`) RDictFwd `$dict_<fn>_<slot>` during the
--- per-module typecheck (registerConstraintRegs ungated); with no leading dict PARAM
--- the witness is unbound.  The OCaml oracle's eval_modules dict-passes
--- prelude+modules unconditionally; this mirrors that.
--- ARGSTAMP-UNIFY Phase 1 (F10 dict-set convergence): the eval branch now ALSO
--- includes preludeArgPosDictNames, matching the emit branch's dict-name set.
--- First convergence step toward flipping eval to full dict-threading.  By itself
--- OUTPUT-invariant: an arg-position prelude fn that is ALSO arg-tag-dispatchable
--- gets a redundant (not wrong) dict pass.  NOTE the historical neq-hang risk
--- (prop-shrinker oscillation when neq/elem/any/… were swept into the eval dict
--- set); guarded by the `medaka test stdlib/core.mdk` canary.
+-- The `=>`-constrained-function dict-name set `elaborateModules` hands to prePass and
+-- dictPass, which must see the same set: the prelude's constrained names, then the
+-- full `constrainedSigNames` of every module (not the return-position subset:
+-- dictPass gives a leading dict parameter to every function whose signature is
+-- constrained, so a mark set that omitted `quad : Monoid a => a -> a` would leave
+-- its call sites unmarked).  The prelude's names are the one prelude-only input, so
+-- a driver with a prelude key derives them once per process.
+moduleDictNames : List String -> List (String, List Decl) -> List String
+moduleDictNames preludeNames modules =
+  preludeNames ++ constrainedSigNames (flatMap snd modules)
 
 constrainedSigPredicateSlots : Decl -> List (String, List PredicateSlot)
 constrainedSigPredicateSlots (DTypeSig _ n ty _)
@@ -57773,7 +57726,7 @@ preludeMarkFactsOf coreDecls = PreludeMarkFacts {
   pmfMethodConstraints = methodConstraintNames coreDecls,
   pmfArgDispatch = argDispatchIndices coreDecls,
   pmfArgDispatchById = argDispatchIndicesById coreDecls,
-  pmfConstrainedBodyVars = preludeConstrainedBodyVars coreDecls,
+  pmfConstrainedNames = constrainedSigNames coreDecls,
 }
 
 -- `allDecls` IS `coreDecls ++ flatMap snd modules` -- the envelope's
@@ -57811,8 +57764,7 @@ markSetsOf gctx pmf coreDecls modules allDecls =
     msGraphShadowNames = graphShadowNames,
     msArgNames = map fst (pmf.pmfArgDispatch ++ argDispatchIndices userDecls),
     msCoreShadowMap = coreShadowMapFor gctx coreDecls shadowMap,
-    msBareDictNames =
-      dedup (moduleDictNames pmf.pmfConstrainedBodyVars rpNames modules),
+    msBareDictNames = dedup (moduleDictNames pmf.pmfConstrainedNames modules),
     msUnits = units,
   }
   gctx.markSetsRef := Some ms
@@ -59652,7 +59604,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig true "defaultDriveInputs" (TyCon "DriveInputs"))
 (DFunDef false "defaultDriveInputs" () (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EVar "omEmpty")) (fa "diFlatEntryIsStdlib" (EVar "False")) (fa "diTrace" (EVar "None")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "None"))) (fa "diProfileName" (ELit (LString ""))) (fa "diMarked" (EVar "None")) (fa "diPreludeKey" (EVar "None")))))
 (DTypeSig true "driveInputsFor" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "DriveInputs")))))
-(DFunDef false "driveInputsFor" ((PVar "profile") (PVar "flatEntry") (PVar "mods")) (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EApp (EApp (EVar "namesToSet") (EVar "mods")) (EVar "omEmpty"))) (fa "diFlatEntryIsStdlib" (EVar "flatEntry")) (fa "diTrace" (EVar "None")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "profile"))) (fa "diProfileName" (EMatch (EVar "profile") (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "profileName") (EVar "p"))))) (fa "diMarked" (EVar "None")) (fa "diPreludeKey" (EVar "None")))))
+(DFunDef false "driveInputsFor" ((PVar "profile") (PVar "flatEntry") (PVar "mods")) (ERecordUpdate (EVar "defaultDriveInputs") ((fa "diStdlibOwned" (EApp (EApp (EVar "namesToSet") (EVar "mods")) (EVar "omEmpty"))) (fa "diFlatEntryIsStdlib" (EVar "flatEntry")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "profile"))) (fa "diProfileName" (EMatch (EVar "profile") (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "profileName") (EVar "p"))))))))
 (DTypeSig false "offTraceSink" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
 (DFunDef false "offTraceSink" (PWild) (ERecordCreate "TraceSink" ((fa "tsAssumptionEnabled" (EVar "False")) (fa "tsAssumptionEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsNumericPredicateEnabled" (EVar "False")) (fa "tsNumericPredicateEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsMethodReturnEnabled" (EVar "False")) (fa "tsMethodReturnEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsEvidenceObservationEnabled" (EVar "False")) (fa "tsEvidenceObservationEntries" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig true "beginAssumptionTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
@@ -67309,10 +67261,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "lastComponent" ((PList)) (ELit (LString "")))
 (DFunDef false "lastComponent" ((PList (PVar "x"))) (EVar "x"))
 (DFunDef false "lastComponent" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastComponent") (EVar "rest")))
-(DTypeSig false "preludeConstrainedBodyVars" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "preludeConstrainedBodyVars" ((PVar "preludeDecls")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EApp (EVar "declBodyVars") (EVar "n")) (EVar "preludeDecls"))))) (EApp (EVar "constrainedSigNames") (EVar "preludeDecls"))))
-(DTypeSig false "moduleDictNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "moduleDictNames" ((PVar "bodyVars") (PVar "rpNames") (PVar "modules")) (EBlock (DoLet false false (PVar "rpSet") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EApp (EVar "anyMember") (EApp (EVar "snd") (EVar "p"))) (EVar "rpNames")))) (EVar "bodyVars")))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "rpSet") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rpSet"))))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bodyVars")))) (EApp (EVar "constrainedSigNames") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules")))))))
+(DTypeSig false "moduleDictNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "moduleDictNames" ((PVar "preludeNames") (PVar "modules")) (EBinOp "++" (EVar "preludeNames") (EApp (EVar "constrainedSigNames") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules")))))
 (DTypeSig false "constrainedSigPredicateSlots" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot"))))))
 (DFunDef false "constrainedSigPredicateSlots" ((PCon "DTypeSig" PWild (PVar "n") (PVar "ty") PWild)) (EIf (EApp (EVar "isConstrainedTy") (EVar "ty")) (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "sigPredicateSlot")) (EApp (EVar "sigConstraints") (EVar "ty"))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "constrainedSigPredicateSlots" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "constrainedSigPredicateSlots") (EVar "d")))
@@ -67469,9 +67419,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "evValueOf" ((PCon "EvRoute" (PVar "r"))) (EApp (EVar "EvOne") (EUnOp "!" (EVar "r"))))
 (DFunDef false "evValueOf" ((PCon "EvRoutes" (PVar "rs"))) (EApp (EVar "EvMany") (EUnOp "!" (EVar "rs"))))
 (DTypeSig false "preludeMarkFactsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "PreludeMarkFacts")))
-(DFunDef false "preludeMarkFactsOf" ((PVar "coreDecls")) (ERecordCreate "PreludeMarkFacts" ((fa "pmfReturnPos" (EApp (EVar "returnPosMethodNames") (EVar "coreDecls"))) (fa "pmfMethodConstraints" (EApp (EVar "methodConstraintNames") (EVar "coreDecls"))) (fa "pmfArgDispatch" (EApp (EVar "argDispatchIndices") (EVar "coreDecls"))) (fa "pmfArgDispatchById" (EApp (EVar "argDispatchIndicesById") (EVar "coreDecls"))) (fa "pmfConstrainedBodyVars" (EApp (EVar "preludeConstrainedBodyVars") (EVar "coreDecls"))))))
+(DFunDef false "preludeMarkFactsOf" ((PVar "coreDecls")) (ERecordCreate "PreludeMarkFacts" ((fa "pmfReturnPos" (EApp (EVar "returnPosMethodNames") (EVar "coreDecls"))) (fa "pmfMethodConstraints" (EApp (EVar "methodConstraintNames") (EVar "coreDecls"))) (fa "pmfArgDispatch" (EApp (EVar "argDispatchIndices") (EVar "coreDecls"))) (fa "pmfArgDispatchById" (EApp (EVar "argDispatchIndicesById") (EVar "coreDecls"))) (fa "pmfConstrainedNames" (EApp (EVar "constrainedSigNames") (EVar "coreDecls"))))))
 (DTypeSig false "markSetsOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PreludeMarkFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkSets")))))))
-(DFunDef false "markSetsOf" ((PVar "gctx") (PVar "pmf") (PVar "coreDecls") (PVar "modules") (PVar "allDecls")) (EBlock (DoLet false false (PVar "units") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "userDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "shadowMap") (EApp (EApp (EVar "computeMangledShadowMap") (EVar "allDecls")) (EVar "units"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "mangledShadowMapRef")) (EVar "shadowMap"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "argDispatchIdxByIdRef")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatchById") (EApp (EVar "argDispatchIndicesById") (EVar "userDecls"))))) (DoLet false false (PVar "rpNames") (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfReturnPos") (EApp (EVar "returnPosMethodNames") (EVar "userDecls")))) (DoLet false false (PVar "markSharedNames") (EApp (EVar "dedup") (EBinOp "++" (EBinOp "++" (EVar "rpNames") (EFieldAccess (EVar "pmf") "pmfMethodConstraints")) (EApp (EVar "methodConstraintNames") (EVar "userDecls"))))) (DoLet false false (PVar "graphShadowNames") (EApp (EApp (EApp (EVar "buildStandaloneShadowsGraph") (EVar "shadowMap")) (EVar "allDecls")) (EVar "userDecls"))) (DoLet false false (PVar "ms") (ERecordCreate "MarkSets" ((fa "msMarkRpNames" (EApp (EVar "dedup") (EBinOp "++" (EVar "markSharedNames") (EVar "graphShadowNames")))) (fa "msMarkSharedNames" (EVar "markSharedNames")) (fa "msGraphShadowNames" (EVar "graphShadowNames")) (fa "msArgNames" (EApp (EApp (EVar "map") (EVar "fst")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatch") (EApp (EVar "argDispatchIndices") (EVar "userDecls"))))) (fa "msCoreShadowMap" (EApp (EApp (EApp (EVar "coreShadowMapFor") (EVar "gctx")) (EVar "coreDecls")) (EVar "shadowMap"))) (fa "msBareDictNames" (EApp (EVar "dedup") (EApp (EApp (EApp (EVar "moduleDictNames") (EFieldAccess (EVar "pmf") "pmfConstrainedBodyVars")) (EVar "rpNames")) (EVar "modules")))) (fa "msUnits" (EVar "units"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "markSetsRef")) (EApp (EVar "Some") (EVar "ms")))) (DoExpr (EVar "ms"))))
+(DFunDef false "markSetsOf" ((PVar "gctx") (PVar "pmf") (PVar "coreDecls") (PVar "modules") (PVar "allDecls")) (EBlock (DoLet false false (PVar "units") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "userDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "shadowMap") (EApp (EApp (EVar "computeMangledShadowMap") (EVar "allDecls")) (EVar "units"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "mangledShadowMapRef")) (EVar "shadowMap"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "argDispatchIdxByIdRef")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatchById") (EApp (EVar "argDispatchIndicesById") (EVar "userDecls"))))) (DoLet false false (PVar "rpNames") (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfReturnPos") (EApp (EVar "returnPosMethodNames") (EVar "userDecls")))) (DoLet false false (PVar "markSharedNames") (EApp (EVar "dedup") (EBinOp "++" (EBinOp "++" (EVar "rpNames") (EFieldAccess (EVar "pmf") "pmfMethodConstraints")) (EApp (EVar "methodConstraintNames") (EVar "userDecls"))))) (DoLet false false (PVar "graphShadowNames") (EApp (EApp (EApp (EVar "buildStandaloneShadowsGraph") (EVar "shadowMap")) (EVar "allDecls")) (EVar "userDecls"))) (DoLet false false (PVar "ms") (ERecordCreate "MarkSets" ((fa "msMarkRpNames" (EApp (EVar "dedup") (EBinOp "++" (EVar "markSharedNames") (EVar "graphShadowNames")))) (fa "msMarkSharedNames" (EVar "markSharedNames")) (fa "msGraphShadowNames" (EVar "graphShadowNames")) (fa "msArgNames" (EApp (EApp (EVar "map") (EVar "fst")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatch") (EApp (EVar "argDispatchIndices") (EVar "userDecls"))))) (fa "msCoreShadowMap" (EApp (EApp (EApp (EVar "coreShadowMapFor") (EVar "gctx")) (EVar "coreDecls")) (EVar "shadowMap"))) (fa "msBareDictNames" (EApp (EVar "dedup") (EApp (EApp (EVar "moduleDictNames") (EFieldAccess (EVar "pmf") "pmfConstrainedNames")) (EVar "modules")))) (fa "msUnits" (EVar "units"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "markSetsRef")) (EApp (EVar "Some") (EVar "ms")))) (DoExpr (EVar "ms"))))
 (DTypeSig false "markDictNames" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "markDictNames" ((PVar "gctx") (PVar "names") (PVar "coreDecls") (PVar "modules")) (EApp (EVar "dedup") (EBinOp "++" (EVar "names") (EApp (EApp (EApp (EApp (EVar "aliasDictNames") (EVar "gctx")) (EVar "names")) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (EVar "modules")))))
 (DTypeSig false "beginModuleMarking" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "ModuleSeed") (TyCon "Unit")))))))
@@ -69088,7 +69038,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig true "defaultDriveInputs" (TyCon "DriveInputs"))
 (DFunDef false "defaultDriveInputs" () (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EVar "omEmpty")) (fa "diFlatEntryIsStdlib" (EVar "False")) (fa "diTrace" (EVar "None")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "None"))) (fa "diProfileName" (ELit (LString ""))) (fa "diMarked" (EVar "None")) (fa "diPreludeKey" (EVar "None")))))
 (DTypeSig true "driveInputsFor" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "DriveInputs")))))
-(DFunDef false "driveInputsFor" ((PVar "profile") (PVar "flatEntry") (PVar "mods")) (ERecordCreate "DriveInputs" ((fa "diStdlibOwned" (EApp (EApp (EVar "namesToSet") (EVar "mods")) (EVar "omEmpty"))) (fa "diFlatEntryIsStdlib" (EVar "flatEntry")) (fa "diTrace" (EVar "None")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "profile"))) (fa "diProfileName" (EMatch (EVar "profile") (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "profileName") (EVar "p"))))) (fa "diMarked" (EVar "None")) (fa "diPreludeKey" (EVar "None")))))
+(DFunDef false "driveInputsFor" ((PVar "profile") (PVar "flatEntry") (PVar "mods")) (ERecordUpdate (EVar "defaultDriveInputs") ((fa "diStdlibOwned" (EApp (EApp (EVar "namesToSet") (EVar "mods")) (EVar "omEmpty"))) (fa "diFlatEntryIsStdlib" (EVar "flatEntry")) (fa "diIoJoinGrants" (EApp (EVar "ioJoinGrants") (EVar "profile"))) (fa "diProfileName" (EMatch (EVar "profile") (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "profileName") (EVar "p"))))))))
 (DTypeSig false "offTraceSink" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
 (DFunDef false "offTraceSink" (PWild) (ERecordCreate "TraceSink" ((fa "tsAssumptionEnabled" (EVar "False")) (fa "tsAssumptionEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsNumericPredicateEnabled" (EVar "False")) (fa "tsNumericPredicateEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsMethodReturnEnabled" (EVar "False")) (fa "tsMethodReturnEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsEvidenceObservationEnabled" (EVar "False")) (fa "tsEvidenceObservationEntries" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig true "beginAssumptionTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
@@ -76745,10 +76695,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "lastComponent" ((PList)) (ELit (LString "")))
 (DFunDef false "lastComponent" ((PList (PVar "x"))) (EVar "x"))
 (DFunDef false "lastComponent" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastComponent") (EVar "rest")))
-(DTypeSig false "preludeConstrainedBodyVars" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "preludeConstrainedBodyVars" ((PVar "preludeDecls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EApp (EVar "declBodyVars") (EVar "n")) (EVar "preludeDecls"))))) (EApp (EVar "constrainedSigNames") (EVar "preludeDecls"))))
-(DTypeSig false "moduleDictNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "moduleDictNames" ((PVar "bodyVars") (PVar "rpNames") (PVar "modules")) (EBlock (DoLet false false (PVar "rpSet") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EApp (EVar "anyMember") (EApp (EVar "snd") (EVar "p"))) (EVar "rpNames")))) (EVar "bodyVars")))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "rpSet") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rpSet"))))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bodyVars")))) (EApp (EVar "constrainedSigNames") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules")))))))
+(DTypeSig false "moduleDictNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "moduleDictNames" ((PVar "preludeNames") (PVar "modules")) (EBinOp "++" (EVar "preludeNames") (EApp (EVar "constrainedSigNames") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules")))))
 (DTypeSig false "constrainedSigPredicateSlots" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot"))))))
 (DFunDef false "constrainedSigPredicateSlots" ((PCon "DTypeSig" PWild (PVar "n") (PVar "ty") PWild)) (EIf (EApp (EVar "isConstrainedTy") (EVar "ty")) (EListLit (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "sigPredicateSlot")) (EApp (EVar "sigConstraints") (EVar "ty"))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "constrainedSigPredicateSlots" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "constrainedSigPredicateSlots") (EVar "d")))
@@ -76905,9 +76853,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "evValueOf" ((PCon "EvRoute" (PVar "r"))) (EApp (EVar "EvOne") (EUnOp "!" (EVar "r"))))
 (DFunDef false "evValueOf" ((PCon "EvRoutes" (PVar "rs"))) (EApp (EVar "EvMany") (EUnOp "!" (EVar "rs"))))
 (DTypeSig false "preludeMarkFactsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "PreludeMarkFacts")))
-(DFunDef false "preludeMarkFactsOf" ((PVar "coreDecls")) (ERecordCreate "PreludeMarkFacts" ((fa "pmfReturnPos" (EApp (EVar "returnPosMethodNames") (EVar "coreDecls"))) (fa "pmfMethodConstraints" (EApp (EVar "methodConstraintNames") (EVar "coreDecls"))) (fa "pmfArgDispatch" (EApp (EVar "argDispatchIndices") (EVar "coreDecls"))) (fa "pmfArgDispatchById" (EApp (EVar "argDispatchIndicesById") (EVar "coreDecls"))) (fa "pmfConstrainedBodyVars" (EApp (EVar "preludeConstrainedBodyVars") (EVar "coreDecls"))))))
+(DFunDef false "preludeMarkFactsOf" ((PVar "coreDecls")) (ERecordCreate "PreludeMarkFacts" ((fa "pmfReturnPos" (EApp (EVar "returnPosMethodNames") (EVar "coreDecls"))) (fa "pmfMethodConstraints" (EApp (EVar "methodConstraintNames") (EVar "coreDecls"))) (fa "pmfArgDispatch" (EApp (EVar "argDispatchIndices") (EVar "coreDecls"))) (fa "pmfArgDispatchById" (EApp (EVar "argDispatchIndicesById") (EVar "coreDecls"))) (fa "pmfConstrainedNames" (EApp (EVar "constrainedSigNames") (EVar "coreDecls"))))))
 (DTypeSig false "markSetsOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PreludeMarkFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkSets")))))))
-(DFunDef false "markSetsOf" ((PVar "gctx") (PVar "pmf") (PVar "coreDecls") (PVar "modules") (PVar "allDecls")) (EBlock (DoLet false false (PVar "units") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "userDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "shadowMap") (EApp (EApp (EVar "computeMangledShadowMap") (EVar "allDecls")) (EVar "units"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "mangledShadowMapRef")) (EVar "shadowMap"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "argDispatchIdxByIdRef")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatchById") (EApp (EVar "argDispatchIndicesById") (EVar "userDecls"))))) (DoLet false false (PVar "rpNames") (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfReturnPos") (EApp (EVar "returnPosMethodNames") (EVar "userDecls")))) (DoLet false false (PVar "markSharedNames") (EApp (EVar "dedup") (EBinOp "++" (EBinOp "++" (EVar "rpNames") (EFieldAccess (EVar "pmf") "pmfMethodConstraints")) (EApp (EVar "methodConstraintNames") (EVar "userDecls"))))) (DoLet false false (PVar "graphShadowNames") (EApp (EApp (EApp (EVar "buildStandaloneShadowsGraph") (EVar "shadowMap")) (EVar "allDecls")) (EVar "userDecls"))) (DoLet false false (PVar "ms") (ERecordCreate "MarkSets" ((fa "msMarkRpNames" (EApp (EVar "dedup") (EBinOp "++" (EVar "markSharedNames") (EVar "graphShadowNames")))) (fa "msMarkSharedNames" (EVar "markSharedNames")) (fa "msGraphShadowNames" (EVar "graphShadowNames")) (fa "msArgNames" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatch") (EApp (EVar "argDispatchIndices") (EVar "userDecls"))))) (fa "msCoreShadowMap" (EApp (EApp (EApp (EVar "coreShadowMapFor") (EVar "gctx")) (EVar "coreDecls")) (EVar "shadowMap"))) (fa "msBareDictNames" (EApp (EVar "dedup") (EApp (EApp (EApp (EVar "moduleDictNames") (EFieldAccess (EVar "pmf") "pmfConstrainedBodyVars")) (EVar "rpNames")) (EVar "modules")))) (fa "msUnits" (EVar "units"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "markSetsRef")) (EApp (EVar "Some") (EVar "ms")))) (DoExpr (EVar "ms"))))
+(DFunDef false "markSetsOf" ((PVar "gctx") (PVar "pmf") (PVar "coreDecls") (PVar "modules") (PVar "allDecls")) (EBlock (DoLet false false (PVar "units") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "userDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "shadowMap") (EApp (EApp (EVar "computeMangledShadowMap") (EVar "allDecls")) (EVar "units"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "mangledShadowMapRef")) (EVar "shadowMap"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "argDispatchIdxByIdRef")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatchById") (EApp (EVar "argDispatchIndicesById") (EVar "userDecls"))))) (DoLet false false (PVar "rpNames") (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfReturnPos") (EApp (EVar "returnPosMethodNames") (EVar "userDecls")))) (DoLet false false (PVar "markSharedNames") (EApp (EVar "dedup") (EBinOp "++" (EBinOp "++" (EVar "rpNames") (EFieldAccess (EVar "pmf") "pmfMethodConstraints")) (EApp (EVar "methodConstraintNames") (EVar "userDecls"))))) (DoLet false false (PVar "graphShadowNames") (EApp (EApp (EApp (EVar "buildStandaloneShadowsGraph") (EVar "shadowMap")) (EVar "allDecls")) (EVar "userDecls"))) (DoLet false false (PVar "ms") (ERecordCreate "MarkSets" ((fa "msMarkRpNames" (EApp (EVar "dedup") (EBinOp "++" (EVar "markSharedNames") (EVar "graphShadowNames")))) (fa "msMarkSharedNames" (EVar "markSharedNames")) (fa "msGraphShadowNames" (EVar "graphShadowNames")) (fa "msArgNames" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatch") (EApp (EVar "argDispatchIndices") (EVar "userDecls"))))) (fa "msCoreShadowMap" (EApp (EApp (EApp (EVar "coreShadowMapFor") (EVar "gctx")) (EVar "coreDecls")) (EVar "shadowMap"))) (fa "msBareDictNames" (EApp (EVar "dedup") (EApp (EApp (EVar "moduleDictNames") (EFieldAccess (EVar "pmf") "pmfConstrainedNames")) (EVar "modules")))) (fa "msUnits" (EVar "units"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "markSetsRef")) (EApp (EVar "Some") (EVar "ms")))) (DoExpr (EVar "ms"))))
 (DTypeSig false "markDictNames" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "markDictNames" ((PVar "gctx") (PVar "names") (PVar "coreDecls") (PVar "modules")) (EApp (EVar "dedup") (EBinOp "++" (EVar "names") (EApp (EApp (EApp (EApp (EVar "aliasDictNames") (EVar "gctx")) (EVar "names")) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (EVar "modules")))))
 (DTypeSig false "beginModuleMarking" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "ModuleSeed") (TyCon "Unit")))))))

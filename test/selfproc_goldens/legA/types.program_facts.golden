@@ -3,5 +3,8 @@ emptyFacts : ProgramFacts
 factsNow : Unit -> ProgramFacts
 factsOfChecked : CheckedProgram -> ProgramFacts
 factsOfElab : (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts) -> ProgramFacts
+factsOfElabSources : (DriveOutputs -> List (String, List Decl) -> List (String, (List (String, String), (List String, String)))) -> DriveOutputs -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts) -> List EvEntry -> ProgramFacts
 factsOfElabWith : List EvEntry -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts) -> ProgramFacts
+factsWithEvidence : List EvEntry -> ProgramFacts -> ProgramFacts
+withCheckedExternSources : (DriveOutputs -> List (String, List Decl) -> List (String, (List (String, String), (List String, String)))) -> DriveOutputs -> List Decl -> List (String, List Decl) -> ProgramFacts -> ProgramFacts
 withFacts : ProgramFacts -> (Unit -> <a> b) -> <a> b
