@@ -638,7 +638,7 @@ cevalOutputOf decls prog =
 -- parameterized over the value type (v := Value e), like eval.mdk's ModInfo —
 -- see the kind-inference note on `Value`
 data CModInfo v =
-  | CModInfo String (List Decl) (List CBind) (List CImplEntry) (List (String, Ref v)) (EvalEnv v)
+  CModInfo String (List Decl) (List CBind) (List CImplEntry) (List (String, Ref v)) (EvalEnv v)
 
 -- [T-EVAL-LOCKSTEP] [facts] is the program's `ProgramFacts`, read as
 -- `evalModulesWith` reads it: its dispositions select the inherited defaults, and

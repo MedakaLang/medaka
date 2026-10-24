@@ -894,7 +894,7 @@ stdlibModuleGo (seg :: rest) found =
 -- POSITIONAL, not a named-field record, and read ONLY through the helpers
 -- below — the same native field-scanner reason `Rule` documents.
 public export data StdlibIndex =
-  | StdlibIndex (HashMap String (List (String, Ty)))
+  StdlibIndex (HashMap String (List (String, Ty)))
 
 -- The degraded index.  Also what a caller passes when it deliberately wants no
 -- stdlib knowledge: `medaka_cli.mdk`'s `runLintCmd` and `mcp.mdk`'s

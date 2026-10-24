@@ -120,7 +120,7 @@ data SupersededRefresh = SupersededRefresh Bytes Bytes Int
 -- The open sessions, the refresh tokens their families have consumed, and the
 -- ones a replay superseded.
 data Sessions =
-  | Sessions (List SessionRecord) (List ConsumedRefresh) (List SupersededRefresh)
+  Sessions (List SessionRecord) (List ConsumedRefresh) (List SupersededRefresh)
 
 -- The three secret-bearing parts of a `Store`, kept as one field so the blob
 -- and repository halves are not respelled every time one of them changes.

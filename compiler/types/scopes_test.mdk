@@ -35,8 +35,7 @@ data FrameView = FrameView {
   fvLevel : Int,
   fvModule : String,
   fvOwner : String,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 frameView : ScopeStore -> ScopeId -> FrameView
 frameView store sid =
@@ -61,8 +60,7 @@ data CopyView = CopyView {
   copyCopiedOwner : Option String,
   copyOriginalStats : (Int, Int),
   copyCopiedStats : (Int, Int),
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 data DefaultView =
   | NoDefault

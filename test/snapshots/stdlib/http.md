@@ -238,7 +238,7 @@ export data Header = Header String Bytes
 -- | A framed HTTP/1.1 request. Values come only from the parsers in this
 -- module; the `request*` accessors read its parts.
 export data Request =
-  | Request String String (List Header) (List Header) Bytes Bool
+  Request String String (List Header) (List Header) Bytes Bool
 
 data RequestLine = RequestLine String String Int
 data HeaderBlock = HeaderBlock (List Header) Int Int
@@ -1524,7 +1524,7 @@ parseRequest input = match parseRequestClassified input
    has any chunked transfer coding removed. Values come only from
    `parseResponseClassified` and `parseResponse`. -}
 export data ParsedResponse =
-  | ParsedResponse Int String (List Header) (List Header) Bytes
+  ParsedResponse Int String (List Header) (List Header) Bytes
 
 -- | The status code.
 export

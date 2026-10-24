@@ -23,7 +23,7 @@ public export data Backend =
 
 -- name, backend, host ABI, grants.
 public export data TargetProfile =
-  | TargetProfile String Backend String (List (String, EffParamTy))
+  TargetProfile String Backend String (List (String, EffParamTy))
 
 export
 profileName : TargetProfile -> String

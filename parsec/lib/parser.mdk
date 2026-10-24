@@ -30,7 +30,7 @@ export data PResult a = POk a Int | PErr String Int
 --   typed `<>`.  Parsing this library's inputs performs nothing, so the exported
 --   `Parser a` alias pins the index to `<>`.
 export data ParserE (e : Effect) a =
-  | ParserE (Array Char -> Int -> <e> PResult a)
+  ParserE (Array Char -> Int -> <e> PResult a)
 
 export type Parser a = ParserE <> a
 

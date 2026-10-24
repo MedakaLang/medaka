@@ -131,7 +131,7 @@ renderFail (FailExpect x t) =
 -- `<>`.  The compiler's own parsing performs nothing, so every signature below
 -- reads `Parser X` and means `ParserE <> X` through the alias.
 public export data ParserE (e : Effect) a =
-  | ParserE (Array Token -> Int -> <e> PR a)
+  ParserE (Array Token -> Int -> <e> PR a)
 
 export type Parser a = ParserE <> a
 
@@ -4974,7 +4974,7 @@ parseProgram = defer
 -- child traversal exactly — guarded by `test/mcp_fixtures/child_spans.mdk`.
 public export data DeclPos = DeclPos Int Int (Option Loc) (List (Option Loc))  -- (line, end_line), 1-based; name Loc; child name Locs
 public export data Positions =
-  | Positions (List DeclPos) (List Int) Int (List (List Int))
+  Positions (List DeclPos) (List Int) Int (List (List Int))
 -- decl positions, variant start lines, last_content_line, per-decl reflow-unit
 -- lines.  The last field mirrors variant_lines: one entry per top-level decl (in
 -- decl order), giving the source line of each top-level reflow unit of that

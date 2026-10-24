@@ -16,7 +16,7 @@ import test.vector_support.{rejectContains}
 
 data Fixture = Fixture String (List Cid) (List (Cid, Bytes)) Bytes
 data FixtureState =
-  | FixtureState String (List Cid) (List (Cid, Bytes)) (Option Bytes)
+  FixtureState String (List Cid) (List (Cid, Bytes)) (Option Bytes)
 
 mustHex : String -> Bytes
 mustHex text = resultOrPanic "car_vectors: malformed hex" (decode text)

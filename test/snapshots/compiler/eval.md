@@ -4405,7 +4405,7 @@ runMainForEffect binds = match lookupBinding "main" binds
 -- parameterized over the value type (v := Value e), like EvalEnv — see the
 -- kind-inference note on `Value`
 data ModInfo v =
-  | ModInfo String (List Decl) (List (String, List (List Pat, Expr, Loc))) (List (String, Ref v)) (EvalEnv v)
+  ModInfo String (List Decl) (List (String, List (List Pat, Expr, Loc))) (List (String, Ref v)) (EvalEnv v)
 
 -- ── S1-PRELUDE (a): a prelude standalone never shadows a user interface method ──
 -- docs/spec/SHADOW-SEMANTICS.md rows 46-49.  A bare occurrence whose name equals a
@@ -4850,7 +4850,7 @@ groupsOf decls =
 --
 -- parameterized over the value type (v := Value e), like ModInfo / EvalEnv
 public export data ModExports v =
-  | ModExports (List (String, Ref v)) (List (String, List String))
+  ModExports (List (String, Ref v)) (List (String, List String))
 
 export
 modExportCells : ModExports v -> List (String, Ref v)

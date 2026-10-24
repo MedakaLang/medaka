@@ -53,7 +53,7 @@ data Timer (e : Effect) = Timer (Unit -> <e> Float) (Int -> <e> Unit)
 -- Waiting for readiness over a set of descriptors, performed in the row of the
 -- code that built the descriptor wait.
 data Poller (e : Effect) =
-  | Poller (Array Int -> Array Int -> Int -> <e> Result String (Array Int))
+  Poller (Array Int -> Array Int -> Int -> <e> Result String (Array Int))
 
 -- | What a parked task is waiting on.  A task woken by any one of its waits
 -- simply retries, so a spurious wake is harmless.  `waitRead` and `waitWrite`

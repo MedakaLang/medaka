@@ -268,8 +268,7 @@ data CellAliasObservation = CellAliasObservation {
   caoFirstPredicateEffectLinked : Bool,
   caoSecondBodyTypeFresh : Bool,
   caoSecondBodyEffectFresh : Bool,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 data SharedSubstitutionObservation = SharedSubstitutionObservation {
   ssoSubstitutionCount : Int,
@@ -286,8 +285,7 @@ data SharedSubstitutionObservation = SharedSubstitutionObservation {
   ssoGoalFreshAcrossRuns : Bool,
   ssoDestinationFreshAcrossRuns : Bool,
   ssoCellAliases : CellAliasObservation,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 cellsAliasWithinAndSeparateAcross : Instantiation ->
   Instantiation ->
@@ -473,8 +471,7 @@ data ContextForwardingObservation = ContextForwardingObservation {
   cfoDestinationContexts : List (String, Int, String, Int),
   cfoRichDestinations : List (String, Int),
   cfoAbsentDestinations : List (String, Int),
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 contextForwardingResult : Unit -> ContextForwardingObservation
 contextForwardingResult _ =

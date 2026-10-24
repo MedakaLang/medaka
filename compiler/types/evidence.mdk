@@ -23,11 +23,11 @@ public export data ScopeId = ScopeId Int deriving (Eq, Ord, Debug)
 -- The owning scope is part of a formal evidence binder's identity.  Generated
 -- dictionary names are later renderings of this value, never scope keys.
 public export data EvidenceBinderId =
-  | EvidenceBinderId ScopeId Int
+  EvidenceBinderId ScopeId Int
   deriving (Eq, Ord, Debug)
 
 public export data RequestInstanceId =
-  | RequestInstanceId Int
+  RequestInstanceId Int
   deriving (Eq, Ord, Debug)
 
 -- The semantic prerequisite set selected with an instance.  The interface identity

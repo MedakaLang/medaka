@@ -134,7 +134,7 @@ public export data RateLimitVerdict = Admitted | Refused | RefusedCapacity
    It is held here so that one reference carries all limiter state; its
    windows are its own and do not move with the index. -}
 export data RateLimitState =
-  | RateLimitState Int (Map String ClientCounters) (Map String ClientCounters) (Map String HandleCounters)
+  RateLimitState Int (Map String ClientCounters) (Map String ClientCounters) (Map String HandleCounters)
 
 data ClientCounters = ClientCounters Int Int Int Int Int Int Int Int
 -- connections used, requests used, writes used, preferences used,

@@ -100,8 +100,7 @@ public export data GzipHeader = GzipHeader {
   comment : Option String,
   xfl : Int,
   os : Int,
-}
-  deriving (Eq, Debug)
+} deriving (Eq, Debug)
 
 hasFlag : Int -> Int -> Bool
 hasFlag flg mask = bitAnd flg mask /= 0
