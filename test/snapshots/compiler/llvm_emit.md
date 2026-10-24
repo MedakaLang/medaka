@@ -1,5 +1,5 @@
 # META
-source_lines=15117
+source_lines=15088
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -755,16 +755,6 @@ data LTy =
 -- semantic state from a previous emission.
 data EmitInputData = EmitInputData {
   ctorFieldIndex : OrdMap (List String),
-  -- each `stdlib/runtime.mdk` extern's declared arity
-  -- (`ir.core_ir_lower.externArities`), the parameter count of its first-class
-  -- (eta-wrapped) form
-  externArityIndex : OrdMap Int,
-  -- #2074: the USER-declared externs only (the runtime catalog's own names are
-  -- subtracted at the mint, `ir.core_ir_lower.ffiExternTypeNames`), keyed by the
-  -- extern's program-wide name (`types.private_mangle.externSymbolName`) →
-  -- (C symbol, (declared param type-head names, declared return type-head name)).
-  -- This is the ONLY table that answers "is this name a foreign call?".
-  ffiExternIndex : OrdMap (String, (List String, String)),
   emitHalf : Int,
   preludeBinds : List String,
   -- Exact prelude impl ownership, method -> canonical impl key -> the symbol tag
@@ -790,17 +780,13 @@ export
 makeEmitInput : RuntimeExternDomain ->
   List (String, (String, String, Int)) ->
   List (String, List String) ->
-  List (String, Int) ->
   Int ->
   List String ->
   List (String, String, String) ->
   String ->
-  List (String, (List (String, String), (List String, String))) ->
   EmitInput
-makeEmitInput domain methodIfaces ctorFieldTypes externArities emitHalf preludeBinds preludeImpls srcName ffiExternTypes = EmitInputData {
+makeEmitInput domain methodIfaces ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
-  externArityIndex = omFromPairs (reverseL externArities) omEmpty,
-  ffiExternIndex = omFromPairs (reverseL (hostRows "c" ffiExternTypes)) omEmpty,
   emitHalf = emitHalf,
   preludeBinds = preludeBinds,
   preludeImplIndex = preludeImplIndexOf preludeImpls omEmpty,
@@ -4664,23 +4650,8 @@ notAnExternFamily fname =
 -- §2.  So it gets its own arm in `emitApp`'s CVar-head ladder — placed AFTER
 -- `isAnyExtern` and before `isCtor` — rather than a fourth row in the catalog.
 --
--- 🚨 ORDER IS THE BUILTIN-NAME EXEMPTION.  `isAnyExtern` is consulted FIRST in
--- both `emitApp` and `emitVar`, so a local `extern bitAnd : …` redeclaring a
--- catalog name still runs the BUILTIN's codegen — the fact
--- `ffiIsBuiltinExternName` (compiler/types/typecheck.mdk) exempts from slice 1's
--- crossable-set guard.  The index itself is belt AND braces: the mint
--- (`ir.core_ir_lower.ffiExternTypeNames`) subtracts `stdlib/runtime.mdk`'s own
--- extern names, so a runtime extern name with no llvm family in the catalog
--- still cannot become a foreign call here.
---
--- 🚨 THE CROSSABLE SET IS NOT REDEFINED HERE.  `ffiCrossableHead` below is the
--- SET OF TYPE-HEAD NAMES that slice 1's `ffiCrossableTy`
--- (compiler/types/typecheck.mdk) accepts — its `ffiCrossableConName` six plus its
--- `Array Int` arm's head — restated in the only vocabulary this file has
--- (the `tyHeadName` strings an `ffiExternIndex` row carries, not `Ty`).  It is a
--- CONSISTENCY GUARD, not a second gate: every signature reaching here has already
--- passed `ffiCrossableTy` at check time, so a head this predicate rejects is an
--- internal inconsistency and reports as a loud gap, never a quiet skip.
+-- Catalog names use builtin lowering before the foreign-call path. Selected
+-- `externFacts` carry the checked call shape and host symbol for user externs.
 
 -- the declared (param type-head names, return type-head name) of a USER extern,
 -- or None when `name` is not one.
@@ -15201,10 +15172,10 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "gapStr" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "gapStr" ((PVar "e") (PVar "reason")) (EMatch (EFieldAccess (EVar "e") "gapMode") (arm (PCon "Record") () (ELet false PWild (EApp (EApp (EVar "noteGap") (EVar "e")) (EVar "reason")) (ELit (LString "0")))) (arm (PCon "Strict") () (EApp (EVar "panic") (EVar "reason")))))
 (DData Private "LTy" () ((variant "LTInt" (ConPos)) (variant "LTFloat" (ConPos)) (variant "LTBool" (ConPos)) (variant "LTCon" (ConPos)) (variant "LTClosure" (ConPos)) (variant "LTStr" (ConPos)) (variant "LTUnit" (ConPos)) (variant "LTChar" (ConPos)) (variant "LTUnknown" (ConPos)) (variant "LTNum" (ConPos)) (variant "LTFloatU" (ConPos)) (variant "LTU64" (ConPos)) (variant "LTI64" (ConPos)) (variant "LTU64U" (ConPos)) (variant "LTU32U" (ConPos)) (variant "LTI32U" (ConPos))) ())
-(DData Private "EmitInputData" () ((variant "EmitInputData" (ConNamed (field "ctorFieldIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "externArityIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ffiExternIndex" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (field "emitHalf" (TyCon "Int")) (field "preludeBinds" (TyApp (TyCon "List") (TyCon "String"))) (field "preludeImplIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "srcName" (TyCon "String")) (field "sharedMethodNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "runtimeExterns" (TyCon "RuntimeExternDomain")) (field "noInlineFns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DData Private "EmitInputData" () ((variant "EmitInputData" (ConNamed (field "ctorFieldIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "emitHalf" (TyCon "Int")) (field "preludeBinds" (TyApp (TyCon "List") (TyCon "String"))) (field "preludeImplIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "srcName" (TyCon "String")) (field "sharedMethodNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "runtimeExterns" (TyCon "RuntimeExternDomain")) (field "noInlineFns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeAlias true "EmitInput" () (TyCon "EmitInputData"))
-(DTypeSig true "makeEmitInput" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyCon "EmitInput")))))))))))
-(DFunDef false "makeEmitInput" ((PVar "domain") (PVar "methodIfaces") (PVar "ctorFieldTypes") (PVar "externArities") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName") (PVar "ffiExternTypes")) (ERecordCreate "EmitInputData" ((fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "externArityIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "externArities"))) (EVar "omEmpty"))) (fa "ffiExternIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "hostRows") (ELit (LString "c"))) (EVar "ffiExternTypes")))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "sharedMethodNames" (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "methodIfaces")) (EVar "omEmpty")) (EVar "omEmpty"))) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
+(DTypeSig true "makeEmitInput" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "EmitInput")))))))))
+(DFunDef false "makeEmitInput" ((PVar "domain") (PVar "methodIfaces") (PVar "ctorFieldTypes") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName")) (ERecordCreate "EmitInputData" ((fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "sharedMethodNames" (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "methodIfaces")) (EVar "omEmpty")) (EVar "omEmpty"))) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
 (DTypeSig true "withNoInlineFns" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "EmitInput") (TyCon "EmitInput"))))
 (DFunDef false "withNoInlineFns" ((PVar "names") (PVar "input")) (ERecordUpdate (EVar "input") ((fa "noInlineFns" (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ELit LUnit)))) (EVar "names"))) (EVar "omEmpty"))))))
 (DTypeSig false "fnAttrs" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
@@ -17946,10 +17917,10 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "gapStr" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "gapStr" ((PVar "e") (PVar "reason")) (EMatch (EFieldAccess (EVar "e") "gapMode") (arm (PCon "Record") () (ELet false PWild (EApp (EApp (EVar "noteGap") (EVar "e")) (EVar "reason")) (ELit (LString "0")))) (arm (PCon "Strict") () (EApp (EVar "panic") (EVar "reason")))))
 (DData Private "LTy" () ((variant "LTInt" (ConPos)) (variant "LTFloat" (ConPos)) (variant "LTBool" (ConPos)) (variant "LTCon" (ConPos)) (variant "LTClosure" (ConPos)) (variant "LTStr" (ConPos)) (variant "LTUnit" (ConPos)) (variant "LTChar" (ConPos)) (variant "LTUnknown" (ConPos)) (variant "LTNum" (ConPos)) (variant "LTFloatU" (ConPos)) (variant "LTU64" (ConPos)) (variant "LTI64" (ConPos)) (variant "LTU64U" (ConPos)) (variant "LTU32U" (ConPos)) (variant "LTI32U" (ConPos))) ())
-(DData Private "EmitInputData" () ((variant "EmitInputData" (ConNamed (field "ctorFieldIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "externArityIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ffiExternIndex" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (field "emitHalf" (TyCon "Int")) (field "preludeBinds" (TyApp (TyCon "List") (TyCon "String"))) (field "preludeImplIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "srcName" (TyCon "String")) (field "sharedMethodNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "runtimeExterns" (TyCon "RuntimeExternDomain")) (field "noInlineFns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DData Private "EmitInputData" () ((variant "EmitInputData" (ConNamed (field "ctorFieldIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "emitHalf" (TyCon "Int")) (field "preludeBinds" (TyApp (TyCon "List") (TyCon "String"))) (field "preludeImplIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "srcName" (TyCon "String")) (field "sharedMethodNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "runtimeExterns" (TyCon "RuntimeExternDomain")) (field "noInlineFns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeAlias true "EmitInput" () (TyCon "EmitInputData"))
-(DTypeSig true "makeEmitInput" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyCon "EmitInput")))))))))))
-(DFunDef false "makeEmitInput" ((PVar "domain") (PVar "methodIfaces") (PVar "ctorFieldTypes") (PVar "externArities") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName") (PVar "ffiExternTypes")) (ERecordCreate "EmitInputData" ((fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "externArityIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "externArities"))) (EVar "omEmpty"))) (fa "ffiExternIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "hostRows") (ELit (LString "c"))) (EVar "ffiExternTypes")))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "sharedMethodNames" (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "methodIfaces")) (EVar "omEmpty")) (EVar "omEmpty"))) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
+(DTypeSig true "makeEmitInput" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "EmitInput")))))))))
+(DFunDef false "makeEmitInput" ((PVar "domain") (PVar "methodIfaces") (PVar "ctorFieldTypes") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName")) (ERecordCreate "EmitInputData" ((fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "sharedMethodNames" (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "methodIfaces")) (EVar "omEmpty")) (EVar "omEmpty"))) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
 (DTypeSig true "withNoInlineFns" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "EmitInput") (TyCon "EmitInput"))))
 (DFunDef false "withNoInlineFns" ((PVar "names") (PVar "input")) (ERecordUpdate (EVar "input") ((fa "noInlineFns" (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ELit LUnit)))) (EVar "names"))) (EVar "omEmpty"))))))
 (DTypeSig false "fnAttrs" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))

@@ -38,7 +38,6 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
   methodIfaceTable,
   ctorFieldTypeNames,
-  externArities,
   validateFfiExternTypeNames,
 }
 import ir.core_ir.{
@@ -91,7 +90,7 @@ emitIsolation runtimePath pPath pPlusUPath =
 -- `main` is stamped, as every lowered binder is, so the emitter reaches the node.
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
-  let input = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
+  let input = makeEmitInput PreludeFreeRuntime [] [] 0 [] [] ""
   let mainId = BinderId "" 0
   let cp =
     CProgram
@@ -146,18 +145,19 @@ runEmit runtimeDecls preludeDecls userDecls =
     factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let mangled = coreD ++ flatMap snd modules2
+  let _ =
+    validateFfiExternTypeNames
+      (externSourceHeadRows (optionOr [] externFacts.pfExternSources))
   let input =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (methodIfaceTable mangled)
       (ctorFieldTypeNames mangled)
-      (externArities runtimeDecls)
       0
       []
       []
       ""
-      (validateFfiExternTypeNames
-        (externSourceHeadRows (optionOr [] externFacts.pfExternSources)))
+
   let cp = lowerProgramEmitWith (factsWithEvidence evTableM externFacts) mangled
   emitProgram
     input

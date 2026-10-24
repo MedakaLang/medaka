@@ -56,7 +56,6 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
   methodIfaceTable,
   ctorFieldTypeNames,
-  externArities,
   validateFfiExternTypeNames,
 }
 import ir.dce.{dceFilter}
@@ -71,7 +70,7 @@ import backend.llvm_emit.{emitProgram, makeEmitInput}
 -- names above. Aliased on import, exactly as tools/snapshot.mdk does for the same
 -- clash. The `W` suffix marks the WasmGC peer; the un-suffixed names stay LLVM's, so
 -- an unqualified `emitProgram` in this file still means what it has always meant.
-import backend.wasm_emit.{emitProgram as wasmText, makeWasmEmitInputFull}
+import backend.wasm_emit.{emitProgram as wasmText, makeWasmEmitInput}
 import tools.fmt.{formatSource}
 import frontend.exhaust.{checkGuardExhaustivenessWith}
 import support.timer.{
@@ -299,17 +298,17 @@ runStaged on targetPath rsrc csrc tsrc =
   -- Input indexing is elaboration work; keep it outside the emit timer.  The FFI
   -- projection is post-elaboration so it consumes the same canonical alias shape
   -- the declaration guards accepted.
+  let _ = validateFfiExternTypeNames (checkedFfiExternTypeNames elaborated)
   let input =
     makeEmitInput
       (runtimeDomain (externDecls rDecls))
       (methodIfaceTable elaborated)
       (ctorFieldTypeNames elaborated)
-      (externArities rDecls)
       0
       []
       []
       targetPath
-      (validateFfiExternTypeNames (checkedFfiExternTypeNames elaborated))
+
   let tEl1 = now ()
   let _ =
     emitPhaseAO
@@ -501,10 +500,9 @@ wasmStage : Bool ->
 wasmStage _ False _ _ _ _ _ = ()
 wasmStage on True outputs runtimeDecls live cprog declsOp =
   let input =
-    makeWasmEmitInputFull
+    makeWasmEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames live)
-      []
   let tWe0 = now ()
   let aWe0 = allocSnap ()
   let oWe0 = opSnap ()

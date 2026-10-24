@@ -43,7 +43,6 @@ import ir.core_ir_lower.{
   lowerProgramEmitPinnedWith,
   methodIfaceTable,
   ctorFieldTypeNames,
-  externArities,
   validateFfiExternTypeNames,
   noInlineFnNames,
 }
@@ -150,18 +149,19 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
   let allDecls = if half == 0 then dceFilter allDecls0 else allDecls0
   let (preludeBinds, preludeImpls) =
     if half == 2 then preludeSymsOf facts coreD else ([], [])
+  let _ =
+    validateFfiExternTypeNames
+      (externSourceHeadRows (optionOr [] facts.pfExternSources))
   let base =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
-      (externArities runtimeDecls)
       half
       preludeBinds
       preludeImpls
       (srcNameFromArgs (args ()))
-      (validateFfiExternTypeNames
-        (externSourceHeadRows (optionOr [] facts.pfExternSources)))
+
   let input = withNoInlineFns (noInlineFnNames allDecls) base
   let statsOn = statsEnabled ()
   let cp = lowerProgramEmitPinnedWith facts preludeImpls allDecls

@@ -43719,7 +43719,7 @@ ffiIsBuiltinExternName gctx n = omHasKey n gctx.builtinExternNamesRef.value
 -- in the §1 crossable set; the row names `FFI`), so routing it through them changes
 -- nothing at all and the program still emits `call double @mdk_log`.  The reason is
 -- that the emitter's half of the exemption is a SEPARATE, NAME-ONLY mechanism that
--- no typecheck verdict reaches: `ffiExternRows` (`compiler/ir/core_ir_lower.mdk`)
+-- no typecheck verdict reaches: the checked FFI facts consumed by the emitter
 -- subtracts the runtime catalog's names from the FFI index outright, and
 -- `emitApp`'s ladder tests `isAnyExtern` BEFORE the FFI arm.  A catalog name is
 -- lowered as the builtin no matter what typecheck concluded about it.
@@ -44026,7 +44026,7 @@ ffiInstAtom sub a = match a.eatParam
 --
 -- is an instance of the catalog's type, passes every rule above, and types a caller as
 -- `String -> Unit` — while the emitter, which is name-keyed and never sees a
--- typecheck verdict (`isAnyExtern`/`ffiExternRows`), lowers the call to the REAL
+-- typecheck verdict (`isAnyExtern` and the selected extern facts), lowers the call to the REAL
 -- `writeFile` and the file is really written.  `medaka check` printed
 -- `innocent : String -> Unit` for a function that writes to disk, at exit 0.
 --
@@ -44224,7 +44224,7 @@ positionalSigVars names cells = SigVars {
 -- ── signature heads, for the emitter's FFI rows ─────────────────────────────
 --
 -- The `(argument heads, return head)` projection of a signature, the granularity
--- `ffiExternRows` (`compiler/ir/core_ir_lower.mdk`) records for the emitter's FFI
+-- the checked FFI facts consumed by the emitter records for the emitter's FFI
 -- index: a foreign call's representation is decided by its heads.  A type
 -- variable projects to `_`, so renaming one changes nothing.  This projection
 -- says nothing about whether a redeclaration of a catalog name is honest; that
@@ -44281,8 +44281,7 @@ ffiTyHeadNameWith aliases ty = match expandAliasHeadTyWith aliases ty
 -- interners, which hold the catalog of the graph record most recently minted or restored.  Lowering
 -- therefore no longer independently scans `runtimeDecls` to decide whether a checked
 -- declaration routes as a builtin.
--- The raw-AST `ir.core_ir_lower.ffiExternTypeNames` remains only for the snapshot
--- tool's intentionally untyped emitter stage.
+-- Typed emitters use these canonical producers for checked extern facts.
 export
 checkedFfiExternTypeNames : List Decl ->
   List (String, (List (String, String), (List String, String)))

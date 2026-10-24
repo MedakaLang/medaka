@@ -3,8 +3,8 @@
 --
 -- `log` is a real `stdlib/runtime.mdk` catalog name (`Float -> Float`, the
 -- natural logarithm), and a catalog name is lowered as the BUILTIN whatever the
--- local row claims -- `ffiExternRows` (compiler/ir/core_ir_lower.mdk) subtracts
--- the catalog from the FFI index outright and `emitApp` tests `isAnyExtern`
+-- local row claims -- the emitter selects catalog names before the foreign-call path and `emitApp` tests
+-- `isAnyExtern`
 -- before the FFI arm, neither of which reads any typecheck verdict.  While the
 -- exemption was keyed on the bare name alone, this declaration compiled to
 -- `call double @mdk_log(double <String cell pointer>)` at exit 0 and the

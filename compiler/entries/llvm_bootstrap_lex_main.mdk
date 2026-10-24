@@ -39,7 +39,6 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
   methodIfaceTable,
   ctorFieldTypeNames,
-  externArities,
   validateFfiExternTypeNames,
 }
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
@@ -71,18 +70,19 @@ runEmit inputs runtimeDecls coreDecls modules =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
+  let _ =
+    validateFfiExternTypeNames
+      (externSourceHeadRows (optionOr [] externFacts.pfExternSources))
   let input =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
-      (externArities runtimeDecls)
       0
       []
       []
       ""
-      (validateFfiExternTypeNames
-        (externSourceHeadRows (optionOr [] externFacts.pfExternSources)))
+
   let cp =
     lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
   let (text, _) =

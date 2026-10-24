@@ -50,7 +50,7 @@ import ir.core_ir_lower.{
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{
   emitProgram,
-  makeWasmEmitInputFull,
+  makeWasmEmitInput,
 }
 import backend.emit_plan.{buildEmitPlanReached}
 import entries.entry_support.{
@@ -91,14 +91,13 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
-  let ffiRows =
+  let _ =
     validateFfiExternTypeNames
       (externSourceHeadRows (optionOr [] facts.pfExternSources))
   let input =
-    makeWasmEmitInputFull
+    makeWasmEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
-      ffiRows
   let lowered = lowerProgramEmitWith facts allDecls
   let (plan, reached) =
     buildEmitPlanReached (runtimeDomain (externDecls runtimeDecls)) lowered

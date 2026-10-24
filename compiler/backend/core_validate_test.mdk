@@ -85,7 +85,7 @@ import backend.wasm_emit.{
   emitProgramUnchecked as wasmUnchecked,
   emitProgramGaps,
   emitProgramRecord as wasmRecord,
-  makeWasmEmitInputFull,
+  makeWasmEmitInput,
 }
 import backend.llvm_emit.{
   emitProgram as llvmStrict,
@@ -224,8 +224,7 @@ recordSrc =
 
 test "(e) record mode logs one event per refused extern, and no unbound-variable event" =
   let decls = grantWholeDomain (desugar (parse recordSrc))
-  let input =
-    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
+  let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (_, events) =
     wasmRecord input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
@@ -272,7 +271,7 @@ test "(f) llvm refuses assertSnapshot and lowers what wasm refuses" = expectEach
 llvmRecordEvents : Expectation
 llvmRecordEvents =
   let decls = grantWholeDomain (desugar (parse assertSnapshotSrc))
-  let input = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
+  let input = makeEmitInput PreludeFreeRuntime [] [] 0 [] [] ""
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (_, events) =
     llvmRecord input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
@@ -403,11 +402,7 @@ ffiNoJsEvents : Option CheckedTarget -> <IO> List String
 ffiNoJsEvents checked =
   let decls = grantWholeDomain (desugar (parse ffiValueSrc))
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
-  let input =
-    makeWasmEmitInputFull
-      PreludeFreeRuntime
-      (ctorFieldTypeNames decls)
-      (externHeadRows cp)
+  let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
   checkedTarget := checked
   let (_, events) =
     wasmRecord input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
@@ -2168,8 +2163,8 @@ emissionText route victim =
           (if victim == "target" then other else target)
           domain
           cp))
-  let li = makeEmitInput domain [] [] [] 0 [] [] "" []
-  let wi = makeWasmEmitInputFull domain [] []
+  let li = makeEmitInput domain [] [] 0 [] [] ""
+  let wi = makeWasmEmitInput domain []
   match route
     "llvm-stats" =>
       let (text, stats) = llvmStats li plan cp
@@ -2403,8 +2398,8 @@ test "gateway valid controls return module text and unavailable externs stay rec
   let cp = emissionVictim "not-provided"
   let lp = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
   let wp = buildEmitPlan WasmBackend PreludeFreeRuntime cp
-  let li = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
-  let wi = makeWasmEmitInputFull PreludeFreeRuntime [] []
+  let li = makeEmitInput PreludeFreeRuntime [] [] 0 [] [] ""
+  let wi = makeWasmEmitInput PreludeFreeRuntime []
   let (_, le) = llvmRecord li lp cp
   let (_, we) = wasmRecord wi wp cp
   expectEach [

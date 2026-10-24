@@ -95,7 +95,7 @@ arithLlvm : String -> String
 arithLlvm tag =
   let cp = arithProgram tag
   emitProgram
-    (makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" [])
+    (makeEmitInput PreludeFreeRuntime [] [] 0 [] [] "")
     (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
     cp
 

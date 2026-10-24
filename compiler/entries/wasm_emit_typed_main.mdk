@@ -82,7 +82,6 @@ import backend.wasm_emit.{
   emitProgramGaps as emitGapsWithPlan,
   makeWasmEmitInput,
   inputRuntimeExternsW,
-  makeWasmEmitInputFull,
 }
 import entries.entry_support.{driveRuntime}
 import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
@@ -185,10 +184,9 @@ typedElaboratedFacts runtimeDecls preludeDecls userDecls =
 typedInput : List Decl -> List Decl -> List Decl -> WasmEmitInput
 typedInput runtimeDecls preludeDecls userDecls =
   let mangled = typedElaborated runtimeDecls preludeDecls userDecls
-  makeWasmEmitInputFull
+  makeWasmEmitInput
     (runtimeDomain (externDecls runtimeDecls))
     (ctorFieldTypeNames mangled)
-    []
 
 -- A hand-built program, its applications stamped and tail-flagged and its
 -- binders stamped as a lowering's are.
@@ -266,17 +264,13 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let uMangled = typedElaborated runtimeDecls [] uDecls
         let pCtors = ctorFieldTypeNames pMangled
         let pInput =
-          makeWasmEmitInputFull
-            (runtimeDomain (externDecls runtimeDecls))
-            pCtors
-            []
+          makeWasmEmitInput (runtimeDomain (externDecls runtimeDecls)) pCtors
         let p1 = emitProgram pInput pProgram
         let ctorWat =
           emitProgramUnchecked
-            (makeWasmEmitInputFull
+            (makeWasmEmitInput
               (runtimeDomain (externDecls runtimeDecls))
-              (ctorFieldTypeNames uMangled)
-              [])
+              (ctorFieldTypeNames uMangled))
             pProgram
         let mainDecls = desugar (parse "data Dummy = Dummy\n\nmain = 1\n")
         let mainMangled = typedElaborated runtimeDecls [] mainDecls
@@ -299,10 +293,9 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
           None => mainPlan
         let mainWat =
           emitUncheckedWithPlan
-            (makeWasmEmitInputFull
+            (makeWasmEmitInput
               (runtimeDomain (externDecls runtimeDecls))
-              (ctorFieldTypeNames mainMangled)
-              [])
+              (ctorFieldTypeNames mainMangled))
             floatPlan
             mainProgram
         let pLast = emitProgram pInput pProgram

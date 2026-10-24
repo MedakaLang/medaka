@@ -1,5 +1,5 @@
 # META
-source_lines=1502
+source_lines=1499
 stages=DESUGAR,MARK
 # SOURCE
 import types.typecheck.{checkedFfiExternTypeNamesModules}
@@ -178,8 +178,7 @@ import ir.core_ir_lower.{
   lowerProgramWithFacts,
   methodIfaceTable,
   ctorFieldTypeNames,
-  externArities,
-  ffiExternTypeNames,
+  validateFfiExternTypeNames,
 }
 import ir.core_ir_sexp.{cprogramToSexp}
 import types.annotate.{annotateProgram}
@@ -205,7 +204,7 @@ import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 -- shim that existed solely because Medaka had no import aliasing.)
 import backend.wasm_emit.{
   emitProgramRecord as wasmRecord,
-  makeWasmEmitInputFull,
+  makeWasmEmitInput,
 }
 import support.util.{
   joinNl,
@@ -656,17 +655,16 @@ emitBoth root sel runtimeDecls userDecls =
 
 llvmOf : List Decl -> List Decl -> CProgram -> String
 llvmOf runtimeDecls allDecls cp =
+  let _ = validateFfiExternTypeNames (externHeadRows cp)
   let input =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
-      (externArities runtimeDecls)
       0
       []
       []
       ""
-      (externHeadRows cp)
   let (text, gaps) =
     emitProgramRecord
       input
@@ -677,10 +675,9 @@ llvmOf runtimeDecls allDecls cp =
 wasmOf : List Decl -> List Decl -> CProgram -> String
 wasmOf runtimeDecls allDecls cp =
   let input =
-    makeWasmEmitInputFull
+    makeWasmEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
-      (externHeadRows cp)
   let (text, gaps) =
     wasmRecord
       input
@@ -1516,7 +1513,7 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("frontend" "marker") ((mem "markWithPrelude" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "programToSexp" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" false))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "declaredRecordFieldOrders" false) (mem "lowerProgramEmitWith" false) (mem "lowerProgramWithFacts" false) (mem "methodIfaceTable" false) (mem "ctorFieldTypeNames" false) (mem "externArities" false) (mem "ffiExternTypeNames" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "declaredRecordFieldOrders" false) (mem "lowerProgramEmitWith" false) (mem "lowerProgramWithFacts" false) (mem "methodIfaceTable" false) (mem "ctorFieldTypeNames" false) (mem "validateFfiExternTypeNames" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneToLinesWithRuntime" false) (mem "elaborateOneFacts" false) (mem "elaborateModulesWithReport" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false))))
@@ -1528,7 +1525,7 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "buildEmitPlan" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externHeadRows" false))))
 (DUse false (UseGroup ("backend" "llvm_emit") ((mem "emitProgramRecord" false) (mem "makeEmitInput" false))))
-(DUse false (UseGroup ("backend" "wasm_emit") ((mem "emitProgramRecord" false "wasmRecord") (mem "makeWasmEmitInputFull" false))))
+(DUse false (UseGroup ("backend" "wasm_emit") ((mem "emitProgramRecord" false "wasmRecord") (mem "makeWasmEmitInput" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "anyList" false) (mem "reverseL" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "chopExt" false) (mem "baseOf" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
@@ -1631,9 +1628,9 @@ mapUnit f (x :: rest) =
 (DTypeSig false "emitBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "emitBoth" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "userDecls")) (EBlock (DoLet false false (PTuple (PVar "elab") PWild (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "False")) (EVar "None")) (EVar "runtimeDecls")) (EListLit)) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userDecls"))))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild (PVar "evTable") PWild PWild) (EVar "elab")) (DoLet false false (PVar "externFacts") (EApp (EApp (EApp (EApp (EVar "factsOfElabSources") (EVar "checkedFfiExternTypeNamesModules")) (EVar "outputs")) (EVar "elab")) (EVar "evTable"))) (DoLet false false (PTuple (PVar "coreD") (PVar "modules2") (PVar "evTableM")) (EApp (EApp (EApp (EVar "mangleUnitsEv") (EVar "evTable")) (EVar "coreE")) (EVar "modulesE"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "coreD") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules2")))) (DoLet false false (PVar "cp") (EApp (EApp (EVar "lowerProgramEmitWith") (EApp (EApp (EVar "factsWithEvidence") (EVar "evTableM")) (EVar "externFacts"))) (EVar "allDecls"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "llvmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit))) (DoExpr (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "wasmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit)))))
 (DTypeSig false "llvmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))
-(DFunDef false "llvmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeEmitInput") (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EApp (EVar "methodIfaceTable") (EVar "allDecls"))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (EApp (EVar "externArities") (EVar "runtimeDecls"))) (ELit (LInt 0))) (EListLit)) (EListLit)) (ELit (LString ""))) (EApp (EVar "externHeadRows") (EVar "cp")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EApp (EVar "emitProgramRecord") (EVar "input")) (EApp (EApp (EApp (EVar "buildEmitPlan") (EVar "LlvmBackend")) (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EVar "cp"))) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";"))) (EVar "text")) (EVar "gaps")))))
+(DFunDef false "llvmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "validateFfiExternTypeNames") (EApp (EVar "externHeadRows") (EVar "cp")))) (DoLet false false (PVar "input") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeEmitInput") (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EApp (EVar "methodIfaceTable") (EVar "allDecls"))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (ELit (LInt 0))) (EListLit)) (EListLit)) (ELit (LString "")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EApp (EVar "emitProgramRecord") (EVar "input")) (EApp (EApp (EApp (EVar "buildEmitPlan") (EVar "LlvmBackend")) (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EVar "cp"))) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";"))) (EVar "text")) (EVar "gaps")))))
 (DTypeSig false "wasmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))
-(DFunDef false "wasmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EApp (EVar "makeWasmEmitInputFull") (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (EApp (EVar "externHeadRows") (EVar "cp")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EApp (EVar "wasmRecord") (EVar "input")) (EApp (EApp (EApp (EVar "buildEmitPlan") (EVar "WasmBackend")) (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EVar "cp"))) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";;"))) (EVar "text")) (EVar "gaps")))))
+(DFunDef false "wasmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EVar "makeWasmEmitInput") (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EApp (EVar "wasmRecord") (EVar "input")) (EApp (EApp (EApp (EVar "buildEmitPlan") (EVar "WasmBackend")) (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EVar "cp"))) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";;"))) (EVar "text")) (EVar "gaps")))))
 (DTypeSig false "withGaps" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "withGaps" (PWild (PVar "text") (PList)) (EVar "text"))
 (DFunDef false "withGaps" ((PVar "cmt") (PVar "text") (PVar "gaps")) (EApp (EVar "blockOf") (EBinOp "++" (EApp (EVar "contentLines") (EVar "text")) (EApp (EApp (EVar "map") (ELam ((PVar "g")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cmt"))) (ELit (LString " GAP: "))) (EApp (EVar "display") (EVar "g"))) (ELit (LString ""))))) (EVar "gaps")))))
@@ -1852,7 +1849,7 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("frontend" "marker") ((mem "markWithPrelude" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "programToSexp" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" false))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "declaredRecordFieldOrders" false) (mem "lowerProgramEmitWith" false) (mem "lowerProgramWithFacts" false) (mem "methodIfaceTable" false) (mem "ctorFieldTypeNames" false) (mem "externArities" false) (mem "ffiExternTypeNames" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "declaredRecordFieldOrders" false) (mem "lowerProgramEmitWith" false) (mem "lowerProgramWithFacts" false) (mem "methodIfaceTable" false) (mem "ctorFieldTypeNames" false) (mem "validateFfiExternTypeNames" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "checkOneToLinesWithRuntime" false) (mem "elaborateOneFacts" false) (mem "elaborateModulesWithReport" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false))))
@@ -1864,7 +1861,7 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "buildEmitPlan" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externHeadRows" false))))
 (DUse false (UseGroup ("backend" "llvm_emit") ((mem "emitProgramRecord" false) (mem "makeEmitInput" false))))
-(DUse false (UseGroup ("backend" "wasm_emit") ((mem "emitProgramRecord" false "wasmRecord") (mem "makeWasmEmitInputFull" false))))
+(DUse false (UseGroup ("backend" "wasm_emit") ((mem "emitProgramRecord" false "wasmRecord") (mem "makeWasmEmitInput" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "anyList" false) (mem "reverseL" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "chopExt" false) (mem "baseOf" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
@@ -1967,9 +1964,9 @@ mapUnit f (x :: rest) =
 (DTypeSig false "emitBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "emitBoth" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "userDecls")) (EBlock (DoLet false false (PTuple (PVar "elab") PWild (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "False")) (EVar "None")) (EVar "runtimeDecls")) (EListLit)) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userDecls"))))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild (PVar "evTable") PWild PWild) (EVar "elab")) (DoLet false false (PVar "externFacts") (EApp (EApp (EApp (EApp (EVar "factsOfElabSources") (EVar "checkedFfiExternTypeNamesModules")) (EVar "outputs")) (EVar "elab")) (EVar "evTable"))) (DoLet false false (PTuple (PVar "coreD") (PVar "modules2") (PVar "evTableM")) (EApp (EApp (EApp (EVar "mangleUnitsEv") (EVar "evTable")) (EVar "coreE")) (EVar "modulesE"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "coreD") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules2")))) (DoLet false false (PVar "cp") (EApp (EApp (EVar "lowerProgramEmitWith") (EApp (EApp (EVar "factsWithEvidence") (EVar "evTableM")) (EVar "externFacts"))) (EVar "allDecls"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "llvmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit))) (DoExpr (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "wasmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit)))))
 (DTypeSig false "llvmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))
-(DFunDef false "llvmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeEmitInput") (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EApp (EVar "methodIfaceTable") (EVar "allDecls"))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (EApp (EVar "externArities") (EVar "runtimeDecls"))) (ELit (LInt 0))) (EListLit)) (EListLit)) (ELit (LString ""))) (EApp (EVar "externHeadRows") (EVar "cp")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EApp (EVar "emitProgramRecord") (EVar "input")) (EApp (EApp (EApp (EVar "buildEmitPlan") (EVar "LlvmBackend")) (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EVar "cp"))) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";"))) (EVar "text")) (EVar "gaps")))))
+(DFunDef false "llvmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "validateFfiExternTypeNames") (EApp (EVar "externHeadRows") (EVar "cp")))) (DoLet false false (PVar "input") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeEmitInput") (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EApp (EVar "methodIfaceTable") (EVar "allDecls"))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (ELit (LInt 0))) (EListLit)) (EListLit)) (ELit (LString "")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EApp (EVar "emitProgramRecord") (EVar "input")) (EApp (EApp (EApp (EVar "buildEmitPlan") (EVar "LlvmBackend")) (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EVar "cp"))) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";"))) (EVar "text")) (EVar "gaps")))))
 (DTypeSig false "wasmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))
-(DFunDef false "wasmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EApp (EVar "makeWasmEmitInputFull") (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (EApp (EVar "externHeadRows") (EVar "cp")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EApp (EVar "wasmRecord") (EVar "input")) (EApp (EApp (EApp (EVar "buildEmitPlan") (EVar "WasmBackend")) (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EVar "cp"))) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";;"))) (EVar "text")) (EVar "gaps")))))
+(DFunDef false "wasmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EVar "makeWasmEmitInput") (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EApp (EVar "wasmRecord") (EVar "input")) (EApp (EApp (EApp (EVar "buildEmitPlan") (EVar "WasmBackend")) (EApp (EVar "runtimeDomain") (EApp (EVar "externDecls") (EVar "runtimeDecls")))) (EVar "cp"))) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";;"))) (EVar "text")) (EVar "gaps")))))
 (DTypeSig false "withGaps" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "withGaps" (PWild (PVar "text") (PList)) (EVar "text"))
 (DFunDef false "withGaps" ((PVar "cmt") (PVar "text") (PVar "gaps")) (EApp (EVar "blockOf") (EBinOp "++" (EApp (EVar "contentLines") (EVar "text")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "g")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cmt"))) (ELit (LString " GAP: "))) (EApp (EMethodRef "display") (EVar "g"))) (ELit (LString ""))))) (EVar "gaps")))))

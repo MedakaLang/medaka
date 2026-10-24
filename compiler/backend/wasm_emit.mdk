@@ -487,8 +487,6 @@ data WasmEmit = WasmEmit {
   useStrJoin : Ref Bool,
   tupleArities : Ref (List Int),
   wDispGroups : Ref (List DispGroup),
-  -- the plan's `jsffi` imports, by Medaka name (`EmitPlan.jsImports`)
-  wJsImports : Ref (OrdMap JsImport),
   -- the W7 scratch locals (`__rli2`, ...) the function being emitted references;
   -- see w7ScopeOpen.
   w7Used : Ref (OrdMap Unit),
@@ -552,47 +550,27 @@ freshWasmEmit mode = WasmEmit {
   useStrJoin = Ref False,
   tupleArities = Ref [],
   wDispGroups = Ref [],
-  wJsImports = Ref omEmpty,
   w7Used = Ref omEmpty,
 }
 
--- Declaration-derived facts are indexed once for each emission. The last field
--- is the complete loaded runtime declaration domain.
+-- Declaration-derived facts are indexed once for each emission.
 data WasmEmitInputData =
-  WasmEmitInputData (OrdMap (List Int)) (OrdMap (List (String, String), (List String, String))) RuntimeExternDomain
+  WasmEmitInputData (OrdMap (List Int)) RuntimeExternDomain
 
 export type WasmEmitInput = WasmEmitInputData
 
--- The DECL-FREE form: for the hand-built-`CProgram` harnesses that have no
--- declaration list to project, so the FFI extern index is legitimately empty.  Every driver that lowers real decls uses
--- `makeWasmEmitInputFull` instead.
 export
 makeWasmEmitInput : RuntimeExternDomain ->
   List (String, List String) ->
   WasmEmitInput
 makeWasmEmitInput domain ctorFieldTypes =
-  makeWasmEmitInputFull domain ctorFieldTypes []
-
--- The full input: an index of USER-declared FFI extern names (name ->
--- (host bindings, (paramTypeHeads, retTypeHead))), every host's, so a reference
--- to one is lowered as a `js` binding (the `jsImports` of the plan) or, with no
--- `js` binding, is a gap that names it.  Kept apart from `makeWasmEmitInput`
--- so the single-file harnesses that never declare a user FFI extern keep its
--- shorter arity.
-export
-makeWasmEmitInputFull : RuntimeExternDomain ->
-  List (String, List String) ->
-  List (String, (List (String, String), (List String, String))) ->
-  WasmEmitInput
-makeWasmEmitInputFull domain ctorFieldTypes ffiExternRows =
   WasmEmitInputData
     (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty)
-    (omFromPairs (reverseL ffiExternRows) omEmpty)
     domain
 
 export
 inputRuntimeExternsW : WasmEmitInput -> RuntimeExternDomain
-inputRuntimeExternsW (WasmEmitInputData _ _ names) = names
+inputRuntimeExternsW (WasmEmitInputData _ names) = names
 
 -- ── program info threaded through the ref-mode emitter ───────────────────────
 -- WasmProgramIndex owns the declaration-derived function, value, constructor,
@@ -799,7 +777,7 @@ narrowByIfaceW iface entries =
 
 -- #2076: the wasm peer of `llvm_emit.mdk`'s `ffiSigOf`/`isFfiExtern` — the host
 -- bindings of `name` when it is a USER-declared FFI extern.  Built from
--- `makeWasmEmitInputFull`'s rows (empty for every caller of `makeWasmEmitInput`).
+-- `makeWasmEmitInput`'s rows (empty for every caller of `makeWasmEmitInput`).
 -- Consulted by `emitAppRef`/`emitTailCallW`/`emitVarRefPlain` ahead of the
 -- runtime extern families, as `DemandScope` resolves a name.
 ffiBindsOfW : Prog -> String -> Option (List (String, String))
@@ -1328,7 +1306,7 @@ floatFieldIndices (_ :: rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData ctorFloatIndex _ _ => match omLookup ctor ctorFloatIndex
+  WasmEmitInputData ctorFloatIndex _ => match omLookup ctor ctorFloatIndex
     Some idxs => containsInt idx idxs
     None => False
 
@@ -1813,224 +1791,6 @@ anyBind : (CBind -> Bool) -> List CBind -> Bool
 anyBind _ [] = False
 anyBind p (b :: rest) = if p b then True else anyBind p rest
 
--- The legacy arity table is retained with the obsolete emitter indexes as one
--- removal unit; requirement-backed eta closures no longer read it.
-externArityW : String -> Int
--- lint-disable-next-line rule-dead-code
-externArityW name =
-  if contains name ["flushStdout", "randomBool"] then
-    0
-  else if contains
-    name
-    [
-      "intToString",
-      "charToStr",
-      "stringLength",
-      "stringByteLength",
-      "putStr",
-      "putStrLn",
-      "ePutStr",
-      "ePutStrLn",
-      "stringToUpper",
-      "stringToLower",
-      "hashString",
-      "stringConcat",
-      "stringToInt",
-      "stringReverse",
-      "setSeed",
-      "randomState",
-      "restoreRandomState",
-      "randomChar",
-      "hashInt",
-      "hashChar",
-      "hashBool",
-      "charCode",
-      "charIsAlpha",
-      "charIsSpace",
-      "charIsUpper",
-      "charIsLower",
-      "charIsPunct",
-      "charToUpper",
-      "charToLower",
-      "floatToString",
-      "intToFloat",
-      "floatToInt",
-      "hashFloat",
-      "randomFloat",
-      "panic",
-      "arrayLength",
-      "arrayFromList",
-      "arrayCopy",
-      "indexError",
-      "indexErrorAt",
-      "floatToBytes64",
-      "stringToChars",
-      "stringFromChars",
-      "charFromCode",
-      "stringToUtf8Bytes",
-      "stringFromUtf8Bytes",
-      "getEnv",
-      "readLine",
-      "readLineOpt",
-      "readAll",
-      "readExactly",
-      "osEntropyBytes",
-      "executablePath",
-      "exit",
-      "args",
-      "wallTimeSec",
-      "monotonicSec",
-      "sleepMs",
-      "fetchText",
-      "bitNot",
-      "intBitNot",
-      "intBitsToFloat",
-      "sqrt",
-      "floor",
-      "ceil",
-      "trunc",
-      "round",
-      "cbrt",
-      "exp",
-      "log",
-      "log2",
-      "log10",
-      "sin",
-      "cos",
-      "tan",
-      "asin",
-      "acos",
-      "atan",
-      "sinh",
-      "cosh",
-      "tanh",
-      "stringToFloat",
-      "byteBlockMake",
-      "byteBlockLength",
-      "byteBlockFromIntArray",
-      "byteBlockToIntArray",
-      "byteBlockFromString",
-      "byteBlockToString",
-    ] then
-    -- W11: charCode : Char -> Int (1-arg leaf); W11b: char classification + case-mapping (1-arg).
-
-    -- W8b: floatToString/intToFloat/floatToInt/hashFloat are 1-arg; randomFloat takes
-    -- a Unit arg (like randomChar — emitted + dropped).
-
-    -- W10: panic msg (1); arrayLength/arrayFromList/arrayCopy (1).
-
-    -- Index-16a: indexError msg (1) -- the coded-OOB abort extern.
-    -- #1787: indexErrorAt idx (1) -- the same abort, carrying the index.
-
-    -- stage-B: floatToBytes64 : Float -> Array Int (1-arg).
-
-    -- W11b: stringToChars/stringFromChars/charFromCode are each 1-arg.
-
-    -- W11b: the UTF-8 byte codec externs are each 1-arg.
-
-    -- W12: getEnv/exit take 1 arg; args takes a Unit arg (emitted + dropped, like
-    -- randomFloat).
-
-    -- #101: bitNot / intBitsToFloat are 1-arg (Int -> Int / Int -> Float).
-
-    -- #101: the 1-arg libm math externs (unary Float -> Float).
-
-    -- layer-6: stringToFloat : String -> Option Float (1-arg).
-    1
-  else if contains
-    name
-    [
-      "randomInt",
-      "stringIndexOf",
-      "stringJoin",
-      "stringStartsWith",
-      "stringEndsWith",
-      "stringCountOccurrences",
-      "stringLastIndexOf",
-      "stringCompare",
-      "arrayGetUnsafe",
-      "arrayMake",
-      "arrayMakeWith",
-      "bitAnd",
-      "shiftLeft",
-      "shiftRight",
-      "arrayFill",
-      "bytesToFloat64",
-      "bitOr",
-      "bitXor",
-      "intBitAnd",
-      "intBitOr",
-      "intBitXor",
-      "intShiftLeft",
-      "intShiftRight",
-      "u64BitAnd",
-      "u64BitOr",
-      "u64BitXor",
-      "u64ShiftLeft",
-      "u64ShiftRight",
-      "u64MulHigh",
-      "pow",
-      "atan2",
-      "hypot",
-      "floatRem",
-      "sliceError",
-      "indexErrorAtSite",
-      "panicAt",
-      "byteBlockGetUnsafe",
-      "byteBlockCopyUnsafe",
-      "readFile",
-      "fileExists",
-      "readFileBytes",
-      "canonicalizePath",
-      "listDir",
-      "statFile",
-      "makeDir",
-      "removeFile",
-      "removeDir",
-      "fsync",
-      "fileMode",
-    ] then
-    -- a file extern whose path is an authority: its path and its grant
-
-    -- W10: arrayGetUnsafe (idx, arr); arrayMake (size, init); arrayMakeWith (size, f).
-
-    -- stage-A: 2-arg bitwise (Int->Int->Int) and arrayFill (val->arr->Unit).
-
-    -- stage-B: bytesToFloat64 : Array Int -> Int -> Float (2-arg).
-
-    -- #101: bitOr/bitXor (Int->Int->Int) + the 2-arg libm math (pow/atan2/hypot) +
-    -- floatRem (Float->Float->Float).
-
-    -- #670: sliceError (lo, hiIncl) -- the coded E-SLICE-OOB abort extern (2-arg).
-    2
-  else if contains
-    name
-    [
-      "stringSlice",
-      "arraySetUnsafe",
-      "byteBlockSetUnsafe",
-      "writeFileBytes",
-      "writeFile",
-      "appendFile",
-      "ioPoll",
-      siteSentinelName,
-    ] then
-    -- writeFileBytes, writeFile, appendFile: its path, its contents and the path's grant
-    3
-  else if contains name ["rename", "writeFileMode"] then
-    -- rename: its two paths and the grant of each; writeFileMode: its path, its mode,
-    -- its contents and the path's grant
-    4
-  else if contains name ["arrayBlit", "byteBlockBlit"] then
-    -- stage-A: arrayBlit src srcOff dst dstOff len (5 args); byteBlockBlit is
-    -- its byte-block peer, same argument order.
-    5
-  else
-    1
-
--- The extern family an application of `name` dispatches through: the catalog's
--- wasm column, plus the trap-site literal, which `core_ir_lower` writes, is no
--- runtime extern, and lowers on the leaf path.
 externFamilyW : String -> Option WasmFamily
 externFamilyW name =
   if name == siteSentinelName then
@@ -2982,10 +2742,6 @@ emitRefProgram prog plan groups =
       -- the host imports the reached externs' lowerings call (`EmitPlan.hostKeys`).
       ++ hostImportLines plan.hostKeys
       ++ jsffiImportLines plan.jsImports
-  let _ =
-    setRef
-      (progEmit prog).wJsImports
-      (omFromPairs (map (imp => (imp.medakaName, imp)) plan.jsImports) omEmpty)
   let valNames = progValNames prog
   -- Stage-2/3 (b′) WASMGC-TRMC: the plan's dispatch-graph TMC groups (the lexer's
   -- `scan` token spine, the offside-rule `layout` family, `intersperse`), installed

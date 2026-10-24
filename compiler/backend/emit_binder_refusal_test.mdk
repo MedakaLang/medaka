@@ -28,7 +28,7 @@ import backend.core_validate.{validateBinderStamps}
 import backend.emit_plan.{buildEmitPlan}
 
 import backend.llvm_emit.{emitProgram as llvmEmit, makeEmitInput}
-import backend.wasm_emit.{emitProgram as wasmEmit, makeWasmEmitInputFull}
+import backend.wasm_emit.{emitProgram as wasmEmit, makeWasmEmitInput}
 
 probeVar : String
 probeVar = "MEDAKA_BINDER_REFUSAL_PROBE"
@@ -81,14 +81,14 @@ program paramRow =
 llvmText : CProgram -> String
 llvmText cp =
   llvmEmit
-    (makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" [])
+    (makeEmitInput PreludeFreeRuntime [] [] 0 [] [] "")
     (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
     cp
 
 wasmText : CProgram -> String
 wasmText cp =
   wasmEmit
-    (makeWasmEmitInputFull PreludeFreeRuntime [] [])
+    (makeWasmEmitInput PreludeFreeRuntime [])
     (buildEmitPlan WasmBackend PreludeFreeRuntime cp)
     cp
 
