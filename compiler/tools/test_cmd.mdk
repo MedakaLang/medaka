@@ -812,7 +812,7 @@ data Prepared =
 --   doctests      the phases need the injected tree and the gate must not read
 --                 it, so the two cannot be one pass, and the gate is the check
 --                 driver over the graph already loaded (`projectDiagsLoaded`,
---                 keyed into the prelude and module-chain memos `check` mints).
+--                 keyed into the prelude interface `check` reads).
 --
 -- The two drivers must agree on the IMPL UNIVERSE, or which arm a module
 -- takes decides whether it type-checks — and adding a doctest would move it
@@ -960,8 +960,8 @@ forceInjected rsrc csrc mods synthDecls =
         (factsOfElab elab)
 
 -- The doctest-bearing gate: `analyzeProject`'s verdict over the graph this
--- invocation already loaded, keyed into the same prelude and module-chain memos
--- `medaka check` mints, so nothing here re-parses or re-loads.
+-- invocation already loaded, keyed into the same prelude interface `medaka check`
+-- reads, so nothing here re-parses or re-loads.
 gateOfCheck : Bool ->
   String ->
   String ->

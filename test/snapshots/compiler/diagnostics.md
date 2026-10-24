@@ -1,5 +1,5 @@
 # META
-source_lines=3503
+source_lines=3508
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -964,7 +964,7 @@ modOwnSchemes : ModDiags -> (String, List (String, PubScheme))
 modOwnSchemes (mid, (schemes, _, _)) = (mid, schemes)
 
 -- The check drive's report beside its outputs: a single file's entry drive, or a
--- graph's drive through the module-chain memo under `chainKey`.
+-- graph's keyed drive under `chainKey` (`checkChainReport`).
 export
 checkReportOf : ChainSteps -> String -> FrontDriveIn -> (TcReport, DriveOutputs)
 checkReportOf steps chainKey d = match (d.fdMods, d.fdPairs)
@@ -1012,7 +1012,7 @@ checkDriveReport chainKey d =
 -- entry's `name : scheme` lines inside the drive, before any later elaboration:
 -- a scheme rendered after another drive can name its type variables differently
 -- (#4053).  A graph's report is rendered later from its `trDiagnostics`, so its
--- `cdLines` are empty.  `target` and `roots` key the module-chain memo.
+-- `cdLines` are empty.  `target` and `roots` make the drive's chain key.
 export
 checkFrontDrive : String ->
   List String ->
@@ -1156,10 +1156,11 @@ public export data FrontPolicy =
   | DriveUnblocked String ChainSteps
   | ResolvedByGate
 
--- Whether a check drive of a graph records module-chain steps.  A session (the
--- LSP, the playground) analyzes the same graph again and resumes from them; a
--- process that checks a graph once would only pay a snapshot and a drain per
--- module for steps nothing reads.
+-- Whether a check drive of a graph passes its modules' source keys, so it serves
+-- unchanged modules from their recorded interfaces and records the ones it checks
+-- (`types/module_interface.mdk`).  A session (the LSP, the playground) analyzes the
+-- graph again and serves from them; a process that checks a graph once would only
+-- pay a drain and a frozen interface per module for interfaces nothing reads.
 public export data ChainSteps = RecordSteps | NoSteps
 
 -- `fiInputs` is what every drive of the run is given: the verb's profile and the
@@ -2041,8 +2042,9 @@ foldStale ((path, d) :: rest) buckets =
 -- WHAT A STEP CARRIES: `ModuleExports` is fields of strings, string lists and
 -- String-keyed maps of strings, and `Diag` is a severity, two strings and three `Option`s -- no `Decl`, no
 -- `Ref`, no `Scheme`, no union-find cell.  So this memo is OUTSIDE the
--- mint-after-restore law the module-chain memo lives under: it restores no
--- `GraphRun` because resolve mints nothing to restore.
+-- admissibility rule the typechecker's module interfaces live under
+-- (`types/module_interface.mdk`): it restores no `GraphRun` because resolve mints
+-- nothing to restore.
 --
 -- Uncapped and one step per module of the current graph, replaced wholesale when
 -- `rmKey` changes -- NOT a fixed-size MRU, whose hit rate collapses exactly when
@@ -2233,9 +2235,11 @@ typecheckPassReport steps inputs runtimeP coreP preludeKey chainKey mods modPair
       buckets,
   )
 
--- `check`'s drive of a graph: the module-chain memo (types/typecheck.mdk)
--- resumes an unchanged import prefix from its snapshot, so only the modules
--- after it are re-checked.  `mods` are the loaded triples `pairs` desugars.
+-- `check`'s drive of a graph, keyed under `chainKey`: with `RecordSteps` a module
+-- whose source and import closure are unchanged since its interface was recorded is
+-- served from it, so only the modules an edit reaches are re-checked
+-- (types/typecheck.mdk, `diagsServe`).  `mods` are the loaded triples `pairs`
+-- desugars.
 checkChainReport : ChainSteps ->
   DriveInputs ->
   Bool ->
@@ -2272,8 +2276,9 @@ stepKeysFor NoSteps _ = []
 -- typecheck rather than from a second, check-only one; `projectDiagsFromTc`
 -- below reaches it the same way for `medaka test`.  Both drivers' diagnostics
 -- must bucket, filter and order identically, which is why there is one fold.
--- `modPairs` is passed in rather than re-derived: the chain memo's keys need it,
--- and desugaring the graph twice was the cost this split would otherwise add.
+-- `modPairs` is passed in rather than re-derived: the keyed drive's source keys
+-- need it, and desugaring the graph twice was the cost this split would otherwise
+-- add.
 typecheckDiagsFold : DriveOutputs ->
   List Decl ->
   List Decl ->

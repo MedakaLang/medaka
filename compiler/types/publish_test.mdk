@@ -40,8 +40,7 @@ import types.tc_types.{
 import types.typecheck.{
   defaultDriveInputs, checkOneSchemeFullK, checkModulesDiagsChain,
   checkModulesAllLines, elaborateModulesReport, checkModules,
-  methodReturnMemoCurrentViews, methodReturnMemoRetentionStats,
-  chainMemoReplayedSteps, tcCode, tcMsg, checkModulesChainReportFor,
+  methodReturnMemoCurrentViews, tcCode, tcMsg, checkModulesChainReportFor,
   checkModulesChainReportForGraph, checkOneReportK, checkModulesPartialK,
   elaborateModulesWithReport, driveInputsFor, tcConfigOf
 }
@@ -349,14 +348,25 @@ accConflict = joinNl [
   "  cachedChoose _ = 99",
 ]
 
--- (the keyed chain's report, memo views taken right after the drive)
+-- (the keyed chain's report, method-return views taken right after the drive)
 accDrive : String ->
   String ->
   String ->
   String ->
   (TcReport, List MethodReturnMemoView)
 accDrive chainKey prefixSource entrySource stepKey =
-  let ((report, _), gctx) =
+  let (report, views, _) =
+    accDriveServed chainKey prefixSource entrySource stepKey
+  (report, views)
+
+-- `accDrive` beside the number of modules the drive served.
+accDriveServed : String ->
+  String ->
+  String ->
+  String ->
+  (TcReport, List MethodReturnMemoView, Int)
+accDriveServed chainKey prefixSource entrySource stepKey =
+  let ((report, outputs), gctx) =
     checkModulesChainReportForGraph
       defaultDriveInputs
       False
@@ -369,7 +379,7 @@ accDrive chainKey prefixSource entrySource stepKey =
         ("acc_prefix", desugar (parseLocated prefixSource)),
         ("acc_entry", desugar (parseLocated entrySource)),
       ]
-  (report, methodReturnMemoCurrentViews gctx)
+  (report, methodReturnMemoCurrentViews gctx, outputs.doServedModules)
 
 -- Schemes WITH their context, diagnostics, the memo views, and the checked
 -- program's evidence and dispositions, rendered at the moment of the call.
@@ -410,6 +420,12 @@ accRenderMod (mid, (ss, errs, warns)) =
     ++ rendered ss
     ++ map (d => "diag \{tcCode d}: \{tcMsg d}") (errs ++ warns)
 
+-- Each module's schemes and diagnostics alone: what a served module reports as
+-- the checked one does.  Its evidence cells are not carried, so the checked
+-- program's evidence differs.
+accRenderRows : (TcReport, List MethodReturnMemoView) -> List String
+accRenderRows (r, _) = flatMap accRenderMod r.trDiagnostics
+
 accLinks : (TcReport, List MethodReturnMemoView) -> Int
 accLinks (r, _) =
   fold
@@ -417,11 +433,6 @@ accLinks (r, _) =
       acc + fold (a e => a + linkCount (snd e).psScheme) 0 ss)
     0
     r.trDiagnostics
-
-accRetainedSteps : Unit -> Int
-accRetainedSteps _ =
-  let (_, _, n) = methodReturnMemoRetentionStats ()
-  n
 
 data QKind = QKind String (Unit -> Int)
 
@@ -442,8 +453,9 @@ accQs = [
     let _ = accDrive "acc-q" accConflict accEntry accConflict
     0),
   QKind "keyed hit over a ground prefix" (_ =>
-    let _ = accDrive "acc-p" (accPrefix False) accEntry (accPrefix False)
-    accRetainedSteps ()),
+    let (_, _, served) =
+      accDriveServed "acc-p" (accPrefix False) accEntry (accPrefix False)
+    served),
   QKind "keyed miss" (_ =>
     let _ = accDrive "acc-p" (accPrefix True) accEntry (accPrefix True)
     0),
@@ -452,11 +464,13 @@ accQs = [
 accCheck : QKind -> (String, Expectation)
 accCheck (QKind name run) =
   let pSrc2 = accPrefix False
-  let cold = accRender (accDrive "acc-cold-\{name}" pSrc2 accEntry pSrc2)
+  let coldDrive = accDrive "acc-cold-\{name}" pSrc2 accEntry pSrc2
+  let cold = accRender coldDrive
   let held = accDrive "acc-p" pSrc2 accEntry pSrc2
+  let heldBefore = accRender held
   let steps = run ()
   let after = accRender held
-  let warm = accRender (accDrive "acc-p" pSrc2 accEntry pSrc2)
+  let warm = accDrive "acc-p" pSrc2 accEntry pSrc2
   let hitRetained =
     if name == "keyed hit over a ground prefix" then
       expectGreaterThan 0 steps
@@ -465,15 +479,18 @@ accCheck (QKind name run) =
   (
     name,
     expectEach [
-      ("held P renders as it did", expectEqual cold after),
-      ("re-driven P equals cold P", expectEqual cold warm),
+      ("held P renders as it did", expectEqual heldBefore after),
+      (
+        "re-driven P equals cold P",
+        expectEqual (accRenderRows coldDrive) (accRenderRows warm),
+      ),
       (
         "P carries an inferred context",
         expectEqual
           ["useNeed : Need a => a -> Int"]
           (filter (== "useNeed : Need a => a -> Int") cold),
       ),
-      ("a hit really retained a chain step", hitRetained),
+      ("a hit really served P", hitRetained),
       ("held P publishes no Link", expectEqual 0 (accLinks held)),
       (
         "cold P is checked",
@@ -519,21 +536,24 @@ weakChainSteps held =
     "  Empty => 0",
     "entry = use held",
   ]
-  let _ =
-    checkModulesDiagsChain
-      defaultDriveInputs
-      (Some (4053, 4056))
-      "acc-weak-\{held}"
-      [Some src, None]
-      []
-      []
-      [
-        ("weak_a", desugar (parseLocated src)),
-        ("weak_main", desugar (parseLocated mainSrc)),
-      ]
-  accRetainedSteps ()
+  let drive =
+    _ =>
+      checkModulesChainReportFor
+        defaultDriveInputs
+        False
+        (Some (4053, 4056))
+        "acc-weak-\{held}"
+        [Some src, None]
+        []
+        []
+        [
+          ("weak_a", desugar (parseLocated src)),
+          ("weak_main", desugar (parseLocated mainSrc)),
+        ]
+  let _ = drive ()
+  (snd (drive ())).doServedModules
 
-test "a weak-variable prefix records no chain step; the ground twin records one" = expectEach
+test "a weak-variable prefix records no interface; the ground twin records one" = expectEach
   [
     ("weak: none", expectEqual 0 (weakChainSteps "export held = idf Empty")),
     ("ground: one", expectEqual 1 (weakChainSteps "export held = Box 1")),
@@ -655,13 +675,13 @@ test "a later module's constrained signature name: warm evidence equals cold" =
     ("added", expectEqual coldAdded warmAdded),
   ]
 
--- Steps replayed by the last keyed drive, with the entry varied.  A body edit
--- touches no fingerprinted input and replays the whole prefix; an orphan impl in
--- the entry changes the graph key and replays none.
+-- Modules the keyed drive served, with the entry varied.  A body edit touches no
+-- module before the entry and serves all of them; an orphan impl in the entry
+-- changes the graph key and serves none.
 replayDrive : String -> String -> Int
 replayDrive key entrySrc =
   let bSrc = instHolder True
-  let _ =
+  let (_, outputs) =
     checkModulesChainReportFor
       defaultDriveInputs
       False
@@ -676,9 +696,9 @@ replayDrive key entrySrc =
         ("b", desugar (parseLocated bSrc)),
         ("e", desugar (parseLocated entrySrc)),
       ]
-  chainMemoReplayedSteps ()
+  outputs.doServedModules
 
-test "the chain memo replays the prefix after a body edit and not after an orphan impl" =
+test "the keyed drive serves the prefix after a body edit and not after an orphan impl" =
   let _ = replayDrive "replay-k" instEntry
   let afterBody = replayDrive "replay-k" (instEntry ++ "extra = 42\n")
   let _ = replayDrive "replay-k2" instEntry
@@ -689,8 +709,8 @@ test "the chain memo replays the prefix after a body edit and not after an orpha
         ++ instEntry
         ++ "impl Speak Bool where\n  speak _ = \"b\"\n")
   expectEach [
-    ("body edit replays the three prefix steps", expectEqual 3 afterBody),
-    ("orphan impl replays none", expectEqual 0 afterImpl),
+    ("body edit serves the three prefix modules", expectEqual 3 afterBody),
+    ("orphan impl serves none", expectEqual 0 afterImpl),
   ]
 
 -- The same-module variant: the instance sits in the prefix module whose own step

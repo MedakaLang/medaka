@@ -1,5 +1,5 @@
 # META
-source_lines=281
+source_lines=285
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude interface as a value, and the one process cache that holds it.
@@ -78,6 +78,7 @@ public export data GraphRunSeed = GraphRunSeed {
 zonkMonoList : ZState -> List Mono -> (ZState, List Mono)
 zonkMonoList = mapAccumL zonkMono
 
+export
 zonkSlot : PredicateSlot -> PredicateSlot
 zonkSlot (PredicateSlot { psIface = iface, psArgs = (PSArgsKnown args), psBoundIds = ids }) = PredicateSlot {
   psIface = iface,
@@ -86,10 +87,12 @@ zonkSlot (PredicateSlot { psIface = iface, psArgs = (PSArgsKnown args), psBoundI
 }
 zonkSlot slot = slot
 
+export
 zonkMethodSlot : MethodPredicateSlot -> MethodPredicateSlot
 zonkMethodSlot (MethodPredicateSlot { mpsPredicate = p, mpsPositions = ps }) =
   MethodPredicateSlot { mpsPredicate = zonkSlot p, mpsPositions = ps }
 
+export
 zonkRecord : RecordInfo -> RecordInfo
 zonkRecord (RecordInfo ids authIds result fields index) =
   let (z1, result1) = zonkMono emptyZonk result
@@ -110,6 +113,7 @@ export
 thawScheme : PubScheme -> Scheme
 thawScheme p = (freezePub p.psScheme p.psContext).psScheme
 
+export
 mapSlots : (a -> a) -> List (k, List a) -> List (k, List a)
 mapSlots f = map (row => (fst row, map f (snd row)))
 
@@ -299,18 +303,18 @@ keysMatch a b
 (DData Public "GraphRunSeed" () ((variant "GraphRunSeed" (ConNamed (field "grsCtorExistentials" (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (field "grsAnyExistentials" (TyCon "Bool")) (field "grsTyvarNext" (TyCon "Int")) (field "grsEffvarNext" (TyCon "Int"))))) ())
 (DTypeSig false "zonkMonoList" (TyFun (TyCon "ZState") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyTuple (TyCon "ZState") (TyApp (TyCon "List") (TyCon "Mono"))))))
 (DFunDef false "zonkMonoList" () (EApp (EVar "mapAccumL") (EVar "zonkMono")))
-(DTypeSig false "zonkSlot" (TyFun (TyCon "PredicateSlot") (TyCon "PredicateSlot")))
+(DTypeSig true "zonkSlot" (TyFun (TyCon "PredicateSlot") (TyCon "PredicateSlot")))
 (DFunDef false "zonkSlot" ((PRec "PredicateSlot" ((rf "psIface" (PVar "iface")) (rf "psArgs" (PCon "PSArgsKnown" (PVar "args"))) (rf "psBoundIds" (PVar "ids"))) false)) (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EApp (EVar "snd") (EApp (EApp (EVar "zonkMonoList") (EVar "emptyZonk")) (EVar "args"))))) (fa "psBoundIds" (EVar "ids")))))
 (DFunDef false "zonkSlot" ((PVar "slot")) (EVar "slot"))
-(DTypeSig false "zonkMethodSlot" (TyFun (TyCon "MethodPredicateSlot") (TyCon "MethodPredicateSlot")))
+(DTypeSig true "zonkMethodSlot" (TyFun (TyCon "MethodPredicateSlot") (TyCon "MethodPredicateSlot")))
 (DFunDef false "zonkMethodSlot" ((PRec "MethodPredicateSlot" ((rf "mpsPredicate" (PVar "p")) (rf "mpsPositions" (PVar "ps"))) false)) (ERecordCreate "MethodPredicateSlot" ((fa "mpsPredicate" (EApp (EVar "zonkSlot") (EVar "p"))) (fa "mpsPositions" (EVar "ps")))))
-(DTypeSig false "zonkRecord" (TyFun (TyCon "RecordInfo") (TyCon "RecordInfo")))
+(DTypeSig true "zonkRecord" (TyFun (TyCon "RecordInfo") (TyCon "RecordInfo")))
 (DFunDef false "zonkRecord" ((PCon "RecordInfo" (PVar "ids") (PVar "authIds") (PVar "result") (PVar "fields") (PVar "index"))) (EBlock (DoLet false false (PTuple (PVar "z1") (PVar "result1")) (EApp (EApp (EVar "zonkMono") (EVar "emptyZonk")) (EVar "result"))) (DoLet false false (PTuple (PVar "z2") (PVar "fieldMonos")) (EApp (EApp (EVar "zonkMonoList") (EVar "z1")) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "fields")))) (DoLet false false (PTuple PWild (PVar "indexMonos")) (EApp (EApp (EVar "zonkMonoList") (EVar "z2")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "entries") (EVar "index"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "RecordInfo") (EVar "ids")) (EVar "authIds")) (EVar "result1")) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "fields"))) (EVar "fieldMonos"))) (EApp (EVar "M.fromList") (EApp (EApp (EVar "zip") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "entries") (EVar "index")))) (EVar "indexMonos")))))))
 (DTypeSig true "freezeScheme" (TyFun (TyCon "Scheme") (TyCon "PubScheme")))
 (DFunDef false "freezeScheme" ((PVar "s")) (EApp (EApp (EVar "freezePub") (EVar "s")) (EListLit)))
 (DTypeSig true "thawScheme" (TyFun (TyCon "PubScheme") (TyCon "Scheme")))
 (DFunDef false "thawScheme" ((PVar "p")) (EFieldAccess (EApp (EApp (EVar "freezePub") (EFieldAccess (EVar "p") "psScheme")) (EFieldAccess (EVar "p") "psContext")) "psScheme"))
-(DTypeSig false "mapSlots" (TyFun (TyFun (TyVar "a") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyApp (TyCon "List") (TyVar "a")))))))
+(DTypeSig true "mapSlots" (TyFun (TyFun (TyVar "a") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "mapSlots" ((PVar "f")) (EApp (EVar "map") (ELam ((PVar "row")) (ETuple (EApp (EVar "fst") (EVar "row")) (EApp (EApp (EVar "map") (EVar "f")) (EApp (EVar "snd") (EVar "row")))))))
 (DTypeSig true "freezeInterface" (TyFun (TyCon "CrossRun") (TyFun (TyCon "GraphRun") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "PreludeInterface")))))))
 (DFunDef false "freezeInterface" ((PVar "cross") (PVar "run") (PVar "externs") (PVar "core") (PVar "standalone")) (ERecordCreate "PreludeInterface" ((fa "piFunNames" (EFieldAccess (EFieldAccess (EVar "cross") "universeFunNamesRef") "value")) (fa "piMethodDispatchIdx" (EFieldAccess (EFieldAccess (EVar "cross") "universeMethodDispatchIdxByIdRef") "value")) (fa "piDataCtors" (EFieldAccess (EFieldAccess (EVar "cross") "universeDataCtors") "value")) (fa "piCtorPop" (EApp (EApp (EVar "spMap") (EVar "freezeScheme")) (EFieldAccess (EFieldAccess (EVar "cross") "universeCtorPop") "value"))) (fa "piRecordPop" (EApp (EApp (EVar "spMap") (EVar "zonkRecord")) (EFieldAccess (EFieldAccess (EVar "cross") "universeRecordPop") "value"))) (fa "piBuiltinClasses" (EFieldAccess (EFieldAccess (EVar "cross") "builtinClassesRef") "value")) (fa "piFunPredicateSlots" (EApp (EApp (EVar "mapSlots") (EVar "zonkSlot")) (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleFunPredicateSlotsRef") "value"))) (fa "piFunPredicateSlotsQual" (EApp (EApp (EVar "mapSlots") (EVar "zonkSlot")) (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleFunPredicateSlotsQualRef") "value"))) (fa "piFunConstraintDeclared" (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleFunConstraintDeclaredRef") "value")) (fa "piFunConstraintDeclaredQual" (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleFunConstraintDeclaredQualRef") "value")) (fa "piMethodPredicateSlots" (EApp (EApp (EVar "mapSlots") (EVar "zonkMethodSlot")) (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleMethodPredicateSlotsRef") "value"))) (fa "piMethodPredicateSlotsQual" (EApp (EApp (EVar "mapSlots") (EVar "zonkMethodSlot")) (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleMethodPredicateSlotsQualRef") "value"))) (fa "piCtorExistentials" (EFieldAccess (EFieldAccess (EVar "run") "ctorExistentialsRef") "value")) (fa "piAnyExistentials" (EFieldAccess (EFieldAccess (EVar "run") "anyExistentialsRef") "value")) (fa "piExternNames" (EVar "externs")) (fa "piTyvarNext" (EFieldAccess (EFieldAccess (EVar "run") "tyvarCounter") "value")) (fa "piEffvarNext" (EFieldAccess (EFieldAccess (EVar "run") "effvarCounter") "value")) (fa "piCore" (EApp (EVar "freezeRows") (EVar "core"))) (fa "piStandaloneNames" (EVar "standalone")))))
@@ -352,18 +356,18 @@ keysMatch a b
 (DData Public "GraphRunSeed" () ((variant "GraphRunSeed" (ConNamed (field "grsCtorExistentials" (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (field "grsAnyExistentials" (TyCon "Bool")) (field "grsTyvarNext" (TyCon "Int")) (field "grsEffvarNext" (TyCon "Int"))))) ())
 (DTypeSig false "zonkMonoList" (TyFun (TyCon "ZState") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyTuple (TyCon "ZState") (TyApp (TyCon "List") (TyCon "Mono"))))))
 (DFunDef false "zonkMonoList" () (EApp (EVar "mapAccumL") (EVar "zonkMono")))
-(DTypeSig false "zonkSlot" (TyFun (TyCon "PredicateSlot") (TyCon "PredicateSlot")))
+(DTypeSig true "zonkSlot" (TyFun (TyCon "PredicateSlot") (TyCon "PredicateSlot")))
 (DFunDef false "zonkSlot" ((PRec "PredicateSlot" ((rf "psIface" (PVar "iface")) (rf "psArgs" (PCon "PSArgsKnown" (PVar "args"))) (rf "psBoundIds" (PVar "ids"))) false)) (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EApp (EVar "snd") (EApp (EApp (EVar "zonkMonoList") (EVar "emptyZonk")) (EVar "args"))))) (fa "psBoundIds" (EVar "ids")))))
 (DFunDef false "zonkSlot" ((PVar "slot")) (EVar "slot"))
-(DTypeSig false "zonkMethodSlot" (TyFun (TyCon "MethodPredicateSlot") (TyCon "MethodPredicateSlot")))
+(DTypeSig true "zonkMethodSlot" (TyFun (TyCon "MethodPredicateSlot") (TyCon "MethodPredicateSlot")))
 (DFunDef false "zonkMethodSlot" ((PRec "MethodPredicateSlot" ((rf "mpsPredicate" (PVar "p")) (rf "mpsPositions" (PVar "ps"))) false)) (ERecordCreate "MethodPredicateSlot" ((fa "mpsPredicate" (EApp (EVar "zonkSlot") (EVar "p"))) (fa "mpsPositions" (EVar "ps")))))
-(DTypeSig false "zonkRecord" (TyFun (TyCon "RecordInfo") (TyCon "RecordInfo")))
+(DTypeSig true "zonkRecord" (TyFun (TyCon "RecordInfo") (TyCon "RecordInfo")))
 (DFunDef false "zonkRecord" ((PCon "RecordInfo" (PVar "ids") (PVar "authIds") (PVar "result") (PVar "fields") (PVar "index"))) (EBlock (DoLet false false (PTuple (PVar "z1") (PVar "result1")) (EApp (EApp (EVar "zonkMono") (EVar "emptyZonk")) (EVar "result"))) (DoLet false false (PTuple (PVar "z2") (PVar "fieldMonos")) (EApp (EApp (EVar "zonkMonoList") (EVar "z1")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "fields")))) (DoLet false false (PTuple PWild (PVar "indexMonos")) (EApp (EApp (EVar "zonkMonoList") (EVar "z2")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "entries") (EMethodRef "index"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "RecordInfo") (EVar "ids")) (EVar "authIds")) (EVar "result1")) (EApp (EApp (EVar "zip") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "fields"))) (EVar "fieldMonos"))) (EApp (EVar "M.fromList") (EApp (EApp (EVar "zip") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "entries") (EMethodRef "index")))) (EVar "indexMonos")))))))
 (DTypeSig true "freezeScheme" (TyFun (TyCon "Scheme") (TyCon "PubScheme")))
 (DFunDef false "freezeScheme" ((PVar "s")) (EApp (EApp (EVar "freezePub") (EVar "s")) (EListLit)))
 (DTypeSig true "thawScheme" (TyFun (TyCon "PubScheme") (TyCon "Scheme")))
 (DFunDef false "thawScheme" ((PVar "p")) (EFieldAccess (EApp (EApp (EVar "freezePub") (EFieldAccess (EVar "p") "psScheme")) (EFieldAccess (EVar "p") "psContext")) "psScheme"))
-(DTypeSig false "mapSlots" (TyFun (TyFun (TyVar "a") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyApp (TyCon "List") (TyVar "a")))))))
+(DTypeSig true "mapSlots" (TyFun (TyFun (TyVar "a") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "mapSlots" ((PVar "f")) (EApp (EMethodRef "map") (ELam ((PVar "row")) (ETuple (EApp (EVar "fst") (EVar "row")) (EApp (EApp (EMethodRef "map") (EVar "f")) (EApp (EVar "snd") (EVar "row")))))))
 (DTypeSig true "freezeInterface" (TyFun (TyCon "CrossRun") (TyFun (TyCon "GraphRun") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "PreludeInterface")))))))
 (DFunDef false "freezeInterface" ((PVar "cross") (PVar "run") (PVar "externs") (PVar "core") (PVar "standalone")) (ERecordCreate "PreludeInterface" ((fa "piFunNames" (EFieldAccess (EFieldAccess (EVar "cross") "universeFunNamesRef") "value")) (fa "piMethodDispatchIdx" (EFieldAccess (EFieldAccess (EVar "cross") "universeMethodDispatchIdxByIdRef") "value")) (fa "piDataCtors" (EFieldAccess (EFieldAccess (EVar "cross") "universeDataCtors") "value")) (fa "piCtorPop" (EApp (EApp (EVar "spMap") (EVar "freezeScheme")) (EFieldAccess (EFieldAccess (EVar "cross") "universeCtorPop") "value"))) (fa "piRecordPop" (EApp (EApp (EVar "spMap") (EVar "zonkRecord")) (EFieldAccess (EFieldAccess (EVar "cross") "universeRecordPop") "value"))) (fa "piBuiltinClasses" (EFieldAccess (EFieldAccess (EVar "cross") "builtinClassesRef") "value")) (fa "piFunPredicateSlots" (EApp (EApp (EVar "mapSlots") (EVar "zonkSlot")) (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleFunPredicateSlotsRef") "value"))) (fa "piFunPredicateSlotsQual" (EApp (EApp (EVar "mapSlots") (EVar "zonkSlot")) (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleFunPredicateSlotsQualRef") "value"))) (fa "piFunConstraintDeclared" (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleFunConstraintDeclaredRef") "value")) (fa "piFunConstraintDeclaredQual" (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleFunConstraintDeclaredQualRef") "value")) (fa "piMethodPredicateSlots" (EApp (EApp (EVar "mapSlots") (EVar "zonkMethodSlot")) (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleMethodPredicateSlotsRef") "value"))) (fa "piMethodPredicateSlotsQual" (EApp (EApp (EVar "mapSlots") (EVar "zonkMethodSlot")) (EFieldAccess (EFieldAccess (EVar "cross") "crossModuleMethodPredicateSlotsQualRef") "value"))) (fa "piCtorExistentials" (EFieldAccess (EFieldAccess (EVar "run") "ctorExistentialsRef") "value")) (fa "piAnyExistentials" (EFieldAccess (EFieldAccess (EVar "run") "anyExistentialsRef") "value")) (fa "piExternNames" (EVar "externs")) (fa "piTyvarNext" (EFieldAccess (EFieldAccess (EVar "run") "tyvarCounter") "value")) (fa "piEffvarNext" (EFieldAccess (EFieldAccess (EVar "run") "effvarCounter") "value")) (fa "piCore" (EApp (EVar "freezeRows") (EVar "core"))) (fa "piStandaloneNames" (EVar "standalone")))))
