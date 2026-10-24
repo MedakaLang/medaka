@@ -2,6 +2,7 @@
 -- over hand-built values; a scheme's context surviving a later drive and a
 -- shadowing binding's context (#2054); published schemes holding no Link; and
 -- the partial analysis a drive returns (locals, seed, module).
+import support.ordmap.{omEmpty}
 import test.{
   expectEqual, expectNotEqual, expectEach, expectTrue, expectFalse,
   expectGreaterThan, Expectation, fail
@@ -1112,7 +1113,7 @@ projectReport view rsrc csrc dir broken =
           True
           []
           (Ref [])
-          (Ref [])
+          (Ref omEmpty)
           (_ => None)
           entry
           [dir, "stdlib"]

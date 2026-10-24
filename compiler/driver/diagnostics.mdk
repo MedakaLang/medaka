@@ -29,7 +29,6 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
-import frontend.parse_cache.{takeFirstN}
 import frontend.desugar.{desugar, checkDerives}
 import frontend.resolve.{
   ResError,
@@ -113,7 +112,6 @@ import support.util.{
   listLen,
   matchingStepPrefix,
   lookupAssoc,
-  dropAssoc,
   startsWith,
   anyList,
   allList,
@@ -909,7 +907,7 @@ fileFront : (List String -> <e> List (String, List String)) ->
 fileFront exportsFor modName allowInternal runtimeSrc coreSrc raw =
   frontEnd
     exportsFor
-    (d => unkept (checkReportOf "" d))
+    (d => unkept (checkReportOf NoSteps "" d))
     FrontInput {
       fiInputs = driveInputsFor !selectedProfile False [],
       fiAllowInternal = allowInternal,
@@ -964,8 +962,8 @@ modOwnSchemes (mid, (schemes, _, _)) = (mid, schemes)
 -- The check drive's report beside its outputs: a single file's entry drive, or a
 -- graph's drive through the module-chain memo under `chainKey`.
 export
-checkReportOf : String -> FrontDriveIn -> (TcReport, DriveOutputs)
-checkReportOf chainKey d = match (d.fdMods, d.fdPairs)
+checkReportOf : ChainSteps -> String -> FrontDriveIn -> (TcReport, DriveOutputs)
+checkReportOf steps chainKey d = match (d.fdMods, d.fdPairs)
   ([], [up]) => checkModulesEntryFullReportK
     d.fdInputs
     (valueMainCandidate d.fdCore [up])
@@ -975,6 +973,7 @@ checkReportOf chainKey d = match (d.fdMods, d.fdPairs)
     [up]
   (mods, pairs) =>
     checkChainReport
+      steps
       d.fdInputs
       (valueMainCandidate d.fdCore pairs)
       d.fdPreludeKey
@@ -991,7 +990,7 @@ checkDriveReport : String ->
   FrontDriveIn ->
   (CheckDrive, TcReport, DriveOutputs)
 checkDriveReport chainKey d =
-  let (r, outputs) = checkReportOf chainKey d
+  let (r, outputs) = checkReportOf NoSteps chainKey d
   let drive = match (d.fdMods, d.fdPairs)
     ([], [_]) =>
       let (coreSchemes, schemes, _, _) = entrySplit r
@@ -1150,8 +1149,14 @@ public export data FrontProgram =
 -- one, which resolves nothing.
 public export data FrontPolicy =
   | NeverDriveRejected
-  | DriveUnblocked String
+  | DriveUnblocked String ChainSteps
   | ResolvedByGate
+
+-- Whether a check drive of a graph records module-chain steps.  A session (the
+-- LSP, the playground) analyzes the same graph again and resumes from them; a
+-- process that checks a graph once would only pay a snapshot and a drain per
+-- module for steps nothing reads.
+public export data ChainSteps = RecordSteps | NoSteps
 
 -- `fiInputs` is what every drive of the run is given: the verb's profile and the
 -- stdlib ownership its loader computed.  `fiAllowInternal`/`fiTrusted` lift the
@@ -1257,7 +1262,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
         match anyList (p => not (isEmpty (snd p))) resolved
           True => undrivenOutput (map resolveBucket resolved)
           False => drivenGraph drive driveIn (seedAll (map midPath mods) [])
-      DriveUnblocked chainKey =>
+      DriveUnblocked chainKey steps =>
         let buckets =
           resolvedBuckets
             exportsFor
@@ -1273,6 +1278,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
           True =>
             let (r, outputs, results) =
               typecheckPassReport
+                steps
                 fi.fiInputs
                 rt
                 core
@@ -1576,7 +1582,7 @@ cacheRemove f ((k, v) :: rest)
 -- errors (file → Diag) to append after the graph analysis.
 wrappedRead : Ref (List (String, String)) ->
   Ref (List (String, Diag)) ->
-  Ref (List (String, List Decl)) ->
+  Ref (OrdMap (List Decl)) ->
   (String -> Option String) ->
   String ->
   Option String
@@ -1654,7 +1660,7 @@ analyzeProject : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
   Ref (List (String, String)) ->
-  Ref (List (String, List Decl)) ->
+  Ref (OrdMap (List Decl)) ->
   (String -> Option String) ->
   String ->
   List String ->
@@ -1685,7 +1691,7 @@ analyzeProjectFull : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
   Ref (List (String, String)) ->
-  Ref (List (String, List Decl)) ->
+  Ref (OrdMap (List Decl)) ->
   (String -> Option String) ->
   String ->
   List String ->
@@ -1716,7 +1722,7 @@ analyzeProjectReport : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
   Ref (List (String, String)) ->
-  Ref (List (String, List Decl)) ->
+  Ref (OrdMap (List Decl)) ->
   (String -> Option String) ->
   String ->
   List String ->
@@ -1771,7 +1777,7 @@ analyzeProjectKeyed : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
   Ref (List (String, String)) ->
-  Ref (List (String, List Decl)) ->
+  Ref (OrdMap (List Decl)) ->
   (String -> Option String) ->
   String ->
   List String ->
@@ -1810,14 +1816,14 @@ analyzeProjectKeyed exportsFor allowInternal trustedMods cacheRef parseCacheRef 
       let front =
         frontEnd
           exportsFor
-          (d => unkept (checkReportOf chainKey d))
+          (d => unkept (checkReportOf RecordSteps chainKey d))
           FrontInput {
             fiInputs = driveInputsFor !selectedProfile False [],
             fiAllowInternal = allowInternal,
             fiTrusted = trustedMods,
             fiRuntimeSrc = runtimeSrc,
             fiCoreSrc = coreSrc,
-            fiPolicy = DriveUnblocked chainKey,
+            fiPolicy = DriveUnblocked chainKey RecordSteps,
             fiProgram = FrontGraph mods (desugaredModPairs mods),
           }
       (
@@ -1899,7 +1905,7 @@ projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP prelu
 -- error (a buffer with an unresolved import).
 export
 projectEntrySchemes : Ref (List (String, String)) ->
-  Ref (List (String, List Decl)) ->
+  Ref (OrdMap (List Decl)) ->
   (String -> Option String) ->
   String ->
   List String ->
@@ -1922,7 +1928,7 @@ projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
 -- module's schemes, the prelude's, and the last-checked module's locals and seed.
 export
 projectEntryAnalysis : Ref (List (String, String)) ->
-  Ref (List (String, List Decl)) ->
+  Ref (OrdMap (List Decl)) ->
   (String -> Option String) ->
   String ->
   List String ->
@@ -1945,7 +1951,7 @@ projectEntryAnalysis cacheRef parseCacheRef read entry roots runtimeSrc coreSrc 
 export
 projectEntryAnalysisOr : (GraphId -> Option PartialAnalysis) ->
   Ref (List (String, String)) ->
-  Ref (List (String, List Decl)) ->
+  Ref (OrdMap (List Decl)) ->
   (String -> Option String) ->
   String ->
   List String ->
@@ -1972,7 +1978,7 @@ projectEntryAnalysisOr kept cacheRef parseCacheRef read entry roots runtimeSrc c
             preludeKey
             runtimeP
             coreP
-            (map midToDesugaredPair mods))
+            (desugarGraph mods))
 
 -- resolve per module (threading exports), bucketing by file.
 
@@ -2157,6 +2163,7 @@ typecheckPassFull : DriveInputs ->
 typecheckPassFull inputs runtimeP coreP preludeKey chainKey mods modPairs buckets =
   let (r, _, results) =
     typecheckPassReport
+      NoSteps
       inputs
       runtimeP
       coreP
@@ -2170,7 +2177,8 @@ typecheckPassFull inputs runtimeP coreP preludeKey chainKey mods modPairs bucket
 -- `typecheckPassFull` returning the drive's whole report and outputs, whose
 -- `trDiagnostics` is the per-module list.  `frontEnd` runs it over a graph
 -- resolve rejected under `DriveUnblocked`.
-typecheckPassReport : DriveInputs ->
+typecheckPassReport : ChainSteps ->
+  DriveInputs ->
   List Decl ->
   List Decl ->
   Option (Int, Int) ->
@@ -2179,7 +2187,7 @@ typecheckPassReport : DriveInputs ->
   List (String, List Decl) ->
   List (String, List Diag) ->
   (TcReport, DriveOutputs, List (String, List Diag))
-typecheckPassReport inputs runtimeP coreP preludeKey chainKey mods modPairs buckets =
+typecheckPassReport steps inputs runtimeP coreP preludeKey chainKey mods modPairs buckets =
   -- The graph analogue of a single file's `resolveClean` gate, per module: a
   -- module resolve rejected, or one importing such a module, is not typechecked
   -- (a bare method name resolve left unbound would panic in `inferMethodAt`).
@@ -2196,6 +2204,7 @@ typecheckPassReport inputs runtimeP coreP preludeKey chainKey mods modPairs buck
   let valueMain = not rejected && valueMainCandidate coreP modPairs
   let (driven, outputs) =
     checkChainReport
+      steps
       inputs
       valueMain
       preludeKey
@@ -2223,7 +2232,8 @@ typecheckPassReport inputs runtimeP coreP preludeKey chainKey mods modPairs buck
 -- `check`'s drive of a graph: the module-chain memo (types/typecheck.mdk)
 -- resumes an unchanged import prefix from its snapshot, so only the modules
 -- after it are re-checked.  `mods` are the loaded triples `pairs` desugars.
-checkChainReport : DriveInputs ->
+checkChainReport : ChainSteps ->
+  DriveInputs ->
   Bool ->
   Option (Int, Int) ->
   String ->
@@ -2232,16 +2242,23 @@ checkChainReport : DriveInputs ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   (TcReport, DriveOutputs)
-checkChainReport inputs valueMain preludeKey chainKey runtimeP coreP mods pairs =
+checkChainReport steps inputs valueMain preludeKey chainKey runtimeP coreP mods pairs =
   checkModulesChainReportFor
     inputs
     valueMain
     preludeKey
     chainKey
-    (map moduleStepKey mods)
+    (stepKeysFor steps mods)
     runtimeP
     coreP
     pairs
+
+-- With no step keys the drive's fold records nothing.
+stepKeysFor : ChainSteps ->
+  List (String, String, List Decl) ->
+  List (Option String)
+stepKeysFor RecordSteps mods = map moduleStepKey mods
+stepKeysFor NoSteps _ = []
 
 -- The non-typecheck half of `typecheckPassFull`, over per-module `(errs, warns)` a
 -- driver already produced: fold in each module's guard-exhaustiveness, `deriving`
@@ -2409,7 +2426,7 @@ projectDiagsFromTc exportsFor allowInternal trustedMods runtimeP coreP mods outp
 -- `desugarModule`'s path-and-source-keyed memo with the check path.
 export
 desugaredModPairs : List (String, String, List Decl) -> List (String, List Decl)
-desugaredModPairs mods = map midToDesugaredPair mods
+desugaredModPairs mods = desugarGraph mods
 
 rawPairOf : (String, String, List Decl) -> (String, List Decl)
 rawPairOf (mid, _, prog) = (mid, prog)
@@ -2440,27 +2457,43 @@ moduleStepKey (mid, path, _) =
 -- path (`rewriteDecls`), so two byte-identical sources in two packages are two
 -- different trees, and a source-only key hands the second module the first one's
 -- imports.  Falls back to a plain desugar when the loader has no source record for
--- the path.  Bounded MRU.
+-- the path.
 desugarModule : String -> List Decl -> List Decl
 desugarModule path prog = match loadedSourceOf path
   None => desugar prog
   Some src =>
     let key = joinNl [path, src]
-    match lookupAssoc key !moduleDesugarCacheRef
+    match omLookup key !moduleDesugarCacheRef
       Some decls => decls
       None =>
         let decls = desugar prog
-        moduleDesugarCacheRef :=
-          takeFirstN
-            moduleDesugarCacheLimit
-            ((key, decls) :: dropAssoc key !moduleDesugarCacheRef)
+        moduleDesugarCacheRef := omInsert key decls !moduleDesugarCacheRef
         decls
 
-moduleDesugarCacheLimit : Int
-moduleDesugarCacheLimit = 24
+-- `midToDesugaredPair` over a whole loaded graph, then the memo narrows to the
+-- graph's entries: it is bounded by the graph, and no graph size evicts a
+-- module another module of the same graph still needs.
+desugarGraph : List (String, String, List Decl) -> List (String, List Decl)
+desugarGraph mods =
+  let pairs = map midToDesugaredPair mods
+  let old = !moduleDesugarCacheRef
+  moduleDesugarCacheRef := omFromPairs (keptDesugared old mods) omEmpty
+  pairs
 
-moduleDesugarCacheRef : Ref (List (String, List Decl))
-moduleDesugarCacheRef = Ref []
+keptDesugared : OrdMap (List Decl) ->
+  List (String, String, List Decl) ->
+  List (String, List Decl)
+keptDesugared _ [] = []
+keptDesugared old ((_, path, _) :: rest) = match loadedSourceOf path
+  None => keptDesugared old rest
+  Some src =>
+    let key = joinNl [path, src]
+    match omLookup key old
+      Some decls => (key, decls) :: keptDesugared old rest
+      None => keptDesugared old rest
+
+moduleDesugarCacheRef : Ref (OrdMap (List Decl))
+moduleDesugarCacheRef = Ref omEmpty
 
 diagCode : Diag -> String
 diagCode (Diag _ code _ _ _ _) = code
@@ -2607,7 +2640,7 @@ analyzeProjectToLines : Ref (List (String, String)) ->
   String ->
   <IO> String
 analyzeProjectToLines cacheRef read entry roots runtimeSrc coreSrc =
-  let parseCacheRef = Ref []
+  let parseCacheRef = Ref omEmpty
   joinNl
     (projectLines
       (analyzeProject
@@ -3376,7 +3409,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
         fiTrusted = trusted,
         fiRuntimeSrc = rsrc,
         fiCoreSrc = csrc,
-        fiPolicy = DriveUnblocked chainKey,
+        fiPolicy = DriveUnblocked chainKey NoSteps,
         fiProgram = program,
       }
       let (cj, hasErr) = match modsWithPath
