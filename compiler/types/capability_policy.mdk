@@ -1,0 +1,173 @@
+-- Admission compares a frozen demand with constant grants; it never solves cells.
+import frontend.ast.{EffParamTy, TyConOrigin(..)}
+import types.capability_manifest.{
+  CapabilityManifest, FrozenAtom(..), FrozenAuthority(..), FrozenVariable
+}
+import types.effect_domain.{
+  Param(..), dsub, dsubAny, dantichain, domainKey, isSubTop, subTopOf
+}
+import types.effect_param_decode.{decodeWrittenParam, dtopIn}
+import types.effect_rows.{EffLabel(..)}
+import types.target_profile.{hostLabels}
+import support.util.{filterList, joinWith, allList, anyList}
+import map as M
+import map.{Map(..)}
+
+public export data PolicyVerdict =
+  | PolicyAdmitted
+  | PolicyRefused (List String) (List String)
+public export data Permit = Permitted | Forbidden | Malformed String
+
+export
+manifestAllowed : List (String, Param) ->
+  CapabilityManifest ->
+  List (String, EffParamTy) ->
+  PolicyVerdict
+manifestAllowed domains manifest policy =
+  let judgments = map (a => (a, permitFrozen domains a policy)) manifest.atoms
+  let refused =
+    filterList
+      (j => match snd j
+        Permitted => False
+        _ => True)
+      judgments
+  match refused
+    [] => PolicyAdmitted
+    _ =>
+      PolicyRefused
+        (map (j => (fst j).label) refused)
+        (flatMap malformedLine judgments
+          ++ flatMap (notProvenLine policy) judgments)
+
+malformedLine : (FrozenAtom, Permit) -> List String
+malformedLine (a, Malformed message) =
+  ["   policy entry for \{a.label}: \{message}\n"]
+malformedLine _ = []
+
+export
+permitFrozen : List (String, Param) ->
+  FrozenAtom ->
+  List (String, EffParamTy) ->
+  Permit
+permitFrozen domains atom policy = match (
+  atom.label == "IO",
+  entriesFor atom policy,
+)
+  (True, []) =>
+    firstNotPermitted
+      (map
+        (label =>
+          permitFrozen
+            domains
+            FrozenAtom {
+              label = label,
+              origin = OriginBuiltin,
+              domainTop = dtopIn domains (EffLabel label OriginBuiltin),
+              authority =
+                FrozenConst (dtopIn domains (EffLabel label OriginBuiltin)),
+            }
+            policy)
+        hostLabels)
+  (_, []) => Forbidden
+  (_, written) =>
+    match (allOk
+      (map
+        (decodeWrittenParam domains (EffLabel atom.label atom.origin))
+        written))
+      Err message => Malformed message
+      Ok grants =>
+        if within atom.authority (dantichain grants) then
+          Permitted
+        else
+          Forbidden
+
+-- A symbolic tuple needs one covering tuple. Constant products may instead be
+-- covered together by several grants through the domain's exact union rule.
+within : FrozenAuthority -> List Param -> Bool
+within (FrozenJoin members) grants = allList (m => within m grants) members
+within (FrozenConst p) grants = dsubAny p grants
+within authority grants = anyList (withinOne authority) grants
+
+withinOne : FrozenAuthority -> Param -> Bool
+withinOne _ grant
+  | isSubTop grant = True
+withinOne (FrozenVar _) _ = False
+withinOne (FrozenProduct axes) (PProduct schema) = axesWithin axes schema
+withinOne (FrozenConst p) grant = dsub p grant
+withinOne (FrozenJoin members) grant = allList (m => withinOne m grant) members
+withinOne _ _ = False
+
+axesWithin : List (String, FrozenAuthority) -> List (String, Param) -> Bool
+axesWithin [] [] = True
+axesWithin ((name, authority) :: rest) ((axis, grant) :: schema) =
+  name == axis
+    && domainKey (authorityTop authority) == domainKey grant
+    && within authority [grant]
+    && axesWithin rest schema
+axesWithin _ _ = False
+
+authorityTop : FrozenAuthority -> Param
+authorityTop (FrozenConst p) = subTopOf p
+authorityTop (FrozenVar v) = v.domainTop
+authorityTop (FrozenProduct axes) =
+  PProduct (map (a => (fst a, authorityTop (snd a))) axes)
+authorityTop (FrozenJoin (m :: _)) = authorityTop m
+authorityTop (FrozenJoin []) = PUnit
+
+firstNotPermitted : List Permit -> Permit
+firstNotPermitted [] = Permitted
+firstNotPermitted (Permitted :: rest) = firstNotPermitted rest
+firstNotPermitted (p :: _) = p
+
+entriesFor : FrozenAtom -> List (String, EffParamTy) -> List EffParamTy
+entriesFor atom policy =
+  let qualified = match atom.origin
+    OriginModule m => "\{m}.\{atom.label}"
+    _ => atom.label
+  match entriesUnder qualified policy
+    [] => entriesUnder atom.label policy
+    entries => entries
+
+entriesUnder : String -> List (String, EffParamTy) -> List EffParamTy
+entriesUnder key policy =
+  map snd (filterList (entry => fst entry == key) policy)
+
+notProvenLine : List (String, EffParamTy) -> (FrozenAtom, Permit) -> List String
+notProvenLine policy (atom, Forbidden) =
+  let vars = M.values (variablesInto atom.authority Tip)
+  match (vars, entriesFor atom policy)
+    ([], _) => []
+    (_, []) => []
+    _ =>
+      let demands =
+        joinWith ", " (map (v => "\{atom.label} \{variableName v}") vars)
+      ["   not proven: \{demands} (\{variablesWhy vars})\n"]
+notProvenLine _ _ = []
+
+variablesInto : FrozenAuthority ->
+  Map Int FrozenVariable ->
+  Map Int FrozenVariable
+variablesInto (FrozenVar v) vars = M.set v.localId v vars
+variablesInto (FrozenJoin members) vars =
+  fold (acc m => variablesInto m acc) vars members
+variablesInto (FrozenProduct axes) vars =
+  fold (acc a => variablesInto (snd a) acc) vars axes
+variablesInto _ vars = vars
+
+variableName : FrozenVariable -> String
+variableName v = match v.sourceName
+  Some name => name
+  None => "k" ++ intToString v.localId
+
+variablesWhy : List FrozenVariable -> String
+variablesWhy vars =
+  let names = map (v => "`" ++ variableName v ++ "`") vars
+  match names
+    [one] => "authority variable \{one}"
+    _ => "authority variables \{joinWith ", " names}"
+
+export
+allOk : List (Result String a) -> Result String (List a)
+allOk [] = Ok []
+allOk ((Err message) :: _) = Err message
+allOk ((Ok value) :: rest) = map (value :: _) (allOk rest)

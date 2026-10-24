@@ -1,0 +1,104 @@
+-- This is the only bridge from checked authority cells to capability data.
+import types.capability_manifest.{
+  EntryKey,
+  ManifestRequest,
+  InvocationProtocol(..),
+  CapabilityManifest(..),
+  FrozenAtom(..),
+  FrozenAuthority(..),
+  FrozenVariable(..),
+  ManifestDefect,
+  validateManifest,
+}
+import types.effect_invocation.{InvocationOps, invocationSummary}
+import types.repr.{Scheme}
+import types.effect_authority.{Authority(..), Authvar(..), authNorm, authvarId}
+import types.effect_rows.{Atom(..), EffLabel(..), atomsUnion}
+import types.effect_param_decode.{dtopIn}
+import types.effect_domain.{Param}
+import list.{mapAccumL}
+import map as M
+import map.{Map(..)}
+
+public export data ManifestEntryInput = ManifestEntryInput {
+  request : ManifestRequest,
+  scheme : Scheme,
+  wrappers : List (EntryKey, Scheme),
+}
+
+export
+publishManifests : List (String, Param) ->
+  InvocationOps ->
+  List ManifestEntryInput ->
+  Result (List ManifestDefect) (List CapabilityManifest)
+publishManifests domains ops inputs =
+  let (_, manifests) =
+    mapAccumL
+      (state input =>
+        let atoms = invocationSummary ops input.scheme
+        let charged = match input.request.protocol
+          HostInvocation => atoms
+          ExecutedMain =>
+            fold
+              (acc wrapper =>
+                atomsUnion acc (invocationSummary ops (snd wrapper)))
+              atoms
+              input.wrappers
+        let (more, frozen) = freezeAtomsWith domains state charged
+        (more, CapabilityManifest { request = input.request, atoms = frozen }))
+      Tip
+      inputs
+  match flatMap validateManifest manifests
+    [] => Ok manifests
+    defects => Err defects
+
+-- Compatibility callers freeze their atom batch with the same identity rules.
+export
+freezeAtoms : List (String, Param) -> List Atom -> List FrozenAtom
+freezeAtoms domains atoms = snd (freezeAtomsWith domains Tip atoms)
+
+freezeAtomsWith : List (String, Param) ->
+  Map Int FrozenVariable ->
+  List Atom ->
+  (Map Int FrozenVariable, List FrozenAtom)
+freezeAtomsWith domains = mapAccumL
+  (state (Atom (EffLabel label origin) authority) =>
+    let (more, frozen) = freezeAuthority state (authNorm authority)
+    (
+      more,
+      FrozenAtom {
+        label = label,
+        origin = origin,
+        domainTop = dtopIn domains (EffLabel label origin),
+        authority = frozen,
+      },
+    ))
+
+freezeAuthority : Map Int FrozenVariable ->
+  Authority ->
+  (Map Int FrozenVariable, FrozenAuthority)
+freezeAuthority state (AConst p) = (state, FrozenConst p)
+freezeAuthority state (AJoin members) =
+  let (more, frozen) = mapAccumL freezeAuthority state members
+  (more, FrozenJoin frozen)
+freezeAuthority state (AProduct axes) =
+  let (more, frozen) =
+    mapAccumL
+      (s (name, authority) =>
+        let (next, value) = freezeAuthority s authority
+        (next, (name, value)))
+      state
+      axes
+  (more, FrozenProduct frozen)
+freezeAuthority state (AVar cell) = match !cell
+  ALink _ _ target => freezeAuthority state (authNorm target)
+  AUnbound _ _ top pattern name => match M.get (authvarId cell) state
+    Some variable => (state, FrozenVar variable)
+    None =>
+      let variable = FrozenVariable {
+        localId = M.size state,
+        domainTop = top,
+        patternOnly = pattern,
+        sourceName = name,
+      }
+      (M.set (authvarId cell) variable state, FrozenVar variable)

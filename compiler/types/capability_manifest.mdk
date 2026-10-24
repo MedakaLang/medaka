@@ -1,0 +1,182 @@
+-- Checked capability data contains no inference cells or query functions.
+import frontend.ast.{TyConOrigin(..)}
+import types.effect_domain.{Param(..), domainKey, isSubTop}
+import support.util.{lenKey}
+import map as M
+import map.{Map(..)}
+import list.{mapAccumL}
+
+public export data EntryKey = EntryKey { moduleId : String, binding : String }
+public export data InvocationProtocol = HostInvocation | ExecutedMain
+public export data ManifestRequest = ManifestRequest {
+  entry : EntryKey,
+  protocol : InvocationProtocol,
+}
+public export data ManifestSelector =
+  | EntryOverPrelude String InvocationProtocol
+  | ExactEntry EntryKey InvocationProtocol
+public export data ManifestRequirement =
+  | RawUnchecked
+  | CheckedEntry EntryKey InvocationProtocol
+public export data ManifestLookup =
+  | NotRequested
+  | RequestedMissing ManifestRequest
+  | Published CapabilityManifest
+public export data FrozenVariable = FrozenVariable {
+  localId : Int,
+  domainTop : Param,
+  patternOnly : Bool,
+  sourceName : Option String,
+}
+public export data FrozenAuthority =
+  | FrozenConst Param
+  | FrozenVar FrozenVariable
+  | FrozenJoin (List FrozenAuthority)
+  | FrozenProduct (List (String, FrozenAuthority))
+public export data FrozenAtom = FrozenAtom {
+  label : String,
+  origin : TyConOrigin,
+  domainTop : Param,
+  authority : FrozenAuthority,
+}
+public export data CapabilityManifest = CapabilityManifest {
+  request : ManifestRequest,
+  atoms : List FrozenAtom,
+}
+public export data ManifestDefect = ManifestDefect String
+
+export
+entryKeyEqual : EntryKey -> EntryKey -> Bool
+entryKeyEqual a b = a.moduleId == b.moduleId && a.binding == b.binding
+
+protocolEqual : InvocationProtocol -> InvocationProtocol -> Bool
+protocolEqual HostInvocation HostInvocation = True
+protocolEqual ExecutedMain ExecutedMain = True
+protocolEqual _ _ = False
+
+export
+requestEqual : ManifestRequest -> ManifestRequest -> Bool
+requestEqual a b =
+  entryKeyEqual a.entry b.entry && protocolEqual a.protocol b.protocol
+
+export
+lookupManifest : ManifestRequest ->
+  List ManifestRequest ->
+  List CapabilityManifest ->
+  ManifestLookup
+lookupManifest request selected manifests =
+  if any (requestEqual request) selected then
+    findManifest request manifests
+  else
+    NotRequested
+
+findManifest : ManifestRequest -> List CapabilityManifest -> ManifestLookup
+findManifest request [] = RequestedMissing request
+findManifest request (m :: rest) =
+  if requestEqual request m.request then
+    Published m
+  else
+    findManifest request rest
+
+export
+validateManifest : CapabilityManifest -> List ManifestDefect
+validateManifest manifest =
+  let (_, defects) = mapAccumL validateAtom (Tip, Tip) manifest.atoms
+  problem (manifest.request.entry.binding == "") "empty entry binding"
+    ++ flatMap identity defects
+
+problem : Bool -> String -> List ManifestDefect
+problem True message = [ManifestDefect message]
+problem False _ = []
+
+validateAtom : (Map String Unit, Map Int FrozenVariable) ->
+  FrozenAtom ->
+  ((Map String Unit, Map Int FrozenVariable), List ManifestDefect)
+validateAtom (labels, variables) atom =
+  let origin = match atom.origin
+    OriginModule m => "module:" ++ lenKey m
+    OriginBuiltin => "builtin:"
+    OriginUnresolved => "unresolved:"
+  let key = origin ++ lenKey atom.label
+  let (more, defects) =
+    validateAuthority atom.domainTop variables atom.authority
+  (
+    (M.set key () labels, more),
+    problem (atom.label == "") "empty effect label"
+      ++ problem (M.has key labels) "duplicate effect identity"
+      ++ topProblems atom.domainTop
+      ++ defects,
+  )
+
+topProblems : Param -> List ManifestDefect
+topProblems top =
+  problem (not (isSubTop top)) "domainTop is not a domain top"
+    ++ paramProblems top
+
+paramProblems : Param -> List ManifestDefect
+paramProblems (PProduct axes) =
+  axisNames (map fst axes) ++ flatMap (a => paramProblems (snd a)) axes
+paramProblems _ = []
+
+axisNames : List String -> List ManifestDefect
+axisNames names =
+  let (_, defects) =
+    mapAccumL
+      (seen name => (
+        M.set name () seen,
+        problem (name == "" || M.has name seen) "empty or repeated product axis",
+      ))
+      Tip
+      names
+  flatMap identity defects
+
+validateAuthority : Param ->
+  Map Int FrozenVariable ->
+  FrozenAuthority ->
+  (Map Int FrozenVariable, List ManifestDefect)
+validateAuthority top variables (FrozenConst p) = (
+  variables,
+  problem (domainKey top /= domainKey p) "constant domain mismatch"
+    ++ paramProblems p,
+)
+validateAuthority top variables (FrozenVar v) =
+  let metadata = match M.get v.localId variables
+    None => []
+    Some previous =>
+      problem
+        (domainKey previous.domainTop /= domainKey v.domainTop
+          || previous.patternOnly /= v.patternOnly
+          || previous.sourceName /= v.sourceName)
+        "inconsistent frozen variable metadata"
+  (
+    M.set v.localId v variables,
+    problem (v.localId < 0) "negative frozen variable id"
+      ++ problem
+        (domainKey top /= domainKey v.domainTop)
+        "variable domain mismatch"
+      ++ topProblems v.domainTop
+      ++ metadata,
+  )
+validateAuthority top variables (FrozenJoin members) =
+  let (more, defects) = mapAccumL (validateAuthority top) variables members
+  (more, flatMap identity defects)
+validateAuthority (PProduct schema) variables (FrozenProduct axes) =
+  let (more, defects) = validateAxes schema variables axes
+  (more, axisNames (map fst axes) ++ defects)
+validateAuthority _ variables (FrozenProduct _) =
+  (variables, [ManifestDefect "product authority in non-product domain"])
+
+validateAxes : List (String, Param) ->
+  Map Int FrozenVariable ->
+  List (String, FrozenAuthority) ->
+  (Map Int FrozenVariable, List ManifestDefect)
+validateAxes [] variables [] = (variables, [])
+validateAxes ((name, top) :: schema) variables ((axis, authority) :: rest) =
+  let (more, defects) = validateAuthority top variables authority
+  let (done, later) = validateAxes schema more rest
+  (
+    done,
+    problem (name /= axis) "product axis order mismatch" ++ defects ++ later,
+  )
+validateAxes _ variables _ =
+  (variables, [ManifestDefect "product axis schema mismatch"])
