@@ -165,6 +165,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`core.md`](stdlib/core.md) | core | — |
 | [`crypto.hmac.md`](stdlib/crypto.hmac.md) | crypto.hmac | — |
 | [`crypto.sha256.md`](stdlib/crypto.sha256.md) | crypto.sha256 | — |
+| [`crypto.sha256_fast.md`](stdlib/crypto.sha256_fast.md) | crypto.sha256_fast | — |
 | [`fs.md`](stdlib/fs.md) | fs | — |
 | [`hash_map.md`](stdlib/hash_map.md) | hash_map | — |
 | [`hash_set.md`](stdlib/hash_set.md) | hash_set | — |

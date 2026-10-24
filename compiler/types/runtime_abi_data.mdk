@@ -1828,6 +1828,16 @@ runtimeAbiRows = [
     },
   ),
   (
+    "sha256Native",
+    CallableShape {
+      writtenValueArity = 1,
+      loweredCoreArity = 1,
+      parameterHeads = ["ByteBlock"],
+      resultHead = "ByteBlock",
+      canonicalSignature = "v1:ByteBlock -> ByteBlock",
+    },
+  ),
+  (
     "byteBlockWriteStdout",
     CallableShape {
       writtenValueArity = 1,

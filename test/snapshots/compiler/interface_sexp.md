@@ -105,7 +105,7 @@ stages=DESUGAR,MARK
 -- node, a section count that differs from the nodes present, or any component
 -- refusal is an `Err`, never a partial record.
 import list.{mapAccumL, sortOn}
-import crypto.sha256.{sha256}
+import crypto.sha256_fast.{sha256Fast}
 import hex as Hex
 import bytes.{encodeUtf8}
 import string as S
@@ -1335,7 +1335,7 @@ pairAtoms = pairSExp SAtom SAtom
 -- The SHA-256 of a text, in lower-case hex.
 export
 sha256Hex : String -> String
-sha256Hex text = Hex.encode (sha256 (encodeUtf8 text))
+sha256Hex text = Hex.encode (sha256Fast (encodeUtf8 text))
 
 headerNode : InterfaceKey -> Int -> String -> SExp
 headerNode key count digest = tagged "medaka-interface" [
@@ -1644,7 +1644,7 @@ decodeParsed body (SList (header :: sections)) = do
 decodeParsed _ top = refuse "file" top "expected a header node"
 # DESUGAR
 (DUse false (UseGroup ("list") ((mem "mapAccumL" false) (mem "sortOn" false))))
-(DUse false (UseGroup ("crypto" "sha256") ((mem "sha256" false))))
+(DUse false (UseGroup ("crypto" "sha256_fast") ((mem "sha256Fast" false))))
 (DUse false (UseAlias ("hex") "Hex"))
 (DUse false (UseGroup ("bytes") ((mem "encodeUtf8" false))))
 (DUse false (UseAlias ("string") "S"))
@@ -2141,7 +2141,7 @@ decodeParsed _ top = refuse "file" top "expected a header node"
 (DTypeSig false "pairAtoms" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "SExp")))
 (DFunDef false "pairAtoms" () (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "SAtom")))
 (DTypeSig true "sha256Hex" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "sha256Hex" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256") (EApp (EVar "encodeUtf8") (EVar "text")))))
+(DFunDef false "sha256Hex" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256Fast") (EApp (EVar "encodeUtf8") (EVar "text")))))
 (DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "SExp")))))
 (DFunDef false "headerNode" ((PVar "key") (PVar "count") (PVar "digest")) (EApp (EApp (EVar "tagged") (ELit (LString "medaka-interface"))) (EListLit (EApp (EVar "intNode") (EVar "formatVersion")) (EApp (EApp (EVar "tagged") (ELit (LString "sources"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "pairAtoms")) (EFieldAccess (EVar "key") "ikSources")))) (EApp (EApp (EVar "tagged") (ELit (LString "compiler"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "key") "ikCompiler")))) (EApp (EApp (EVar "tagged") (ELit (LString "sections"))) (EListLit (EApp (EVar "intNode") (EVar "count")))) (EApp (EApp (EVar "tagged") (ELit (LString "digest"))) (EListLit (EApp (EVar "SAtom") (EVar "digest")))))))
 (DTypeSig true "bodyOf" (TyFun (TyCon "String") (TyCon "String")))
@@ -2194,7 +2194,7 @@ decodeParsed _ top = refuse "file" top "expected a header node"
 (DFunDef false "decodeParsed" (PWild (PVar "top")) (EApp (EApp (EApp (EVar "refuse") (ELit (LString "file"))) (EVar "top")) (ELit (LString "expected a header node"))))
 # MARK
 (DUse false (UseGroup ("list") ((mem "mapAccumL" false) (mem "sortOn" false))))
-(DUse false (UseGroup ("crypto" "sha256") ((mem "sha256" false))))
+(DUse false (UseGroup ("crypto" "sha256_fast") ((mem "sha256Fast" false))))
 (DUse false (UseAlias ("hex") "Hex"))
 (DUse false (UseGroup ("bytes") ((mem "encodeUtf8" false))))
 (DUse false (UseAlias ("string") "S"))
@@ -2691,7 +2691,7 @@ decodeParsed _ top = refuse "file" top "expected a header node"
 (DTypeSig false "pairAtoms" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "SExp")))
 (DFunDef false "pairAtoms" () (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "SAtom")))
 (DTypeSig true "sha256Hex" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "sha256Hex" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256") (EApp (EVar "encodeUtf8") (EVar "text")))))
+(DFunDef false "sha256Hex" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256Fast") (EApp (EVar "encodeUtf8") (EVar "text")))))
 (DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "SExp")))))
 (DFunDef false "headerNode" ((PVar "key") (PVar "count") (PVar "digest")) (EApp (EApp (EVar "tagged") (ELit (LString "medaka-interface"))) (EListLit (EApp (EVar "intNode") (EVar "formatVersion")) (EApp (EApp (EVar "tagged") (ELit (LString "sources"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "pairAtoms")) (EFieldAccess (EVar "key") "ikSources")))) (EApp (EApp (EVar "tagged") (ELit (LString "compiler"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "key") "ikCompiler")))) (EApp (EApp (EVar "tagged") (ELit (LString "sections"))) (EListLit (EApp (EVar "intNode") (EDictApp "count")))) (EApp (EApp (EVar "tagged") (ELit (LString "digest"))) (EListLit (EApp (EVar "SAtom") (EVar "digest")))))))
 (DTypeSig true "bodyOf" (TyFun (TyCon "String") (TyCon "String")))

@@ -3646,6 +3646,7 @@ externBindings _ = [
   ("byteBlockFromIntArray", prim1 pByteBlockFromIntArray),
   ("byteBlockToIntArray", prim1 pByteBlockToIntArray),
   ("byteBlockFromString", prim1 pByteBlockFromString),
+  ("sha256Native", prim1 pSha256Native),
   ("byteBlockToString", prim1 pByteBlockToString),
   ("byteBlockWriteStdout", prim1M pByteBlockWriteStdout),
   ("Ref", prim1 pRef),
@@ -4259,6 +4260,13 @@ pByteBlockToIntArray _ = panic "byteBlockToIntArray: not a ByteBlock"
 pByteBlockFromString : Value e -> <e> Value e
 pByteBlockFromString (VString s) = VByteBlock (stringToUtf8Bytes s)
 pByteBlockFromString _ = panic "byteBlockFromString: not a String"
+
+-- sha256Native : ByteBlock -> ByteBlock — the host's own digest, so the
+-- interpreter and the compiled engines share one implementation.
+pSha256Native : Value e -> <e> Value e
+pSha256Native (VByteBlock b) =
+  VByteBlock (byteBlockToIntArray (sha256Native (byteBlockFromIntArray b)))
+pSha256Native _ = panic "sha256Native: not a ByteBlock"
 
 -- byteBlockToString : ByteBlock -> String — the block's bytes read as UTF-8,
 -- through the host's `stringFromUtf8Bytes`: valid UTF-8 is copied verbatim and

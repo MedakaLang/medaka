@@ -454,12 +454,12 @@ internalExterns = [
   "arrayGetUnsafe", "arraySetUnsafe", "arrayBlit", "arrayFill",
   "bytesToFloat64", "byteBlockGetUnsafe", "byteBlockSetUnsafe",
   "byteBlockCopyUnsafe", "byteBlockMake", "byteBlockFromIntArray",
-  "byteBlockBlit", "byteBlockToString", "byteBlockWriteStdout", "u8Truncate",
-  "u8ToInt", "u16Truncate", "u16ToInt", "u32Truncate", "u32ToInt", "intBitAnd",
-  "intBitOr", "intBitXor", "intBitNot", "intShiftLeft", "intShiftRight",
-  "u64Truncate", "u64TruncateToInt", "u64BitAnd", "u64BitOr", "u64BitXor",
-  "u64ShiftLeft", "u64ShiftRight", "u64MulHigh", "i32Truncate", "i32ToInt",
-  "i64FromBits", "i64ToBits", "indexErrorAtSite", "panicAt"
+  "byteBlockBlit", "byteBlockToString", "byteBlockWriteStdout", "sha256Native",
+  "u8Truncate", "u8ToInt", "u16Truncate", "u16ToInt", "u32Truncate", "u32ToInt",
+  "intBitAnd", "intBitOr", "intBitXor", "intBitNot", "intShiftLeft",
+  "intShiftRight", "u64Truncate", "u64TruncateToInt", "u64BitAnd", "u64BitOr",
+  "u64BitXor", "u64ShiftLeft", "u64ShiftRight", "u64MulHigh", "i32Truncate",
+  "i32ToInt", "i64FromBits", "i64ToBits", "indexErrorAtSite", "panicAt"
 ]
 
 -- The internal-extern guard list for a module given whether internal access is
