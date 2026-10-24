@@ -54341,7 +54341,7 @@ methodReturnMemoCurrentViews gctx =
       gctx.graphRun.goals.value)
 
 -- The prelude generation pair plus the chain key: what the module interfaces' graph
--- key (`serveStateOf`) and the resolve prefix memo (`driver/diagnostics.mdk`) carry
+-- key (`serveStateOf`) and the driver's pass caches (`driver/diagnostics.mdk`) carry
 -- for "the same graph".  One definition, so the two cannot drift apart on it.
 export
 chainFullKey : Int -> Int -> String -> String

@@ -1,5 +1,5 @@
 # META
-source_lines=3508
+source_lines=3646
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -46,12 +46,12 @@ import frontend.resolve.{
   resErrorIsPrivateName,
   resolveModuleG,
   resolveModulesErrorsByFile,
-  importedCtorDecls,
+  importedCtorDeclsStep,
   withStdlibExports,
   hintableUnboundNames,
   exportedValueNames,
 }
-import frontend.visibility.{ModuleExports}
+import frontend.visibility.{ModuleExports, coreExports}
 import list.{drop, last}
 import support.ordmap.{
   OrdMap,
@@ -60,6 +60,8 @@ import support.ordmap.{
   omHasKey,
   omLookup,
   omFromPairs,
+  omKeys,
+  omSize,
 }
 import frontend.exhaust.{checkGuardExhaustivenessWith}
 import frontend.marker.{
@@ -114,7 +116,6 @@ import driver.main_autoprint.{valueMainCandidate}
 import support.util.{
   joinNl,
   listLen,
-  matchingStepPrefix,
   lookupAssoc,
   startsWith,
   anyList,
@@ -122,6 +123,8 @@ import support.util.{
   filterList,
   contains,
   joinDot,
+  isSome,
+  lenKey,
 }
 import support.timer.{takePerfSink}
 import json.{Json(..), jObject, stringify}
@@ -1144,8 +1147,8 @@ public export data FrontProgram =
 -- single file resolve rejects is never driven, under any policy.
 -- `NeverDriveRejected`: one unmemoised resolve of the whole graph, and a graph
 -- it rejects is not driven (`check`, `run`, `check-policy`, `manifest`).
--- `DriveUnblocked chainKey`: per-module resolve through the resolve-prefix memo
--- keyed by `chainKey`, and a rejected graph's modules the rejection does not
+-- `DriveUnblocked chainKey`: per-module resolve through the pass caches keyed by
+-- `chainKey` (`passCacheRef`), and a rejected graph's modules the rejection does not
 -- block (`resolveBlockedMods`) get a check drive of their own, whose report the
 -- LSP's hover reads (the LSP, `check --json`, `build --json`).
 -- `ResolvedByGate`: no resolve here; `build`'s gate (`driver/front_gate.frontGate`)
@@ -1266,7 +1269,8 @@ frontEnd exportsFor drive fi = match fi.fiProgram
               pairs)
         match anyList (p => not (isEmpty (snd p))) resolved
           True => undrivenOutput (map resolveBucket resolved)
-          False => drivenGraph drive driveIn (seedAll (map midPath mods) [])
+          False =>
+            drivenGraph drive None driveIn (seedAll (map midPath mods) [])
       DriveUnblocked chainKey steps =>
         let buckets =
           resolvedBuckets
@@ -1298,21 +1302,28 @@ frontEnd exportsFor drive fi = match fi.fiProgram
               foOutputs = outputs,
               foDriven = None,
             }
-          False => drivenGraph drive driveIn buckets
+          False =>
+            drivenGraph
+              drive
+              (foldServeKey steps preludeKey chainKey)
+              driveIn
+              buckets
       ResolvedByGate =>
-        drivenGraph drive driveIn (seedAll (map midPath mods) [])
+        drivenGraph drive None driveIn (seedAll (map midPath mods) [])
 
 -- The verb's drive of a graph resolve admitted, its per-module diagnostics
 -- folded into `buckets`, which hold every loaded file.
 drivenGraph : (FrontDriveIn -> <e> (a, TcReport, DriveOutputs)) ->
+  Option String ->
   FrontDriveIn ->
   List (String, List Diag) ->
   <e> FrontOutput a
-drivenGraph drive d buckets =
+drivenGraph drive served d buckets =
   let (kept, r, outputs) = drive d
   let folded =
     typecheckDiagsFold
       outputs
+      served
       d.fdRuntime
       d.fdCore
       d.fdMods
@@ -2032,115 +2043,58 @@ foldStale ((path, d) :: rest) buckets =
 -- so each module's imports resolve via an O(log n) `findExports` lookup instead of a
 -- linear scan of a growing `List ModuleExports`.  Threaded byte-identically:
 -- `omInsert exp.modId exp known` replaces the `exp :: known` prepend.
--- ── resolve-prefix memo ─────────────────────────────────────────────────────
--- `resolvePass` is a strict left fold with no backward dependency: module k's
--- verdict is a function of the preludes, the modules BEFORE k, k's own trust and
--- k's decls, so nothing after k can change it.  On an LSP keystroke only the
--- entry's source changed, so the unchanged prefix's verdicts are replayed instead
--- of recomputed, and only the modules from the first changed one onward resolve.
 --
--- WHAT A STEP CARRIES: `ModuleExports` is fields of strings, string lists and
--- String-keyed maps of strings, and `Diag` is a severity, two strings and three `Option`s -- no `Decl`, no
--- `Ref`, no `Scheme`, no union-find cell.  So this memo is OUTSIDE the
--- admissibility rule the typechecker's module interfaces live under
--- (`types/module_interface.mdk`): it restores no `GraphRun` because resolve mints
--- nothing to restore.
---
--- Uncapped and one step per module of the current graph, replaced wholesale when
--- `rmKey` changes -- NOT a fixed-size MRU, whose hit rate collapses exactly when
--- the graph outgrows the cap.
-data ResStep = ResStep {
-  rsKey : String,
-  rsExports : ModuleExports,
-  rsDiags : List Diag,
-}
-
-data ResMemo = ResMemo { rmKey : String, rmSteps : List ResStep }
-
-resolveChainMemoRef : Ref (Option ResMemo)
-resolveChainMemoRef = Ref None
-
--- A module's step key is its `moduleStepKey` PLUS its resolved trust, because
--- `resolvePass`'s verdict depends on `allowInternal`/`trustedMods` (#1362) and
--- the chain key carries neither -- the typecheck chain does not depend on them.
--- Without this a hit under one trust setting would launder an internal-extern
--- rejection into the other's analyze.
-resStepKey : Bool -> List String -> (String, String, List Decl) -> Option String
-resStepKey allowInternal trustedMods (mid, path, prog) =
-  let trust = if allowInternal || contains mid trustedMods then "T" else "U"
-  map (k => joinNl [k, trust]) (moduleStepKey (mid, path, prog))
-
-rsKeyOf : ResStep -> String
-rsKeyOf st = st.rsKey
-
--- Replay the hit prefix: rebuild `known` by folding its exports (cheaper than
--- snapshotting the accumulator per step, and one fewer invariant), and push each
--- step's diagnostics into its file's bucket in the order the fold would have.
-resumeResSteps : List ResStep ->
-  List (String, String, List Decl) ->
-  OrdMap ModuleExports ->
-  List (String, List Diag) ->
-  (OrdMap ModuleExports, List (String, List Diag))
-resumeResSteps [] _ known buckets = (known, buckets)
-resumeResSteps _ [] known buckets = (known, buckets)
-resumeResSteps (st :: sts) ((_, path, _) :: ms) known buckets =
-  resumeResSteps
-    sts
-    ms
-    (omInsert st.rsExports.modId st.rsExports known)
-    (pushDiags path st.rsDiags buckets)
-
--- The fold itself.  `mods`' decls are already DESUGARED (the caller shares one
--- `desugarModule` per module with the typecheck half).  Records a step after each
--- module while keys are available; the LAST module of the graph is never
--- recorded, and a `None` key ends recording for that module and every one after
--- it, so the returned steps stay positionally aligned.
+-- `mods`' decls are already DESUGARED (the caller shares one `desugarModule` per
+-- module with the typecheck half).  [served] is the chain key of an analyze that
+-- serves each module's verdict from `passCacheRef`, `None` for one that resolves
+-- every module afresh; [ids] holds the resolve identities of the modules before.
 resolvePass : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
+  Option String ->
   OrdMap ModuleExports ->
-  List (Option String) ->
+  OrdMap Int ->
   List (String, String, List Decl) ->
   List (String, List Diag) ->
-  <e> (List (String, List Diag), List ResStep)
-resolvePass _ _ _ _ _ _ _ _ [] buckets = (buckets, [])
-resolvePass exportsFor allowInternal trustedMods preludeKey rt core known keys ((mid, path, desugared) :: rest) buckets =
-  let (exp, errs) =
-    resolveModuleG
-      (internalGuardFor (allowInternal || contains mid trustedMods))
-      preludeKey
-      rt
-      core
-      known
-      mid
-      desugared
-  let diags = map diagOfResError (hintResErrors exportsFor errs)
-  let (key, keys2) = match keys
-    k :: ks => (k, ks)
-    [] => (None, [])
-  let (buckets2, steps) =
-    resolvePass
-      exportsFor
-      allowInternal
-      trustedMods
-      preludeKey
-      rt
-      core
-      (omInsert exp.modId exp known)
-      keys2
-      rest
-      (pushDiags path diags buckets)
-  match rest
-    [] => (buckets2, [])
-    _ => match key
-      None => (buckets2, [])
-      Some k => (
-        buckets2,
-        ResStep { rsKey = k, rsExports = exp, rsDiags = diags } :: steps,
-      )
+  <e> List (String, List Diag)
+resolvePass _ _ _ _ _ _ _ _ _ [] buckets = buckets
+resolvePass exportsFor allowInternal trustedMods preludeKey rt core served known ids ((m@(mid, path, desugared)) :: rest) buckets =
+  let trusted = allowInternal || contains mid trustedMods
+  -- A module's verdict reads, beside its own decls and its imports' exports, its
+  -- trust (#1362) and whether any module came before it: a missing import is
+  -- `UnknownModule` after the first module and a stub in the first.
+  let graph =
+    map (k => joinNl [k, boolKey trusted, boolKey (omSize known == 0)]) served
+  let (diags, exp, ident) = servedPass ResolveKind graph ids m (_ =>
+    let (exp, errs) =
+      resolveModuleG
+        (internalGuardFor trusted)
+        preludeKey
+        rt
+        core
+        known
+        mid
+        desugared
+    (map diagOfResError (hintResErrors exportsFor errs), exp))
+  resolvePass
+    exportsFor
+    allowInternal
+    trustedMods
+    preludeKey
+    rt
+    core
+    served
+    (omInsert exp.modId exp known)
+    (omInsert mid ident ids)
+    rest
+    (pushDiags path diags buckets)
+
+boolKey : Bool -> String
+boolKey True = "T"
+boolKey False = "F"
 
 -- ── typecheck pass (per module, ISOLATED) ───────────────────────────────────
 -- Run the shared multi-module typecheck (`checkModulesDiagsChain`): core + runtime are
@@ -2227,6 +2181,7 @@ typecheckPassReport steps inputs runtimeP coreP preludeKey chainKey mods modPair
     outputs,
     typecheckDiagsFold
       outputs
+      (foldServeKey steps preludeKey chainKey)
       runtimeP
       coreP
       mods
@@ -2278,8 +2233,11 @@ stepKeysFor NoSteps _ = []
 -- must bucket, filter and order identically, which is why there is one fold.
 -- `modPairs` is passed in rather than re-derived: the keyed drive's source keys
 -- need it, and desugaring the graph twice was the cost this split would otherwise
--- add.
+-- add.  [served] is the chain key of a caller whose analyze serves each module's
+-- raw-tree diagnostics from `passCacheRef` (`foldServeKey`), `None` for one that
+-- folds every module afresh.
 typecheckDiagsFold : DriveOutputs ->
+  Option String ->
   List Decl ->
   List Decl ->
   List (String, String, List Decl) ->
@@ -2287,35 +2245,54 @@ typecheckDiagsFold : DriveOutputs ->
   List (String, (List TcDiag, List TcDiag)) ->
   List (String, List Diag) ->
   List (String, List Diag)
-typecheckDiagsFold outputs runtimeP coreP mods modPairs tcByMid buckets =
-  -- Each module's clause-exhaustiveness oracle is its own decls, the decls
-  -- declaring a constructor its imports bind, and the prelude: never every
-  -- loaded module, where an unrelated module's same-spelled constructor
-  -- answers for a pattern that names another (#1185).
-  let ctorScope =
-    omFromPairs (importedCtorDecls coreP modPairs (map rawPairOf mods)) omEmpty
+typecheckDiagsFold outputs served runtimeP coreP mods modPairs tcByMid buckets =
   let preludeDecls = runtimeP ++ coreP
-  -- #1499: the prelude-standalone operand is the PRELUDE ALONE — NOT the
-  -- oracle's decls, which fold in other modules' declarations and would turn
-  -- this into a different (cross-module standalone) rule.  Built
-  -- ONCE here rather than per module: the fold below is over many modules
-  -- against one prelude.
-  let shadowPool = preludeStandaloneSet (runtimeP ++ coreP)
-  -- #2738's operand: every module whose decls this compile has, keyed the way a
-  -- `DUse`'s `usePathModuleId` spells it, with the prelude under the same `"core"`
-  -- key `meIfaceExports` (`DeclEnvs.deMethods`) uses.  The detector reads a DEPENDENCY's decls (the
-  -- displaced function's own signature lives there, not here), which is exactly the
-  -- operand the flat path cannot have.
-  let shadowGraph = ("core", runtimeP ++ coreP) :: modPairs
+  let passes = RawPasses {
+    rpCoreExports = coreExports coreP,
+    rpPool = omFromPairs (map rawPairOf mods) omEmpty,
+    rpPrelude = preludeDecls,
+    -- #1499: the prelude-standalone operand is the prelude alone, not the
+    -- oracle's decls, which fold in other modules' declarations and would turn
+    -- this into a different (cross-module standalone) rule.
+    rpShadowPool = preludeStandaloneSet preludeDecls,
+    -- #2738's operand: every module whose decls this compile has, keyed the way a
+    -- `DUse`'s `usePathModuleId` spells it, with the prelude under the same
+    -- `"core"` key `meIfaceExports` (`DeclEnvs.deMethods`) uses.  The detector
+    -- reads a DEPENDENCY's decls (the displaced function's own signature lives
+    -- there, not here), which is exactly the operand the flat path cannot have.
+    rpShadowGraph = ("core", preludeDecls) :: modPairs,
+    rpOutputs = outputs,
+    rpModPairs = modPairs,
+  }
   foldModuleTc
-    outputs
-    shadowPool
-    shadowGraph
-    (ctorScope, preludeDecls)
-    modPairs
+    passes
+    (option None (k => foldGraphPart k outputs mods modPairs) served)
+    omEmpty
+    omEmpty
     mods
     tcByMid
     buckets
+
+-- What every module's raw-tree passes share: the prelude's exports and decls, the
+-- graph's raw decls by module id (the constructor declarations a module's imports
+-- bind are found there), the prelude-standalone set, the desugared graph the
+-- import-shadow detector reads, and the drive's outputs.
+data RawPasses = RawPasses {
+  rpCoreExports : ModuleExports,
+  rpPool : OrdMap (List Decl),
+  rpPrelude : List Decl,
+  rpShadowPool : OrdMap Unit,
+  rpShadowGraph : List (String, List Decl),
+  rpOutputs : DriveOutputs,
+  rpModPairs : List (String, List Decl),
+}
+
+-- The chain key under which a caller's analyze serves the bucketing fold's
+-- per-module diagnostics: a session's (`RecordSteps`) with a keyed prelude.
+foldServeKey : ChainSteps -> Option (Int, Int) -> String -> Option String
+foldServeKey RecordSteps (Some (rk, ck)) chainKey =
+  Some (chainFullKey rk ck chainKey)
+foldServeKey _ _ _ = None
 
 -- Resolve a graph the caller has already loaded, bucketing each module's errors
 -- by its file.  The shared prefix of `projectDiagsLoaded` and
@@ -2333,48 +2310,20 @@ resolvedBuckets : (List String -> <e> List (String, List String)) ->
   List (String, List Decl) ->
   <e> List (String, List Diag)
 resolvedBuckets exportsFor allowInternal trustedMods preludeKey chainKey runtimeP coreP mods modPairs =
-  let seeded = seedAll (map midPath mods) []
-  let dmods = desugaredTriples mods modPairs
-  match preludeKey
-    -- Unkeyed: neither hits nor stores, and hashes no key -- a one-shot verb
-    -- pays exactly what it paid before.
-    None =>
-      fst
-        (resolvePass
-          exportsFor
-          allowInternal
-          trustedMods
-          None
-          runtimeP
-          coreP
-          omEmpty
-          []
-          dmods
-          seeded)
-    Some (rk, ck) =>
-      let fullKey = chainFullKey rk ck chainKey
-      let steps = match !resolveChainMemoRef
-        Some m => if m.rmKey == fullKey then m.rmSteps else []
-        None => []
-      let stepKeys = map (resStepKey allowInternal trustedMods) mods
-      let (kept, _) = matchingStepPrefix rsKeyOf steps stepKeys (listLen mods)
-      let n = listLen kept
-      let (known, buckets) = resumeResSteps kept mods omEmpty seeded
-      let (finalBuckets, newSteps) =
-        resolvePass
-          exportsFor
-          allowInternal
-          trustedMods
-          preludeKey
-          runtimeP
-          coreP
-          known
-          (drop n stepKeys)
-          (drop n dmods)
-          buckets
-      resolveChainMemoRef :=
-        Some ResMemo { rmKey = fullKey, rmSteps = kept ++ newSteps }
-      finalBuckets
+  -- A keyed prelude serves each module's verdict from `passCacheRef`; unkeyed,
+  -- nothing is served or recorded, and no key is built.
+  resolvePass
+    exportsFor
+    allowInternal
+    trustedMods
+    preludeKey
+    runtimeP
+    coreP
+    (map ((rk, ck) => chainFullKey rk ck chainKey) preludeKey)
+    omEmpty
+    omEmpty
+    (desugaredTriples mods modPairs)
+    (seedAll (map midPath mods) [])
 
 -- (modId, path, DESUGARED decls), pairing each module with the tree
 -- `desugarModule` already memoized for the typecheck half.  `resolvePass` must not
@@ -2414,6 +2363,7 @@ projectDiagsFromTc exportsFor allowInternal trustedMods runtimeP coreP mods outp
   let modPairs = desugaredModPairs mods
   typecheckDiagsFold
     outputs
+    None
     runtimeP
     coreP
     mods
@@ -2545,83 +2495,271 @@ moduleImportIds ((DUse _ path _) :: rest) =
   importModId path :: moduleImportIds rest
 moduleImportIds (_ :: rest) = moduleImportIds rest
 
--- For each (mid, path, rawProg): look up its harvested (errs, warns) by mid, wrap
--- them as Diags (preserving each type error's Option Loc), fold in this module's
--- guard-exhaustiveness warnings from the raw decls, and bucket by path.
--- (mid, desugaredDecls) lookup, sibling of `lookupTcDiags` — used by
--- `foldModuleTc` to fetch the already-desugared decls for a module (computed
--- once by `typecheckPassFull`'s `modPairs`) instead of re-desugaring or reading raw.
+-- (mid, desugaredDecls) lookup, sibling of `lookupTcDiags`: the already-desugared
+-- decls of a module (the caller's `modPairs`), instead of re-desugaring or reading raw.
 lookupDesugaredMod : String -> List (String, List Decl) -> List Decl
 lookupDesugaredMod _ [] = []
 lookupDesugaredMod mid ((m, d) :: rest)
   | m == mid = d
   | otherwise = lookupDesugaredMod mid rest
 
-foldModuleTc : DriveOutputs ->
-  OrdMap Unit ->
-  List (String, List Decl) ->
-  (OrdMap (List Decl), List Decl) ->
-  List (String, List Decl) ->
+-- For each (mid, path, rawProg): its raw-tree diagnostics (`rawTreeDiags`, or the
+-- served ones), then its harvested (errs, warns) as Diags (preserving each type
+-- error's Option Loc) unless resolve rejected it, bucketed by path.  [known] is
+-- the exports of the modules before it, [ids] their fold identities.
+foldModuleTc : RawPasses ->
+  Option String ->
+  OrdMap ModuleExports ->
+  OrdMap Int ->
   List (String, String, List Decl) ->
   List (String, (List TcDiag, List TcDiag)) ->
   List (String, List Diag) ->
   List (String, List Diag)
-foldModuleTc _ _ _ _ _ [] _ buckets = buckets
-foldModuleTc outputs shadowPool shadowGraph oracle modPairs ((mid, path, prog) :: rest) tcByMid buckets =
+foldModuleTc _ _ _ _ [] _ buckets = buckets
+foldModuleTc passes graph known ids ((mid, path, prog) :: rest) tcByMid buckets =
+  let (rawDiags, exp, ident) =
+    servedPass
+      FoldKind
+      graph
+      ids
+      (mid, path, prog)
+      (_ => rawTreeDiags passes known (mid, path, prog))
   let (tcErrs, tcWarns) = lookupTcDiags mid tcByMid
   let tcReported = match lookupBucket path buckets
     Some existing => not (resolveRejected existing)
     None => True
   let errDiags = if tcReported then map diagOfTypeError tcErrs else []
   let warnDiags = if tcReported then map diagOfTypeWarning tcWarns else []
-  let (ctorScope, preludeDecls) = oracle
-  let imported = match omLookup mid ctorScope
-    Some ds => ds
-    None => []
-  let guardWarns = checkGuardExhaustivenessWith (imported ++ preludeDecls) prog
-  let guardDiags = map guardWarnToDiag guardWarns
-  let deriveDiags = map deriveErrToDiag (checkDerives prog)
+  foldModuleTc
+    passes
+    graph
+    (omInsert exp.modId exp known)
+    (omInsert mid ident ids)
+    rest
+    tcByMid
+    (pushDiags path (rawDiags ++ errDiags ++ warnDiags) buckets)
+
+-- One module's derive, guard-exhaustiveness and two shadow diagnostics, and its
+-- exports for the modules after it.
+rawTreeDiags : RawPasses ->
+  OrdMap ModuleExports ->
+  (String, String, List Decl) ->
+  (List Diag, ModuleExports)
+rawTreeDiags passes known (mid, _, prog) =
+  let desugared = lookupDesugaredMod mid passes.rpModPairs
+  -- The clause-exhaustiveness oracle is the module's own decls, the decls
+  -- declaring a constructor its imports bind, and the prelude: never every
+  -- loaded module, where an unrelated module's same-spelled constructor
+  -- answers for a pattern that names another (#1185).
+  let (imported, exp) = importedCtorDeclsStep
+    passes.rpCoreExports
+    passes.rpPool
+    known
+    (mid, desugared)
+  let guardWarns =
+    checkGuardExhaustivenessWith (imported ++ passes.rpPrelude) prog
   -- #1375 clause (b) / #1499, per module: this module's own interface methods
-  -- against the prelude standalones, bucketed by this module's own path and
-  -- named by its own module id.  Empty intersection ⇒ `[]` ⇒ byte-identical.
-  -- Reads the DESUGARED decls (already computed once in `modPairs` by
-  -- the caller), not raw — see the FLAT-half comment in `analyzeSurface`
+  -- against the prelude standalones, named by its own module id.  Reads the
+  -- DESUGARED decls, not raw — see the FLAT-half comment in `analyzeSurface`
   -- for why a defaulted `IfaceMethod` double-fires over the raw tree (F2).
   let shadowDiags =
     map
       (preludeShadowWarnToDiag mid)
-      (preludeStandaloneShadowsWith
-        shadowPool
-        (lookupDesugaredMod mid modPairs))
+      (preludeStandaloneShadowsWith passes.rpShadowPool desugared)
   -- #2738, the importer direction: this module's own selective imports against the
-  -- interfaces it can name, bucketed by its own path and named by its own module id.
-  -- No collision ⇒ `[]` ⇒ byte-identical.
+  -- interfaces it can name, named by its own module id.
   let importShadowDiags =
     map
       (importShadowWarnToDiag mid)
       (importedStandaloneShadows
-        outputs
-        shadowGraph
-        (lookupDesugaredMod mid modPairs))
-  let buckets2 =
-    pushDiags
-      path
-      (deriveDiags
-        ++ guardDiags
-        ++ shadowDiags
-        ++ importShadowDiags
-        ++ errDiags
-        ++ warnDiags)
-      buckets
-  foldModuleTc
-    outputs
-    shadowPool
-    shadowGraph
-    oracle
-    modPairs
-    rest
-    tcByMid
-    buckets2
+        passes.rpOutputs
+        passes.rpShadowGraph
+        desugared)
+  (
+    map deriveErrToDiag (checkDerives prog)
+      ++ map guardWarnToDiag guardWarns
+      ++ shadowDiags
+      ++ importShadowDiags,
+    exp,
+  )
+
+-- ── the per-module pass caches ──────────────────────────────────────────────
+-- A session's analyze serves a module's resolve verdict and its raw-tree
+-- diagnostics, each with the exports the modules after it read, from the analyze
+-- that last computed them, when nothing they read has changed: the module's own
+-- decls (its path and the exact source the loader parsed), its imports' exports
+-- and constructor declarations through re-export chains, and what the pass reads of
+-- the whole graph (the key's graph part: `resolvePass`, `foldGraphPart`).  A key's
+-- imports are the identities of the modules its decls import, and a module's
+-- identity is new whenever its pass computes it afresh, so a change anywhere in the
+-- import closure reaches the module.  Each pass keeps one entry per module id, the
+-- newest, with no count cap.  An entry holds strings, string lists and maps of them
+-- (`ModuleExports`, `Diag`): no `Decl`, no `Ref`, no `Scheme`, so it lies outside
+-- the admissibility rule of `types/module_interface.mdk`.
+data PassKey = PassKey {
+  pkGraph : String,
+  pkPath : String,
+  pkSource : String,
+  pkImports : List Int,
+} deriving (Eq)
+
+data PassEntry = PassEntry {
+  peKey : PassKey,
+  peIdentity : Int,
+  peDiags : List Diag,
+  peExports : ModuleExports,
+}
+
+-- [pcSerial] is the last identity handed out.
+data PassCaches = PassCaches {
+  pcResolve : OrdMap PassEntry,
+  pcFold : OrdMap PassEntry,
+  pcSerial : Int,
+}
+
+passCacheRef : Ref PassCaches
+passCacheRef = Ref (emptyPassCaches ())
+
+emptyPassCaches : Unit -> PassCaches
+emptyPassCaches _ =
+  PassCaches { pcResolve = omEmpty, pcFold = omEmpty, pcSerial = 0 }
+
+data PassKind = ResolveKind | FoldKind
+
+passEntries : PassKind -> PassCaches -> OrdMap PassEntry
+passEntries ResolveKind c = c.pcResolve
+passEntries FoldKind c = c.pcFold
+
+keepPassEntry : PassKind -> String -> PassEntry -> Unit
+keepPassEntry kind mid entry =
+  let c = passCacheRef.value
+  passCacheRef := match kind
+    ResolveKind => { c | pcResolve = omInsert mid entry c.pcResolve }
+    FoldKind => { c | pcFold = omInsert mid entry c.pcFold }
+
+-- An identity no earlier call returned.
+freshPassIdentity : Unit -> Int
+freshPassIdentity _ =
+  let c = passCacheRef.value
+  let next = c.pcSerial + 1
+  passCacheRef := { c | pcSerial = next }
+  next
+
+-- The identity of the entry the bucketing fold's cache holds for module [mid]:
+-- unchanged across analyzes that serve the module, new whenever one folds it.
+export
+foldCachedIdentity : String -> Option Int
+foldCachedIdentity mid =
+  map (e => e.peIdentity) (omLookup mid passCacheRef.value.pcFold)
+
+-- The same for the resolve pass's cache.
+export
+resolveCachedIdentity : String -> Option Int
+resolveCachedIdentity mid =
+  map (e => e.peIdentity) (omLookup mid passCacheRef.value.pcResolve)
+
+-- The module ids [prog] imports, `DAttrib`-wrapped imports included.
+importIdsOf : List Decl -> List String
+importIdsOf prog = flatMap importIdsOfDecl prog
+
+importIdsOfDecl : Decl -> List String
+importIdsOfDecl (DUse _ path _) = [importModId path]
+importIdsOfDecl (DAttrib _ d) = importIdsOfDecl d
+importIdsOfDecl _ = []
+
+-- [compute] of one module with its identity in [kind]'s pass: served when [graph]
+-- is `Some` and the module's entry was recorded under the same graph part, path,
+-- source and import identities; otherwise computed, and under `Some` recorded with
+-- a fresh identity.
+servedPass : PassKind ->
+  Option String ->
+  OrdMap Int ->
+  (String, String, List Decl) ->
+  (Unit -> <e> (List Diag, ModuleExports)) ->
+  <e> (List Diag, ModuleExports, Int)
+servedPass _ None _ _ compute =
+  let (diags, exp) = compute ()
+  (diags, exp, 0)
+servedPass kind (Some g) ids (mid, path, prog) compute =
+  match loadedSourceOf path
+    None =>
+      let (diags, exp) = compute ()
+      (diags, exp, freshPassIdentity ())
+    Some src =>
+      let key = PassKey {
+        pkGraph = g,
+        pkPath = path,
+        pkSource = src,
+        pkImports = map (i => optionOr 0 (omLookup i ids)) (importIdsOf prog),
+      }
+      let hit = match omLookup mid (passEntries kind passCacheRef.value)
+        Some e => if e.peKey == key then Some e else None
+        None => None
+      match hit
+        Some e => (e.peDiags, e.peExports, e.peIdentity)
+        None =>
+          let (diags, exp) = compute ()
+          let ident = freshPassIdentity ()
+          let _ = keepPassEntry kind mid PassEntry {
+            peKey = key,
+            peIdentity = ident,
+            peDiags = diags,
+            peExports = exp,
+          }
+          (diags, exp, ident)
+
+-- What every module's raw-tree diagnostics read of the whole graph, beside the
+-- chain key [chainFull] (the prelude generation, the entry and the roots the
+-- loader rewrote each module's imports under): the module count (the import-shadow
+-- detector's bound on a re-export chain), the drive's interface-row index, and
+-- the path and source of every module that declares an interface, since the
+-- import-shadow detector takes an interface's method signature from the first
+-- loaded module declaring an interface of that bare name, imported or not.  `None`
+-- when a module declaring an interface has no source record: nothing is served.
+foldGraphPart : String ->
+  DriveOutputs ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  Option String
+foldGraphPart chainFull outputs mods modPairs =
+  let declarers =
+    filterList
+      ((mid, _, _) =>
+        anyList declaresInterface (lookupDesugaredMod mid modPairs))
+      mods
+  let rows =
+    map
+      ((_, path, _) =>
+        map (src => "\{lenKey path}\{lenKey src}") (loadedSourceOf path))
+      declarers
+  if allList isSome rows then
+    Some
+      (joinNl
+        ([
+            lenKey chainFull,
+            lenKey (intToString (listLen modPairs)),
+            lenKey (ifaceIndexText outputs.doIfaceExports),
+          ]
+          ++ map (optionOr "") rows))
+  else
+    None
+
+declaresInterface : Decl -> Bool
+declaresInterface (DInterface {  }) = True
+declaresInterface (DAttrib _ d) = declaresInterface d
+declaresInterface _ = False
+
+ifaceIndexText : OrdMap (List (String, List String)) -> String
+ifaceIndexText idx =
+  joinNl (map (mid => ifaceRowsText mid (omLookup mid idx)) (omKeys idx))
+
+ifaceRowsText : String -> Option (List (String, List String)) -> String
+ifaceRowsText mid rows =
+  stringConcat
+    (lenKey mid
+      :: map
+        (row => "\{lenKey (fst row)}\{lenKey (joinNl (snd row))}")
+        (optionOr [] rows))
 
 lookupTcDiags : String ->
   List (String, (List TcDiag, List TcDiag)) ->
@@ -3515,10 +3653,10 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDecls" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" false) (mem "coreExports" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
@@ -3530,7 +3668,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "parseCachedLocated" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false) (mem "modIdToPath" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false) (mem "isSome" false) (mem "lenKey" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
@@ -3667,9 +3805,9 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "unkept" (TyFun (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyTuple (TyCon "Unit") (TyCon "TcReport") (TyCon "DriveOutputs"))))
 (DFunDef false "unkept" ((PTuple (PVar "r") (PVar "o"))) (ETuple (ELit LUnit) (EVar "r") (EVar "o")))
 (DTypeSig true "frontEnd" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyFun (TyCon "FrontDriveIn") (TyEffect () (Some "e") (TyTuple (TyVar "a") (TyCon "TcReport") (TyCon "DriveOutputs")))) (TyFun (TyCon "FrontInput") (TyEffect () (Some "e") (TyApp (TyCon "FrontOutput") (TyVar "a")))))))
-(DFunDef false "frontEnd" ((PVar "exportsFor") (PVar "drive") (PVar "fi")) (EMatch (EFieldAccess (EVar "fi") "fiProgram") (arm (PCon "FrontFile" (PTuple (PVar "mid") (PVar "path") (PVar "raw"))) () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "mid")) (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")) (EVar "raw")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EFieldAccess (EVar "fi") "fiAllowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EVar "fi") "fiTrusted")))))) (DoExpr (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "False") () (EApp (EVar "undrivenOutput") (EListLit (ETuple (EVar "path") (EFieldAccess (EVar "s") "surfaceDiags"))))) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EFieldAccess (EVar "s") "surfacePreludeKey")) (fa "fdRuntime" (EFieldAccess (EVar "s") "surfaceRuntimeP")) (fa "fdCore" (EFieldAccess (EVar "s") "surfaceCoreP")) (fa "fdPairs" (EListLit (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (fa "fdMods" (EListLit)))))) (DoLet false false (PVar "tcHalf") (EApp (EVar "tcHalfOfPerModule") (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EListLit (ETuple (EVar "path") (EBinOp "++" (EFieldAccess (EVar "s") "surfaceDiags") (EVar "tcHalf"))))) (EVar "r")) (EVar "outputs")) (EVar "kept"))))))))) (arm (PCon "FrontGraph" (PVar "mods") (PVar "pairs")) () (EBlock (DoLet false false (PVar "rt") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiRuntimeSrc"))) (DoLet false false (PVar "core") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiCoreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")))) (DoLet false false (PVar "driveIn") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EVar "preludeKey")) (fa "fdRuntime" (EVar "rt")) (fa "fdCore" (EVar "core")) (fa "fdPairs" (EVar "pairs")) (fa "fdMods" (EVar "mods"))))) (DoExpr (EMatch (EFieldAccess (EVar "fi") "fiPolicy") (arm (PCon "NeverDriveRejected") () (EBlock (DoLet false false (PVar "resolved") (EApp (EApp (EVar "hintResErrorPairs") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "mods"))) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "pairs")))) (DoExpr (EMatch (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isEmpty") (EApp (EVar "snd") (EVar "p")))))) (EVar "resolved")) (arm (PCon "True") () (EApp (EVar "undrivenOutput") (EApp (EApp (EVar "map") (EVar "resolveBucket")) (EVar "resolved")))) (arm (PCon "False") () (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit)))))))) (arm (PCon "DriveUnblocked" (PVar "chainKey") (PVar "steps")) () (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "rt")) (EVar "core")) (EVar "mods")) (EVar "pairs"))) (DoExpr (EMatch (EApp (EVar "bucketsResolveRejected") (EVar "buckets")) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "outputs") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "steps")) (EFieldAccess (EVar "fi") "fiInputs")) (EVar "rt")) (EVar "core")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "pairs")) (EVar "buckets"))) (DoExpr (ERecordCreate "FrontOutput" ((fa "foDiags" (EVar "results")) (fa "foReport" (EVar "r")) (fa "foOutputs" (EVar "outputs")) (fa "foDriven" (EVar "None"))))))) (arm (PCon "False") () (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "driveIn")) (EVar "buckets"))))))) (arm (PCon "ResolvedByGate") () (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))))))
-(DTypeSig false "drivenGraph" (TyFun (TyFun (TyCon "FrontDriveIn") (TyEffect () (Some "e") (TyTuple (TyVar "a") (TyCon "TcReport") (TyCon "DriveOutputs")))) (TyFun (TyCon "FrontDriveIn") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "FrontOutput") (TyVar "a")))))))
-(DFunDef false "drivenGraph" ((PVar "drive") (PVar "d") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (EVar "d"))) (DoLet false false (PVar "folded") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EFieldAccess (EVar "d") "fdMods")) (EFieldAccess (EVar "d") "fdPairs")) (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EVar "folded")) (EVar "r")) (EVar "outputs")) (EVar "kept")))))
+(DFunDef false "frontEnd" ((PVar "exportsFor") (PVar "drive") (PVar "fi")) (EMatch (EFieldAccess (EVar "fi") "fiProgram") (arm (PCon "FrontFile" (PTuple (PVar "mid") (PVar "path") (PVar "raw"))) () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "mid")) (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")) (EVar "raw")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EFieldAccess (EVar "fi") "fiAllowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EVar "fi") "fiTrusted")))))) (DoExpr (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "False") () (EApp (EVar "undrivenOutput") (EListLit (ETuple (EVar "path") (EFieldAccess (EVar "s") "surfaceDiags"))))) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EFieldAccess (EVar "s") "surfacePreludeKey")) (fa "fdRuntime" (EFieldAccess (EVar "s") "surfaceRuntimeP")) (fa "fdCore" (EFieldAccess (EVar "s") "surfaceCoreP")) (fa "fdPairs" (EListLit (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (fa "fdMods" (EListLit)))))) (DoLet false false (PVar "tcHalf") (EApp (EVar "tcHalfOfPerModule") (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EListLit (ETuple (EVar "path") (EBinOp "++" (EFieldAccess (EVar "s") "surfaceDiags") (EVar "tcHalf"))))) (EVar "r")) (EVar "outputs")) (EVar "kept"))))))))) (arm (PCon "FrontGraph" (PVar "mods") (PVar "pairs")) () (EBlock (DoLet false false (PVar "rt") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiRuntimeSrc"))) (DoLet false false (PVar "core") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiCoreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")))) (DoLet false false (PVar "driveIn") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EVar "preludeKey")) (fa "fdRuntime" (EVar "rt")) (fa "fdCore" (EVar "core")) (fa "fdPairs" (EVar "pairs")) (fa "fdMods" (EVar "mods"))))) (DoExpr (EMatch (EFieldAccess (EVar "fi") "fiPolicy") (arm (PCon "NeverDriveRejected") () (EBlock (DoLet false false (PVar "resolved") (EApp (EApp (EVar "hintResErrorPairs") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "mods"))) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "pairs")))) (DoExpr (EMatch (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isEmpty") (EApp (EVar "snd") (EVar "p")))))) (EVar "resolved")) (arm (PCon "True") () (EApp (EVar "undrivenOutput") (EApp (EApp (EVar "map") (EVar "resolveBucket")) (EVar "resolved")))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit)))))))) (arm (PCon "DriveUnblocked" (PVar "chainKey") (PVar "steps")) () (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "rt")) (EVar "core")) (EVar "mods")) (EVar "pairs"))) (DoExpr (EMatch (EApp (EVar "bucketsResolveRejected") (EVar "buckets")) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "outputs") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "steps")) (EFieldAccess (EVar "fi") "fiInputs")) (EVar "rt")) (EVar "core")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "pairs")) (EVar "buckets"))) (DoExpr (ERecordCreate "FrontOutput" ((fa "foDiags" (EVar "results")) (fa "foReport" (EVar "r")) (fa "foOutputs" (EVar "outputs")) (fa "foDriven" (EVar "None"))))))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EApp (EApp (EApp (EVar "foldServeKey") (EVar "steps")) (EVar "preludeKey")) (EVar "chainKey"))) (EVar "driveIn")) (EVar "buckets"))))))) (arm (PCon "ResolvedByGate") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))))))
+(DTypeSig false "drivenGraph" (TyFun (TyFun (TyCon "FrontDriveIn") (TyEffect () (Some "e") (TyTuple (TyVar "a") (TyCon "TcReport") (TyCon "DriveOutputs")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "FrontDriveIn") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "FrontOutput") (TyVar "a"))))))))
+(DFunDef false "drivenGraph" ((PVar "drive") (PVar "served") (PVar "d") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (EVar "d"))) (DoLet false false (PVar "folded") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EVar "served")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EFieldAccess (EVar "d") "fdMods")) (EFieldAccess (EVar "d") "fdPairs")) (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EVar "folded")) (EVar "r")) (EVar "outputs")) (EVar "kept")))))
 (DTypeSig false "resolveBucket" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "resolveBucket" ((PTuple (PVar "file") (PVar "errs"))) (ETuple (EVar "file") (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EVar "errs"))))
 (DTypeSig false "undrivenOutput" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "FrontOutput") (TyVar "a"))))
@@ -3763,39 +3901,34 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "foldStale" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "foldStale" ((PList) (PVar "buckets")) (EVar "buckets"))
 (DFunDef false "foldStale" ((PCons (PTuple (PVar "path") (PVar "d")) (PVar "rest")) (PVar "buckets")) (EApp (EApp (EVar "foldStale") (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiag") (EVar "path")) (EVar "d")) (EApp (EApp (EVar "seedBucket") (EVar "path")) (EVar "buckets")))))
-(DData Private "ResStep" () ((variant "ResStep" (ConNamed (field "rsKey" (TyCon "String")) (field "rsExports" (TyCon "ModuleExports")) (field "rsDiags" (TyApp (TyCon "List") (TyCon "Diag")))))) ())
-(DData Private "ResMemo" () ((variant "ResMemo" (ConNamed (field "rmKey" (TyCon "String")) (field "rmSteps" (TyApp (TyCon "List") (TyCon "ResStep")))))) ())
-(DTypeSig false "resolveChainMemoRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "ResMemo"))))
-(DFunDef false "resolveChainMemoRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig false "resStepKey" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "resStepKey" ((PVar "allowInternal") (PVar "trustedMods") (PTuple (PVar "mid") (PVar "path") (PVar "prog"))) (EBlock (DoLet false false (PVar "trust") (EIf (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trustedMods"))) (ELit (LString "T")) (ELit (LString "U")))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EApp (EVar "joinNl") (EListLit (EVar "k") (EVar "trust"))))) (EApp (EVar "moduleStepKey") (ETuple (EVar "mid") (EVar "path") (EVar "prog")))))))
-(DTypeSig false "rsKeyOf" (TyFun (TyCon "ResStep") (TyCon "String")))
-(DFunDef false "rsKeyOf" ((PVar "st")) (EFieldAccess (EVar "st") "rsKey"))
-(DTypeSig false "resumeResSteps" (TyFun (TyApp (TyCon "List") (TyCon "ResStep")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "resumeResSteps" ((PList) PWild (PVar "known") (PVar "buckets")) (ETuple (EVar "known") (EVar "buckets")))
-(DFunDef false "resumeResSteps" (PWild (PList) (PVar "known") (PVar "buckets")) (ETuple (EVar "known") (EVar "buckets")))
-(DFunDef false "resumeResSteps" ((PCons (PVar "st") (PVar "sts")) (PCons (PTuple PWild (PVar "path") PWild) (PVar "ms")) (PVar "known") (PVar "buckets")) (EApp (EApp (EApp (EApp (EVar "resumeResSteps") (EVar "sts")) (EVar "ms")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EFieldAccess (EVar "st") "rsExports") "modId")) (EFieldAccess (EVar "st") "rsExports")) (EVar "known"))) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EFieldAccess (EVar "st") "rsDiags")) (EVar "buckets"))))
-(DTypeSig false "resolvePass" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyCon "ResStep")))))))))))))))
-(DFunDef false "resolvePass" (PWild PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "buckets")) (ETuple (EVar "buckets") (EListLit)))
-(DFunDef false "resolvePass" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "preludeKey") (PVar "rt") (PVar "core") (PVar "known") (PVar "keys") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "desugared")) (PVar "rest")) (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "exp") (PVar "errs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModuleG") (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trustedMods"))))) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "known")) (EVar "mid")) (EVar "desugared"))) (DoLet false false (PVar "diags") (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EVar "errs")))) (DoLet false false (PTuple (PVar "key") (PVar "keys2")) (EMatch (EVar "keys") (arm (PCons (PVar "k") (PVar "ks")) () (ETuple (EVar "k") (EVar "ks"))) (arm (PList) () (ETuple (EVar "None") (EListLit))))) (DoLet false false (PTuple (PVar "buckets2") (PVar "steps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EVar "keys2")) (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EVar "diags")) (EVar "buckets")))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (ETuple (EVar "buckets2") (EListLit))) (arm PWild () (EMatch (EVar "key") (arm (PCon "None") () (ETuple (EVar "buckets2") (EListLit))) (arm (PCon "Some" (PVar "k")) () (ETuple (EVar "buckets2") (EBinOp "::" (ERecordCreate "ResStep" ((fa "rsKey" (EVar "k")) (fa "rsExports" (EVar "exp")) (fa "rsDiags" (EVar "diags")))) (EVar "steps"))))))))))
+(DTypeSig false "resolvePass" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
+(DFunDef false "resolvePass" (PWild PWild PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "buckets")) (EVar "buckets"))
+(DFunDef false "resolvePass" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "preludeKey") (PVar "rt") (PVar "core") (PVar "served") (PVar "known") (PVar "ids") (PCons (PAs "m" (PTuple (PVar "mid") (PVar "path") (PVar "desugared"))) (PVar "rest")) (PVar "buckets")) (EBlock (DoLet false false (PVar "trusted") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trustedMods")))) (DoLet false false (PVar "graph") (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EApp (EVar "joinNl") (EListLit (EVar "k") (EApp (EVar "boolKey") (EVar "trusted")) (EApp (EVar "boolKey") (EBinOp "==" (EApp (EVar "omSize") (EVar "known")) (ELit (LInt 0)))))))) (EVar "served"))) (DoLet false false (PTuple (PVar "diags") (PVar "exp") (PVar "ident")) (EApp (EApp (EApp (EApp (EApp (EVar "servedPass") (EVar "ResolveKind")) (EVar "graph")) (EVar "ids")) (EVar "m")) (ELam (PWild) (EBlock (DoLet false false (PTuple (PVar "exp") (PVar "errs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModuleG") (EApp (EVar "internalGuardFor") (EVar "trusted"))) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "known")) (EVar "mid")) (EVar "desugared"))) (DoExpr (ETuple (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EVar "errs"))) (EVar "exp"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "served")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "ident")) (EVar "ids"))) (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EVar "diags")) (EVar "buckets"))))))
+(DTypeSig false "boolKey" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "boolKey" ((PCon "True")) (ELit (LString "T")))
+(DFunDef false "boolKey" ((PCon "False")) (ELit (LString "F")))
 (DTypeSig false "typecheckPassFull" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
 (DFunDef false "typecheckPassFull" ((PVar "inputs") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "r") PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "NoSteps")) (EVar "inputs")) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EVar "buckets"))) (DoExpr (ETuple (EFieldAccess (EVar "r") "trDiagnostics") (EVar "results")))))
 (DTypeSig false "typecheckPassReport" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))
-(DFunDef false "typecheckPassReport" ((PVar "steps") (PVar "inputs") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs") (PVar "buckets")) (EBlock (DoLet false false (PVar "blocked") (EApp (EApp (EApp (EVar "resolveBlockedMods") (EVar "buckets")) (EVar "omEmpty")) (EVar "mods"))) (DoLet false false (PVar "checkedMods") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "mods"))) (DoLet false false (PVar "checkedPairs") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "modPairs"))) (DoLet false false (PVar "rejected") (EApp (EVar "bucketsResolveRejected") (EVar "buckets"))) (DoLet false false (PVar "valueMain") (EBinOp "&&" (EApp (EVar "not") (EVar "rejected")) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreP")) (EVar "modPairs")))) (DoLet false false (PTuple (PVar "driven") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkChainReport") (EVar "steps")) (EVar "inputs")) (EVar "valueMain")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "checkedMods")) (EVar "checkedPairs"))) (DoLet false false (PVar "report") (EIf (EVar "rejected") (ERecordUpdate (EVar "driven") ((fa "trChecked" (EVar "None")))) (EVar "driven"))) (DoExpr (ETuple (EVar "report") (EVar "outputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "report") "trDiagnostics"))) (EVar "buckets"))))))
+(DFunDef false "typecheckPassReport" ((PVar "steps") (PVar "inputs") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs") (PVar "buckets")) (EBlock (DoLet false false (PVar "blocked") (EApp (EApp (EApp (EVar "resolveBlockedMods") (EVar "buckets")) (EVar "omEmpty")) (EVar "mods"))) (DoLet false false (PVar "checkedMods") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "mods"))) (DoLet false false (PVar "checkedPairs") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "modPairs"))) (DoLet false false (PVar "rejected") (EApp (EVar "bucketsResolveRejected") (EVar "buckets"))) (DoLet false false (PVar "valueMain") (EBinOp "&&" (EApp (EVar "not") (EVar "rejected")) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreP")) (EVar "modPairs")))) (DoLet false false (PTuple (PVar "driven") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkChainReport") (EVar "steps")) (EVar "inputs")) (EVar "valueMain")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "checkedMods")) (EVar "checkedPairs"))) (DoLet false false (PVar "report") (EIf (EVar "rejected") (ERecordUpdate (EVar "driven") ((fa "trChecked" (EVar "None")))) (EVar "driven"))) (DoExpr (ETuple (EVar "report") (EVar "outputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EApp (EApp (EApp (EVar "foldServeKey") (EVar "steps")) (EVar "preludeKey")) (EVar "chainKey"))) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "report") "trDiagnostics"))) (EVar "buckets"))))))
 (DTypeSig false "checkChainReport" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "DriveInputs") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs"))))))))))))
 (DFunDef false "checkChainReport" ((PVar "steps") (PVar "inputs") (PVar "valueMain") (PVar "preludeKey") (PVar "chainKey") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "pairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesChainReportFor") (EVar "inputs")) (EVar "valueMain")) (EVar "preludeKey")) (EVar "chainKey")) (EApp (EApp (EVar "stepKeysFor") (EVar "steps")) (EVar "mods"))) (EVar "runtimeP")) (EVar "coreP")) (EVar "pairs")))
 (DTypeSig false "stepKeysFor" (TyFun (TyCon "ChainSteps") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "stepKeysFor" ((PCon "RecordSteps") (PVar "mods")) (EApp (EApp (EVar "map") (EVar "moduleStepKey")) (EVar "mods")))
 (DFunDef false "stepKeysFor" ((PCon "NoSteps") PWild) (EListLit))
-(DTypeSig false "typecheckDiagsFold" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))
-(DFunDef false "typecheckDiagsFold" ((PVar "outputs") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "modPairs") (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PVar "ctorScope") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EApp (EVar "importedCtorDecls") (EVar "coreP")) (EVar "modPairs")) (EApp (EApp (EVar "map") (EVar "rawPairOf")) (EVar "mods")))) (EVar "omEmpty"))) (DoLet false false (PVar "preludeDecls") (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (DoLet false false (PVar "shadowPool") (EApp (EVar "preludeStandaloneSet") (EBinOp "++" (EVar "runtimeP") (EVar "coreP")))) (DoLet false false (PVar "shadowGraph") (EBinOp "::" (ETuple (ELit (LString "core")) (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (EVar "modPairs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "outputs")) (EVar "shadowPool")) (EVar "shadowGraph")) (ETuple (EVar "ctorScope") (EVar "preludeDecls"))) (EVar "modPairs")) (EVar "mods")) (EVar "tcByMid")) (EVar "buckets")))))
+(DTypeSig false "typecheckDiagsFold" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))
+(DFunDef false "typecheckDiagsFold" ((PVar "outputs") (PVar "served") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "modPairs") (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PVar "preludeDecls") (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (DoLet false false (PVar "passes") (ERecordCreate "RawPasses" ((fa "rpCoreExports" (EApp (EVar "coreExports") (EVar "coreP"))) (fa "rpPool" (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "rawPairOf")) (EVar "mods"))) (EVar "omEmpty"))) (fa "rpPrelude" (EVar "preludeDecls")) (fa "rpShadowPool" (EApp (EVar "preludeStandaloneSet") (EVar "preludeDecls"))) (fa "rpShadowGraph" (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "preludeDecls")) (EVar "modPairs"))) (fa "rpOutputs" (EVar "outputs")) (fa "rpModPairs" (EVar "modPairs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "passes")) (EApp (EApp (EApp (EVar "option") (EVar "None")) (ELam ((PVar "k")) (EApp (EApp (EApp (EApp (EVar "foldGraphPart") (EVar "k")) (EVar "outputs")) (EVar "mods")) (EVar "modPairs")))) (EVar "served"))) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "mods")) (EVar "tcByMid")) (EVar "buckets")))))
+(DData Private "RawPasses" () ((variant "RawPasses" (ConNamed (field "rpCoreExports" (TyCon "ModuleExports")) (field "rpPool" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (field "rpPrelude" (TyApp (TyCon "List") (TyCon "Decl"))) (field "rpShadowPool" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "rpShadowGraph" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "rpOutputs" (TyCon "DriveOutputs")) (field "rpModPairs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))) ())
+(DTypeSig false "foldServeKey" (TyFun (TyCon "ChainSteps") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "foldServeKey" ((PCon "RecordSteps") (PCon "Some" (PTuple (PVar "rk") (PVar "ck"))) (PVar "chainKey")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey"))))
+(DFunDef false "foldServeKey" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "resolvedBuckets" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))
-(DFunDef false "resolvedBuckets" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "preludeKey") (PVar "chainKey") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "modPairs")) (EBlock (DoLet false false (PVar "seeded") (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit))) (DoLet false false (PVar "dmods") (EApp (EApp (EVar "desugaredTriples") (EVar "mods")) (EVar "modPairs"))) (DoExpr (EMatch (EVar "preludeKey") (arm (PCon "None") () (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "None")) (EVar "runtimeP")) (EVar "coreP")) (EVar "omEmpty")) (EListLit)) (EVar "dmods")) (EVar "seeded")))) (arm (PCon "Some" (PTuple (PVar "rk") (PVar "ck"))) () (EBlock (DoLet false false (PVar "fullKey") (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey"))) (DoLet false false (PVar "steps") (EMatch (EUnOp "!" (EVar "resolveChainMemoRef")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EFieldAccess (EVar "m") "rmKey") (EVar "fullKey")) (EFieldAccess (EVar "m") "rmSteps") (EListLit))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "stepKeys") (EApp (EApp (EVar "map") (EApp (EApp (EVar "resStepKey") (EVar "allowInternal")) (EVar "trustedMods"))) (EVar "mods"))) (DoLet false false (PTuple (PVar "kept") PWild) (EApp (EApp (EApp (EApp (EVar "matchingStepPrefix") (EVar "rsKeyOf")) (EVar "steps")) (EVar "stepKeys")) (EApp (EVar "listLen") (EVar "mods")))) (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "kept"))) (DoLet false false (PTuple (PVar "known") (PVar "buckets")) (EApp (EApp (EApp (EApp (EVar "resumeResSteps") (EVar "kept")) (EVar "mods")) (EVar "omEmpty")) (EVar "seeded"))) (DoLet false false (PTuple (PVar "finalBuckets") (PVar "newSteps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "known")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "stepKeys"))) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "dmods"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "resolveChainMemoRef")) (EApp (EVar "Some") (ERecordCreate "ResMemo" ((fa "rmKey" (EVar "fullKey")) (fa "rmSteps" (EBinOp "++" (EVar "kept") (EVar "newSteps")))))))) (DoExpr (EVar "finalBuckets"))))))))
+(DFunDef false "resolvedBuckets" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "preludeKey") (PVar "chainKey") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "rk") (PVar "ck"))) (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey")))) (EVar "preludeKey"))) (EVar "omEmpty")) (EVar "omEmpty")) (EApp (EApp (EVar "desugaredTriples") (EVar "mods")) (EVar "modPairs"))) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))
 (DTypeSig false "desugaredTriples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "desugaredTriples" ((PCons (PTuple (PVar "mid") (PVar "path") PWild) (PVar "ms")) (PCons (PTuple PWild (PVar "decls")) (PVar "ps"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "path") (EVar "decls")) (EApp (EApp (EVar "desugaredTriples") (EVar "ms")) (EVar "ps"))))
 (DFunDef false "desugaredTriples" (PWild PWild) (EListLit))
 (DTypeSig true "projectDiagsFromTc" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
-(DFunDef false "projectDiagsFromTc" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "outputs") (PVar "tcByMid")) (EBlock (DoLet false false (PVar "modPairs") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EVar "tcByMid")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "None")) (ELit (LString ""))) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))))
+(DFunDef false "projectDiagsFromTc" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "outputs") (PVar "tcByMid")) (EBlock (DoLet false false (PVar "modPairs") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EVar "None")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EVar "tcByMid")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "None")) (ELit (LString ""))) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))))
 (DTypeSig true "desugaredModPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "desugaredModPairs" ((PVar "mods")) (EApp (EVar "desugarGraph") (EVar "mods")))
 (DTypeSig false "rawPairOf" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -3829,9 +3962,50 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "lookupDesugaredMod" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "lookupDesugaredMod" (PWild (PList)) (EListLit))
 (DFunDef false "lookupDesugaredMod" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "mid")) (EVar "d") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "foldModuleTc" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))
-(DFunDef false "foldModuleTc" (PWild PWild PWild PWild PWild (PList) PWild (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "foldModuleTc" ((PVar "outputs") (PVar "shadowPool") (PVar "shadowGraph") (PVar "oracle") (PVar "modPairs") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "tcReported") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "existing")) () (EApp (EVar "not") (EApp (EVar "resolveRejected") (EVar "existing")))) (arm (PCon "None") () (EVar "True")))) (DoLet false false (PVar "errDiags") (EIf (EVar "tcReported") (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EListLit))) (DoLet false false (PVar "warnDiags") (EIf (EVar "tcReported") (EApp (EApp (EVar "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")) (EListLit))) (DoLet false false (PTuple (PVar "ctorScope") (PVar "preludeDecls")) (EVar "oracle")) (DoLet false false (PVar "imported") (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "ctorScope")) (arm (PCon "Some" (PVar "ds")) () (EVar "ds")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EVar "imported") (EVar "preludeDecls"))) (EVar "prog"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog")))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "shadowPool")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "importShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EApp (EVar "importedStandaloneShadows") (EVar "outputs")) (EVar "shadowGraph")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "buckets2") (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "errDiags")) (EVar "warnDiags"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "outputs")) (EVar "shadowPool")) (EVar "shadowGraph")) (EVar "oracle")) (EVar "modPairs")) (EVar "rest")) (EVar "tcByMid")) (EVar "buckets2")))))
+(DTypeSig false "foldModuleTc" (TyFun (TyCon "RawPasses") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))
+(DFunDef false "foldModuleTc" (PWild PWild PWild PWild (PList) PWild (PVar "buckets")) (EVar "buckets"))
+(DFunDef false "foldModuleTc" ((PVar "passes") (PVar "graph") (PVar "known") (PVar "ids") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "rawDiags") (PVar "exp") (PVar "ident")) (EApp (EApp (EApp (EApp (EApp (EVar "servedPass") (EVar "FoldKind")) (EVar "graph")) (EVar "ids")) (ETuple (EVar "mid") (EVar "path") (EVar "prog"))) (ELam (PWild) (EApp (EApp (EApp (EVar "rawTreeDiags") (EVar "passes")) (EVar "known")) (ETuple (EVar "mid") (EVar "path") (EVar "prog")))))) (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "tcReported") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "existing")) () (EApp (EVar "not") (EApp (EVar "resolveRejected") (EVar "existing")))) (arm (PCon "None") () (EVar "True")))) (DoLet false false (PVar "errDiags") (EIf (EVar "tcReported") (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EListLit))) (DoLet false false (PVar "warnDiags") (EIf (EVar "tcReported") (EApp (EApp (EVar "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "passes")) (EVar "graph")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "ident")) (EVar "ids"))) (EVar "rest")) (EVar "tcByMid")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EVar "rawDiags") (EVar "errDiags")) (EVar "warnDiags"))) (EVar "buckets"))))))
+(DTypeSig false "rawTreeDiags" (TyFun (TyCon "RawPasses") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "ModuleExports"))))))
+(DFunDef false "rawTreeDiags" ((PVar "passes") (PVar "known") (PTuple (PVar "mid") PWild (PVar "prog"))) (EBlock (DoLet false false (PVar "desugared") (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EFieldAccess (EVar "passes") "rpModPairs"))) (DoLet false false (PTuple (PVar "imported") (PVar "exp")) (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsStep") (EFieldAccess (EVar "passes") "rpCoreExports")) (EFieldAccess (EVar "passes") "rpPool")) (EVar "known")) (ETuple (EVar "mid") (EVar "desugared")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EVar "imported") (EFieldAccess (EVar "passes") "rpPrelude"))) (EVar "prog"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EFieldAccess (EVar "passes") "rpShadowPool")) (EVar "desugared")))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "importShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EApp (EVar "importedStandaloneShadows") (EFieldAccess (EVar "passes") "rpOutputs")) (EFieldAccess (EVar "passes") "rpShadowGraph")) (EVar "desugared")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog"))) (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "exp")))))
+(DData Private "PassKey" () ((variant "PassKey" (ConNamed (field "pkGraph" (TyCon "String")) (field "pkPath" (TyCon "String")) (field "pkSource" (TyCon "String")) (field "pkImports" (TyApp (TyCon "List") (TyCon "Int")))))) ())
+(DImpl true "Eq" ((TyCon "PassKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "PassKey" ((rf "pkGraph" (PVar "__a0")) (rf "pkPath" (PVar "__a1")) (rf "pkSource" (PVar "__a2")) (rf "pkImports" (PVar "__a3"))) false) (PRec "PassKey" ((rf "pkGraph" (PVar "__b0")) (rf "pkPath" (PVar "__b1")) (rf "pkSource" (PVar "__b2")) (rf "pkImports" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))))))))
+(DData Private "PassEntry" () ((variant "PassEntry" (ConNamed (field "peKey" (TyCon "PassKey")) (field "peIdentity" (TyCon "Int")) (field "peDiags" (TyApp (TyCon "List") (TyCon "Diag"))) (field "peExports" (TyCon "ModuleExports"))))) ())
+(DData Private "PassCaches" () ((variant "PassCaches" (ConNamed (field "pcResolve" (TyApp (TyCon "OrdMap") (TyCon "PassEntry"))) (field "pcFold" (TyApp (TyCon "OrdMap") (TyCon "PassEntry"))) (field "pcSerial" (TyCon "Int"))))) ())
+(DTypeSig false "passCacheRef" (TyApp (TyCon "Ref") (TyCon "PassCaches")))
+(DFunDef false "passCacheRef" () (EApp (EVar "Ref") (EApp (EVar "emptyPassCaches") (ELit LUnit))))
+(DTypeSig false "emptyPassCaches" (TyFun (TyCon "Unit") (TyCon "PassCaches")))
+(DFunDef false "emptyPassCaches" (PWild) (ERecordCreate "PassCaches" ((fa "pcResolve" (EVar "omEmpty")) (fa "pcFold" (EVar "omEmpty")) (fa "pcSerial" (ELit (LInt 0))))))
+(DData Private "PassKind" () ((variant "ResolveKind" (ConPos)) (variant "FoldKind" (ConPos))) ())
+(DTypeSig false "passEntries" (TyFun (TyCon "PassKind") (TyFun (TyCon "PassCaches") (TyApp (TyCon "OrdMap") (TyCon "PassEntry")))))
+(DFunDef false "passEntries" ((PCon "ResolveKind") (PVar "c")) (EFieldAccess (EVar "c") "pcResolve"))
+(DFunDef false "passEntries" ((PCon "FoldKind") (PVar "c")) (EFieldAccess (EVar "c") "pcFold"))
+(DTypeSig false "keepPassEntry" (TyFun (TyCon "PassKind") (TyFun (TyCon "String") (TyFun (TyCon "PassEntry") (TyCon "Unit")))))
+(DFunDef false "keepPassEntry" ((PVar "kind") (PVar "mid") (PVar "entry")) (EBlock (DoLet false false (PVar "c") (EFieldAccess (EVar "passCacheRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "passCacheRef")) (EMatch (EVar "kind") (arm (PCon "ResolveKind") () (ERecordUpdate (EVar "c") ((fa "pcResolve" (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "entry")) (EFieldAccess (EVar "c") "pcResolve")))))) (arm (PCon "FoldKind") () (ERecordUpdate (EVar "c") ((fa "pcFold" (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "entry")) (EFieldAccess (EVar "c") "pcFold")))))))))))
+(DTypeSig false "freshPassIdentity" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "freshPassIdentity" (PWild) (EBlock (DoLet false false (PVar "c") (EFieldAccess (EVar "passCacheRef") "value")) (DoLet false false (PVar "next") (EBinOp "+" (EFieldAccess (EVar "c") "pcSerial") (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "passCacheRef")) (ERecordUpdate (EVar "c") ((fa "pcSerial" (EVar "next")))))) (DoExpr (EVar "next"))))
+(DTypeSig true "foldCachedIdentity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "foldCachedIdentity" ((PVar "mid")) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (EFieldAccess (EVar "e") "peIdentity"))) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EFieldAccess (EVar "passCacheRef") "value") "pcFold"))))
+(DTypeSig true "resolveCachedIdentity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "resolveCachedIdentity" ((PVar "mid")) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (EFieldAccess (EVar "e") "peIdentity"))) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EFieldAccess (EVar "passCacheRef") "value") "pcResolve"))))
+(DTypeSig false "importIdsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "importIdsOf" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "importIdsOfDecl")) (EVar "prog")))
+(DTypeSig false "importIdsOfDecl" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "importIdsOfDecl" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "importModId") (EVar "path"))))
+(DFunDef false "importIdsOfDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "importIdsOfDecl") (EVar "d")))
+(DFunDef false "importIdsOfDecl" (PWild) (EListLit))
+(DTypeSig false "servedPass" (TyFun (TyCon "PassKind") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "ModuleExports")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "ModuleExports") (TyCon "Int")))))))))
+(DFunDef false "servedPass" (PWild (PCon "None") PWild PWild (PVar "compute")) (EBlock (DoLet false false (PTuple (PVar "diags") (PVar "exp")) (EApp (EVar "compute") (ELit LUnit))) (DoExpr (ETuple (EVar "diags") (EVar "exp") (ELit (LInt 0))))))
+(DFunDef false "servedPass" ((PVar "kind") (PCon "Some" (PVar "g")) (PVar "ids") (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "compute")) (EMatch (EApp (EVar "loadedSourceOf") (EVar "path")) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "diags") (PVar "exp")) (EApp (EVar "compute") (ELit LUnit))) (DoExpr (ETuple (EVar "diags") (EVar "exp") (EApp (EVar "freshPassIdentity") (ELit LUnit)))))) (arm (PCon "Some" (PVar "src")) () (EBlock (DoLet false false (PVar "key") (ERecordCreate "PassKey" ((fa "pkGraph" (EVar "g")) (fa "pkPath" (EVar "path")) (fa "pkSource" (EVar "src")) (fa "pkImports" (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "i")) (EVar "ids"))))) (EApp (EVar "importIdsOf") (EVar "prog"))))))) (DoLet false false (PVar "hit") (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EApp (EApp (EVar "passEntries") (EVar "kind")) (EFieldAccess (EVar "passCacheRef") "value"))) (arm (PCon "Some" (PVar "e")) () (EIf (EBinOp "==" (EFieldAccess (EVar "e") "peKey") (EVar "key")) (EApp (EVar "Some") (EVar "e")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (DoExpr (EMatch (EVar "hit") (arm (PCon "Some" (PVar "e")) () (ETuple (EFieldAccess (EVar "e") "peDiags") (EFieldAccess (EVar "e") "peExports") (EFieldAccess (EVar "e") "peIdentity"))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "diags") (PVar "exp")) (EApp (EVar "compute") (ELit LUnit))) (DoLet false false (PVar "ident") (EApp (EVar "freshPassIdentity") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "keepPassEntry") (EVar "kind")) (EVar "mid")) (ERecordCreate "PassEntry" ((fa "peKey" (EVar "key")) (fa "peIdentity" (EVar "ident")) (fa "peDiags" (EVar "diags")) (fa "peExports" (EVar "exp")))))) (DoExpr (ETuple (EVar "diags") (EVar "exp") (EVar "ident")))))))))))
+(DTypeSig false "foldGraphPart" (TyFun (TyCon "String") (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "foldGraphPart" ((PVar "chainFull") (PVar "outputs") (PVar "mods") (PVar "modPairs")) (EBlock (DoLet false false (PVar "declarers") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild PWild)) (EApp (EApp (EVar "anyList") (EVar "declaresInterface")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (EVar "mods"))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "path") PWild)) (EApp (EApp (EVar "map") (ELam ((PVar "src")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "path")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "src")))) (ELit (LString ""))))) (EApp (EVar "loadedSourceOf") (EVar "path"))))) (EVar "declarers"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isSome")) (EVar "rows")) (EApp (EVar "Some") (EApp (EVar "joinNl") (EBinOp "++" (EListLit (EApp (EVar "lenKey") (EVar "chainFull")) (EApp (EVar "lenKey") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "modPairs")))) (EApp (EVar "lenKey") (EApp (EVar "ifaceIndexText") (EFieldAccess (EVar "outputs") "doIfaceExports")))) (EApp (EApp (EVar "map") (EApp (EVar "optionOr") (ELit (LString "")))) (EVar "rows"))))) (EVar "None")))))
+(DTypeSig false "declaresInterface" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "declaresInterface" ((PRec "DInterface" () false)) (EVar "True"))
+(DFunDef false "declaresInterface" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declaresInterface") (EVar "d")))
+(DFunDef false "declaresInterface" (PWild) (EVar "False"))
+(DTypeSig false "ifaceIndexText" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyCon "String")))
+(DFunDef false "ifaceIndexText" ((PVar "idx")) (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (ELam ((PVar "mid")) (EApp (EApp (EVar "ifaceRowsText") (EVar "mid")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "idx"))))) (EApp (EVar "omKeys") (EVar "idx")))))
+(DTypeSig false "ifaceRowsText" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyCon "String"))))
+(DFunDef false "ifaceRowsText" ((PVar "mid") (PVar "rows")) (EApp (EVar "stringConcat") (EBinOp "::" (EApp (EVar "lenKey") (EVar "mid")) (EApp (EApp (EVar "map") (ELam ((PVar "row")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "lenKey") (EApp (EVar "fst") (EVar "row"))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "lenKey") (EApp (EVar "joinNl") (EApp (EVar "snd") (EVar "row")))))) (ELit (LString ""))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "rows"))))))
 (DTypeSig false "lookupTcDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "lookupTcDiags" (PWild (PList)) (ETuple (EListLit) (EListLit)))
 (DFunDef false "lookupTcDiags" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "mid")) (EVar "d") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -3995,10 +4169,10 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDecls" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" false) (mem "coreExports" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
@@ -4010,7 +4184,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "parseCachedLocated" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false) (mem "modIdToPath" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false) (mem "isSome" false) (mem "lenKey" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
@@ -4147,9 +4321,9 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "unkept" (TyFun (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyTuple (TyCon "Unit") (TyCon "TcReport") (TyCon "DriveOutputs"))))
 (DFunDef false "unkept" ((PTuple (PVar "r") (PVar "o"))) (ETuple (ELit LUnit) (EVar "r") (EVar "o")))
 (DTypeSig true "frontEnd" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyFun (TyCon "FrontDriveIn") (TyEffect () (Some "e") (TyTuple (TyVar "a") (TyCon "TcReport") (TyCon "DriveOutputs")))) (TyFun (TyCon "FrontInput") (TyEffect () (Some "e") (TyApp (TyCon "FrontOutput") (TyVar "a")))))))
-(DFunDef false "frontEnd" ((PVar "exportsFor") (PVar "drive") (PVar "fi")) (EMatch (EFieldAccess (EVar "fi") "fiProgram") (arm (PCon "FrontFile" (PTuple (PVar "mid") (PVar "path") (PVar "raw"))) () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "mid")) (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")) (EVar "raw")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EFieldAccess (EVar "fi") "fiAllowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EVar "fi") "fiTrusted")))))) (DoExpr (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "False") () (EApp (EVar "undrivenOutput") (EListLit (ETuple (EVar "path") (EFieldAccess (EVar "s") "surfaceDiags"))))) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EFieldAccess (EVar "s") "surfacePreludeKey")) (fa "fdRuntime" (EFieldAccess (EVar "s") "surfaceRuntimeP")) (fa "fdCore" (EFieldAccess (EVar "s") "surfaceCoreP")) (fa "fdPairs" (EListLit (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (fa "fdMods" (EListLit)))))) (DoLet false false (PVar "tcHalf") (EApp (EVar "tcHalfOfPerModule") (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EListLit (ETuple (EVar "path") (EBinOp "++" (EFieldAccess (EVar "s") "surfaceDiags") (EVar "tcHalf"))))) (EVar "r")) (EVar "outputs")) (EVar "kept"))))))))) (arm (PCon "FrontGraph" (PVar "mods") (PVar "pairs")) () (EBlock (DoLet false false (PVar "rt") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiRuntimeSrc"))) (DoLet false false (PVar "core") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiCoreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")))) (DoLet false false (PVar "driveIn") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EVar "preludeKey")) (fa "fdRuntime" (EVar "rt")) (fa "fdCore" (EVar "core")) (fa "fdPairs" (EVar "pairs")) (fa "fdMods" (EVar "mods"))))) (DoExpr (EMatch (EFieldAccess (EVar "fi") "fiPolicy") (arm (PCon "NeverDriveRejected") () (EBlock (DoLet false false (PVar "resolved") (EApp (EApp (EVar "hintResErrorPairs") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "mods"))) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "pairs")))) (DoExpr (EMatch (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EApp (EVar "snd") (EVar "p")))))) (EVar "resolved")) (arm (PCon "True") () (EApp (EVar "undrivenOutput") (EApp (EApp (EMethodRef "map") (EVar "resolveBucket")) (EVar "resolved")))) (arm (PCon "False") () (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit)))))))) (arm (PCon "DriveUnblocked" (PVar "chainKey") (PVar "steps")) () (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "rt")) (EVar "core")) (EVar "mods")) (EVar "pairs"))) (DoExpr (EMatch (EApp (EVar "bucketsResolveRejected") (EVar "buckets")) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "outputs") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "steps")) (EFieldAccess (EVar "fi") "fiInputs")) (EVar "rt")) (EVar "core")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "pairs")) (EVar "buckets"))) (DoExpr (ERecordCreate "FrontOutput" ((fa "foDiags" (EVar "results")) (fa "foReport" (EVar "r")) (fa "foOutputs" (EVar "outputs")) (fa "foDriven" (EVar "None"))))))) (arm (PCon "False") () (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "driveIn")) (EVar "buckets"))))))) (arm (PCon "ResolvedByGate") () (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))))))
-(DTypeSig false "drivenGraph" (TyFun (TyFun (TyCon "FrontDriveIn") (TyEffect () (Some "e") (TyTuple (TyVar "a") (TyCon "TcReport") (TyCon "DriveOutputs")))) (TyFun (TyCon "FrontDriveIn") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "FrontOutput") (TyVar "a")))))))
-(DFunDef false "drivenGraph" ((PVar "drive") (PVar "d") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (EVar "d"))) (DoLet false false (PVar "folded") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EFieldAccess (EVar "d") "fdMods")) (EFieldAccess (EVar "d") "fdPairs")) (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EVar "folded")) (EVar "r")) (EVar "outputs")) (EVar "kept")))))
+(DFunDef false "frontEnd" ((PVar "exportsFor") (PVar "drive") (PVar "fi")) (EMatch (EFieldAccess (EVar "fi") "fiProgram") (arm (PCon "FrontFile" (PTuple (PVar "mid") (PVar "path") (PVar "raw"))) () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "mid")) (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")) (EVar "raw")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EFieldAccess (EVar "fi") "fiAllowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EVar "fi") "fiTrusted")))))) (DoExpr (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "False") () (EApp (EVar "undrivenOutput") (EListLit (ETuple (EVar "path") (EFieldAccess (EVar "s") "surfaceDiags"))))) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EFieldAccess (EVar "s") "surfacePreludeKey")) (fa "fdRuntime" (EFieldAccess (EVar "s") "surfaceRuntimeP")) (fa "fdCore" (EFieldAccess (EVar "s") "surfaceCoreP")) (fa "fdPairs" (EListLit (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (fa "fdMods" (EListLit)))))) (DoLet false false (PVar "tcHalf") (EApp (EVar "tcHalfOfPerModule") (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EListLit (ETuple (EVar "path") (EBinOp "++" (EFieldAccess (EVar "s") "surfaceDiags") (EVar "tcHalf"))))) (EVar "r")) (EVar "outputs")) (EVar "kept"))))))))) (arm (PCon "FrontGraph" (PVar "mods") (PVar "pairs")) () (EBlock (DoLet false false (PVar "rt") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiRuntimeSrc"))) (DoLet false false (PVar "core") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiCoreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")))) (DoLet false false (PVar "driveIn") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EVar "preludeKey")) (fa "fdRuntime" (EVar "rt")) (fa "fdCore" (EVar "core")) (fa "fdPairs" (EVar "pairs")) (fa "fdMods" (EVar "mods"))))) (DoExpr (EMatch (EFieldAccess (EVar "fi") "fiPolicy") (arm (PCon "NeverDriveRejected") () (EBlock (DoLet false false (PVar "resolved") (EApp (EApp (EVar "hintResErrorPairs") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "mods"))) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "pairs")))) (DoExpr (EMatch (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EApp (EVar "snd") (EVar "p")))))) (EVar "resolved")) (arm (PCon "True") () (EApp (EVar "undrivenOutput") (EApp (EApp (EMethodRef "map") (EVar "resolveBucket")) (EVar "resolved")))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit)))))))) (arm (PCon "DriveUnblocked" (PVar "chainKey") (PVar "steps")) () (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "rt")) (EVar "core")) (EVar "mods")) (EVar "pairs"))) (DoExpr (EMatch (EApp (EVar "bucketsResolveRejected") (EVar "buckets")) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "outputs") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "steps")) (EFieldAccess (EVar "fi") "fiInputs")) (EVar "rt")) (EVar "core")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "pairs")) (EVar "buckets"))) (DoExpr (ERecordCreate "FrontOutput" ((fa "foDiags" (EVar "results")) (fa "foReport" (EVar "r")) (fa "foOutputs" (EVar "outputs")) (fa "foDriven" (EVar "None"))))))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EApp (EApp (EApp (EVar "foldServeKey") (EVar "steps")) (EVar "preludeKey")) (EVar "chainKey"))) (EVar "driveIn")) (EVar "buckets"))))))) (arm (PCon "ResolvedByGate") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))))))
+(DTypeSig false "drivenGraph" (TyFun (TyFun (TyCon "FrontDriveIn") (TyEffect () (Some "e") (TyTuple (TyVar "a") (TyCon "TcReport") (TyCon "DriveOutputs")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "FrontDriveIn") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "FrontOutput") (TyVar "a"))))))))
+(DFunDef false "drivenGraph" ((PVar "drive") (PVar "served") (PVar "d") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (EVar "d"))) (DoLet false false (PVar "folded") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EVar "served")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EFieldAccess (EVar "d") "fdMods")) (EFieldAccess (EVar "d") "fdPairs")) (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EVar "folded")) (EVar "r")) (EVar "outputs")) (EVar "kept")))))
 (DTypeSig false "resolveBucket" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "resolveBucket" ((PTuple (PVar "file") (PVar "errs"))) (ETuple (EVar "file") (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EVar "errs"))))
 (DTypeSig false "undrivenOutput" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "FrontOutput") (TyVar "a"))))
@@ -4243,39 +4417,34 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "foldStale" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "foldStale" ((PList) (PVar "buckets")) (EVar "buckets"))
 (DFunDef false "foldStale" ((PCons (PTuple (PVar "path") (PVar "d")) (PVar "rest")) (PVar "buckets")) (EApp (EApp (EVar "foldStale") (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiag") (EVar "path")) (EVar "d")) (EApp (EApp (EVar "seedBucket") (EVar "path")) (EVar "buckets")))))
-(DData Private "ResStep" () ((variant "ResStep" (ConNamed (field "rsKey" (TyCon "String")) (field "rsExports" (TyCon "ModuleExports")) (field "rsDiags" (TyApp (TyCon "List") (TyCon "Diag")))))) ())
-(DData Private "ResMemo" () ((variant "ResMemo" (ConNamed (field "rmKey" (TyCon "String")) (field "rmSteps" (TyApp (TyCon "List") (TyCon "ResStep")))))) ())
-(DTypeSig false "resolveChainMemoRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "ResMemo"))))
-(DFunDef false "resolveChainMemoRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig false "resStepKey" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "resStepKey" ((PVar "allowInternal") (PVar "trustedMods") (PTuple (PVar "mid") (PVar "path") (PVar "prog"))) (EBlock (DoLet false false (PVar "trust") (EIf (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trustedMods"))) (ELit (LString "T")) (ELit (LString "U")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EApp (EVar "joinNl") (EListLit (EVar "k") (EVar "trust"))))) (EApp (EVar "moduleStepKey") (ETuple (EVar "mid") (EVar "path") (EVar "prog")))))))
-(DTypeSig false "rsKeyOf" (TyFun (TyCon "ResStep") (TyCon "String")))
-(DFunDef false "rsKeyOf" ((PVar "st")) (EFieldAccess (EVar "st") "rsKey"))
-(DTypeSig false "resumeResSteps" (TyFun (TyApp (TyCon "List") (TyCon "ResStep")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "resumeResSteps" ((PList) PWild (PVar "known") (PVar "buckets")) (ETuple (EVar "known") (EVar "buckets")))
-(DFunDef false "resumeResSteps" (PWild (PList) (PVar "known") (PVar "buckets")) (ETuple (EVar "known") (EVar "buckets")))
-(DFunDef false "resumeResSteps" ((PCons (PVar "st") (PVar "sts")) (PCons (PTuple PWild (PVar "path") PWild) (PVar "ms")) (PVar "known") (PVar "buckets")) (EApp (EApp (EApp (EApp (EVar "resumeResSteps") (EVar "sts")) (EVar "ms")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EFieldAccess (EVar "st") "rsExports") "modId")) (EFieldAccess (EVar "st") "rsExports")) (EVar "known"))) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EFieldAccess (EVar "st") "rsDiags")) (EVar "buckets"))))
-(DTypeSig false "resolvePass" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyCon "ResStep")))))))))))))))
-(DFunDef false "resolvePass" (PWild PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "buckets")) (ETuple (EVar "buckets") (EListLit)))
-(DFunDef false "resolvePass" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "preludeKey") (PVar "rt") (PVar "core") (PVar "known") (PVar "keys") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "desugared")) (PVar "rest")) (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "exp") (PVar "errs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModuleG") (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trustedMods"))))) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "known")) (EVar "mid")) (EVar "desugared"))) (DoLet false false (PVar "diags") (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EVar "errs")))) (DoLet false false (PTuple (PVar "key") (PVar "keys2")) (EMatch (EVar "keys") (arm (PCons (PVar "k") (PVar "ks")) () (ETuple (EVar "k") (EVar "ks"))) (arm (PList) () (ETuple (EVar "None") (EListLit))))) (DoLet false false (PTuple (PVar "buckets2") (PVar "steps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EVar "keys2")) (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EVar "diags")) (EVar "buckets")))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (ETuple (EVar "buckets2") (EListLit))) (arm PWild () (EMatch (EVar "key") (arm (PCon "None") () (ETuple (EVar "buckets2") (EListLit))) (arm (PCon "Some" (PVar "k")) () (ETuple (EVar "buckets2") (EBinOp "::" (ERecordCreate "ResStep" ((fa "rsKey" (EVar "k")) (fa "rsExports" (EVar "exp")) (fa "rsDiags" (EVar "diags")))) (EVar "steps"))))))))))
+(DTypeSig false "resolvePass" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
+(DFunDef false "resolvePass" (PWild PWild PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "buckets")) (EVar "buckets"))
+(DFunDef false "resolvePass" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "preludeKey") (PVar "rt") (PVar "core") (PVar "served") (PVar "known") (PVar "ids") (PCons (PAs "m" (PTuple (PVar "mid") (PVar "path") (PVar "desugared"))) (PVar "rest")) (PVar "buckets")) (EBlock (DoLet false false (PVar "trusted") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trustedMods")))) (DoLet false false (PVar "graph") (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EApp (EVar "joinNl") (EListLit (EVar "k") (EApp (EVar "boolKey") (EVar "trusted")) (EApp (EVar "boolKey") (EBinOp "==" (EApp (EVar "omSize") (EVar "known")) (ELit (LInt 0)))))))) (EVar "served"))) (DoLet false false (PTuple (PVar "diags") (PVar "exp") (PVar "ident")) (EApp (EApp (EApp (EApp (EApp (EVar "servedPass") (EVar "ResolveKind")) (EVar "graph")) (EVar "ids")) (EVar "m")) (ELam (PWild) (EBlock (DoLet false false (PTuple (PVar "exp") (PVar "errs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModuleG") (EApp (EVar "internalGuardFor") (EVar "trusted"))) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "known")) (EVar "mid")) (EVar "desugared"))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EVar "errs"))) (EVar "exp"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "served")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "ident")) (EVar "ids"))) (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EVar "diags")) (EVar "buckets"))))))
+(DTypeSig false "boolKey" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "boolKey" ((PCon "True")) (ELit (LString "T")))
+(DFunDef false "boolKey" ((PCon "False")) (ELit (LString "F")))
 (DTypeSig false "typecheckPassFull" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
 (DFunDef false "typecheckPassFull" ((PVar "inputs") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "r") PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "NoSteps")) (EVar "inputs")) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EVar "buckets"))) (DoExpr (ETuple (EFieldAccess (EVar "r") "trDiagnostics") (EVar "results")))))
 (DTypeSig false "typecheckPassReport" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))
-(DFunDef false "typecheckPassReport" ((PVar "steps") (PVar "inputs") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs") (PVar "buckets")) (EBlock (DoLet false false (PVar "blocked") (EApp (EApp (EApp (EVar "resolveBlockedMods") (EVar "buckets")) (EVar "omEmpty")) (EVar "mods"))) (DoLet false false (PVar "checkedMods") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "mods"))) (DoLet false false (PVar "checkedPairs") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "modPairs"))) (DoLet false false (PVar "rejected") (EApp (EVar "bucketsResolveRejected") (EVar "buckets"))) (DoLet false false (PVar "valueMain") (EBinOp "&&" (EApp (EVar "not") (EVar "rejected")) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreP")) (EVar "modPairs")))) (DoLet false false (PTuple (PVar "driven") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkChainReport") (EVar "steps")) (EVar "inputs")) (EVar "valueMain")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "checkedMods")) (EVar "checkedPairs"))) (DoLet false false (PVar "report") (EIf (EVar "rejected") (ERecordUpdate (EVar "driven") ((fa "trChecked" (EVar "None")))) (EVar "driven"))) (DoExpr (ETuple (EVar "report") (EVar "outputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "report") "trDiagnostics"))) (EVar "buckets"))))))
+(DFunDef false "typecheckPassReport" ((PVar "steps") (PVar "inputs") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs") (PVar "buckets")) (EBlock (DoLet false false (PVar "blocked") (EApp (EApp (EApp (EVar "resolveBlockedMods") (EVar "buckets")) (EVar "omEmpty")) (EVar "mods"))) (DoLet false false (PVar "checkedMods") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "mods"))) (DoLet false false (PVar "checkedPairs") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "modPairs"))) (DoLet false false (PVar "rejected") (EApp (EVar "bucketsResolveRejected") (EVar "buckets"))) (DoLet false false (PVar "valueMain") (EBinOp "&&" (EApp (EVar "not") (EVar "rejected")) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreP")) (EVar "modPairs")))) (DoLet false false (PTuple (PVar "driven") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkChainReport") (EVar "steps")) (EVar "inputs")) (EVar "valueMain")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "checkedMods")) (EVar "checkedPairs"))) (DoLet false false (PVar "report") (EIf (EVar "rejected") (ERecordUpdate (EVar "driven") ((fa "trChecked" (EVar "None")))) (EVar "driven"))) (DoExpr (ETuple (EVar "report") (EVar "outputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EApp (EApp (EApp (EVar "foldServeKey") (EVar "steps")) (EVar "preludeKey")) (EVar "chainKey"))) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "report") "trDiagnostics"))) (EVar "buckets"))))))
 (DTypeSig false "checkChainReport" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "DriveInputs") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs"))))))))))))
 (DFunDef false "checkChainReport" ((PVar "steps") (PVar "inputs") (PVar "valueMain") (PVar "preludeKey") (PVar "chainKey") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "pairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesChainReportFor") (EVar "inputs")) (EVar "valueMain")) (EVar "preludeKey")) (EVar "chainKey")) (EApp (EApp (EVar "stepKeysFor") (EVar "steps")) (EVar "mods"))) (EVar "runtimeP")) (EVar "coreP")) (EVar "pairs")))
 (DTypeSig false "stepKeysFor" (TyFun (TyCon "ChainSteps") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "stepKeysFor" ((PCon "RecordSteps") (PVar "mods")) (EApp (EApp (EMethodRef "map") (EVar "moduleStepKey")) (EVar "mods")))
 (DFunDef false "stepKeysFor" ((PCon "NoSteps") PWild) (EListLit))
-(DTypeSig false "typecheckDiagsFold" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))
-(DFunDef false "typecheckDiagsFold" ((PVar "outputs") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "modPairs") (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PVar "ctorScope") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EApp (EVar "importedCtorDecls") (EVar "coreP")) (EVar "modPairs")) (EApp (EApp (EMethodRef "map") (EVar "rawPairOf")) (EVar "mods")))) (EVar "omEmpty"))) (DoLet false false (PVar "preludeDecls") (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (DoLet false false (PVar "shadowPool") (EApp (EVar "preludeStandaloneSet") (EBinOp "++" (EVar "runtimeP") (EVar "coreP")))) (DoLet false false (PVar "shadowGraph") (EBinOp "::" (ETuple (ELit (LString "core")) (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (EVar "modPairs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "outputs")) (EVar "shadowPool")) (EVar "shadowGraph")) (ETuple (EVar "ctorScope") (EVar "preludeDecls"))) (EVar "modPairs")) (EVar "mods")) (EVar "tcByMid")) (EVar "buckets")))))
+(DTypeSig false "typecheckDiagsFold" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))
+(DFunDef false "typecheckDiagsFold" ((PVar "outputs") (PVar "served") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "modPairs") (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PVar "preludeDecls") (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (DoLet false false (PVar "passes") (ERecordCreate "RawPasses" ((fa "rpCoreExports" (EApp (EVar "coreExports") (EVar "coreP"))) (fa "rpPool" (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "rawPairOf")) (EVar "mods"))) (EVar "omEmpty"))) (fa "rpPrelude" (EVar "preludeDecls")) (fa "rpShadowPool" (EApp (EVar "preludeStandaloneSet") (EVar "preludeDecls"))) (fa "rpShadowGraph" (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "preludeDecls")) (EVar "modPairs"))) (fa "rpOutputs" (EVar "outputs")) (fa "rpModPairs" (EVar "modPairs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "passes")) (EApp (EApp (EApp (EVar "option") (EVar "None")) (ELam ((PVar "k")) (EApp (EApp (EApp (EApp (EVar "foldGraphPart") (EVar "k")) (EVar "outputs")) (EVar "mods")) (EVar "modPairs")))) (EVar "served"))) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "mods")) (EVar "tcByMid")) (EVar "buckets")))))
+(DData Private "RawPasses" () ((variant "RawPasses" (ConNamed (field "rpCoreExports" (TyCon "ModuleExports")) (field "rpPool" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (field "rpPrelude" (TyApp (TyCon "List") (TyCon "Decl"))) (field "rpShadowPool" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "rpShadowGraph" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "rpOutputs" (TyCon "DriveOutputs")) (field "rpModPairs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))) ())
+(DTypeSig false "foldServeKey" (TyFun (TyCon "ChainSteps") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "foldServeKey" ((PCon "RecordSteps") (PCon "Some" (PTuple (PVar "rk") (PVar "ck"))) (PVar "chainKey")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey"))))
+(DFunDef false "foldServeKey" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "resolvedBuckets" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))
-(DFunDef false "resolvedBuckets" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "preludeKey") (PVar "chainKey") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "modPairs")) (EBlock (DoLet false false (PVar "seeded") (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit))) (DoLet false false (PVar "dmods") (EApp (EApp (EVar "desugaredTriples") (EVar "mods")) (EVar "modPairs"))) (DoExpr (EMatch (EVar "preludeKey") (arm (PCon "None") () (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "None")) (EVar "runtimeP")) (EVar "coreP")) (EVar "omEmpty")) (EListLit)) (EVar "dmods")) (EVar "seeded")))) (arm (PCon "Some" (PTuple (PVar "rk") (PVar "ck"))) () (EBlock (DoLet false false (PVar "fullKey") (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey"))) (DoLet false false (PVar "steps") (EMatch (EUnOp "!" (EVar "resolveChainMemoRef")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EFieldAccess (EVar "m") "rmKey") (EVar "fullKey")) (EFieldAccess (EVar "m") "rmSteps") (EListLit))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "stepKeys") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "resStepKey") (EVar "allowInternal")) (EVar "trustedMods"))) (EVar "mods"))) (DoLet false false (PTuple (PVar "kept") PWild) (EApp (EApp (EApp (EApp (EVar "matchingStepPrefix") (EVar "rsKeyOf")) (EVar "steps")) (EVar "stepKeys")) (EApp (EVar "listLen") (EVar "mods")))) (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "kept"))) (DoLet false false (PTuple (PVar "known") (PVar "buckets")) (EApp (EApp (EApp (EApp (EVar "resumeResSteps") (EVar "kept")) (EVar "mods")) (EVar "omEmpty")) (EVar "seeded"))) (DoLet false false (PTuple (PVar "finalBuckets") (PVar "newSteps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "known")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "stepKeys"))) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "dmods"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "resolveChainMemoRef")) (EApp (EVar "Some") (ERecordCreate "ResMemo" ((fa "rmKey" (EVar "fullKey")) (fa "rmSteps" (EBinOp "++" (EVar "kept") (EVar "newSteps")))))))) (DoExpr (EVar "finalBuckets"))))))))
+(DFunDef false "resolvedBuckets" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "preludeKey") (PVar "chainKey") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "rk") (PVar "ck"))) (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey")))) (EVar "preludeKey"))) (EVar "omEmpty")) (EVar "omEmpty")) (EApp (EApp (EVar "desugaredTriples") (EVar "mods")) (EVar "modPairs"))) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))
 (DTypeSig false "desugaredTriples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "desugaredTriples" ((PCons (PTuple (PVar "mid") (PVar "path") PWild) (PVar "ms")) (PCons (PTuple PWild (PVar "decls")) (PVar "ps"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "path") (EVar "decls")) (EApp (EApp (EVar "desugaredTriples") (EVar "ms")) (EVar "ps"))))
 (DFunDef false "desugaredTriples" (PWild PWild) (EListLit))
 (DTypeSig true "projectDiagsFromTc" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
-(DFunDef false "projectDiagsFromTc" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "outputs") (PVar "tcByMid")) (EBlock (DoLet false false (PVar "modPairs") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EVar "tcByMid")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "None")) (ELit (LString ""))) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))))
+(DFunDef false "projectDiagsFromTc" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "outputs") (PVar "tcByMid")) (EBlock (DoLet false false (PVar "modPairs") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EVar "None")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EVar "tcByMid")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "None")) (ELit (LString ""))) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))))
 (DTypeSig true "desugaredModPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "desugaredModPairs" ((PVar "mods")) (EApp (EVar "desugarGraph") (EVar "mods")))
 (DTypeSig false "rawPairOf" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -4309,9 +4478,50 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "lookupDesugaredMod" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "lookupDesugaredMod" (PWild (PList)) (EListLit))
 (DFunDef false "lookupDesugaredMod" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "mid")) (EVar "d") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "foldModuleTc" (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))
-(DFunDef false "foldModuleTc" (PWild PWild PWild PWild PWild (PList) PWild (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "foldModuleTc" ((PVar "outputs") (PVar "shadowPool") (PVar "shadowGraph") (PVar "oracle") (PVar "modPairs") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "tcReported") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "existing")) () (EApp (EVar "not") (EApp (EVar "resolveRejected") (EVar "existing")))) (arm (PCon "None") () (EVar "True")))) (DoLet false false (PVar "errDiags") (EIf (EVar "tcReported") (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EListLit))) (DoLet false false (PVar "warnDiags") (EIf (EVar "tcReported") (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")) (EListLit))) (DoLet false false (PTuple (PVar "ctorScope") (PVar "preludeDecls")) (EVar "oracle")) (DoLet false false (PVar "imported") (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "ctorScope")) (arm (PCon "Some" (PVar "ds")) () (EVar "ds")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EVar "imported") (EVar "preludeDecls"))) (EVar "prog"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog")))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "shadowPool")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "importShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EApp (EVar "importedStandaloneShadows") (EVar "outputs")) (EVar "shadowGraph")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "buckets2") (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "errDiags")) (EVar "warnDiags"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "outputs")) (EVar "shadowPool")) (EVar "shadowGraph")) (EVar "oracle")) (EVar "modPairs")) (EVar "rest")) (EVar "tcByMid")) (EVar "buckets2")))))
+(DTypeSig false "foldModuleTc" (TyFun (TyCon "RawPasses") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))
+(DFunDef false "foldModuleTc" (PWild PWild PWild PWild (PList) PWild (PVar "buckets")) (EVar "buckets"))
+(DFunDef false "foldModuleTc" ((PVar "passes") (PVar "graph") (PVar "known") (PVar "ids") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "rawDiags") (PVar "exp") (PVar "ident")) (EApp (EApp (EApp (EApp (EApp (EVar "servedPass") (EVar "FoldKind")) (EVar "graph")) (EVar "ids")) (ETuple (EVar "mid") (EVar "path") (EVar "prog"))) (ELam (PWild) (EApp (EApp (EApp (EVar "rawTreeDiags") (EVar "passes")) (EVar "known")) (ETuple (EVar "mid") (EVar "path") (EVar "prog")))))) (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "tcReported") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "existing")) () (EApp (EVar "not") (EApp (EVar "resolveRejected") (EVar "existing")))) (arm (PCon "None") () (EVar "True")))) (DoLet false false (PVar "errDiags") (EIf (EVar "tcReported") (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EListLit))) (DoLet false false (PVar "warnDiags") (EIf (EVar "tcReported") (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "passes")) (EVar "graph")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "ident")) (EVar "ids"))) (EVar "rest")) (EVar "tcByMid")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EVar "rawDiags") (EVar "errDiags")) (EVar "warnDiags"))) (EVar "buckets"))))))
+(DTypeSig false "rawTreeDiags" (TyFun (TyCon "RawPasses") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "ModuleExports"))))))
+(DFunDef false "rawTreeDiags" ((PVar "passes") (PVar "known") (PTuple (PVar "mid") PWild (PVar "prog"))) (EBlock (DoLet false false (PVar "desugared") (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EFieldAccess (EVar "passes") "rpModPairs"))) (DoLet false false (PTuple (PVar "imported") (PVar "exp")) (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsStep") (EFieldAccess (EVar "passes") "rpCoreExports")) (EFieldAccess (EVar "passes") "rpPool")) (EVar "known")) (ETuple (EVar "mid") (EVar "desugared")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EVar "imported") (EFieldAccess (EVar "passes") "rpPrelude"))) (EVar "prog"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EFieldAccess (EVar "passes") "rpShadowPool")) (EVar "desugared")))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "importShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EApp (EVar "importedStandaloneShadows") (EFieldAccess (EVar "passes") "rpOutputs")) (EFieldAccess (EVar "passes") "rpShadowGraph")) (EVar "desugared")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog"))) (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "exp")))))
+(DData Private "PassKey" () ((variant "PassKey" (ConNamed (field "pkGraph" (TyCon "String")) (field "pkPath" (TyCon "String")) (field "pkSource" (TyCon "String")) (field "pkImports" (TyApp (TyCon "List") (TyCon "Int")))))) ())
+(DImpl true "Eq" ((TyCon "PassKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "PassKey" ((rf "pkGraph" (PVar "__a0")) (rf "pkPath" (PVar "__a1")) (rf "pkSource" (PVar "__a2")) (rf "pkImports" (PVar "__a3"))) false) (PRec "PassKey" ((rf "pkGraph" (PVar "__b0")) (rf "pkPath" (PVar "__b1")) (rf "pkSource" (PVar "__b2")) (rf "pkImports" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))))))))
+(DData Private "PassEntry" () ((variant "PassEntry" (ConNamed (field "peKey" (TyCon "PassKey")) (field "peIdentity" (TyCon "Int")) (field "peDiags" (TyApp (TyCon "List") (TyCon "Diag"))) (field "peExports" (TyCon "ModuleExports"))))) ())
+(DData Private "PassCaches" () ((variant "PassCaches" (ConNamed (field "pcResolve" (TyApp (TyCon "OrdMap") (TyCon "PassEntry"))) (field "pcFold" (TyApp (TyCon "OrdMap") (TyCon "PassEntry"))) (field "pcSerial" (TyCon "Int"))))) ())
+(DTypeSig false "passCacheRef" (TyApp (TyCon "Ref") (TyCon "PassCaches")))
+(DFunDef false "passCacheRef" () (EApp (EVar "Ref") (EApp (EVar "emptyPassCaches") (ELit LUnit))))
+(DTypeSig false "emptyPassCaches" (TyFun (TyCon "Unit") (TyCon "PassCaches")))
+(DFunDef false "emptyPassCaches" (PWild) (ERecordCreate "PassCaches" ((fa "pcResolve" (EVar "omEmpty")) (fa "pcFold" (EVar "omEmpty")) (fa "pcSerial" (ELit (LInt 0))))))
+(DData Private "PassKind" () ((variant "ResolveKind" (ConPos)) (variant "FoldKind" (ConPos))) ())
+(DTypeSig false "passEntries" (TyFun (TyCon "PassKind") (TyFun (TyCon "PassCaches") (TyApp (TyCon "OrdMap") (TyCon "PassEntry")))))
+(DFunDef false "passEntries" ((PCon "ResolveKind") (PVar "c")) (EFieldAccess (EVar "c") "pcResolve"))
+(DFunDef false "passEntries" ((PCon "FoldKind") (PVar "c")) (EFieldAccess (EVar "c") "pcFold"))
+(DTypeSig false "keepPassEntry" (TyFun (TyCon "PassKind") (TyFun (TyCon "String") (TyFun (TyCon "PassEntry") (TyCon "Unit")))))
+(DFunDef false "keepPassEntry" ((PVar "kind") (PVar "mid") (PVar "entry")) (EBlock (DoLet false false (PVar "c") (EFieldAccess (EVar "passCacheRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "passCacheRef")) (EMatch (EVar "kind") (arm (PCon "ResolveKind") () (ERecordUpdate (EVar "c") ((fa "pcResolve" (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "entry")) (EFieldAccess (EVar "c") "pcResolve")))))) (arm (PCon "FoldKind") () (ERecordUpdate (EVar "c") ((fa "pcFold" (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "entry")) (EFieldAccess (EVar "c") "pcFold")))))))))))
+(DTypeSig false "freshPassIdentity" (TyFun (TyCon "Unit") (TyCon "Int")))
+(DFunDef false "freshPassIdentity" (PWild) (EBlock (DoLet false false (PVar "c") (EFieldAccess (EVar "passCacheRef") "value")) (DoLet false false (PVar "next") (EBinOp "+" (EFieldAccess (EVar "c") "pcSerial") (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "passCacheRef")) (ERecordUpdate (EVar "c") ((fa "pcSerial" (EVar "next")))))) (DoExpr (EVar "next"))))
+(DTypeSig true "foldCachedIdentity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "foldCachedIdentity" ((PVar "mid")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (EFieldAccess (EVar "e") "peIdentity"))) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EFieldAccess (EVar "passCacheRef") "value") "pcFold"))))
+(DTypeSig true "resolveCachedIdentity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "resolveCachedIdentity" ((PVar "mid")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (EFieldAccess (EVar "e") "peIdentity"))) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EFieldAccess (EVar "passCacheRef") "value") "pcResolve"))))
+(DTypeSig false "importIdsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "importIdsOf" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "importIdsOfDecl")) (EVar "prog")))
+(DTypeSig false "importIdsOfDecl" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "importIdsOfDecl" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "importModId") (EVar "path"))))
+(DFunDef false "importIdsOfDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "importIdsOfDecl") (EVar "d")))
+(DFunDef false "importIdsOfDecl" (PWild) (EListLit))
+(DTypeSig false "servedPass" (TyFun (TyCon "PassKind") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "ModuleExports")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "ModuleExports") (TyCon "Int")))))))))
+(DFunDef false "servedPass" (PWild (PCon "None") PWild PWild (PVar "compute")) (EBlock (DoLet false false (PTuple (PVar "diags") (PVar "exp")) (EApp (EVar "compute") (ELit LUnit))) (DoExpr (ETuple (EVar "diags") (EVar "exp") (ELit (LInt 0))))))
+(DFunDef false "servedPass" ((PVar "kind") (PCon "Some" (PVar "g")) (PVar "ids") (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "compute")) (EMatch (EApp (EVar "loadedSourceOf") (EVar "path")) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "diags") (PVar "exp")) (EApp (EVar "compute") (ELit LUnit))) (DoExpr (ETuple (EVar "diags") (EVar "exp") (EApp (EVar "freshPassIdentity") (ELit LUnit)))))) (arm (PCon "Some" (PVar "src")) () (EBlock (DoLet false false (PVar "key") (ERecordCreate "PassKey" ((fa "pkGraph" (EVar "g")) (fa "pkPath" (EVar "path")) (fa "pkSource" (EVar "src")) (fa "pkImports" (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "i")) (EVar "ids"))))) (EApp (EVar "importIdsOf") (EVar "prog"))))))) (DoLet false false (PVar "hit") (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EApp (EApp (EVar "passEntries") (EVar "kind")) (EFieldAccess (EVar "passCacheRef") "value"))) (arm (PCon "Some" (PVar "e")) () (EIf (EBinOp "==" (EFieldAccess (EVar "e") "peKey") (EVar "key")) (EApp (EVar "Some") (EVar "e")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (DoExpr (EMatch (EVar "hit") (arm (PCon "Some" (PVar "e")) () (ETuple (EFieldAccess (EVar "e") "peDiags") (EFieldAccess (EVar "e") "peExports") (EFieldAccess (EVar "e") "peIdentity"))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "diags") (PVar "exp")) (EApp (EVar "compute") (ELit LUnit))) (DoLet false false (PVar "ident") (EApp (EVar "freshPassIdentity") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "keepPassEntry") (EVar "kind")) (EVar "mid")) (ERecordCreate "PassEntry" ((fa "peKey" (EVar "key")) (fa "peIdentity" (EVar "ident")) (fa "peDiags" (EVar "diags")) (fa "peExports" (EVar "exp")))))) (DoExpr (ETuple (EVar "diags") (EVar "exp") (EVar "ident")))))))))))
+(DTypeSig false "foldGraphPart" (TyFun (TyCon "String") (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "foldGraphPart" ((PVar "chainFull") (PVar "outputs") (PVar "mods") (PVar "modPairs")) (EBlock (DoLet false false (PVar "declarers") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild PWild)) (EApp (EApp (EVar "anyList") (EVar "declaresInterface")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (EVar "mods"))) (DoLet false false (PVar "rows") (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "path") PWild)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "src")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "path")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "src")))) (ELit (LString ""))))) (EApp (EVar "loadedSourceOf") (EVar "path"))))) (EVar "declarers"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isSome")) (EVar "rows")) (EApp (EVar "Some") (EApp (EVar "joinNl") (EBinOp "++" (EListLit (EApp (EVar "lenKey") (EVar "chainFull")) (EApp (EVar "lenKey") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "modPairs")))) (EApp (EVar "lenKey") (EApp (EVar "ifaceIndexText") (EFieldAccess (EVar "outputs") "doIfaceExports")))) (EApp (EApp (EMethodRef "map") (EApp (EVar "optionOr") (ELit (LString "")))) (EVar "rows"))))) (EVar "None")))))
+(DTypeSig false "declaresInterface" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "declaresInterface" ((PRec "DInterface" () false)) (EVar "True"))
+(DFunDef false "declaresInterface" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declaresInterface") (EVar "d")))
+(DFunDef false "declaresInterface" (PWild) (EVar "False"))
+(DTypeSig false "ifaceIndexText" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyCon "String")))
+(DFunDef false "ifaceIndexText" ((PVar "idx")) (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (ELam ((PVar "mid")) (EApp (EApp (EVar "ifaceRowsText") (EVar "mid")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "idx"))))) (EApp (EVar "omKeys") (EVar "idx")))))
+(DTypeSig false "ifaceRowsText" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyCon "String"))))
+(DFunDef false "ifaceRowsText" ((PVar "mid") (PVar "rows")) (EApp (EVar "stringConcat") (EBinOp "::" (EApp (EVar "lenKey") (EVar "mid")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EApp (EVar "fst") (EVar "row"))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EApp (EVar "joinNl") (EApp (EVar "snd") (EVar "row")))))) (ELit (LString ""))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "rows"))))))
 (DTypeSig false "lookupTcDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "lookupTcDiags" (PWild (PList)) (ETuple (EListLit) (EListLit)))
 (DFunDef false "lookupTcDiags" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "mid")) (EVar "d") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
