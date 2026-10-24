@@ -217,7 +217,6 @@ import types.publish.{TcReport(..), tcCode}
 import types.program_facts.{ProgramFacts, factsOfChecked}
 import types.typecheck.{
   TcDiag,
-  lastInvocationOps,
   driveInputsFor,
 }
 import types.tc_types.{DriveInputs(..), DriveOutputs(..)}

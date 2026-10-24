@@ -1,17 +1,28 @@
 # META
-source_lines=684
+source_lines=802
 stages=DESUGAR,MARK
 # SOURCE
+import types.capability_manifest.{
+  CapabilityManifest(..), ManifestRequest(..), ManifestLookup(..),
+  InvocationProtocol(..), FrozenAtom(..), FrozenAuthority(..), FrozenVariable,
+  lookupManifest
+}
+import types.capability_policy.{manifestAllowed}
+import map as FV
+import map.{Map(..)}
+import types.effect_domain.{renderAxisVal}
+import frontend.ast.{TyConOrigin(..)}
+import string.{trimLeft}
 import types.effect_domain.{
   canonParam, drender, isSubTop, Param(..), pathClimbs, pathSpelling
 }
 import types.effect_authority.{authHasVars, authConsts}
+import types.effect_param_decode.{decodeSetParam}
 import types.effect_policy as EP
 import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain,
   allOk
 }
-import types.effect_invocation.{invocationSummary, InvocationOps}
 import types.effect_rows.{atomKey, atomLabel, atomAuth, renderAtom, Atom(..)}
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
 -- policy checker (WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md).
@@ -56,8 +67,6 @@ import types.typecheck.{
   elaborateModulesWithReport,
   entrySplit,
   pubSchemes,
-  lastInvocationOps,
-  decodeSetParam,
   bindingGrantArity,
 }
 import types.program_facts.{factsOfElab, withFacts}
@@ -211,17 +220,6 @@ policyLabels [] = []
 policyLabels ((l, p) :: rest) =
   l ++ effParamSurface quoteTok p :: policyLabels rest
 
--- ── 4. effect ATOMS from a scheme ────────────────────────────────────────
--- What the host can make an entry perform: the invocation summary
--- (`types/effect_invocation.mdk`), over the checked program's own
--- constructors and variance table (`lastInvocationOps`).
-
--- The label view of an atom list (for header rendering + chain keys).  Each atom
--- renders `label` (⊤ param) or `label "pat"` (concrete) via drender — byte-
--- identical to WS-1a for ⊤ params (drender ⊤ = "").
-atomLabels : List Atom -> List String
-atomLabels atoms = map renderAtom atoms
-
 -- ── 7. accept: run the plugin on a sample request with stub capabilities ─────
 -- Synthetic stub funDefs that shadow the user-declared platform externs.  Parsed
 -- from source so we don't hand-build the `stringConcat`/literal AST.  `logEvent`
@@ -329,10 +327,9 @@ lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 -- `--fn <name>` is arbitrary CLI input looked up directly by bare name
 -- (`lookupAssoc` is a first-match scan), so an entry redefinition of a prelude
 -- name must win, and a prelude name (`--fn println`) must be present rather
--- than read as effect-free.  `tiOps` is taken from the drive's own outputs, and
--- so is `tiAutoPrintCall`: when the drivers that run the program print a value `main`
--- (`shouldAutoPrintMain` reads the drive's `main` type), the scheme of the
--- prelude `println` the wrap applies to it.  The binding rule reads the
+-- than read as effect-free. `tiAutoPrintCall` retains only the diagnostic
+-- provenance for a value main's printing wrapper. Admission reads the frozen
+-- manifests in `tiOutputs`. The binding rule reads the
 -- program the drive read: `tiCore` and `tiModules` are its desugared prelude and
 -- module graph (the entry last), and `tiRuntime` is `stdlib/runtime.mdk`, whose
 -- externs are the built-ins: a module that declares one again runs the
@@ -340,7 +337,6 @@ lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 -- the effect domains and the grants flag are read from.
 public export data TargetInputs = TargetInputs {
   tiSchemes : List (String, Scheme),
-  tiOps : InvocationOps,
   tiEntryDecls : List Decl,
   tiAutoPrintCall : Option Scheme,
   tiCore : List Decl,
@@ -386,7 +382,6 @@ analyzeProgramReport inputs valueMain executes rtD coreD modsD =
     elaborateModulesWithReport inputs valueMain executes rtD coreD modsD
   let (preludePub, ownPub, _, _) = entrySplit report
   let preludeSchemes = pubSchemes preludePub
-  let ops = lastInvocationOps outputs
   let autoPrintCall =
     if shouldAutoPrintMain outputs.doEntryOutcome coreD modsD then
       lookupAssoc "println" preludeSchemes
@@ -397,7 +392,6 @@ analyzeProgramReport inputs valueMain executes rtD coreD modsD =
       eaElab = elaborated,
       eaTarget = TargetInputs {
         tiSchemes = pubSchemes ownPub ++ preludeSchemes,
-        tiOps = ops,
         tiEntryDecls = entryModuleDecls modsD,
         tiAutoPrintCall = autoPrintCall,
         tiCore = coreD,
@@ -440,21 +434,17 @@ policyVerdict : List (String, EffParamTy) ->
   PolicyOutcome
 policyVerdict policy analysis fnName =
   let schemes = analysis.eaTarget.tiSchemes
-  -- Existence is checked against the complete scheme list, not effTable:
-  -- fnEffectsTable deliberately omits verified-pure bindings, so using it as
-  -- a name index would reject a real pure entry exactly like an absent one.
-  match lookupAssoc fnName schemes
-    None => PolicyReject "rejected. no '\{fnName}' entry found\n"
-    Some fnScheme =>
-      let fnEffects = invocationSummary analysis.eaTarget.tiOps fnScheme
+  match (lookupAssoc fnName schemes, hostManifest analysis fnName)
+    (Some fnScheme, Ok manifest) =>
+      let fnEffects = manifest.atoms
       let outputs = analysis.eaTarget.tiOutputs
-      match policyRefusals outputs.doEffectDomains fnEffects policy
+      match manifestAllowed outputs.doEffectDomains manifest policy
         PolicyAdmitted =>
           let effStr =
             if listIsEmpty fnEffects then
               "pure"
             else
-              "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
+              "<" ++ joinWith ", " (map frozenAtomText fnEffects) ++ ">"
           let header = "accepted. \{fnName} requires only \{effStr}\n"
           -- The sample is a String; only an entry taking and returning one is
           -- run.  It stays a thunk so the verdict prints first.
@@ -473,9 +463,12 @@ policyVerdict policy analysis fnName =
           let effTable = fnEffectsTable schemes
           let chain = viaChain callGraph effTable fnName (firstOf forbidden)
           let header =
-            "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
+            "rejected. \{fnName} requires <\{joinWith ", " (map frozenAtomText fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
           let via = "   reached via: " ++ joinWith " → " chain ++ "\n"
           PolicyReject (header ++ via ++ stringConcat lines)
+
+    (_, Err message) => PolicyReject ("rejected. " ++ message ++ "\n")
+    (None, _) => PolicyReject "rejected. no '\{fnName}' entry found\n"
 
 takesAndReturnsString : Scheme -> Bool
 takesAndReturnsString (Forall _ _ _ _ _ mono) = match normalize mono
@@ -639,10 +632,135 @@ public export data ManifestArgs = ManifestArgs (Option String) String
 export
 runManifest : EntryAnalysis -> String -> Result String String
 runManifest analysis fnName =
-  match lookupAssoc fnName analysis.eaTarget.tiSchemes
-    None => Err "no '\{fnName}' entry found"
-    Some sch =>
-      Ok (manifestToml (invocationSummary analysis.eaTarget.tiOps sch))
+  map frozenManifestToml (hostManifest analysis fnName)
+
+hostManifest : EntryAnalysis -> String -> Result String CapabilityManifest
+hostManifest analysis name =
+  let outputs = analysis.eaTarget.tiOutputs
+  let selected =
+    filter
+      (r =>
+        r.entry.binding == name
+          && (match r.protocol
+            HostInvocation => True
+            ExecutedMain => False))
+      outputs.doManifestRequests
+  match selected
+    [request] =>
+      match (lookupManifest
+        request
+        outputs.doManifestRequests
+        outputs.doManifests)
+        Published manifest => Ok manifest
+        _ => Err "missing checked manifest for '\{name}'"
+    [] => Err "no '\{name}' entry requested"
+    _ => Err "ambiguous checked manifest for '\{name}'"
+
+frozenManifestToml : CapabilityManifest -> String
+frozenManifestToml manifest =
+  let labels = fold indexFrozenLabel Tip manifest.atoms
+  let key a =
+    if snd
+      (optionOr
+        ("", False)
+        (FV.get (a : FrozenAtom).label labels)) then match a.origin
+      OriginModule mid => tomlQuote "\{mid}.\{a.label}"
+      _ => a.label
+    else
+      a.label
+  "[package.capabilities]\n"
+    ++ joinTomlLines (map (frozenAtomToml key) manifest.atoms)
+
+indexFrozenLabel : Map String (String, Bool) ->
+  FrozenAtom ->
+  Map String (String, Bool)
+indexFrozenLabel labels atom =
+  let origin = frozenOrigin atom.origin
+  let (first, collision) = optionOr (origin, False) (FV.get atom.label labels)
+  FV.set atom.label (first, collision || first /= origin) labels
+
+frozenOrigin : TyConOrigin -> String
+frozenOrigin (OriginModule mid) = "module:" ++ mid
+frozenOrigin OriginBuiltin = "builtin"
+frozenOrigin OriginUnresolved = "unresolved"
+
+frozenAtomToml : (FrozenAtom -> String) -> FrozenAtom -> String
+frozenAtomToml key a =
+  let label = key a
+  match frozenConsts a.authority
+    Some ps if anyList pathClimbs ps => label ++ " = true"
+    Some [p] => "\{label} = \{paramToml p}"
+    Some (ps@(_ :: _ :: _)) =>
+      "\{label} = [\{joinWith ", " (map paramToml ps)}]"
+    _ => match FV.values (frozenVars a.authority Tip)
+      [] => label ++ " = true"
+      vars => "\{label} = true  # unresolved: \{frozenVariablesWhy vars}"
+
+frozenConsts : FrozenAuthority -> Option (List Param)
+frozenConsts (FrozenConst p) = Some [p]
+frozenConsts (FrozenJoin members) =
+  map (flatMap identity) (frozenConstantMembers members)
+frozenConsts _ = None
+
+frozenConstantMembers : List FrozenAuthority -> Option (List (List Param))
+frozenConstantMembers [] = Some []
+frozenConstantMembers (member :: rest) = do
+  ps <- frozenConsts member
+  more <- frozenConstantMembers rest
+  Some (ps :: more)
+
+frozenVarName : FrozenVariable -> String
+frozenVarName v = optionOr ("k" ++ intToString v.localId) v.sourceName
+
+frozenVars : FrozenAuthority -> Map Int FrozenVariable -> Map Int FrozenVariable
+frozenVars (FrozenVar v) vars = FV.set v.localId v vars
+frozenVars (FrozenJoin members) vars =
+  fold (acc a => frozenVars a acc) vars members
+frozenVars (FrozenProduct axes) vars =
+  fold (acc a => frozenVars (snd a) acc) vars axes
+frozenVars _ vars = vars
+
+frozenVariablesWhy : List FrozenVariable -> String
+frozenVariablesWhy vars = match map (v => "`" ++ frozenVarName v ++ "`") vars
+  [one] => "authority variable \{one}"
+  names => "authority variables \{joinWith ", " names}"
+
+export
+frozenAtomText : FrozenAtom -> String
+frozenAtomText atom = match atom.authority
+  FrozenJoin [] => atom.label ++ " {}"
+  FrozenJoin members =>
+    joinWith ", " (map (a => atom.label ++ frozenAuthorityText a) members)
+  authority => atom.label ++ frozenAuthorityText authority
+
+frozenAuthorityText : FrozenAuthority -> String
+frozenAuthorityText (FrozenConst p) = drender p
+frozenAuthorityText (FrozenVar v) = " " ++ frozenVarName v
+frozenAuthorityText (FrozenJoin []) = " {}"
+frozenAuthorityText (FrozenJoin members) =
+  " ("
+    ++ joinWith " | " (map (a => trimLeft (frozenAuthorityText a)) members)
+    ++ ")"
+frozenAuthorityText (FrozenProduct axes) =
+  " "
+    ++ joinWith
+      " "
+      (map
+        (a => "\{fst a}=\{frozenAxisText (snd a)}")
+        (filter
+          (a => match snd a
+            FrozenConst p => not (isSubTop p)
+            _ => True)
+          axes))
+
+frozenAxisText : FrozenAuthority -> String
+frozenAxisText (FrozenConst p) = renderAxisVal p
+frozenAxisText (FrozenVar v) = frozenVarName v
+frozenAxisText (FrozenJoin []) = "{}"
+frozenAxisText (FrozenJoin members) =
+  "(" ++ joinWith " | " (map frozenAxisText members) ++ ")"
+frozenAxisText authority =
+  "(" ++ trimLeft (frozenAuthorityText authority) ++ ")"
 
 -- Render the manifest as --allow tokens for round-trip through check-policy.
 -- PPrefix (Some s) → "Label=s"
@@ -687,11 +805,18 @@ axisToAllow _ = []
 joinSemiTok : List String -> String
 joinSemiTok xs = joinWith ";" xs
 # DESUGAR
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" true) (mem "ManifestRequest" true) (mem "ManifestLookup" true) (mem "InvocationProtocol" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" false) (mem "lookupManifest" false))))
+(DUse false (UseGroup ("types" "capability_policy") ((mem "manifestAllowed" false))))
+(DUse false (UseAlias ("map") "FV"))
+(DUse false (UseGroup ("map") ((mem "Map" true))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "renderAxisVal" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
+(DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "Param" true) (mem "pathClimbs" false) (mem "pathSpelling" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authHasVars" false) (mem "authConsts" false))))
+(DUse false (UseGroup ("types" "effect_param_decode") ((mem "decodeSetParam" false))))
 (DUse false (UseAlias ("types" "effect_policy") "EP"))
 (DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "policyRefusals" false) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false) (mem "allOk" false))))
-(DUse false (UseGroup ("types" "effect_invocation") ((mem "invocationSummary" false) (mem "InvocationOps" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "renderAtom" false) (mem "Atom" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "effParamSurface" false) (mem "Decl" true))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false))))
@@ -701,7 +826,7 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "ElabResult" false) (mem "DriveInputs" true) (mem "DriveOutputs" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModulesWithReport" false) (mem "entrySplit" false) (mem "pubSchemes" false) (mem "lastInvocationOps" false) (mem "decodeSetParam" false) (mem "bindingGrantArity" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModulesWithReport" false) (mem "entrySplit" false) (mem "pubSchemes" false) (mem "bindingGrantArity" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "factsOfElab" false) (mem "withFacts" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnvFacts" false) (mem "buildStampExterns" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false) (mem "anyList" false))))
@@ -742,8 +867,6 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "policyLabels" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "policyLabels" ((PList)) (EListLit))
 (DFunDef false "policyLabels" ((PCons (PTuple (PVar "l") (PVar "p")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EVar "l") (EApp (EApp (EVar "effParamSurface") (EVar "quoteTok")) (EVar "p"))) (EApp (EVar "policyLabels") (EVar "rest"))))
-(DTypeSig false "atomLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "atomLabels" ((PVar "atoms")) (EApp (EApp (EVar "map") (EVar "renderAtom")) (EVar "atoms")))
 (DTypeSig false "stubSource" (TyCon "String"))
 (DFunDef false "stubSource" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "cacheGet req = \"\"\n")) (ELit (LString "cacheSet req result = ()\n")) (ELit (LString "logEvent s = putStr (stringConcat [\"   [LOG] \", s, \"\\n\"])\n")) (ELit (LString "getEnv k = None\n")) (ELit (LString "args u = []\n")) (ELit (LString "executablePath u = \"\"\n")) (ELit (LString "readFile p g = Err \"\"\n")) (ELit (LString "readFileBytes p g = Err \"\"\n")) (ELit (LString "fileExists p g = False\n")) (ELit (LString "canonicalizePath p g = p\n")) (ELit (LString "listDir p g = Err \"\"\n")) (ELit (LString "statFile p g = Err \"\"\n")) (ELit (LString "writeFile p c g = Err \"\"\n")) (ELit (LString "writeFileBytes p b g = Err \"\"\n")) (ELit (LString "appendFile p c g = Err \"\"\n")) (ELit (LString "makeDir p g = Err \"\"\n")) (ELit (LString "removeFile p g = Err \"\"\n")) (ELit (LString "rename o n gs gd = Err \"\"\n")) (ELit (LString "removeDir p g = Err \"\"\n")) (ELit (LString "runCommand cmd a = Err \"\"\n")) (ELit (LString "runCommandBatch cmd j a = []\n")) (ELit (LString "netResolve h = Err \"\"\n")) (ELit (LString "netTcpConnect h p = Err \"\"\n")) (ELit (LString "netTcpListen h p = Err \"\"\n")) (ELit (LString "netListenPort fd = Err \"\"\n")) (ELit (LString "netTcpAccept fd = Err \"\"\n")) (ELit (LString "netSend fd b = Err \"\"\n")) (ELit (LString "netRecv fd n = Err \"\"\n")) (ELit (LString "netShutdown fd how = Err \"\"\n")) (ELit (LString "netClose fd = Err \"\"\n")) (ELit (LString "netSetTimeout fd ms = Err \"\"\n")))))
 (DTypeSig false "runPlugin" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "ElabResult") (TyCon "String")))))
@@ -751,12 +874,12 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "lookupValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupValue" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))
-(DData Public "TargetInputs" () ((variant "TargetInputs" (ConNamed (field "tiSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "tiOps" (TyCon "InvocationOps")) (field "tiEntryDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiAutoPrintCall" (TyApp (TyCon "Option") (TyCon "Scheme"))) (field "tiCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "tiRuntime" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiOutputs" (TyCon "DriveOutputs"))))) ())
+(DData Public "TargetInputs" () ((variant "TargetInputs" (ConNamed (field "tiSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "tiEntryDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiAutoPrintCall" (TyApp (TyCon "Option") (TyCon "Scheme"))) (field "tiCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "tiRuntime" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiOutputs" (TyCon "DriveOutputs"))))) ())
 (DData Public "EntryAnalysis" () ((variant "EntryAnalysis" (ConNamed (field "eaElab" (TyCon "ElabResult")) (field "eaTarget" (TyCon "TargetInputs"))))) ())
 (DTypeSig true "analyzeProgram" (TyFun (TyCon "DriveInputs") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EntryAnalysis"))))))))
 (DFunDef false "analyzeProgram" ((PVar "inputs") (PVar "valueMain") (PVar "executes") (PVar "rtD") (PVar "coreD") (PVar "modsD")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProgramReport") (EVar "inputs")) (EVar "valueMain")) (EVar "executes")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (arm (PTuple (PVar "analysis") PWild PWild) () (EVar "analysis"))))
 (DTypeSig true "analyzeProgramReport" (TyFun (TyCon "DriveInputs") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "EntryAnalysis") (TyCon "TcReport") (TyCon "DriveOutputs")))))))))
-(DFunDef false "analyzeProgramReport" ((PVar "inputs") (PVar "valueMain") (PVar "executes") (PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PTuple (PVar "elaborated") (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EVar "inputs")) (EVar "valueMain")) (EVar "executes")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PTuple (PVar "preludePub") (PVar "ownPub") PWild PWild) (EApp (EVar "entrySplit") (EVar "report"))) (DoLet false false (PVar "preludeSchemes") (EApp (EVar "pubSchemes") (EVar "preludePub"))) (DoLet false false (PVar "ops") (EApp (EVar "lastInvocationOps") (EVar "outputs"))) (DoLet false false (PVar "autoPrintCall") (EIf (EApp (EApp (EApp (EVar "shouldAutoPrintMain") (EFieldAccess (EVar "outputs") "doEntryOutcome")) (EVar "coreD")) (EVar "modsD")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "println"))) (EVar "preludeSchemes")) (EVar "None"))) (DoExpr (ETuple (ERecordCreate "EntryAnalysis" ((fa "eaElab" (EVar "elaborated")) (fa "eaTarget" (ERecordCreate "TargetInputs" ((fa "tiSchemes" (EBinOp "++" (EApp (EVar "pubSchemes") (EVar "ownPub")) (EVar "preludeSchemes"))) (fa "tiOps" (EVar "ops")) (fa "tiEntryDecls" (EApp (EVar "entryModuleDecls") (EVar "modsD"))) (fa "tiAutoPrintCall" (EVar "autoPrintCall")) (fa "tiCore" (EVar "coreD")) (fa "tiModules" (EVar "modsD")) (fa "tiRuntime" (EVar "rtD")) (fa "tiOutputs" (EVar "outputs"))))))) (EVar "report") (EVar "outputs")))))
+(DFunDef false "analyzeProgramReport" ((PVar "inputs") (PVar "valueMain") (PVar "executes") (PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PTuple (PVar "elaborated") (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EVar "inputs")) (EVar "valueMain")) (EVar "executes")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PTuple (PVar "preludePub") (PVar "ownPub") PWild PWild) (EApp (EVar "entrySplit") (EVar "report"))) (DoLet false false (PVar "preludeSchemes") (EApp (EVar "pubSchemes") (EVar "preludePub"))) (DoLet false false (PVar "autoPrintCall") (EIf (EApp (EApp (EApp (EVar "shouldAutoPrintMain") (EFieldAccess (EVar "outputs") "doEntryOutcome")) (EVar "coreD")) (EVar "modsD")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "println"))) (EVar "preludeSchemes")) (EVar "None"))) (DoExpr (ETuple (ERecordCreate "EntryAnalysis" ((fa "eaElab" (EVar "elaborated")) (fa "eaTarget" (ERecordCreate "TargetInputs" ((fa "tiSchemes" (EBinOp "++" (EApp (EVar "pubSchemes") (EVar "ownPub")) (EVar "preludeSchemes"))) (fa "tiEntryDecls" (EApp (EVar "entryModuleDecls") (EVar "modsD"))) (fa "tiAutoPrintCall" (EVar "autoPrintCall")) (fa "tiCore" (EVar "coreD")) (fa "tiModules" (EVar "modsD")) (fa "tiRuntime" (EVar "rtD")) (fa "tiOutputs" (EVar "outputs"))))))) (EVar "report") (EVar "outputs")))))
 (DTypeSig false "entryModuleDecls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "entryModuleDecls" ((PList)) (EListLit))
 (DFunDef false "entryModuleDecls" ((PList (PTuple PWild (PVar "decls")))) (EVar "decls"))
@@ -765,7 +888,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig true "runCheckPolicy" (TyFun (TyCon "EntryAnalysis") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))
 (DFunDef false "runCheckPolicy" ((PVar "analysis") (PVar "allowStr") (PVar "fnName")) (EMatch (EApp (EVar "parsePolicy") (EVar "allowStr")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "policy")) () (EApp (EApp (EApp (EVar "policyVerdict") (EVar "policy")) (EVar "analysis")) (EVar "fnName")))))
 (DTypeSig false "policyVerdict" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyFun (TyCon "EntryAnalysis") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))
-(DFunDef false "policyVerdict" ((PVar "policy") (PVar "analysis") (PVar "fnName")) (EBlock (DoLet false false (PVar "schemes") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiSchemes")) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EApp (EVar "invocationSummary") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiOps")) (EVar "fnScheme"))) (DoLet false false (PVar "outputs") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiOutputs")) (DoExpr (EMatch (EApp (EApp (EApp (EVar "policyRefusals") (EFieldAccess (EVar "outputs") "doEffectDomains")) (EVar "fnEffects")) (EVar "policy")) (arm (PCon "PolicyAdmitted") () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EVar "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (ELam (PWild) (EIf (EApp (EVar "takesAndReturnsString") (EVar "fnScheme")) (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EApp (EApp (EApp (EVar "bindingGrantArity") (EVar "outputs")) (EVar "fnName")) (EVar "fnScheme"))) (EFieldAccess (EVar "analysis") "eaElab")) (EBinOp "++" (EBinOp "++" (ELit (LString "   no sample run: '")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString "' is not a String -> String entry\n")))))) (DoExpr (EApp (EApp (EVar "PolicyAccept") (EVar "header")) (EVar "pluginOutput"))))) (arm (PCon "PolicyRefused" (PVar "forbidden") (PVar "lines")) () (EBlock (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiEntryDecls"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "viaChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (EVar "header") (EVar "via")) (EApp (EVar "stringConcat") (EVar "lines")))))))))))))))
+(DFunDef false "policyVerdict" ((PVar "policy") (PVar "analysis") (PVar "fnName")) (EBlock (DoLet false false (PVar "schemes") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiSchemes")) (DoExpr (EMatch (ETuple (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (EApp (EApp (EVar "hostManifest") (EVar "analysis")) (EVar "fnName"))) (arm (PTuple (PCon "Some" (PVar "fnScheme")) (PCon "Ok" (PVar "manifest"))) () (EBlock (DoLet false false (PVar "fnEffects") (EFieldAccess (EVar "manifest") "atoms")) (DoLet false false (PVar "outputs") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiOutputs")) (DoExpr (EMatch (EApp (EApp (EApp (EVar "manifestAllowed") (EFieldAccess (EVar "outputs") "doEffectDomains")) (EVar "manifest")) (EVar "policy")) (arm (PCon "PolicyAdmitted") () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "frozenAtomText")) (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EVar "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (ELam (PWild) (EIf (EApp (EVar "takesAndReturnsString") (EVar "fnScheme")) (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EApp (EApp (EApp (EVar "bindingGrantArity") (EVar "outputs")) (EVar "fnName")) (EVar "fnScheme"))) (EFieldAccess (EVar "analysis") "eaElab")) (EBinOp "++" (EBinOp "++" (ELit (LString "   no sample run: '")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString "' is not a String -> String entry\n")))))) (DoExpr (EApp (EApp (EVar "PolicyAccept") (EVar "header")) (EVar "pluginOutput"))))) (arm (PCon "PolicyRefused" (PVar "forbidden") (PVar "lines")) () (EBlock (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiEntryDecls"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "viaChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "frozenAtomText")) (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (EVar "header") (EVar "via")) (EApp (EVar "stringConcat") (EVar "lines"))))))))))) (arm (PTuple PWild (PCon "Err" (PVar "message"))) () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EVar "message")) (ELit (LString "\n"))))) (arm (PTuple (PCon "None") PWild) () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString "' entry found\n")))))))))
 (DTypeSig false "takesAndReturnsString" (TyFun (TyCon "Scheme") (TyCon "Bool")))
 (DFunDef false "takesAndReturnsString" ((PCon "Forall" PWild PWild PWild PWild PWild (PVar "mono"))) (EMatch (EApp (EVar "normalize") (EVar "mono")) (arm (PCon "TFun" (PVar "arg") PWild (PVar "res")) () (EBinOp "&&" (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "arg"))) (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "res"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "isStringCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
@@ -814,7 +937,49 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "joinTomlLines" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "joinTomlLines") (EVar "xs")))) (ELit (LString ""))))
 (DData Public "ManifestArgs" () ((variant "ManifestArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))) ())
 (DTypeSig true "runManifest" (TyFun (TyCon "EntryAnalysis") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "runManifest" ((PVar "analysis") (PVar "fnName")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiSchemes")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "no '")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString "' entry found"))))) (arm (PCon "Some" (PVar "sch")) () (EApp (EVar "Ok") (EApp (EVar "manifestToml") (EApp (EApp (EVar "invocationSummary") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiOps")) (EVar "sch")))))))
+(DFunDef false "runManifest" ((PVar "analysis") (PVar "fnName")) (EApp (EApp (EVar "map") (EVar "frozenManifestToml")) (EApp (EApp (EVar "hostManifest") (EVar "analysis")) (EVar "fnName"))))
+(DTypeSig false "hostManifest" (TyFun (TyCon "EntryAnalysis") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "CapabilityManifest")))))
+(DFunDef false "hostManifest" ((PVar "analysis") (PVar "name")) (EBlock (DoLet false false (PVar "outputs") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiOutputs")) (DoLet false false (PVar "selected") (EApp (EApp (EVar "filter") (ELam ((PVar "r")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "r") "entry") "binding") (EVar "name")) (EMatch (EFieldAccess (EVar "r") "protocol") (arm (PCon "HostInvocation") () (EVar "True")) (arm (PCon "ExecutedMain") () (EVar "False")))))) (EFieldAccess (EVar "outputs") "doManifestRequests"))) (DoExpr (EMatch (EVar "selected") (arm (PList (PVar "request")) () (EMatch (EApp (EApp (EApp (EVar "lookupManifest") (EVar "request")) (EFieldAccess (EVar "outputs") "doManifestRequests")) (EFieldAccess (EVar "outputs") "doManifests")) (arm (PCon "Published" (PVar "manifest")) () (EApp (EVar "Ok") (EVar "manifest"))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "missing checked manifest for '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "'"))))))) (arm (PList) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "no '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' entry requested"))))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "ambiguous checked manifest for '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "'")))))))))
+(DTypeSig false "frozenManifestToml" (TyFun (TyCon "CapabilityManifest") (TyCon "String")))
+(DFunDef false "frozenManifestToml" ((PVar "manifest")) (EBlock (DoLet false false (PVar "labels") (EApp (EApp (EApp (EVar "fold") (EVar "indexFrozenLabel")) (EVar "Tip")) (EFieldAccess (EVar "manifest") "atoms"))) (DoLet false true (PVar "key") (ELam ((PVar "a")) (EIf (EApp (EVar "snd") (EApp (EApp (EVar "optionOr") (ETuple (ELit (LString "")) (EVar "False"))) (EApp (EApp (EVar "FV.get") (EFieldAccess (EAnnot (EVar "a") (TyCon "FrozenAtom")) "label")) (EVar "labels")))) (EMatch (EFieldAccess (EVar "a") "origin") (arm (PCon "OriginModule" (PVar "mid")) () (EApp (EVar "tomlQuote") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "."))) (EApp (EVar "display") (EFieldAccess (EVar "a") "label"))) (ELit (LString ""))))) (arm PWild () (EFieldAccess (EVar "a") "label"))) (EFieldAccess (EVar "a") "label")))) (DoExpr (EBinOp "++" (ELit (LString "[package.capabilities]\n")) (EApp (EVar "joinTomlLines") (EApp (EApp (EVar "map") (EApp (EVar "frozenAtomToml") (EVar "key"))) (EFieldAccess (EVar "manifest") "atoms")))))))
+(DTypeSig false "indexFrozenLabel" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Bool"))) (TyFun (TyCon "FrozenAtom") (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Bool"))))))
+(DFunDef false "indexFrozenLabel" ((PVar "labels") (PVar "atom")) (EBlock (DoLet false false (PVar "origin") (EApp (EVar "frozenOrigin") (EFieldAccess (EVar "atom") "origin"))) (DoLet false false (PTuple (PVar "first") (PVar "collision")) (EApp (EApp (EVar "optionOr") (ETuple (EVar "origin") (EVar "False"))) (EApp (EApp (EVar "FV.get") (EFieldAccess (EVar "atom") "label")) (EVar "labels")))) (DoExpr (EApp (EApp (EApp (EVar "FV.set") (EFieldAccess (EVar "atom") "label")) (ETuple (EVar "first") (EBinOp "||" (EVar "collision") (EBinOp "/=" (EVar "first") (EVar "origin"))))) (EVar "labels")))))
+(DTypeSig false "frozenOrigin" (TyFun (TyCon "TyConOrigin") (TyCon "String")))
+(DFunDef false "frozenOrigin" ((PCon "OriginModule" (PVar "mid"))) (EBinOp "++" (ELit (LString "module:")) (EVar "mid")))
+(DFunDef false "frozenOrigin" ((PCon "OriginBuiltin")) (ELit (LString "builtin")))
+(DFunDef false "frozenOrigin" ((PCon "OriginUnresolved")) (ELit (LString "unresolved")))
+(DTypeSig false "frozenAtomToml" (TyFun (TyFun (TyCon "FrozenAtom") (TyCon "String")) (TyFun (TyCon "FrozenAtom") (TyCon "String"))))
+(DFunDef false "frozenAtomToml" ((PVar "key") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "key") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "frozenConsts") (EFieldAccess (EVar "a") "authority")) (arm (PCon "Some" (PVar "ps")) ((GBool (EApp (EApp (EVar "anyList") (EVar "pathClimbs")) (EVar "ps")))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))) (arm (PCon "Some" (PList (PVar "p"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EVar "paramToml") (EVar "p")))) (ELit (LString "")))) (arm (PCon "Some" (PAs "ps" (PCons PWild (PCons PWild PWild)))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "paramToml")) (EVar "ps"))))) (ELit (LString "]")))) (arm PWild () (EMatch (EApp (EVar "FV.values") (EApp (EApp (EVar "frozenVars") (EFieldAccess (EVar "a") "authority")) (EVar "Tip"))) (arm (PList) () (EBinOp "++" (EVar "label") (ELit (LString " = true")))) (arm (PVar "vars") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = true  # unresolved: "))) (EApp (EVar "display") (EApp (EVar "frozenVariablesWhy") (EVar "vars")))) (ELit (LString ""))))))))))
+(DTypeSig false "frozenConsts" (TyFun (TyCon "FrozenAuthority") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Param")))))
+(DFunDef false "frozenConsts" ((PCon "FrozenConst" (PVar "p"))) (EApp (EVar "Some") (EListLit (EVar "p"))))
+(DFunDef false "frozenConsts" ((PCon "FrozenJoin" (PVar "members"))) (EApp (EApp (EVar "map") (EApp (EVar "flatMap") (EVar "identity"))) (EApp (EVar "frozenConstantMembers") (EVar "members"))))
+(DFunDef false "frozenConsts" (PWild) (EVar "None"))
+(DTypeSig false "frozenConstantMembers" (TyFun (TyApp (TyCon "List") (TyCon "FrozenAuthority")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Param"))))))
+(DFunDef false "frozenConstantMembers" ((PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "frozenConstantMembers" ((PCons (PVar "member") (PVar "rest"))) (EApp (EApp (EVar "andThen") (EApp (EVar "frozenConsts") (EVar "member"))) (ELam ((PVar "ps")) (EApp (EApp (EVar "andThen") (EApp (EVar "frozenConstantMembers") (EVar "rest"))) (ELam ((PVar "more")) (EApp (EVar "Some") (EBinOp "::" (EVar "ps") (EVar "more"))))))))
+(DTypeSig false "frozenVarName" (TyFun (TyCon "FrozenVariable") (TyCon "String")))
+(DFunDef false "frozenVarName" ((PVar "v")) (EApp (EApp (EVar "optionOr") (EBinOp "++" (ELit (LString "k")) (EApp (EVar "intToString") (EFieldAccess (EVar "v") "localId")))) (EFieldAccess (EVar "v") "sourceName")))
+(DTypeSig false "frozenVars" (TyFun (TyCon "FrozenAuthority") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")))))
+(DFunDef false "frozenVars" ((PCon "FrozenVar" (PVar "v")) (PVar "vars")) (EApp (EApp (EApp (EVar "FV.set") (EFieldAccess (EVar "v") "localId")) (EVar "v")) (EVar "vars")))
+(DFunDef false "frozenVars" ((PCon "FrozenJoin" (PVar "members")) (PVar "vars")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "frozenVars") (EVar "a")) (EVar "acc")))) (EVar "vars")) (EVar "members")))
+(DFunDef false "frozenVars" ((PCon "FrozenProduct" (PVar "axes")) (PVar "vars")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "frozenVars") (EApp (EVar "snd") (EVar "a"))) (EVar "acc")))) (EVar "vars")) (EVar "axes")))
+(DFunDef false "frozenVars" (PWild (PVar "vars")) (EVar "vars"))
+(DTypeSig false "frozenVariablesWhy" (TyFun (TyApp (TyCon "List") (TyCon "FrozenVariable")) (TyCon "String")))
+(DFunDef false "frozenVariablesWhy" ((PVar "vars")) (EMatch (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "frozenVarName") (EVar "v"))) (ELit (LString "`"))))) (EVar "vars")) (arm (PList (PVar "one")) () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variable ")) (EApp (EVar "display") (EVar "one"))) (ELit (LString "")))) (arm (PVar "names") () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variables ")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "names")))) (ELit (LString ""))))))
+(DTypeSig true "frozenAtomText" (TyFun (TyCon "FrozenAtom") (TyCon "String")))
+(DFunDef false "frozenAtomText" ((PVar "atom")) (EMatch (EFieldAccess (EVar "atom") "authority") (arm (PCon "FrozenJoin" (PList)) () (EBinOp "++" (EFieldAccess (EVar "atom") "label") (ELit (LString " {}")))) (arm (PCon "FrozenJoin" (PVar "members")) () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EFieldAccess (EVar "atom") "label") (EApp (EVar "frozenAuthorityText") (EVar "a"))))) (EVar "members")))) (arm (PVar "authority") () (EBinOp "++" (EFieldAccess (EVar "atom") "label") (EApp (EVar "frozenAuthorityText") (EVar "authority"))))))
+(DTypeSig false "frozenAuthorityText" (TyFun (TyCon "FrozenAuthority") (TyCon "String")))
+(DFunDef false "frozenAuthorityText" ((PCon "FrozenConst" (PVar "p"))) (EApp (EVar "drender") (EVar "p")))
+(DFunDef false "frozenAuthorityText" ((PCon "FrozenVar" (PVar "v"))) (EBinOp "++" (ELit (LString " ")) (EApp (EVar "frozenVarName") (EVar "v"))))
+(DFunDef false "frozenAuthorityText" ((PCon "FrozenJoin" (PList))) (ELit (LString " {}")))
+(DFunDef false "frozenAuthorityText" ((PCon "FrozenJoin" (PVar "members"))) (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EVar "trimLeft") (EApp (EVar "frozenAuthorityText") (EVar "a"))))) (EVar "members")))) (ELit (LString ")"))))
+(DFunDef false "frozenAuthorityText" ((PCon "FrozenProduct" (PVar "axes"))) (EBinOp "++" (ELit (LString " ")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "frozenAxisText") (EApp (EVar "snd") (EVar "a"))))) (ELit (LString ""))))) (EApp (EApp (EVar "filter") (ELam ((PVar "a")) (EMatch (EApp (EVar "snd") (EVar "a")) (arm (PCon "FrozenConst" (PVar "p")) () (EApp (EVar "not") (EApp (EVar "isSubTop") (EVar "p")))) (arm PWild () (EVar "True"))))) (EVar "axes"))))))
+(DTypeSig false "frozenAxisText" (TyFun (TyCon "FrozenAuthority") (TyCon "String")))
+(DFunDef false "frozenAxisText" ((PCon "FrozenConst" (PVar "p"))) (EApp (EVar "renderAxisVal") (EVar "p")))
+(DFunDef false "frozenAxisText" ((PCon "FrozenVar" (PVar "v"))) (EApp (EVar "frozenVarName") (EVar "v")))
+(DFunDef false "frozenAxisText" ((PCon "FrozenJoin" (PList))) (ELit (LString "{}")))
+(DFunDef false "frozenAxisText" ((PCon "FrozenJoin" (PVar "members"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EVar "map") (EVar "frozenAxisText")) (EVar "members")))) (ELit (LString ")"))))
+(DFunDef false "frozenAxisText" ((PVar "authority")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "trimLeft") (EApp (EVar "frozenAuthorityText") (EVar "authority")))) (ELit (LString ")"))))
 (DTypeSig true "manifestToAllowStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "manifestToAllowStr" ((PVar "atoms")) (EBlock (DoLet false false (PVar "toks") (EApp (EApp (EVar "flatMap") (EVar "atomToAllowToks")) (EVar "atoms"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "toks")))))
 (DTypeSig false "atomToAllowToks" (TyFun (TyCon "Atom") (TyApp (TyCon "List") (TyCon "String"))))
@@ -830,11 +995,18 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "joinSemiTok" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSemiTok" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "xs")))
 # MARK
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" true) (mem "ManifestRequest" true) (mem "ManifestLookup" true) (mem "InvocationProtocol" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" false) (mem "lookupManifest" false))))
+(DUse false (UseGroup ("types" "capability_policy") ((mem "manifestAllowed" false))))
+(DUse false (UseAlias ("map") "FV"))
+(DUse false (UseGroup ("map") ((mem "Map" true))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "renderAxisVal" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
+(DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "Param" true) (mem "pathClimbs" false) (mem "pathSpelling" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authHasVars" false) (mem "authConsts" false))))
+(DUse false (UseGroup ("types" "effect_param_decode") ((mem "decodeSetParam" false))))
 (DUse false (UseAlias ("types" "effect_policy") "EP"))
 (DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "policyRefusals" false) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false) (mem "allOk" false))))
-(DUse false (UseGroup ("types" "effect_invocation") ((mem "invocationSummary" false) (mem "InvocationOps" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "renderAtom" false) (mem "Atom" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "effParamSurface" false) (mem "Decl" true))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false))))
@@ -844,7 +1016,7 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "ElabResult" false) (mem "DriveInputs" true) (mem "DriveOutputs" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModulesWithReport" false) (mem "entrySplit" false) (mem "pubSchemes" false) (mem "lastInvocationOps" false) (mem "decodeSetParam" false) (mem "bindingGrantArity" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModulesWithReport" false) (mem "entrySplit" false) (mem "pubSchemes" false) (mem "bindingGrantArity" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "factsOfElab" false) (mem "withFacts" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnvFacts" false) (mem "buildStampExterns" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false) (mem "anyList" false))))
@@ -885,8 +1057,6 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "policyLabels" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "policyLabels" ((PList)) (EListLit))
 (DFunDef false "policyLabels" ((PCons (PTuple (PVar "l") (PVar "p")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EVar "l") (EApp (EApp (EVar "effParamSurface") (EVar "quoteTok")) (EVar "p"))) (EApp (EVar "policyLabels") (EVar "rest"))))
-(DTypeSig false "atomLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "atomLabels" ((PVar "atoms")) (EApp (EApp (EMethodRef "map") (EVar "renderAtom")) (EVar "atoms")))
 (DTypeSig false "stubSource" (TyCon "String"))
 (DFunDef false "stubSource" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "cacheGet req = \"\"\n")) (ELit (LString "cacheSet req result = ()\n")) (ELit (LString "logEvent s = putStr (stringConcat [\"   [LOG] \", s, \"\\n\"])\n")) (ELit (LString "getEnv k = None\n")) (ELit (LString "args u = []\n")) (ELit (LString "executablePath u = \"\"\n")) (ELit (LString "readFile p g = Err \"\"\n")) (ELit (LString "readFileBytes p g = Err \"\"\n")) (ELit (LString "fileExists p g = False\n")) (ELit (LString "canonicalizePath p g = p\n")) (ELit (LString "listDir p g = Err \"\"\n")) (ELit (LString "statFile p g = Err \"\"\n")) (ELit (LString "writeFile p c g = Err \"\"\n")) (ELit (LString "writeFileBytes p b g = Err \"\"\n")) (ELit (LString "appendFile p c g = Err \"\"\n")) (ELit (LString "makeDir p g = Err \"\"\n")) (ELit (LString "removeFile p g = Err \"\"\n")) (ELit (LString "rename o n gs gd = Err \"\"\n")) (ELit (LString "removeDir p g = Err \"\"\n")) (ELit (LString "runCommand cmd a = Err \"\"\n")) (ELit (LString "runCommandBatch cmd j a = []\n")) (ELit (LString "netResolve h = Err \"\"\n")) (ELit (LString "netTcpConnect h p = Err \"\"\n")) (ELit (LString "netTcpListen h p = Err \"\"\n")) (ELit (LString "netListenPort fd = Err \"\"\n")) (ELit (LString "netTcpAccept fd = Err \"\"\n")) (ELit (LString "netSend fd b = Err \"\"\n")) (ELit (LString "netRecv fd n = Err \"\"\n")) (ELit (LString "netShutdown fd how = Err \"\"\n")) (ELit (LString "netClose fd = Err \"\"\n")) (ELit (LString "netSetTimeout fd ms = Err \"\"\n")))))
 (DTypeSig false "runPlugin" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "ElabResult") (TyCon "String")))))
@@ -894,12 +1064,12 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "lookupValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupValue" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))
-(DData Public "TargetInputs" () ((variant "TargetInputs" (ConNamed (field "tiSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "tiOps" (TyCon "InvocationOps")) (field "tiEntryDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiAutoPrintCall" (TyApp (TyCon "Option") (TyCon "Scheme"))) (field "tiCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "tiRuntime" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiOutputs" (TyCon "DriveOutputs"))))) ())
+(DData Public "TargetInputs" () ((variant "TargetInputs" (ConNamed (field "tiSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "tiEntryDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiAutoPrintCall" (TyApp (TyCon "Option") (TyCon "Scheme"))) (field "tiCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "tiRuntime" (TyApp (TyCon "List") (TyCon "Decl"))) (field "tiOutputs" (TyCon "DriveOutputs"))))) ())
 (DData Public "EntryAnalysis" () ((variant "EntryAnalysis" (ConNamed (field "eaElab" (TyCon "ElabResult")) (field "eaTarget" (TyCon "TargetInputs"))))) ())
 (DTypeSig true "analyzeProgram" (TyFun (TyCon "DriveInputs") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EntryAnalysis"))))))))
 (DFunDef false "analyzeProgram" ((PVar "inputs") (PVar "valueMain") (PVar "executes") (PVar "rtD") (PVar "coreD") (PVar "modsD")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProgramReport") (EVar "inputs")) (EVar "valueMain")) (EVar "executes")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (arm (PTuple (PVar "analysis") PWild PWild) () (EVar "analysis"))))
 (DTypeSig true "analyzeProgramReport" (TyFun (TyCon "DriveInputs") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "EntryAnalysis") (TyCon "TcReport") (TyCon "DriveOutputs")))))))))
-(DFunDef false "analyzeProgramReport" ((PVar "inputs") (PVar "valueMain") (PVar "executes") (PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PTuple (PVar "elaborated") (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EVar "inputs")) (EVar "valueMain")) (EVar "executes")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PTuple (PVar "preludePub") (PVar "ownPub") PWild PWild) (EApp (EVar "entrySplit") (EVar "report"))) (DoLet false false (PVar "preludeSchemes") (EApp (EVar "pubSchemes") (EVar "preludePub"))) (DoLet false false (PVar "ops") (EApp (EVar "lastInvocationOps") (EVar "outputs"))) (DoLet false false (PVar "autoPrintCall") (EIf (EApp (EApp (EApp (EVar "shouldAutoPrintMain") (EFieldAccess (EVar "outputs") "doEntryOutcome")) (EVar "coreD")) (EVar "modsD")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "println"))) (EVar "preludeSchemes")) (EVar "None"))) (DoExpr (ETuple (ERecordCreate "EntryAnalysis" ((fa "eaElab" (EVar "elaborated")) (fa "eaTarget" (ERecordCreate "TargetInputs" ((fa "tiSchemes" (EBinOp "++" (EApp (EVar "pubSchemes") (EVar "ownPub")) (EVar "preludeSchemes"))) (fa "tiOps" (EVar "ops")) (fa "tiEntryDecls" (EApp (EVar "entryModuleDecls") (EVar "modsD"))) (fa "tiAutoPrintCall" (EVar "autoPrintCall")) (fa "tiCore" (EVar "coreD")) (fa "tiModules" (EVar "modsD")) (fa "tiRuntime" (EVar "rtD")) (fa "tiOutputs" (EVar "outputs"))))))) (EVar "report") (EVar "outputs")))))
+(DFunDef false "analyzeProgramReport" ((PVar "inputs") (PVar "valueMain") (PVar "executes") (PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PTuple (PVar "elaborated") (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EVar "inputs")) (EVar "valueMain")) (EVar "executes")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PTuple (PVar "preludePub") (PVar "ownPub") PWild PWild) (EApp (EVar "entrySplit") (EVar "report"))) (DoLet false false (PVar "preludeSchemes") (EApp (EVar "pubSchemes") (EVar "preludePub"))) (DoLet false false (PVar "autoPrintCall") (EIf (EApp (EApp (EApp (EVar "shouldAutoPrintMain") (EFieldAccess (EVar "outputs") "doEntryOutcome")) (EVar "coreD")) (EVar "modsD")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "println"))) (EVar "preludeSchemes")) (EVar "None"))) (DoExpr (ETuple (ERecordCreate "EntryAnalysis" ((fa "eaElab" (EVar "elaborated")) (fa "eaTarget" (ERecordCreate "TargetInputs" ((fa "tiSchemes" (EBinOp "++" (EApp (EVar "pubSchemes") (EVar "ownPub")) (EVar "preludeSchemes"))) (fa "tiEntryDecls" (EApp (EVar "entryModuleDecls") (EVar "modsD"))) (fa "tiAutoPrintCall" (EVar "autoPrintCall")) (fa "tiCore" (EVar "coreD")) (fa "tiModules" (EVar "modsD")) (fa "tiRuntime" (EVar "rtD")) (fa "tiOutputs" (EVar "outputs"))))))) (EVar "report") (EVar "outputs")))))
 (DTypeSig false "entryModuleDecls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "entryModuleDecls" ((PList)) (EListLit))
 (DFunDef false "entryModuleDecls" ((PList (PTuple PWild (PVar "decls")))) (EVar "decls"))
@@ -908,7 +1078,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig true "runCheckPolicy" (TyFun (TyCon "EntryAnalysis") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))
 (DFunDef false "runCheckPolicy" ((PVar "analysis") (PVar "allowStr") (PVar "fnName")) (EMatch (EApp (EVar "parsePolicy") (EVar "allowStr")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "policy")) () (EApp (EApp (EApp (EVar "policyVerdict") (EVar "policy")) (EVar "analysis")) (EVar "fnName")))))
 (DTypeSig false "policyVerdict" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyFun (TyCon "EntryAnalysis") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))
-(DFunDef false "policyVerdict" ((PVar "policy") (PVar "analysis") (PVar "fnName")) (EBlock (DoLet false false (PVar "schemes") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiSchemes")) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EApp (EVar "invocationSummary") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiOps")) (EVar "fnScheme"))) (DoLet false false (PVar "outputs") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiOutputs")) (DoExpr (EMatch (EApp (EApp (EApp (EVar "policyRefusals") (EFieldAccess (EVar "outputs") "doEffectDomains")) (EVar "fnEffects")) (EVar "policy")) (arm (PCon "PolicyAdmitted") () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EMethodRef "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (ELam (PWild) (EIf (EApp (EVar "takesAndReturnsString") (EVar "fnScheme")) (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EApp (EApp (EApp (EVar "bindingGrantArity") (EVar "outputs")) (EVar "fnName")) (EVar "fnScheme"))) (EFieldAccess (EVar "analysis") "eaElab")) (EBinOp "++" (EBinOp "++" (ELit (LString "   no sample run: '")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString "' is not a String -> String entry\n")))))) (DoExpr (EApp (EApp (EVar "PolicyAccept") (EVar "header")) (EVar "pluginOutput"))))) (arm (PCon "PolicyRefused" (PVar "forbidden") (PVar "lines")) () (EBlock (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiEntryDecls"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "viaChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (EVar "header") (EVar "via")) (EApp (EVar "stringConcat") (EVar "lines")))))))))))))))
+(DFunDef false "policyVerdict" ((PVar "policy") (PVar "analysis") (PVar "fnName")) (EBlock (DoLet false false (PVar "schemes") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiSchemes")) (DoExpr (EMatch (ETuple (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (EApp (EApp (EVar "hostManifest") (EVar "analysis")) (EVar "fnName"))) (arm (PTuple (PCon "Some" (PVar "fnScheme")) (PCon "Ok" (PVar "manifest"))) () (EBlock (DoLet false false (PVar "fnEffects") (EFieldAccess (EVar "manifest") "atoms")) (DoLet false false (PVar "outputs") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiOutputs")) (DoExpr (EMatch (EApp (EApp (EApp (EVar "manifestAllowed") (EFieldAccess (EVar "outputs") "doEffectDomains")) (EVar "manifest")) (EVar "policy")) (arm (PCon "PolicyAdmitted") () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "frozenAtomText")) (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EMethodRef "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (ELam (PWild) (EIf (EApp (EVar "takesAndReturnsString") (EVar "fnScheme")) (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EApp (EApp (EApp (EVar "bindingGrantArity") (EVar "outputs")) (EVar "fnName")) (EVar "fnScheme"))) (EFieldAccess (EVar "analysis") "eaElab")) (EBinOp "++" (EBinOp "++" (ELit (LString "   no sample run: '")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString "' is not a String -> String entry\n")))))) (DoExpr (EApp (EApp (EVar "PolicyAccept") (EVar "header")) (EVar "pluginOutput"))))) (arm (PCon "PolicyRefused" (PVar "forbidden") (PVar "lines")) () (EBlock (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiEntryDecls"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "viaChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "frozenAtomText")) (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (EVar "header") (EVar "via")) (EApp (EVar "stringConcat") (EVar "lines"))))))))))) (arm (PTuple PWild (PCon "Err" (PVar "message"))) () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EVar "message")) (ELit (LString "\n"))))) (arm (PTuple (PCon "None") PWild) () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString "' entry found\n")))))))))
 (DTypeSig false "takesAndReturnsString" (TyFun (TyCon "Scheme") (TyCon "Bool")))
 (DFunDef false "takesAndReturnsString" ((PCon "Forall" PWild PWild PWild PWild PWild (PVar "mono"))) (EMatch (EApp (EVar "normalize") (EVar "mono")) (arm (PCon "TFun" (PVar "arg") PWild (PVar "res")) () (EBinOp "&&" (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "arg"))) (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "res"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "isStringCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
@@ -957,7 +1127,49 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "joinTomlLines" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "joinTomlLines") (EVar "xs")))) (ELit (LString ""))))
 (DData Public "ManifestArgs" () ((variant "ManifestArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))) ())
 (DTypeSig true "runManifest" (TyFun (TyCon "EntryAnalysis") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "runManifest" ((PVar "analysis") (PVar "fnName")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiSchemes")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "no '")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString "' entry found"))))) (arm (PCon "Some" (PVar "sch")) () (EApp (EVar "Ok") (EApp (EVar "manifestToml") (EApp (EApp (EVar "invocationSummary") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiOps")) (EVar "sch")))))))
+(DFunDef false "runManifest" ((PVar "analysis") (PVar "fnName")) (EApp (EApp (EMethodRef "map") (EVar "frozenManifestToml")) (EApp (EApp (EVar "hostManifest") (EVar "analysis")) (EVar "fnName"))))
+(DTypeSig false "hostManifest" (TyFun (TyCon "EntryAnalysis") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "CapabilityManifest")))))
+(DFunDef false "hostManifest" ((PVar "analysis") (PVar "name")) (EBlock (DoLet false false (PVar "outputs") (EFieldAccess (EFieldAccess (EVar "analysis") "eaTarget") "tiOutputs")) (DoLet false false (PVar "selected") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "r")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "r") "entry") "binding") (EVar "name")) (EMatch (EFieldAccess (EVar "r") "protocol") (arm (PCon "HostInvocation") () (EVar "True")) (arm (PCon "ExecutedMain") () (EVar "False")))))) (EFieldAccess (EVar "outputs") "doManifestRequests"))) (DoExpr (EMatch (EVar "selected") (arm (PList (PVar "request")) () (EMatch (EApp (EApp (EApp (EVar "lookupManifest") (EVar "request")) (EFieldAccess (EVar "outputs") "doManifestRequests")) (EFieldAccess (EVar "outputs") "doManifests")) (arm (PCon "Published" (PVar "manifest")) () (EApp (EVar "Ok") (EVar "manifest"))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "missing checked manifest for '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "'"))))))) (arm (PList) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "no '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' entry requested"))))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "ambiguous checked manifest for '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "'")))))))))
+(DTypeSig false "frozenManifestToml" (TyFun (TyCon "CapabilityManifest") (TyCon "String")))
+(DFunDef false "frozenManifestToml" ((PVar "manifest")) (EBlock (DoLet false false (PVar "labels") (EApp (EApp (EApp (EMethodRef "fold") (EVar "indexFrozenLabel")) (EVar "Tip")) (EFieldAccess (EVar "manifest") "atoms"))) (DoLet false true (PVar "key") (ELam ((PVar "a")) (EIf (EApp (EVar "snd") (EApp (EApp (EVar "optionOr") (ETuple (ELit (LString "")) (EVar "False"))) (EApp (EApp (EVar "FV.get") (EFieldAccess (EAnnot (EVar "a") (TyCon "FrozenAtom")) "label")) (EVar "labels")))) (EMatch (EFieldAccess (EVar "a") "origin") (arm (PCon "OriginModule" (PVar "mid")) () (EApp (EVar "tomlQuote") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EFieldAccess (EVar "a") "label"))) (ELit (LString ""))))) (arm PWild () (EFieldAccess (EVar "a") "label"))) (EFieldAccess (EVar "a") "label")))) (DoExpr (EBinOp "++" (ELit (LString "[package.capabilities]\n")) (EApp (EVar "joinTomlLines") (EApp (EApp (EMethodRef "map") (EApp (EVar "frozenAtomToml") (EVar "key"))) (EFieldAccess (EVar "manifest") "atoms")))))))
+(DTypeSig false "indexFrozenLabel" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Bool"))) (TyFun (TyCon "FrozenAtom") (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Bool"))))))
+(DFunDef false "indexFrozenLabel" ((PVar "labels") (PVar "atom")) (EBlock (DoLet false false (PVar "origin") (EApp (EVar "frozenOrigin") (EFieldAccess (EVar "atom") "origin"))) (DoLet false false (PTuple (PVar "first") (PVar "collision")) (EApp (EApp (EVar "optionOr") (ETuple (EVar "origin") (EVar "False"))) (EApp (EApp (EVar "FV.get") (EFieldAccess (EVar "atom") "label")) (EVar "labels")))) (DoExpr (EApp (EApp (EApp (EVar "FV.set") (EFieldAccess (EVar "atom") "label")) (ETuple (EVar "first") (EBinOp "||" (EVar "collision") (EBinOp "/=" (EVar "first") (EVar "origin"))))) (EVar "labels")))))
+(DTypeSig false "frozenOrigin" (TyFun (TyCon "TyConOrigin") (TyCon "String")))
+(DFunDef false "frozenOrigin" ((PCon "OriginModule" (PVar "mid"))) (EBinOp "++" (ELit (LString "module:")) (EVar "mid")))
+(DFunDef false "frozenOrigin" ((PCon "OriginBuiltin")) (ELit (LString "builtin")))
+(DFunDef false "frozenOrigin" ((PCon "OriginUnresolved")) (ELit (LString "unresolved")))
+(DTypeSig false "frozenAtomToml" (TyFun (TyFun (TyCon "FrozenAtom") (TyCon "String")) (TyFun (TyCon "FrozenAtom") (TyCon "String"))))
+(DFunDef false "frozenAtomToml" ((PVar "key") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "key") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "frozenConsts") (EFieldAccess (EVar "a") "authority")) (arm (PCon "Some" (PVar "ps")) ((GBool (EApp (EApp (EVar "anyList") (EVar "pathClimbs")) (EVar "ps")))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))) (arm (PCon "Some" (PList (PVar "p"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EVar "paramToml") (EVar "p")))) (ELit (LString "")))) (arm (PCon "Some" (PAs "ps" (PCons PWild (PCons PWild PWild)))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "paramToml")) (EVar "ps"))))) (ELit (LString "]")))) (arm PWild () (EMatch (EApp (EVar "FV.values") (EApp (EApp (EVar "frozenVars") (EFieldAccess (EVar "a") "authority")) (EVar "Tip"))) (arm (PList) () (EBinOp "++" (EVar "label") (ELit (LString " = true")))) (arm (PVar "vars") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = true  # unresolved: "))) (EApp (EMethodRef "display") (EApp (EVar "frozenVariablesWhy") (EVar "vars")))) (ELit (LString ""))))))))))
+(DTypeSig false "frozenConsts" (TyFun (TyCon "FrozenAuthority") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Param")))))
+(DFunDef false "frozenConsts" ((PCon "FrozenConst" (PVar "p"))) (EApp (EVar "Some") (EListLit (EVar "p"))))
+(DFunDef false "frozenConsts" ((PCon "FrozenJoin" (PVar "members"))) (EApp (EApp (EMethodRef "map") (EApp (EDictApp "flatMap") (EVar "identity"))) (EApp (EVar "frozenConstantMembers") (EVar "members"))))
+(DFunDef false "frozenConsts" (PWild) (EVar "None"))
+(DTypeSig false "frozenConstantMembers" (TyFun (TyApp (TyCon "List") (TyCon "FrozenAuthority")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Param"))))))
+(DFunDef false "frozenConstantMembers" ((PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "frozenConstantMembers" ((PCons (PVar "member") (PVar "rest"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "frozenConsts") (EVar "member"))) (ELam ((PVar "ps")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "frozenConstantMembers") (EVar "rest"))) (ELam ((PVar "more")) (EApp (EVar "Some") (EBinOp "::" (EVar "ps") (EVar "more"))))))))
+(DTypeSig false "frozenVarName" (TyFun (TyCon "FrozenVariable") (TyCon "String")))
+(DFunDef false "frozenVarName" ((PVar "v")) (EApp (EApp (EVar "optionOr") (EBinOp "++" (ELit (LString "k")) (EApp (EVar "intToString") (EFieldAccess (EVar "v") "localId")))) (EFieldAccess (EVar "v") "sourceName")))
+(DTypeSig false "frozenVars" (TyFun (TyCon "FrozenAuthority") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")))))
+(DFunDef false "frozenVars" ((PCon "FrozenVar" (PVar "v")) (PVar "vars")) (EApp (EApp (EApp (EVar "FV.set") (EFieldAccess (EVar "v") "localId")) (EVar "v")) (EVar "vars")))
+(DFunDef false "frozenVars" ((PCon "FrozenJoin" (PVar "members")) (PVar "vars")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "frozenVars") (EVar "a")) (EVar "acc")))) (EVar "vars")) (EVar "members")))
+(DFunDef false "frozenVars" ((PCon "FrozenProduct" (PVar "axes")) (PVar "vars")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "frozenVars") (EApp (EVar "snd") (EVar "a"))) (EVar "acc")))) (EVar "vars")) (EVar "axes")))
+(DFunDef false "frozenVars" (PWild (PVar "vars")) (EVar "vars"))
+(DTypeSig false "frozenVariablesWhy" (TyFun (TyApp (TyCon "List") (TyCon "FrozenVariable")) (TyCon "String")))
+(DFunDef false "frozenVariablesWhy" ((PVar "vars")) (EMatch (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "frozenVarName") (EVar "v"))) (ELit (LString "`"))))) (EVar "vars")) (arm (PList (PVar "one")) () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variable ")) (EApp (EMethodRef "display") (EVar "one"))) (ELit (LString "")))) (arm (PVar "names") () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variables ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "names")))) (ELit (LString ""))))))
+(DTypeSig true "frozenAtomText" (TyFun (TyCon "FrozenAtom") (TyCon "String")))
+(DFunDef false "frozenAtomText" ((PVar "atom")) (EMatch (EFieldAccess (EVar "atom") "authority") (arm (PCon "FrozenJoin" (PList)) () (EBinOp "++" (EFieldAccess (EVar "atom") "label") (ELit (LString " {}")))) (arm (PCon "FrozenJoin" (PVar "members")) () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EBinOp "++" (EFieldAccess (EVar "atom") "label") (EApp (EVar "frozenAuthorityText") (EVar "a"))))) (EVar "members")))) (arm (PVar "authority") () (EBinOp "++" (EFieldAccess (EVar "atom") "label") (EApp (EVar "frozenAuthorityText") (EVar "authority"))))))
+(DTypeSig false "frozenAuthorityText" (TyFun (TyCon "FrozenAuthority") (TyCon "String")))
+(DFunDef false "frozenAuthorityText" ((PCon "FrozenConst" (PVar "p"))) (EApp (EVar "drender") (EVar "p")))
+(DFunDef false "frozenAuthorityText" ((PCon "FrozenVar" (PVar "v"))) (EBinOp "++" (ELit (LString " ")) (EApp (EVar "frozenVarName") (EVar "v"))))
+(DFunDef false "frozenAuthorityText" ((PCon "FrozenJoin" (PList))) (ELit (LString " {}")))
+(DFunDef false "frozenAuthorityText" ((PCon "FrozenJoin" (PVar "members"))) (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EVar "trimLeft") (EApp (EVar "frozenAuthorityText") (EVar "a"))))) (EVar "members")))) (ELit (LString ")"))))
+(DFunDef false "frozenAuthorityText" ((PCon "FrozenProduct" (PVar "axes"))) (EBinOp "++" (ELit (LString " ")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "frozenAxisText") (EApp (EVar "snd") (EVar "a"))))) (ELit (LString ""))))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "a")) (EMatch (EApp (EVar "snd") (EVar "a")) (arm (PCon "FrozenConst" (PVar "p")) () (EApp (EVar "not") (EApp (EVar "isSubTop") (EVar "p")))) (arm PWild () (EVar "True"))))) (EVar "axes"))))))
+(DTypeSig false "frozenAxisText" (TyFun (TyCon "FrozenAuthority") (TyCon "String")))
+(DFunDef false "frozenAxisText" ((PCon "FrozenConst" (PVar "p"))) (EApp (EVar "renderAxisVal") (EVar "p")))
+(DFunDef false "frozenAxisText" ((PCon "FrozenVar" (PVar "v"))) (EApp (EVar "frozenVarName") (EVar "v")))
+(DFunDef false "frozenAxisText" ((PCon "FrozenJoin" (PList))) (ELit (LString "{}")))
+(DFunDef false "frozenAxisText" ((PCon "FrozenJoin" (PVar "members"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EMethodRef "map") (EVar "frozenAxisText")) (EVar "members")))) (ELit (LString ")"))))
+(DFunDef false "frozenAxisText" ((PVar "authority")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "trimLeft") (EApp (EVar "frozenAuthorityText") (EVar "authority")))) (ELit (LString ")"))))
 (DTypeSig true "manifestToAllowStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "manifestToAllowStr" ((PVar "atoms")) (EBlock (DoLet false false (PVar "toks") (EApp (EApp (EDictApp "flatMap") (EVar "atomToAllowToks")) (EVar "atoms"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "toks")))))
 (DTypeSig false "atomToAllowToks" (TyFun (TyCon "Atom") (TyApp (TyCon "List") (TyCon "String"))))

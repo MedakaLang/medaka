@@ -1,5 +1,5 @@
 # META
-source_lines=1653
+source_lines=1709
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_demand.{validateWasmDemand}
@@ -165,6 +165,11 @@ public export data ExternFinding =
 
 -- Defects are fatal in every emission mode; target extern findings may instead
 -- be recorded. The first failing validation family keeps its original order.
+import types.capability_manifest.{
+  ManifestRequirement(..), ManifestRequest(..), ManifestDefect(..),
+  CapabilityManifest, requestEqual, entryKeyEqual, validateManifest
+}
+
 public export data CoreDefect = CoreDefect String
 
 public export data EmissionValidation = EmissionValidation {
@@ -179,11 +184,12 @@ coreDefectMessage (CoreDefect message) = message
 export
 validateForEmission : Backend ->
   RuntimeExternDomain ->
+  ManifestRequirement ->
   EmitPlan ->
   CProgram ->
   EmissionValidation
-validateForEmission backend domain plan cp =
-  match emissionDefects backend domain plan cp
+validateForEmission backend domain requirement plan cp =
+  match emissionDefects backend domain requirement plan cp
     [] =>
       let names = match domain
         PreludeFreeRuntime => []
@@ -201,10 +207,11 @@ validateForEmission backend domain plan cp =
 
 emissionDefects : Backend ->
   RuntimeExternDomain ->
+  ManifestRequirement ->
   EmitPlan ->
   CProgram ->
   List CoreDefect
-emissionDefects backend domain plan cp =
+emissionDefects backend domain requirement plan cp =
   if backendName plan.target /= backendName backend then
     [
       CoreDefect
@@ -215,6 +222,7 @@ emissionDefects backend domain plan cp =
     None => match dictTagCollision backend cp
       Some message => [CoreDefect message]
       None => firstShapeDefect [
+        () => validateManifestCarriage requirement plan cp,
         () => validateExternMetadata cp,
         () =>
           validateExternRequirements backend domain cp plan.externRequirements,
@@ -232,6 +240,54 @@ emissionDefects backend domain plan cp =
             ++ validateMethodResults plan cp,
         () => validateTails cp,
       ]
+
+validateManifestCarriage : ManifestRequirement ->
+  EmitPlan ->
+  CProgram ->
+  List String
+validateManifestCarriage requirement plan (CProgram _ _ _ _ _ facts) =
+  let manifests = facts.factManifests
+  let structure =
+    flatMap
+      (m =>
+        map
+          ((ManifestDefect text) => "manifest: " ++ text)
+          (validateManifest m))
+      manifests
+  let expected = match requirement
+    RawUnchecked => []
+    CheckedEntry key protocol =>
+      let request = ManifestRequest { entry = key, protocol = protocol }
+      if any
+        (m => requestEqual request (m : CapabilityManifest).request)
+        manifests then
+        []
+      else if any
+        (m => entryKeyEqual key (m : CapabilityManifest).request.entry)
+        manifests then
+        ["manifest: wrong invocation protocol for checked entry"]
+      else if any
+        (m => (m : CapabilityManifest).request.entry.binding == key.binding)
+        manifests then
+        ["manifest: wrong module for checked entry"]
+      else if any (_ => True) manifests then
+        ["manifest: wrong binding for checked entry"]
+      else
+        ["manifest: missing checked entry manifest"]
+  expected
+    ++ structure
+    ++ (if manifestProjectionEqual
+      (map (m => (m : CapabilityManifest).request) manifests)
+      plan.manifestIndex then
+      []
+    else
+      ["manifest: emit plan projection disagrees with Core"])
+
+manifestProjectionEqual : List ManifestRequest -> List ManifestRequest -> Bool
+manifestProjectionEqual [] [] = True
+manifestProjectionEqual (a :: more) (b :: rest) =
+  requestEqual a b && manifestProjectionEqual more rest
+manifestProjectionEqual _ _ = False
 
 firstShapeDefect : List (Unit -> List String) -> List CoreDefect
 firstShapeDefect [] = []
@@ -1676,14 +1732,21 @@ validatePhysicalDemand _ _ _ = []
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "dedupBy" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false))))
 (DData Public "ExternFinding" () ((variant "ExternFinding" (ConPos (TyCon "String") (TyCon "Backend") (TyCon "GapKind") (TyCon "String") (TyCon "String")))) ())
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequirement" true) (mem "ManifestRequest" true) (mem "ManifestDefect" true) (mem "CapabilityManifest" false) (mem "requestEqual" false) (mem "entryKeyEqual" false) (mem "validateManifest" false))))
 (DData Public "CoreDefect" () ((variant "CoreDefect" (ConPos (TyCon "String")))) ())
 (DData Public "EmissionValidation" () ((variant "EmissionValidation" (ConNamed (field "defects" (TyApp (TyCon "List") (TyCon "CoreDefect"))) (field "externFindings" (TyApp (TyCon "List") (TyCon "ExternFinding")))))) ())
 (DTypeSig true "coreDefectMessage" (TyFun (TyCon "CoreDefect") (TyCon "String")))
 (DFunDef false "coreDefectMessage" ((PCon "CoreDefect" (PVar "message"))) (EVar "message"))
-(DTypeSig true "validateForEmission" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "EmissionValidation"))))))
-(DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "domain")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
-(DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect")))))))
-(DFunDef false "emissionDefects" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EVar "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EVar "validateExternMetadata") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "validateExternRequirements") (EVar "backend")) (EVar "domain")) (EVar "cp")) (EFieldAccess (EVar "plan") "externRequirements"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateRequirementProjection") (EVar "backend")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validatePhysicalDemand") (EVar "backend")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
+(DTypeSig true "validateForEmission" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "EmissionValidation")))))))
+(DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "requirement") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "domain")) (EVar "requirement")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
+(DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect"))))))))
+(DFunDef false "emissionDefects" ((PVar "backend") (PVar "domain") (PVar "requirement") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EVar "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateManifestCarriage") (EVar "requirement")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateExternMetadata") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "validateExternRequirements") (EVar "backend")) (EVar "domain")) (EVar "cp")) (EFieldAccess (EVar "plan") "externRequirements"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateRequirementProjection") (EVar "backend")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validatePhysicalDemand") (EVar "backend")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
+(DTypeSig false "validateManifestCarriage" (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "validateManifestCarriage" ((PVar "requirement") (PVar "plan") (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "manifests") (EFieldAccess (EVar "facts") "factManifests")) (DoLet false false (PVar "structure") (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "map") (ELam ((PCon "ManifestDefect" (PVar "text"))) (EBinOp "++" (ELit (LString "manifest: ")) (EVar "text")))) (EApp (EVar "validateManifest") (EVar "m"))))) (EVar "manifests"))) (DoLet false false (PVar "expected") (EMatch (EVar "requirement") (arm (PCon "RawUnchecked") () (EListLit)) (arm (PCon "CheckedEntry" (PVar "key") (PVar "protocol")) () (EBlock (DoLet false false (PVar "request") (ERecordCreate "ManifestRequest" ((fa "entry" (EVar "key")) (fa "protocol" (EVar "protocol"))))) (DoExpr (EIf (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EApp (EApp (EVar "requestEqual") (EVar "request")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request")))) (EVar "manifests")) (EListLit) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EApp (EApp (EVar "entryKeyEqual") (EVar "key")) (EFieldAccess (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request") "entry")))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong invocation protocol for checked entry"))) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EBinOp "==" (EFieldAccess (EFieldAccess (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request") "entry") "binding") (EFieldAccess (EVar "key") "binding")))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong module for checked entry"))) (EIf (EApp (EApp (EVar "any") (ELam (PWild) (EVar "True"))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong binding for checked entry"))) (EListLit (ELit (LString "manifest: missing checked entry manifest")))))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "expected") (EVar "structure")) (EIf (EApp (EApp (EVar "manifestProjectionEqual") (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request"))) (EVar "manifests"))) (EFieldAccess (EVar "plan") "manifestIndex")) (EListLit) (EListLit (ELit (LString "manifest: emit plan projection disagrees with Core"))))))))
+(DTypeSig false "manifestProjectionEqual" (TyFun (TyApp (TyCon "List") (TyCon "ManifestRequest")) (TyFun (TyApp (TyCon "List") (TyCon "ManifestRequest")) (TyCon "Bool"))))
+(DFunDef false "manifestProjectionEqual" ((PList) (PList)) (EVar "True"))
+(DFunDef false "manifestProjectionEqual" ((PCons (PVar "a") (PVar "more")) (PCons (PVar "b") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "requestEqual") (EVar "a")) (EVar "b")) (EApp (EApp (EVar "manifestProjectionEqual") (EVar "more")) (EVar "rest"))))
+(DFunDef false "manifestProjectionEqual" (PWild PWild) (EVar "False"))
 (DTypeSig false "firstShapeDefect" (TyFun (TyApp (TyCon "List") (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "CoreDefect"))))
 (DFunDef false "firstShapeDefect" ((PList)) (EListLit))
 (DFunDef false "firstShapeDefect" ((PCons (PVar "check") (PVar "rest"))) (EMatch (EApp (EVar "check") (ELit LUnit)) (arm (PList) () (EApp (EVar "firstShapeDefect") (EVar "rest"))) (arm (PVar "bad") () (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad"))))))))
@@ -2147,14 +2210,21 @@ validatePhysicalDemand _ _ _ = []
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "dedupBy" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false))))
 (DData Public "ExternFinding" () ((variant "ExternFinding" (ConPos (TyCon "String") (TyCon "Backend") (TyCon "GapKind") (TyCon "String") (TyCon "String")))) ())
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequirement" true) (mem "ManifestRequest" true) (mem "ManifestDefect" true) (mem "CapabilityManifest" false) (mem "requestEqual" false) (mem "entryKeyEqual" false) (mem "validateManifest" false))))
 (DData Public "CoreDefect" () ((variant "CoreDefect" (ConPos (TyCon "String")))) ())
 (DData Public "EmissionValidation" () ((variant "EmissionValidation" (ConNamed (field "defects" (TyApp (TyCon "List") (TyCon "CoreDefect"))) (field "externFindings" (TyApp (TyCon "List") (TyCon "ExternFinding")))))) ())
 (DTypeSig true "coreDefectMessage" (TyFun (TyCon "CoreDefect") (TyCon "String")))
 (DFunDef false "coreDefectMessage" ((PCon "CoreDefect" (PVar "message"))) (EVar "message"))
-(DTypeSig true "validateForEmission" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "EmissionValidation"))))))
-(DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "domain")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
-(DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect")))))))
-(DFunDef false "emissionDefects" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EVar "validateExternMetadata") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "validateExternRequirements") (EVar "backend")) (EVar "domain")) (EVar "cp")) (EFieldAccess (EVar "plan") "externRequirements"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateRequirementProjection") (EVar "backend")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validatePhysicalDemand") (EVar "backend")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
+(DTypeSig true "validateForEmission" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "EmissionValidation")))))))
+(DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "requirement") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "domain")) (EVar "requirement")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
+(DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect"))))))))
+(DFunDef false "emissionDefects" ((PVar "backend") (PVar "domain") (PVar "requirement") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateManifestCarriage") (EVar "requirement")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateExternMetadata") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "validateExternRequirements") (EVar "backend")) (EVar "domain")) (EVar "cp")) (EFieldAccess (EVar "plan") "externRequirements"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateRequirementProjection") (EVar "backend")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validatePhysicalDemand") (EVar "backend")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
+(DTypeSig false "validateManifestCarriage" (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "validateManifestCarriage" ((PVar "requirement") (PVar "plan") (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "manifests") (EFieldAccess (EVar "facts") "factManifests")) (DoLet false false (PVar "structure") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EMethodRef "map") (ELam ((PCon "ManifestDefect" (PVar "text"))) (EBinOp "++" (ELit (LString "manifest: ")) (EVar "text")))) (EApp (EVar "validateManifest") (EVar "m"))))) (EVar "manifests"))) (DoLet false false (PVar "expected") (EMatch (EVar "requirement") (arm (PCon "RawUnchecked") () (EListLit)) (arm (PCon "CheckedEntry" (PVar "key") (PVar "protocol")) () (EBlock (DoLet false false (PVar "request") (ERecordCreate "ManifestRequest" ((fa "entry" (EVar "key")) (fa "protocol" (EVar "protocol"))))) (DoExpr (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EApp (EApp (EVar "requestEqual") (EVar "request")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request")))) (EVar "manifests")) (EListLit) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EApp (EApp (EVar "entryKeyEqual") (EVar "key")) (EFieldAccess (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request") "entry")))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong invocation protocol for checked entry"))) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EBinOp "==" (EFieldAccess (EFieldAccess (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request") "entry") "binding") (EFieldAccess (EVar "key") "binding")))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong module for checked entry"))) (EIf (EApp (EApp (EDictApp "any") (ELam (PWild) (EVar "True"))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong binding for checked entry"))) (EListLit (ELit (LString "manifest: missing checked entry manifest")))))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "expected") (EVar "structure")) (EIf (EApp (EApp (EVar "manifestProjectionEqual") (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request"))) (EVar "manifests"))) (EFieldAccess (EVar "plan") "manifestIndex")) (EListLit) (EListLit (ELit (LString "manifest: emit plan projection disagrees with Core"))))))))
+(DTypeSig false "manifestProjectionEqual" (TyFun (TyApp (TyCon "List") (TyCon "ManifestRequest")) (TyFun (TyApp (TyCon "List") (TyCon "ManifestRequest")) (TyCon "Bool"))))
+(DFunDef false "manifestProjectionEqual" ((PList) (PList)) (EVar "True"))
+(DFunDef false "manifestProjectionEqual" ((PCons (PVar "a") (PVar "more")) (PCons (PVar "b") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "requestEqual") (EVar "a")) (EVar "b")) (EApp (EApp (EVar "manifestProjectionEqual") (EVar "more")) (EVar "rest"))))
+(DFunDef false "manifestProjectionEqual" (PWild PWild) (EVar "False"))
 (DTypeSig false "firstShapeDefect" (TyFun (TyApp (TyCon "List") (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "CoreDefect"))))
 (DFunDef false "firstShapeDefect" ((PList)) (EListLit))
 (DFunDef false "firstShapeDefect" ((PCons (PVar "check") (PVar "rest"))) (EMatch (EApp (EVar "check") (ELit LUnit)) (arm (PList) () (EApp (EVar "firstShapeDefect") (EVar "rest"))) (arm (PVar "bad") () (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad"))))))))

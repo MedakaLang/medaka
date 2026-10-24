@@ -281,7 +281,7 @@ This is #1398's REVISION block and runs beside Phases 0 to 4; it needs nothing f
 | Id | Action | Acceptance |
 |---|---|---|
 | **B1** | The Plan record (R5). **Landed 2026-10-14** (sprint #4107, PR #4110): `backend/emit_plan.mdk`'s `EmitPlan`, carrying its `target`; `lowerProgramEmitWith` takes no backend. R5's reachable-extern-requirements field is not on it yet; T4's `js/` lowering (#3672) waits for that field. | `lowerProgramEmitWith` has no backend parameter; `WasmEmitInput` carries the four facts it lacked. |
-| **B2** | F7 capability manifest and the remaining ledger rows. | Each row's L7 hand-derived fixture; the validator arm observed red. |
+| **B2** | F7 capability manifest (P5.5): a checked request publishes a complete, immutable entry/protocol contract before erasure; policy, manifest and emission consume that value. Remaining ledger rows stay open. | F7's existing publication, policy, target and emission route fixtures; the validator arm observed red. |
 | **B3** | Twin retirement | Global initialization order is owned by `backend/global_plan.mdk` and carried by `EmitPlan.globalInit`; emitters consume its source-prioritized SCC-ready order. G3's twin count falls with every fact that lands; a PR that adds a twin says why. |
 | **B4** | Validators on every test | `core_validate` runs before either emitter writes, in every engines fixture, not only in its own gate. |
 
