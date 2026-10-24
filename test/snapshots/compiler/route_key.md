@@ -1,5 +1,5 @@
 # META
-source_lines=706
+source_lines=714
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -151,11 +151,19 @@ entriesAboveSegment entries = match !preludeEvidenceRef
       entries
 
 denseIndexOf : EvTable -> EvIndex
-denseIndexOf entries =
+denseIndexOf entries = match emptyIndexFor entries
+  EvIndex lo arr =>
+    let _ = fillEvidence lo arr entries
+    EvIndex lo arr
+
+-- An index with a slot for every ordinal from the smallest to the largest in
+-- [entries] and nothing filled; the caller fills it and decides what a repeated
+-- ordinal means.
+export
+emptyIndexFor : EvTable -> EvIndex
+emptyIndexFor entries =
   let lo = evMinOrdinal entries
-  let arr = arrayMake (evSlotCount entries lo - lo) None
-  let _ = fillEvidence lo arr entries
-  EvIndex lo arr
+  EvIndex lo (arrayMake (evSlotCount entries lo - lo) None)
 
 aboveSegment : Array (Option EvEntry) -> EvEntry -> Bool
 aboveSegment seg (EvEntry (EvId m i) _)
@@ -721,7 +729,9 @@ rkTyList =
 (DTypeSig true "entriesAboveSegment" (TyFun (TyCon "EvTable") (TyCon "EvTable")))
 (DFunDef false "entriesAboveSegment" ((PVar "entries")) (EMatch (EUnOp "!" (EVar "preludeEvidenceRef")) (arm (PCon "None") () (EVar "entries")) (arm (PCon "Some" (PVar "seg")) () (EApp (EApp (EVar "filter") (ELam ((PVar "e")) (EMatch (EVar "e") (arm (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) () (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "seg"))))))) (EVar "entries")))))
 (DTypeSig false "denseIndexOf" (TyFun (TyCon "EvTable") (TyCon "EvIndex")))
-(DFunDef false "denseIndexOf" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))
+(DFunDef false "denseIndexOf" ((PVar "entries")) (EMatch (EApp (EVar "emptyIndexFor") (EVar "entries")) (arm (PCon "EvIndex" (PVar "lo") (PVar "arr")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))))
+(DTypeSig true "emptyIndexFor" (TyFun (TyCon "EvTable") (TyCon "EvIndex")))
+(DFunDef false "emptyIndexFor" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))))))
 (DTypeSig false "aboveSegment" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "EvEntry") (TyCon "Bool"))))
 (DFunDef false "aboveSegment" ((PVar "seg") (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild)) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "seg"))) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "seg")) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) PWild)) ((GBool (EBinOp "==" (EVar "m2") (EVar "m")))) (EVar "False")) (arm PWild () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is below the prelude's counter but not the prelude's")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -842,7 +852,9 @@ rkTyList =
 (DTypeSig true "entriesAboveSegment" (TyFun (TyCon "EvTable") (TyCon "EvTable")))
 (DFunDef false "entriesAboveSegment" ((PVar "entries")) (EMatch (EUnOp "!" (EVar "preludeEvidenceRef")) (arm (PCon "None") () (EVar "entries")) (arm (PCon "Some" (PVar "seg")) () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "e")) (EMatch (EVar "e") (arm (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) () (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "seg"))))))) (EVar "entries")))))
 (DTypeSig false "denseIndexOf" (TyFun (TyCon "EvTable") (TyCon "EvIndex")))
-(DFunDef false "denseIndexOf" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))
+(DFunDef false "denseIndexOf" ((PVar "entries")) (EMatch (EApp (EVar "emptyIndexFor") (EVar "entries")) (arm (PCon "EvIndex" (PVar "lo") (PVar "arr")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))))
+(DTypeSig true "emptyIndexFor" (TyFun (TyCon "EvTable") (TyCon "EvIndex")))
+(DFunDef false "emptyIndexFor" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))))))
 (DTypeSig false "aboveSegment" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "EvEntry") (TyCon "Bool"))))
 (DFunDef false "aboveSegment" ((PVar "seg") (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild)) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "seg"))) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "seg")) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) PWild)) ((GBool (EBinOp "==" (EVar "m2") (EVar "m")))) (EVar "False")) (arm PWild () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is below the prelude's counter but not the prelude's")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))

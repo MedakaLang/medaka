@@ -2253,7 +2253,7 @@ moduleAliasKeys : GraphCtx -> UsePath -> Loc -> List (String, String, String, Id
 moduleCellsFrom : Bool -> ModuleCells -> ModuleCells -> ModuleCells -> ModuleCells -> ModuleCells
 moduleChainMemoRef : Ref (Option ChainMemo)
 moduleCtxFrom : Bool -> ModuleCtx -> ModuleCtx -> ModuleCtx -> ModuleCtx -> ModuleCtx
-moduleDictNames : List (String, List String) -> List String -> List (String, List Decl) -> List String
+moduleDictNames : List String -> List (String, List Decl) -> List String
 moduleImportSeed : ModuleCtx -> List (String, Scheme) -> List (String, (Option String, ExportBinding)) -> ModuleSeed
 moduleMarkCtx : GraphCtx -> MarkSets -> String -> List Decl -> Map String Scheme -> MarkCtx
 modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
@@ -2545,7 +2545,6 @@ prefixLiteralProblems : String -> String -> List String
 prefixPatternErrMsg : String -> String
 prefixPatternOk : String -> Bool
 preludeArgPosDictNames : List Decl -> List Decl -> List String
-preludeConstrainedBodyVars : List Decl -> List (String, List String)
 preludeMarkFactsOf : List Decl -> PreludeMarkFacts
 preludePreambleFor : GraphCtx -> Option (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamble
 preludePreambleMemoRef : Ref (Option (((Int, Int), String), PreludePreamble))

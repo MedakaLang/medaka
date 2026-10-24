@@ -1,5 +1,5 @@
 # META
-source_lines=730
+source_lines=758
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's elaborated trees as a value, an on-disk file and a process
@@ -469,7 +469,9 @@ aboveCounter _ _ = False
 
 -- The key a file's header claims, after its version, header and digest are
 -- checked, without decoding the body: what a process that will not take the
--- trees itself needs to say whether they are fresh.
+-- trees itself needs to say whether they are fresh.  A file whose counters lie under
+-- a recomputed digest reads as fresh here; a process that decodes the file
+-- (`readPreludeTrees True`) refuses it and falls back silently (`interface verify` decodes it too).
 export
 readElabKey : String -> Result InterfaceFault InterfaceKey
 readElabKey text = map ((h, _) => h.hKey) (checkedFile text)
@@ -651,6 +653,32 @@ binderSpan decls =
     (lo.value, count.value)
   else
     (lo.value, 0 - 1)
+
+-- Whether the minted binder ordinals of [decls] are exactly the [count] ordinals
+-- from [base], each once: in range, no repeat, and so no gap.  `binderSpan` sees
+-- only the run's ends and its size, which a changed or duplicated id leaves alone.
+export
+binderRunIs : Int -> Int -> List Decl -> Bool
+binderRunIs count base decls
+  | count < 0 = False
+  | otherwise =
+    let seen = arrayMake count False
+    let ok = Ref True
+    let taken = Ref 0
+    let note =
+      bid => match bid
+        BinderId _ i if i >= 0 =>
+          let j = i - base
+          let _ =
+            if j < 0 || j >= count || arrayGetUnsafe j seen then
+              ok := False
+            else
+              arraySetUnsafe j True seen
+          taken := taken.value + 1
+          bid
+        _ => bid
+    let _ = mapBinders note decls
+    ok.value && taken.value == count
 
 -- [decls] with every minted binder ordinal moved by [offset].
 export
@@ -947,6 +975,8 @@ heldPreludeCounters _ =
 (DFunDef false "relocInterp" (PWild (PAs "p" (PCon "InterpStr" PWild))) (EVar "p"))
 (DTypeSig true "binderSpan" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "binderSpan" ((PVar "decls")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "Ref") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))) (DoLet false false (PVar "hi") (EApp (EVar "Ref") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))) (DoLet false false (PVar "count") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "note") (ELam ((PVar "bid")) (EMatch (EVar "bid") (arm (PCon "BinderId" PWild (PVar "i")) ((GBool (EBinOp ">=" (EVar "i") (ELit (LInt 0))))) (EBlock (DoLet false false PWild (EIf (EBinOp "||" (EBinOp "<" (EFieldAccess (EVar "lo") "value") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EFieldAccess (EVar "lo") "value"))) (EApp (EApp (EVar "setRef") (EVar "lo")) (EVar "i")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp ">" (EVar "i") (EFieldAccess (EVar "hi") "value")) (EApp (EApp (EVar "setRef") (EVar "hi")) (EVar "i")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (EBinOp "+" (EFieldAccess (EVar "count") "value") (ELit (LInt 1))))) (DoExpr (EVar "bid")))) (arm PWild () (EVar "bid"))))) (DoLet false false PWild (EApp (EApp (EVar "mapBinders") (EVar "note")) (EVar "decls"))) (DoExpr (EIf (EBinOp "==" (EBinOp "+" (EBinOp "-" (EFieldAccess (EVar "hi") "value") (EFieldAccess (EVar "lo") "value")) (ELit (LInt 1))) (EFieldAccess (EVar "count") "value")) (ETuple (EFieldAccess (EVar "lo") "value") (EFieldAccess (EVar "count") "value")) (ETuple (EFieldAccess (EVar "lo") "value") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))))))
+(DTypeSig true "binderRunIs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
+(DFunDef false "binderRunIs" ((PVar "count") (PVar "base") (PVar "decls")) (EIf (EBinOp "<" (EVar "count") (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "seen") (EApp (EApp (EVar "arrayMake") (EVar "count")) (EVar "False"))) (DoLet false false (PVar "ok") (EApp (EVar "Ref") (EVar "True"))) (DoLet false false (PVar "taken") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "note") (ELam ((PVar "bid")) (EMatch (EVar "bid") (arm (PCon "BinderId" PWild (PVar "i")) ((GBool (EBinOp ">=" (EVar "i") (ELit (LInt 0))))) (EBlock (DoLet false false (PVar "j") (EBinOp "-" (EVar "i") (EVar "base"))) (DoLet false false PWild (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "j") (ELit (LInt 0))) (EBinOp ">=" (EVar "j") (EVar "count"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "seen"))) (EApp (EApp (EVar "setRef") (EVar "ok")) (EVar "False")) (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "j")) (EVar "True")) (EVar "seen")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "taken")) (EBinOp "+" (EFieldAccess (EVar "taken") "value") (ELit (LInt 1))))) (DoExpr (EVar "bid")))) (arm PWild () (EVar "bid"))))) (DoLet false false PWild (EApp (EApp (EVar "mapBinders") (EVar "note")) (EVar "decls"))) (DoExpr (EBinOp "&&" (EFieldAccess (EVar "ok") "value") (EBinOp "==" (EFieldAccess (EVar "taken") "value") (EVar "count"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "relocDecls" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "relocDecls" ((PVar "offset") (PVar "decls")) (EApp (EApp (EVar "mapBinders") (EApp (EVar "relocId") (EVar "offset"))) (EVar "decls")))
 (DTypeSig false "relocated" (TyFun (TyCon "Int") (TyFun (TyCon "PreludeElab") (TyCon "PreludeElab"))))
@@ -1179,6 +1209,8 @@ heldPreludeCounters _ =
 (DFunDef false "relocInterp" (PWild (PAs "p" (PCon "InterpStr" PWild))) (EVar "p"))
 (DTypeSig true "binderSpan" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "binderSpan" ((PVar "decls")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "Ref") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))) (DoLet false false (PVar "hi") (EApp (EVar "Ref") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))) (DoLet false false (PVar "count") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "note") (ELam ((PVar "bid")) (EMatch (EVar "bid") (arm (PCon "BinderId" PWild (PVar "i")) ((GBool (EBinOp ">=" (EVar "i") (ELit (LInt 0))))) (EBlock (DoLet false false PWild (EIf (EBinOp "||" (EBinOp "<" (EFieldAccess (EVar "lo") "value") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EFieldAccess (EVar "lo") "value"))) (EApp (EApp (EVar "setRef") (EVar "lo")) (EVar "i")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp ">" (EVar "i") (EFieldAccess (EVar "hi") "value")) (EApp (EApp (EVar "setRef") (EVar "hi")) (EVar "i")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (EBinOp "+" (EFieldAccess (EDictApp "count") "value") (ELit (LInt 1))))) (DoExpr (EVar "bid")))) (arm PWild () (EVar "bid"))))) (DoLet false false PWild (EApp (EApp (EVar "mapBinders") (EVar "note")) (EVar "decls"))) (DoExpr (EIf (EBinOp "==" (EBinOp "+" (EBinOp "-" (EFieldAccess (EVar "hi") "value") (EFieldAccess (EVar "lo") "value")) (ELit (LInt 1))) (EFieldAccess (EDictApp "count") "value")) (ETuple (EFieldAccess (EVar "lo") "value") (EFieldAccess (EDictApp "count") "value")) (ETuple (EFieldAccess (EVar "lo") "value") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))))))
+(DTypeSig true "binderRunIs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
+(DFunDef false "binderRunIs" ((PVar "count") (PVar "base") (PVar "decls")) (EIf (EBinOp "<" (EDictApp "count") (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "seen") (EApp (EApp (EVar "arrayMake") (EDictApp "count")) (EVar "False"))) (DoLet false false (PVar "ok") (EApp (EVar "Ref") (EVar "True"))) (DoLet false false (PVar "taken") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "note") (ELam ((PVar "bid")) (EMatch (EVar "bid") (arm (PCon "BinderId" PWild (PVar "i")) ((GBool (EBinOp ">=" (EVar "i") (ELit (LInt 0))))) (EBlock (DoLet false false (PVar "j") (EBinOp "-" (EVar "i") (EVar "base"))) (DoLet false false PWild (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "j") (ELit (LInt 0))) (EBinOp ">=" (EVar "j") (EDictApp "count"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "seen"))) (EApp (EApp (EVar "setRef") (EVar "ok")) (EVar "False")) (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "j")) (EVar "True")) (EVar "seen")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "taken")) (EBinOp "+" (EFieldAccess (EVar "taken") "value") (ELit (LInt 1))))) (DoExpr (EVar "bid")))) (arm PWild () (EVar "bid"))))) (DoLet false false PWild (EApp (EApp (EVar "mapBinders") (EVar "note")) (EVar "decls"))) (DoExpr (EBinOp "&&" (EFieldAccess (EVar "ok") "value") (EBinOp "==" (EFieldAccess (EVar "taken") "value") (EDictApp "count"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "relocDecls" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "relocDecls" ((PVar "offset") (PVar "decls")) (EApp (EApp (EVar "mapBinders") (EApp (EVar "relocId") (EVar "offset"))) (EVar "decls")))
 (DTypeSig false "relocated" (TyFun (TyCon "Int") (TyFun (TyCon "PreludeElab") (TyCon "PreludeElab"))))

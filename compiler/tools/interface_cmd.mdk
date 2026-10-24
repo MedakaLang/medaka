@@ -449,14 +449,16 @@ interfaceVerdictOf modulePath = match readFile (interfacePath modulePath)
     Err fault => Stale (faultComponent fault)
     Ok (f, _) => againstSources modulePath (k => k) f.ifKey
 
--- A file framed like the elaborated trees stands on its header alone: the
--- version, the header and the digest are checked, the body is not decoded.
+-- `verify` is the one command that reads the whole file: the version, the header,
+-- the digest, the body and the counters against their rows.  The hot parents read
+-- the header alone (`readElabKey`), so a digest-valid file whose counters lie
+-- reads as fresh to them; `verify` is where it is called stale.
 elabVerdictOf : String -> <IO> Verdict
 elabVerdictOf modulePath = match readFile (elabPath modulePath)
   Err _ => Missing
-  Ok text => match readElabKey text
+  Ok text => match readElabFile text
     Err fault => Stale (faultComponent fault)
-    Ok key => againstSources modulePath elabKeyOf key
+    Ok (key, _) => againstSources modulePath elabKeyOf key
 
 declsVerdictOf : String -> <IO> Verdict
 declsVerdictOf modulePath = match readFile (declsPath modulePath)

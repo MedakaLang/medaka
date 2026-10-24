@@ -41,7 +41,7 @@ import types.prelude_interface.{
   InterfaceKey, interfaceKeyOf, keysMatch, seedPreludeInterface
 }
 import types.prelude_elab.{
-  PreludeElab, binderSpan, elabKeyOf, readElabFile, readElabKey, relocDecls,
+  PreludeElab, binderRunIs, elabKeyOf, readElabFile, readElabKey, relocDecls,
   seedPreludeElab
 }
 import types.prelude_decls.{
@@ -525,17 +525,14 @@ holdPreludeDecls inputs covered =
   registerPreludeDecls inputs.pnCoreSrc (_ =>
     map (pd => placed pd.pdCoreBinders pd.pdCoreBase pd.pdCore) (value ()))
 
--- Whether each tree's minted binder ordinals are the run its counters claim.
--- The digest covers the counters line, so only a writer that lied passes the
--- digest and fails here; a lie would shift every id minted after the tree.
+-- Whether each tree's minted binder ordinals are exactly the run its counters
+-- claim, each once.  The digest covers the counters line, so only a writer that
+-- lied passes the digest and fails here; a lie would shift every id minted after
+-- the tree.
 describes : PreludeDecls -> Bool
 describes pd =
-  runOf pd.pdRuntimeBinders pd.pdRuntimeBase pd.pdRuntime
-    && runOf pd.pdCoreBinders pd.pdCoreBase pd.pdCore
-
-runOf : Int -> Int -> List Decl -> Bool
-runOf 0 _ decls = fst (binderSpan decls) < 0
-runOf count base decls = binderSpan decls == (base, count)
+  binderRunIs pd.pdRuntimeBinders pd.pdRuntimeBase pd.pdRuntime
+    && binderRunIs pd.pdCoreBinders pd.pdCoreBase pd.pdCore
 
 -- [decls], whose [count] minted binder ordinals run from [base], moved onto the
 -- next [count] ordinals of the counter.

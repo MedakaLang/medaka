@@ -564,8 +564,10 @@ test "verify names the component of a header edit, a truncation and an empty ela
             "counter lowered under the old digest"
             (expectEqual (Ok "stale: elaborated trees (.mdke) file") counters),
           labelFail
-            "counter lowered under a recomputed digest: verify reads the header only"
-            (expectEqual (Ok "fresh") counterDigested),
+            "counter lowered under a recomputed digest"
+            (expectEqual
+              (Ok "stale: elaborated trees (.mdke) file")
+              counterDigested),
         ]
     _ => fail "write run failed")
 

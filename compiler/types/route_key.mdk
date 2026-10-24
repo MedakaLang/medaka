@@ -147,11 +147,19 @@ entriesAboveSegment entries = match !preludeEvidenceRef
       entries
 
 denseIndexOf : EvTable -> EvIndex
-denseIndexOf entries =
+denseIndexOf entries = match emptyIndexFor entries
+  EvIndex lo arr =>
+    let _ = fillEvidence lo arr entries
+    EvIndex lo arr
+
+-- An index with a slot for every ordinal from the smallest to the largest in
+-- [entries] and nothing filled; the caller fills it and decides what a repeated
+-- ordinal means.
+export
+emptyIndexFor : EvTable -> EvIndex
+emptyIndexFor entries =
   let lo = evMinOrdinal entries
-  let arr = arrayMake (evSlotCount entries lo - lo) None
-  let _ = fillEvidence lo arr entries
-  EvIndex lo arr
+  EvIndex lo (arrayMake (evSlotCount entries lo - lo) None)
 
 aboveSegment : Array (Option EvEntry) -> EvEntry -> Bool
 aboveSegment seg (EvEntry (EvId m i) _)

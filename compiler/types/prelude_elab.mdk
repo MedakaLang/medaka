@@ -465,7 +465,9 @@ aboveCounter _ _ = False
 
 -- The key a file's header claims, after its version, header and digest are
 -- checked, without decoding the body: what a process that will not take the
--- trees itself needs to say whether they are fresh.
+-- trees itself needs to say whether they are fresh.  A file whose counters lie under
+-- a recomputed digest reads as fresh here; a process that decodes the file
+-- (`readPreludeTrees True`) refuses it and falls back silently (`interface verify` decodes it too).
 export
 readElabKey : String -> Result InterfaceFault InterfaceKey
 readElabKey text = map ((h, _) => h.hKey) (checkedFile text)
@@ -647,6 +649,32 @@ binderSpan decls =
     (lo.value, count.value)
   else
     (lo.value, 0 - 1)
+
+-- Whether the minted binder ordinals of [decls] are exactly the [count] ordinals
+-- from [base], each once: in range, no repeat, and so no gap.  `binderSpan` sees
+-- only the run's ends and its size, which a changed or duplicated id leaves alone.
+export
+binderRunIs : Int -> Int -> List Decl -> Bool
+binderRunIs count base decls
+  | count < 0 = False
+  | otherwise =
+    let seen = arrayMake count False
+    let ok = Ref True
+    let taken = Ref 0
+    let note =
+      bid => match bid
+        BinderId _ i if i >= 0 =>
+          let j = i - base
+          let _ =
+            if j < 0 || j >= count || arrayGetUnsafe j seen then
+              ok := False
+            else
+              arraySetUnsafe j True seen
+          taken := taken.value + 1
+          bid
+        _ => bid
+    let _ = mapBinders note decls
+    ok.value && taken.value == count
 
 -- [decls] with every minted binder ordinal moved by [offset].
 export

@@ -1,5 +1,5 @@
 # META
-source_lines=535
+source_lines=537
 stages=DESUGAR,MARK
 # SOURCE
 {- interface_cmd.mdk: `medaka interface write|show|verify`, the driver for the
@@ -453,14 +453,16 @@ interfaceVerdictOf modulePath = match readFile (interfacePath modulePath)
     Err fault => Stale (faultComponent fault)
     Ok (f, _) => againstSources modulePath (k => k) f.ifKey
 
--- A file framed like the elaborated trees stands on its header alone: the
--- version, the header and the digest are checked, the body is not decoded.
+-- `verify` is the one command that reads the whole file: the version, the header,
+-- the digest, the body and the counters against their rows.  The hot parents read
+-- the header alone (`readElabKey`), so a digest-valid file whose counters lie
+-- reads as fresh to them; `verify` is where it is called stale.
 elabVerdictOf : String -> <IO> Verdict
 elabVerdictOf modulePath = match readFile (elabPath modulePath)
   Err _ => Missing
-  Ok text => match readElabKey text
+  Ok text => match readElabFile text
     Err fault => Stale (faultComponent fault)
-    Ok key => againstSources modulePath elabKeyOf key
+    Ok (key, _) => againstSources modulePath elabKeyOf key
 
 declsVerdictOf : String -> <IO> Verdict
 declsVerdictOf modulePath = match readFile (declsPath modulePath)
@@ -635,7 +637,7 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "interfaceVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "interfaceVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "interfacePath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterface") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "f") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (ELam ((PVar "k")) (EVar "k"))) (EFieldAccess (EVar "f") "ifKey")))))))
 (DTypeSig false "elabVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
-(DFunDef false "elabVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "elabPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabKey") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PVar "key")) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "elabKeyOf")) (EVar "key")))))))
+(DFunDef false "elabVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "elabPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "elabKeyOf")) (EVar "key")))))))
 (DTypeSig false "declsVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsKey") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PVar "key")) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")))))))
 (DTypeSig true "verdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
@@ -752,7 +754,7 @@ runInterfaceCmd (sub :: _) =
 (DTypeSig false "interfaceVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "interfaceVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "interfacePath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readInterface") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "f") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (ELam ((PVar "k")) (EVar "k"))) (EFieldAccess (EVar "f") "ifKey")))))))
 (DTypeSig false "elabVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
-(DFunDef false "elabVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "elabPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabKey") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PVar "key")) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "elabKeyOf")) (EVar "key")))))))
+(DFunDef false "elabVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "elabPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readElabFile") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PTuple (PVar "key") PWild)) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "elabKeyOf")) (EVar "key")))))))
 (DTypeSig false "declsVerdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
 (DFunDef false "declsVerdictOf" ((PVar "modulePath")) (EMatch (EApp (EVar "readFile") (EApp (EVar "declsPath") (EVar "modulePath"))) (arm (PCon "Err" PWild) () (EVar "Missing")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "readDeclsKey") (EVar "text")) (arm (PCon "Err" (PVar "fault")) () (EApp (EVar "Stale") (EApp (EVar "faultComponent") (EVar "fault")))) (arm (PCon "Ok" (PVar "key")) () (EApp (EApp (EApp (EVar "againstSources") (EVar "modulePath")) (EVar "declsKeyOf")) (EVar "key")))))))
 (DTypeSig true "verdictOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Verdict"))))
