@@ -2,6 +2,7 @@ import types.effect_domain.{
   canonParam, drender, isSubTop, Param(..), pathClimbs, pathSpelling
 }
 import types.effect_authority.{authHasVars, authConsts}
+import types.effect_param_decode.{decodeSetParam}
 import types.effect_policy as EP
 import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain,
@@ -53,7 +54,6 @@ import types.typecheck.{
   entrySplit,
   pubSchemes,
   lastInvocationOps,
-  decodeSetParam,
   bindingGrantArity,
 }
 import types.program_facts.{factsOfElab, withFacts}

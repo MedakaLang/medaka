@@ -1,0 +1,287 @@
+import frontend.ast.{EffParamTy(..), TyConOrigin(..)}
+import types.effect_domain.{Param(..), drender}
+import types.effect_param_decode.{
+  decodeWrittenParam, dtopIn, writtenParam, writtenAxis, effectParamProblems,
+  effectParamMsg, atomicLabelParamText, repeatedNames, decodeSetParam,
+  atomOfLabel
+}
+import types.effect_rows.{EffLabel(..), builtinLabel, renderAtom}
+import test.{expectEqual, expectEach, expectErrContains}
+
+schema : List (String, Param)
+schema = [("Host", PPrefix None), ("Method", PSet None)]
+
+domains : List (String, Param)
+domains = [
+  ("Net", PPrefix None),
+  ("FileRead", PPath None),
+  ("Env", PSet None),
+  ("FFI", PPrefix None),
+  ("Http", PProduct schema),
+  ("plugin::Local", PSet None),
+]
+
+test "empty and malformed parameters retain label-specific diagnostics" = expectEach
+  [
+    (
+      "empty Prefix",
+      expectEqual
+        (Err
+          "invalid effect parameter on <Net>: pattern is empty; name the element, or write the bare label for the whole domain")
+        (map
+          drender
+          (decodeWrittenParam domains (builtinLabel "Net") (EPLit ""))),
+    ),
+    (
+      "empty Path",
+      expectErrContains
+        "pattern is empty"
+        (map
+          drender
+          (decodeWrittenParam domains (builtinLabel "FileRead") (EPLit ""))),
+    ),
+    (
+      "empty FFI",
+      expectEqual
+        (Err
+          "invalid effect parameter on <FFI>: the library pattern is empty; name the library, `<FFI \"curl\">`")
+        (map
+          drender
+          (decodeWrittenParam domains (builtinLabel "FFI") (EPLit ""))),
+    ),
+    (
+      "Prefix rejects a set",
+      expectErrContains
+        "takes a prefix pattern, not a set"
+        (map
+          drender
+          (decodeWrittenParam domains (builtinLabel "Net") (EPSet []))),
+    ),
+    (
+      "Path rejects axes",
+      expectErrContains
+        "is not a product domain and takes no axes"
+        (map
+          drender
+          (decodeWrittenParam domains (builtinLabel "FileRead") (EPProduct []))),
+    ),
+    (
+      "IO is atomic",
+      expectEqual
+        [
+          "label `IO` is atomic and takes no parameter; declare it `effect IO Prefix` to parameterize it",
+        ]
+        (effectParamProblems "IO" PUnit (EPLit "x")),
+    ),
+    (
+      "unknown atomic label",
+      expectEqual
+        [
+          "label `Other` is atomic and takes no parameter; declare it `effect Other Prefix` to parameterize it",
+        ]
+        (effectParamProblems "Other" PUnit (EPName "k")),
+    ),
+  ]
+
+test "valid parameters preserve Prefix Path Set Product and FFI values" = expectEach
+  [
+    (
+      "Prefix",
+      expectEqual
+        (Ok " \"a.example/*\"")
+        (map
+          drender
+          (decodeWrittenParam
+            domains
+            (builtinLabel "Net")
+            (EPLit "a.example/*"))),
+    ),
+    (
+      "Path",
+      expectEqual
+        (Ok " \"data/../x\"")
+        (map
+          drender
+          (decodeWrittenParam
+            domains
+            (builtinLabel "FileRead")
+            (EPLit "data/../x"))),
+    ),
+    (
+      "Set",
+      expectEqual
+        (Ok " {\"HOME\", \"PATH\"}")
+        (map
+          drender
+          (decodeWrittenParam
+            domains
+            (builtinLabel "Env")
+            (EPSet ["PATH", "HOME", "PATH"]))),
+    ),
+    (
+      "empty Set",
+      expectEqual
+        (Ok " {}")
+        (map
+          drender
+          (decodeWrittenParam domains (builtinLabel "Env") (EPSet []))),
+    ),
+    (
+      "Product schema order",
+      expectEqual
+        (Ok " Host=\"a.example\" Method={\"GET\", \"POST\"}")
+        (map
+          drender
+          (decodeWrittenParam
+            domains
+            (builtinLabel "Http")
+            (EPProduct [
+              ("Method", EPSet ["POST", "GET"]),
+              ("Host", EPLit "a.example"),
+            ]))),
+    ),
+    (
+      "Product primary literal",
+      expectEqual
+        (Ok " Host=\"a.example\"")
+        (map
+          drender
+          (decodeWrittenParam
+            domains
+            (builtinLabel "Http")
+            (EPLit "a.example"))),
+    ),
+    (
+      "FFI library",
+      expectEqual
+        (Ok " \"curl\"")
+        (map
+          drender
+          (decodeWrittenParam domains (builtinLabel "FFI") (EPLit "curl"))),
+    ),
+    (
+      "IO top",
+      expectEqual
+        (Ok "")
+        (map drender (decodeWrittenParam domains (builtinLabel "IO") EPTop)),
+    ),
+    (
+      "module identity",
+      expectEqual
+        (Ok " {\"local\"}")
+        (map
+          drender
+          (decodeWrittenParam
+            domains
+            (EffLabel "Local" (OriginModule "plugin"))
+            (EPLit "local"))),
+    ),
+  ]
+
+malformedAxes : EffParamTy
+malformedAxes = EPProduct [
+  ("Host", EPLit ""),
+  ("Method", EPLit "GET"),
+  ("Host", EPSet ["a.example"]),
+  ("Missing", EPTop),
+  ("Method", EPSet ["POST"]),
+]
+
+test "product diagnostics accumulate duplicates first then axis problems in source order" = expectEach
+  [
+    (
+      "all problems",
+      expectEqual
+        [
+          "axis `Host` is written twice; write each value as its own element",
+          "axis `Method` is written twice; write each value as its own element",
+          "Host pattern is empty; name the element, or write the bare label for the whole domain",
+          "axis `Method` takes a set, not a pattern",
+          "axis `Host` takes a prefix pattern, not a set",
+          "unknown product axis `Missing`; declared axes: Host, Method",
+        ]
+        (effectParamProblems "Http" (PProduct schema) malformedAxes),
+    ),
+    (
+      "decoder returns only the first",
+      expectEqual
+        (Err
+          "invalid effect parameter on <Http>: axis `Host` is written twice; write each value as its own element")
+        (map
+          drender
+          (decodeWrittenParam domains (builtinLabel "Http") malformedAxes)),
+    ),
+    (
+      "empty primary literal is checked before canonicalization",
+      expectEqual
+        [
+          "Host pattern is empty; name the element, or write the bare label for the whole domain",
+        ]
+        (effectParamProblems "Http" (PProduct schema) (EPLit "")),
+    ),
+    (
+      "named axes retain their domain",
+      expectEqual
+        []
+        (effectParamProblems
+          "Http"
+          (PProduct schema)
+          (EPProduct [("Host", EPName "h"), ("Method", EPName "m")])),
+    ),
+    (
+      "Product rejects bare sets",
+      expectEqual
+        [
+          "label `Http` takes named axes such as `Host=... Method=...`, not a bare set",
+        ]
+        (effectParamProblems "Http" (PProduct schema) (EPSet [])),
+    ),
+  ]
+
+test "comma and repeated-name decoders retain empty filtering sorting and first-occurrence order" = expectEach
+  [
+    (
+      "braces",
+      expectEqual ["HOME", "PATH"] (decodeSetParam "{PATH,,HOME,PATH,}"),
+    ),
+    ("bare", expectEqual ["a", "b"] (decodeSetParam ",b,a,b,")),
+    ("empty braces", expectEqual [] (decodeSetParam "{}")),
+    ("empty text", expectEqual [] (decodeSetParam "")),
+    (
+      "no whitespace normalization",
+      expectEqual [" a", "a"] (decodeSetParam "a, a"),
+    ),
+    (
+      "repeated names",
+      expectEqual ["b", "a"] (repeatedNames ["b", "a", "b", "a", "b"] []),
+    ),
+    (
+      "already seen",
+      expectEqual ["a"] (repeatedNames ["b", "a", "a", "b"] ["b"]),
+    ),
+  ]
+
+test "pure adapters retain tops and unchecked written-value behavior" = expectEach
+  [
+    ("top atom", expectEqual "Net" (renderAtom (atomOfLabel domains "Net"))),
+    (
+      "unknown domain",
+      expectEqual "" (drender (dtopIn domains (builtinLabel "Other"))),
+    ),
+    (
+      "written invalid shape falls back to top",
+      expectEqual "" (drender (writtenParam (PPrefix None) (EPSet ["x"]))),
+    ),
+    (
+      "written axis set canonicalizes",
+      expectEqual
+        " {\"GET\", \"POST\"}"
+        (drender (snd (writtenAxis ("Method", EPSet ["POST", "GET", "GET"])))),
+    ),
+    (
+      "atomic message",
+      expectEqual
+        "invalid effect parameter on <IO>: label `IO` is atomic and takes no parameter; declare it `effect IO Prefix` to parameterize it"
+        (effectParamMsg "IO" (atomicLabelParamText "IO")),
+    ),
+  ]
