@@ -16,8 +16,8 @@ import string as S
 import support.sexp_value.{SexpError(..), renderSExp}
 import types.interface_sexp.{InterfaceFault(..), sha256Hex}
 import types.prelude_decls.{
-  PreludeDecls(..), preludeDeclsOf, encodeDeclsFile, readDeclsFile,
-  readDeclsKey, declsKeyOf, declsFormatVersion, renderDeclsFault
+  PreludeDecls(..), acceptedDeclsBody, preludeDeclsOf, encodeDeclsFile,
+  readDeclsFile, readDeclsKey, declsKeyOf, declsFormatVersion, renderDeclsFault
 }
 import types.prelude_elab.{binderSpan, relocDecls}
 import types.prelude_interface.{InterfaceKey(..), interfaceKeyOf, keysMatch}
@@ -287,3 +287,42 @@ test "a key of another compiler or sources reads as a mismatch, never as the sam
           "the declarations key carries this file's format"
           (expectEqual declsFormatVersion (declsKeyOf testKey).ikFormat),
       ]
+
+-- The covered bytes of [text] with the counters line replaced by [line].
+withCounters : String -> String -> String
+withCounters text line = match S.indexOf "\n" text
+  None => text
+  Some i =>
+    let body = S.drop (i + 1) text
+    line ++ S.drop (optionOr 0 (S.indexOf "\n" body)) body
+
+test "a counters line that does not describe the trees is not accepted, whatever its size" =
+  match writtenFile ()
+    None => fail "could not write the file"
+    Some text => match readDeclsFile text
+      Err f => fail "the file did not read: \{why (Err f)}"
+      Ok (_, pd) =>
+        let n = pd.pdCoreBinders
+        let accepted = line => why (acceptedDeclsBody (withCounters text line))
+        let refused =
+          "counters: the binder counters disagree with the trees (prelude declarations)"
+        expectAll [
+          labelFail
+            "the file's own counters"
+            (expectEqual "ok" (accepted "(counters 0 0 \{n} 0)")),
+          labelFail
+            "a count far above any run"
+            (expectEqual refused (accepted "(counters 0 0 99999999999 0)")),
+          labelFail
+            "one above the longest run"
+            (expectEqual refused (accepted "(counters 0 0 4194305 0)")),
+          labelFail
+            "one short"
+            (expectEqual refused (accepted "(counters 0 0 \{n - 1} 0)")),
+          labelFail
+            "zero with ids present"
+            (expectEqual refused (accepted "(counters 0 0 0 0)")),
+          labelFail
+            "a runtime count"
+            (expectEqual refused (accepted "(counters 5 0 \{n} 0)")),
+        ]

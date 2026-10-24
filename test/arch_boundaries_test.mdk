@@ -816,6 +816,8 @@ sideNames = [
   "preludeCacheRef",
   "preludeElabCacheRef",
   "preludeEvidenceRef",
+  "desugarCacheRef",
+  "desugarGenRef",
   "program_facts.currentFacts",
 ]
 

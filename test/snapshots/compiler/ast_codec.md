@@ -26,7 +26,7 @@ import list.{splitAt}
 import support.sexp_value.{
   SExp(..), SexpCursor, SexpError(..), cursorAdvance, cursorAtEnd, cursorAtom,
   cursorClose, cursorFail, cursorFailed, cursorInt, cursorList, cursorOf,
-  cursorOffset, cursorOpen, cursorPeek, cursorChar, isOpenByte
+  cursorOffset, cursorOpen, cursorPeek, cursorChar, isCloseByte, isOpenByte
 }
 
 -- ── entry points ────────────────────────────────────────────────────────────
@@ -174,7 +174,7 @@ readFloat cur =
 readOpt : (SexpCursor -> a) -> SexpCursor -> Option a
 readOpt f cur =
   let _ = cursorOpen cur
-  if cursorPeek cur == 41 then
+  if isCloseByte (cursorPeek cur) then
     let _ = cursorAdvance cur
     None
   else
@@ -2120,7 +2120,7 @@ readDeclTagged t cur
 (DUse false (UseWild ("frontend" "ast")))
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
 (DUse false (UseGroup ("list") ((mem "splitAt" false))))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "SexpError" true) (mem "cursorAdvance" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false) (mem "isOpenByte" false))))
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "SexpError" true) (mem "cursorAdvance" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false) (mem "isCloseByte" false) (mem "isOpenByte" false))))
 (DTypeSig true "declsSExp" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SExp")))
 (DFunDef false "declsSExp" ((PVar "ds")) (EApp (EApp (EVar "sexpList") (EVar "sexpDecl")) (EVar "ds")))
 (DTypeSig true "evEntriesSExp" (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyCon "SExp")))
@@ -2180,7 +2180,7 @@ readDeclTagged t cur
 (DTypeSig false "readFloat" (TyFun (TyCon "SexpCursor") (TyCon "Float")))
 (DFunDef false "readFloat" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "hi") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "lo") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "hi") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (ELit (LInt 4294967295)))) (EBinOp "<" (EVar "lo") (ELit (LInt 0)))) (EBinOp ">" (EVar "lo") (ELit (LInt 4294967295)))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit (LFloat 0.0))) (EApp (EApp (EVar "bytesToFloat64") (EApp (EVar "fromList") (EBinOp "++" (EApp (EVar "bytesOfWord") (EVar "hi")) (EApp (EVar "bytesOfWord") (EVar "lo"))))) (ELit (LInt 0)))))))
 (DTypeSig false "readOpt" (TyFun (TyFun (TyCon "SexpCursor") (TyVar "a")) (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "readOpt" ((PVar "f") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 41))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EVar "v"))))))))
+(DFunDef false "readOpt" ((PVar "f") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EVar "v"))))))))
 (DTypeSig false "readPair" (TyFun (TyFun (TyCon "SexpCursor") (TyVar "a")) (TyFun (TyFun (TyCon "SexpCursor") (TyVar "b")) (TyFun (TyCon "SexpCursor") (TyTuple (TyVar "a") (TyVar "b"))))))
 (DFunDef false "readPair" ((PVar "fa") (PVar "fb") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a") (EApp (EVar "fa") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "fb") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "a") (EVar "b")))))
 (DTypeSig false "readLoc" (TyFun (TyCon "SexpCursor") (TyCon "Loc")))
@@ -2842,7 +2842,7 @@ readDeclTagged t cur
 (DUse false (UseWild ("frontend" "ast")))
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
 (DUse false (UseGroup ("list") ((mem "splitAt" false))))
-(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "SexpError" true) (mem "cursorAdvance" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false) (mem "isOpenByte" false))))
+(DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "SexpError" true) (mem "cursorAdvance" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false) (mem "isCloseByte" false) (mem "isOpenByte" false))))
 (DTypeSig true "declsSExp" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SExp")))
 (DFunDef false "declsSExp" ((PVar "ds")) (EApp (EApp (EVar "sexpList") (EVar "sexpDecl")) (EVar "ds")))
 (DTypeSig true "evEntriesSExp" (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyCon "SExp")))
@@ -2902,7 +2902,7 @@ readDeclTagged t cur
 (DTypeSig false "readFloat" (TyFun (TyCon "SexpCursor") (TyCon "Float")))
 (DFunDef false "readFloat" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "hi") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "lo") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "hi") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (ELit (LInt 4294967295)))) (EBinOp "<" (EVar "lo") (ELit (LInt 0)))) (EBinOp ">" (EVar "lo") (ELit (LInt 4294967295)))) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit (LFloat 0.0))) (EApp (EApp (EVar "bytesToFloat64") (EApp (EVar "fromList") (EBinOp "++" (EApp (EVar "bytesOfWord") (EVar "hi")) (EApp (EVar "bytesOfWord") (EVar "lo"))))) (ELit (LInt 0)))))))
 (DTypeSig false "readOpt" (TyFun (TyFun (TyCon "SexpCursor") (TyVar "a")) (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "readOpt" ((PVar "f") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "cursorPeek") (EVar "cur")) (ELit (LInt 41))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EVar "v"))))))))
+(DFunDef false "readOpt" ((PVar "f") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoExpr (EIf (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EBlock (DoLet false false PWild (EApp (EVar "cursorAdvance") (EVar "cur"))) (DoExpr (EVar "None"))) (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (EApp (EVar "Some") (EVar "v"))))))))
 (DTypeSig false "readPair" (TyFun (TyFun (TyCon "SexpCursor") (TyVar "a")) (TyFun (TyFun (TyCon "SexpCursor") (TyVar "b")) (TyFun (TyCon "SexpCursor") (TyTuple (TyVar "a") (TyVar "b"))))))
 (DFunDef false "readPair" ((PVar "fa") (PVar "fb") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "a") (EApp (EVar "fa") (EVar "cur"))) (DoLet false false (PVar "b") (EApp (EVar "fb") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "a") (EVar "b")))))
 (DTypeSig false "readLoc" (TyFun (TyCon "SexpCursor") (TyCon "Loc")))

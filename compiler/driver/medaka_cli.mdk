@@ -2897,6 +2897,7 @@ runRunCmd argv =
       -- a pure error-rendering function).
       let modsWithPath = match loadProgramFilesLocatedE (_ => None) target roots
         Err lerr =>
+          let _ = takeShippedPrelude jsonMode stdlibDir rsrc csrc
           let _ = orExit (mapErr (ppParseError tsrc target) (parseResult tsrc))
           let _ = runAbort (moduleLoadErrText tsrc target stdlibDir lerr)
           panic "unreachable"

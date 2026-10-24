@@ -656,3 +656,61 @@ test "a missing or stale declarations file makes verify name it" = withStagedStd
             (expectEqual "stale: declarations (.mdkd) missing" (verifyOut dir)),
         ]
     _ => fail "write run failed")
+
+-- [fresh] with its covered text replaced by [edit] of it and the digest recomputed.
+redigested : String -> (String -> String) -> String
+redigested fresh edit = match S.indexOf "\n" fresh
+  None => fresh
+  Some i =>
+    let covered = S.drop (i + 1) fresh
+    let edited = edit covered
+    let header = S.take i fresh
+    "\{S.replace (sha256Hex covered) (sha256Hex edited) header}\n\{edited}"
+
+-- What `verify` prints once core.mdkd is [text].
+verifyDecls : String ->
+  String ->
+  <Exec, IO, FileWrite, Env "MEDAKA_ROOT", Env "MEDAKA"> String
+verifyDecls dir text =
+  let _ = writeFile "\{dir}/core.mdkd" text
+  verifyOut dir
+
+test "verify refuses a digest-valid declarations file that the loader would refuse" = withStagedStdlib
+  (dir => match runCommandBatch "env" 1 [writeArgv dir]
+    [_] => match readFile "\{dir}/core.mdkd"
+      Err e => fail e
+      Ok fresh =>
+        let counters =
+          line => redigested fresh (c =>
+            line ++ S.drop (optionOr 0 (S.indexOf "\n" c)) c)
+        let stale = "stale: declarations (.mdkd) file"
+        let n = match readDeclsFile fresh
+          Ok (_, pd) => pd.pdCoreBinders
+          Err _ => 0
+        expectAll [
+          labelFail
+            "counters one short"
+            (expectEqual
+              stale
+              (verifyDecls dir (counters "(counters 0 0 \{n - 1} 0)"))),
+          labelFail
+            "counters zero"
+            (expectEqual
+              stale
+              (verifyDecls dir (counters "(counters 0 0 0 0)"))),
+          labelFail
+            "a huge count"
+            (expectEqual
+              stale
+              (verifyDecls dir (counters "(counters 0 0 99999999999 0)"))),
+          labelFail
+            "not declarations"
+            (expectEqual
+              stale
+              (verifyDecls
+                dir
+                (redigested fresh (_ =>
+                  "(counters 0 0 0 0)\n(not declarations)\n")))),
+          labelFail "the original" (expectEqual "fresh" (verifyDecls dir fresh)),
+        ]
+    _ => fail "write run failed")
