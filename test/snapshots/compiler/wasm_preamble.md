@@ -1,10 +1,10 @@
 # META
-source_lines=3368
+source_lines=3362
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_demand.{
   WasmDemandPlan, PlannedImport, helperOrder, hasWasmHelper, jsWireParam,
-  jsWireResult
+  jsWireResult, unaryF64Sig, binaryF64Sig
 }
 import backend.wasm_demand.{JsImport(..)}
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
@@ -1775,12 +1775,6 @@ hostImportSigOf "mdk_file_bound_enter" =
 hostImportSigOf "mdk_file_bound_exit" = Some ""
 hostImportSigOf _ = None
 
-unaryF64Sig : String
-unaryF64Sig = " (param f64) (result f64)"
-
-binaryF64Sig : String
-binaryF64Sig = " (param f64) (param f64) (result f64)"
-
 -- stringToFloat host seam: the guest pushes the string's bytes via the path channel
 -- (mdk_path_reset + mdk_path_push, shared with IO) then calls mdk_str_to_float, which
 -- reads pathBuf as a UTF-8 string, parses it with the strtod acceptance set and returns
@@ -3371,7 +3365,7 @@ plannedHelperBlock plan files "siteRuntimeLines" =
 plannedHelperBlock _ _ name =
   panic ("internal error: unplanned-wasm-helper: " ++ name)
 # DESUGAR
-(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
@@ -3576,10 +3570,6 @@ plannedHelperBlock _ _ name =
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
-(DTypeSig false "unaryF64Sig" (TyCon "String"))
-(DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
-(DTypeSig false "binaryF64Sig" (TyCon "String"))
-(DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
 (DTypeSig true "floatStrRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "floatStrRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_str_to_float"))) (EVar "keys")) (EVar "floatStrLines")))
 (DTypeSig false "floatStrLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3806,7 +3796,7 @@ plannedHelperBlock _ _ name =
 (DFunDef false "plannedHelperBlock" ((PVar "plan") (PVar "files") (PLit (LString "siteRuntimeLines"))) (EApp (EApp (EVar "siteRuntimeLines") (EVar "files")) (EFieldAccess (EVar "plan") "nonexhaustiveRuntime")))
 (DFunDef false "plannedHelperBlock" (PWild PWild (PVar "name")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: unplanned-wasm-helper: ")) (EVar "name"))))
 # MARK
-(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "PlannedImport" false) (mem "helperOrder" false) (mem "hasWasmHelper" false) (mem "jsWireParam" false) (mem "jsWireResult" false) (mem "unaryF64Sig" false) (mem "binaryF64Sig" false))))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
@@ -4011,10 +4001,6 @@ plannedHelperBlock _ _ name =
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
-(DTypeSig false "unaryF64Sig" (TyCon "String"))
-(DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
-(DTypeSig false "binaryF64Sig" (TyCon "String"))
-(DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
 (DTypeSig true "floatStrRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "floatStrRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_str_to_float"))) (EVar "keys")) (EVar "floatStrLines")))
 (DTypeSig false "floatStrLines" (TyApp (TyCon "List") (TyCon "String")))

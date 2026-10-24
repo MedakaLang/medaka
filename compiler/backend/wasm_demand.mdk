@@ -245,7 +245,8 @@ noteBinop acc "/" = { acc | seenDivGuard = True }
 noteBinop acc "%" = { acc | seenDivGuard = True }
 noteBinop acc _ = acc
 
--- the emitter's value-global partition (`isValBind` in wasm_emit.mdk)
+-- Top-level nullary values become globals; `main` remains the program entry.
+export
 isValBind : CBind -> Bool
 isValBind (CBind name [CClause [] _] _ _) = name /= "main"
 isValBind _ = False
@@ -457,6 +458,7 @@ multiOrPatternClauses [CClause pats _] =
   anyList (p => not (isPlainParam p)) pats
 multiOrPatternClauses _ = True
 
+export
 isPlainParam : Pat -> Bool
 isPlainParam (PVar _ _ _) = True
 isPlainParam PWild = True
@@ -912,6 +914,7 @@ export
 isCmpOp : String -> Bool
 isCmpOp op = contains op ["==", "/=", "<", ">", "<=", ">="]
 
+export
 appHead : CExpr -> CExpr
 appHead (CApp f _ _) = appHead f
 appHead e = e
@@ -2147,9 +2150,11 @@ hostImportSigOf "mdk_file_bound_enter" =
 hostImportSigOf "mdk_file_bound_exit" = Some ""
 hostImportSigOf _ = None
 
+export
 unaryF64Sig : String
 unaryF64Sig = " (param f64) (result f64)"
 
+export
 binaryF64Sig : String
 binaryF64Sig = " (param f64) (param f64) (result f64)"
 

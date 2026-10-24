@@ -59,8 +59,6 @@ implEntryIfaceWord
 implEntryKey
 implEntrySymTag
 implEntryTag
-isArithOp
-isCmpOp
 isCtor
 isFfiExtern
 isFnBind

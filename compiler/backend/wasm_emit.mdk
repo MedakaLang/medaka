@@ -1,7 +1,7 @@
 import backend.wasm_demand.{
   WasmDemandPlan, WasmTypeContext, wasmTypeContext, hasWasmHelper,
   selectWasmBin, ctorFloatFieldIndex, exprHasFallthrough, isCmpOp, envMark,
-  paramEntries, envMarksOf, envWithMarks
+  paramEntries, envMarksOf, envWithMarks, appHead, isPlainParam, isValBind
 }
 import backend.wasm_demand as WD
 import backend.wasm_demand.{JsImport(..), WasmDemand(..)}
@@ -1859,11 +1859,6 @@ noteWasmUse emit UseStrJoin = setRef emit.useStrJoin True
 cFieldExpr : CField -> CExpr
 cFieldExpr (CField _ _ e) = e
 
-isPlainParam : Pat -> Bool
-isPlainParam (PVar _ _ _) = True
-isPlainParam PWild = True
-isPlainParam _ = False
-
 -- the set of top-level fn names that appear as VALUES (bare ref in a non-call
 -- position, or partially / over applied) anywhere in the program — these need a
 -- closure wrapper so they can flow through `(ref eq)` slots / be applied indirectly.
@@ -3091,10 +3086,6 @@ isUnitExtern : String -> Bool
 -- lint-disable-next-line rule-duplicate-body
 isUnitExtern name =
   contains name ["putStr", "putStrLn", "ePutStr", "ePutStrLn", "flushStdout"]
-
-appHead : CExpr -> CExpr
-appHead (CApp f _ _) = appHead f
-appHead e = e
 
 refPrintFor : Prog -> WTy -> List String
 refPrintFor _ WInt = ["    call $mdk_unbox_int", "    call $mdk_print_int"]
@@ -10108,11 +10099,6 @@ bindConFieldsGo prog env c (p :: rest) v i =
   (cur ++ more, env3)
 
 -- ── helpers shared by both modes ─────────────────────────────────────────────
-
--- top-level binding classification (W2 + W3, identical).
-isValBind : CBind -> Bool
-isValBind (CBind name [CClause [] _] _ _) = name /= "main"
-isValBind _ = False
 
 isFnBind : CBind -> Bool
 isFnBind (CBind "main" _ _ _) = False
