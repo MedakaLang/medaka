@@ -1,3 +1,5 @@
 dynFor : ModuleCtx -> DynCtx
 emptyDriveOutputs : Unit -> DriveOutputs
+manifestDriverFor : DriveInputs -> Option String -> Option EntryKey
 siteFor : ModuleCtx -> SiteCtx
+withPublishedManifests : List ManifestRequest -> List CapabilityManifest -> DriveOutputs -> DriveOutputs
