@@ -35,7 +35,8 @@ watOf src =
   let input =
     makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
-  let (text, _) = emitProgramRecord input (buildEmitPlan WasmBackend cp) cp
+  let (text, _) =
+    emitProgramRecord input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
   text
 
 -- the (segment id, escaped payload) of one `(data $strseg_N "…")` line

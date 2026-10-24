@@ -96,7 +96,7 @@ arithLlvm tag =
   let cp = arithProgram tag
   emitProgram
     (makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" [])
-    (buildEmitPlan LlvmBackend cp)
+    (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
     cp
 
 test "fst result selects Int arithmetic" =

@@ -84,7 +84,11 @@ runEmit inputs runtimeDecls coreDecls modules =
     makeWasmEmitInputFull (runtimeDomain (externDecls runtimeDecls)) [] []
   let cp =
     lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
-  let gaps = emitProgramGaps input (buildEmitPlan WasmBackend cp) cp
+  let gaps =
+    emitProgramGaps
+      input
+      (buildEmitPlan WasmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
+      cp
   printGaps gaps
 
 printGaps : List String -> <IO> Unit

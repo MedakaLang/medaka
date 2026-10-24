@@ -183,6 +183,8 @@
 -- `emitExpr` returns a flat list of instruction lines.  In ref-mode the value left
 -- on the stack is always `(ref eq)`; in scalar-mode it is i32.
 
+import backend.extern_requirements.{requirementFacts}
+import types.extern_source.{ExternBindingKind(..)}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{
   noBinderId,
@@ -588,6 +590,7 @@ makeWasmEmitInputFull domain ctorFieldTypes ffiExternRows =
     (omFromPairs (reverseL ffiExternRows) omEmpty)
     domain
 
+export
 inputRuntimeExternsW : WasmEmitInput -> RuntimeExternDomain
 inputRuntimeExternsW (WasmEmitInputData _ _ names) = names
 
@@ -800,8 +803,9 @@ narrowByIfaceW iface entries =
 -- Consulted by `emitAppRef`/`emitTailCallW`/`emitVarRefPlain` ahead of the
 -- runtime extern families, as `DemandScope` resolves a name.
 ffiBindsOfW : Prog -> String -> Option (List (String, String))
-ffiBindsOfW prog name = match progInput prog
-  WasmEmitInputData _ ffiIndex _ => map fst (omLookup name ffiIndex)
+ffiBindsOfW prog name = match omLookup name (progEmit prog).externFacts
+  Some fact if fact.bindingKind == ForeignBinding => Some fact.hostBindings
+  _ => None
 
 isFfiExternW : Prog -> String -> Bool
 isFfiExternW prog name = isSome (ffiBindsOfW prog name)
@@ -812,7 +816,7 @@ isFfiExternW prog name = isSome (ffiBindsOfW prog name)
 -- check meets the last gap.  An `Array Int` result has no channel on either target
 -- (compiler/FFI-ABI.md section 2.4), so wasm refuses it as native does.
 jsImportForW : Prog -> String -> Result (List String) JsImport
-jsImportForW prog name = match omLookup name (progEmit prog).wJsImports.value
+jsImportForW prog name = match selectedJsImport prog name
   Some imp =>
     if not (allList jsCrossableHead (imp.result :: imp.params)) then
       Err
@@ -837,6 +841,22 @@ jsImportForW prog name = match omLookup name (progEmit prog).wJsImports.value
         (gapLP
           prog
           "wasm: the extern '\{externDisplayW (progEmit prog) name}' has no `js` binding, so the module has nothing to import for it; `check --target` refuses a reached extern with no binding for its target's host (T-TARGET-NO-BINDING)")
+
+selectedJsImport : Prog -> String -> Option JsImport
+selectedJsImport prog name = match omLookup name (progEmit prog).externFacts
+  Some fact if fact.bindingKind
+    == ForeignBinding => match hostSymbol "js" fact.hostBindings
+    Some host =>
+      map
+        (shape => JsImport {
+          medakaName = name,
+          jsName = host,
+          params = shape.parameterHeads,
+          result = shape.resultHead,
+        })
+        fact.callableShape
+    None => None
+  _ => None
 
 -- A user extern applied: with all its arguments, the arguments and then its
 -- wrapper (`jsffiWrapperLines`); otherwise its eta closure, applied.
@@ -1509,7 +1529,7 @@ refuseUnprovidedExternsW emit input plan cp =
 emitProgramCore : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
 emitProgramCore emit input plan (cp@(CProgram _ _ _ _ _ facts)) =
   emitUniqueProgram
-    { emit | externFacts = facts.factExterns }
+    { emit | externFacts = requirementFacts plan.externRequirements }
     input
     plan
     (uniqueBinders cp)
@@ -1721,7 +1741,7 @@ emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String
 emitProgramGaps input plan cp0 =
   let (CProgram groups ctorArs ctorTypes impls mctx facts) = uniqueBinders cp0
   let emit = freshWasmEmit WGapRecord
-  let emit = { emit | externFacts = facts.factExterns }
+  let emit = { emit | externFacts = requirementFacts plan.externRequirements }
   let _ =
     refuseUnprovidedExternsW
       emit
@@ -1793,10 +1813,10 @@ anyBind : (CBind -> Bool) -> List CBind -> Bool
 anyBind _ [] = False
 anyBind p (b :: rest) = if p b then True else anyBind p rest
 
--- W9: arity of a str/leaf extern (the param count its emit* arm consumes).  Used to
--- build an eta closure when the extern is referenced as a VALUE (point-free / passed
--- as an argument), mirroring the LLVM emitter's emitExternEtaClosure.
+-- The legacy arity table is retained with the obsolete emitter indexes as one
+-- removal unit; requirement-backed eta closures no longer read it.
 externArityW : String -> Int
+-- lint-disable-next-line rule-dead-code
 externArityW name =
   if contains name ["flushStdout", "randomBool"] then
     0
@@ -5551,7 +5571,11 @@ emitVarRefPlain prog env d x =
 -- locals and emits the extern call, then build the closure struct at the use site.
 emitExternEtaClosure : Prog -> String -> List String
 emitExternEtaClosure prog name =
-  let arity = externArityW (runtimeNameW prog name)
+  let arity = match omLookup name (progEmit prog).externFacts
+    Some fact => match fact.callableShape
+      Some shape => shape.loweredCoreArity
+      None => panic ("internal error: missing-extern-abi: " ++ name)
+    None => panic ("internal error: missing-extern-requirement: " ++ name)
   let lamName = "$mdk_ext_" ++ injectiveIdent name
   let _ = noteFuncRef (progEmit prog) lamName
   let _ =
@@ -6634,6 +6658,8 @@ emitAppRef prog env d app =
         emitIndirectApp prog env d hd args CallValueW
       else if isCtor prog f then
         emitCtorApp prog env d f args
+      else if f0 == siteSentinelName then
+        emitLeafExternRef prog env d siteSentinelName args
       else if runtimeNameW prog f0 == "Ref" then
         emitRefBoxNew prog env d args
       else if runtimeNameW prog f0 == "setRef" then
@@ -9046,7 +9072,8 @@ emitTailCallW prog env app =
         emitRefExpr prog env 0 app ++ ["return"]
       else if isFfiExternW prog f then
         emitFfiAppW prog env 0 hd f args CallTailW
-      else if runtimeNameW prog f0 == "Ref"
+      else if f0 == siteSentinelName
+        || runtimeNameW prog f0 == "Ref"
         || runtimeNameW prog f0 == "setRef"
         || isSome (externFamilyW (runtimeNameW prog f0)) then
         emitAppRef prog env 0 app ++ ["return"]

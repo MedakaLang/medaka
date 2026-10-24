@@ -2,6 +2,7 @@ import frontend.ast.{Decl(..), ExternDecl(..), externBindings}
 import types.runtime_abi_types.{CallableShape(..)}
 import types.runtime_abi.{runtimeAbi, sourceShape}
 import support.ordmap.{omEmpty, omFromPairs, omLookup}
+import support.util.{listLen}
 import string.{byteLength}
 import array as A
 
@@ -53,8 +54,12 @@ sourceExterns provenance mid heads decls =
     (ed =>
       let raw = sourceShape ed.edTy
       let shape = match omLookup ed.edName index
-        Some (_, (params, ret)) =>
-          { raw | parameterHeads = params, resultHead = ret }
+        Some (_, (params, ret)) => { raw |
+          writtenValueArity = listLen params,
+          loweredCoreArity = listLen params,
+          parameterHeads = params,
+          resultHead = ret,
+        }
         None => raw
       let (kind, abi) = match runtimeAbi ed.edName
         Some canonical => (RuntimeBinding ed.edName, canonical)

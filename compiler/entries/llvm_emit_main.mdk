@@ -68,7 +68,7 @@ emitTarget decls =
         -- catalog to subtract the builtin-name exemption against.  An empty FFI
         -- index keeps its behaviour exactly what it was.
         [])
-      (buildEmitPlan LlvmBackend cp)
+      (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
       cp)
 
 main = oracleMain ()

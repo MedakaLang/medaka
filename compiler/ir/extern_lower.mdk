@@ -57,7 +57,7 @@ lowerExterns input decls (prog@(CProgram groups _ _ _ _ facts)) =
   let sources =
     optionOr (sourceExterns RawSource "<raw>" [] decls) input.pfExternSources
   let rows = map externFact sources ++ implicitRuntimeFacts
-  let inventory = omFromPairs (map (f => (f.symbol, f)) rows) omEmpty
+  let inventory = externFactIndex rows
   let names =
     omFromPairs
       (map (f => (f.declaredName, f)) implicitRuntimeFacts
@@ -304,3 +304,14 @@ walkStmts env scope ((CSAssign x e) :: rest) =
 
 walkField : ExternVisitor -> OrdMap Unit -> CField -> CField
 walkField env scope (CField k o e) = CField k o (walkExpr env scope e)
+
+export
+externFactIndex : List ExternDeclFact -> OrdMap ExternDeclFact
+externFactIndex =
+  fold
+    (index fact =>
+      if omHasKey fact.symbol index then
+        panic ("duplicate-extern-declaration: " ++ fact.symbol)
+      else
+        omInsert fact.symbol fact index)
+    omEmpty

@@ -85,7 +85,11 @@ runEmit inputs runtimeDecls coreDecls modules =
         (externSourceHeadRows (optionOr [] externFacts.pfExternSources)))
   let cp =
     lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
-  let (text, _) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
+  let (text, _) =
+    emitProgramRecord
+      input
+      (buildEmitPlan LlvmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
+      cp
   putStr text
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, on the trees `elaborateModules` has already produced (#2809 put the

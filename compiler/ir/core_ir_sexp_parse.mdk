@@ -1,3 +1,4 @@
+import ir.extern_lower.{externFactIndex}
 -- Round-trip deserializer for the Core IR S-expression format produced by
 -- core_ir_sexp.mdk.  Parses the output of cprogramToSexp back into a CProgram
 -- so the round-trip gate can evaluate it and compare against the original.
@@ -589,10 +590,7 @@ toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups, SList results, o
   factEntryOutcome = match outcome
     SAtom "none" => None
     _ => Some (toEntryOutcome outcome),
-  factExterns =
-    omFromPairs
-      (map (row => let fact = toExtern row in (fact.symbol, fact)) rows)
-      omEmpty,
+  factExterns = externFactIndex (map toExtern rows),
 }
 toDeclFacts other =
   panic ("core_ir_sexp_parse: bad declaration facts: " ++ sexprToStr other)

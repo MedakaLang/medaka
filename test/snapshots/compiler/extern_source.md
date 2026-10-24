@@ -1,11 +1,12 @@
 # META
-source_lines=125
+source_lines=130
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Decl(..), ExternDecl(..), externBindings}
 import types.runtime_abi_types.{CallableShape(..)}
 import types.runtime_abi.{runtimeAbi, sourceShape}
 import support.ordmap.{omEmpty, omFromPairs, omLookup}
+import support.util.{listLen}
 import string.{byteLength}
 import array as A
 
@@ -57,8 +58,12 @@ sourceExterns provenance mid heads decls =
     (ed =>
       let raw = sourceShape ed.edTy
       let shape = match omLookup ed.edName index
-        Some (_, (params, ret)) =>
-          { raw | parameterHeads = params, resultHead = ret }
+        Some (_, (params, ret)) => { raw |
+          writtenValueArity = listLen params,
+          loweredCoreArity = listLen params,
+          parameterHeads = params,
+          resultHead = ret,
+        }
         None => raw
       let (kind, abi) = match runtimeAbi ed.edName
         Some canonical => (RuntimeBinding ed.edName, canonical)
@@ -132,6 +137,7 @@ readLenDigits bytes i n
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
 (DUse false (UseGroup ("types" "runtime_abi") ((mem "runtimeAbi" false) (mem "sourceShape" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromPairs" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false))))
 (DUse false (UseGroup ("string") ((mem "byteLength" false))))
 (DUse false (UseAlias ("array") "A"))
 (DData Public "ExternBindingKind" () ((variant "ForeignBinding" (ConPos)) (variant "RuntimeBinding" (ConPos (TyCon "String")))) ())
@@ -151,7 +157,7 @@ readLenDigits bytes i n
 (DTypeSig true "sourceExternSymbol" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "sourceExternSymbol" ((PVar "mid") (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$extern$u")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "mid")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString ""))))
 (DTypeSig true "sourceExterns" (TyFun (TyCon "ExternProvenance") (TyFun (TyCon "String") (TyFun (TyCon "ExternHeadRows") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ExternSource")))))))
-(DFunDef false "sourceExterns" ((PVar "provenance") (PVar "mid") (PVar "heads") (PVar "decls")) (EBlock (DoLet false false (PVar "index") (EApp (EApp (EVar "omFromPairs") (EVar "heads")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "ed")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "sourceShape") (EFieldAccess (EVar "ed") "edTy"))) (DoLet false false (PVar "shape") (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "ed") "edName")) (EVar "index")) (arm (PCon "Some" (PTuple PWild (PTuple (PVar "params") (PVar "ret")))) () (ERecordUpdate (EVar "raw") ((fa "parameterHeads" (EVar "params")) (fa "resultHead" (EVar "ret"))))) (arm (PCon "None") () (EVar "raw")))) (DoLet false false (PTuple (PVar "kind") (PVar "abi")) (EMatch (EApp (EVar "runtimeAbi") (EFieldAccess (EVar "ed") "edName")) (arm (PCon "Some" (PVar "canonical")) () (ETuple (EApp (EVar "RuntimeBinding") (EFieldAccess (EVar "ed") "edName")) (EVar "canonical"))) (arm (PCon "None") () (ETuple (EVar "ForeignBinding") (EVar "shape"))))) (DoExpr (ERecordCreate "ExternSource" ((fa "sourceSymbol" (EApp (EApp (EVar "sourceExternSymbol") (EVar "mid")) (EFieldAccess (EVar "ed") "edName"))) (fa "sourceModule" (EVar "mid")) (fa "sourceName" (EFieldAccess (EVar "ed") "edName")) (fa "sourceBinding" (EVar "kind")) (fa "sourceHosts" (EApp (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EFieldAccess (EVar "b") "ebHost") (EFieldAccess (EVar "b") "ebSymbol")))) (EApp (EVar "externBindings") (EVar "ed")))) (fa "sourceAbi" (EApp (EVar "Some") (EVar "abi"))) (fa "sourceProvenance" (EVar "provenance")))))))) (EApp (EVar "externRecords") (EVar "decls"))))))
+(DFunDef false "sourceExterns" ((PVar "provenance") (PVar "mid") (PVar "heads") (PVar "decls")) (EBlock (DoLet false false (PVar "index") (EApp (EApp (EVar "omFromPairs") (EVar "heads")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "ed")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "sourceShape") (EFieldAccess (EVar "ed") "edTy"))) (DoLet false false (PVar "shape") (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "ed") "edName")) (EVar "index")) (arm (PCon "Some" (PTuple PWild (PTuple (PVar "params") (PVar "ret")))) () (ERecordUpdate (EVar "raw") ((fa "writtenValueArity" (EApp (EVar "listLen") (EVar "params"))) (fa "loweredCoreArity" (EApp (EVar "listLen") (EVar "params"))) (fa "parameterHeads" (EVar "params")) (fa "resultHead" (EVar "ret"))))) (arm (PCon "None") () (EVar "raw")))) (DoLet false false (PTuple (PVar "kind") (PVar "abi")) (EMatch (EApp (EVar "runtimeAbi") (EFieldAccess (EVar "ed") "edName")) (arm (PCon "Some" (PVar "canonical")) () (ETuple (EApp (EVar "RuntimeBinding") (EFieldAccess (EVar "ed") "edName")) (EVar "canonical"))) (arm (PCon "None") () (ETuple (EVar "ForeignBinding") (EVar "shape"))))) (DoExpr (ERecordCreate "ExternSource" ((fa "sourceSymbol" (EApp (EApp (EVar "sourceExternSymbol") (EVar "mid")) (EFieldAccess (EVar "ed") "edName"))) (fa "sourceModule" (EVar "mid")) (fa "sourceName" (EFieldAccess (EVar "ed") "edName")) (fa "sourceBinding" (EVar "kind")) (fa "sourceHosts" (EApp (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EFieldAccess (EVar "b") "ebHost") (EFieldAccess (EVar "b") "ebSymbol")))) (EApp (EVar "externBindings") (EVar "ed")))) (fa "sourceAbi" (EApp (EVar "Some") (EVar "abi"))) (fa "sourceProvenance" (EVar "provenance")))))))) (EApp (EVar "externRecords") (EVar "decls"))))))
 (DTypeSig false "externRecords" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ExternDecl"))))
 (DFunDef false "externRecords" ((PList)) (EListLit))
 (DFunDef false "externRecords" ((PCons (PCon "DExtern" (PVar "ed")) (PVar "rest"))) (EBinOp "::" (EVar "ed") (EApp (EVar "externRecords") (EVar "rest"))))
@@ -170,6 +176,7 @@ readLenDigits bytes i n
 (DUse false (UseGroup ("types" "runtime_abi_types") ((mem "CallableShape" true))))
 (DUse false (UseGroup ("types" "runtime_abi") ((mem "runtimeAbi" false) (mem "sourceShape" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromPairs" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false))))
 (DUse false (UseGroup ("string") ((mem "byteLength" false))))
 (DUse false (UseAlias ("array") "A"))
 (DData Public "ExternBindingKind" () ((variant "ForeignBinding" (ConPos)) (variant "RuntimeBinding" (ConPos (TyCon "String")))) ())
@@ -189,7 +196,7 @@ readLenDigits bytes i n
 (DTypeSig true "sourceExternSymbol" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "sourceExternSymbol" ((PVar "mid") (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$extern$u")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "mid")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString ""))))
 (DTypeSig true "sourceExterns" (TyFun (TyCon "ExternProvenance") (TyFun (TyCon "String") (TyFun (TyCon "ExternHeadRows") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ExternSource")))))))
-(DFunDef false "sourceExterns" ((PVar "provenance") (PVar "mid") (PVar "heads") (PVar "decls")) (EBlock (DoLet false false (PVar "index") (EApp (EApp (EVar "omFromPairs") (EVar "heads")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "ed")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "sourceShape") (EFieldAccess (EVar "ed") "edTy"))) (DoLet false false (PVar "shape") (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "ed") "edName")) (EMethodRef "index")) (arm (PCon "Some" (PTuple PWild (PTuple (PVar "params") (PVar "ret")))) () (ERecordUpdate (EVar "raw") ((fa "parameterHeads" (EVar "params")) (fa "resultHead" (EVar "ret"))))) (arm (PCon "None") () (EVar "raw")))) (DoLet false false (PTuple (PVar "kind") (PVar "abi")) (EMatch (EApp (EVar "runtimeAbi") (EFieldAccess (EVar "ed") "edName")) (arm (PCon "Some" (PVar "canonical")) () (ETuple (EApp (EVar "RuntimeBinding") (EFieldAccess (EVar "ed") "edName")) (EVar "canonical"))) (arm (PCon "None") () (ETuple (EVar "ForeignBinding") (EVar "shape"))))) (DoExpr (ERecordCreate "ExternSource" ((fa "sourceSymbol" (EApp (EApp (EVar "sourceExternSymbol") (EVar "mid")) (EFieldAccess (EVar "ed") "edName"))) (fa "sourceModule" (EVar "mid")) (fa "sourceName" (EFieldAccess (EVar "ed") "edName")) (fa "sourceBinding" (EVar "kind")) (fa "sourceHosts" (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EFieldAccess (EVar "b") "ebHost") (EFieldAccess (EVar "b") "ebSymbol")))) (EApp (EVar "externBindings") (EVar "ed")))) (fa "sourceAbi" (EApp (EVar "Some") (EVar "abi"))) (fa "sourceProvenance" (EVar "provenance")))))))) (EApp (EVar "externRecords") (EVar "decls"))))))
+(DFunDef false "sourceExterns" ((PVar "provenance") (PVar "mid") (PVar "heads") (PVar "decls")) (EBlock (DoLet false false (PVar "index") (EApp (EApp (EVar "omFromPairs") (EVar "heads")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "ed")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "sourceShape") (EFieldAccess (EVar "ed") "edTy"))) (DoLet false false (PVar "shape") (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "ed") "edName")) (EMethodRef "index")) (arm (PCon "Some" (PTuple PWild (PTuple (PVar "params") (PVar "ret")))) () (ERecordUpdate (EVar "raw") ((fa "writtenValueArity" (EApp (EVar "listLen") (EVar "params"))) (fa "loweredCoreArity" (EApp (EVar "listLen") (EVar "params"))) (fa "parameterHeads" (EVar "params")) (fa "resultHead" (EVar "ret"))))) (arm (PCon "None") () (EVar "raw")))) (DoLet false false (PTuple (PVar "kind") (PVar "abi")) (EMatch (EApp (EVar "runtimeAbi") (EFieldAccess (EVar "ed") "edName")) (arm (PCon "Some" (PVar "canonical")) () (ETuple (EApp (EVar "RuntimeBinding") (EFieldAccess (EVar "ed") "edName")) (EVar "canonical"))) (arm (PCon "None") () (ETuple (EVar "ForeignBinding") (EVar "shape"))))) (DoExpr (ERecordCreate "ExternSource" ((fa "sourceSymbol" (EApp (EApp (EVar "sourceExternSymbol") (EVar "mid")) (EFieldAccess (EVar "ed") "edName"))) (fa "sourceModule" (EVar "mid")) (fa "sourceName" (EFieldAccess (EVar "ed") "edName")) (fa "sourceBinding" (EVar "kind")) (fa "sourceHosts" (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EFieldAccess (EVar "b") "ebHost") (EFieldAccess (EVar "b") "ebSymbol")))) (EApp (EVar "externBindings") (EVar "ed")))) (fa "sourceAbi" (EApp (EVar "Some") (EVar "abi"))) (fa "sourceProvenance" (EVar "provenance")))))))) (EApp (EVar "externRecords") (EVar "decls"))))))
 (DTypeSig false "externRecords" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ExternDecl"))))
 (DFunDef false "externRecords" ((PList)) (EListLit))
 (DFunDef false "externRecords" ((PCons (PCon "DExtern" (PVar "ed")) (PVar "rest"))) (EBinOp "::" (EVar "ed") (EApp (EVar "externRecords") (EVar "rest"))))
