@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
@@ -195,6 +196,7 @@ typedInput : List Decl -> List Decl -> List Decl -> WasmEmitInput
 typedInput runtimeDecls preludeDecls userDecls =
   let mangled = typedElaborated runtimeDecls preludeDecls userDecls
   makeWasmEmitInput
+    RawUnchecked
     (runtimeDomain (externDecls runtimeDecls))
     (ctorFieldTypeNames mangled)
 
@@ -274,11 +276,15 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let uMangled = typedElaborated runtimeDecls [] uDecls
         let pCtors = ctorFieldTypeNames pMangled
         let pInput =
-          makeWasmEmitInput (runtimeDomain (externDecls runtimeDecls)) pCtors
+          makeWasmEmitInput
+            RawUnchecked
+            (runtimeDomain (externDecls runtimeDecls))
+            pCtors
         let p1 = emitProgram pInput pProgram
         let ctorWat =
           emitProgramUnchecked
             (makeWasmEmitInput
+              RawUnchecked
               (runtimeDomain (externDecls runtimeDecls))
               (ctorFieldTypeNames uMangled))
             pProgram
@@ -304,6 +310,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let mainWat =
           emitUncheckedWithPlan
             (makeWasmEmitInput
+              RawUnchecked
               (runtimeDomain (externDecls runtimeDecls))
               (ctorFieldTypeNames mainMangled))
             floatPlan
@@ -351,6 +358,7 @@ reemitStateFallbackInput runtimeDecls decls =
   -- namespace the paired `typedProgram` emits into.
   let mangled = typedElaborated runtimeDecls [] decls
   makeWasmEmitInput
+    RawUnchecked
     (runtimeDomain (externDecls runtimeDecls))
     (ctorFieldTypeNames mangled)
 
@@ -378,7 +386,7 @@ reemitTrmcState _ =
     (emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17))
 
 trmcStateInput : WasmEmitInput
-trmcStateInput = makeWasmEmitInput PreludeFreeRuntime []
+trmcStateInput = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 trmcStateLoc : Loc
 trmcStateLoc = Loc "<trmc-state>" 1 1 1 1
@@ -478,7 +486,7 @@ reemitLambdaState _ =
 
 lambdaStateInput : WasmEmitInput
 lambdaStateInput =
-  makeWasmEmitInput PreludeFreeRuntime [("Pair", ["Int", "Int"])]
+  makeWasmEmitInput RawUnchecked PreludeFreeRuntime [("Pair", ["Int", "Int"])]
 
 lambdaStateLoc : Loc
 lambdaStateLoc = Loc "<lambda-state>" 1 1 1 1
@@ -585,7 +593,7 @@ reemitFeatureState _ =
     (emitProgram featureHashFloatInput featureHashFloatProgram)
 
 featureStateInput : WasmEmitInput
-featureStateInput = makeWasmEmitInput PreludeFreeRuntime [
+featureStateInput = makeWasmEmitInput RawUnchecked PreludeFreeRuntime [
   ("FeatureRecord", ["Int", "Int"]),
   ("FeatureVariant", ["Int", "Int"]),
 ]
@@ -675,7 +683,7 @@ featureStateProgram =
 -- string-bearing feature route, so it proves the hash-string runtime conjunction
 -- is not widened by base hash use.
 featureHashIntOnlyInput : WasmEmitInput
-featureHashIntOnlyInput = makeWasmEmitInput PreludeFreeRuntime []
+featureHashIntOnlyInput = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 featureHashIntOnlyProgram : CProgram
 featureHashIntOnlyProgram =
@@ -696,7 +704,7 @@ featureHashIntOnlyProgram =
 -- record U is the nearest miss: Float + hashInt retain shared prerequisites but
 -- deliberately omit hashFloat. Census repeats P and adds exactly one attributed gap.
 featureHashFloatInput : WasmEmitInput
-featureHashFloatInput = makeWasmEmitInput PreludeFreeRuntime []
+featureHashFloatInput = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 featureHashFloatProgram : CProgram
 featureHashFloatProgram =
@@ -770,7 +778,7 @@ reemitCharFromCodeState _ =
     (emitProgram charFromCodeStateInput charFromCodeStateProgram)
 
 charFromCodeStateInput : WasmEmitInput
-charFromCodeStateInput = makeWasmEmitInput PreludeFreeRuntime []
+charFromCodeStateInput = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 charFromCodeStateProgram : CProgram
 charFromCodeStateProgram =
@@ -919,7 +927,7 @@ reemitLeafRuntimeRow name p u gapBind gapMissing =
   printCapture ("LEAF_" ++ name ++ "_P2") (emitProgram leafRuntimeInput p)
 
 leafRuntimeInput : WasmEmitInput
-leafRuntimeInput = makeWasmEmitInput PreludeFreeRuntime []
+leafRuntimeInput = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 leafRuntimeLoc : Loc
 leafRuntimeLoc = Loc "<leaf-runtime-state>" 1 1 1 1
@@ -1212,7 +1220,7 @@ featureStateCensusProgram =
     []
 
 trapStateInput : WasmEmitInput
-trapStateInput = makeWasmEmitInput PreludeFreeRuntime []
+trapStateInput = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 trapStateProgram : CProgram
 trapStateProgram =
@@ -1283,7 +1291,7 @@ reemitRefTrapState _ =
   printCapture "REF_TRAP_P2" (emitProgram refTrapStateInput refTrapStateProgram)
 
 refTrapStateInput : WasmEmitInput
-refTrapStateInput = makeWasmEmitInput PreludeFreeRuntime []
+refTrapStateInput = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 refTrapCtorArities : List (String, Int)
 refTrapCtorArities = [("TrapToken", 0)]
@@ -1329,7 +1337,7 @@ refTrapStateAbortProgram =
     []
 
 implSelfInput : WasmEmitInput
-implSelfInput = makeWasmEmitInput PreludeFreeRuntime []
+implSelfInput = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 implSelfLoc : Loc
 implSelfLoc = Loc "<impl-self-state>" 1 1 1 1
@@ -1478,13 +1486,13 @@ defaultStateLoc = Loc "<default-state>" 1 1 1 1
 -- inputs coinciding is a property of THIS probe, not a duplicate to consolidate.
 defaultStateInputP : WasmEmitInput
 -- lint-disable-next-line rule-duplicate-body
-defaultStateInputP = makeWasmEmitInput PreludeFreeRuntime []
+defaultStateInputP = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 -- The P/U pair is deliberately parallel (prelude half vs untyped half); the two
 -- inputs coinciding is a property of THIS probe, not a duplicate to consolidate.
 defaultStateInputU : WasmEmitInput
 -- lint-disable-next-line rule-duplicate-body
-defaultStateInputU = makeWasmEmitInput PreludeFreeRuntime []
+defaultStateInputU = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 defaultStateCall : String -> CExpr
 defaultStateCall tag = mkApp (CMethod
@@ -1595,7 +1603,7 @@ bindingLoc : Loc
 bindingLoc = Loc "<current-binding>" 1 1 1 1
 
 bindingInput : WasmEmitInput
-bindingInput = makeWasmEmitInput PreludeFreeRuntime []
+bindingInput = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 bindingMain : CBind
 bindingMain = synthBind "main" [CClause [] (CLit (LInt 0))]
@@ -1743,7 +1751,7 @@ printEventLines (event :: rest) =
   printEventLines rest
 
 gapStateInput : WasmEmitInput
-gapStateInput = makeWasmEmitInput PreludeFreeRuntime []
+gapStateInput = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
 
 gapStateProgram : CProgram
 gapStateProgram =

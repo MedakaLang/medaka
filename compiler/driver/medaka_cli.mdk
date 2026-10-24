@@ -1,3 +1,7 @@
+import driver.main_autoprint.{executedMainInputs}
+import types.capability_manifest.{
+  EntryKey(..), ManifestSelector(..), InvocationProtocol(..)
+}
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
 -- Slice 0+1).  Compiled natively (`medaka build compiler/driver/medaka_cli.mdk -o
 -- ./medaka`) this is a Medaka CLI replacing bin/main.ml's check/fmt/new
@@ -209,7 +213,7 @@ import json.{
   parse as parseJson,
   asString,
 }
-import types.publish.{TcReport(..)}
+import types.publish.{TcReport(..), tcCode}
 import types.program_facts.{ProgramFacts, factsOfChecked}
 import types.typecheck.{
   TcDiag,
@@ -1267,7 +1271,6 @@ checkTargetInputs rsrc csrc drive =
       None
   TargetInputs {
     tiSchemes = drive.cdEntrySchemes ++ drive.cdCoreSchemes,
-    tiOps = lastInvocationOps drive.cdOutputs,
     tiEntryDecls = match lastModPair drive.cdMods
       Some (_, decls) => decls
       None => [],
@@ -2951,10 +2954,12 @@ runRunCmd argv =
       let (program, frontTrusted) = match modsWithPath
         [m] => (FrontFile m, [])
         _ => (FrontGraph modsWithPath modsD, trusted)
+      let executionDriver =
+        EntryKey { moduleId = "async", binding = "runAsyncMain" }
       let front =
         frontEnd
           cliStdlibExportsEnv
-          (d => elaborateRun d.fdInputs rtD coreD modsD)
+          (d => elaborateRun d.fdInputs executionDriver rtD coreD modsD)
           FrontInput {
             fiInputs = inputs,
             fiAllowInternal = allowInternal,
@@ -2998,7 +3003,7 @@ runRunCmd argv =
                   -- multi-module arm below keeps `projWarns` on the
                   -- coherence allowlist.
                   let executed =
-                    executedFromReport report "runAsyncMain" (coreD, modsD)
+                    executedFromReport report executionDriver (coreD, modsD)
                   match executed
                     Err msg => runAbort msg
                     Ok trees =>
@@ -3079,7 +3084,7 @@ runRunCmd argv =
                   let _ =
                     emitPhase perfOn "check" (perfTCheck - perfTLoad) target
                   let executed =
-                    executedFromReport report "runAsyncMain" (coreD, modsD)
+                    executedFromReport report executionDriver (coreD, modsD)
                   match executed
                     Err msg => runAbort msg
                     Ok trees =>
@@ -3106,16 +3111,17 @@ desugarPair (mid, p) = (mid, desugarIn mid p)
 -- `run`'s one elaboration: the analysis its gate reads, and the auto-print
 -- evidence `executedTrees` wraps the elaborated trees with.
 elaborateRun : DriveInputs ->
+  EntryKey ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> (EntryAnalysis, TcReport, DriveOutputs)
-elaborateRun inputs rtD coreD modsD =
+elaborateRun inputs executionDriver rtD coreD modsD =
   let (analysis, report, outputs) =
     analyzeProgramReport
-      inputs
+      (executedMainInputs inputs executionDriver modsD)
       (valueMainCandidate coreD modsD)
-      (Some "runAsyncMain")
+      (Some executionDriver.binding)
       rtD
       coreD
       modsD
@@ -3644,7 +3650,9 @@ runCheckPolicyArgs (PolicyArgs None _ _) =
       "usage: medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]"
   stageExit 1
 runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
-  match analyzeTarget target
+  match analyzeTarget target fn
+    Err diags if diags == "no '\{fn}' entry found" =>
+      dieMsg ("rejected. " ++ diags)
     -- A target `check` refuses has no row to judge: the refusal names what
     -- failed and carries `check`'s own diagnostics.
     Err diags =>
@@ -3674,8 +3682,8 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
 -- (`analyzeProgramReport`), refusing on any error `check` would report for it.  The
 -- two verbs therefore read the entry's row from the same analysis, and a
 -- manifest's claim is one `check-policy` can verify.
-analyzeTarget : String -> <IO> Result String EntryAnalysis
-analyzeTarget target =
+analyzeTarget : String -> String -> <IO> Result String EntryAnalysis
+analyzeTarget target fn =
   let _ = carryTargetProfile None target
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let stdlibDir = root ++ "/stdlib"
@@ -3687,7 +3695,8 @@ analyzeTarget target =
     Err lerr => match parseResult tsrc
       Err e => Err (ppParseError tsrc target e)
       Ok _ => Err (moduleLoadErrText tsrc target stdlibDir lerr)
-    Ok modsWithPath => analyzeLoaded prelude target roots stdlibDir modsWithPath
+    Ok modsWithPath =>
+      analyzeLoaded prelude target roots stdlibDir fn modsWithPath
 
 -- One front-end run (`frontEnd`) whose drive is the elaboration the verb reads.
 -- A graph resolve rejects is refused with its resolve errors and not driven;
@@ -3697,9 +3706,10 @@ analyzeLoaded : PreludeInputs ->
   String ->
   List String ->
   String ->
+  String ->
   List (String, String, List Decl) ->
   <IO> Result String EntryAnalysis
-analyzeLoaded prelude target roots stdlibDir modsWithPath =
+analyzeLoaded prelude target roots stdlibDir fn modsWithPath =
   let rsrc = prelude.pnRuntimeSrc
   let csrc = prelude.pnCoreSrc
   let mods = map dropPathTriple modsWithPath
@@ -3722,6 +3732,7 @@ analyzeLoaded prelude target roots stdlibDir modsWithPath =
           modsD)
       FrontInput {
         fiInputs = { driveInputsFor !selectedProfile False [] |
+          diManifestRequests = [EntryOverPrelude fn HostInvocation],
           diPreludeKey = Some (preludeGeneration rsrc csrc),
         },
         fiAllowInternal = False,
@@ -3738,8 +3749,12 @@ analyzeLoaded prelude target roots stdlibDir modsWithPath =
       match locatedProjectDiags front.foDiags
         (Some errText, _, _) => Err errText
         (None, _, _) =>
-          if isNone front.foReport.trChecked then
-            Err (residualOrGeneric pathMap target residual)
+          if isNone
+            front.foReport.trChecked then match front.foReport.trResidual
+            missing@(_ :: _) if all
+              (p => tcCode (snd p) == "T-MANIFEST-ENTRY")
+              missing => Err "no '\{fn}' entry found"
+            _ => Err (residualOrGeneric pathMap target residual)
           else
             Ok analysis
 
@@ -3797,7 +3812,7 @@ runManifestCmd argv0 =
 runManifestArgs : ManifestArgs -> <IO> Unit
 runManifestArgs (ManifestArgs None _) =
   dieMsg "usage: medaka manifest <file.mdk> [--fn name]"
-runManifestArgs (ManifestArgs (Some target) fn) = match analyzeTarget target
+runManifestArgs (ManifestArgs (Some target) fn) = match analyzeTarget target fn
   Err diags => dieMsg diags
   Ok analysis => match runManifest analysis fn
     Ok toml => putStr toml

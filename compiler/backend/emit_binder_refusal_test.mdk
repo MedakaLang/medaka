@@ -1,3 +1,12 @@
+import string.{replaceAll, contains}
+import test.{expectEach, expectTextContainsAll, expectFalse, fail}
+import test_process.{withScratchDir, boundedVerbSeconds, medakaRoot}
+import driver.build_cmd.{
+  runBuildNativeRoots, BuildProfile(..), ppBuildReport, envOr
+}
+import types.capability_manifest.{
+  ManifestRequirement(..), EntryKey(..), InvocationProtocol(..)
+}
 import backend.emit_plan.{prepareWasmPlan}
 import support.ordmap.{omEmpty}
 -- Each emitter refuses a program with a binder its binder table has no row for,
@@ -82,16 +91,22 @@ program paramRow =
     }
 
 llvmText : CProgram -> String
-llvmText cp =
+llvmText cp = llvmFor RawUnchecked cp
+
+llvmFor : ManifestRequirement -> CProgram -> String
+llvmFor requirement cp =
   llvmEmit
-    (makeEmitInput PreludeFreeRuntime [] [] 0 [] [] "")
+    (makeEmitInput requirement PreludeFreeRuntime [] [] 0 [] [] "")
     (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
     cp
 
 wasmText : CProgram -> String
-wasmText cp =
+wasmText cp = wasmFor RawUnchecked cp
+
+wasmFor : ManifestRequirement -> CProgram -> String
+wasmFor requirement cp =
   let (plan, prepared) = prepareWasmPlan PreludeFreeRuntime omEmpty cp
-  wasmEmit (makeWasmEmitInput PreludeFreeRuntime []) plan prepared
+  wasmEmit (makeWasmEmitInput requirement PreludeFreeRuntime []) plan prepared
 
 -- What the refusal says about `x`.
 refusal : String
@@ -114,6 +129,22 @@ test "both emitters emit the program once x has its row" = expectAll [
 -- The probe: under `MEDAKA_BINDER_REFUSAL_PROBE`, the backend it names emits the
 -- program without `x`'s row.  Passing means the emitter did not refuse.
 test "probe: emit with an unstamped binder" = match getEnv probeVar
+  Some "manifest-llvm" =>
+    expectNotEqual
+      ""
+      (llvmFor
+        (CheckedEntry
+          EntryKey { moduleId = "m", binding = "main" }
+          ExecutedMain)
+        (program True))
+  Some "manifest-wasm" =>
+    expectNotEqual
+      ""
+      (wasmFor
+        (CheckedEntry
+          EntryKey { moduleId = "m", binding = "main" }
+          ExecutedMain)
+        (program True))
   Some "llvm" => expectNotEqual "" (llvmText (program False))
   Some "wasm" => expectNotEqual "" (wasmText (program False))
   _ => pass
@@ -136,3 +167,191 @@ refusedBy backend =
 test "the llvm emitter refuses a binder with no stamped type" = refusedBy "llvm"
 
 test "the wasm emitter refuses a binder with no stamped type" = refusedBy "wasm"
+
+test "both renderers refuse paired manifest omission against an external checked requirement" =
+  expectAll
+    (map
+      (backend =>
+        expectSpawnFails
+          "env"
+          [
+            "\{probeVar}=manifest-\{backend}",
+            medakaBin,
+            "test",
+            "--filter",
+            "probe:",
+            underRoot "compiler/backend/emit_binder_refusal_test.mdk",
+          ]
+          "manifest: missing checked entry manifest")
+      ["llvm", "wasm"])
+
+playgroundMutationHelpers : String
+playgroundMutationHelpers =
+  """
+import ir.core_ir.{CProgram(..), DeclFacts(..)}
+import backend.emit_plan.{EmitPlan(..)}
+import types.capability_manifest.{CapabilityManifest(..), ManifestRequest(..), InvocationProtocol(..), FrozenAtom(..), FrozenAuthority(..)}
+import types.effect_domain.{Param(..)}
+import frontend.ast.{TyConOrigin(..)}
+
+manifestMutation : <Env> String
+manifestMutation = optionOr "valid" (getEnv "MEDAKA_MANIFEST_VICTIM")
+
+mutatePublished : CapabilityManifest -> <Env> CapabilityManifest
+mutatePublished m = match manifestMutation
+  "wrong-binding" => { m | request = { m.request | entry = { m.request.entry | binding = "neighbor" } } }
+  "wrong-module" => { m | request = { m.request | entry = { m.request.entry | moduleId = "unrelated" } } }
+  "wrong-protocol" => { m | request = { m.request | protocol = HostInvocation }, atoms = [] }
+  "malformed" => { m | atoms = [FrozenAtom { label = "Stdout", origin = OriginBuiltin, domainTop = PUnit, authority = FrozenConst (PPrefix None) }] }
+  _ => m
+
+mutateCore : CProgram -> <Env> CProgram
+mutateCore (CProgram binds ca ct impls mc facts) =
+  let manifests = if manifestMutation == "core-missing" || manifestMutation == "both-missing" then [] else map mutatePublished facts.factManifests
+  CProgram binds ca ct impls mc { facts | factManifests = manifests }
+
+mutatePlan : ManifestRequirement -> EmitPlan -> <Env> EmitPlan
+mutatePlan requirement plan = match (manifestMutation, requirement)
+  ("core-missing", CheckedEntry key protocol) => { plan | manifestIndex = [ManifestRequest { entry = key, protocol = protocol }] }
+  ("plan-missing", _) => { plan | manifestIndex = [] }
+  _ => plan
+"""
+
+playgroundMutationSource : String -> String
+playgroundMutationSource source =
+  playgroundMutationHelpers
+    ++ (source
+      |> replaceAll
+        "  let lowered = lowerProgramEmitWith facts allDecls"
+        "  let lowered = mutateCore (lowerProgramEmitWith facts allDecls)"
+      |> replaceAll "  let (plan, reached) =" "  let (originalPlan, reached) ="
+      |> replaceAll
+        "      lowered\n  if emit then"
+        "      lowered\n  let plan = mutatePlan requirement originalPlan\n  if emit then")
+
+playgroundMutationRows : List (String, String)
+playgroundMutationRows = [
+  ("core-missing", "manifest: missing checked entry manifest"),
+  ("plan-missing", "manifest: emit plan projection disagrees with Core"),
+  ("both-missing", "manifest: missing checked entry manifest"),
+  ("wrong-binding", "manifest: wrong binding for checked entry"),
+  ("wrong-module", "manifest: wrong module for checked entry"),
+  ("wrong-protocol", "manifest: wrong invocation protocol for checked entry"),
+  ("malformed", "manifest: constant domain mismatch"),
+]
+
+playgroundResult : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Exec> Result String (Int, String, String)
+playgroundResult binary entry dir mode victim = boundedVerbSeconds 90 "env" [
+  "MEDAKA_STRICT=1",
+  "MEDAKA_MANIFEST_VICTIM=" ++ victim,
+  binary,
+  mode,
+  underRoot "stdlib/runtime.mdk",
+  underRoot "stdlib/core.mdk",
+  entry,
+  dir,
+  underRoot "stdlib",
+]
+
+playgroundRefusal : String ->
+  String ->
+  String ->
+  String ->
+  (String, String) ->
+  <IO, Exec> Expectation
+playgroundRefusal binary entry dir mode (victim, needle) =
+  match playgroundResult binary entry dir mode victim
+    Err e => fail e
+    Ok (code, out, err) =>
+      let _ = match getEnv "MEDAKA_MANIFEST_MATRIX_DIR"
+        Some reports =>
+          writeFile
+            "\{reports}/playground-\{mode}-\{victim}.txt"
+            "exit=\{code}\nstdout:\n\{out}\nstderr:\n\{err}"
+        None => Ok ()
+      expectAll [
+        expectNotEqual 0 code,
+        expectTextContainsAll [needle] (out ++ err),
+        expectFalse (contains "__MEDAKA_WAT" out),
+        expectFalse (contains "__MEDAKA_ANALYZE__" out),
+        expectFalse (contains "(module" out),
+      ]
+
+playgroundControl : String ->
+  String ->
+  String ->
+  String ->
+  <IO, Exec> Expectation
+playgroundControl binary entry dir mode =
+  match playgroundResult binary entry dir mode "valid"
+    Err e => fail e
+    Ok (code, out, err) => expectAll [
+      expectEqual 0 code,
+      expectEqual "" err,
+      expectTextContainsAll
+        (if mode == "compile" then
+          ["__MEDAKA_WAT__", "(module"]
+        else
+          ["__MEDAKA_ANALYZE__", "{\"files\":[]}"])
+        out,
+      expectFalse (contains "__MEDAKA_DIAGNOSTICS__" out),
+    ]
+
+test "real playground compile and analyze reject checked corruption before either success marker" = withScratchDir
+  (dir =>
+    let original = underRoot "compiler/entries/playground_main.mdk"
+    let probe = dir ++ "/playground_manifest_probe.mdk"
+    let binary = dir ++ "/playground_manifest_probe"
+    let entry = dir ++ "/entry.mdk"
+    match readFile original
+      Err e => fail e
+      Ok source =>
+        if not
+          (contains "  let lowered = lowerProgramEmitWith facts allDecls" source
+            && contains "      lowered\n  if emit then" source) then
+          fail "playground mutation insertion points moved"
+        else match (
+          writeFile probe (playgroundMutationSource source),
+          writeFile entry """
+main : Float
+main = 6.0
+""",
+        )
+          (Err e, _) => fail e
+          (_, Err e) => fail e
+          _ =>
+            match (runBuildNativeRoots
+              medakaRoot
+              medakaBin
+              (envOr "CC" "clang")
+              probe
+              binary
+              dir
+              False
+              [underRoot "compiler"]
+              True
+              False
+              False
+              BuildProbe)
+              Err report =>
+                fail ("playground probe build failed: " ++ ppBuildReport report)
+              Ok _ =>
+                expectEach
+                  (flatMap
+                    (mode =>
+                      (
+                          mode ++ "/valid",
+                          playgroundControl binary entry dir mode,
+                        )
+                        :: map
+                          (row => (
+                            mode ++ "/" ++ fst row,
+                            playgroundRefusal binary entry dir mode row,
+                          ))
+                          playgroundMutationRows)
+                    ["compile", "analyze"]))

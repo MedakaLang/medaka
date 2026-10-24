@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_demand.{
   WasmDemandPlan, WasmDemand(..), wasmTypeContext, returnStamp, cexprStamp
 }
@@ -338,7 +339,8 @@ refusal : String -> (WasmDemandPlan -> WasmDemandPlan) -> Result String String
 refusal src mutate =
   let (plan, cp) = prepared src
   let bad = { plan | wasmPhysical = Some (mutate (physical plan)) }
-  let checked = validateForEmission WasmBackend PreludeFreeRuntime bad cp
+  let checked =
+    validateForEmission WasmBackend PreludeFreeRuntime RawUnchecked bad cp
   match checked.defects
     [] => Ok "output would be permitted"
     defects => Err (joinNl (map coreDefectMessage defects))
@@ -397,7 +399,10 @@ test "gap census preserves its forced reference walk without requiring main" =
   let (plan, cp) = prepared "f x y = x + y"
   expectEqual
     []
-    (emitProgramGaps (makeWasmEmitInput PreludeFreeRuntime []) plan cp)
+    (emitProgramGaps
+      (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
+      plan
+      cp)
 
 test "ordinary spellings cannot acquire a runtime declaration's result stamp" =
   let (_, cp) = prepared "main = 42"

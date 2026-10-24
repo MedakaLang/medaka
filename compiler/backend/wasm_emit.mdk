@@ -561,25 +561,31 @@ freshWasmEmit mode = WasmEmit {
 }
 
 -- Declaration-derived facts are indexed once for each emission.
+import types.capability_manifest.{ManifestRequirement}
+
 data WasmEmitInputData =
-  WasmEmitInputData (OrdMap (List Int)) RuntimeExternDomain
+  WasmEmitInputData (OrdMap (List Int)) RuntimeExternDomain ManifestRequirement
 
 export type WasmEmitInput = WasmEmitInputData
 
 export
-makeWasmEmitInput : RuntimeExternDomain ->
+makeWasmEmitInput : ManifestRequirement ->
+  RuntimeExternDomain ->
   List (String, List String) ->
   WasmEmitInput
-makeWasmEmitInput domain ctorFieldTypes =
-  WasmEmitInputData (ctorFloatFieldIndex ctorFieldTypes) domain
+makeWasmEmitInput requirement domain ctorFieldTypes =
+  WasmEmitInputData (ctorFloatFieldIndex ctorFieldTypes) domain requirement
 
 export
 inputRuntimeExternsW : WasmEmitInput -> RuntimeExternDomain
-inputRuntimeExternsW (WasmEmitInputData _ names) = names
+inputRuntimeExternsW (WasmEmitInputData _ names _) = names
 
 export
 inputCtorFloatFieldsW : WasmEmitInput -> OrdMap (List Int)
-inputCtorFloatFieldsW (WasmEmitInputData fields _) = fields
+inputCtorFloatFieldsW (WasmEmitInputData fields _ _) = fields
+
+inputManifestRequirementW : WasmEmitInput -> ManifestRequirement
+inputManifestRequirementW (WasmEmitInputData _ _ requirement) = requirement
 
 physicalPlanW : EmitPlan -> WasmDemandPlan
 physicalPlanW plan = match plan.wasmPhysical
@@ -1516,7 +1522,12 @@ refuseUnprovidedExternsW : WasmEmit ->
   Unit
 refuseUnprovidedExternsW emit input plan cp =
   let validation =
-    validateForEmission WasmBackend (inputRuntimeExternsW input) plan cp
+    validateForEmission
+      WasmBackend
+      (inputRuntimeExternsW input)
+      (inputManifestRequirementW input)
+      plan
+      cp
   match validation.defects
     bad :: _ => panic (coreDefectMessage bad)
     [] => match validation.externFindings

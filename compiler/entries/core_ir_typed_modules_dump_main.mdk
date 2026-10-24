@@ -1,3 +1,4 @@
+import types.capability_manifest.{EntryKey(..), ManifestRequirement(..)}
 -- TYPED + DICT-PASSED Core IR S-expression dump, on the SHIPPING modules path —
 -- the observability probe core_ir_dump_main.mdk cannot be (it is prelude-free and
 -- typecheck-free, so it never shows a `$dict` param or a `CDict`/`CMethod` route).
@@ -29,18 +30,24 @@ import types.program_facts.{ProgramFacts}
 import types.tc_types.{DriveOutputs}
 
 main : <IO> Unit
-main = driveModulesLocated (runEmitWith "runAsyncMain" emitTail)
+main =
+  driveModulesLocated
+    (runEmitWith
+      RawUnchecked
+      EntryKey { moduleId = "async", binding = "runAsyncMain" }
+      emitTail)
 
 -- The llvm_emit_modules_main emitTail with `putStr (emitProgram …)` swapped for
 -- the S-expression serializer; no side-table installs (they feed the emitter,
 -- not the lowering).
-emitTail : DriveOutputs ->
+emitTail : ManifestRequirement ->
+  DriveOutputs ->
   ProgramFacts ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-emitTail _ facts _ coreD modules2 =
+emitTail _ _ facts _ coreD modules2 =
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
   -- #686: this is the DEBUG probe, so serialize in the faithful nested-route

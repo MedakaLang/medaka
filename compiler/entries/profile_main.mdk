@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
 import types.extern_source.{externSourceHeadRows}
@@ -303,6 +304,7 @@ runStaged on targetPath rsrc csrc tsrc =
   let _ = validateFfiExternTypeNames (checkedFfiExternTypeNames elaborated)
   let input =
     makeEmitInput
+      RawUnchecked
       (runtimeDomain (externDecls rDecls))
       (methodIfaceTable elaborated)
       (ctorFieldTypeNames elaborated)
@@ -503,6 +505,7 @@ wasmStage _ False _ _ _ _ _ = ()
 wasmStage on True outputs runtimeDecls live cprog declsOp =
   let input =
     makeWasmEmitInput
+      RawUnchecked
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames live)
   let tWe0 = now ()

@@ -1,3 +1,4 @@
+import types.capability_manifest.{EntryKey(..)}
 -- The INTERPRETER arm of the 3-engine differential gate (test/diff_compiler_engines.sh,
 -- TESTING-DESIGN.md §4.4).
 --
@@ -47,7 +48,7 @@ runElab inputs runtimeDecls coreDecls modules =
   let executed =
     executedTrees
       outputs.doEntryOutcome
-      "runAsyncMain"
+      EntryKey { moduleId = "async", binding = "runAsyncMain" }
       (coreDecls, modules)
       (coreE, modulesE)
   match executed
