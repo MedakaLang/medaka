@@ -91,7 +91,10 @@ import backend.trmc_analysis.{
 -- the user externs with a `js` binding that the program reaches, one each, in
 -- Medaka-name order; the wasm emitter imports exactly these from `jsffi`.  All
 -- three are empty on an LLVM plan.
+import types.capability_manifest.{ManifestRequest, CapabilityManifest}
+
 public export data EmitPlan = EmitPlan {
+  manifestIndex : List ManifestRequest,
   target : Backend,
   externRequirements : ExternRequirements,
   entryOutcome : Option EntryFact,
@@ -179,6 +182,8 @@ planOver target domain reach ctorFields prog =
     WasmBackend => Some (planWasmDemand inputs prog requirements)
     _ => None
   EmitPlan {
+    manifestIndex =
+      map (m => (m : CapabilityManifest).request) facts.factManifests,
     target = target,
     externRequirements = requirements,
     entryOutcome = facts.factEntryOutcome,

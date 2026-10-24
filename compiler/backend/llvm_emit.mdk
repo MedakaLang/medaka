@@ -747,7 +747,10 @@ data LTy =
 -- All declaration-derived semantic facts required by LLVM emission.  Callers
 -- construct this immutable value for each program; LLVM never reads installed
 -- semantic state from a previous emission.
+import types.capability_manifest.{ManifestRequirement}
+
 data EmitInputData = EmitInputData {
+  manifestRequirement : ManifestRequirement,
   ctorFieldIndex : OrdMap (List String),
   emitHalf : Int,
   preludeBinds : List String,
@@ -771,7 +774,8 @@ data EmitInputData = EmitInputData {
 export type EmitInput = EmitInputData
 
 export
-makeEmitInput : RuntimeExternDomain ->
+makeEmitInput : ManifestRequirement ->
+  RuntimeExternDomain ->
   List (String, (String, String, Int)) ->
   List (String, List String) ->
   Int ->
@@ -779,7 +783,8 @@ makeEmitInput : RuntimeExternDomain ->
   List (String, String, String) ->
   String ->
   EmitInput
-makeEmitInput domain methodIfaces ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
+makeEmitInput requirement domain methodIfaces ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
+  manifestRequirement = requirement,
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   emitHalf = emitHalf,
   preludeBinds = preludeBinds,
@@ -14720,7 +14725,13 @@ unprovidedExterns : GapMode ->
   CProgram ->
   List ExternFinding
 unprovidedExterns mode input plan cp =
-  let validation = validateForEmission LlvmBackend input.runtimeExterns plan cp
+  let validation =
+    validateForEmission
+      LlvmBackend
+      input.runtimeExterns
+      input.manifestRequirement
+      plan
+      cp
   match validation.defects
     bad :: _ => panic (coreDefectMessage bad)
     [] => match mode

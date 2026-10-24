@@ -1,3 +1,5 @@
+import driver.main_autoprint.{executedMainInputs}
+import types.capability_manifest.{EntryKey(..)}
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
 --
 -- Runs all pipeline stages accumulating diagnostics
@@ -965,24 +967,36 @@ modOwnSchemes (mid, (schemes, _, _)) = (mid, schemes)
 -- graph's drive through the module-chain memo under `chainKey`.
 export
 checkReportOf : String -> FrontDriveIn -> (TcReport, DriveOutputs)
-checkReportOf chainKey d = match (d.fdMods, d.fdPairs)
-  ([], [up]) => checkModulesEntryFullReportK
-    d.fdInputs
-    (valueMainCandidate d.fdCore [up])
-    d.fdPreludeKey
-    d.fdRuntime
-    d.fdCore
-    [up]
-  (mods, pairs) =>
-    checkChainReport
+checkReportOf chainKey original =
+  let d =
+    if original.fdInputs.diProfileName == "" then
+      original
+    else
+      { original |
+        fdInputs =
+          executedMainInputs
+            original.fdInputs
+            EntryKey { moduleId = "async", binding = "runAsyncMain" }
+            original.fdPairs,
+      }
+  match (d.fdMods, d.fdPairs)
+    ([], [up]) => checkModulesEntryFullReportK
       d.fdInputs
-      (valueMainCandidate d.fdCore pairs)
+      (valueMainCandidate d.fdCore [up])
       d.fdPreludeKey
-      chainKey
       d.fdRuntime
       d.fdCore
-      mods
-      pairs
+      [up]
+    (mods, pairs) =>
+      checkChainReport
+        d.fdInputs
+        (valueMainCandidate d.fdCore pairs)
+        d.fdPreludeKey
+        chainKey
+        d.fdRuntime
+        d.fdCore
+        mods
+        pairs
 
 -- The check drive with its `CheckDrive`, taken off the report before anything
 -- else can drive.

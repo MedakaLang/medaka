@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import support.ordmap.{omEmpty}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
@@ -82,7 +83,8 @@ runEmit inputs runtimeDecls coreDecls modules =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
-  let input = makeWasmEmitInput (runtimeDomain (externDecls runtimeDecls)) []
+  let input =
+    makeWasmEmitInput RawUnchecked (runtimeDomain (externDecls runtimeDecls)) []
   let cp =
     lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
   let (plan, prepared) =

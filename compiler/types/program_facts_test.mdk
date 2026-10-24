@@ -222,9 +222,10 @@ test "checked and elaborated facts preserve the selected entry outcome" =
 
 test "physical wrapper adjustment preserves the original frozen invocation" =
   let (checked, _) = outcomeFacts
-  let wrapped = asyncWrapModules "runAsyncMain" [
-    ("entry", desugar (parseLocated "main = 1")),
-  ]
+  let wrapped =
+    asyncWrapModules
+      EntryKey { moduleId = "async", binding = "runAsyncMain" }
+      [("entry", desugar (parseLocated "main = 1"))]
   let adjusted = factsForExecutedTrees checked wrapped
   expectAll [
     expectEqual

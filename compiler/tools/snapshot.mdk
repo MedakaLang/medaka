@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
@@ -656,6 +657,7 @@ llvmOf runtimeDecls allDecls cp =
   let _ = validateFfiExternTypeNames (externHeadRows cp)
   let input =
     makeEmitInput
+      RawUnchecked
       (runtimeDomain (externDecls runtimeDecls))
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
@@ -674,6 +676,7 @@ wasmOf : List Decl -> List Decl -> CProgram -> String
 wasmOf runtimeDecls allDecls cp =
   let input =
     makeWasmEmitInput
+      RawUnchecked
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
   let (plan, prepared) =

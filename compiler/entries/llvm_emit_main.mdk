@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 -- Driver for the Stage 2.4 LLVM de-risking spike (STAGE2-DESIGN.md §2.4).
 --
 --   medaka run compiler/entries/llvm_emit_main.mdk <file.mdk>
@@ -54,7 +55,7 @@ emitTarget decls =
   let cp = lowerProgramEmitWith emptyFacts decls
   putStr
     (emitProgram
-      (makeEmitInput PreludeFreeRuntime [] [] 0 [] [] "")
+      (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
       (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
       cp)
 

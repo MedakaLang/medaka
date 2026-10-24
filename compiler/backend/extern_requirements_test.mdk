@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 import types.runtime_abi.{runtimeRowsFromSource}
@@ -360,7 +361,7 @@ nativeArityMismatches = [
 checkEtaArity : CallableShape -> String -> Expectation
 checkEtaArity shape name =
   let cp = lowered ("main = let _ = " ++ name ++ " in 42")
-  let input = makeEmitInput PreludeFreeRuntime [] [] 0 [] [] ""
+  let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
   let (text, _) =
     emitProgramRecord input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
   let definitions =

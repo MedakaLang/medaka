@@ -1,3 +1,9 @@
+import types.capability_manifest.{
+  ManifestRequirement(..), CapabilityManifest(..), ManifestRequest(..),
+  EntryKey(..), InvocationProtocol(..), FrozenAtom(..), FrozenAuthority(..)
+}
+import types.effect_domain.{Param(..)}
+import frontend.ast.{TyConOrigin(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
 import backend.extern_requirements.{
@@ -96,7 +102,7 @@ import backend.llvm_emit.{
   emitProgramGaps as llvmCensus,
   makeEmitInput,
 }
-import backend.emit_plan.{EmitPlan, buildEmitPlan}
+import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
 import backend.global_plan.{GlobalInitPlan(..)}
 
 import types.target_profile.{lookupProfile}
@@ -124,6 +130,7 @@ test "missing-extern-abi is a fatal metadata defect before target gaps" =
         validateForEmission
           LlvmBackend
           PreludeFreeRuntime
+          RawUnchecked
           (buildEmitPlan LlvmBackend PreludeFreeRuntime malformed)
           malformed
       expectAll [
@@ -226,7 +233,8 @@ recordSrc =
 
 test "(e) record mode logs one event per refused extern, and no unbound-variable event" =
   let decls = grantWholeDomain (desugar (parse recordSrc))
-  let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
+  let input =
+    makeWasmEmitInput RawUnchecked PreludeFreeRuntime (ctorFieldTypeNames decls)
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (wasmPlan, prepared) =
     prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
@@ -269,7 +277,7 @@ test "(f) llvm refuses assertSnapshot and lowers what wasm refuses" = expectEach
 llvmRecordEvents : Expectation
 llvmRecordEvents =
   let decls = grantWholeDomain (desugar (parse assertSnapshotSrc))
-  let input = makeEmitInput PreludeFreeRuntime [] [] 0 [] [] ""
+  let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (_, events) =
     llvmRecord input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
@@ -400,7 +408,8 @@ ffiNoJsEvents : Option CheckedTarget -> <IO> List String
 ffiNoJsEvents checked =
   let decls = grantWholeDomain (desugar (parse ffiValueSrc))
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
-  let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
+  let input =
+    makeWasmEmitInput RawUnchecked PreludeFreeRuntime (ctorFieldTypeNames decls)
   checkedTarget := checked
   let (wasmPlan, prepared) =
     prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
@@ -2047,7 +2056,109 @@ externVictims = [
   "extern-priority"
 ]
 
+manifestEntry : EntryKey
+manifestEntry = EntryKey { moduleId = "checked", binding = "main" }
+
+manifestControl : CapabilityManifest
+manifestControl = CapabilityManifest {
+  request = ManifestRequest { entry = manifestEntry, protocol = ExecutedMain },
+  atoms = [
+    FrozenAtom {
+      label = "Stdout",
+      origin = OriginBuiltin,
+      domainTop = PUnit,
+      authority = FrozenConst PUnit,
+    },
+  ],
+}
+
+withManifests : List CapabilityManifest -> CProgram -> CProgram
+withManifests manifests (CProgram binds ca ct impls mc facts) =
+  CProgram binds ca ct impls mc { facts | factManifests = manifests }
+
+manifestRequirement : String -> ManifestRequirement
+manifestRequirement "manifest-host" = CheckedEntry manifestEntry HostInvocation
+manifestRequirement victim =
+  if victim == "manifest-raw"
+    || victim == "manifest-raw-malformed"
+    || not (stringStartsWith "manifest-" victim) then
+    RawUnchecked
+  else
+    CheckedEntry manifestEntry ExecutedMain
+
+manifestVictim : String -> CProgram
+manifestVictim victim =
+  let control = lowered "main = 6.0"
+  let m = manifestControl
+  let pureHost =
+    { m | request = { m.request | protocol = HostInvocation }, atoms = [] }
+  let changed = match victim
+    "manifest-wrong-binding" => { m |
+      request = { m.request | entry = { manifestEntry | binding = "neighbor" } },
+    }
+    "manifest-wrong-module" => { m |
+      request = { m.request | entry = { manifestEntry | moduleId = "other" } },
+    }
+    "manifest-wrong-protocol" => pureHost
+    "manifest-host" => pureHost
+    "manifest-malformed" => { m |
+      atoms = [
+        FrozenAtom {
+          label = "Stdout",
+          origin = OriginBuiltin,
+          domainTop = PUnit,
+          authority = FrozenConst (PPrefix None),
+        },
+      ],
+    }
+    "manifest-raw-malformed" => { m |
+      atoms = [
+        FrozenAtom {
+          label = "Stdout",
+          origin = OriginBuiltin,
+          domainTop = PUnit,
+          authority = FrozenConst (PPrefix None),
+        },
+      ],
+    }
+    _ => m
+  withManifests
+    (if victim == "manifest-core-missing"
+      || victim == "manifest-both-missing"
+      || victim == "manifest-raw" then
+      []
+    else
+      [changed])
+    control
+
+corruptManifestPlan : String -> EmitPlan -> EmitPlan
+corruptManifestPlan "manifest-core-missing" plan =
+  { plan | manifestIndex = [manifestControl.request] }
+corruptManifestPlan "manifest-plan-missing" plan = { plan | manifestIndex = [] }
+corruptManifestPlan _ plan = plan
+
+manifestVictims : List String
+manifestVictims = [
+  "manifest-core-missing", "manifest-plan-missing", "manifest-both-missing",
+  "manifest-wrong-binding", "manifest-wrong-module", "manifest-wrong-protocol",
+  "manifest-malformed", "manifest-raw-malformed"
+]
+
 emissionNeedle : String -> String
+emissionNeedle "manifest-core-missing" =
+  "manifest: missing checked entry manifest"
+emissionNeedle "manifest-both-missing" =
+  "manifest: missing checked entry manifest"
+emissionNeedle "manifest-plan-missing" =
+  "manifest: emit plan projection disagrees with Core"
+emissionNeedle "manifest-wrong-binding" =
+  "manifest: wrong binding for checked entry"
+emissionNeedle "manifest-wrong-module" =
+  "manifest: wrong module for checked entry"
+emissionNeedle "manifest-wrong-protocol" =
+  "manifest: wrong invocation protocol for checked entry"
+emissionNeedle "manifest-malformed" = "manifest: constant domain mismatch"
+emissionNeedle "manifest-raw-malformed" = "manifest: constant domain mismatch"
 emissionNeedle "extern-missing" = "missing-extern-requirement"
 emissionNeedle "extern-paired" = "missing-extern-requirement"
 emissionNeedle "extern-import" = "extern-import-mismatch"
@@ -2150,7 +2261,11 @@ test "the emission gateway matrix covers every public renderer derived from both
 export
 emissionText : String -> String -> <Stdout> String
 emissionText route victim =
-  let cp = emissionVictim victim
+  let cp =
+    if stringStartsWith "manifest-" victim then
+      manifestVictim victim
+    else
+      emissionVictim victim
   let target = if contains "llvm" route then LlvmBackend else WasmBackend
   let other = if contains "llvm" route then WasmBackend else LlvmBackend
   let domain =
@@ -2159,16 +2274,19 @@ emissionText route victim =
     else
       PreludeFreeRuntime
   let plan =
-    corruptExternPlan
+    corruptManifestPlan
       victim
-      (corruptGlobalPlan
+      (corruptExternPlan
         victim
-        (buildEmitPlan
-          (if victim == "target" then other else target)
-          domain
-          cp))
-  let li = makeEmitInput domain [] [] 0 [] [] ""
-  let wi = makeWasmEmitInput domain []
+        (corruptGlobalPlan
+          victim
+          (buildEmitPlan
+            (if victim == "target" then other else target)
+            domain
+            cp)))
+  let requirement = manifestRequirement victim
+  let li = makeEmitInput requirement domain [] [] 0 [] [] ""
+  let wi = makeWasmEmitInput requirement domain []
   match route
     "llvm-stats" =>
       let (text, stats) = llvmStats li plan cp
@@ -2181,6 +2299,14 @@ emissionText route victim =
     "wasm-strict" => wasmStrict wi plan cp
     "wasm-record" => fst (wasmRecord wi plan cp)
     "wasm-census" => joinNl (emitProgramGaps wi plan cp)
+    "playground-analyze" =>
+      let validation =
+        validateForEmission WasmBackend domain requirement plan cp
+      match validation.defects
+        [] =>
+          let _ = putStrLn "__MEDAKA_ANALYZE__"
+          "ANALYZE"
+        bad => panic (joinNl (map coreDefectMessage bad))
     "playground" =>
       let wat = wasmStrict wi plan cp
       let _ = putStrLn "__MEDAKA_WAT__"
@@ -2219,25 +2345,37 @@ emissionRefusedAt destination route victim = match boundedVerbSeconds 90 "env" [
   executablePath (),
 ]
   Err e => fail e
-  Ok (code, out, err) => expectEach [
-    ("refuses", expectNotEqual 0 code),
-    (
-      "empty renderer stdout",
-      expectEqual "" (joinNl (rendererOutputLines (split "\n" out))),
-    ),
-    ("no artifact", expectFalse (fileExists destination)),
-    ("class", expectTextContainsAll [emissionNeedle victim] (out ++ err)),
-    (
-      "no output returned",
-      expectFalse (contains "EMISSION_RETURNED_SENTINEL" out),
-    ),
-    (
-      "no module text",
-      expectFalse (contains "(module" out || contains "define i32" out),
-    ),
-    ("no marker", expectFalse (contains "__MEDAKA_WAT__" out)),
-    ("no stats", expectFalse (contains "EMISSION_STATS_SENTINEL" out)),
-  ]
+  Ok (code, out, err) =>
+    let _ =
+      if stringStartsWith
+        "manifest-"
+        victim then match getEnv "MEDAKA_MANIFEST_MATRIX_DIR"
+        Some dir =>
+          writeFile
+            "\{dir}/renderer-\{route}-\{victim}.txt"
+            "exit=\{code}\nstdout:\n\{out}\nstderr:\n\{err}"
+        None => Ok ()
+      else
+        Ok ()
+    expectEach [
+      ("refuses", expectNotEqual 0 code),
+      (
+        "empty renderer stdout",
+        expectEqual "" (joinNl (rendererOutputLines (split "\n" out))),
+      ),
+      ("no artifact", expectFalse (fileExists destination)),
+      ("class", expectTextContainsAll [emissionNeedle victim] (out ++ err)),
+      (
+        "no output returned",
+        expectFalse (contains "EMISSION_RETURNED_SENTINEL" out),
+      ),
+      (
+        "no module text",
+        expectFalse (contains "(module" out || contains "define i32" out),
+      ),
+      ("no marker", expectFalse (contains "__MEDAKA_WAT__" out)),
+      ("no stats", expectFalse (contains "EMISSION_STATS_SENTINEL" out)),
+    ]
 
 test "gateway emission seams refuse F1-F6 and a mismatched target before returning output" =
   match getEnv emissionProbeVar
@@ -2307,6 +2445,7 @@ test "gateway returns fatal defects separately from target extern findings" =
           validateForEmission
             target
             PreludeFreeRuntime
+            RawUnchecked
             (buildEmitPlan target PreludeFreeRuntime (emissionVictim victim))
             (emissionVictim victim)
         map
@@ -2337,6 +2476,7 @@ test "gateway preserves runtime domain identity and rejects a loaded missing row
     validateForEmission
       LlvmBackend
       domain
+      RawUnchecked
       (buildEmitPlan LlvmBackend domain emissionControl)
       emissionControl
   expectEach [
@@ -2375,6 +2515,7 @@ test "gateway preserves collision priority and backend dict-tag widths" =
       (validateForEmission
         backend
         PreludeFreeRuntime
+        RawUnchecked
         (buildEmitPlan backend PreludeFreeRuntime cp)
         cp).defects
   expectEach [
@@ -2402,8 +2543,8 @@ test "gateway valid controls return module text and unavailable externs stay rec
   let cp = emissionVictim "not-provided"
   let lp = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
   let wp = buildEmitPlan WasmBackend PreludeFreeRuntime cp
-  let li = makeEmitInput PreludeFreeRuntime [] [] 0 [] [] ""
-  let wi = makeWasmEmitInput PreludeFreeRuntime []
+  let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  let wi = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
   let (_, le) = llvmRecord li lp cp
   let (_, we) = wasmRecord wi wp cp
   expectEach [
@@ -2469,6 +2610,7 @@ test "runtime domain projection unwraps attributed externs without dropping decl
     validateForEmission
       LlvmBackend
       domain
+      RawUnchecked
       (buildEmitPlan LlvmBackend domain emissionControl)
       emissionControl
   expectEach [
@@ -2526,6 +2668,7 @@ test "method result facts validate before either backend emits" =
               (validateForEmission
                 backend
                 PreludeFreeRuntime
+                RawUnchecked
                 plan
                 methodFactControl).defects),
         ])
@@ -2652,6 +2795,7 @@ test "missing method result facts are fatal for both backends" =
               (validateForEmission
                 backend
                 PreludeFreeRuntime
+                RawUnchecked
                 (buildEmitPlan backend PreludeFreeRuntime cp)
                 cp).defects)))
       [LlvmBackend, WasmBackend])
@@ -2679,3 +2823,68 @@ test "Wasm import projection omissions refuse before output on every Wasm render
             "wasm-strict", "wasm-record", "wasm-census", "wasm-unchecked",
             "playground"
           ])
+
+test "checked manifest carriage rejects every named mutation at the shared gateway" =
+  expectEach
+    (flatMap
+      (backend =>
+        map
+          (victim =>
+            let cp = manifestVictim victim
+            let plan =
+              corruptManifestPlan
+                victim
+                (buildEmitPlan backend PreludeFreeRuntime cp)
+            (
+              "\{backendName backend}/\{victim}",
+              expectTextContainsAll
+                [emissionNeedle victim]
+                (joinNl
+                  (map
+                    coreDefectMessage
+                    (validateForEmission
+                      backend
+                      PreludeFreeRuntime
+                      (manifestRequirement victim)
+                      plan
+                      cp).defects)),
+            ))
+          manifestVictims)
+      [LlvmBackend, WasmBackend])
+
+test "all renderer modes reject checked carriage loss and malformed explicit raw carriage before output" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (flatMap
+          (route =>
+            map
+              (victim => ("\{route}/\{victim}", emissionRefused route victim))
+              manifestVictims)
+          emissionRoutes)
+
+test "explicit raw and checked Float protocol controls emit nonempty modules in every text renderer" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (flatMap
+          (route =>
+            map
+              (victim => (
+                "\{route}/\{victim}",
+                if route == "llvm-census" || route == "wasm-census" then
+                  expectEqual "" (emissionText route victim)
+                else
+                  expectTextContainsAll
+                    [
+                      if stringStartsWith "llvm-" route then
+                        "define i32 @mdk_program_main"
+                      else
+                        "(module",
+                    ]
+                    (emissionText route victim),
+              ))
+              ["manifest-raw", "manifest-host", "manifest-valid"])
+          emissionRoutes)
