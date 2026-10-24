@@ -1052,7 +1052,7 @@ planWasmDemand inputs (cp@(CProgram groups ctorArs _ impls _ facts)) req =
   let roots = need emptyHelpers "ioRuntimeLines"
   let roots =
     if refMode then sourceRoots source str clos hostKeys js roots else roots
-  let roots = fold (hBind ctx refMode str) roots groups
+  let roots = fold (hBind ctx refMode str []) roots groups
   let roots = fold (hImpl ctx refMode str) roots impls
   let roots = if refMode then implFailureRoots roots impls else roots
   let roots =
@@ -1072,7 +1072,7 @@ planWasmDemand inputs (cp@(CProgram groups ctorArs _ impls _ facts)) req =
         (hasUse source UseI64)
         (fold
           (hImpl ctx True str)
-          (fold (hBind ctx True str) closed groups)
+          (fold (hBind ctx True str []) closed groups)
           impls)
   let renderClos = clos || omHasKey "closApplyLines" closed.helpers
   let representation = representationOf source str closed
@@ -1266,8 +1266,14 @@ selectWasmBin ctx str env op l r tag =
   else
     "int"
 
-hBind : WasmTypeContext -> Bool -> Bool -> HelperAcc -> CBind -> HelperAcc
-hBind ctx refMode str acc (CBind name clauses loc _) =
+hBind : WasmTypeContext ->
+  Bool ->
+  Bool ->
+  List String ->
+  HelperAcc ->
+  CBind ->
+  HelperAcc
+hBind ctx refMode str env acc (CBind name clauses loc _) =
   let acc =
     if refMode
       && name /= "main"
@@ -1276,22 +1282,30 @@ hBind ctx refMode str acc (CBind name clauses loc _) =
       locatedNonexh acc loc
     else
       acc
-  fold (hClause ctx refMode str) acc clauses
+  fold (hClause ctx refMode str env) acc clauses
 
-hClause : WasmTypeContext -> Bool -> Bool -> HelperAcc -> CClause -> HelperAcc
-hClause ctx refMode str acc (CClause pats body) =
+hClause : WasmTypeContext ->
+  Bool ->
+  Bool ->
+  List String ->
+  HelperAcc ->
+  CClause ->
+  HelperAcc
+hClause ctx refMode str env acc (CClause pats body) =
   hExpr
     ctx
     refMode
     str
     (fold (hPat refMode) acc pats)
-    (fold (flip envBindPat) [] pats)
+    (fold (flip envBindPat) env pats)
     body
 
 hImpl : WasmTypeContext -> Bool -> Bool -> HelperAcc -> CImplEntry -> HelperAcc
 hImpl ctx refMode str acc (CImplEntry _ _ _ body) = match body
-  CImplTagged _ _ _ _ _ pats b => hClause ctx refMode str acc (CClause pats b)
-  CImplDefault _ _ _ _ _ pats b => hClause ctx refMode str acc (CClause pats b)
+  CImplTagged _ _ _ _ _ pats b =>
+    hClause ctx refMode str [] acc (CClause pats b)
+  CImplDefault _ _ _ _ _ pats b =>
+    hClause ctx refMode str [] acc (CClause pats b)
 
 implFailureRoots : HelperAcc -> List CImplEntry -> HelperAcc
 implFailureRoots acc entries =
@@ -1449,7 +1463,7 @@ hExpr ctx refMode str acc env (CLetGroup binds b) =
   let acc =
     fold
       (a (CBind _ cs loc bid) =>
-        hBind ctx refMode str a (CBind "$local" cs loc bid))
+        hBind ctx refMode str inner a (CBind "$local" cs loc bid))
       acc
       binds
   hExpr ctx refMode str acc inner b

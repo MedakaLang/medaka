@@ -1,0 +1,4 @@
+f x = g ()
+  where
+    g _ = x + x
+main = let _ = z => z in f 21
