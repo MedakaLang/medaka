@@ -13,10 +13,11 @@ import frontend.desugar_cache.{desugaredPrelude}
 import frontend.parse_cache.{parsePrelude}
 import string as S
 import types.framed_test_support.{testKeyAt, treeText, withDigestOf}
-import types.interface_sexp.{InterfaceFault(..)}
+import types.interface_frame.{InterfaceFault(..)}
 import types.prelude_decls.{
   PreludeDecls(..), acceptedDeclsBody, preludeDeclsOf, encodeDeclsFile,
-  readDeclsFile, readDeclsKey, declsKeyOf, declsFormatVersion, renderDeclsFault
+  readDeclsFile, readDeclsKey, readDeclsFramedGated, declsKeyOf,
+  declsFormatVersion, renderDeclsFault
 }
 import types.prelude_elab.{BinderRun(..), binderSpan, relocDecls}
 import types.prelude_interface.{InterfaceKey(..), keysMatch}
@@ -222,6 +223,24 @@ test "a truncated file, a flipped digest byte and a foreign format each refuse" 
           "the key of a good one"
           (expectEqual "ok" (why (readDeclsKey text))),
       ]
+
+test "a stale key is named before the digest is checked" = match writtenFile ()
+  None => fail "could not write the file"
+  Some text =>
+    let headerLine = S.take (optionOr 0 (S.indexOf "\n" text)) text
+    let garbage = "\{headerLine}\n(((\n"
+    expectAll [
+      labelFail
+        "garbage under an accepted key reaches the digest"
+        (expectEqual
+          "header/digest: the body does not match the digest (prelude declarations)"
+          (why (readDeclsFramedGated (_ => None) garbage))),
+      labelFail
+        "garbage under a stale key is stale"
+        (expectEqual
+          "stale: sources (prelude declarations)"
+          (why (readDeclsFramedGated (_ => Some "sources") garbage))),
+    ]
 
 test "a body that is not two declaration lists refuses under a matching digest" =
   match writtenFile ()

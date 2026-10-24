@@ -26,11 +26,11 @@ import support.sexp_value.{
   SExp(..), SexpError(..), atomInt, cursorAtEnd, cursorOf, cursorOffset,
   parseSExp, renderSExp
 }
-import types.interface_sexp.{InterfaceFault(..), sha256Hex}
-import types.prelude_elab.{
-  BinderRun(..), binderRunIs, binderSpan, checkedFramed, failure, firstLine,
-  framedHeader, refuse, renderFramedFault
+import types.interface_frame.{
+  InterfaceFault(..), KeyGate, checkedFramed, failure, firstLine, framedFile,
+  keyFields, noGate, refuse, renderFramedFault
 }
+import types.prelude_elab.{BinderRun(..), binderRunIs, binderSpan}
 import types.prelude_interface.{InterfaceKey(..)}
 
 -- ── the value ───────────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ encodeDeclsFile : InterfaceKey -> PreludeDecls -> String
 encodeDeclsFile key pd =
   let covered =
     "\{renderSExp (countersNode pd)}\n\{renderSExp (declsSExp pd.pdRuntime.ptDecls)}\n\{renderSExp (declsSExp pd.pdCore.ptDecls)}\n"
-  "\{renderSExp (framedHeader "medaka-decls" declsFormatVersion key (sha256Hex covered))}\n\{covered}"
+  framedFile "medaka-decls" declsFormatVersion (keyFields key) covered
 
 export
 renderDeclsFault : InterfaceFault -> String
@@ -113,7 +113,15 @@ renderDeclsFault fault =
 -- version, header and digest are checked, without decoding them.
 export
 readDeclsFramed : String -> Result InterfaceFault (InterfaceKey, String)
-readDeclsFramed text = checkedFramed "medaka-decls" declsFormatVersion text
+readDeclsFramed = readDeclsFramedGated noGate
+
+-- `readDeclsFramed` for a file [gate] has to find fresh: a stale key is refused
+-- before the digest is checked.
+export
+readDeclsFramedGated : KeyGate ->
+  String ->
+  Result InterfaceFault (InterfaceKey, String)
+readDeclsFramedGated = checkedFramed "medaka-decls" declsFormatVersion
 
 -- The key a file's header claims, after its version, header and digest are
 -- checked, without decoding the body.

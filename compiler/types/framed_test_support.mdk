@@ -5,7 +5,7 @@ import frontend.ast.{Decl}
 import frontend.ast_codec.{declsSExp}
 import string as S
 import support.sexp_value.{renderSExp}
-import types.interface_sexp.{sha256Hex}
+import types.interface_frame.{sha256Hex}
 import types.prelude_interface.{InterfaceKey, interfaceKeyOf}
 
 -- The key the rows write under, at the format [version] of the file's kind.

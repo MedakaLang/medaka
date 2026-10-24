@@ -1,5 +1,5 @@
 # META
-source_lines=788
+source_lines=679
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's elaborated trees as a value, an on-disk file and a process
@@ -52,7 +52,10 @@ import support.sexp_value.{
 }
 import support.util.{splitOnChar}
 import types.evidence_coverage.{EvidenceFault(..), evidenceFaults}
-import types.interface_sexp.{InterfaceFault(..), bodyOf, sha256Hex}
+import types.interface_frame.{
+  InterfaceFault(..), KeyGate, bodyOf, checkedFramed, failure, firstLine,
+  framedFile, keyFields, noGate, refuse, renderFramedFault, sha256Hex
+}
 import types.prelude_interface.{InterfaceKey(..)}
 import types.route_key.{setPreludeEvidence}
 import types.runtime_types.{
@@ -164,24 +167,6 @@ sexpBinder row = SList [
 binderLine : List BinderRow -> String
 binderLine rows = renderSExp (SList (map sexpBinder rows))
 
-headerNode : InterfaceKey -> String -> SExp
-headerNode = framedHeader "medaka-elab" formatVersion
-
--- The header line of a framed file: [tag], [version], the key's sources and
--- compiler, and the digest of the bytes after the line.
-export
-framedHeader : String -> Int -> InterfaceKey -> String -> SExp
-framedHeader tag version key digest = SList [
-  SAtom tag,
-  SAtom (intToString version),
-  SList [
-    SAtom "sources",
-    SList (map (s => SList [SAtom (fst s), SAtom (snd s)]) key.ikSources),
-  ],
-  SList [SAtom "compiler", SAtom key.ikCompiler],
-  SList [SAtom "digest", SAtom digest],
-]
-
 countersNode : PreludeElab -> SExp
 countersNode pe = SList [
   SAtom "counters",
@@ -202,7 +187,7 @@ export
 encodeElabFile : InterfaceKey -> PreludeElab -> String
 encodeElabFile key pe =
   let covered = coveredText pe
-  "\{renderSExp (headerNode key (sha256Hex covered))}\n\{covered}"
+  framedFile "medaka-elab" formatVersion (keyFields key) covered
 
 -- The digest a framed file's covered text has: the SHA-256 of the bytes after
 -- the first line.
@@ -210,36 +195,9 @@ export
 framedDigestOf : String -> String
 framedDigestOf text = sha256Hex (bodyOf text)
 
--- Why a file of the kind [noun], written at [version], is refused.
-export
-renderFramedFault : String -> Int -> InterfaceFault -> String
-renderFramedFault noun version (WrongFormat v) =
-  "\{noun} format version \{v}, this compiler reads \{version}"
-renderFramedFault noun _ (Malformed e) = "\{e.sePath}: \{e.seWhat} (\{noun})"
-
 export
 renderElabFault : InterfaceFault -> String
 renderElabFault fault = renderFramedFault "elaborated trees" formatVersion fault
-
-export
-refuse : String -> String -> Result InterfaceFault a
-refuse path what =
-  Err (Malformed SexpError { seOffset = 0, sePath = path, seWhat = what })
-
-export
-failure : SexpError -> Result InterfaceFault a
-failure e = Err (Malformed e)
-
--- The version the header declares, when it declares one.
-declaredVersion : String -> SExp -> Option Int
-declaredVersion tag (SList ((SAtom t) :: v :: _))
-  | t == tag = match atomInt "" v
-    Ok n => Some n
-    Err _ => None
-declaredVersion _ _ = None
-
--- The key and the digest a header claims.
-data Header = Header { hKey : InterfaceKey, hDigest : String }
 
 -- The four counters of the counters line.
 data Counters = Counters {
@@ -247,27 +205,6 @@ data Counters = Counters {
   cLocal : Int,
   cBinders : Int,
   cBinderBase : Int,
-}
-
-headerOf : String -> SExp -> Result SexpError Header
-headerOf tag (SList [SAtom t, v, SList [SAtom "sources", srcs], SList [SAtom "compiler", c], SList [SAtom "digest", d]])
-  | t == tag = do
-    version <- atomInt "header/version" v
-    sources <- traverse sourceOf (listItems srcs)
-    compiler <- expectAtom "header/compiler" c
-    digest <- expectAtom "header/digest" d
-    Ok Header {
-      hKey = InterfaceKey {
-        ikFormat = version,
-        ikSources = sources,
-        ikCompiler = compiler,
-      },
-      hDigest = digest,
-    }
-headerOf tag _ = Err SexpError {
-  seOffset = 0,
-  sePath = "header",
-  seWhat = "expected a \{tag} header of five fields",
 }
 
 countersOf : SExp -> Result SexpError Counters
@@ -286,18 +223,6 @@ countersOf _ = Err SexpError {
   seOffset = 0,
   sePath = "counters",
   seWhat = "expected a counters line of four numbers",
-}
-
-listItems : SExp -> List SExp
-listItems (SList items) = items
-listItems _ = []
-
-sourceOf : SExp -> Result SexpError (String, String)
-sourceOf (SList [SAtom p, SAtom h]) = Ok (p, h)
-sourceOf _ = Err SexpError {
-  seOffset = 0,
-  sePath = "header/sources",
-  seWhat = "expected a (path hash) pair",
 }
 
 readRuntimeType : SexpCursor -> RuntimeType
@@ -325,65 +250,26 @@ readBinder cur =
     brSigned = signed,
   }
 
--- The first line of [text] read as one s-expression, and the text after it;
--- [what] is why there is no such line.
-export
-firstLine : String -> String -> String -> Result InterfaceFault (SExp, String)
-firstLine path what text = match S.indexOf "\n" text
-  None => refuse path what
-  Some i => match parseSExp (S.take i text)
-    Err e => failure e
-    Ok node => Ok (node, S.drop (i + 1) text)
-
--- The header a file claims and the bytes its digest covers, after the version
--- and the digest are checked and before any of the covered bytes is decoded.
-checkedFile : String -> Result InterfaceFault (Header, String)
-checkedFile = checkedHeader "medaka-elab" formatVersion
-
--- The key a file framed under [tag] at [version] claims and the bytes its
--- digest covers, after the version and the digest are checked.
-export
-checkedFramed : String ->
-  Int ->
-  String ->
-  Result InterfaceFault (InterfaceKey, String)
-checkedFramed tag version text =
-  map ((h, covered) => (h.hKey, covered)) (checkedHeader tag version text)
-
-checkedHeader : String ->
-  Int ->
-  String ->
-  Result InterfaceFault (Header, String)
-checkedHeader tag version text = do
-  (node, covered) <- firstLine "file" "no header line" text
-  checkedNode tag version node covered
-
--- [node] is the first line of a file whose digest covers [covered].  Kept out of
--- `checkedHeader`'s `do`: a guarded final `match` there that reads a parameter of
--- the enclosing function does not compile (the emitter reports it unbound).
-checkedNode : String ->
-  Int ->
-  SExp ->
-  String ->
-  Result InterfaceFault (Header, String)
-checkedNode tag version node covered = match declaredVersion tag node
-  Some v if v /= version => Err (WrongFormat v)
-  _ => do
-    h <- mapErr Malformed (headerOf tag node)
-    if sha256Hex covered /= h.hDigest then
-      refuse "header/digest" "the body does not match the digest"
-    else
-      Ok (h, covered)
-
 -- The value of a file, or why it is refused: the version first, then the
 -- header, then the digest, then the counters line, then the body, and last the
 -- counters against the rows they describe.  The key is the one the header
 -- carries.
 export
 readElabFile : String -> Result InterfaceFault (InterfaceKey, PreludeElab)
-readElabFile text = do
-  (h, covered) <- checkedFile text
-  decodeCovered h.hKey covered
+readElabFile = readElabFileGated noGate
+
+-- `readElabFile` for a file [gate] has to find fresh: a stale key is refused
+-- before the digest is checked or any body is decoded.
+export
+readElabFileGated : KeyGate ->
+  String ->
+  Result InterfaceFault (InterfaceKey, PreludeElab)
+readElabFileGated gate text = do
+  (key, covered) <- checkedElab gate text
+  decodeCovered key covered
+
+checkedElab : KeyGate -> String -> Result InterfaceFault (InterfaceKey, String)
+checkedElab = checkedFramed "medaka-elab" formatVersion
 
 decodeCovered : InterfaceKey ->
   String ->
@@ -491,7 +377,12 @@ aboveCounter _ _ = False
 -- under a recomputed digest reads as fresh here; `readElabFile` refuses it.
 export
 readElabKey : String -> Result InterfaceFault InterfaceKey
-readElabKey text = map ((h, _) => h.hKey) (checkedFile text)
+readElabKey = readElabKeyGated noGate
+
+-- `readElabKey` for a file [gate] has to find fresh.
+export
+readElabKeyGated : KeyGate -> String -> Result InterfaceFault InterfaceKey
+readElabKeyGated gate text = map fst (checkedElab gate text)
 
 -- ── binder relocation ───────────────────────────────────────────────────────
 -- The file's binder ordinals are the writer's; a reading process minted its own
@@ -798,7 +689,7 @@ heldPreludeCounters _ =
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "SexpCursor" false) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false) (mem "expectAtom" false) (mem "parseSExp" false) (mem "renderSExp" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false))))
 (DUse false (UseGroup ("types" "evidence_coverage") ((mem "EvidenceFault" true) (mem "evidenceFaults" false))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceFault" true) (mem "bodyOf" false) (mem "sha256Hex" false))))
+(DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "bodyOf" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedFile" false) (mem "keyFields" false) (mem "noGate" false) (mem "refuse" false) (mem "renderFramedFault" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "setPreludeEvidence" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "BinderTypeTable" false) (mem "RuntimeType" true) (mem "addBinderRow" false) (mem "binderOrdinal" false) (mem "runtimeTypeName" false) (mem "runtimeTypeFromName" false))))
@@ -831,60 +722,30 @@ heldPreludeCounters _ =
 (DFunDef false "sexpBinder" ((PVar "row")) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpBinderId") (EFieldAccess (EVar "row") "brId")) (EApp (EVar "SAtom") (EFieldAccess (EVar "row") "brName")) (EApp (EVar "SAtom") (EApp (EVar "runtimeTypeName") (EFieldAccess (EVar "row") "brType"))) (EApp (EVar "SList") (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EVar "SAtom") (EApp (EVar "runtimeTypeName") (EVar "t"))))) (EMatch (EFieldAccess (EVar "row") "brReturns") (arm (PCon "Some" (PVar "t")) () (EListLit (EVar "t"))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "sexpBool") (EFieldAccess (EVar "row") "brSigned")))))
 (DTypeSig false "binderLine" (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyCon "String")))
 (DFunDef false "binderLine" ((PVar "rows")) (EApp (EVar "renderSExp") (EApp (EVar "SList") (EApp (EApp (EVar "map") (EVar "sexpBinder")) (EVar "rows")))))
-(DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "String") (TyCon "SExp"))))
-(DFunDef false "headerNode" () (EApp (EApp (EVar "framedHeader") (ELit (LString "medaka-elab"))) (EVar "formatVersion")))
-(DTypeSig true "framedHeader" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "String") (TyCon "SExp"))))))
-(DFunDef false "framedHeader" ((PVar "tag") (PVar "version") (PVar "key") (PVar "digest")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EVar "tag")) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "version"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "sources"))) (EApp (EVar "SList") (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EApp (EVar "fst") (EVar "s"))) (EApp (EVar "SAtom") (EApp (EVar "snd") (EVar "s"))))))) (EFieldAccess (EVar "key") "ikSources"))))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "compiler"))) (EApp (EVar "SAtom") (EFieldAccess (EVar "key") "ikCompiler")))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "digest"))) (EApp (EVar "SAtom") (EVar "digest")))))))
 (DTypeSig false "countersNode" (TyFun (TyCon "PreludeElab") (TyCon "SExp")))
 (DFunDef false "countersNode" ((PVar "pe")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "counters"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EVar "pe") "peEvCounter"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EVar "pe") "peLocalCounter"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EVar "pe") "peBinderCount"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EVar "pe") "peBinderBase"))))))
 (DTypeSig false "coveredText" (TyFun (TyCon "PreludeElab") (TyCon "String")))
 (DFunDef false "coveredText" ((PVar "pe")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EVar "countersNode") (EVar "pe"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EVar "declsSExp") (EFieldAccess (EVar "pe") "peDecls"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EVar "evEntriesSExp") (EFieldAccess (EVar "pe") "peEvidence"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "binderLine") (EFieldAccess (EVar "pe") "peBinders")))) (ELit (LString "\n"))))
 (DTypeSig true "encodeElabFile" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "PreludeElab") (TyCon "String"))))
-(DFunDef false "encodeElabFile" ((PVar "key") (PVar "pe")) (EBlock (DoLet false false (PVar "covered") (EApp (EVar "coveredText") (EVar "pe"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EApp (EVar "headerNode") (EVar "key")) (EApp (EVar "sha256Hex") (EVar "covered")))))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "covered"))) (ELit (LString ""))))))
+(DFunDef false "encodeElabFile" ((PVar "key") (PVar "pe")) (EBlock (DoLet false false (PVar "covered") (EApp (EVar "coveredText") (EVar "pe"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "framedFile") (ELit (LString "medaka-elab"))) (EVar "formatVersion")) (EApp (EVar "keyFields") (EVar "key"))) (EVar "covered")))))
 (DTypeSig true "framedDigestOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "framedDigestOf" ((PVar "text")) (EApp (EVar "sha256Hex") (EApp (EVar "bodyOf") (EVar "text"))))
-(DTypeSig true "renderFramedFault" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "InterfaceFault") (TyCon "String")))))
-(DFunDef false "renderFramedFault" ((PVar "noun") (PVar "version") (PCon "WrongFormat" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "noun"))) (ELit (LString " format version "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ", this compiler reads "))) (EApp (EVar "display") (EVar "version"))) (ELit (LString ""))))
-(DFunDef false "renderFramedFault" ((PVar "noun") PWild (PCon "Malformed" (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "e") "sePath"))) (ELit (LString ": "))) (EApp (EVar "display") (EFieldAccess (EVar "e") "seWhat"))) (ELit (LString " ("))) (EApp (EVar "display") (EVar "noun"))) (ELit (LString ")"))))
 (DTypeSig true "renderElabFault" (TyFun (TyCon "InterfaceFault") (TyCon "String")))
 (DFunDef false "renderElabFault" ((PVar "fault")) (EApp (EApp (EApp (EVar "renderFramedFault") (ELit (LString "elaborated trees"))) (EVar "formatVersion")) (EVar "fault")))
-(DTypeSig true "refuse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyVar "a")))))
-(DFunDef false "refuse" ((PVar "path") (PVar "what")) (EApp (EVar "Err") (EApp (EVar "Malformed") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (EVar "path")) (fa "seWhat" (EVar "what")))))))
-(DTypeSig true "failure" (TyFun (TyCon "SexpError") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyVar "a"))))
-(DFunDef false "failure" ((PVar "e")) (EApp (EVar "Err") (EApp (EVar "Malformed") (EVar "e"))))
-(DTypeSig false "declaredVersion" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "declaredVersion" ((PVar "tag") (PCon "SList" (PCons (PCon "SAtom" (PVar "t")) (PCons (PVar "v") PWild)))) (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (EMatch (EApp (EApp (EVar "atomInt") (ELit (LString ""))) (EVar "v")) (arm (PCon "Ok" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "Err" PWild) () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "declaredVersion" (PWild PWild) (EVar "None"))
-(DData Private "Header" () ((variant "Header" (ConNamed (field "hKey" (TyCon "InterfaceKey")) (field "hDigest" (TyCon "String"))))) ())
 (DData Private "Counters" () ((variant "Counters" (ConNamed (field "cEvidence" (TyCon "Int")) (field "cLocal" (TyCon "Int")) (field "cBinders" (TyCon "Int")) (field "cBinderBase" (TyCon "Int"))))) ())
-(DTypeSig false "headerOf" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Header")))))
-(DFunDef false "headerOf" ((PVar "tag") (PCon "SList" (PList (PCon "SAtom" (PVar "t")) (PVar "v") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sources"))) (PVar "srcs"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "compiler"))) (PVar "c"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "digest"))) (PVar "d")))))) (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "header/version"))) (EVar "v"))) (ELam ((PVar "version")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "traverse") (EVar "sourceOf")) (EApp (EVar "listItems") (EVar "srcs")))) (ELam ((PVar "sources")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/compiler"))) (EVar "c"))) (ELam ((PVar "compiler")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/digest"))) (EVar "d"))) (ELam ((PVar "digest")) (EApp (EVar "Ok") (ERecordCreate "Header" ((fa "hKey" (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "version")) (fa "ikSources" (EVar "sources")) (fa "ikCompiler" (EVar "compiler"))))) (fa "hDigest" (EVar "digest"))))))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "headerOf" ((PVar "tag") PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "header"))) (fa "seWhat" (EBinOp "++" (EBinOp "++" (ELit (LString "expected a ")) (EApp (EVar "display") (EVar "tag"))) (ELit (LString " header of five fields"))))))))
 (DTypeSig false "countersOf" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Counters"))))
 (DFunDef false "countersOf" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "counters"))) (PVar "k") (PVar "l") (PVar "n") (PVar "b")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "k"))) (ELam ((PVar "kk")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "l"))) (ELam ((PVar "ll")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "n"))) (ELam ((PVar "nn")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "b"))) (ELam ((PVar "bb")) (EApp (EVar "Ok") (ERecordCreate "Counters" ((fa "cEvidence" (EVar "kk")) (fa "cLocal" (EVar "ll")) (fa "cBinders" (EVar "nn")) (fa "cBinderBase" (EVar "bb"))))))))))))))
 (DFunDef false "countersOf" (PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "counters"))) (fa "seWhat" (ELit (LString "expected a counters line of four numbers")))))))
-(DTypeSig false "listItems" (TyFun (TyCon "SExp") (TyApp (TyCon "List") (TyCon "SExp"))))
-(DFunDef false "listItems" ((PCon "SList" (PVar "items"))) (EVar "items"))
-(DFunDef false "listItems" (PWild) (EListLit))
-(DTypeSig false "sourceOf" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "sourceOf" ((PCon "SList" (PList (PCon "SAtom" (PVar "p")) (PCon "SAtom" (PVar "h"))))) (EApp (EVar "Ok") (ETuple (EVar "p") (EVar "h"))))
-(DFunDef false "sourceOf" (PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "header/sources"))) (fa "seWhat" (ELit (LString "expected a (path hash) pair")))))))
 (DTypeSig false "readRuntimeType" (TyFun (TyCon "SexpCursor") (TyCon "RuntimeType")))
 (DFunDef false "readRuntimeType" ((PVar "cur")) (EMatch (EApp (EVar "runtimeTypeFromName") (EApp (EVar "cursorAtom") (EVar "cur"))) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "RTValue")))))
 (DTypeSig false "readBinder" (TyFun (TyCon "SexpCursor") (TyCon "BinderRow")))
 (DFunDef false "readBinder" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "bid") (EApp (EVar "readBinderId") (EVar "cur"))) (DoLet false false (PVar "name") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "ty") (EApp (EVar "readRuntimeType") (EVar "cur"))) (DoLet false false (PVar "returns") (EMatch (EApp (EApp (EVar "cursorList") (EVar "readRuntimeType")) (EVar "cur")) (arm (PList) () (EVar "None")) (arm (PList (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm PWild () (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "None"))))) (DoLet false false (PVar "signed") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "name")) (fa "brType" (EVar "ty")) (fa "brReturns" (EVar "returns")) (fa "brSigned" (EVar "signed")))))))
-(DTypeSig true "firstLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "SExp") (TyCon "String")))))))
-(DFunDef false "firstLine" ((PVar "path") (PVar "what") (PVar "text")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "what"))) (arm (PCon "Some" (PVar "i")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "i")) (EVar "text"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EApp (EVar "Ok") (ETuple (EVar "node") (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text")))))))))
-(DTypeSig false "checkedFile" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "Header") (TyCon "String")))))
-(DFunDef false "checkedFile" () (EApp (EApp (EVar "checkedHeader") (ELit (LString "medaka-elab"))) (EVar "formatVersion")))
-(DTypeSig true "checkedFramed" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "String")))))))
-(DFunDef false "checkedFramed" ((PVar "tag") (PVar "version") (PVar "text")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "h") (PVar "covered"))) (ETuple (EFieldAccess (EVar "h") "hKey") (EVar "covered")))) (EApp (EApp (EApp (EVar "checkedHeader") (EVar "tag")) (EVar "version")) (EVar "text"))))
-(DTypeSig false "checkedHeader" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "Header") (TyCon "String")))))))
-(DFunDef false "checkedHeader" ((PVar "tag") (PVar "version") (PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "firstLine") (ELit (LString "file"))) (ELit (LString "no header line"))) (EVar "text"))) (ELam ((PTuple (PVar "node") (PVar "covered"))) (EApp (EApp (EApp (EApp (EVar "checkedNode") (EVar "tag")) (EVar "version")) (EVar "node")) (EVar "covered")))))
-(DTypeSig false "checkedNode" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "SExp") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "Header") (TyCon "String"))))))))
-(DFunDef false "checkedNode" ((PVar "tag") (PVar "version") (PVar "node") (PVar "covered")) (EMatch (EApp (EApp (EVar "declaredVersion") (EVar "tag")) (EVar "node")) (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "/=" (EVar "v") (EVar "version")))) (EApp (EVar "Err") (EApp (EVar "WrongFormat") (EVar "v")))) (arm PWild () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "mapErr") (EVar "Malformed")) (EApp (EApp (EVar "headerOf") (EVar "tag")) (EVar "node")))) (ELam ((PVar "h")) (EIf (EBinOp "/=" (EApp (EVar "sha256Hex") (EVar "covered")) (EFieldAccess (EVar "h") "hDigest")) (EApp (EApp (EVar "refuse") (ELit (LString "header/digest"))) (ELit (LString "the body does not match the digest"))) (EApp (EVar "Ok") (ETuple (EVar "h") (EVar "covered")))))))))
 (DTypeSig true "readElabFile" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeElab")))))
-(DFunDef false "readElabFile" ((PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EVar "checkedFile") (EVar "text"))) (ELam ((PTuple (PVar "h") (PVar "covered"))) (EApp (EApp (EVar "decodeCovered") (EFieldAccess (EVar "h") "hKey")) (EVar "covered")))))
+(DFunDef false "readElabFile" () (EApp (EVar "readElabFileGated") (EVar "noGate")))
+(DTypeSig true "readElabFileGated" (TyFun (TyCon "KeyGate") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeElab"))))))
+(DFunDef false "readElabFileGated" ((PVar "gate") (PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "checkedElab") (EVar "gate")) (EVar "text"))) (ELam ((PTuple (PVar "key") (PVar "covered"))) (EApp (EApp (EVar "decodeCovered") (EVar "key")) (EVar "covered")))))
+(DTypeSig false "checkedElab" (TyFun (TyCon "KeyGate") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "String"))))))
+(DFunDef false "checkedElab" () (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-elab"))) (EVar "formatVersion")))
 (DTypeSig false "decodeCovered" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeElab"))))))
 (DFunDef false "decodeCovered" ((PVar "key") (PVar "covered")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "firstLine") (ELit (LString "counters"))) (ELit (LString "no counters line"))) (EVar "covered"))) (ELam ((PTuple (PVar "node") (PVar "rest"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "mapErr") (EVar "Malformed")) (EApp (EVar "countersOf") (EVar "node")))) (ELam ((PVar "counters")) (EApp (EApp (EApp (EVar "decodeBody") (EVar "key")) (EVar "counters")) (EVar "rest")))))))
 (DTypeSig false "decodeBody" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "Counters") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeElab")))))))
@@ -904,7 +765,9 @@ heldPreludeCounters _ =
 (DFunDef false "aboveCounter" ((PVar "counter") (PCon "MissingEntry" (PLit (LString "")) (PVar "i") PWild)) (EBinOp ">=" (EVar "i") (EVar "counter")))
 (DFunDef false "aboveCounter" (PWild PWild) (EVar "False"))
 (DTypeSig true "readElabKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey"))))
-(DFunDef false "readElabKey" ((PVar "text")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "h") PWild)) (EFieldAccess (EVar "h") "hKey"))) (EApp (EVar "checkedFile") (EVar "text"))))
+(DFunDef false "readElabKey" () (EApp (EVar "readElabKeyGated") (EVar "noGate")))
+(DTypeSig true "readElabKeyGated" (TyFun (TyCon "KeyGate") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey")))))
+(DFunDef false "readElabKeyGated" ((PVar "gate") (PVar "text")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "checkedElab") (EVar "gate")) (EVar "text"))))
 (DTypeSig false "mapBinders" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "mapBinders" ((PVar "f") (PVar "decls")) (EApp (EApp (EVar "map") (EApp (EVar "relocDecl") (EVar "f"))) (EVar "decls")))
 (DTypeSig false "relocId" (TyFun (TyCon "Int") (TyFun (TyCon "BinderId") (TyCon "BinderId"))))
@@ -1043,7 +906,7 @@ heldPreludeCounters _ =
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "SexpCursor" false) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorAtom" false) (mem "cursorClose" false) (mem "cursorFail" false) (mem "cursorFailed" false) (mem "cursorInt" false) (mem "cursorList" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "cursorOpen" false) (mem "cursorPeek" false) (mem "cursorChar" false) (mem "expectAtom" false) (mem "parseSExp" false) (mem "renderSExp" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false))))
 (DUse false (UseGroup ("types" "evidence_coverage") ((mem "EvidenceFault" true) (mem "evidenceFaults" false))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceFault" true) (mem "bodyOf" false) (mem "sha256Hex" false))))
+(DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "bodyOf" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedFile" false) (mem "keyFields" false) (mem "noGate" false) (mem "refuse" false) (mem "renderFramedFault" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "setPreludeEvidence" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "BinderTypeTable" false) (mem "RuntimeType" true) (mem "addBinderRow" false) (mem "binderOrdinal" false) (mem "runtimeTypeName" false) (mem "runtimeTypeFromName" false))))
@@ -1076,60 +939,30 @@ heldPreludeCounters _ =
 (DFunDef false "sexpBinder" ((PVar "row")) (EApp (EVar "SList") (EListLit (EApp (EVar "sexpBinderId") (EFieldAccess (EVar "row") "brId")) (EApp (EVar "SAtom") (EFieldAccess (EVar "row") "brName")) (EApp (EVar "SAtom") (EApp (EVar "runtimeTypeName") (EFieldAccess (EVar "row") "brType"))) (EApp (EVar "SList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EVar "SAtom") (EApp (EVar "runtimeTypeName") (EVar "t"))))) (EMatch (EFieldAccess (EVar "row") "brReturns") (arm (PCon "Some" (PVar "t")) () (EListLit (EVar "t"))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "sexpBool") (EFieldAccess (EVar "row") "brSigned")))))
 (DTypeSig false "binderLine" (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyCon "String")))
 (DFunDef false "binderLine" ((PVar "rows")) (EApp (EVar "renderSExp") (EApp (EVar "SList") (EApp (EApp (EMethodRef "map") (EVar "sexpBinder")) (EVar "rows")))))
-(DTypeSig false "headerNode" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "String") (TyCon "SExp"))))
-(DFunDef false "headerNode" () (EApp (EApp (EVar "framedHeader") (ELit (LString "medaka-elab"))) (EVar "formatVersion")))
-(DTypeSig true "framedHeader" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "String") (TyCon "SExp"))))))
-(DFunDef false "framedHeader" ((PVar "tag") (PVar "version") (PVar "key") (PVar "digest")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EVar "tag")) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EVar "version"))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "sources"))) (EApp (EVar "SList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (EApp (EVar "fst") (EVar "s"))) (EApp (EVar "SAtom") (EApp (EVar "snd") (EVar "s"))))))) (EFieldAccess (EVar "key") "ikSources"))))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "compiler"))) (EApp (EVar "SAtom") (EFieldAccess (EVar "key") "ikCompiler")))) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "digest"))) (EApp (EVar "SAtom") (EVar "digest")))))))
 (DTypeSig false "countersNode" (TyFun (TyCon "PreludeElab") (TyCon "SExp")))
 (DFunDef false "countersNode" ((PVar "pe")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "counters"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EVar "pe") "peEvCounter"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EVar "pe") "peLocalCounter"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EVar "pe") "peBinderCount"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EVar "pe") "peBinderBase"))))))
 (DTypeSig false "coveredText" (TyFun (TyCon "PreludeElab") (TyCon "String")))
 (DFunDef false "coveredText" ((PVar "pe")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EVar "countersNode") (EVar "pe"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EVar "declsSExp") (EFieldAccess (EVar "pe") "peDecls"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EVar "evEntriesSExp") (EFieldAccess (EVar "pe") "peEvidence"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "binderLine") (EFieldAccess (EVar "pe") "peBinders")))) (ELit (LString "\n"))))
 (DTypeSig true "encodeElabFile" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "PreludeElab") (TyCon "String"))))
-(DFunDef false "encodeElabFile" ((PVar "key") (PVar "pe")) (EBlock (DoLet false false (PVar "covered") (EApp (EVar "coveredText") (EVar "pe"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EApp (EVar "headerNode") (EVar "key")) (EApp (EVar "sha256Hex") (EVar "covered")))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "covered"))) (ELit (LString ""))))))
+(DFunDef false "encodeElabFile" ((PVar "key") (PVar "pe")) (EBlock (DoLet false false (PVar "covered") (EApp (EVar "coveredText") (EVar "pe"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "framedFile") (ELit (LString "medaka-elab"))) (EVar "formatVersion")) (EApp (EVar "keyFields") (EVar "key"))) (EVar "covered")))))
 (DTypeSig true "framedDigestOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "framedDigestOf" ((PVar "text")) (EApp (EVar "sha256Hex") (EApp (EVar "bodyOf") (EVar "text"))))
-(DTypeSig true "renderFramedFault" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "InterfaceFault") (TyCon "String")))))
-(DFunDef false "renderFramedFault" ((PVar "noun") (PVar "version") (PCon "WrongFormat" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "noun"))) (ELit (LString " format version "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ", this compiler reads "))) (EApp (EMethodRef "display") (EVar "version"))) (ELit (LString ""))))
-(DFunDef false "renderFramedFault" ((PVar "noun") PWild (PCon "Malformed" (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "e") "sePath"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "e") "seWhat"))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EVar "noun"))) (ELit (LString ")"))))
 (DTypeSig true "renderElabFault" (TyFun (TyCon "InterfaceFault") (TyCon "String")))
 (DFunDef false "renderElabFault" ((PVar "fault")) (EApp (EApp (EApp (EVar "renderFramedFault") (ELit (LString "elaborated trees"))) (EVar "formatVersion")) (EVar "fault")))
-(DTypeSig true "refuse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyVar "a")))))
-(DFunDef false "refuse" ((PVar "path") (PVar "what")) (EApp (EVar "Err") (EApp (EVar "Malformed") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (EVar "path")) (fa "seWhat" (EVar "what")))))))
-(DTypeSig true "failure" (TyFun (TyCon "SexpError") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyVar "a"))))
-(DFunDef false "failure" ((PVar "e")) (EApp (EVar "Err") (EApp (EVar "Malformed") (EVar "e"))))
-(DTypeSig false "declaredVersion" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "declaredVersion" ((PVar "tag") (PCon "SList" (PCons (PCon "SAtom" (PVar "t")) (PCons (PVar "v") PWild)))) (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (EMatch (EApp (EApp (EVar "atomInt") (ELit (LString ""))) (EVar "v")) (arm (PCon "Ok" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "Err" PWild) () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "declaredVersion" (PWild PWild) (EVar "None"))
-(DData Private "Header" () ((variant "Header" (ConNamed (field "hKey" (TyCon "InterfaceKey")) (field "hDigest" (TyCon "String"))))) ())
 (DData Private "Counters" () ((variant "Counters" (ConNamed (field "cEvidence" (TyCon "Int")) (field "cLocal" (TyCon "Int")) (field "cBinders" (TyCon "Int")) (field "cBinderBase" (TyCon "Int"))))) ())
-(DTypeSig false "headerOf" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Header")))))
-(DFunDef false "headerOf" ((PVar "tag") (PCon "SList" (PList (PCon "SAtom" (PVar "t")) (PVar "v") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sources"))) (PVar "srcs"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "compiler"))) (PVar "c"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "digest"))) (PVar "d")))))) (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "header/version"))) (EVar "v"))) (ELam ((PVar "version")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EMethodRef "traverse") (EVar "sourceOf")) (EApp (EVar "listItems") (EVar "srcs")))) (ELam ((PVar "sources")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/compiler"))) (EVar "c"))) (ELam ((PVar "compiler")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/digest"))) (EVar "d"))) (ELam ((PVar "digest")) (EApp (EVar "Ok") (ERecordCreate "Header" ((fa "hKey" (ERecordCreate "InterfaceKey" ((fa "ikFormat" (EVar "version")) (fa "ikSources" (EVar "sources")) (fa "ikCompiler" (EVar "compiler"))))) (fa "hDigest" (EVar "digest"))))))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "headerOf" ((PVar "tag") PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "header"))) (fa "seWhat" (EBinOp "++" (EBinOp "++" (ELit (LString "expected a ")) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString " header of five fields"))))))))
 (DTypeSig false "countersOf" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Counters"))))
 (DFunDef false "countersOf" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "counters"))) (PVar "k") (PVar "l") (PVar "n") (PVar "b")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "k"))) (ELam ((PVar "kk")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "l"))) (ELam ((PVar "ll")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "n"))) (ELam ((PVar "nn")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "counters"))) (EVar "b"))) (ELam ((PVar "bb")) (EApp (EVar "Ok") (ERecordCreate "Counters" ((fa "cEvidence" (EVar "kk")) (fa "cLocal" (EVar "ll")) (fa "cBinders" (EVar "nn")) (fa "cBinderBase" (EVar "bb"))))))))))))))
 (DFunDef false "countersOf" (PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "counters"))) (fa "seWhat" (ELit (LString "expected a counters line of four numbers")))))))
-(DTypeSig false "listItems" (TyFun (TyCon "SExp") (TyApp (TyCon "List") (TyCon "SExp"))))
-(DFunDef false "listItems" ((PCon "SList" (PVar "items"))) (EVar "items"))
-(DFunDef false "listItems" (PWild) (EListLit))
-(DTypeSig false "sourceOf" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "sourceOf" ((PCon "SList" (PList (PCon "SAtom" (PVar "p")) (PCon "SAtom" (PVar "h"))))) (EApp (EVar "Ok") (ETuple (EVar "p") (EVar "h"))))
-(DFunDef false "sourceOf" (PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "header/sources"))) (fa "seWhat" (ELit (LString "expected a (path hash) pair")))))))
 (DTypeSig false "readRuntimeType" (TyFun (TyCon "SexpCursor") (TyCon "RuntimeType")))
 (DFunDef false "readRuntimeType" ((PVar "cur")) (EMatch (EApp (EVar "runtimeTypeFromName") (EApp (EVar "cursorAtom") (EVar "cur"))) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "RTValue")))))
 (DTypeSig false "readBinder" (TyFun (TyCon "SexpCursor") (TyCon "BinderRow")))
 (DFunDef false "readBinder" ((PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "bid") (EApp (EVar "readBinderId") (EVar "cur"))) (DoLet false false (PVar "name") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "ty") (EApp (EVar "readRuntimeType") (EVar "cur"))) (DoLet false false (PVar "returns") (EMatch (EApp (EApp (EVar "cursorList") (EVar "readRuntimeType")) (EVar "cur")) (arm (PList) () (EVar "None")) (arm (PList (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm PWild () (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "None"))))) (DoLet false false (PVar "signed") (EApp (EVar "readBool") (EVar "cur"))) (DoLet false false PWild (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "name")) (fa "brType" (EVar "ty")) (fa "brReturns" (EVar "returns")) (fa "brSigned" (EVar "signed")))))))
-(DTypeSig true "firstLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "SExp") (TyCon "String")))))))
-(DFunDef false "firstLine" ((PVar "path") (PVar "what") (PVar "text")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "None") () (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "what"))) (arm (PCon "Some" (PVar "i")) () (EMatch (EApp (EVar "parseSExp") (EApp (EApp (EVar "S.take") (EVar "i")) (EVar "text"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "failure") (EVar "e"))) (arm (PCon "Ok" (PVar "node")) () (EApp (EVar "Ok") (ETuple (EVar "node") (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text")))))))))
-(DTypeSig false "checkedFile" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "Header") (TyCon "String")))))
-(DFunDef false "checkedFile" () (EApp (EApp (EVar "checkedHeader") (ELit (LString "medaka-elab"))) (EVar "formatVersion")))
-(DTypeSig true "checkedFramed" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "String")))))))
-(DFunDef false "checkedFramed" ((PVar "tag") (PVar "version") (PVar "text")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "h") (PVar "covered"))) (ETuple (EFieldAccess (EVar "h") "hKey") (EVar "covered")))) (EApp (EApp (EApp (EVar "checkedHeader") (EVar "tag")) (EVar "version")) (EVar "text"))))
-(DTypeSig false "checkedHeader" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "Header") (TyCon "String")))))))
-(DFunDef false "checkedHeader" ((PVar "tag") (PVar "version") (PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "firstLine") (ELit (LString "file"))) (ELit (LString "no header line"))) (EVar "text"))) (ELam ((PTuple (PVar "node") (PVar "covered"))) (EApp (EApp (EApp (EApp (EVar "checkedNode") (EVar "tag")) (EVar "version")) (EVar "node")) (EVar "covered")))))
-(DTypeSig false "checkedNode" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "SExp") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "Header") (TyCon "String"))))))))
-(DFunDef false "checkedNode" ((PVar "tag") (PVar "version") (PVar "node") (PVar "covered")) (EMatch (EApp (EApp (EVar "declaredVersion") (EVar "tag")) (EVar "node")) (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "/=" (EVar "v") (EVar "version")))) (EApp (EVar "Err") (EApp (EVar "WrongFormat") (EVar "v")))) (arm PWild () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "mapErr") (EVar "Malformed")) (EApp (EApp (EVar "headerOf") (EVar "tag")) (EVar "node")))) (ELam ((PVar "h")) (EIf (EBinOp "/=" (EApp (EVar "sha256Hex") (EVar "covered")) (EFieldAccess (EVar "h") "hDigest")) (EApp (EApp (EVar "refuse") (ELit (LString "header/digest"))) (ELit (LString "the body does not match the digest"))) (EApp (EVar "Ok") (ETuple (EVar "h") (EVar "covered")))))))))
 (DTypeSig true "readElabFile" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeElab")))))
-(DFunDef false "readElabFile" ((PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "checkedFile") (EVar "text"))) (ELam ((PTuple (PVar "h") (PVar "covered"))) (EApp (EApp (EVar "decodeCovered") (EFieldAccess (EVar "h") "hKey")) (EVar "covered")))))
+(DFunDef false "readElabFile" () (EApp (EVar "readElabFileGated") (EVar "noGate")))
+(DTypeSig true "readElabFileGated" (TyFun (TyCon "KeyGate") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeElab"))))))
+(DFunDef false "readElabFileGated" ((PVar "gate") (PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "checkedElab") (EVar "gate")) (EVar "text"))) (ELam ((PTuple (PVar "key") (PVar "covered"))) (EApp (EApp (EVar "decodeCovered") (EVar "key")) (EVar "covered")))))
+(DTypeSig false "checkedElab" (TyFun (TyCon "KeyGate") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "String"))))))
+(DFunDef false "checkedElab" () (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-elab"))) (EVar "formatVersion")))
 (DTypeSig false "decodeCovered" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeElab"))))))
 (DFunDef false "decodeCovered" ((PVar "key") (PVar "covered")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "firstLine") (ELit (LString "counters"))) (ELit (LString "no counters line"))) (EVar "covered"))) (ELam ((PTuple (PVar "node") (PVar "rest"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "mapErr") (EVar "Malformed")) (EApp (EVar "countersOf") (EVar "node")))) (ELam ((PVar "counters")) (EApp (EApp (EApp (EVar "decodeBody") (EVar "key")) (EVar "counters")) (EVar "rest")))))))
 (DTypeSig false "decodeBody" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "Counters") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeElab")))))))
@@ -1149,7 +982,9 @@ heldPreludeCounters _ =
 (DFunDef false "aboveCounter" ((PVar "counter") (PCon "MissingEntry" (PLit (LString "")) (PVar "i") PWild)) (EBinOp ">=" (EVar "i") (EVar "counter")))
 (DFunDef false "aboveCounter" (PWild PWild) (EVar "False"))
 (DTypeSig true "readElabKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey"))))
-(DFunDef false "readElabKey" ((PVar "text")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "h") PWild)) (EFieldAccess (EVar "h") "hKey"))) (EApp (EVar "checkedFile") (EVar "text"))))
+(DFunDef false "readElabKey" () (EApp (EVar "readElabKeyGated") (EVar "noGate")))
+(DTypeSig true "readElabKeyGated" (TyFun (TyCon "KeyGate") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey")))))
+(DFunDef false "readElabKeyGated" ((PVar "gate") (PVar "text")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "checkedElab") (EVar "gate")) (EVar "text"))))
 (DTypeSig false "mapBinders" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "mapBinders" ((PVar "f") (PVar "decls")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocDecl") (EVar "f"))) (EVar "decls")))
 (DTypeSig false "relocId" (TyFun (TyCon "Int") (TyFun (TyCon "BinderId") (TyCon "BinderId"))))

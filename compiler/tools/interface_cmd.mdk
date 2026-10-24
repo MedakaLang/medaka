@@ -30,17 +30,18 @@ import support.path.{dirOf, baseName, joinPath}
 import support.stage_count.{stageExit}
 import support.util.{joinNl, joinWith}
 import types.effect_rows.{Atom, renderAtom}
+import types.interface_frame.{KeyGate}
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface,
-  readInterface, renderFault, mergeSections
+  readInterface, readInterfaceGated, renderFault, mergeSections
 }
 import types.prelude_elab.{
-  PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile, elabKeyOf,
-  framedDigestOf, renderElabFault, readElabKey
+  PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile,
+  readElabFileGated, elabKeyOf, framedDigestOf, renderElabFault
 }
 import types.prelude_decls.{
   PreludeDecls(..), preludeDeclsOf, encodeDeclsFile, readDeclsFile, declsKeyOf,
-  readDeclsFramed, acceptedDeclsBody, renderDeclsFault
+  readDeclsFramedGated, acceptedDeclsBody, renderDeclsFault
 }
 import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
@@ -424,55 +425,50 @@ verdictText Fresh = "fresh"
 verdictText (Stale component) = "stale: \{component}"
 verdictText Missing = "missing"
 
--- How a file written under [stored] stands against [modulePath]'s sources now,
--- once [shape] has put the current key in the file's own format.
-againstSources : String ->
-  (InterfaceKey -> InterfaceKey) ->
-  InterfaceKey ->
-  <IO> Verdict
-againstSources modulePath shape stored = match (
+-- The gate a file written under a key of its own format has to pass to stand
+-- fresh against [modulePath]'s sources now: [shape] puts the current key in the
+-- file's format.  Sources that cannot be read leave nothing fresh.
+gateOf : String -> (InterfaceKey -> InterfaceKey) -> <IO> KeyGate
+gateOf modulePath shape = match (
   readFile (runtimePathOf modulePath),
   readFile modulePath,
 )
   (Ok runtimeSrc, Ok coreSrc) =>
-    match (keysMatch
-      stored
-      (shape
+    let current =
+      shape
         (preludeInterfaceKey
           (baseName modulePath)
-          (inputsOf modulePath runtimeSrc coreSrc))))
-      None => Fresh
-      Some component => Stale component
-  _ => Stale "sources"
+          (inputsOf modulePath runtimeSrc coreSrc))
+    stored => keysMatch stored current
+  _ => _ => Some "sources"
 
 interfaceVerdictOf : String -> <IO> Verdict
 interfaceVerdictOf modulePath = match readFile (interfacePath modulePath)
   Err _ => Missing
-  Ok text => match readInterface text
+  Ok text => match readInterfaceGated (gateOf modulePath (k => k)) text
     Err fault => Stale (faultComponent fault)
-    Ok (f, _) => againstSources modulePath (k => k) f.ifKey
+    Ok _ => Fresh
 
 -- `verify` is the one command that reads the whole file: the version, the header,
--- the digest, the body and the counters against their rows.  The hot parents read
--- the header alone (`readElabKey`), so a digest-valid file whose counters lie
--- reads as fresh to them; `verify` is where it is called stale.
+-- the key, the digest, the body and the counters against their rows.  The hot
+-- parents read the header alone (`readElabKeyGated`), so a digest-valid file
+-- whose counters lie reads as fresh to them; `verify` is where it is called
+-- stale.  A stale key is named before any body is decoded.
 elabVerdictOf : String -> <IO> Verdict
 elabVerdictOf modulePath = match readFile (elabPath modulePath)
   Err _ => Missing
-  Ok text => match readElabFile text
+  Ok text => match readElabFileGated (gateOf modulePath elabKeyOf) text
     Err fault => Stale (faultComponent fault)
-    Ok (key, _) => againstSources modulePath elabKeyOf key
+    Ok _ => Fresh
 
 declsVerdictOf : String -> <IO> Verdict
 declsVerdictOf modulePath = match readFile (declsPath modulePath)
   Err _ => Missing
-  Ok text => match readDeclsFramed text
+  Ok text => match readDeclsFramedGated (gateOf modulePath declsKeyOf) text
     Err fault => Stale (faultComponent fault)
-    Ok (key, covered) => match againstSources modulePath declsKeyOf key
-      Fresh => match acceptedDeclsBody covered
-        Err fault => Stale (faultComponent fault)
-        Ok _ => Fresh
-      other => other
+    Ok (_, covered) => match acceptedDeclsBody covered
+      Err fault => Stale (faultComponent fault)
+      Ok _ => Fresh
 
 -- How [modulePath]'s three files stand against the module's sources now: fresh
 -- only when all are, and a stale or missing elaborated-trees or declarations

@@ -38,8 +38,10 @@ import types.interface_sexp.{
   cDeclaredPrefixOfSExp, builtinClassesSExp, builtinClassesOfSExp,
   spellingPopSExp, spellingPopOfSExp, atomSExp, PreludeInterfaceFile(..),
   InterfaceSection(..), formatVersion, sectionsOfCache, cacheOfSections,
-  encodeInterface, decodeInterface, readInterface, sha256Hex
+  encodeInterface, decodeInterface, readInterface, readInterfaceGated,
+  renderFault
 }
+import types.interface_frame.{sha256Hex}
 import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
 }
@@ -1705,6 +1707,40 @@ test "a malformed file is refused" = match preludeInterface
           (failureOf (withSection "x")),
       ),
     ]
+
+-- The header's key goes to the gate before any section is decoded or the digest
+-- compared, so a stale file with a garbage body names the key.
+test "a stale key is named before the sections are read" =
+  match preludeInterface
+    Err e => fail e
+    Ok pi =>
+      let good = encodeInterface (fileOf [([[ioUnit]], pi)])
+      let headerLine = S.take (optionOr 0 (S.indexOf "\n" good)) good
+      let garbage = "\{headerLine}\n(section nonsense)\n"
+      let said =
+        r => match r
+          Err f => renderFault f
+          Ok _ => "ok"
+      expectEach [
+        (
+          "garbage under an accepted key is malformed",
+          expectEqual
+            "file/0: section: expected 2 field(s)"
+            (said (readInterfaceGated (_ => None) garbage)),
+        ),
+        (
+          "garbage under a stale key is stale",
+          expectEqual
+            "stale: sources"
+            (said (readInterfaceGated (_ => Some "sources") garbage)),
+        ),
+        (
+          "the intact file under a stale key",
+          expectEqual
+            "stale: compiler"
+            (said (readInterfaceGated (_ => Some "compiler") good)),
+        ),
+      ]
 
 test "the prelude's file round-trips with its key, joins and every row" =
   match preludeInterface
