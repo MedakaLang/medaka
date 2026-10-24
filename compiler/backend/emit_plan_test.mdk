@@ -1,3 +1,5 @@
+import backend.wasm_demand.{JsImport(..)}
+import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 -- Sibling test for `compiler/backend/emit_plan.mdk` ([P-TEST-SIBLING]).
 --
@@ -55,16 +57,13 @@ import ir.core_ir.{
   EntryFact(..),
   synthBind,
 }
-import support.ordmap.{omLookup}
+import support.ordmap.{omLookup, omEmpty}
 import backend.emit_plan.{
   EmitPlan(..),
-  JsImport(..),
   ReachUnits(..),
   buildEmitPlan,
   lookupMethodResult,
   buildEmitPlanReached,
-  isTrmcFn,
-  isTrmcImpl,
 }
 
 import backend.trmc_analysis.{ctorTailIsCons, dispMembersOf, dispRootOf}
@@ -335,7 +334,8 @@ bindNm : CBind -> String
 bindNm (CBind n _ _ _) = n
 
 test "wasm reach keeps a dispatch-only impl and its lazy global, drops the rest" =
-  let (plan, reached) = buildEmitPlanReached PreludeFreeRuntime reachProgram
+  let (plan, reached) =
+    buildEmitPlanReached PreludeFreeRuntime omEmpty reachProgram
   expectAll [
     labelFail
       "the m impl survives, the k impl does not"
@@ -1119,7 +1119,8 @@ test "a top-level definition named like an extern, as the emitter resolves it" =
 -- host keys
 jsPlanOf : List CBind -> (List (String, String, String), List String)
 jsPlanOf binds =
-  let (plan, _) = buildEmitPlanReached PreludeFreeRuntime (program binds)
+  let (plan, _) =
+    buildEmitPlanReached PreludeFreeRuntime omEmpty (program binds)
   (
     map (imp => (imp.medakaName, imp.jsName, jsImportField imp)) plan.jsImports,
     plan.hostKeys,

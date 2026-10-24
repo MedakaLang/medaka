@@ -1,3 +1,5 @@
+import backend.emit_plan.{prepareWasmPlan}
+import backend.wasm_emit.{inputCtorFloatFieldsW}
 -- WasmGC backend driver — peer of `entries/llvm_emit_main.mdk` (the single-file,
 -- PRELUDE-FREE, scalar spike driver), swapping the final consumer: emit a WasmGC
 -- WAT module (backend.wasm_emit.emitProgram) instead of LLVM IR.
@@ -51,6 +53,7 @@ withTarget targetPath = match readFile targetPath
     -- signatures the source declares restate what they type.
     let cp =
       stampDeclaredSignatures decls (lowerProgramEmitWith emptyFacts annotated)
-    putStr
-      (emitProgram input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp)
+    let (plan, prepared) =
+      prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp
+    putStr (emitProgram input plan prepared)
   Err msg => ePutStrLn msg

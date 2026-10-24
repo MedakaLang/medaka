@@ -1,7 +1,8 @@
 # META
-source_lines=15095
+source_lines=15093
 stages=DESUGAR,MARK
 # SOURCE
+import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
 --
 -- This IS the canonical LLVM backend (STAGE2-DESIGN.md §2.4). Originally
@@ -314,9 +315,6 @@ import types.route_key.{numIntWord}
 import backend.emit_plan.{
   EmitPlan(..),
   lookupMethodResult,
-  TrmcVerdicts,
-  isTrmcFn,
-  isTrmcImpl,
   planEntryMainIsUnit,
   planEntryMainIsFloat,
 }
@@ -15098,6 +15096,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 runtimeName : Emit -> String -> String
 runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 # DESUGAR
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "requirementFacts" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
@@ -15117,7 +15116,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
-(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "lookupMethodResult" false) (mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
+(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "lookupMethodResult" false) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -17843,6 +17842,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "runtimeName" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "runtimeName" ((PVar "e") (PVar "symbol")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "e") "externFacts")) (EVar "symbol"))))
 # MARK
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "requirementFacts" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
@@ -17862,7 +17862,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
-(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "lookupMethodResult" false) (mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
+(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "lookupMethodResult" false) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))

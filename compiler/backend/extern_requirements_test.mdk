@@ -85,7 +85,7 @@ test "selection follows Core uses and retains the complete explicit runtime doma
 test "whole and reached selection use the returned Core without another reach" =
   let cp = lowered "unused x = intToString x\nmain = 42"
   let whole = planExterns WasmBackend PreludeFreeRuntime cp
-  let (plan, reached) = buildEmitPlanReached PreludeFreeRuntime cp
+  let (plan, reached) = buildEmitPlanReached PreludeFreeRuntime omEmpty cp
   expectAll [
     expectEqual [runtimeExternSymbol "intToString"] (symbols whole),
     expectEqual [] (symbols plan.externRequirements),

@@ -1,3 +1,5 @@
+import backend.emit_plan.{prepareWasmPlan}
+import backend.wasm_emit.{inputCtorFloatFieldsW}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- compiler/tools/snapshot.mdk — `medaka snapshot`, the in-process snapshot runner
 -- (TESTING-DESIGN.md §4.3, R0).
@@ -674,11 +676,12 @@ wasmOf runtimeDecls allDecls cp =
     makeWasmEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
-  let (text, gaps) =
-    wasmRecord
-      input
-      (buildEmitPlan WasmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
+  let (plan, prepared) =
+    prepareWasmPlan
+      (runtimeDomain (externDecls runtimeDecls))
+      (inputCtorFloatFieldsW input)
       cp
+  let (text, gaps) = wasmRecord input plan prepared
   withGaps ";;" text gaps
 
 withGaps : String -> String -> List String -> String

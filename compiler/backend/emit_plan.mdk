@@ -1,3 +1,8 @@
+import backend.wasm_demand.{
+  JsImport(..), WasmDemand(..), WasmDemandInputs(..), WasmDemandPlan,
+  planWasmDemand, ctorFloatFieldIndex
+}
+import backend.wasm_names.{uniqueBinders}
 -- The per-emission plan: facts about the lowered program that both backends read
 -- and neither recomputes.  Built once, right after lowering, from the program an
 -- emitter is about to receive.
@@ -50,6 +55,7 @@ import support.util.{lenKey, reverseL, filterList, listLen}
 import backend.wasm_reach.{wasmReachFilter}
 import backend.emit_support.{eagerReachMap, lazyGlobalNames}
 import backend.trmc_analysis.{
+  TrmcVerdicts(..),
   SelfRef(..),
   flattenApp,
   DispGroup,
@@ -97,77 +103,43 @@ public export data EmitPlan = EmitPlan {
   trmc : TrmcVerdicts,
   dispGroups : List DispGroup,
   wasmDemand : WasmDemand,
+  wasmInputs : WasmDemandInputs,
+  wasmPhysical : Option WasmDemandPlan,
   hostKeys : List String,
   jsImports : List JsImport,
 }
 
--- A reached user extern's `js` binding (docs/spec/WASM-SEMANTICS.md section
--- 3.1): its Medaka name, the JS name it binds, and its declared parameter and
--- result heads (`Array` is `Array Int`).
-public export data JsImport = JsImport {
-  medakaName : String,
-  jsName : String,
-  params : List String,
-  result : String,
-}
-
 public export data ReachUnits = ReachUnits { total : Int, kept : Int }
-
--- One walk of every binding and impl body (`wasmDemandOf`).  `uses` holds, once
--- each, the catalog demands (`wasmUses`) of every runtime extern the program
--- names and the demands its literals, collection forms and `++`/`::` make.
--- `refBox` is a `Ref` cell, `divGuard` a `/` or `%`, and `tupleArities` the
--- distinct tuple arities, first seen first.  A name demands what its extern
--- does only where the emitter would lower it as that extern (`DemandScope`), so a
--- binder that shares an extern's name demands nothing.
-public export data WasmDemand = WasmDemand {
-  uses : List WasmUse,
-  refBox : Bool,
-  divGuard : Bool,
-  tupleArities : List Int,
-}
-
--- The self-recursive TRMC verdict.  `eligibleFns` holds every top-level function, and
--- `eligibleImpls` every impl group (one `(method, key)` pair, its clauses in program
--- order), whose clauses `trmcEligible` accepts with a uniform count of leading
--- dictionary parameters.
---
--- The verdict is the same on both backends, and each realizes every eligible
--- function as a destination-passing loop.  What differs is only the cell a
--- constructor leaf links.  LLVM allocates every leaf through its constructor
--- tag.  Wasm picks the struct per function: the built-in list cell when the
--- leaves are `::` (`ctorTailIsCons`), the user constructor's struct otherwise.
--- A dispatch-group member is emitted by its group, not by this verdict.
---
--- A constructor is a name in the program's constructor table.  Wasm's own table
--- also answers for reserved and synthetic names the program may not declare
--- (`Some`, `Ok`, `Err`, `Cons`, `Tup<n>`).  None of them can head a leaf whose
--- last field is the self-call: `Some (f x)` returned by `f` would need
--- `Option T = T`, and the list and tuple cells lower to `::` and tuple nodes, not
--- applications.  So, for a typechecked program, the one table gives both backends
--- the verdict they computed.  Untyped input (the `wasm_emit_main` probe) can head
--- such a leaf, and there the plan's verdict is the narrower one.
-public export data TrmcVerdicts = TrmcVerdicts {
-  eligibleFns : OrdMap Unit,
-  eligibleImpls : OrdMap Unit,
-}
 
 export
 buildEmitPlan : Backend -> RuntimeExternDomain -> CProgram -> EmitPlan
-buildEmitPlan target domain prog = planOver target domain None prog
+buildEmitPlan target domain prog = planOver target domain None omEmpty prog
 
 -- The wasm modules entries' builder: reach first, then every plan field over the
 -- reached program, which is also the program the emitter must receive. The
 -- complete runtime domain is retained separately from the reached selection.
 export
-buildEmitPlanReached : RuntimeExternDomain -> CProgram -> (EmitPlan, CProgram)
-buildEmitPlanReached domain prog =
+buildEmitPlanReached : RuntimeExternDomain ->
+  OrdMap (List Int) ->
+  CProgram ->
+  (EmitPlan, CProgram)
+buildEmitPlanReached domain ctorFields prog =
   let reached = wasmReachFilter prog
   let units = ReachUnits {
     total = programUnitCount prog,
     kept = programUnitCount reached,
   }
-  (planOver WasmBackend domain (Some units) reached, reached)
+  let prepared = uniqueBinders reached
+  (planOver WasmBackend domain (Some units) ctorFields prepared, prepared)
+
+export
+prepareWasmPlan : RuntimeExternDomain ->
+  OrdMap (List Int) ->
+  CProgram ->
+  (EmitPlan, CProgram)
+prepareWasmPlan domain ctorFields prog =
+  let prepared = uniqueBinders prog
+  (planOver WasmBackend domain None ctorFields prepared, prepared)
 
 programUnitCount : CProgram -> Int
 programUnitCount (CProgram groups _ _ impls _ _) =
@@ -176,25 +148,36 @@ programUnitCount (CProgram groups _ _ impls _ _) =
 planOver : Backend ->
   RuntimeExternDomain ->
   Option ReachUnits ->
+  OrdMap (List Int) ->
   CProgram ->
   EmitPlan
-planOver target domain reach prog =
+planOver target domain reach ctorFields prog =
   let (CProgram groups ctorArs _ impls _ facts) = prog
   -- first entry wins on a repeated constructor name, as in both emitters' tables
   let ctors = omFromPairs (reverseL ctorArs) omEmpty
   let fns = filterList isTopFn groups
   let requirements = planExterns target domain prog
-  let (demand, keys, _) = match target
-    WasmBackend =>
-      wasmDemandOf
-        facts.factExterns
-        (omFromPairs (reverseL (hostRows "js" (externHeadRows prog))) omEmpty)
-        groups
-        impls
-    LlvmBackend => (noDemand, [], [])
-    EvalBackend => (noDemand, [], [])
   let lazy = lazyGlobalNames groups
   let eager = eagerReachMap groups
+  let globalInit = planGlobals prog lazy eager
+  let trmc = TrmcVerdicts {
+    eligibleFns =
+      omFromNames
+        (map bindName (filterList (b => selfTrmcBind ctors b) fns))
+        omEmpty,
+    eligibleImpls = trmcImplKeys ctors impls,
+  }
+  let dispatch = planDispatchGroups ctors fns groups impls
+  let inputs = WasmDemandInputs {
+    ctorFloatFields = ctorFields,
+    lazyGlobals = lazy,
+    globalInit = globalInit,
+    trmcVerdicts = trmc,
+    dispatchGroups = dispatch,
+  }
+  let physical = match target
+    WasmBackend => Some (planWasmDemand inputs prog requirements)
+    _ => None
   EmitPlan {
     target = target,
     externRequirements = requirements,
@@ -203,28 +186,20 @@ planOver target domain reach prog =
     wasmOnlyReach = reach,
     lazyGlobals = lazy,
     eagerReach = eager,
-    globalInit = planGlobals prog lazy eager,
-    trmc = TrmcVerdicts {
-      eligibleFns =
-        omFromNames
-          (map bindName (filterList (b => selfTrmcBind ctors b) fns))
-          omEmpty,
-      eligibleImpls = trmcImplKeys ctors impls,
-    },
-    dispGroups = planDispatchGroups ctors fns groups impls,
-    wasmDemand = demand,
-    hostKeys = keys,
-    jsImports = match target
-      WasmBackend =>
-        map
-          ((symbol, (host, (params, result))) => JsImport {
-            medakaName = symbol,
-            jsName = host,
-            params = params,
-            result = result,
-          })
-          (requirementHostRows requirements)
-      _ => [],
+    globalInit = globalInit,
+    trmc = trmc,
+    dispGroups = dispatch,
+    wasmDemand = match physical
+      Some p => p.sourceDemand
+      None => noDemand,
+    wasmInputs = inputs,
+    wasmPhysical = physical,
+    hostKeys = match physical
+      Some p => p.sourceHostKeys
+      None => [],
+    jsImports = match physical
+      Some p => p.jsImports
+      None => [],
   }
 
 export
@@ -260,16 +235,6 @@ lookupMethodResult : OrdMap (OrdMap MethodResultFact) ->
 lookupMethodResult index iface method = match omLookup iface index
   Some methods => omLookup method methods
   None => None
-
--- does the TRMC verdict hold for top-level function [name]?
-export
-isTrmcFn : TrmcVerdicts -> String -> Bool
-isTrmcFn v name = omHasKey name v.eligibleFns
-
--- does the TRMC verdict hold for the impl group of [method] at instance [key]?
-export
-isTrmcImpl : TrmcVerdicts -> String -> String -> Bool
-isTrmcImpl v method key = omHasKey (implGroupKey method key) v.eligibleImpls
 
 -- a function binding: it takes parameters, and it is not `main`
 isTopFn : CBind -> Bool
@@ -416,305 +381,3 @@ data DemandScope = DemandScope {
   jsBinds : OrdMap (String, (List String, String)),
   externFacts : OrdMap ExternDeclFact,
 }
-
-wasmDemandOf : OrdMap ExternDeclFact ->
-  OrdMap (String, (List String, String)) ->
-  List CBind ->
-  List CImplEntry ->
-  (WasmDemand, List String, List JsImport)
-wasmDemandOf externFacts jsBinds groups impls =
-  let start = DemandAcc {
-    seenUses = [],
-    seenKeys = omEmpty,
-    seenJs = omEmpty,
-    seenRefBox = False,
-    seenDivGuard = False,
-    seenArities = [],
-  }
-  let tops = filterList (b => bindName b /= "main") groups
-  let sc = DemandScope {
-    locals = omEmpty,
-    topFns =
-      omFromNames
-        (map bindName (filterList (b => not (isValBind b)) tops))
-        omEmpty,
-    topVals = omFromNames (map bindName (filterList isValBind tops)) omEmpty,
-    jsBinds = jsBinds,
-    externFacts = externFacts,
-  }
-  let acc = walkEach (dImpl sc) (walkEach (dBind sc) start groups) impls
-  (
-    WasmDemand {
-      uses = reverseL acc.seenUses,
-      refBox = acc.seenRefBox,
-      divGuard = acc.seenDivGuard,
-      tupleArities = reverseL acc.seenArities,
-    },
-    omKeys acc.seenKeys,
-    filterMap (k => omLookup k acc.seenJs) (omKeys acc.seenJs),
-  )
-
-walkEach : (DemandAcc -> a -> DemandAcc) -> DemandAcc -> List a -> DemandAcc
-walkEach _ acc [] = acc
-walkEach f acc (x :: xs) = walkEach f (f acc x) xs
-
--- `seenUses` holds at most one entry per `WasmUse` constructor, so the scan is
--- bounded.
-noteUse : DemandAcc -> WasmUse -> DemandAcc
-noteUse acc u =
-  if any (== u) acc.seenUses then
-    acc
-  else
-    { acc | seenUses = u :: acc.seenUses }
-
-noteKey : DemandAcc -> String -> DemandAcc
-noteKey acc k =
-  if omHasKey k acc.seenKeys then
-    acc
-  else
-    { acc | seenKeys = omInsert k () acc.seenKeys }
-
-noteArity : DemandAcc -> Int -> DemandAcc
-noteArity acc n =
-  if any (== n) acc.seenArities then
-    acc
-  else
-    { acc | seenArities = n :: acc.seenArities }
-
-noteRefBox : DemandAcc -> DemandAcc
-noteRefBox acc = if acc.seenRefBox then acc else { acc | seenRefBox = True }
-
--- an occurrence of a name: every demand and host key the catalog lists for it
-noteName : DemandAcc -> String -> DemandAcc
-noteName acc "Ref" = noteRefBox acc
-noteName acc "$withFileReadBound" = noteFileBound acc
-noteName acc "$withFileWriteBound" = noteFileBound acc
-noteName acc name =
-  walkEach
-    noteArity
-    (walkEach
-      noteKey
-      (walkEach noteUse acc (wasmUses name))
-      (wasmHostKeys name))
-    (wasmTupleArities name)
-
--- a name the emitter lowers as an extern: a user `js` binding, else a catalog
--- extern
-noteExtern : DemandScope -> DemandAcc -> String -> DemandAcc
-noteExtern sc acc name = match omLookup name sc.jsBinds
-  None => match externRuntimeKey sc.externFacts name
-    Some key => noteName acc key
-    None =>
-      if name == "$withFileReadBound" || name == "$withFileWriteBound" then
-        noteFileBound acc
-      else
-        acc
-  Some (js, (params, result)) =>
-    if omHasKey name acc.seenJs then
-      acc
-    else
-      let imp = JsImport {
-        medakaName = name,
-        jsName = js,
-        params = params,
-        result = result,
-      }
-      noteJsResult
-        (walkEach
-          noteJsParam
-          { acc | seenJs = omInsert name imp acc.seenJs }
-          params)
-        result
-
--- What one parameter head of a `js` import needs (WASM-SEMANTICS section 3.1): a
--- `String` or `Array` crosses on the path channel, an `Array` comes back on the
--- result channel, and a boxed head needs its type.
-noteJsParam : DemandAcc -> String -> DemandAcc
-noteJsParam acc "String" = walkEach noteKey (noteUse acc UseStr) jsPathKeys
-noteJsParam acc "Array" =
-  walkEach noteKey (noteUse acc UseArray) (jsPathKeys ++ jsResultKeys)
-noteJsParam acc head = noteJsBoxed acc head
-
--- What a `js` import's result head needs: a `String` comes back on the result
--- channel.
-noteJsResult : DemandAcc -> String -> DemandAcc
-noteJsResult acc "String" = walkEach noteKey (noteUse acc UseStr) jsResultKeys
-noteJsResult acc head = noteJsBoxed acc head
-
-noteJsBoxed : DemandAcc -> String -> DemandAcc
-noteJsBoxed acc "Float" = noteUse acc UseFloat
-noteJsBoxed acc "U64" = noteUse acc UseU64
-noteJsBoxed acc "I64" = noteUse acc UseI64
-noteJsBoxed acc _ = acc
-
-jsPathKeys : List String
-jsPathKeys = ["mdk_path_reset", "mdk_path_push"]
-
-jsResultKeys : List String
-jsResultKeys = ["mdk_result_len", "mdk_result_byte"]
-
--- a declared file bound pushes its grant, a cons list of $str elements
-noteFileBound : DemandAcc -> DemandAcc
-noteFileBound acc =
-  walkEach noteKey (noteUse (noteUse acc UseStr) UseList) fileBoundHostKeys
-
-noteTag : DemandAcc -> String -> DemandAcc
-noteTag acc "U64" = noteUse acc UseU64
-noteTag acc "I64" = noteUse acc UseI64
-noteTag acc _ = acc
-
--- `++` is runtime-dispatched ($mdk_append): the $str leaf concat and the cons list.
-noteBinop : DemandAcc -> String -> DemandAcc
-noteBinop acc "++" = noteUse (noteUse (noteUse acc UseStrLeaf) UseStr) UseList
-noteBinop acc "::" = noteUse acc UseList
-noteBinop acc "/" = { acc | seenDivGuard = True }
-noteBinop acc "%" = { acc | seenDivGuard = True }
-noteBinop acc _ = acc
-
--- the emitter's value-global partition (`isValBind` in wasm_emit.mdk)
-isValBind : CBind -> Bool
-isValBind (CBind _ [CClause [] _] _ _) = True
-isValBind _ = False
-
--- [sc] with every variable [pats] bind in scope
-bindIn : DemandScope -> List Pat -> DemandScope
-bindIn sc pats = match patVarsList pats
-  [] => sc
-  names => { sc | locals = omFromNames names sc.locals }
-
-isLocal : DemandScope -> String -> Bool
-isLocal sc x = omHasKey x sc.locals
-
-isCoreFn : DemandScope -> String -> Bool
-isCoreFn sc x = omHasKey ("core__" ++ x) sc.topFns
-
--- a name read as a value
-dVar : DemandScope -> DemandAcc -> String -> DemandAcc
-dVar sc acc x =
-  if isLocal sc x
-    || omHasKey x sc.topVals
-    || omHasKey x sc.topFns
-    || isCoreFn sc x then
-    acc
-  else
-    noteExtern sc acc x
-
-dBind : DemandScope -> DemandAcc -> CBind -> DemandAcc
-dBind sc acc (CBind _ clauses _ _) = walkEach (dClause sc) acc clauses
-
--- a clause's parameter patterns, then its body with them in scope
-dClause : DemandScope -> DemandAcc -> CClause -> DemandAcc
-dClause sc acc (CClause pats body) =
-  dExpr (bindIn sc pats) (walkEach dPat acc pats) body
-
-dImpl : DemandScope -> DemandAcc -> CImplEntry -> DemandAcc
-dImpl sc acc (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ pats b)) =
-  dExpr (bindIn sc pats) (walkEach dPat acc pats) b
-dImpl sc acc (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ pats b)) =
-  dExpr (bindIn sc pats) (walkEach dPat acc pats) b
-
-dExpr : DemandScope -> DemandAcc -> CExpr -> DemandAcc
-dExpr sc acc (CList es) = walkEach (dExpr sc) (noteUse acc UseList) es
-dExpr sc acc (CRangeList lo hi _) =
-  dExpr sc (dExpr sc (noteUse acc UseList) lo) hi
-dExpr sc acc (CTuple es) = walkEach (dExpr sc) (noteArity acc (listLen es)) es
-dExpr sc acc (CArray es) = walkEach (dExpr sc) (noteUse acc UseArray) es
-dExpr sc acc (CRangeArray lo hi _) =
-  dExpr sc (dExpr sc (noteUse acc UseArray) lo) hi
-dExpr sc acc (CIndex a i) = dExpr sc (dExpr sc (noteUse acc UseArray) a) i
-dExpr sc acc (CSlice a lo hi _) =
-  dExpr sc (dExpr sc (dExpr sc (noteUse acc UseArray) a) lo) hi
-dExpr sc acc (CRecord _ fields) = walkEach (dField sc) acc fields
-dExpr sc acc (CFieldAccess ex _ _ _) = dExpr sc acc ex
-dExpr sc acc (CRecordUpdate _ base fields) =
-  walkEach (dField sc) (dExpr sc acc base) fields
-dExpr sc acc (CVariantUpdate _ base fields) =
-  walkEach (dField sc) (dExpr sc acc base) fields
-dExpr sc acc (app@(CApp _ _ _)) =
-  let (hd, args) = flattenApp app []
-  walkEach (dExpr sc) (dAppHead sc acc hd) args
-dExpr sc acc (CVar x _) = dVar sc acc x
-dExpr _ acc (CLit (LFloat _)) = noteUse acc UseFloat
-dExpr _ acc (CLit (LU64 _ _)) = noteUse acc UseU64
-dExpr _ acc (CLit (LI64 _ _)) = noteUse acc UseI64
-dExpr _ acc (CLit (LString _)) = noteUse acc UseStr
-dExpr _ acc (CLit (LChar _)) = noteUse acc UseStr
-dExpr sc acc (CLam pats b) = dExpr (bindIn sc pats) acc b
-dExpr sc acc (CBinPrim op l r tag _) =
-  dExpr sc (dExpr sc (noteBinop (noteTag acc tag) op) l) r
-dExpr sc acc (CUnOp _ x) = dExpr sc acc x
-dExpr sc acc (CIf c t f) = dExpr sc (dExpr sc (dExpr sc acc c) t) f
-dExpr sc acc (CLet r pat a b) =
-  let inner = bindIn sc [pat]
-  dExpr inner (dExpr (if r then inner else sc) (dPat acc pat) a) b
-dExpr sc acc (CBlock stmts) = dStmts sc acc stmts
-dExpr sc acc (CDecision scrut arms tree) =
-  dTree (walkEach (dArm sc) (dExpr sc acc scrut) arms) tree
-dExpr sc acc (CMatch scrut arms) = walkEach (dArm sc) (dExpr sc acc scrut) arms
-dExpr sc acc (CLetGroup binds b) =
-  let inner = { sc | locals = omFromNames (map bindName binds) sc.locals }
-  dExpr inner (walkEach (dBind inner) acc binds) b
-dExpr _ acc _ = acc
-
--- an applied name: a local is a closure call, a `core__` function a call to it
-dAppHead : DemandScope -> DemandAcc -> CExpr -> DemandAcc
-dAppHead sc acc (CVar f _) =
-  if isLocal sc f || not (omHasKey f sc.topFns) && isCoreFn sc f then
-    acc
-  else if externRuntimeKey sc.externFacts f == Some "setRef" then
-    noteRefBox acc
-  else
-    noteExtern sc acc f
-dAppHead sc acc h = dExpr sc acc h
-
-dField : DemandScope -> DemandAcc -> CField -> DemandAcc
-dField sc acc (CField _ _ e) = dExpr sc acc e
-
--- an arm's pattern binds its guards and body; a `Pat <- e` guard binds the
--- guards after it and the body
-dArm : DemandScope -> DemandAcc -> CArm -> DemandAcc
-dArm sc acc (CArm pat guards body) =
-  dGuarded (bindIn sc [pat]) (dPat acc pat) guards body
-
-dGuarded : DemandScope -> DemandAcc -> List CGuard -> CExpr -> DemandAcc
-dGuarded sc acc [] body = dExpr sc acc body
-dGuarded sc acc ((CGBool g) :: rest) body =
-  dGuarded sc (dExpr sc acc g) rest body
-dGuarded sc acc ((CGBind p e) :: rest) body =
-  dGuarded (bindIn sc [p]) (dExpr sc (dPat acc p) e) rest body
-
--- a block's `let` binds the statements after it, and its own right side when
--- it is `rec`
-dStmts : DemandScope -> DemandAcc -> List CStmt -> DemandAcc
-dStmts _ acc [] = acc
-dStmts sc acc ((CSExpr e) :: rest) = dStmts sc (dExpr sc acc e) rest
-dStmts sc acc ((CSLet r pat e) :: rest) =
-  let inner = bindIn sc [pat]
-  dStmts inner (dExpr (if r then inner else sc) (dPat acc pat) e) rest
-dStmts sc acc ((CSAssign _ e) :: rest) = dStmts sc (dExpr sc acc e) rest
-
--- a pattern's collection heads: a cons or list pattern is a list, a tuple
--- pattern its arity
-dPat : DemandAcc -> Pat -> DemandAcc
-dPat acc (PCons h t) = dPat (dPat (noteUse acc UseList) h) t
-dPat acc (PList ps) = walkEach dPat (noteUse acc UseList) ps
-dPat acc (PTuple ps) = walkEach dPat (noteArity acc (listLen ps)) ps
-dPat acc (PCon _ args) = walkEach dPat acc args
-dPat acc (PAs _ _ _ p) = dPat acc p
-dPat acc _ = acc
-
--- a decision tree's switch heads, the lowered shape of list and tuple patterns
-dTree : DemandAcc -> CTree -> DemandAcc
-dTree acc (CTGuard _ fail) = dTree acc fail
-dTree acc (CTDrop sub) = dTree acc sub
-dTree acc (CTSwitch branches dft) = dTree (walkEach dBranch acc branches) dft
-dTree acc _ = acc
-
-dBranch : DemandAcc -> CTBranch -> DemandAcc
-dBranch acc (CTBranch h sub) = dTree (dSwitchHead acc h) sub
-
-dSwitchHead : DemandAcc -> CHead -> DemandAcc
-dSwitchHead acc HCons = noteUse acc UseList
-dSwitchHead acc HNil = noteUse acc UseList
-dSwitchHead acc (HTuple n) = noteArity acc n
-dSwitchHead acc _ = acc
