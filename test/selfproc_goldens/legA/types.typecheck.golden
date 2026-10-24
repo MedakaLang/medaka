@@ -1604,7 +1604,6 @@ implTupleHeadKindMsg : String -> Int -> List Kind -> String
 importDefinersOf : GraphCtx -> List Decl -> List (String, (String, String))
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, a)) -> UsePath -> List (String, a) -> List (String, a)
-importIdsOf : Decl -> List String
 importLocFor : Map String (Map String Unit) -> List Decl -> String -> Option Loc
 importLocOf : String -> Decl -> Option Loc
 importLocReaching : Map String (Map String Unit) -> String -> Decl -> Option Loc

@@ -3497,21 +3497,21 @@ importedCtorDecls : List Decl ->
   List (String, List Decl)
 importedCtorDecls preludeDecls mods pool =
   importedCtorDeclsGo
-    (coreExports preludeDecls)
-    (omFromPairs pool omEmpty)
+    (importedCtorDeclsStep
+      (coreExports preludeDecls)
+      (omFromPairs pool omEmpty))
     omEmpty
     mods
 
-importedCtorDeclsGo : ModuleExports ->
-  OrdMap (List Decl) ->
+-- [step] is `importedCtorDeclsStep` with the prelude's exports and the pool bound.
+importedCtorDeclsGo : (OrdMap ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)) ->
   OrdMap ModuleExports ->
   List (String, List Decl) ->
   List (String, List Decl)
-importedCtorDeclsGo _ _ _ [] = []
-importedCtorDeclsGo coreExp pool known ((mid, prog) :: rest) =
-  let (decls, exp) = importedCtorDeclsStep coreExp pool known (mid, prog)
-  (mid, decls)
-    :: importedCtorDeclsGo coreExp pool (omInsert exp.modId exp known) rest
+importedCtorDeclsGo _ _ [] = []
+importedCtorDeclsGo step known ((mid, prog) :: rest) =
+  let (decls, exp) = step known (mid, prog)
+  (mid, decls) :: importedCtorDeclsGo step (omInsert exp.modId exp known) rest
 
 -- One module of `importedCtorDecls`: the decls declaring a constructor its imports
 -- bind, and its exports, which the modules after it read through [known].
@@ -7135,10 +7135,10 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "strippedCtorKey" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "strippedCtorKey" ((PVar "p") (PVar "collisions") (PVar "n")) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EVar "useBaseName") (EVar "p")) (EVar "n"))) (DoExpr (EIf (EBinOp "==" (EVar "base") (EVar "n")) (EListLit) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "base")) (EVar "collisions")) (arm (PCon "Some" (PVar "mods")) () (EListLit (ETuple (EVar "n") (EVar "mods")))) (arm (PCon "None") () (EListLit)))))))
 (DTypeSig true "importedCtorDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "importedCtorDecls" ((PVar "preludeDecls") (PVar "mods") (PVar "pool")) (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsGo") (EApp (EVar "coreExports") (EVar "preludeDecls"))) (EApp (EApp (EVar "omFromPairs") (EVar "pool")) (EVar "omEmpty"))) (EVar "omEmpty")) (EVar "mods")))
-(DTypeSig false "importedCtorDeclsGo" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
-(DFunDef false "importedCtorDeclsGo" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "importedCtorDeclsGo" ((PVar "coreExp") (PVar "pool") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "decls") (PVar "exp")) (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsStep") (EVar "coreExp")) (EVar "pool")) (EVar "known")) (ETuple (EVar "mid") (EVar "prog")))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EVar "decls")) (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsGo") (EVar "coreExp")) (EVar "pool")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EVar "rest"))))))
+(DFunDef false "importedCtorDecls" ((PVar "preludeDecls") (PVar "mods") (PVar "pool")) (EApp (EApp (EApp (EVar "importedCtorDeclsGo") (EApp (EApp (EVar "importedCtorDeclsStep") (EApp (EVar "coreExports") (EVar "preludeDecls"))) (EApp (EApp (EVar "omFromPairs") (EVar "pool")) (EVar "omEmpty")))) (EVar "omEmpty")) (EVar "mods")))
+(DTypeSig false "importedCtorDeclsGo" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleExports")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "importedCtorDeclsGo" (PWild PWild (PList)) (EListLit))
+(DFunDef false "importedCtorDeclsGo" ((PVar "step") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "decls") (PVar "exp")) (EApp (EApp (EVar "step") (EVar "known")) (ETuple (EVar "mid") (EVar "prog")))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EVar "decls")) (EApp (EApp (EApp (EVar "importedCtorDeclsGo") (EVar "step")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EVar "rest"))))))
 (DTypeSig true "importedCtorDeclsStep" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleExports")))))))
 (DFunDef false "importedCtorDeclsStep" ((PVar "coreExp") (PVar "pool") (PVar "known") (PTuple (PVar "mid") (PVar "prog"))) (EBlock (DoLet false false (PVar "paths") (EApp (EVar "usePathsOf") (EVar "prog"))) (DoLet false false (PVar "decls") (EBinOp "++" (EApp (EApp (EApp (EVar "ctorDeclsBoundBy") (EVar "pool")) (EVar "known")) (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isAliasPath") (EVar "p"))))) (EVar "paths"))) (EApp (EApp (EApp (EVar "ctorDeclsBoundBy") (EVar "pool")) (EVar "known")) (EApp (EApp (EVar "filterList") (EVar "isAliasPath")) (EVar "paths"))))) (DoExpr (ETuple (EVar "decls") (EApp (EApp (EApp (EApp (EApp (EVar "buildExportsWith") (EVar "coreExp")) (EVar "known")) (EVar "mid")) (EVar "prog")) (EListLit))))))
 (DTypeSig false "isAliasPath" (TyFun (TyCon "UsePath") (TyCon "Bool")))
@@ -8598,10 +8598,10 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "strippedCtorKey" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "strippedCtorKey" ((PVar "p") (PVar "collisions") (PVar "n")) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EVar "useBaseName") (EVar "p")) (EVar "n"))) (DoExpr (EIf (EBinOp "==" (EVar "base") (EVar "n")) (EListLit) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "base")) (EVar "collisions")) (arm (PCon "Some" (PVar "mods")) () (EListLit (ETuple (EVar "n") (EVar "mods")))) (arm (PCon "None") () (EListLit)))))))
 (DTypeSig true "importedCtorDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "importedCtorDecls" ((PVar "preludeDecls") (PVar "mods") (PVar "pool")) (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsGo") (EApp (EVar "coreExports") (EVar "preludeDecls"))) (EApp (EApp (EVar "omFromPairs") (EVar "pool")) (EVar "omEmpty"))) (EVar "omEmpty")) (EVar "mods")))
-(DTypeSig false "importedCtorDeclsGo" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
-(DFunDef false "importedCtorDeclsGo" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "importedCtorDeclsGo" ((PVar "coreExp") (PVar "pool") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "decls") (PVar "exp")) (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsStep") (EVar "coreExp")) (EVar "pool")) (EVar "known")) (ETuple (EVar "mid") (EVar "prog")))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EVar "decls")) (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsGo") (EVar "coreExp")) (EVar "pool")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EVar "rest"))))))
+(DFunDef false "importedCtorDecls" ((PVar "preludeDecls") (PVar "mods") (PVar "pool")) (EApp (EApp (EApp (EVar "importedCtorDeclsGo") (EApp (EApp (EVar "importedCtorDeclsStep") (EApp (EVar "coreExports") (EVar "preludeDecls"))) (EApp (EApp (EVar "omFromPairs") (EVar "pool")) (EVar "omEmpty")))) (EVar "omEmpty")) (EVar "mods")))
+(DTypeSig false "importedCtorDeclsGo" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleExports")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "importedCtorDeclsGo" (PWild PWild (PList)) (EListLit))
+(DFunDef false "importedCtorDeclsGo" ((PVar "step") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "decls") (PVar "exp")) (EApp (EApp (EVar "step") (EVar "known")) (ETuple (EVar "mid") (EVar "prog")))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EVar "decls")) (EApp (EApp (EApp (EVar "importedCtorDeclsGo") (EVar "step")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EVar "rest"))))))
 (DTypeSig true "importedCtorDeclsStep" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleExports")))))))
 (DFunDef false "importedCtorDeclsStep" ((PVar "coreExp") (PVar "pool") (PVar "known") (PTuple (PVar "mid") (PVar "prog"))) (EBlock (DoLet false false (PVar "paths") (EApp (EVar "usePathsOf") (EVar "prog"))) (DoLet false false (PVar "decls") (EBinOp "++" (EApp (EApp (EApp (EVar "ctorDeclsBoundBy") (EVar "pool")) (EVar "known")) (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isAliasPath") (EVar "p"))))) (EVar "paths"))) (EApp (EApp (EApp (EVar "ctorDeclsBoundBy") (EVar "pool")) (EVar "known")) (EApp (EApp (EVar "filterList") (EVar "isAliasPath")) (EVar "paths"))))) (DoExpr (ETuple (EVar "decls") (EApp (EApp (EApp (EApp (EApp (EVar "buildExportsWith") (EVar "coreExp")) (EVar "known")) (EVar "mid")) (EVar "prog")) (EListLit))))))
 (DTypeSig false "isAliasPath" (TyFun (TyCon "UsePath") (TyCon "Bool")))

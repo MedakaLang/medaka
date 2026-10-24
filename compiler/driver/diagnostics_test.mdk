@@ -21,13 +21,16 @@ import driver.diagnostics.{
   FrontOutput(..), Diag(..), foldCachedIdentity, resolveCachedIdentity
 }
 import types.typecheck.{defaultDriveInputs}
+import types.module_interface.{
+  ModuleInterface(..), ModuleKey(..), currentModuleInterfaces
+}
 import frontend.ast.{Decl}
 import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
 import frontend.parser.{parseLocated}
 import fs.{fixtureFiles}
 import list.{sort, somes}
 import path.{dirname, stem}
-import string.{endsWith, lines, trim, unlines}
+import string.{contains, endsWith, lines, trim, unlines}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectFalse, expectNotEqual,
   expectNoFindings, expectTrue, fail
@@ -287,6 +290,18 @@ reportOf rsrc csrc dir src =
           rsrc
           csrc)
 
+alphaSrc : String
+alphaSrc = """export
+alphaOnly : Int
+alphaOnly = 1
+"""
+
+betaSrc : String
+betaSrc = """export
+betaOnly : Int
+betaOnly = 2
+"""
+
 entryNames : CheckDrive -> List String
 entryNames d = sort (map fst d.cdEntrySchemes)
 
@@ -296,8 +311,8 @@ test "a check drive built from a report holds that report's schemes after a late
     readFile "stdlib/core.mdk",
   )
     (Ok rsrc, Ok csrc) => withScratchDir (dir =>
-      let a = reportOf rsrc csrc dir "export\nalphaOnly : Int\nalphaOnly = 1\n"
-      let b = reportOf rsrc csrc dir "export\nbetaOnly : Int\nbetaOnly = 2\n"
+      let a = reportOf rsrc csrc dir alphaSrc
+      let b = reportOf rsrc csrc dir betaSrc
       match (a, b)
         (Some ra, Some rb) =>
           let da = graphCheckDrive ra (emptyDriveOutputs ()) [] []
@@ -363,22 +378,35 @@ test "a derive error outside the drive withholds the checked program" = match (
     ]
   _ => fail "could not read the prelude pair"
 
--- ── a graph past the loader caches' old bounds ─────────────────────────────
+-- ── a long import chain: no graph size evicts a module of the graph ────────
 
 -- Module [i] of an [n]-module chain: it imports module [i + 1] and exports a
 -- value built on that module's. The last file holds the chain's base case.
 chainModuleSrc : Int -> Int -> String
 chainModuleSrc n i =
   if i + 1 < n then
-    "import m\{i + 1}.{v\{i + 1}}\nexport\nv\{i} : Int\nv\{i} = v\{i + 1} + 1\n"
+    """import m\{i + 1}.{v\{i + 1}}
+export
+v\{i} : Int
+v\{i} = v\{i + 1} + 1
+"""
   else
-    "export\nv\{i} : Int\nv\{i} = 1\n"
+    """export
+v\{i} : Int
+v\{i} = 1
+"""
+
+chainEntry : String
+chainEntry = """import m1.{v1}
+
+main = println v1
+"""
 
 -- Writes modules [i], [i + 1], ... of the [n]-module chain beside the entry.
 writeChain : String -> Int -> Int -> <FileWrite> Result String Unit
 writeChain dir n i =
   if i >= n then
-    writeFile "\{dir}/main.mdk" "import m1.{v1}\n\nmain = println v1\n"
+    writeFile "\{dir}/main.mdk" chainEntry
   else match writeFile "\{dir}/m\{i}.mdk" (chainModuleSrc n i)
     Err e => Err e
     Ok _ => writeChain dir n (i + 1)
@@ -527,4 +555,225 @@ foldCacheCheck rsrc csrc dir = match (
 test "the pass caches serve an unchanged module and recompute it when its import's constructors change" =
   match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
     (Ok rsrc, Ok csrc) => withScratchDir (foldCacheCheck rsrc csrc)
+    _ => fail "could not read the prelude pair"
+
+-- ── the caches hold the graph last analyzed ────────────────────────────────
+
+-- One analyze of the project whose entry is [entry] in [dir]: every file's
+-- diagnostics as `<file stem> <code>: <message>`, sorted, and the number of
+-- modules the drive served from their interfaces.
+analyzeEntry : String -> String -> String -> String -> <IO> (List String, Int)
+analyzeEntry rsrc csrc dir entry =
+  let (keyed, buckets) =
+    analyzeProjectKeyed
+      noStdlibExports
+      True
+      []
+      (Ref [])
+      (Ref omEmpty)
+      (_ => None)
+      "\{dir}/\{entry}.mdk"
+      [dir, "stdlib"]
+      rsrc
+      csrc
+  (
+    sort
+      (flatMap
+        (b => map (d => "\{stem (fst b)} \{diagText d}") (snd b))
+        buckets),
+    match keyed
+      Some ((_, outputs), _) => outputs.doServedModules
+      None => -1,
+  )
+
+-- The module ids the interface cache holds.
+cachedInterfaceIds : Unit -> List String
+cachedInterfaceIds _ =
+  sort (map (mi => mi.miKey.mkModule) (currentModuleInterfaces ()))
+
+-- A library and an entry that imports it, under module ids that begin with [p].
+-- The library's incomplete clause function leaves a warning to serve.
+writeLibPair : String -> String -> <FileWrite> Result String Unit
+writeLibPair dir p =
+  match (writeFile
+    "\{dir}/\{p}lib.mdk"
+    """public export data Shape = Circle Int | Square Int
+
+export
+area : Shape -> Int
+area (Circle r) = r
+""")
+    Err e => Err e
+    Ok _ =>
+      writeFile
+        "\{dir}/\{p}main.mdk"
+        """import \{p}lib.{area, Shape(..)}
+
+main = println (area (Circle 1))
+"""
+
+cacheBoundCheck : String -> String -> String -> <IO, FileWrite> Expectation
+cacheBoundCheck rsrc csrc dir = match (
+  writeLibPair dir "ca",
+  writeLibPair dir "cb",
+)
+  (Ok _, Ok _) =>
+    let _ = analyzeEntry rsrc csrc dir "camain"
+    let afterFirst = cachedInterfaceIds ()
+    let (_, firstServed) = analyzeEntry rsrc csrc dir "cbmain"
+    let afterSecond = cachedInterfaceIds ()
+    let (_, repeatServed) = analyzeEntry rsrc csrc dir "cbmain"
+    expectEach [
+      ("the first graph records its library", expectEqual ["calib"] afterFirst),
+      ("the second graph serves nothing", expectEqual 0 firstServed),
+      (
+        "the interface cache holds the second graph's ids only",
+        expectEqual ["cblib"] afterSecond,
+      ),
+      (
+        "the first graph's pass entries are gone",
+        expectEqual
+          (None, None)
+          (foldCachedIdentity "calib", resolveCachedIdentity "calib"),
+      ),
+      (
+        "the second graph's pass entries are held",
+        expectEqual
+          (True, True)
+          (
+            isSome (foldCachedIdentity "cblib"),
+            isSome (resolveCachedIdentity "cblib"),
+          ),
+      ),
+      (
+        "a repeated analyze of one graph serves its library",
+        expectEqual 1 repeatServed,
+      ),
+      (
+        "and keeps the cache as it was",
+        expectEqual afterSecond (cachedInterfaceIds ()),
+      ),
+    ]
+  _ => fail "could not write the cache fixtures"
+
+test "an analyze keeps the cached interfaces and pass entries of its own graph only" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) => withScratchDir (cacheBoundCheck rsrc csrc)
+    _ => fail "could not read the prelude pair"
+
+-- ── a rejected graph records what a later accepted graph may serve ─────────
+
+-- Modules [p]a and [p]c share nothing with [p]b, which the entry imports with
+-- all three.  A rejected graph's drive covers [p]a and [p]c, and takes the last of
+-- them for its entry, so only [p]a records.  [p]a leaves a warning to serve.  [bBody] is [p]b's value; with
+-- [declaresImpl] it also declares an interface and an impl, which every other
+-- module's key reads (the graph part of the key holds each module's instance heads).
+writeRejectable : String ->
+  String ->
+  Bool ->
+  String ->
+  <FileWrite> Result String Unit
+writeRejectable dir p declaresImpl bBody =
+  let bSrc =
+    if declaresImpl then
+      """export interface Speak a where
+  speak : a -> String
+
+impl Speak Bool where
+  speak _ = "b"
+
+export
+bval : Int
+bval = \{bBody}
+"""
+    else
+      """export
+bval : Int
+bval = \{bBody}
+"""
+  match (
+    writeFile
+      "\{dir}/\{p}a.mdk"
+      """public export data Shape = Circle Int | Square Int
+
+export
+area : Shape -> Int
+area (Circle r) = r
+""",
+    writeFile "\{dir}/\{p}b.mdk" bSrc,
+    writeFile "\{dir}/\{p}c.mdk" """export
+cval : Int
+cval = 2
+""",
+    writeFile
+      "\{dir}/\{p}main.mdk"
+      """import \{p}a.{area, Shape(..)}
+import \{p}b.{bval}
+import \{p}c.{cval}
+
+main = println (area (Circle 1) + bval + cval)
+""",
+  )
+    (Ok _, Ok _, Ok _, Ok _) => Ok ()
+    _ => Err "could not write the rejectable graph"
+
+-- Analyzes the graph with [p]b undefined-name-rejected, fixes it, analyzes again,
+-- evicts the caches with an unrelated graph, and analyzes the fixed graph cold:
+-- (the rejected run's lines, the second run, the cold run).
+rejectedThenFixed : String ->
+  String ->
+  String ->
+  String ->
+  Bool ->
+  <IO, FileWrite> Option ((List String, Int), (List String, Int))
+rejectedThenFixed rsrc csrc dir p declaresImpl = match (
+  writeRejectable dir p declaresImpl "notDefinedAnywhere",
+  writeLibPair dir "ev",
+)
+  (Ok _, Ok _) =>
+    let (rejected, _) = analyzeEntry rsrc csrc dir "\{p}main"
+    match writeRejectable dir p declaresImpl "3"
+      Err _ => None
+      Ok _ =>
+        let second = analyzeEntry rsrc csrc dir "\{p}main"
+        let _ = analyzeEntry rsrc csrc dir "evmain"
+        let cold = analyzeEntry rsrc csrc dir "\{p}main"
+        if isEmpty (filter (l => contains "R-UNBOUND" l) rejected) then
+          None
+        else
+          Some (second, cold)
+  _ => None
+
+rejectedGraphCheck : String -> String -> String -> <IO, FileWrite> Expectation
+rejectedGraphCheck rsrc csrc dir = match (
+  rejectedThenFixed rsrc csrc dir "pa" False,
+  rejectedThenFixed rsrc csrc dir "pb" True,
+)
+  (Some (plainSecond, plainCold), Some (implSecond, implCold)) => expectEach [
+    (
+      "without an impl in the rejected module, the second drive serves the first independent module",
+      expectEqual 1 (snd plainSecond),
+    ),
+    (
+      "and prints what a cold analyze prints",
+      expectEqual (fst plainCold) (fst plainSecond),
+    ),
+    (
+      "the independent module's warning is among the lines",
+      expectTrue (any (l => contains "W-NONEXHAUSTIVE" l) (fst plainSecond)),
+    ),
+    (
+      "with an impl in the rejected module, the second drive serves neither",
+      expectEqual 0 (snd implSecond),
+    ),
+    (
+      "and prints what a cold analyze prints",
+      expectEqual (fst implCold) (fst implSecond),
+    ),
+  ]
+  _ => fail "the rejected graph did not reject, or could not be written"
+
+test "a graph recorded while another module was rejected serves what a cold analyze prints" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) => withScratchDir (rejectedGraphCheck rsrc csrc)
     _ => fail "could not read the prelude pair"

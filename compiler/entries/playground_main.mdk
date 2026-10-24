@@ -345,8 +345,8 @@ dropPath (mid, _, decls) = (mid, decls)
 -- rather than per call: the host (playground/compile.mjs) re-enters `main` on
 -- one instance for every analyze, so an imported stdlib module (list.mdk,
 -- map.mdk, …) is parsed once per session, not once per keystroke — the same
--- reuse the LSP gets from its session-lived cache.  Bounded (MRU, 24 entries)
--- inside the loader, so a long editing session cannot grow it.
+-- reuse the LSP gets from its session-lived cache.  Each load narrows it
+-- to the modules that load touched, so a long editing session cannot grow it.
 playgroundParseCache : Ref (OrdMap (List Decl))
 playgroundParseCache = Ref omEmpty
 

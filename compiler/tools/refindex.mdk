@@ -97,8 +97,8 @@ import frontend.parser.{
 import driver.loader.{
   loadProgramFilesLocatedCached,
   moduleIdOfPath,
-  importModId,
 }
+import frontend.visibility.{useModId}
 import support.util.{zipL, startsWith, endsWith, splitOnChar}
 import support.path.{joinPath}
 import support.ordmap.{omEmpty}
@@ -1687,7 +1687,7 @@ midPathsOf root =
 directImportIds : List Decl -> List String
 directImportIds [] = []
 directImportIds ((DUse _ path _) :: rest) =
-  let m = importModId path
+  let m = useModId path
   if m == "core" then directImportIds rest else m :: directImportIds rest
 directImportIds ((DAttrib _ inner) :: rest) = directImportIds (inner :: rest)
 directImportIds (_ :: rest) = directImportIds rest

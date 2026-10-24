@@ -1,5 +1,5 @@
 # META
-source_lines=488
+source_lines=490
 stages=DESUGAR,MARK
 # SOURCE
 -- A module's interface as a file: `ModuleInterface` written as an `SExp` per
@@ -78,8 +78,8 @@ fileTag = "medaka-module"
 
 -- ── writing ─────────────────────────────────────────────────────────────────
 
-keyFields : ModuleKey -> List SExp
-keyFields k = [
+moduleHeaderFields : ModuleKey -> List SExp
+moduleHeaderFields k = [
   tagged "module" [SAtom k.mkModule],
   tagged "source" [SAtom k.mkSource],
   tagged "imports" [listSExp (pairSExp SAtom SAtom) k.mkImports],
@@ -127,6 +127,8 @@ binderNode row = SList [
   boolNode row.brSigned,
 ]
 
+-- A binder's return type is a list of at most one element, not `optionSExp`'s
+-- `none`/`some` pair: `decBinder` reads it back with the list reader.
 optionList : Option SExp -> SExp
 optionList None = SList []
 optionList (Some x) = SList [x]
@@ -189,7 +191,8 @@ encodeModuleSections key sections
     framedFile
       fileTag
       moduleFormatVersion
-      (keyFields key ++ [tagged "sections" [intNode (length sections)]])
+      (moduleHeaderFields key
+        ++ [tagged "sections" [intNode (length sections)]])
       (stringJoin "" (map sectionLine sections))
 
 -- The file for one interface valid under every join.
@@ -391,7 +394,7 @@ readHeaderFields [SList [SAtom "module", m], SList [SAtom "source", s], SList [S
   do
     modId <- expectAtom "header/module" m
     source <- expectAtom "header/source" s
-    imports <- decList decPairAtoms "header/imports" imps
+    imports <- listOfSExp decPairAtoms "header/imports" imps
     graph <- expectAtom "header/graph" g
     count <- atomInt "header/sections" n
     Ok (
@@ -408,9 +411,6 @@ readHeaderFields _ = Err SexpError {
   sePath = "header",
   seWhat = "expected the module, source, imports, graph and sections fields",
 }
-
-decList : Reader a -> Reader (List a)
-decList = listOfSExp
 
 -- The component a key differs from [expected] in, if it does.
 export
@@ -456,6 +456,8 @@ decodeModuleSections gate text = do
   else
     Ok (key, sections)
 
+-- `interface_frame.gated` over a `ModuleKey`: that gate is typed on `InterfaceKey`,
+-- and this one has already run, so it takes the component it found.
 stale : Option String -> Result InterfaceFault Unit
 stale None = Ok ()
 stale (Some component) = Err (StaleKey component)
@@ -506,8 +508,8 @@ decodeModuleInterfaceFor expected =
 (DFunDef false "moduleFormatVersion" () (ELit (LInt 1)))
 (DTypeSig false "fileTag" (TyCon "String"))
 (DFunDef false "fileTag" () (ELit (LString "medaka-module")))
-(DTypeSig false "keyFields" (TyFun (TyCon "ModuleKey") (TyApp (TyCon "List") (TyCon "SExp"))))
-(DFunDef false "keyFields" ((PVar "k")) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "module"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkModule")))) (EApp (EApp (EVar "tagged") (ELit (LString "source"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkSource")))) (EApp (EApp (EVar "tagged") (ELit (LString "imports"))) (EListLit (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "SAtom"))) (EFieldAccess (EVar "k") "mkImports")))) (EApp (EApp (EVar "tagged") (ELit (LString "graph"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkGraph"))))))
+(DTypeSig false "moduleHeaderFields" (TyFun (TyCon "ModuleKey") (TyApp (TyCon "List") (TyCon "SExp"))))
+(DFunDef false "moduleHeaderFields" ((PVar "k")) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "module"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkModule")))) (EApp (EApp (EVar "tagged") (ELit (LString "source"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkSource")))) (EApp (EApp (EVar "tagged") (ELit (LString "imports"))) (EListLit (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "SAtom"))) (EFieldAccess (EVar "k") "mkImports")))) (EApp (EApp (EVar "tagged") (ELit (LString "graph"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkGraph"))))))
 (DTypeSig false "locNode" (TyFun (TyCon "Loc") (TyCon "SExp")))
 (DFunDef false "locNode" ((PCon "Loc" (PVar "file") (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EApp (EApp (EVar "tagged") (ELit (LString "loc"))) (EListLit (EApp (EVar "SAtom") (EVar "file")) (EApp (EVar "intNode") (EVar "a")) (EApp (EVar "intNode") (EVar "b")) (EApp (EVar "intNode") (EVar "c")) (EApp (EVar "intNode") (EVar "d")))))
 (DTypeSig false "diagNode" (TyFun (TyCon "TcDiag") (TyCon "SExp")))
@@ -528,7 +530,7 @@ decodeModuleInterfaceFor expected =
 (DTypeSig false "sectionLine" (TyFun (TyCon "ModuleSection") (TyCon "String")))
 (DFunDef false "sectionLine" ((PVar "s")) (EBinOp "++" (EApp (EVar "renderSExp") (EApp (EApp (EVar "tagged") (ELit (LString "section"))) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "joins"))) (EListLit (EApp (EApp (EVar "listSExp") (EApp (EVar "listSExp") (EVar "atomSExp"))) (EFieldAccess (EVar "s") "msJoins")))) (EApp (EVar "interfaceNode") (EFieldAccess (EVar "s") "msInterface"))))) (ELit (LString "\n"))))
 (DTypeSig true "encodeModuleSections" (TyFun (TyCon "ModuleKey") (TyFun (TyApp (TyCon "List") (TyCon "ModuleSection")) (TyCon "String"))))
-(DFunDef false "encodeModuleSections" ((PVar "key") (PVar "sections")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "s")) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "s") "msInterface") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))))) (EVar "sections")) (EApp (EVar "panic") (ELit (LString "module_interface_sexp: a section was recorded under another key"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "framedFile") (EVar "fileTag")) (EVar "moduleFormatVersion")) (EBinOp "++" (EApp (EVar "keyFields") (EVar "key")) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "sections"))) (EListLit (EApp (EVar "intNode") (EApp (EVar "length") (EVar "sections")))))))) (EApp (EApp (EVar "stringJoin") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "sectionLine")) (EVar "sections")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "encodeModuleSections" ((PVar "key") (PVar "sections")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "s")) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "s") "msInterface") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))))) (EVar "sections")) (EApp (EVar "panic") (ELit (LString "module_interface_sexp: a section was recorded under another key"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "framedFile") (EVar "fileTag")) (EVar "moduleFormatVersion")) (EBinOp "++" (EApp (EVar "moduleHeaderFields") (EVar "key")) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "sections"))) (EListLit (EApp (EVar "intNode") (EApp (EVar "length") (EVar "sections")))))))) (EApp (EApp (EVar "stringJoin") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "sectionLine")) (EVar "sections")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "encodeModuleInterface" (TyFun (TyCon "ModuleInterface") (TyCon "String")))
 (DFunDef false "encodeModuleInterface" ((PVar "mi")) (EApp (EApp (EVar "encodeModuleSections") (EFieldAccess (EVar "mi") "miKey")) (EListLit (ERecordCreate "ModuleSection" ((fa "msJoins" (EListLit)) (fa "msInterface" (EVar "mi")))))))
 (DTypeSig false "decLoc" (TyApp (TyCon "Reader") (TyCon "Loc")))
@@ -564,10 +566,8 @@ decodeModuleInterfaceFor expected =
 (DFunDef false "decSection" ((PVar "key") (PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "section"))) (PVar "js") (PVar "i")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "decJoins") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "section"))) (ELit (LInt 1)))) (EVar "js"))) (ELam ((PVar "joins")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decInterface") (EVar "key")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "section"))) (ELit (LInt 2)))) (EVar "i"))) (ELam ((PVar "value")) (EApp (EVar "Ok") (ERecordCreate "ModuleSection" ((fa "msJoins" (EVar "joins")) (fa "msInterface" (EVar "value"))))))))))
 (DFunDef false "decSection" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "section")) (ELit (LInt 2))))) (EVar "node")))
 (DTypeSig false "readHeaderFields" (TyFun (TyApp (TyCon "List") (TyCon "SExp")) (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "ModuleKey") (TyCon "Int")))))
-(DFunDef false "readHeaderFields" ((PList (PCon "SList" (PList (PCon "SAtom" (PLit (LString "module"))) (PVar "m"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "source"))) (PVar "s"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "imports"))) (PVar "imps"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "graph"))) (PVar "g"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sections"))) (PVar "n"))))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/module"))) (EVar "m"))) (ELam ((PVar "modId")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/source"))) (EVar "s"))) (ELam ((PVar "source")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "decPairAtoms")) (ELit (LString "header/imports"))) (EVar "imps"))) (ELam ((PVar "imports")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/graph"))) (EVar "g"))) (ELam ((PVar "graph")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "header/sections"))) (EVar "n"))) (ELam ((PVar "count")) (EApp (EVar "Ok") (ETuple (ERecordCreate "ModuleKey" ((fa "mkModule" (EVar "modId")) (fa "mkSource" (EVar "source")) (fa "mkImports" (EVar "imports")) (fa "mkGraph" (EVar "graph")))) (EVar "count"))))))))))))))
+(DFunDef false "readHeaderFields" ((PList (PCon "SList" (PList (PCon "SAtom" (PLit (LString "module"))) (PVar "m"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "source"))) (PVar "s"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "imports"))) (PVar "imps"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "graph"))) (PVar "g"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sections"))) (PVar "n"))))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/module"))) (EVar "m"))) (ELam ((PVar "modId")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/source"))) (EVar "s"))) (ELam ((PVar "source")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EVar "decPairAtoms")) (ELit (LString "header/imports"))) (EVar "imps"))) (ELam ((PVar "imports")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/graph"))) (EVar "g"))) (ELam ((PVar "graph")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "header/sections"))) (EVar "n"))) (ELam ((PVar "count")) (EApp (EVar "Ok") (ETuple (ERecordCreate "ModuleKey" ((fa "mkModule" (EVar "modId")) (fa "mkSource" (EVar "source")) (fa "mkImports" (EVar "imports")) (fa "mkGraph" (EVar "graph")))) (EVar "count"))))))))))))))
 (DFunDef false "readHeaderFields" (PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "header"))) (fa "seWhat" (ELit (LString "expected the module, source, imports, graph and sections fields")))))))
-(DTypeSig false "decList" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "decList" () (EVar "listOfSExp"))
 (DTypeSig true "keyDifference" (TyFun (TyCon "ModuleKey") (TyFun (TyCon "ModuleKey") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "keyDifference" ((PVar "expected") (PVar "k")) (EIf (EBinOp "/=" (EFieldAccess (EVar "k") "mkModule") (EFieldAccess (EVar "expected") "mkModule")) (EApp (EVar "Some") (ELit (LString "module"))) (EIf (EBinOp "/=" (EFieldAccess (EVar "k") "mkSource") (EFieldAccess (EVar "expected") "mkSource")) (EApp (EVar "Some") (ELit (LString "source"))) (EIf (EBinOp "/=" (EFieldAccess (EVar "k") "mkImports") (EFieldAccess (EVar "expected") "mkImports")) (EApp (EVar "Some") (ELit (LString "imports"))) (EIf (EBinOp "/=" (EFieldAccess (EVar "k") "mkGraph") (EFieldAccess (EVar "expected") "mkGraph")) (EApp (EVar "Some") (ELit (LString "graph"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig true "readModuleKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "ModuleKey"))))
@@ -599,8 +599,8 @@ decodeModuleInterfaceFor expected =
 (DFunDef false "moduleFormatVersion" () (ELit (LInt 1)))
 (DTypeSig false "fileTag" (TyCon "String"))
 (DFunDef false "fileTag" () (ELit (LString "medaka-module")))
-(DTypeSig false "keyFields" (TyFun (TyCon "ModuleKey") (TyApp (TyCon "List") (TyCon "SExp"))))
-(DFunDef false "keyFields" ((PVar "k")) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "module"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkModule")))) (EApp (EApp (EVar "tagged") (ELit (LString "source"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkSource")))) (EApp (EApp (EVar "tagged") (ELit (LString "imports"))) (EListLit (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "SAtom"))) (EFieldAccess (EVar "k") "mkImports")))) (EApp (EApp (EVar "tagged") (ELit (LString "graph"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkGraph"))))))
+(DTypeSig false "moduleHeaderFields" (TyFun (TyCon "ModuleKey") (TyApp (TyCon "List") (TyCon "SExp"))))
+(DFunDef false "moduleHeaderFields" ((PVar "k")) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "module"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkModule")))) (EApp (EApp (EVar "tagged") (ELit (LString "source"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkSource")))) (EApp (EApp (EVar "tagged") (ELit (LString "imports"))) (EListLit (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "SAtom")) (EVar "SAtom"))) (EFieldAccess (EVar "k") "mkImports")))) (EApp (EApp (EVar "tagged") (ELit (LString "graph"))) (EListLit (EApp (EVar "SAtom") (EFieldAccess (EVar "k") "mkGraph"))))))
 (DTypeSig false "locNode" (TyFun (TyCon "Loc") (TyCon "SExp")))
 (DFunDef false "locNode" ((PCon "Loc" (PVar "file") (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EApp (EApp (EVar "tagged") (ELit (LString "loc"))) (EListLit (EApp (EVar "SAtom") (EVar "file")) (EApp (EVar "intNode") (EVar "a")) (EApp (EVar "intNode") (EVar "b")) (EApp (EVar "intNode") (EVar "c")) (EApp (EVar "intNode") (EVar "d")))))
 (DTypeSig false "diagNode" (TyFun (TyCon "TcDiag") (TyCon "SExp")))
@@ -621,7 +621,7 @@ decodeModuleInterfaceFor expected =
 (DTypeSig false "sectionLine" (TyFun (TyCon "ModuleSection") (TyCon "String")))
 (DFunDef false "sectionLine" ((PVar "s")) (EBinOp "++" (EApp (EVar "renderSExp") (EApp (EApp (EVar "tagged") (ELit (LString "section"))) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "joins"))) (EListLit (EApp (EApp (EVar "listSExp") (EApp (EVar "listSExp") (EVar "atomSExp"))) (EFieldAccess (EVar "s") "msJoins")))) (EApp (EVar "interfaceNode") (EFieldAccess (EVar "s") "msInterface"))))) (ELit (LString "\n"))))
 (DTypeSig true "encodeModuleSections" (TyFun (TyCon "ModuleKey") (TyFun (TyApp (TyCon "List") (TyCon "ModuleSection")) (TyCon "String"))))
-(DFunDef false "encodeModuleSections" ((PVar "key") (PVar "sections")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "s")) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "s") "msInterface") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))))) (EVar "sections")) (EApp (EVar "panic") (ELit (LString "module_interface_sexp: a section was recorded under another key"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "framedFile") (EVar "fileTag")) (EVar "moduleFormatVersion")) (EBinOp "++" (EApp (EVar "keyFields") (EVar "key")) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "sections"))) (EListLit (EApp (EVar "intNode") (EApp (EMethodRef "length") (EVar "sections")))))))) (EApp (EApp (EVar "stringJoin") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "sectionLine")) (EVar "sections")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "encodeModuleSections" ((PVar "key") (PVar "sections")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "s")) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "s") "msInterface") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))))) (EVar "sections")) (EApp (EVar "panic") (ELit (LString "module_interface_sexp: a section was recorded under another key"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "framedFile") (EVar "fileTag")) (EVar "moduleFormatVersion")) (EBinOp "++" (EApp (EVar "moduleHeaderFields") (EVar "key")) (EListLit (EApp (EApp (EVar "tagged") (ELit (LString "sections"))) (EListLit (EApp (EVar "intNode") (EApp (EMethodRef "length") (EVar "sections")))))))) (EApp (EApp (EVar "stringJoin") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "sectionLine")) (EVar "sections")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "encodeModuleInterface" (TyFun (TyCon "ModuleInterface") (TyCon "String")))
 (DFunDef false "encodeModuleInterface" ((PVar "mi")) (EApp (EApp (EVar "encodeModuleSections") (EFieldAccess (EVar "mi") "miKey")) (EListLit (ERecordCreate "ModuleSection" ((fa "msJoins" (EListLit)) (fa "msInterface" (EVar "mi")))))))
 (DTypeSig false "decLoc" (TyApp (TyCon "Reader") (TyCon "Loc")))
@@ -657,10 +657,8 @@ decodeModuleInterfaceFor expected =
 (DFunDef false "decSection" ((PVar "key") (PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "section"))) (PVar "js") (PVar "i")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "decJoins") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "section"))) (ELit (LInt 1)))) (EVar "js"))) (ELam ((PVar "joins")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decInterface") (EVar "key")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "section"))) (ELit (LInt 2)))) (EVar "i"))) (ELam ((PVar "value")) (EApp (EVar "Ok") (ERecordCreate "ModuleSection" ((fa "msJoins" (EVar "joins")) (fa "msInterface" (EVar "value"))))))))))
 (DFunDef false "decSection" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "section")) (ELit (LInt 2))))) (EVar "node")))
 (DTypeSig false "readHeaderFields" (TyFun (TyApp (TyCon "List") (TyCon "SExp")) (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "ModuleKey") (TyCon "Int")))))
-(DFunDef false "readHeaderFields" ((PList (PCon "SList" (PList (PCon "SAtom" (PLit (LString "module"))) (PVar "m"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "source"))) (PVar "s"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "imports"))) (PVar "imps"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "graph"))) (PVar "g"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sections"))) (PVar "n"))))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/module"))) (EVar "m"))) (ELam ((PVar "modId")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/source"))) (EVar "s"))) (ELam ((PVar "source")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "decPairAtoms")) (ELit (LString "header/imports"))) (EVar "imps"))) (ELam ((PVar "imports")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/graph"))) (EVar "g"))) (ELam ((PVar "graph")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "header/sections"))) (EVar "n"))) (ELam ((PVar "count")) (EApp (EVar "Ok") (ETuple (ERecordCreate "ModuleKey" ((fa "mkModule" (EVar "modId")) (fa "mkSource" (EVar "source")) (fa "mkImports" (EVar "imports")) (fa "mkGraph" (EVar "graph")))) (EDictApp "count"))))))))))))))
+(DFunDef false "readHeaderFields" ((PList (PCon "SList" (PList (PCon "SAtom" (PLit (LString "module"))) (PVar "m"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "source"))) (PVar "s"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "imports"))) (PVar "imps"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "graph"))) (PVar "g"))) (PCon "SList" (PList (PCon "SAtom" (PLit (LString "sections"))) (PVar "n"))))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/module"))) (EVar "m"))) (ELam ((PVar "modId")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/source"))) (EVar "s"))) (ELam ((PVar "source")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EVar "decPairAtoms")) (ELit (LString "header/imports"))) (EVar "imps"))) (ELam ((PVar "imports")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (ELit (LString "header/graph"))) (EVar "g"))) (ELam ((PVar "graph")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomInt") (ELit (LString "header/sections"))) (EVar "n"))) (ELam ((PVar "count")) (EApp (EVar "Ok") (ETuple (ERecordCreate "ModuleKey" ((fa "mkModule" (EVar "modId")) (fa "mkSource" (EVar "source")) (fa "mkImports" (EVar "imports")) (fa "mkGraph" (EVar "graph")))) (EDictApp "count"))))))))))))))
 (DFunDef false "readHeaderFields" (PWild) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (ELit (LInt 0))) (fa "sePath" (ELit (LString "header"))) (fa "seWhat" (ELit (LString "expected the module, source, imports, graph and sections fields")))))))
-(DTypeSig false "decList" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "decList" () (EVar "listOfSExp"))
 (DTypeSig true "keyDifference" (TyFun (TyCon "ModuleKey") (TyFun (TyCon "ModuleKey") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "keyDifference" ((PVar "expected") (PVar "k")) (EIf (EBinOp "/=" (EFieldAccess (EVar "k") "mkModule") (EFieldAccess (EVar "expected") "mkModule")) (EApp (EVar "Some") (ELit (LString "module"))) (EIf (EBinOp "/=" (EFieldAccess (EVar "k") "mkSource") (EFieldAccess (EVar "expected") "mkSource")) (EApp (EVar "Some") (ELit (LString "source"))) (EIf (EBinOp "/=" (EFieldAccess (EVar "k") "mkImports") (EFieldAccess (EVar "expected") "mkImports")) (EApp (EVar "Some") (ELit (LString "imports"))) (EIf (EBinOp "/=" (EFieldAccess (EVar "k") "mkGraph") (EFieldAccess (EVar "expected") "mkGraph")) (EApp (EVar "Some") (ELit (LString "graph"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig true "readModuleKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "ModuleKey"))))

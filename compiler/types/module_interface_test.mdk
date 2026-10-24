@@ -1,6 +1,6 @@
 -- The module interface cache: what a recorded interface replays, when a key hits,
 -- and the cases a served drive must not differ from a checked one in.  Drives run
--- through `checkModulesChainReportFor` with source keys, as the keyed callers do;
+-- through `keyedDrive` with source keys, as the keyed callers do;
 -- each test uses module ids and chain keys of its own, because the cache is keyed
 -- by module id and lives for the process.
 import test.{
@@ -15,85 +15,18 @@ import types.module_interface.{
   ModuleInterface(..), FrozenExport(..), ModuleKey(..), applyModuleInterface,
   currentModuleInterfaces
 }
-import types.publish.{
-  ModDiags, PubScheme(..), TcDiag(..), TcReport(..), ppPubScheme
+import types.module_interface_test_support.{
+  bareDrive, chainDrive, entrySrc, keyedDrive, leafSrc, render, renderRow
 }
+import types.publish.{ModDiags, PubScheme(..), ppPubScheme}
 import types.repr.{ppSchemeCon, Scheme(..)}
 import types.tc_types.{
   DriveOutputs(..), ExportBinding(..), GraphCtx(..), CrossRun(..)
 }
-import types.typecheck.{
-  defaultDriveInputs, checkModulesChainReportFor,
-  checkModulesChainReportForGraph, checkModules
-}
+import types.typecheck.{defaultDriveInputs, checkModules}
 import support.util.{joinNl}
 
 -- ── fixtures ────────────────────────────────────────────────────────────────
-
-export
-leafSrc : String
-leafSrc = joinNl [
-  "export data Box a = Box a | Empty",
-  "export wrap x = Box x",
-  "export unwrap : Box Int -> Int",
-  "unwrap b = match b",
-  "  Box n => n",
-  "  Empty => 0",
-]
-
--- [leaf] is the id of the module [midSrc] imports.
-export
-midSrc : String -> String
-midSrc leaf = joinNl [
-  "import \{leaf}.{Box(..), wrap}",
-  "export twice x = wrap (wrap x)",
-]
-
-export
-entrySrc : String -> String
-entrySrc mid = joinNl ["import \{mid}.{twice}", "entry = twice 1"]
-
--- One keyed drive over the chain leaf, mid, entry, whose modules are named
--- [p]_leaf, [p]_mid and [p]_entry.  The result is the rendered report, the number
--- of modules the drive served and the graph record it ended in.
-chainDrive : String ->
-  Int ->
-  String ->
-  String ->
-  String ->
-  (List String, Int, GraphCtx)
-chainDrive p seed chainKey leafText entryText =
-  let midText = midSrc "\{p}_leaf"
-  let ((report, outputs), gctx) =
-    checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      (Some (seed, seed + 1))
-      chainKey
-      [Some leafText, Some midText, None]
-      []
-      (desugar (parse ""))
-      [
-        ("\{p}_leaf", desugar (parseLocated leafText)),
-        ("\{p}_mid", desugar (parseLocated midText)),
-        ("\{p}_entry", desugar (parseLocated entryText)),
-      ]
-  (render report, outputs.doServedModules, gctx)
-
-export
-render : TcReport -> List String
-render r = flatMap renderRow r.trDiagnostics
-
-export
-renderRow : ModDiags -> List String
-renderRow (mid, (schemes, errs, warns)) =
-  map (s => "\{mid}.\{fst s} : \{ppPubScheme (snd s)}") schemes
-    ++ map (d => "\{mid} error \{diagCode d}") errs
-    ++ map (d => "\{mid} warning \{diagCode d}") warns
-
-export
-diagCode : TcDiag -> String
-diagCode (TcDiag code _ _ _ _ _) = code
 
 export
 interfaceOf : String -> Option ModuleInterface
@@ -122,17 +55,7 @@ renderFrozenBinding (name, fe) = "\{name} : \{renderFrozen fe}"
 export
 freshGraph : String -> Int -> GraphCtx
 freshGraph mid seed =
-  let (_, gctx) =
-    checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      (Some (seed, seed + 1))
-      "fresh-\{mid}"
-      [None]
-      []
-      (desugar (parse ""))
-      [(mid, desugar (parseLocated "export unrelated = 1"))]
-  gctx
+  snd (bareDrive seed "fresh-\{mid}" [(mid, "export unrelated = 1")])
 
 hasNames : GraphCtx -> List String -> Bool
 hasNames g names =
@@ -207,24 +130,20 @@ otherSrc extra = joinNl [
   extra,
 ]
 
+boolSpeakImpl : String
+boolSpeakImpl = """impl Speak Bool where
+  speak _ = "b"
+"""
+
 -- Modules sib_leaf and sib_other; the entry imports only the leaf.
 sibDrive : String -> String -> Int
 sibDrive chainKey otherText =
   let entryText = joinNl ["import sib_leaf.{Box(..), wrap}", "entry = wrap 1"]
-  let (_, outputs) =
-    checkModulesChainReportFor
-      defaultDriveInputs
-      False
-      (Some (4621, 4622))
-      chainKey
-      [Some leafSrc, Some otherText, None]
-      []
-      (desugar (parse ""))
-      [
-        ("sib_leaf", desugar (parseLocated leafSrc)),
-        ("sib_other", desugar (parseLocated otherText)),
-        ("sib_entry", desugar (parseLocated entryText)),
-      ]
+  let ((_, outputs), _) = bareDrive 4621 chainKey [
+    ("sib_leaf", leafSrc),
+    ("sib_other", otherText),
+    ("sib_entry", entryText),
+  ]
   outputs.doServedModules
 
 test "an impl in a module the importer does not import invalidates the leaf's interface" =
@@ -232,8 +151,7 @@ test "an impl in a module the importer does not import invalidates the leaf's in
   let _ = sibDrive "sib-k" plain
   let afterBody = sibDrive "sib-k" (plain ++ "extra = 42\n")
   let _ = sibDrive "sib-k2" plain
-  let afterImpl =
-    sibDrive "sib-k2" (plain ++ "impl Speak Bool where\n  speak _ = \"b\"\n")
+  let afterImpl = sibDrive "sib-k2" (plain ++ boolSpeakImpl)
   expectEach [
     ("a body edit elsewhere serves the leaf", expectEqual 1 afterBody),
     ("an impl elsewhere serves nothing", expectEqual 0 afterImpl),
@@ -261,21 +179,11 @@ rowIds mid rows =
 
 hwDrive : String -> String -> (List Int, List Int, Int)
 hwDrive chainKey midText =
-  let entryText = entrySrc "hw_mid"
-  let ((report, outputs), _) =
-    checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      (Some (4631, 4632))
-      chainKey
-      [Some manySrc, Some midText, None]
-      []
-      (desugar (parse ""))
-      [
-        ("hw_leaf", desugar (parseLocated manySrc)),
-        ("hw_mid", desugar (parseLocated midText)),
-        ("hw_entry", desugar (parseLocated entryText)),
-      ]
+  let ((report, outputs), _) = bareDrive 4631 chainKey [
+    ("hw_leaf", manySrc),
+    ("hw_mid", midText),
+    ("hw_entry", entrySrc "hw_mid"),
+  ]
   (
     rowIds "hw_leaf" report.trDiagnostics,
     rowIds "hw_mid" report.trDiagnostics,
@@ -310,20 +218,12 @@ test "a serving drive after an elaboration mints no id below an earlier drive's 
 liveDrive : String -> String -> String -> String -> String -> (List String, Int)
 liveDrive runtime core chainKey libText userText =
   let entryText = joinNl ["import lr_user.{u}", "entry = u"]
-  let ((report, outputs), _) =
-    checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      (Some (4641, 4642))
-      chainKey
-      [Some libText, Some userText, None]
-      (desugar (parse runtime))
-      (desugar (parse core))
-      [
-        ("lr_lib", desugar (parseLocated libText)),
-        ("lr_user", desugar (parseLocated userText)),
-        ("lr_entry", desugar (parseLocated entryText)),
-      ]
+  let ((report, outputs), _) = keyedDrive 4641 chainKey (desugar
+    (parse runtime)) (desugar (parse core)) [
+    ("lr_lib", libText),
+    ("lr_user", userText),
+    ("lr_entry", entryText),
+  ]
   (render report, outputs.doServedModules)
 
 openLib : String

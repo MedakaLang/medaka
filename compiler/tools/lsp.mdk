@@ -1939,7 +1939,7 @@ publishForSelected runtimeSrc coreSrc uri text docs =
         publishProjectDiagnostics runtimeSrc coreSrc uri text docs
       else
         -- a one-module graph: the parse memo keeps this buffer's parse alone
-        let _ = retainParsed projectParseCache [text]
+        retainParsed projectParseCache [text]
         match publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
           Some report =>
             if report.trPartial.paModule == "__user__" then

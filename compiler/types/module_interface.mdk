@@ -37,7 +37,9 @@ import frontend.ast.{TabKey, DataVis, Variant, EvTable, Ident}
 import list.{drop, take, mapAccumL}
 import map as M
 import map.{Map(..)}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
+import support.ordmap.{
+  OrdMap, omEmpty, omInsert, omLookup, omHasKey, omRestrict
+}
 import support.util.{joinNl, lenKey, listLen, isNonEmptyL}
 import types.prelude_interface.{
   freezeScheme, thawScheme, zonkSlot, zonkMethodSlot, zonkRecord, mapSlots
@@ -380,6 +382,14 @@ export
 recordModuleInterface : ModuleInterface -> Unit
 recordModuleInterface mi =
   moduleCacheRef := withInterface moduleCacheRef.value mi
+
+-- Drops the interfaces of every module outside [mids], so the cache is bounded by
+-- the graph last analyzed rather than by every module id ever loaded.
+export
+retainModuleInterfaces : List String -> Unit
+retainModuleInterfaces mids =
+  let cache = moduleCacheRef.value
+  moduleCacheRef := { cache | mcEntries = omRestrict mids cache.mcEntries }
 
 -- Adds interfaces read from elsewhere.  The serials handed out afterwards start
 -- above theirs.

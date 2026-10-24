@@ -814,6 +814,7 @@ sideNames = [
   "preludeEvidenceRef",
   "desugarCacheRef",
   "desugarGenRef",
+  "moduleCacheRef",
   "program_facts.currentFacts",
 ]
 
