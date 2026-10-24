@@ -13,7 +13,7 @@ stages=DESUGAR,MARK
 -- freshness from the key first (`checkedFramed`'s gate) and only then hashes the
 -- covered bytes and decodes them: a file written for other sources never has
 -- its body looked at.
-import crypto.sha256.{sha256}
+import crypto.sha256_fast.{sha256Fast}
 import hex as Hex
 import list.{take, drop}
 import bytes.{encodeUtf8}
@@ -43,7 +43,7 @@ noGate _ = None
 -- The SHA-256 of a text, in lower-case hex.
 export
 sha256Hex : String -> String
-sha256Hex text = Hex.encode (sha256 (encodeUtf8 text))
+sha256Hex text = Hex.encode (sha256Fast (encodeUtf8 text))
 
 -- What the digest covers: the file's text after its first line.
 export
@@ -237,7 +237,7 @@ gated gate key = match gate key
   Some component => Err (StaleKey component)
   None => Ok ()
 # DESUGAR
-(DUse false (UseGroup ("crypto" "sha256") ((mem "sha256" false))))
+(DUse false (UseGroup ("crypto" "sha256_fast") ((mem "sha256Fast" false))))
 (DUse false (UseAlias ("hex") "Hex"))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("bytes") ((mem "encodeUtf8" false))))
@@ -249,7 +249,7 @@ gated gate key = match gate key
 (DTypeSig true "noGate" (TyCon "KeyGate"))
 (DFunDef false "noGate" (PWild) (EVar "None"))
 (DTypeSig true "sha256Hex" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "sha256Hex" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256") (EApp (EVar "encodeUtf8") (EVar "text")))))
+(DFunDef false "sha256Hex" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256Fast") (EApp (EVar "encodeUtf8") (EVar "text")))))
 (DTypeSig true "bodyOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "bodyOf" ((PVar "text")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text"))) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig true "refuse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyVar "a")))))
@@ -298,7 +298,7 @@ gated gate key = match gate key
 (DTypeSig true "gated" (TyFun (TyCon "KeyGate") (TyFun (TyCon "InterfaceKey") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "Unit")))))
 (DFunDef false "gated" ((PVar "gate") (PVar "key")) (EMatch (EApp (EVar "gate") (EVar "key")) (arm (PCon "Some" (PVar "component")) () (EApp (EVar "Err") (EApp (EVar "StaleKey") (EVar "component")))) (arm (PCon "None") () (EApp (EVar "Ok") (ELit LUnit)))))
 # MARK
-(DUse false (UseGroup ("crypto" "sha256") ((mem "sha256" false))))
+(DUse false (UseGroup ("crypto" "sha256_fast") ((mem "sha256Fast" false))))
 (DUse false (UseAlias ("hex") "Hex"))
 (DUse false (UseGroup ("list") ((mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("bytes") ((mem "encodeUtf8" false))))
@@ -310,7 +310,7 @@ gated gate key = match gate key
 (DTypeSig true "noGate" (TyCon "KeyGate"))
 (DFunDef false "noGate" (PWild) (EVar "None"))
 (DTypeSig true "sha256Hex" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "sha256Hex" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256") (EApp (EVar "encodeUtf8") (EVar "text")))))
+(DFunDef false "sha256Hex" ((PVar "text")) (EApp (EVar "Hex.encode") (EApp (EVar "sha256Fast") (EApp (EVar "encodeUtf8") (EVar "text")))))
 (DTypeSig true "bodyOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "bodyOf" ((PVar "text")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EVar "S.drop") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text"))) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig true "refuse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyVar "a")))))
