@@ -432,7 +432,7 @@ checkBodyImpl : GraphCtx -> CheckRunSeed -> ModuleSeed -> String -> List Decl ->
 checkCallObligationsU : ModuleCtx -> Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : ModuleCtx -> List String -> String -> List FunClause -> Unit
 checkCoherence : ModuleCtx -> ImplEnv -> Int -> Unit
-checkCoreMemoized : ModuleCtx -> Option GraphRun -> Option (Int, Int) -> List Decl -> List Decl -> List (String, Scheme) -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
+checkCoreMemoized : ModuleCtx -> Option (Int, Int) -> List Decl -> List Decl -> List (String, Scheme) -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
 checkDeclAuthorityDomains : ModuleCtx -> List (String, Param) -> List (String, KindAnn) -> List Ty -> Unit
 checkDeclAuthorityUses : ModuleCtx -> List Decl -> Unit
 checkDeclAuthorityUsesDecl : ModuleCtx -> Decl -> Unit
@@ -1396,7 +1396,7 @@ graphAliasRow : Decl -> List (TabKey, (List String, Ty))
 graphAmbigValues : GraphCtx -> String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCollect : GraphCtx -> GraphOut -> Bool -> String -> (List Decl, List (String, PubScheme), List TcDiag, List TcDiag) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag))) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)))
-graphLineageRun : Option GraphRun -> Lineage -> GraphRun
+graphLineageRun : Lineage -> GraphRun
 graphMarksNow : GraphCtx -> Unit -> GraphMarks
 graphModuleWorker : GraphOut -> ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag), ModuleCtx)
 graphPreamble : DriveInputs -> Map String (List (String, String)) -> GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), Map String (List VecObl), List Decl, MarkSets, ModuleCtx)
@@ -2024,7 +2024,6 @@ markBinders : Ref (Map Int Unit) -> List (Ref Authvar) -> Unit
 markClauseWith : ModuleCtx -> ArgRw -> (List Pat, Expr) -> (List Pat, Expr)
 markDictNames : GraphCtx -> List String -> List Decl -> List (String, List Decl) -> List String
 markGroupClauses : ModuleMarking -> TcEnv -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
-markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), GraphRun)
 markNumlitOpTaint : ModuleCtx -> Mono -> Unit
 markRecursiveOccurrences : ModuleCtx -> ModuleMarking -> List (String, Mono) -> List ScopedMember -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 markSetsOf : GraphCtx -> PreludeMarkFacts -> List Decl -> List (String, List Decl) -> List Decl -> MarkSets
@@ -2508,12 +2507,10 @@ positionCells : ModuleCtx -> List (String, Int) -> List (Int, Ref Authvar)
 positionalSigVars : List (String, Int) -> List (Int, Ref Authvar) -> SigVars
 postponePendingJoins : ModuleCtx -> Int -> Unit
 prePassDeclScoped : ModuleCtx -> ArgRw -> Decl -> Decl
-prePassDict : ModuleCtx -> List String -> List String -> List Decl -> List Decl
 prePassFunClauseScoped : ModuleCtx -> ArgRw -> FunClause -> FunClause
 prePassIfaceMethodScoped : ModuleCtx -> ArgRw -> IfaceMethod -> IfaceMethod
 prePassImplMethodScoped : ModuleCtx -> ArgRw -> ImplMethod -> ImplMethod
 prePassLetBindScoped : ModuleCtx -> ArgRw -> LetBind -> LetBind
-prePassModulePair : ModuleCtx -> List String -> (String, List Decl) -> (String, List Decl)
 predicateNodeKey : IfaceRef -> List Mono -> String
 predicateRequestArgsMatch : PredicateSlotArgs -> PredicateSlotArgs -> Bool
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
@@ -2935,7 +2932,6 @@ rewriteBinopExpr : ModuleCtx -> EvIndex -> Expr -> Expr
 rewriteLocalDictExpr : GraphCtx -> Expr -> Expr
 rewriteLocalDoStmt : GraphCtx -> DoStmt -> DoStmt
 rewriteLocalLetBind : GraphCtx -> LetBind -> LetBind
-rewriteRPDict : ModuleCtx -> Map String Unit -> Map String Unit -> Expr -> Expr
 rigidHeadInstanceContext : SiteCtx -> Map String Unit -> IfaceRef -> List Mono -> Option (List (IfaceRef, List Mono))
 rigidSigPairs : GraphCtx -> Map String Unit -> List (Mono, Mono) -> List (Mono, Mono)
 rootCellsOf : Map String Unit -> List (String, Scheme) -> List (String, Map Int Unit)

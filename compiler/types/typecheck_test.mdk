@@ -119,7 +119,6 @@ import types.typecheck.{
   finishMethodReturnTrace,
   finishNumericPredicateTrace,
   isLiveSpan,
-  markModules,
   matchWarningsNow,
   methodReturnResolutionMutationProbe,
   methodReturnMemoCurrentViews,
@@ -5921,43 +5920,6 @@ test "the cell stores report an unminted site and an id from an earlier graph" =
       )
       (cellStoreMisses gctx (EvId "span_probe" 0)),
   ]
-
--- Two modules whose return-position method occurrences the mark pre-pass mints.
-preMarkedModules : List (String, List Decl)
-preMarkedModules = [
-  (
-    "pre_a",
-    desugar
-      (parseLocated
-        (joinNl [
-          "interface Def a where", "  def : a", "impl Def Int where",
-          "  def = 7", "seven : Int", "seven = def"
-        ])),
-  ),
-  (
-    "pre_b",
-    desugar
-      (parseLocated
-        (joinNl [
-          "interface Zero a where", "  zero : a", "impl Zero Int where",
-          "  zero = 0", "nought : Int", "nought = zero"
-        ])),
-  ),
-]
-
--- The profiler's order: the mark pre-pass on its own, then the typecheck of the
--- marked trees, whose inputs carry the marked run.
-test "checkModules completes over modules markModules marked first" =
-  let (core2, mods2, marked) = markModules [] preMarkedModules
-  expectEqual
-    ["pre_a", "pre_b"]
-    (map
-      fst
-      (checkModules
-        { defaultDriveInputs | diMarked = Some marked }
-        []
-        core2
-        mods2))
 
 -- A prelude with a data declaration and an exhaustive match of it.
 seedCoreDecls : Unit -> List Decl

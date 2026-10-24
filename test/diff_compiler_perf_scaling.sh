@@ -213,7 +213,7 @@ fi
 # The MULTI-MODULE profiler (issue #153). The single-file PROFILE above cannot see
 # the O(modules^2) family (checkModuleFullImpl / elabModuleStamp) because it never
 # runs the multi-module driver — a gate must run where the bug lands. This one is
-# profile_modules_main: loadProgram -> desugar -> markModules -> checkModules,
+# profile_modules_main: loadProgram -> desugar -> checkModules,
 # emitting the SAME `[perf] <stage> <t>s <mb>MB` line protocol as PROFILE.
 # Same add-only deliberate-red seam as PERF_PROFILE above, for the OTHER driver.
 # It is a second knob rather than a reuse of PERF_PROFILE because the two binaries
@@ -1351,7 +1351,7 @@ gen_wrapchain() {
 # buildKeyTable(accAll ++ prog)) scales with.
 #
 # ⚠️ THE FIXTURE MUST RESOLVE CLEANLY, or the gate measures the WRONG quadratic.
-# profile_modules_main drives markModules/checkModules, which do NOT run
+# profile_modules_main drives checkModules, which does NOT run
 # frontend.resolve and DISCARD its result — so a resolve-BROKEN fixture still prints
 # growing MB, but that growth can be the compiler re-failing to bind the same
 # unresolved names once per module (a different module-count-scaling mechanism),
@@ -4099,7 +4099,7 @@ fi   # end PERF_ONLY unit: llvm-dispatch
 # run only the single-file driver and are STRUCTURALLY BLIND to the multi-module
 # passes (checkModuleFullImpl, elabModuleStamp) where the module-count quadratics
 # live. This shape runs the MULTI-MODULE driver (profile_modules_main:
-# loadProgram -> markModules -> checkModules) over N import-chained modules so the
+# loadProgram -> checkModules) over N import-chained modules so the
 # accumulated-decl rescans actually execute. It is graded on BOTH net-total
 # allocation (its own baseline, subtracted like the single-file shapes) AND, since
 # the scan-heavy part is time-dominant, the per-stage `typecheck` TIME.

@@ -24,7 +24,7 @@ import types.tc_types.{
 }
 import types.typecheck.{
   defaultDriveInputs, checkModulesChainReportFor,
-  checkModulesChainReportForGraph, markModules
+  checkModulesChainReportForGraph, checkModules
 }
 import support.util.{joinNl}
 
@@ -285,7 +285,11 @@ hwDrive chainKey midText =
 test "a serving drive after an elaboration mints no id below an earlier drive's high-water" =
   let midText = joinNl ["import hw_leaf.{f1}", "export g x = f1 x"]
   let (leafIds, _, _) = hwDrive "hw-k" midText
-  let _ = markModules [] [("hw_pre", desugar (parseLocated "pre = 1"))]
+  let _ =
+    length
+      (checkModules defaultDriveInputs [] [] [
+        ("hw_pre", desugar (parseLocated "pre = 1")),
+      ])
   let (servedIds, midIds, served) =
     hwDrive "hw-k" (joinNl [midText, "export g2 x = f1 x"])
   expectEach [

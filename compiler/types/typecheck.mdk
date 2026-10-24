@@ -8314,8 +8314,8 @@ initialGraphCtx ctors run = GraphCtx {
 
 -- The process's interners (see `Interners`): the lineage objects and the extern
 -- catalog of the graph record a drive continues from.  The drive's mint, the record
--- past the core pass and `markModules`' record each write it (`noteInterners`), so
--- the next mint continues from the last of them.  Before any drive they are a fresh record's.
+-- past the core pass each write it (`noteInterners`), so the next mint continues
+-- from the last of them.  Before any drive they are a fresh record's.
 interners : Ref Interners
 interners = Ref (internersOf (initialGraphCtx builtinCtors (freshGraphRun ())))
 
@@ -9899,7 +9899,6 @@ defaultDriveInputs = DriveInputs {
   diTrace = None,
   diIoJoinGrants = ioJoinGrants None,
   diProfileName = "",
-  diMarked = None,
   diPreludeKey = None,
 }
 
@@ -10446,7 +10445,6 @@ freshGraphRun _ = GraphRun {
   goalsN = Ref 0,
   evCounter = Ref 0,
   evBase = 0,
-  markedAhead = False,
   evJudged = Ref 0,
   evTable = Ref [],
   evCells = Ref (arrayMake 0 None),
@@ -10740,25 +10738,19 @@ freshEvId mctx _ =
 -- arrays span one graph rather than its whole life.
 --
 -- Nothing reads the cell arrays across a new lineage.  Every driver's mint
--- (`mintGraphCtx`) starts one before it marks, except after `markModules`, which
--- starts one itself, marks, and returns its run for the driver that checks those
--- trees: that driver's inputs carry it as [marked], and the mint keeps its base and
--- cells.  Trees outlive their drive only through the facts the drive returned, so a
--- caller that runs a second elaboration before it reads the first's trees keeps the
--- first's facts.
+-- (`mintGraphCtx`) starts one before it marks.  Trees outlive their drive only
+-- through the facts the drive returned, so a caller that runs a second elaboration
+-- before it reads the first's trees keeps the first's facts.
 --
 -- The binder-name and grant state are the lineage's own objects, cleared in place
 -- below.
-graphLineageRun : Option GraphRun -> Lineage -> GraphRun
-graphLineageRun marked lineage =
+graphLineageRun : Lineage -> GraphRun
+graphLineageRun lineage =
   let n = lineage.lnEvCounter.value
-  let base = match marked
-    Some run => run.evBase
-    None => n
+  let base = n
   let localAbs = lineage.lnLocalAbs
   let grants = lineage.lnGrants
   let fresh = freshGraphRun ()
-  let kept = optionOr fresh marked
   fresh.evCounter := n
   -- The cells below the base belong to an earlier drive, which judged them or never
   -- solved them; this drive judges only the cells of its own lineage.
@@ -10774,8 +10766,6 @@ graphLineageRun marked lineage =
     localAbs = localAbs,
     grants = grants,
     evBase = base,
-    evCells = kept.evCells,
-    siteCells = kept.siteCells,
   }
 
 sealMethodReturnGoals : GraphCtx ->
@@ -27710,39 +27700,6 @@ argMentions typarams ty = anyMember (tyVarNames ty) typarams
 anyMember : List String -> List String -> Bool
 anyMember [] _ = False
 anyMember (x :: xs) ys = contains x ys || anyMember xs ys
-
--- rewrite each return-position method occurrence to EMethodAt, and each
--- constrained-fn occurrence (a name in [dictNames]) to EDictAt.  EMethodAt carries
--- fresh refs the typechecker fills; EDictAt carries a fresh evidence id the
--- typechecker publishes an answer under (#2549 M2).  The two name sets are
--- disjoint (interface methods vs top-level functions).
---
--- ⚠️ #2189: THE THREE NAME SETS ARE INDEXED, NOT SCANNED.  [rpNames]/[dictNames]
--- grow with the program (one entry per interface method / per `=>`-constrained
--- top-level fn), and the rewrite visits EVERY `EVar` node — so a `contains n
--- rpNames` List-as-set walk here is O(occurrences x names) = O(N^2), the same
--- shape #975 drained out of the marker and #1031 drained out of `bound` in
--- `rewriteArgScoped` below.  Build each set ONCE per prepass (`omFromNames`) and
--- probe it with `omHasKey`.  Membership semantics are identical, so the rewrite is
--- byte-for-byte parity.
-prePassDict : ModuleCtx -> List String -> List String -> List Decl -> List Decl
-prePassDict mctx rpNames dictNames prog =
-  mapProg
-    (rewriteRPDict
-      mctx
-      (omFromNames rpNames omEmpty)
-      (omFromNames dictNames omEmpty))
-    prog
-
--- [rpNames] here is the union of return-position methods AND method-level-
--- constrained methods (foldMap): both must become EMethodAt so eval can narrow by
--- the t-route and/or fold on the method-level dicts.
-rewriteRPDict : ModuleCtx -> OrdMap Unit -> OrdMap Unit -> Expr -> Expr
-rewriteRPDict mctx rpNames dictNames (EVar n)
-  | omHasKey n rpNames = EMethodAt n "" (mintMethodCell mctx "")
-  | omHasKey n dictNames = EDictAt n (freshEvId mctx ())
-  | otherwise = EVar n
-rewriteRPDict mctx _ _ e = e
 
 -- The `ArgRw` hook that records nothing: every marker but the group-recursive one
 -- (`markRecursiveOccurrences`) reads the dict application's route out of the goal
@@ -53421,20 +53378,18 @@ collectModules collect base ((mid, extra) :: older) =
 -- it when keyed, and continues from that frozen value as a hit does, so the record
 -- past core is one shape however the drive came by it: core's evidence, binder rows,
 -- scope frames and goals stay in the run core was checked in, and its schemes reach
--- inference as fresh cells.  [marked] is the drive's `diMarked`: a run whose cells
--- were minted before the drive, which the miss's continuation keeps as the mint did.
+-- inference as fresh cells.
 -- The interface's extern catalog is the one [runtimeDecls] alone build, not the
 -- process's union, which holds whatever runtimes earlier drives declared.
 -- Returns the bindings inference reads, the prelude's published rows and the module
 -- record to continue from, whose `mcGraph` is the graph record.
 checkCoreMemoized : ModuleCtx ->
-  Option GraphRun ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, Scheme) ->
   (ModuleBindings, List (String, PubScheme), ModuleCtx)
-checkCoreMemoized prev marked key runtimeDecls coreDecls runtimeSeed =
+checkCoreMemoized prev key runtimeDecls coreDecls runtimeSeed =
   let gctx = prev.mcGraph
   let join = gctx.config.value.tcIoJoin
   let cached = match key
@@ -53465,10 +53420,7 @@ checkCoreMemoized prev marked key runtimeDecls coreDecls runtimeSeed =
       let _ = match key
         Some k => seedPreludeInterface k [([join], pi)]
         None => ()
-      continueFromInterface
-        gctx
-        (graphLineageRun marked (internersOf gctx).lineage)
-        pi
+      continueFromInterface gctx (graphLineageRun (internersOf gctx).lineage) pi
 
 -- The record a drive continues from past the core pass: [gctx] with [pi] thawed
 -- into it.  [run] is a graph run core was not checked in; it takes the interface's
@@ -53555,16 +53507,12 @@ tcConfigOf domains inputs = TcConfig {
 -- field is fresh (`initialGraphCtx`) except the trace sink and the admitted map,
 -- which are this drive's, the extern catalog, which is the interners' (a union over
 -- the process; see `noteBuiltinExternNames`), and `graphRun`, a new lineage from
--- the interners' (`graphLineageRun`, keeping the base and cells of the run
--- `markModules` returned when [inputs] carry it).  The record is returned, and the
+-- the interners' (`graphLineageRun`).  The record is returned, and the
 -- drive continues from it; the interners take its lineage and catalog.
 mintGraphCtx : DriveInputs -> OrdMap (List (String, String)) -> GraphCtx
 mintGraphCtx inputs admitted =
   let carried = interners.value
-  let base =
-    initialGraphCtx
-      builtinCtors
-      (graphLineageRun inputs.diMarked carried.lineage)
+  let base = initialGraphCtx builtinCtors (graphLineageRun carried.lineage)
   let gctx = GraphCtx { base |
     trace = inputs.diTrace,
     graphAdmittedMethodsRef = Ref admitted,
@@ -53713,13 +53661,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   let (coreSchemes, corePub, coreContexts, coreTree, coreCtx) = match sel
     GOutDiags =>
       let (bindings, published, coreCtx) =
-        checkCoreMemoized
-          initial
-          inputs.diMarked
-          preludeKey
-          runtimeDecls
-          coreDecls
-          runtimeSeed
+        checkCoreMemoized initial preludeKey runtimeDecls coreDecls runtimeSeed
       -- The graph record the drive continues from, with the interface thawed into
       -- it.  Nothing holds `initial` past this point.
       let _ = noteInterners coreCtx.mcGraph
@@ -53750,11 +53692,11 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
 
 -- The prelude's shipped trees for a tree-arm drive (`types/prelude_elab.mdk`), moved
 -- onto the binders of [coreDecls], the drive's own desugar of core: held for the
--- drive's prelude key, and only for a drive that checks no trees marked ahead of it.
+-- drive's prelude key.
 treeArmElab : DriveInputs -> List Decl -> Option PreludeElab
-treeArmElab inputs coreDecls = match (inputs.diMarked, inputs.diPreludeKey)
-  (None, Some k) => preludeElabFor k coreDecls
-  _ => None
+treeArmElab inputs coreDecls = match inputs.diPreludeKey
+  Some k => preludeElabFor k coreDecls
+  None => None
 
 -- Those trees with the interface of the same key cached for the drive's IO join:
 -- a drive takes both or neither.
@@ -56532,13 +56474,6 @@ sigPredicateSlot : (IfaceRef, List String) -> PredicateSlot
 sigPredicateSlot (iface, _) =
   PredicateSlot { psIface = iface, psArgs = PSArgsUnknown, psBoundIds = [] }
 
-prePassModulePair : ModuleCtx ->
-  List String ->
-  (String, List Decl) ->
-  (String, List Decl)
-prePassModulePair mctx rpNames (mid, prog) =
-  (mid, prePassDict mctx rpNames [] prog)
-
 argRwOf : MarkCtx ->
   OrdMap Unit ->
   (String -> EvId -> Unit) ->
@@ -56915,30 +56850,6 @@ shadowBareName : List (String, String) -> String -> String
 shadowBareName sm n = match lookupAssoc n sm
   Some bare => bare
   None => n
-
--- The mark sub-phase of elaborateModules (RKey-only): compute rpNames over the
--- full module graph and prePassDict each module.  Exported so profiling drivers
--- can bracket the mark phase vs the typecheck phase separately.  It opens the graph
--- lineage the cells it mints belong to and returns that run beside the marked
--- trees; the driver it feeds (`checkModules`) takes the run as `diMarked` and keeps
--- those cells when its preamble mints the graph.  The marking runs in a graph record
--- built by a mint with the default drive inputs (the interners' lineage and catalog,
--- every other field fresh) and in the module record a drive starts from
--- (`initialModuleCtx`), so the cells it mints belong to no module, as in a process
--- that marks before any drive.
--- The interners take the record's lineage, which the next mint continues.
-export
-markModules : List Decl ->
-  List (String, List Decl) ->
-  (List Decl, List (String, List Decl), GraphRun)
-markModules coreDecls modules =
-  let gctx = mintGraphCtx defaultDriveInputs omEmpty
-  let mctx = initialModuleCtx gctx
-  let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
-  let core2 = prePassDict mctx rpNames [] coreDecls
-  let modules2 = map (prePassModulePair mctx rpNames) modules
-  let marked = GraphRun { gctx.graphRun | markedAhead = True }
-  (core2, modules2, marked)
 
 -- typecheck one module (seeded like checkModuleFull) AND immediately stamp the
 -- EMethodAt route refs it just recorded.  `recordModuleStart` marks the goal channel

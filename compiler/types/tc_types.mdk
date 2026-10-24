@@ -967,9 +967,7 @@ public export data TraceSink = TraceSink {
 -- What a driver hands a drive as its first argument: the stdlib ownership of the
 -- loader's module list, the trace sink (`None`: every trace off), the selected
 -- target profile's `IO` grants and name (`""` for none), carried as data so this
--- module need not import `types.target_profile`, and the run `markModules`
--- returned when the drive checks the trees it marked (`None` otherwise): the mint
--- keeps that run's base and cell arrays.  [diPreludeKey] is the desugar-cache
+-- module need not import `types.target_profile`.  [diPreludeKey] is the desugar-cache
 -- generation pair of the two prelude trees the drive is handed, when its driver
 -- knows it: the tree arm continues from the prelude's shipped trees only under it.
 public export data DriveInputs = DriveInputs {
@@ -978,7 +976,6 @@ public export data DriveInputs = DriveInputs {
   diTrace : Option TraceSink,
   diIoJoinGrants : List (String, EffParamTy),
   diProfileName : String,
-  diMarked : Option GraphRun,
   diPreludeKey : Option (Int, Int),
 }
 
@@ -1774,10 +1771,6 @@ public export data GraphRun = GraphRun {
   -- array indexed by ordinal holds only ordinals from here up, so an id below it is
   -- from an earlier graph.
   evBase : Int,
-  -- Set by `markModules` on the run it returns, whose marking minted this lineage's
-  -- cells before the driver it feeds mints the graph.  The mint keeps those cells
-  -- when the driver's inputs carry the run (`DriveInputs.diMarked`), not on this flag.
-  markedAhead : Bool,
   -- The ordinal below which every method cell has been judged complete
   -- (`judgeEvidence`).  Each drain judges the cells minted since the last one and
   -- raises it to `evCounter`, so a module drained at its own end has its holes
