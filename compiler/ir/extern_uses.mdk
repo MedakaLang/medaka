@@ -1,0 +1,29 @@
+import frontend.ast.{Addr(..)}
+import ir.core_ir.{CProgram(..), CExpr(..), DeclFacts(..)}
+import ir.extern_lower.{walkExternVars}
+import ir.extern_types.{ExternUse(..), ExternUseKind(..)}
+import support.ordmap.{omHasKey}
+import support.util.{reverseL, startsWith}
+
+export
+collectExternUses : CProgram -> List ExternUse
+collectExternUses (prog@(CProgram _ _ _ _ _ facts)) =
+  let uses = Ref []
+  let _ =
+    walkExternVars
+      (scope supplied name addr =>
+        let _ =
+          if not (omHasKey name scope)
+            && (omHasKey name facts.factExterns
+              || startsWith "$extern$" name) then
+            uses :=
+              ExternUse {
+                  useSymbol = name,
+                  useKind =
+                    if supplied < 0 then ExternValue else ExternApplication,
+                  suppliedCoreArguments = if supplied < 0 then 0 else supplied,
+                }
+                :: !uses
+        CVar name addr)
+      prog
+  reverseL !uses

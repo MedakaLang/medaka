@@ -1,3 +1,4 @@
+import types.extern_source.{externSourceHeadRows}
 -- lint-disable-file rule-duplicate-body
 -- (The hover/completion helpers below are DELIBERATELY reimplemented from the
 --  same logic in compiler/tools/lsp.mdk rather than shared: importing lsp.mdk
@@ -150,7 +151,9 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
 }
 import types.private_mangle.{mangleUnitsEv}
-import types.program_facts.{factsOfElabWith}
+import types.program_facts.{
+  factsOfElabSources, factsWithEvidence, withCheckedExternSources
+}
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{
   emitProgram,
@@ -729,8 +732,16 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
   -- #2809: the program is elaborated as written (`finishClean`), then its
   -- elaborated trees are mangled.
   let (coreE, modulesE) = executed
+  let externFacts =
+    withCheckedExternSources
+      checkedFfiExternTypeNamesModules
+      outputs
+      coreE
+      modulesE
+      (factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable)
   let (coreD, modulesM, evTableM) = mangleUnitsEv evTable coreE modulesE
-  let facts = factsForExecutedTrees (factsOfElabWith evTableM elab) modulesE
+  let facts =
+    factsForExecutedTrees (factsWithEvidence evTableM externFacts) modulesE
   let modules2 = stampModulePaths paths modulesM
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
@@ -740,7 +751,7 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
       ++ constrainedSigNames allDecls
   let ffiRows =
     validateFfiExternTypeNames
-      (checkedFfiExternTypeNamesModules outputs modules2)
+      (externSourceHeadRows (optionOr [] facts.pfExternSources))
   let input =
     makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))

@@ -14,6 +14,7 @@ import types.program_facts.{
   factsOfChecked,
   factsOfElab,
   factsOfElabWith,
+  factsOfElabSources,
   withFacts,
   factsNow,
 }
@@ -25,6 +26,9 @@ import types.route_key.{
 import types.typecheck.{
   defaultDriveInputs, elaborateModules, elaborateModulesWithReport
 }
+import types.typecheck.{checkedFfiExternTypeNamesModules}
+import types.extern_source.{ExternSource(..), ExternProvenance(..)}
+import types.runtime_abi_types.{CallableShape(..)}
 import support.util.{joinNl}
 
 routeFacts : ProgramFacts
@@ -33,6 +37,7 @@ routeFacts = ProgramFacts {
   pfDispositions = Some emptyDispositionTable,
   pfBinders = None,
   pfEntryOutcome = None,
+  pfExternSources = None,
 }
 
 isTyped : ProgramFacts -> Bool
@@ -140,4 +145,39 @@ test "checked and elaborated facts preserve the selected entry outcome" =
   expectAll [
     entryOutcomeExpectation checked,
     entryOutcomeExpectation elaborated,
+  ]
+
+test "source-aware checked facts retain module ownership and checked alias heads" =
+  let (elab, _, outputs) = elaborateModulesWithReport
+    defaultDriveInputs
+    False
+    None
+    []
+    []
+    [
+      (
+        "a",
+        desugar
+          (parseLocated
+            "type Number = Int\nextern shared : Number -> <FFI \"c\"> Number\n"),
+      ),
+      (
+        "b",
+        desugar (parseLocated "extern shared : Float -> <FFI \"c\"> Float\n"),
+      ),
+    ]
+  let (_, _, _, _, table, _, _) = elab
+  let facts =
+    factsOfElabSources checkedFfiExternTypeNamesModules outputs elab table
+  let rows = optionOr [] facts.pfExternSources
+  expectAll [
+    expectEqual
+      ["$extern$u1:a6:shared", "$extern$u1:b6:shared"]
+      (map (row => row.sourceSymbol) rows),
+    expectEqual
+      [CheckedSource, CheckedSource]
+      (map (row => row.sourceProvenance) rows),
+    expectEqual
+      [Some (["Int"], "Int"), Some (["Float"], "Float")]
+      (map (s => map (a => (a.parameterHeads, a.resultHead)) s.sourceAbi) rows),
   ]

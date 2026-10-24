@@ -13,7 +13,7 @@ import backend.emit_plan.{buildEmitPlan}
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 import frontend.ast.{Addr(..), BinderId(..), Lit(..), Pat(..), noDeclLoc}
 import ir.core_ir.{
-  CBind(..), CClause(..), CExpr(..), CProgram(..), DeclFacts(..)
+  CBind(..), CClause(..), CExpr(..), CProgram(..), DeclFacts(..), noDeclFacts
 }
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 
@@ -58,6 +58,7 @@ arithProgram tag =
       factRequires = [],
       factSupers = [],
       factEntryOutcome = None,
+      factExterns = noDeclFacts.factExterns,
       factBinders = [
         BinderRow {
           brId = BinderId "arith" 1,

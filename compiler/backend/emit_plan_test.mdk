@@ -14,6 +14,9 @@
 -- and no self-call sits anywhere else, a match guard included.
 
 import backend.emit_target.{Backend(..)}
+import ir.extern_lower.{lowerExterns, externVar, implicitRuntimeFacts}
+import types.program_facts.{emptyFacts}
+import frontend.parser.{parse}
 import test_process.{medakaRoot}
 import test.{
   Expectation,
@@ -74,7 +77,18 @@ ref : String -> CExpr
 ref n = CVar n AGlobal
 
 program : List CBind -> CProgram
-program binds = CProgram binds [] [] [] [] noDeclFacts
+program binds =
+  lowerExterns
+    emptyFacts
+    (parse
+      """
+  extern jsUp : String -> String
+    bind c "c_up"
+    bind js "jsUpper"
+  extern cNeg : Int -> Int
+    bind c "c_neg"
+  """)
+    (CProgram binds [] [] [] [] noDeclFacts)
 
 planOf : List CBind -> EmitPlan
 planOf binds = buildEmitPlan LlvmBackend (program binds)
@@ -1099,7 +1113,15 @@ jsPlanOf binds =
   )
 
 jsUpImport : List (String, String, String)
-jsUpImport = [("jsUp", "jsUpper", "jsUpper:String->String")]
+jsUpImport = [("$extern$u5:<raw>4:jsUp", "jsUpper", "jsUpper:String->String")]
+
+test "an explicit extern variable and its declaration select the runtime import" =
+  match filter (fact => fact.declaredName == "exit") implicitRuntimeFacts
+    [fact] =>
+      expectEqual
+        ["mdk_exit"]
+        (hostKeysOf WasmBackend (mkApp (externVar fact) [int 0]))
+    _ => fail "canonical runtime has no unique exit declaration"
 
 -- a `String` argument crosses on the path channel, a `String` result on the
 -- result channel

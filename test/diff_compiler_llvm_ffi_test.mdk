@@ -10,11 +10,11 @@ import test_process.{
 }
 import compiler_cli_test_support.{boundedInTree}
 import fs.{mkdirAll, fixtureFiles}
-import string.{contains, endsWith, lines, trimRight}
+import string.{contains, endsWith, lines, trimRight, words}
 import list.{filter}
 import test.{
   Expectation, expectAll, expectEach, expectEqualText, expectTextContainsAll,
-  expectAtLeast, expectFalse, fail, pass
+  expectAtLeast, expectFalse, expectEqual, fail, pass
 }
 
 -- # Shared helpers (the continuation sections reuse these)
@@ -876,3 +876,138 @@ test "diff_compiler_llvm_ffi cells 17-18: a bind clause names the linked symbol,
     ("cell 18 ffi_bind_same_symbol", cell18Same w obj),
     ("cell 18 ffi_bind_symbol_collision", cell18Diff w obj),
   ])))
+
+constantControls : List (String, String, String)
+constantControls = [
+  ("pi", "0.0", "3.141592653589793\n"),
+  ("e", "0.0", "2.718281828459045\n"),
+  ("intMinBound", "\"\"", "-4611686018427387904\n"),
+  ("intMaxBound", "\"\"", "4611686018427387903\n"),
+  ("charMinBound", "\"\"", "0\n"),
+  ("charMaxBound", "\"\"", "1114111\n"),
+]
+
+rawConstantRows : List (String, String, String)
+rawConstantRows =
+  flatMap
+    ((name, seed, expected) =>
+      let value =
+        if stringStartsWith "char" name then "charCode " ++ name else name
+      [
+        (name ++ "-scalar", "\{name} = 42\nmain = \{name}\n", "42\n"),
+        (
+          name ++ "-ref",
+          "\{name} = 42\nmain =\n  let _ = 0.0\n  \{name}\n",
+          "42\n",
+        ),
+        (name ++ "-lexical", "main = let \{name} = 42 in \{name}\n", "42\n"),
+        (
+          name ++ "-builtin",
+          "main =\n  let _ = \{seed}\n  \{value}\n",
+          expected,
+        ),
+      ])
+    constantControls
+
+rawConstantRun : String ->
+  String ->
+  List String ->
+  (String, String, String) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+rawConstantRun w emitter libraries (name, source, expected) = graded (writeFile
+  "\{w}/\{name}.mdk"
+  source) (_ => graded (okOutput
+  "emit raw constant"
+  (boundedVerb emitter ["\{w}/\{name}.mdk"])) (ir => graded (writeFile
+  "\{w}/\{name}.ll"
+  ir) (_ => graded (okOutput
+  "link raw constant"
+  (boundedVerb
+    "clang"
+    (["\{w}/\{name}.ll", "\{w}/rt.o", "-o", "\{w}/\{name}.bin", "-lm"]
+      ++ libraries))) (_ => match boundedVerb "\{w}/\{name}.bin" []
+  Err e => fail e
+  Ok (code, out, err) => expectAll [
+    expectEqual 0 code,
+    expectEqualText expected out,
+    expectEqualText "" err,
+  ]))))
+
+constantGcFlags : <Exec, IO> Result String (List String)
+constantGcFlags = match boundedVerb "pkg-config" ["--libs", "bdw-gc"]
+  Ok (0, out, _) => Ok (words out)
+  _ => match boundedVerb "brew" ["--prefix", "bdw-gc"]
+    Ok (0, out, _) => Ok ["-L" ++ trimRight out ++ "/lib", "-lgc"]
+    _ => Ok ["-lgc"]
+
+typedConstantRun : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+typedConstantRun w name binding = graded (writeFile
+  "\{w}/typed-\{name}.mdk"
+  binding) (_ => expectAll [
+  graded (okOutput
+    "check constant shadow"
+    (medakaEnv [] ["check", "\{w}/typed-\{name}.mdk"])) (_ =>
+    pass),
+  match medakaEnv [] ["run", "\{w}/typed-\{name}.mdk"]
+    Err e => fail e
+    Ok (code, out, err) => expectAll [
+      expectEqual 0 code,
+      expectEqualText "42\n" out,
+      expectEqualText "" err,
+    ],
+])
+
+test "typed check and eval agree on all six global and lexical constant shadows" = withScratchDir
+  (w =>
+    expectEach
+      (flatMap
+        ((name, _, _) => [
+          (
+            name ++ "-global",
+            typedConstantRun
+              w
+              (name ++ "-global")
+              "\{name} = 42\nmain = println \{name}\n",
+          ),
+          (
+            name ++ "-lexical",
+            typedConstantRun
+              w
+              (name ++ "-lexical")
+              "main = let \{name} = 42 in println \{name}\n",
+          ),
+        ])
+        constantControls))
+
+test "raw constant globals and lexical shadows win; unshadowed builtins retain their values" = withScratchDir
+  (w => graded (okOutput
+    "build raw emitter"
+    (medakaEnv [] [
+      "build",
+      "--allow-internal",
+      underRoot "compiler/entries/llvm_emit_main.mdk",
+      "-o",
+      "\{w}/raw-emitter",
+    ])) (_ => graded (okOutput
+    "build raw runtime object"
+    (medakaEnv
+      ["MEDAKA_NO_LTO=1"]
+      [
+        "build",
+        "--emit-rt-obj",
+        "\{w}/rt.o",
+      ])) (_ => graded constantGcFlags (flags =>
+    expectEach
+      (map
+        ((name, source, expected) => (
+          name,
+          rawConstantRun w "\{w}/raw-emitter" flags (
+            name,
+            source,
+            expected,
+          ),
+        ))
+        rawConstantRows)))))

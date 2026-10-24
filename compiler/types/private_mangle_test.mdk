@@ -15,6 +15,18 @@ import types.private_mangle.{
   sanitizeId,
 }
 
+test "same-spelled externs keep their original module through an unrelated module" =
+  let p = [
+    ("a.b", "export\nextern shared : Int -> Int\n"),
+    ("app", "import a.b as A\nmain = A.shared\n"),
+  ]
+  let withU = [("a_b", "export\nextern shared : Int -> Int\n")] ++ p
+  expectAll [
+    expectEqual (Some "$extern$u3:a.b6:shared") (refIn p),
+    expectEqual (refIn p) (refIn withU),
+    expectEqual (refIn p) (refIn p),
+  ]
+
 -- (module id, source) units in dependency order; the last one is the entry.
 parseUnits : List (String, String) -> List (String, List Decl)
 parseUnits units = map (u => (fst u, desugar (parse (snd u)))) units
@@ -74,29 +86,29 @@ lastUnit [] = ("", "")
 lastUnit [u] = u
 lastUnit (_ :: rest) = lastUnit rest
 
-test "extern imports erase their spelling to the canonical host symbol" =
+test "extern imports preserve their declaring source identity" =
   let catalog = "export\nextern intToString : Int -> String\n"
   expectAll [
     expectEqual
-      (Some "intToString")
+      (Some "$extern$u7:runtime11:intToString")
       (refIn [
         ("runtime", catalog),
         ("app", "import runtime as R\nmain = R.intToString\n"),
       ]),
     expectEqual
-      (Some "intToString")
+      (Some "$extern$u7:runtime11:intToString")
       (refIn [
         ("runtime", catalog),
         ("app", "import runtime.{intToString as render}\nmain = render\n"),
       ]),
     expectEqual
-      (Some "intToString")
+      (Some "$extern$u7:runtime11:intToString")
       (refIn [
         ("runtime", catalog),
         ("app", "import runtime.*\nmain = intToString\n"),
       ]),
     expectEqual
-      (Some "intToString")
+      (Some "$extern$u7:runtime11:intToString")
       (refIn [
         ("runtime", catalog),
         ("relay", "export import runtime.{intToString}\n"),
@@ -114,7 +126,9 @@ test "canonical extern imports and same-spelled local functions remain distinct"
     ),
   ]
   expectAll [
-    expectEqual (Some "intToString") (refName "main" (declsOf "app" result)),
+    expectEqual
+      (Some "$extern$u7:runtime11:intToString")
+      (refName "main" (declsOf "app" result)),
     expectEqual
       (Some "app__intToString")
       (refName "app__local" (declsOf "app" result)),
@@ -331,7 +345,7 @@ test "a function carried after a same-named interface method is still offered" =
 
 test "an extern carried ahead of a same-named function keeps the extern" =
   expectEqual
-    (Some "myabs")
+    (Some "$extern$u1:b5:myabs")
     (refIn [
       ("b", "export\nextern myabs : Int -> Int\n"),
       ("c", "export\nmyabs n = n + 1\n"),

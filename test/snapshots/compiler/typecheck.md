@@ -1,5 +1,5 @@
 # META
-source_lines=58100
+source_lines=58081
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -742,6 +742,7 @@ import types.runtime_types.{
   runtimeTypeOf,
 }
 import types.runtime_ops.{arithmeticTag}
+import types.runtime_grants as RuntimeGrants
 import types.program_facts.{ProgramFacts, factsOfElab}
 import types.prelude_interface.{
   PreludeInterface,
@@ -16839,27 +16840,7 @@ copyGrantState st = GrantState {
 -- names.  No other extern takes a grant: a foreign function is not a
 -- parameterized file extern.
 fileGrantExterns : OrdMap (Int, Int)
-fileGrantExterns =
-  omFromPairs
-    [
-      ("readFile", (1, 1)),
-      ("readFileBytes", (1, 1)),
-      ("writeFile", (2, 1)),
-      ("writeFileBytes", (2, 1)),
-      ("writeFileMode", (3, 1)),
-      ("appendFile", (2, 1)),
-      ("fileExists", (1, 1)),
-      ("fileMode", (1, 1)),
-      ("canonicalizePath", (1, 1)),
-      ("listDir", (1, 1)),
-      ("makeDir", (1, 1)),
-      ("removeFile", (1, 1)),
-      ("rename", (2, 2)),
-      ("fsync", (1, 1)),
-      ("removeDir", (1, 1)),
-      ("statFile", (1, 1)),
-    ]
-    omEmpty
+fileGrantExterns = RuntimeGrants.fileGrantExterns
 
 -- A program lowered without elaboration (the prelude-free emitter probes) has no
 -- inference to solve a grant from: each file extern it names is granted the
@@ -58146,6 +58127,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "EvidenceRow" true) (mem "Inner" true) (mem "innerNone" false) (mem "innerOfRoute" false) (mem "innerOr" false) (mem "rowHoleWith" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "addBinderRow" false) (mem "emptyBinderTypes" false) (mem "RuntimeType" true) (mem "runtimeTypeOf" false))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
+(DUse false (UseAlias ("types" "runtime_grants") "RuntimeGrants"))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfElab" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" false) (mem "freezeInterface" false) (mem "thawInterface" false) (mem "seedPreludeInterface" false) (mem "preludeCacheHit" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" true) (mem "heldPreludeCounters" false) (mem "preludeElabFor" false) (mem "withShippedRows" false))))
@@ -61133,7 +61115,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "copyGrantState" (TyFun (TyCon "GrantState") (TyCon "GrantState")))
 (DFunDef false "copyGrantState" ((PVar "st")) (ERecordCreate "GrantState" ((fa "gsOccs" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsOccs") "value"))) (fa "gsGrantOnly" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsGrantOnly") "value"))) (fa "gsTopIds" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsTopIds") "value"))) (fa "gsLocalIds" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsLocalIds") "value"))) (fa "gsMethods" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsMethods") "value"))) (fa "gsBodies" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsBodies") "value"))) (fa "gsLastInst" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsLastInst") "value"))) (fa "gsLastMethodInst" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsLastMethodInst") "value"))) (fa "gsLastStandalone" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsLastStandalone") "value"))) (fa "gsSourceless" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsSourceless") "value"))) (fa "gsTakers" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsTakers") "value"))) (fa "gsFresh" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsFresh") "value"))) (fa "gsBounds" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsBounds") "value"))) (fa "gsValueBounds" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsValueBounds") "value"))) (fa "gsPassingModule" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsPassingModule") "value"))))))
 (DTypeSig false "fileGrantExterns" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "fileGrantExterns" () (EApp (EApp (EVar "omFromPairs") (EListLit (ETuple (ELit (LString "readFile")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "readFileBytes")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "writeFile")) (ETuple (ELit (LInt 2)) (ELit (LInt 1)))) (ETuple (ELit (LString "writeFileBytes")) (ETuple (ELit (LInt 2)) (ELit (LInt 1)))) (ETuple (ELit (LString "writeFileMode")) (ETuple (ELit (LInt 3)) (ELit (LInt 1)))) (ETuple (ELit (LString "appendFile")) (ETuple (ELit (LInt 2)) (ELit (LInt 1)))) (ETuple (ELit (LString "fileExists")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "fileMode")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "canonicalizePath")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "listDir")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "makeDir")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "removeFile")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "rename")) (ETuple (ELit (LInt 2)) (ELit (LInt 2)))) (ETuple (ELit (LString "fsync")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "removeDir")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "statFile")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))))) (EVar "omEmpty")))
+(DFunDef false "fileGrantExterns" () (EVar "RuntimeGrants.fileGrantExterns"))
 (DTypeSig true "grantWholeDomain" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "grantWholeDomain" ((PVar "prog")) (EApp (EApp (EVar "map") (EApp (EVar "mapDeclBodies") (EApp (EVar "wholeDomainExpr") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "interners") "value") "lineage") "lnGrants")))) (EVar "prog")))
 (DTypeSig false "wholeDomainExpr" (TyFun (TyCon "GrantState") (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -67581,6 +67563,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "EvidenceRow" true) (mem "Inner" true) (mem "innerNone" false) (mem "innerOfRoute" false) (mem "innerOr" false) (mem "rowHoleWith" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "addBinderRow" false) (mem "emptyBinderTypes" false) (mem "RuntimeType" true) (mem "runtimeTypeOf" false))))
 (DUse false (UseGroup ("types" "runtime_ops") ((mem "arithmeticTag" false))))
+(DUse false (UseAlias ("types" "runtime_grants") "RuntimeGrants"))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfElab" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" false) (mem "freezeInterface" false) (mem "thawInterface" false) (mem "seedPreludeInterface" false) (mem "preludeCacheHit" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" true) (mem "heldPreludeCounters" false) (mem "preludeElabFor" false) (mem "withShippedRows" false))))
@@ -70568,7 +70551,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "copyGrantState" (TyFun (TyCon "GrantState") (TyCon "GrantState")))
 (DFunDef false "copyGrantState" ((PVar "st")) (ERecordCreate "GrantState" ((fa "gsOccs" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsOccs") "value"))) (fa "gsGrantOnly" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsGrantOnly") "value"))) (fa "gsTopIds" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsTopIds") "value"))) (fa "gsLocalIds" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsLocalIds") "value"))) (fa "gsMethods" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsMethods") "value"))) (fa "gsBodies" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsBodies") "value"))) (fa "gsLastInst" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsLastInst") "value"))) (fa "gsLastMethodInst" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsLastMethodInst") "value"))) (fa "gsLastStandalone" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsLastStandalone") "value"))) (fa "gsSourceless" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsSourceless") "value"))) (fa "gsTakers" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsTakers") "value"))) (fa "gsFresh" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsFresh") "value"))) (fa "gsBounds" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsBounds") "value"))) (fa "gsValueBounds" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsValueBounds") "value"))) (fa "gsPassingModule" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "st") "gsPassingModule") "value"))))))
 (DTypeSig false "fileGrantExterns" (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "fileGrantExterns" () (EApp (EApp (EVar "omFromPairs") (EListLit (ETuple (ELit (LString "readFile")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "readFileBytes")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "writeFile")) (ETuple (ELit (LInt 2)) (ELit (LInt 1)))) (ETuple (ELit (LString "writeFileBytes")) (ETuple (ELit (LInt 2)) (ELit (LInt 1)))) (ETuple (ELit (LString "writeFileMode")) (ETuple (ELit (LInt 3)) (ELit (LInt 1)))) (ETuple (ELit (LString "appendFile")) (ETuple (ELit (LInt 2)) (ELit (LInt 1)))) (ETuple (ELit (LString "fileExists")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "fileMode")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "canonicalizePath")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "listDir")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "makeDir")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "removeFile")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "rename")) (ETuple (ELit (LInt 2)) (ELit (LInt 2)))) (ETuple (ELit (LString "fsync")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "removeDir")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))) (ETuple (ELit (LString "statFile")) (ETuple (ELit (LInt 1)) (ELit (LInt 1)))))) (EVar "omEmpty")))
+(DFunDef false "fileGrantExterns" () (EVar "RuntimeGrants.fileGrantExterns"))
 (DTypeSig true "grantWholeDomain" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "grantWholeDomain" ((PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapDeclBodies") (EApp (EVar "wholeDomainExpr") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "interners") "value") "lineage") "lnGrants")))) (EVar "prog")))
 (DTypeSig false "wholeDomainExpr" (TyFun (TyCon "GrantState") (TyFun (TyCon "Expr") (TyCon "Expr"))))

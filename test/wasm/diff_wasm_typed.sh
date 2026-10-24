@@ -305,7 +305,7 @@ done
 # The demand walk is the emit plan's; its `/` and `%` arms are the divisor demand's
 # one authority, and the emitter's seed is each seeded flag's one writer.
 for required in \
-  'wasmDemandOf : OrdMap (String, (List String, String)) -> List CBind -> List CImplEntry -> (WasmDemand, List String, List JsImport)' \
+  'wasmDemandOf : OrdMap ExternDeclFact -> OrdMap (String, (List String, String)) -> List CBind -> List CImplEntry -> (WasmDemand, List String, List JsImport)' \
   'dBind : DemandScope -> DemandAcc -> CBind -> DemandAcc' \
   'dClause : DemandScope -> DemandAcc -> CClause -> DemandAcc' \
   'dImpl : DemandScope -> DemandAcc -> CImplEntry -> DemandAcc' \
@@ -426,9 +426,9 @@ for required in \
   'leafFileBytesReadP : CProgram' \
   'leafFileBytesWriteP : CProgram' \
   'leafFileBytesU : CProgram' \
-  'CVar "readFileBytes" AGlobal' \
-  'CVar "writeFileBytes" AGlobal' \
-  'CVar "readFile" AGlobal' \
+  'runtimeVar "readFileBytes"' \
+  'runtimeVar "writeFileBytes"' \
+  'runtimeVar "readFile"' \
   'CArray [CLit (LInt 1)]'; do
   has_typed_pin "$required" || {
     echo "FAIL A4-FILEBYTES-HARNESS: missing $required"
@@ -464,8 +464,8 @@ for required in \
   'reemitLeafRuntimeRow "ARGS" leafArgsP leafArgsU "leafArgsIntentionalGap" "missingLeafArgsCensus"' \
   'leafArgsP : CProgram' \
   'leafArgsU : CProgram' \
-  'CVar "args" AGlobal' \
-  'CVar "readFile" AGlobal' \
+  'runtimeVar "args"' \
+  'runtimeVar "readFile"' \
   'CList [CLit (LString "args-nearest")]'; do
   has_typed_pin "$required" || {
     echo "FAIL A3-ARGS-HARNESS: missing $required"
@@ -505,9 +505,9 @@ for required in \
   'reemitLeafRuntimeRow "FLOATSTR" leafFloatStrP leafFloatStrU "leafFloatStrIntentionalGap" "missingLeafFloatStrCensus"' \
   'leafFloatStrP : CProgram' \
   'leafFloatStrU : CProgram' \
-  'CVar "stringToFloat" AGlobal' \
-  'CVar "intToFloat" AGlobal' \
-  'CVar "readFile" AGlobal'; do
+  'runtimeVar "stringToFloat"' \
+  'runtimeVar "intToFloat"' \
+  'runtimeVar "readFile"'; do
   has_typed_pin "$required" || {
     echo "FAIL A2-FLOATSTR-HARNESS: missing $required"
     exit 1
@@ -1833,13 +1833,13 @@ cmp -s "$INPUT_WORK/char-from-code-p1.wat" "$INPUT_WORK/char-from-code-u.wat" &&
 for char_from_code_p in char-from-code-p1.wat char-from-code-p2.wat; do
   [ "$(grep -F '(func $mdk_char_from_code' "$INPUT_WORK/$char_from_code_p" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
     [ "$(grep -F 'call $mdk_char_from_code' "$INPUT_WORK/$char_from_code_p" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-    [ "$(grep -F '(func $mdk_ext_charFromCode' "$INPUT_WORK/$char_from_code_p" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    [ "$(grep -F '(func $mdk_ext_zZ_24_extern_24_r12_3a_charFromCode' "$INPUT_WORK/$char_from_code_p" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
       echo "FAIL H2B11-CHAR-FROM-CODE-P-PRESENCE: helper/direct-call/eta wrapper in $char_from_code_p"
       exit 1
     }
 done
 if grep -F '$mdk_char_from_code' "$INPUT_WORK/char-from-code-u.wat" >/dev/null ||
-   grep -F '$mdk_ext_charFromCode' "$INPUT_WORK/char-from-code-u.wat" >/dev/null; then
+   grep -F '$mdk_ext_zZ_24_extern_24_r12_3a_charFromCode' "$INPUT_WORK/char-from-code-u.wat" >/dev/null; then
   echo "FAIL H2B11-CHAR-FROM-CODE-U-ABSENCE: nearest miss emitted selected helper"
   exit 1
 fi

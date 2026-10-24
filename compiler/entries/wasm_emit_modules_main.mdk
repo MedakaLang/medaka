@@ -1,3 +1,4 @@
+import types.extern_source.{externSourceHeadRows}
 -- MULTI-MODULE WasmGC emit driver (slice W9) — the WasmGC peer of
 -- entries/llvm_emit_modules_main.mdk, and the MVP capstone for the WasmGC
 -- backend.  Where wasm_emit_typed_main.mdk runs the single-file TYPED path with
@@ -92,7 +93,7 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
       ++ constrainedSigNames allDecls
   let ffiRows =
     validateFfiExternTypeNames
-      (checkedFfiExternTypeNamesModules outputs modules2)
+      (externSourceHeadRows (optionOr [] facts.pfExternSources))
   let input =
     makeWasmEmitInputFull
       (runtimeDomain (externDecls runtimeDecls))

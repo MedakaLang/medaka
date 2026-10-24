@@ -6,12 +6,15 @@
 -- No inference and no table construction beyond `evIndexOf`: a leaf that imports
 -- representation modules only, never `types.typecheck`.
 
-import frontend.ast.{EvTable}
+import frontend.ast.{Decl, EvTable}
+import types.extern_source.{
+  ExternSource, ExternHeadRows, ExternProvenance(..), sourceExterns
+}
 import types.route_key.{EvIndex, evIndexOf}
 import types.disposition.{DispositionTable}
 import types.runtime_types.{BinderTypeTable}
 import types.publish.{CheckedProgram(..), EntryOutcome}
-import types.tc_types.{ElabResult, ElabFacts(..)}
+import types.tc_types.{DriveOutputs, ElabResult, ElabFacts(..)}
 
 -- `Option` fields are `None` for a program that was never typechecked, so an
 -- untyped lowering reads absence.
@@ -20,6 +23,7 @@ public export data ProgramFacts = ProgramFacts {
   pfDispositions : Option DispositionTable,
   pfBinders : Option BinderTypeTable,
   pfEntryOutcome : Option EntryOutcome,
+  pfExternSources : Option (List ExternSource),
 }
 
 -- No evidence, no dispositions, no binders: untyped lowering and eval.
@@ -30,6 +34,7 @@ emptyFacts = ProgramFacts {
   pfDispositions = None,
   pfBinders = None,
   pfEntryOutcome = None,
+  pfExternSources = None,
 }
 
 export
@@ -39,6 +44,7 @@ factsOfChecked c = ProgramFacts {
   pfDispositions = Some c.cpDispositions,
   pfBinders = Some c.cpBinders,
   pfEntryOutcome = Some c.cpEntryOutcome,
+  pfExternSources = None,
 }
 
 -- The facts of one elaboration, as it returned them: before `mangleUnitsEv`
@@ -56,7 +62,41 @@ factsOfElabWith table (_, _, _, _, _, dispositions, facts) = ProgramFacts {
   pfDispositions = Some dispositions,
   pfBinders = Some facts.efBinders,
   pfEntryOutcome = Some facts.efEntryOutcome,
+  pfExternSources = None,
 }
+
+export
+factsOfElabSources : (DriveOutputs -> List (String, List Decl) -> ExternHeadRows) ->
+  DriveOutputs ->
+  ElabResult ->
+  EvTable ->
+  ProgramFacts
+factsOfElabSources project outputs (elab@(core, modules, _, _, _, _, _)) table =
+  withCheckedExternSources
+    project
+    outputs
+    core
+    modules
+    (factsOfElabWith table elab)
+
+export
+withCheckedExternSources : (DriveOutputs -> List (String, List Decl) -> ExternHeadRows) ->
+  DriveOutputs ->
+  List Decl ->
+  List (String, List Decl) ->
+  ProgramFacts ->
+  ProgramFacts
+withCheckedExternSources project outputs core modules facts =
+  let sources =
+    flatMap
+      ((mid, decls) =>
+        sourceExterns CheckedSource mid (project outputs [(mid, decls)]) decls)
+      (("core", core) :: modules)
+  { facts | pfExternSources = Some sources }
+
+export
+factsWithEvidence : EvTable -> ProgramFacts -> ProgramFacts
+factsWithEvidence table facts = { facts | pfEvidence = evIndexOf table }
 
 currentFacts : Ref (Option ProgramFacts)
 currentFacts = Ref None

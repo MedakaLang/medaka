@@ -198,6 +198,10 @@ import frontend.ast.{
   fixedWidthMask,
   hostSymbol,
 }
+import ir.extern_types.{ExternDeclFact(..)}
+import ir.extern_lower.{externRuntimeKey}
+import types.runtime_abi_types.{CallableShape(..)}
+import types.private_mangle.{injectiveIdent}
 import ir.core_ir.{
   CProgram(..),
   DeclFacts(..),
@@ -404,6 +408,7 @@ data WTrmcCtx =
 data WDispCtx = WDispOff | WDispOn String String Int (List String)
 
 data WasmEmit = WasmEmit {
+  externFacts : OrdMap ExternDeclFact,
   gapMode : WGapMode,
   gapLog : Ref (List String),
   curGapBind : Ref String,
@@ -489,6 +494,7 @@ data WasmEmit = WasmEmit {
 
 freshWasmEmit : WGapMode -> WasmEmit
 freshWasmEmit mode = WasmEmit {
+  externFacts = omEmpty,
   gapMode = mode,
   gapLog = Ref [],
   curGapBind = Ref "?",
@@ -812,12 +818,12 @@ jsImportForW prog name = match omLookup name (progEmit prog).wJsImports.value
       Err
         (gapLP
           prog
-          "wasm: a non-crossable type reached the lowering of foreign call '\{name}' (compiler/FFI-ABI.md section 1)")
+          "wasm: a non-crossable type reached the lowering of foreign call '\{externDisplayW (progEmit prog) name}' (compiler/FFI-ABI.md section 1)")
     else if imp.result == "Array" then
       Err
         (gapLP
           prog
-          "wasm: foreign call '\{name}' returns 'Array Int', which no FFI target can return (compiler/FFI-ABI.md section 2.4, docs/spec/WASM-SEMANTICS.md section 3.1). Declare the array as a parameter instead and have the binding fill it in place: its elements are copied back after the call returns")
+          "wasm: foreign call '\{externDisplayW (progEmit prog) name}' returns 'Array Int', which no FFI target can return (compiler/FFI-ABI.md section 2.4, docs/spec/WASM-SEMANTICS.md section 3.1). Declare the array as a parameter instead and have the binding fill it in place: its elements are copied back after the call returns")
     else
       Ok imp
   None => match ffiBindsOfW prog name
@@ -825,12 +831,12 @@ jsImportForW prog name = match omLookup name (progEmit prog).wJsImports.value
       Err
         (gapLP
           prog
-          "internal error: the emit plan has no `jsffi` import for the reached extern '\{name}'")
+          "internal error: the emit plan has no `jsffi` import for the reached extern '\{externDisplayW (progEmit prog) name}'")
     _ =>
       Err
         (gapLP
           prog
-          "wasm: the extern '\{name}' has no `js` binding, so the module has nothing to import for it; `check --target` refuses a reached extern with no binding for its target's host (T-TARGET-NO-BINDING)")
+          "wasm: the extern '\{externDisplayW (progEmit prog) name}' has no `js` binding, so the module has nothing to import for it; `check --target` refuses a reached extern with no binding for its target's host (T-TARGET-NO-BINDING)")
 
 -- A user extern applied: with all its arguments, the arguments and then its
 -- wrapper (`jsffiWrapperLines`); otherwise its eta closure, applied.
@@ -858,7 +864,7 @@ emitFfiEtaW prog name = match jsImportForW prog name
   Err gap => gap
   Ok imp =>
     let arity = listLen imp.params
-    let lamName = "$mdk_ffi_" ++ name
+    let lamName = "$mdk_ffi_" ++ injectiveIdent name
     let params = synthParams arity
     let body =
       flatMap argLoadAt (zipIdx params 0)
@@ -1501,13 +1507,17 @@ refuseUnprovidedExternsW emit input plan cp =
             findings
 
 emitProgramCore : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
-emitProgramCore emit input plan cp =
-  emitUniqueProgram emit input plan (uniqueBinders cp)
+emitProgramCore emit input plan (cp@(CProgram _ _ _ _ _ facts)) =
+  emitUniqueProgram
+    { emit | externFacts = facts.factExterns }
+    input
+    plan
+    (uniqueBinders cp)
 
 emitUniqueProgram : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
 emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _ facts)) =
   let _ = refuseUnprovidedExternsW emit input plan cp
-  let _ = setRef emit.useStr (programUsesStr groups)
+  let _ = setRef emit.useStr (programUsesStr facts.factExterns groups)
   -- the plan's demand only turns cells ON; `emit` is born with every cell off
   -- (freshWasmEmit).
   let _ = seedDemandW emit plan.wasmDemand
@@ -1711,13 +1721,14 @@ emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String
 emitProgramGaps input plan cp0 =
   let (CProgram groups ctorArs ctorTypes impls mctx facts) = uniqueBinders cp0
   let emit = freshWasmEmit WGapRecord
+  let emit = { emit | externFacts = facts.factExterns }
   let _ =
     refuseUnprovidedExternsW
       emit
       input
       plan
       (CProgram groups ctorArs ctorTypes impls mctx facts)
-  let _ = setRef emit.useStr (programUsesStr groups)
+  let _ = setRef emit.useStr (programUsesStr facts.factExterns groups)
   let _ = seedDemandW emit plan.wasmDemand
   let _ = if !emit.useFloat then setRef emit.useStr True
   let fnNames = collectFnNames groups
@@ -2011,11 +2022,6 @@ externFamilyW name =
 isWasmEtaExtern : String -> Bool
 isWasmEtaExtern name = isSome (externFamilyW name)
 
-isStrExternFamilyW : String -> Bool
-isStrExternFamilyW name = match externFamilyW name
-  Some WasmStr => True
-  _ => False
-
 -- A declared file bound's grant, thunk body and mode (1 for FileWrite): the type
 -- checker writes `$withFileReadBound grant (_ => body)` around the body of a
 -- binding whose row is closed and names a narrow file authority.  The body is
@@ -2053,41 +2059,47 @@ fileBoundEnterW prog env d g mode keep =
 -- catalog wasm family is `WasmStr` (intToString/putStrLn/stringConcat/…).  Any of
 -- these forces the §3.3 $str rep + the byte-write runtime + ref-mode.  Detected
 -- structurally over every clause body.
-programUsesStr : List CBind -> Bool
-programUsesStr groups = anyBind bindUsesStr groups
+programUsesStr : OrdMap ExternDeclFact -> List CBind -> Bool
+programUsesStr facts groups = anyBind (bindUsesStr facts) groups
 
-bindUsesStr : CBind -> Bool
-bindUsesStr (CBind _ clauses _ _) =
-  anyList (c => exprUsesStr (clauseBodyOf c)) clauses
+bindUsesStr : OrdMap ExternDeclFact -> CBind -> Bool
+bindUsesStr facts (CBind _ clauses _ _) =
+  anyList (c => exprUsesStr facts (clauseBodyOf c)) clauses
 
-exprUsesStr : CExpr -> Bool
-exprUsesStr (CLit (LString _)) = True
-exprUsesStr (CLit (LChar _)) = True
-exprUsesStr (CLit _) = False
-exprUsesStr (CVar x _) = isStrExternFamilyW x
-exprUsesStr (app@(CApp _ _ _)) =
+exprUsesStr : OrdMap ExternDeclFact -> CExpr -> Bool
+exprUsesStr _ (CLit (LString _)) = True
+exprUsesStr _ (CLit (LChar _)) = True
+exprUsesStr _ (CLit _) = False
+exprUsesStr facts (CVar symbol AGlobal) = match externRuntimeKey facts symbol
+  Some key => match wasmFamily key
+    Some WasmStr => True
+    _ => False
+  None => False
+exprUsesStr _ (CVar _ _) = False
+exprUsesStr facts (app@(CApp _ _ _)) =
   let (hd, args) = flattenApp app []
-  headUsesStr hd || anyList exprUsesStr args
-exprUsesStr (CLam _ b) = exprUsesStr b
-exprUsesStr (CBinPrim _ l r _ _) = exprUsesStr l || exprUsesStr r
-exprUsesStr (CUnOp _ x) = exprUsesStr x
-exprUsesStr (CIf c t f) = exprUsesStr c || exprUsesStr t || exprUsesStr f
-exprUsesStr (CLet _ _ a b) = exprUsesStr a || exprUsesStr b
-exprUsesStr (CBlock stmts) = anyList stmtUsesStr stmts
-exprUsesStr (CDecision scrut arms _) =
-  exprUsesStr scrut || anyList (a => exprUsesStr (armBody a)) arms
-exprUsesStr (CMatch scrut arms) =
-  exprUsesStr scrut || anyList (a => exprUsesStr (armBody a)) arms
-exprUsesStr _ = False
+  headUsesStr facts hd || anyList (exprUsesStr facts) args
+exprUsesStr facts (CLam _ b) = exprUsesStr facts b
+exprUsesStr facts (CBinPrim _ l r _ _) =
+  exprUsesStr facts l || exprUsesStr facts r
+exprUsesStr facts (CUnOp _ x) = exprUsesStr facts x
+exprUsesStr facts (CIf c t f) =
+  exprUsesStr facts c || exprUsesStr facts t || exprUsesStr facts f
+exprUsesStr facts (CLet _ _ a b) = exprUsesStr facts a || exprUsesStr facts b
+exprUsesStr facts (CBlock stmts) = anyList (stmtUsesStr facts) stmts
+exprUsesStr facts (CDecision scrut arms _) =
+  exprUsesStr facts scrut || anyList (a => exprUsesStr facts (armBody a)) arms
+exprUsesStr facts (CMatch scrut arms) =
+  exprUsesStr facts scrut || anyList (a => exprUsesStr facts (armBody a)) arms
+exprUsesStr _ _ = False
 
-stmtUsesStr : CStmt -> Bool
-stmtUsesStr (CSExpr e) = exprUsesStr e
-stmtUsesStr (CSLet _ _ e) = exprUsesStr e
-stmtUsesStr _ = False
+stmtUsesStr : OrdMap ExternDeclFact -> CStmt -> Bool
+stmtUsesStr facts (CSExpr e) = exprUsesStr facts e
+stmtUsesStr facts (CSLet _ _ e) = exprUsesStr facts e
+stmtUsesStr _ _ = False
 
-headUsesStr : CExpr -> Bool
-headUsesStr (CVar fn _) = isStrExternFamilyW fn
-headUsesStr h = exprUsesStr h
+headUsesStr : OrdMap ExternDeclFact -> CExpr -> Bool
+headUsesStr facts h = exprUsesStr facts h
 
 -- Seeds the demand cells from the plan's walk of the program (`wasmDemandOf`).
 seedDemandW : WasmEmit -> WasmDemand -> Unit
@@ -2675,13 +2687,20 @@ emitVarI32 emit fnNames valNames env x =
     (["global.get $" ++ gname x], WInt)
   else if contains x fnNames then
     (["call $" ++ gname x], WInt)
-  else if isUnprovidedOn WasmBackend x then
-    (unprovidedExternW emit x, WInt)
+  else if isUnprovidedOn
+    WasmBackend
+    (optionOr "" (externRuntimeKey emit.externFacts x)) then
+    (
+      unprovidedExternW
+        emit
+        (optionOr "" (externRuntimeKey emit.externFacts x)),
+      WInt,
+    )
   else
     gapUnboundLTy
       emit
       ("unbound variable '"
-        ++ x
+        ++ externDisplayW emit x
         ++ "' (scalar mode: not a local, global value, or known function)")
 
 -- Sign-extend the i64 on the stack from bit 62 — the `(x << 1) >> 1` pair that
@@ -3586,7 +3605,8 @@ emitRefMain prog plan groups = match findMain (progEmit prog) groups
 -- body is.  Following a CAF removes it from the map, so a cyclic chain ends False.
 mainBodyIsUnit : Prog -> OrdMap CExpr -> CExpr -> Bool
 mainBodyIsUnit prog _ (CApp f _ _) = match appHead f
-  CVar fn _ => isUnitExtern fn || returnStamp prog [] fn == RTUnit
+  CVar fn _ =>
+    isUnitExtern (runtimeNameW prog fn) || returnStamp prog [] fn == RTUnit
   -- `println`/`print` are `Display a =>` constrained → the dict-pass rewrites the
   -- head to a CDict carrying the routes; recover the bare name.
   CDict fn _ => returnStamp prog [] fn == RTUnit
@@ -5462,7 +5482,7 @@ emitVarRefPlain prog env d x =
     ["i32.const 0", "ref.i31"]
   else if x == "otherwise" then
     ["i32.const 1", "ref.i31"]
-  else if x == "charMinBound" then
+  else if runtimeNameW prog x == "charMinBound" then
     -- W9: builtin Char bounds fit in an i31 → emit directly.  These are the RAW
     -- codepoints (0 / 0x10FFFF), because an i31 payload is UNTAGGED — the same rep as
     -- `emitLitRef (LChar _)` and the `True`/`False` arms above, and what `charCode`
@@ -5472,15 +5492,15 @@ emitVarRefPlain prog env d x =
     -- into an untagged i31 leaks the tag out as a value (#373 — `charCode charMaxBound`
     -- printed 2228223, and range checks against the bounds were silently wrong).
     ["i32.const 0", "ref.i31"]
-  else if x == "charMaxBound" then
+  else if runtimeNameW prog x == "charMaxBound" then
     ["i32.const 1114111", "ref.i31"]
-  else if x == "pi" then
+  else if runtimeNameW prog x == "pi" then
     -- W8b: the Float math constants pi/e are boxed (struct $float) — the SAME decimal
     -- text the LLVM oracle boxes (3.141592653589793 / 2.718281828459045).
     ["f64.const 3.141592653589793", "struct.new $float"]
-  else if x == "e" then
+  else if runtimeNameW prog x == "e" then
     ["f64.const 2.718281828459045", "struct.new $float"]
-  else if x == "intMaxBound" then
+  else if runtimeNameW prog x == "intMaxBound" then
     -- P1: builtin Int bounds.  These must not be a bare `unreachable` trap-stub, on the
     -- STALE grounds that a 64-bit bound "overflows i31" and so has no
     -- wasm rep: layer-17 §2.1 gave ref-mode the `$boxint` i64 box, and every int
@@ -5497,7 +5517,7 @@ emitVarRefPlain prog env d x =
     -- — again as literal STRINGS, for exactly the same self-host-overflow reason (they
     -- are 2^62-1 / -2^62, at the boundary of the Int the compiler itself computes in).
     ["i64.const 4611686018427387903", "call $mdk_box_int"]
-  else if x == "intMinBound" then
+  else if runtimeNameW prog x == "intMinBound" then
     ["i64.const -4611686018427387904", "call $mdk_box_int"]
   else if isCtor prog x then
     if ctorArity prog x == 0 then
@@ -5513,15 +5533,15 @@ emitVarRefPlain prog env d x =
     -- W9: a bare prelude reference synthesized post-mangle (string-interp / `/=`) →
     -- resolve to its `core__`-mangled def and emit the closure wrapper for it.
     emitVarRef prog env d (canonFn prog x)
-  else if isWasmEtaExtern x then
+  else if isWasmEtaExtern (runtimeNameW prog x) then
     -- W9: a str/leaf extern referenced as a VALUE (point-free / passed as an arg) —
     -- build an eta closure wrapping a lifted `$mdk_ext_<name>` that calls the extern
     -- (peer of the LLVM emitExternEtaClosure).  env = [] (externs capture nothing).
     emitExternEtaClosure prog x
   else if isFfiExternW prog x then
     emitFfiEtaW prog x
-  else if isUnprovidedOn WasmBackend x then
-    unprovidedExternW (progEmit prog) x
+  else if isUnprovidedOn WasmBackend (runtimeNameW prog x) then
+    unprovidedExternW (progEmit prog) (runtimeNameW prog x)
   else
     gapUnboundLP
       prog
@@ -5531,8 +5551,8 @@ emitVarRefPlain prog env d x =
 -- locals and emits the extern call, then build the closure struct at the use site.
 emitExternEtaClosure : Prog -> String -> List String
 emitExternEtaClosure prog name =
-  let arity = externArityW name
-  let lamName = "$mdk_ext_" ++ name
+  let arity = externArityW (runtimeNameW prog name)
+  let lamName = "$mdk_ext_" ++ injectiveIdent name
   let _ = noteFuncRef (progEmit prog) lamName
   let _ =
     addLiftedNamed
@@ -5573,12 +5593,13 @@ emitExternEtaDefine prog lamName name arity =
   -- the eta declares its own fixed scratch set (arrayEtaScratchLocals), so its body's
   -- W7 references must not land in the function whose codegen reached it.
   let w7Outer = w7ScopeOpen (progEmit prog)
-  let family = externFamilyW name
+  let key = runtimeNameW prog name
+  let family = externFamilyW key
   let call = match family
-    Some WasmStr => emitStrExternRef prog params 0 name argVars
-    Some WasmArray => emitArrayExternRef prog params 0 name argVars
-    Some WasmByteBlock => emitByteBlockExternRef prog params 0 name argVars
-    _ => emitLeafExternRef prog params 0 name argVars
+    Some WasmStr => emitStrExternRef prog params 0 key argVars
+    Some WasmArray => emitArrayExternRef prog params 0 key argVars
+    Some WasmByteBlock => emitByteBlockExternRef prog params 0 key argVars
+    _ => emitLeafExternRef prog params 0 key argVars
   let _ = w7ScopeClose (progEmit prog) w7Outer
   let arrayScratch = match family
     Some WasmArray => arrayEtaScratchLocals
@@ -6304,7 +6325,7 @@ returnStamp prog env fn = match varRow prog env fn
     if contains fn env || progFnMemberW prog fn || progValMemberW prog fn then
       RTValue
     else
-      externResultStamp fn
+      externResultStamp (runtimeNameW prog fn)
 
 -- The result type of the runtime extern [fn], for the externs whose result
 -- decides how a value is printed or computed on.  RTValue where it is none of
@@ -6347,13 +6368,13 @@ externResultStamp fn =
 -- return stamp.  RTValue where nothing states it.
 cexprStamp : Prog -> List String -> CExpr -> RuntimeType
 cexprStamp _ _ (CLit l) = litRuntimeType l
-cexprStamp prog env (CVar "pi" _) =
-  if contains "pi" env then varStamp prog env "pi" else RTFloat
-cexprStamp prog env (CVar "e" _) =
-  if contains "e" env then varStamp prog env "e" else RTFloat
 cexprStamp _ _ (CVar "True" _) = RTBool
 cexprStamp _ _ (CVar "False" _) = RTBool
-cexprStamp prog env (CVar x _) = varStamp prog env x
+cexprStamp prog env (CVar x _) =
+  if runtimeNameW prog x == "pi" || runtimeNameW prog x == "e" then
+    RTFloat
+  else
+    varStamp prog env x
 cexprStamp prog env (CBinPrim op l r tag _) =
   if isCmpOp op then
     RTBool
@@ -6613,17 +6634,20 @@ emitAppRef prog env d app =
         emitIndirectApp prog env d hd args CallValueW
       else if isCtor prog f then
         emitCtorApp prog env d f args
-      else if f == "Ref" then
+      else if runtimeNameW prog f0 == "Ref" then
         emitRefBoxNew prog env d args
-      else if f == "setRef" then
+      else if runtimeNameW prog f0 == "setRef" then
         emitRefBoxSet prog env d args
       else if isFfiExternW prog f then
         emitFfiAppW prog env d hd f args CallValueW
-      else match externFamilyW f
-        Some WasmStr => emitStrExternRef prog env d f args
-        Some WasmLeaf => emitLeafExternRef prog env d f args
-        Some WasmArray => emitArrayExternRef prog env d f args
-        Some WasmByteBlock => emitByteBlockExternRef prog env d f args
+      else match externFamilyW (runtimeNameW prog f0)
+        Some WasmStr => emitStrExternRef prog env d (runtimeNameW prog f0) args
+        Some WasmLeaf =>
+          emitLeafExternRef prog env d (runtimeNameW prog f0) args
+        Some WasmArray =>
+          emitArrayExternRef prog env d (runtimeNameW prog f0) args
+        Some WasmByteBlock =>
+          emitByteBlockExternRef prog env d (runtimeNameW prog f0) args
         _ =>
           if progFnMemberW prog f && isExactCall mode then
             let argInstrs = flatMap (a => emitRefExpr prog env d a) args
@@ -9022,7 +9046,9 @@ emitTailCallW prog env app =
         emitRefExpr prog env 0 app ++ ["return"]
       else if isFfiExternW prog f then
         emitFfiAppW prog env 0 hd f args CallTailW
-      else if f == "Ref" || f == "setRef" || isSome (externFamilyW f) then
+      else if runtimeNameW prog f0 == "Ref"
+        || runtimeNameW prog f0 == "setRef"
+        || isSome (externFamilyW (runtimeNameW prog f0)) then
         emitAppRef prog env 0 app ++ ["return"]
       else if progFnMemberW prog f && isExactCall mode then
         flatMap (a => emitRefExpr prog env 0 a) args
@@ -12126,3 +12152,12 @@ plannedValBinds plan groups =
       Some b => b
       None => panic ("internal error: global init: membership: " ++ n))
     plan.globalInit.eagerOrder
+
+runtimeNameW : Prog -> String -> String
+runtimeNameW prog symbol =
+  optionOr "" (externRuntimeKey (progEmit prog).externFacts symbol)
+
+externDisplayW : WasmEmit -> String -> String
+externDisplayW emit symbol = match omLookup symbol emit.externFacts
+  Some fact => fact.declaredName
+  None => symbol

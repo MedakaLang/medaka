@@ -5,6 +5,8 @@
 import backend.global_plan.{GlobalInitPlan, planGlobals}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{Lit(..), Pat(..), hostRows}
+import ir.extern_types.{ExternDeclFact}
+import ir.extern_lower.{externRuntimeKey, externHeadRows}
 import ir.core_ir.{
   CProgram(..),
   EntryFact(..),
@@ -182,7 +184,8 @@ planOver target reach ffiRows prog =
   let (demand, keys, js) = match target
     WasmBackend =>
       wasmDemandOf
-        (omFromPairs (reverseL (hostRows "js" ffiRows)) omEmpty)
+        facts.factExterns
+        (omFromPairs (reverseL (hostRows "js" (externHeadRows prog))) omEmpty)
         groups
         impls
     LlvmBackend => (noDemand, [], [])
@@ -397,13 +400,15 @@ data DemandScope = DemandScope {
   topFns : OrdMap Unit,
   topVals : OrdMap Unit,
   jsBinds : OrdMap (String, (List String, String)),
+  externFacts : OrdMap ExternDeclFact,
 }
 
-wasmDemandOf : OrdMap (String, (List String, String)) ->
+wasmDemandOf : OrdMap ExternDeclFact ->
+  OrdMap (String, (List String, String)) ->
   List CBind ->
   List CImplEntry ->
   (WasmDemand, List String, List JsImport)
-wasmDemandOf jsBinds groups impls =
+wasmDemandOf externFacts jsBinds groups impls =
   let start = DemandAcc {
     seenUses = [],
     seenKeys = omEmpty,
@@ -421,6 +426,7 @@ wasmDemandOf jsBinds groups impls =
         omEmpty,
     topVals = omFromNames (map bindName (filterList isValBind tops)) omEmpty,
     jsBinds = jsBinds,
+    externFacts = externFacts,
   }
   let acc = walkEach (dImpl sc) (walkEach (dBind sc) start groups) impls
   (
@@ -482,7 +488,13 @@ noteName acc name =
 -- extern
 noteExtern : DemandScope -> DemandAcc -> String -> DemandAcc
 noteExtern sc acc name = match omLookup name sc.jsBinds
-  None => noteName acc name
+  None => match externRuntimeKey sc.externFacts name
+    Some key => noteName acc key
+    None =>
+      if name == "$withFileReadBound" || name == "$withFileWriteBound" then
+        noteFileBound acc
+      else
+        acc
   Some (js, (params, result)) =>
     if omHasKey name acc.seenJs then
       acc
@@ -635,7 +647,7 @@ dAppHead : DemandScope -> DemandAcc -> CExpr -> DemandAcc
 dAppHead sc acc (CVar f _) =
   if isLocal sc f || not (omHasKey f sc.topFns) && isCoreFn sc f then
     acc
-  else if f == "setRef" then
+  else if externRuntimeKey sc.externFacts f == Some "setRef" then
     noteRefBox acc
   else
     noteExtern sc acc f

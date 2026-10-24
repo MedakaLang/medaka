@@ -1,3 +1,4 @@
+import types.extern_source.{externSourceHeadRows}
 -- MULTI-MODULE LLVM emit driver — the emit analog of eval_typed_modules_main.mdk
 -- and the multi-module counterpart of llvm_emit_typed_main.mdk.  It is the
 -- emitting half of the multi-module emit+RUN gate (test/diff_compiler_llvm_modules.sh),
@@ -160,7 +161,7 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
       preludeImpls
       (srcNameFromArgs (args ()))
       (validateFfiExternTypeNames
-        (checkedFfiExternTypeNamesModules outputs modules2))
+        (externSourceHeadRows (optionOr [] facts.pfExternSources)))
   let input = withNoInlineFns (noInlineFnNames allDecls) base
   let statsOn = statsEnabled ()
   let cp = lowerProgramEmitPinnedWith facts preludeImpls allDecls
