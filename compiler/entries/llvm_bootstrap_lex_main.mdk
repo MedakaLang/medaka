@@ -1,3 +1,4 @@
+import types.extern_source.{externSourceHeadRows}
 -- BOOTSTRAP (B1) emit driver — the gap-TOLERANT multi-module emitter behind the
 -- FIRST native self-compile slice (test/bootstrap_lex.sh).  It is a near-clone of
 -- llvm_emit_modules_main.mdk (runs the REAL emitProgram so the native binary can
@@ -38,14 +39,13 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
   methodIfaceTable,
   ctorFieldTypeNames,
-  externArities,
   validateFfiExternTypeNames,
 }
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 
 import types.private_mangle.{mangleUnitsEv}
-import types.program_facts.{factsOfElabWith}
+import types.program_facts.{factsOfElabSources, factsWithEvidence}
 import entries.entry_support.{driveModules}
 
 export
@@ -62,26 +62,34 @@ runEmit inputs runtimeDecls coreDecls modules =
   let (elab, _, outputs) =
     elaborateModulesWithReport inputs False None runtimeDecls coreDecls modules
   let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let externFacts =
+    factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let allDecls = coreD ++ flatMap snd modules2
   let _ =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
+  let _ =
+    validateFfiExternTypeNames
+      (externSourceHeadRows (optionOr [] externFacts.pfExternSources))
   let input =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
-      (externArities runtimeDecls)
       0
       []
       []
       ""
-      (validateFfiExternTypeNames
-        (checkedFfiExternTypeNamesModules outputs modules2))
-  let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
-  let (text, _) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
+
+  let cp =
+    lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
+  let (text, _) =
+    emitProgramRecord
+      input
+      (buildEmitPlan LlvmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
+      cp
   putStr text
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, on the trees `elaborateModules` has already produced (#2809 put the

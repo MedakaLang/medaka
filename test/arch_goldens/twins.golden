@@ -49,7 +49,6 @@ emitValueCmp
 emitVar
 emitVariantUpdate
 entrySuperCount
-externArity
 foldImplsByMethod
 groupImplsByMethod
 headTagForKey
@@ -77,6 +76,7 @@ paramEnv
 ptag
 reservedCtorArity
 reservedCtorsOfType
+runtimeName
 sitePacked
 staticEntryDictRoutes
 strBytes

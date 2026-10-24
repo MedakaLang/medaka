@@ -1,0 +1,130 @@
+import frontend.ast.{Decl(..), ExternDecl(..), externBindings}
+import types.runtime_abi_types.{CallableShape(..)}
+import types.runtime_abi.{runtimeAbi, sourceShape}
+import support.ordmap.{omEmpty, omFromPairs, omLookup}
+import support.util.{listLen}
+import string.{byteLength}
+import array as A
+
+-- Runtime bindings carry catalog identity; foreign bindings use host declarations.
+-- lint-disable-next-line rule-clone-type
+public export data ExternBindingKind =
+  | ForeignBinding
+  | RuntimeBinding String
+  deriving (Eq, Debug)
+
+public export data ExternProvenance =
+  | CheckedSource
+  | RawSource
+  | NoSourceSignature
+  deriving (Eq, Debug)
+
+public export data ExternSource = ExternSource {
+  sourceSymbol : String,
+  sourceModule : String,
+  sourceName : String,
+  sourceBinding : ExternBindingKind,
+  sourceHosts : List (String, String),
+  sourceAbi : Option CallableShape,
+  sourceProvenance : ExternProvenance,
+} deriving (Eq, Debug)
+
+export type ExternHeadRows = List (String, (List (String, String), (List String, String)))
+
+lenKey : String -> String
+lenKey s = "\{intToString (byteLength s)}:\{s}"
+
+export
+runtimeExternSymbol : String -> String
+runtimeExternSymbol key = "$extern$r" ++ lenKey key
+
+export
+sourceExternSymbol : String -> String -> String
+sourceExternSymbol mid name = "$extern$u\{lenKey mid}\{lenKey name}"
+
+export
+sourceExterns : ExternProvenance ->
+  String ->
+  ExternHeadRows ->
+  List Decl ->
+  List ExternSource
+sourceExterns provenance mid heads decls =
+  let index = omFromPairs heads omEmpty
+  map
+    (ed =>
+      let raw = sourceShape ed.edTy
+      let shape = match omLookup ed.edName index
+        Some (_, (params, ret)) => { raw |
+          writtenValueArity = listLen params,
+          loweredCoreArity = listLen params,
+          parameterHeads = params,
+          resultHead = ret,
+        }
+        None => raw
+      let (kind, abi) = match runtimeAbi ed.edName
+        Some canonical => (RuntimeBinding ed.edName, canonical)
+        None => (ForeignBinding, shape)
+      ExternSource {
+        sourceSymbol = sourceExternSymbol mid ed.edName,
+        sourceModule = mid,
+        sourceName = ed.edName,
+        sourceBinding = kind,
+        sourceHosts = map (b => (b.ebHost, b.ebSymbol)) (externBindings ed),
+        sourceAbi = Some abi,
+        sourceProvenance = provenance,
+      })
+    (externRecords decls)
+
+externRecords : List Decl -> List ExternDecl
+externRecords [] = []
+externRecords ((DExtern ed) :: rest) = ed :: externRecords rest
+externRecords ((DAttrib _ inner) :: rest) = externRecords (inner :: rest)
+externRecords (_ :: rest) = externRecords rest
+
+export
+externSourceHeadRows : List ExternSource -> ExternHeadRows
+externSourceHeadRows sources =
+  flatMap
+    (s => match (s.sourceBinding, s.sourceAbi)
+      (ForeignBinding, Some shape) => [
+        (
+          s.sourceSymbol,
+          (s.sourceHosts, (shape.parameterHeads, shape.resultHead)),
+        ),
+      ]
+      _ => [])
+    sources
+
+export
+externDisplayName : String -> Option String
+externDisplayName symbol =
+  if stringStartsWith "$extern$u" symbol then
+    let bytes = stringToUtf8Bytes (stringSlice 9 (stringLength symbol) symbol)
+    match readLenKey bytes
+      Some (_, rest) => map fst (readLenKey rest)
+      None => None
+  else if stringStartsWith "$extern$r" symbol then
+    map
+      fst
+      (readLenKey
+        (stringToUtf8Bytes (stringSlice 9 (stringLength symbol) symbol)))
+  else
+    None
+
+readLenKey : Array Int -> Option (String, Array Int)
+readLenKey bytes = readLenDigits bytes 0 0
+
+readLenDigits : Array Int -> Int -> Int -> Option (String, Array Int)
+readLenDigits bytes i n
+  | i >= arrayLength bytes = None
+  | otherwise =
+    let b = arrayGetUnsafe i bytes
+    if b == 58 && i > 0 && n <= arrayLength bytes - i - 1 then
+      Some (
+        stringFromUtf8Bytes (A.sliceClamped (i + 1) (i + 1 + n) bytes),
+        A.drop (i + 1 + n) bytes,
+      )
+    else if b >= 48 && b <= 57 then
+      readLenDigits bytes (i + 1) (n * 10 + b - 48)
+    else
+      None

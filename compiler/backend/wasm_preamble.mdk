@@ -38,6 +38,7 @@
 -- deliberately leaves the `(module` paren OPEN.
 
 import support.util.{anyList, contains, joinWith}
+import types.private_mangle.{injectiveIdent}
 import backend.emit_plan.{JsImport(..)}
 
 export
@@ -2185,11 +2186,11 @@ jsffiImportLine imp =
 -- program defines under its own name can share either.
 export
 jsffiImportId : String -> String
-jsffiImportId name = "jsffi.import.\{name}"
+jsffiImportId name = "jsffi.import.\{injectiveIdent name}"
 
 export
 jsffiWrapperId : String -> String
-jsffiWrapperId name = "jsffi.wrap.\{name}"
+jsffiWrapperId name = "jsffi.wrap.\{injectiveIdent name}"
 
 -- `<jsName>:<P1>,...,<Pn>-><R>`, each head as declared.
 export

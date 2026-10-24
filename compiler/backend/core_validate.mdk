@@ -70,6 +70,9 @@
 -- would not lower the extern there.  The program checked is the one the
 -- emitter received, after any reachability filter its entry ran.
 
+import ir.extern_types.{ExternDeclFact(..), ExternUse(..)}
+import ir.extern_uses.{collectExternUses}
+import ir.extern_lower.{externRuntimeKey}
 import ir.core_ir.{
   CExpr(..),
   CField(..),
@@ -121,6 +124,9 @@ import frontend.ast.{
   isFixedIntHead, isBoxed64Head
 }
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
+import backend.extern_requirements.{
+  validateExternRequirements, requirementHostRows
+}
 import backend.global_plan.{validateGlobalInit}
 import backend.emit_target.{Backend(..), backendName}
 import backend.emit_plan.{EmitPlan, indexMethodResults, lookupMethodResult}
@@ -172,7 +178,7 @@ validateForEmission : Backend ->
   CProgram ->
   EmissionValidation
 validateForEmission backend domain plan cp =
-  match emissionDefects backend plan cp
+  match emissionDefects backend domain plan cp
     [] =>
       let names = match domain
         PreludeFreeRuntime => []
@@ -188,8 +194,12 @@ validateForEmission backend domain plan cp =
         }
     bad => EmissionValidation { defects = bad, externFindings = [] }
 
-emissionDefects : Backend -> EmitPlan -> CProgram -> List CoreDefect
-emissionDefects backend plan cp =
+emissionDefects : Backend ->
+  RuntimeExternDomain ->
+  EmitPlan ->
+  CProgram ->
+  List CoreDefect
+emissionDefects backend domain plan cp =
   if backendName plan.target /= backendName backend then
     [
       CoreDefect
@@ -200,6 +210,10 @@ emissionDefects backend plan cp =
     None => match dictTagCollision backend cp
       Some message => [CoreDefect message]
       None => firstShapeDefect [
+        () => validateExternMetadata cp,
+        () =>
+          validateExternRequirements backend domain cp plan.externRequirements,
+        () => validateRequirementProjection backend plan,
         () => validateGlobalInit cp plan.lazyGlobals plan.globalInit,
         () => validateRecords cp,
         () => validateBinderStamps cp,
@@ -218,6 +232,27 @@ firstShapeDefect [] = []
 firstShapeDefect (check :: rest) = match check ()
   [] => firstShapeDefect rest
   bad => [CoreDefect ("internal error: " ++ joinWith "\n" bad)]
+
+validateRequirementProjection : Backend -> EmitPlan -> List String
+validateRequirementProjection WasmBackend plan =
+  if map
+      (imp => (imp.medakaName, (imp.jsName, (imp.params, imp.result))))
+      plan.jsImports
+    == requirementHostRows plan.externRequirements then
+    []
+  else
+    ["extern-import-mismatch"]
+validateRequirementProjection _ _ = []
+
+validateExternMetadata : CProgram -> List String
+validateExternMetadata (cp@(CProgram _ _ _ _ _ facts)) =
+  flatMap
+    (use => match omLookup use.useSymbol facts.factExterns
+      None => ["unknown-extern-declaration: " ++ use.useSymbol]
+      Some fact => match fact.callableShape
+        None => ["missing-extern-abi: " ++ fact.symbol]
+        Some _ => [])
+    (collectExternUses cp)
 
 export
 findingExtern : ExternFinding -> String
@@ -809,6 +844,7 @@ data EvFacts = EvFacts {
   efRequires : OrdMap Int,
   efSupers : OrdMap Int,
   efMethods : OrdMap (OrdMap MethodResultFact),
+  efExterns : OrdMap ExternDeclFact,
 }
 
 walkProgram : Backend -> CProgram -> Walk
@@ -826,6 +862,7 @@ walkProgram backend (prog@(CProgram groups ctors _ impls mctx facts)) =
         efRequires = omFromPairs facts.factRequires omEmpty,
         efSupers = omFromPairs facts.factSupers omEmpty,
         efMethods = indexMethodResults facts.factMethodResults,
+        efExterns = facts.factExterns,
       }
       ""
   walkImpls ctx impls (walkBinds ctx groups noFindings)
@@ -1249,10 +1286,12 @@ headText (CLam _ _) = "a lambda"
 headText _ = "an expression"
 
 noteVar : Ctx -> CallScope -> String -> Walk -> Walk
-noteVar (Ctx backend top _ _ _ _ binding) scope x (w@(Walk seen found bad scalar calls ctxs evs results)) =
+noteVar (Ctx backend top _ _ _ facts binding) scope x (w@(Walk seen found bad scalar calls ctxs evs results)) =
   if omHasKey x scope || omHasKey x seen then
     w
-  else match unprovidedOn backend x
+  else match (unprovidedOn
+    backend
+    (optionOr "" (externRuntimeKey facts.efExterns x)))
     None => w
     Some (kind, why) =>
       if isProgramName top x then
@@ -1260,7 +1299,13 @@ noteVar (Ctx backend top _ _ _ _ binding) scope x (w@(Walk seen found bad scalar
       else
         Walk
           (omInsert x () seen)
-          (ExternFinding x backend kind why binding :: found)
+          (ExternFinding
+              (optionOr x (externRuntimeKey facts.efExterns x))
+              backend
+              kind
+              why
+              binding
+            :: found)
           bad
           scalar
           calls

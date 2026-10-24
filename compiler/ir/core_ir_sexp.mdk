@@ -9,6 +9,10 @@
 -- Sub-serializers are all exported so a future round-trip parser can import
 -- them for cross-checking (parse-back → re-dump → assert identical output).
 
+import ir.extern_types.{ExternDeclFact(..)}
+import types.extern_source.{ExternBindingKind(..), ExternProvenance(..)}
+import types.runtime_abi_types.{CallableShape(..)}
+import support.ordmap.{omKeys, omLookup}
 import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..)}
 import ir.core_ir.{
   CExpr(..),
@@ -357,27 +361,43 @@ tablesSexp rows facts None = match (
   facts.factSupers,
   facts.factMethodResults,
   facts.factEntryOutcome,
+  omKeys facts.factExterns,
 )
-  ([], [], [], [], None) => []
-  (_, [], [], [], None) => [slist (map methodContextPairSexp rows)]
+  ([], [], [], [], None, []) => []
+  (_, [], [], [], None, []) => [slist (map methodContextPairSexp rows)]
   _ => [slist (map methodContextPairSexp rows), declFactsSexp facts]
 
 declFactsSexp : DeclFacts -> String
 declFactsSexp facts =
-  node
-    "facts"
-    ([
-        slist (map (factPairSexp "rq") facts.factRequires),
-        slist (map (factPairSexp "sp") facts.factSupers),
-      ]
-      ++ (if isEmpty facts.factMethodResults
-        && isNone facts.factEntryOutcome then
-        []
-      else
-        [slist (map methodResultSexp facts.factMethodResults)])
-      ++ (match facts.factEntryOutcome
-        Some outcome => [entryOutcomeSexp outcome]
-        None => []))
+  if not (isEmpty (omKeys facts.factExterns)) then
+    node "facts" [
+      slist (map (factPairSexp "rq") facts.factRequires),
+      slist (map (factPairSexp "sp") facts.factSupers),
+      slist (map methodResultSexp facts.factMethodResults),
+      optionOr "none" (map entryOutcomeSexp facts.factEntryOutcome),
+      node
+        "externs"
+        (map
+          (key => match omLookup key facts.factExterns
+            Some fact => externSexp fact
+            None => panic "extern inventory lost a row")
+          (omKeys facts.factExterns)),
+    ]
+  else
+    node
+      "facts"
+      ([
+          slist (map (factPairSexp "rq") facts.factRequires),
+          slist (map (factPairSexp "sp") facts.factSupers),
+        ]
+        ++ (if isEmpty facts.factMethodResults
+          && isNone facts.factEntryOutcome then
+          []
+        else
+          [slist (map methodResultSexp facts.factMethodResults)])
+        ++ (match facts.factEntryOutcome
+          Some outcome => [entryOutcomeSexp outcome]
+          None => []))
 
 entryOutcomeSexp : EntryFact -> String
 entryOutcomeSexp outcome = node "entry" [
@@ -471,3 +491,29 @@ binderRowSexp byOrd (d, BinderId _ n) = match BM.get n byOrd
             ++ ret
             ++ signed),
       ]
+
+externSexp : ExternDeclFact -> String
+externSexp fact = node "extern" [
+  escStr fact.symbol,
+  escStr fact.originModule,
+  escStr fact.declaredName,
+  match fact.bindingKind
+    ForeignBinding => "foreign"
+    RuntimeBinding key => node "runtime" [escStr key],
+  slist
+    (map ((host, sym) => slist [escStr host, escStr sym]) fact.hostBindings),
+  optionOr "missing-abi" (map shapeSexp fact.callableShape),
+  match fact.provenance
+    CheckedSource => "checked"
+    RawSource => "raw"
+    NoSourceSignature => "no-source-signature",
+]
+
+shapeSexp : CallableShape -> String
+shapeSexp shape = node "abi" [
+  intToString shape.writtenValueArity,
+  intToString shape.loweredCoreArity,
+  slist (map escStr shape.parameterHeads),
+  escStr shape.resultHead,
+  escStr shape.canonicalSignature,
+]

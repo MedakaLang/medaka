@@ -1,3 +1,5 @@
+import types.extern_source.{externSourceHeadRows}
+import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- Single-file per-stage timing driver for the self-hosted front-end.
 -- Times each pipeline stage individually so the cost of each is visible
 -- rather than buried in a composite (e.g. elaborate = mark + typecheck).
@@ -54,13 +56,12 @@ import ir.core_ir_lower.{
   lowerProgramEmitWith,
   methodIfaceTable,
   ctorFieldTypeNames,
-  externArities,
   validateFfiExternTypeNames,
 }
 import ir.dce.{dceFilter}
 import types.tc_types.{DriveOutputs}
 import types.private_mangle.{mangleUnits, mangleUnitsEv}
-import types.program_facts.{factsOfElabWith}
+import types.program_facts.{factsOfElabSources, factsWithEvidence}
 import backend.emit_plan.{buildEmitPlan}
 
 import backend.llvm_emit.{emitProgram, makeEmitInput}
@@ -69,7 +70,7 @@ import backend.llvm_emit.{emitProgram, makeEmitInput}
 -- names above. Aliased on import, exactly as tools/snapshot.mdk does for the same
 -- clash. The `W` suffix marks the WasmGC peer; the un-suffixed names stay LLVM's, so
 -- an unqualified `emitProgram` in this file still means what it has always meant.
-import backend.wasm_emit.{emitProgram as wasmText, makeWasmEmitInputFull}
+import backend.wasm_emit.{emitProgram as wasmText, makeWasmEmitInput}
 import tools.fmt.{formatSource}
 import frontend.exhaust.{checkGuardExhaustivenessWith}
 import support.timer.{
@@ -290,22 +291,24 @@ runStaged on targetPath rsrc csrc tsrc =
       livePrelude
       (("__user__", desugared) :: [])
   let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let externFacts =
+    factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let elaborated = coreD ++ flatMap snd modules2
   -- Input indexing is elaboration work; keep it outside the emit timer.  The FFI
   -- projection is post-elaboration so it consumes the same canonical alias shape
   -- the declaration guards accepted.
+  let _ = validateFfiExternTypeNames (checkedFfiExternTypeNames elaborated)
   let input =
     makeEmitInput
       (runtimeDomain (externDecls rDecls))
       (methodIfaceTable elaborated)
       (ctorFieldTypeNames elaborated)
-      (externArities rDecls)
       0
       []
       []
       targetPath
-      (validateFfiExternTypeNames (checkedFfiExternTypeNames elaborated))
+
   let tEl1 = now ()
   let _ =
     emitPhaseAO
@@ -367,7 +370,7 @@ runStaged on targetPath rsrc csrc tsrc =
   let tLw0 = now ()
   let aLw0 = allocSnap ()
   let oLw0 = opSnap ()
-  let cprog = lowerProgramEmitWith (factsOfElabWith evTableM elab) live
+  let cprog = lowerProgramEmitWith (factsWithEvidence evTableM externFacts) live
   let tLw1 = now ()
   let _ =
     emitPhaseAO
@@ -380,7 +383,11 @@ runStaged on targetPath rsrc csrc tsrc =
   let tE0 = now ()
   let aE0 = allocSnap ()
   let oE0 = opSnap ()
-  let _ = emitProgram input (buildEmitPlan LlvmBackend cprog) cprog
+  let _ =
+    emitProgram
+      input
+      (buildEmitPlan LlvmBackend (runtimeDomain (externDecls rDecls)) cprog)
+      cprog
   let tE1 = now ()
   let _ =
     emitPhaseAO
@@ -493,14 +500,20 @@ wasmStage : Bool ->
 wasmStage _ False _ _ _ _ _ = ()
 wasmStage on True outputs runtimeDecls live cprog declsOp =
   let input =
-    makeWasmEmitInputFull
+    makeWasmEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames live)
-      []
   let tWe0 = now ()
   let aWe0 = allocSnap ()
   let oWe0 = opSnap ()
-  let _ = wasmText input (buildEmitPlan WasmBackend cprog) cprog
+  let _ =
+    wasmText
+      input
+      (buildEmitPlan
+        WasmBackend
+        (runtimeDomain (externDecls runtimeDecls))
+        cprog)
+      cprog
   let tWe1 = now ()
   emitPhaseAO
     on

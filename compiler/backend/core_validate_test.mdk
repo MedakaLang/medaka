@@ -1,13 +1,21 @@
+import backend.extern_requirements.{
+  ExternRequirements(..), ExternRequirement(..), RequirementBinding(..)
+}
+import types.runtime_abi_types.{CallableShape(..)}
 -- Sibling test module for `compiler/backend/core_validate.mdk` ([P-TEST-SIBLING]).
 --
 -- Each program is prelude-free and lowered without typechecking, through the
 -- pipeline `compiler/entries/wasm_emit_main.mdk` and
 -- `compiler/entries/llvm_emit_main.mdk` use, so a reference to a runtime extern
--- reaches the checked program exactly as the source spells it.
+-- reaches the checked program with its canonical extern declaration identity.
 
 import backend.extern_catalog.{RuntimeExternDomain(..), runtimeDomain}
 import frontend.ast.{externDecls, Decl(..), Attr(..), Ty(..)}
 import backend.emit_target.{Backend(..), backendName}
+import ir.extern_types.{ExternDeclFact(..)}
+import ir.extern_lower.{externVar, externHeadRows}
+import types.extern_source.{runtimeExternSymbol}
+import support.ordmap.{omLookup}
 import test.{
   Expectation,
   fail,
@@ -77,7 +85,7 @@ import backend.wasm_emit.{
   emitProgramUnchecked as wasmUnchecked,
   emitProgramGaps,
   emitProgramRecord as wasmRecord,
-  makeWasmEmitInputFull,
+  makeWasmEmitInput,
 }
 import backend.llvm_emit.{
   emitProgram as llvmStrict,
@@ -90,7 +98,7 @@ import backend.emit_plan.{EmitPlan, buildEmitPlan}
 import backend.global_plan.{GlobalInitPlan(..)}
 
 import types.target_profile.{lookupProfile}
-import test_process.{underRoot, boundedVerbSeconds}
+import test_process.{underRoot, boundedVerbSeconds, withScratchDir}
 import string.{contains, split, stripPrefix}
 
 lowered : String -> CProgram
@@ -98,6 +106,30 @@ lowered src =
   lowerProgramEmitWith
     emptyFacts
     (annotateProgram (grantWholeDomain (desugar (parse src))))
+
+test "missing-extern-abi is a fatal metadata defect before target gaps" =
+  let (cp@(CProgram groups ca ct impls mc facts)) =
+    lowered "main = intToString 42"
+  let symbol = runtimeExternSymbol "intToString"
+  match omLookup symbol facts.factExterns
+    None => fail "lowering omitted the runtime declaration"
+    Some fact =>
+      let malformed = CProgram groups ca ct impls mc { facts |
+        factExterns =
+          omInsert symbol { fact | callableShape = None } facts.factExterns,
+      }
+      let validation =
+        validateForEmission
+          LlvmBackend
+          PreludeFreeRuntime
+          (buildEmitPlan LlvmBackend PreludeFreeRuntime malformed)
+          malformed
+      expectAll [
+        expectTextContainsAll
+          ["missing-extern-abi", symbol]
+          (joinNl (map coreDefectMessage validation.defects)),
+        expectEqual [] (map findingExtern validation.externFindings),
+      ]
 
 -- The extern names `backend` refuses in `src`, in order of first reference.
 refused : Backend -> String -> List String
@@ -192,10 +224,10 @@ recordSrc =
 
 test "(e) record mode logs one event per refused extern, and no unbound-variable event" =
   let decls = grantWholeDomain (desugar (parse recordSrc))
-  let input =
-    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
+  let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
-  let (_, events) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
+  let (_, events) =
+    wasmRecord input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
   let expected = map ("main\t" ++ _) (refusalLines WasmBackend recordSrc)
   expectAll [
     labelFail
@@ -206,7 +238,10 @@ test "(e) record mode logs one event per refused extern, and no unbound-variable
       "gap census"
       (expectEqual
         expected
-        (emitProgramGaps input (buildEmitPlan WasmBackend cp) cp)),
+        (emitProgramGaps
+          input
+          (buildEmitPlan WasmBackend PreludeFreeRuntime cp)
+          cp)),
   ]
 
 assertSnapshotSrc : String
@@ -236,9 +271,10 @@ test "(f) llvm refuses assertSnapshot and lowers what wasm refuses" = expectEach
 llvmRecordEvents : Expectation
 llvmRecordEvents =
   let decls = grantWholeDomain (desugar (parse assertSnapshotSrc))
-  let input = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
+  let input = makeEmitInput PreludeFreeRuntime [] [] 0 [] [] ""
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
-  let (_, events) = llvmRecord input (buildEmitPlan LlvmBackend cp) cp
+  let (_, events) =
+    llvmRecord input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
   expectEqual
     (map ("main\t" ++ _) (refusalLines LlvmBackend assertSnapshotSrc))
     events
@@ -365,13 +401,11 @@ ffiValueSrc =
 ffiNoJsEvents : Option CheckedTarget -> <IO> List String
 ffiNoJsEvents checked =
   let decls = grantWholeDomain (desugar (parse ffiValueSrc))
-  let ffiTypes =
-    [("ffiAddInts", ([("c", "ffiAddInts")], (["Int", "Int"], "Int")))]
-  let input =
-    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) ffiTypes
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
+  let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
   checkedTarget := checked
-  let (_, events) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
+  let (_, events) =
+    wasmRecord input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
   checkedTarget := None
   events
 
@@ -1222,6 +1256,7 @@ evidenceProg body =
       factSupers = [("K", 0), ("S", 1)],
       factBinders = [],
       factEntryOutcome = None,
+      factExterns = noDeclFacts.factExterns,
     }
 
 evidenceOf : Route -> CExpr
@@ -1515,6 +1550,7 @@ dropBinderTable (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
     factSupers = facts.factSupers,
     factBinders = [],
     factEntryOutcome = facts.factEntryOutcome,
+    factExterns = facts.factExterns,
   }
 
 restampBinder : String -> RuntimeType -> CProgram -> CProgram
@@ -1529,6 +1565,7 @@ restampBinder name ty (CProgram groups ctors ctorTypes impls mctx facts) = CProg
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factEntryOutcome = facts.factEntryOutcome,
+    factExterns = facts.factExterns,
     factBinders =
       map
         (row =>
@@ -1617,6 +1654,7 @@ intLetProg ty =
       factRequires = [],
       factSupers = [],
       factEntryOutcome = None,
+      factExterns = noDeclFacts.factExterns,
       factBinders = [
         BinderRow {
           brId = bid,
@@ -1716,6 +1754,7 @@ editRows edit (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
     factSupers = facts.factSupers,
     factBinders = edit facts.factBinders,
     factEntryOutcome = facts.factEntryOutcome,
+    factExterns = facts.factExterns,
   }
 
 test "(ad) a function whose row is missing or gives no return type is refused" = expectEach
@@ -1890,9 +1929,34 @@ emissionVictim "F6" =
     (CMethod "show" (MethodEvidence "I" 1 (RDict "$dict_missing") [] []))
     emissionControl
 emissionVictim "not-provided" =
-  replaceMain (CVar "assertSnapshot" AGlobal) emissionControl
+  let (CProgram _ _ _ _ _ facts) = emissionControl
+  match omLookup (runtimeExternSymbol "assertSnapshot") facts.factExterns
+    Some fact => replaceMain (externVar fact) emissionControl
+    None => panic "emission control omitted assertSnapshot extern fact"
 emissionVictim victim =
-  if contains "global-cycle" victim then
+  if contains "extern-" victim then
+    let cp =
+      if victim == "extern-paired" || victim == "extern-import" then
+        lowered
+          """
+      extern identityHost : Int -> Int
+        bind c "identity_host"
+        bind js "identityHost"
+      main = identityHost 42
+      """
+      else
+        typedLowered "" "main = bitAnd 6 3"
+    if victim == "extern-missing-abi" || victim == "extern-priority" then
+      let (CProgram bs ca ct impls mc facts) = cp
+      let symbol = runtimeExternSymbol "bitAnd"
+      let inventory = match omLookup symbol facts.factExterns
+        Some fact =>
+          omInsert symbol { fact | callableShape = None } facts.factExterns
+        None => facts.factExterns
+      CProgram bs ca ct impls mc { facts | factExterns = inventory }
+    else
+      cp
+  else if contains "global-cycle" victim then
     typedLowered "" """
       x : Int
       x = x + 1
@@ -1943,7 +2007,53 @@ corruptGlobalPlan victim plan =
     "global-cycle-repeat-lazy" => { plan | lazyGlobals = ["x", "x"] }
     _ => plan
 
+corruptExternPlan : String -> EmitPlan -> EmitPlan
+corruptExternPlan victim plan =
+  let requirements = plan.externRequirements
+  let alter f = { requirements | rows = map f requirements.rows }
+  let changed = match victim
+    "extern-missing" => { requirements | rows = [] }
+    "extern-paired" => { requirements | rows = [] }
+    "extern-duplicate" =>
+      { requirements | rows = requirements.rows ++ requirements.rows }
+    "extern-target" => { requirements | target = EvalBackend }
+    "extern-binding" =>
+      alter (row => { row | selectedBinding = RuntimeRequirement "bitOr" })
+    "extern-abi" => alter (row => { row |
+      declaration = { row.declaration |
+        callableShape =
+          map
+            (shape => { shape | loweredCoreArity = 7 })
+            row.declaration.callableShape,
+      },
+    })
+    "extern-use" => alter (row => { row | selectedUses = [] })
+    _ => requirements
+  if victim == "extern-paired" then
+    { plan | externRequirements = changed, jsImports = [], hostKeys = [] }
+  else if victim == "extern-import" then
+    { plan | externRequirements = changed, jsImports = [] }
+  else
+    { plan | externRequirements = changed }
+
+externVictims : List String
+externVictims = [
+  "extern-missing", "extern-paired", "extern-duplicate", "extern-target",
+  "extern-binding", "extern-abi", "extern-use", "extern-missing-abi",
+  "extern-priority"
+]
+
 emissionNeedle : String -> String
+emissionNeedle "extern-missing" = "missing-extern-requirement"
+emissionNeedle "extern-paired" = "missing-extern-requirement"
+emissionNeedle "extern-import" = "extern-import-mismatch"
+emissionNeedle "extern-duplicate" = "duplicate-extern-requirement"
+emissionNeedle "extern-target" = "extern-target-mismatch"
+emissionNeedle "extern-binding" = "extern-binding-mismatch"
+emissionNeedle "extern-abi" = "extern-abi-mismatch"
+emissionNeedle "extern-use" = "extern-use-mismatch"
+emissionNeedle "extern-missing-abi" = "missing-extern-abi"
+emissionNeedle "extern-priority" = "missing-extern-abi"
 emissionNeedle "F1" = "internal error: record:"
 emissionNeedle "F2" = "internal error: call:"
 emissionNeedle "F3" = "internal error: impl symbol:"
@@ -2033,22 +2143,28 @@ test "the emission gateway matrix covers every public renderer derived from both
     (Err e, _) => fail e
     (_, Err e) => fail e
 
+export
 emissionText : String -> String -> <Stdout> String
 emissionText route victim =
   let cp = emissionVictim victim
   let target = if contains "llvm" route then LlvmBackend else WasmBackend
   let other = if contains "llvm" route then WasmBackend else LlvmBackend
-  let plan =
-    corruptGlobalPlan
-      victim
-      (buildEmitPlan (if victim == "target" then other else target) cp)
   let domain =
     if victim == "missing-domain" then
       runtimeDomain (externDecls (parse "extern zzEmissionMissingRow : Int"))
     else
       PreludeFreeRuntime
-  let li = makeEmitInput domain [] [] [] 0 [] [] "" []
-  let wi = makeWasmEmitInputFull domain [] []
+  let plan =
+    corruptExternPlan
+      victim
+      (corruptGlobalPlan
+        victim
+        (buildEmitPlan
+          (if victim == "target" then other else target)
+          domain
+          cp))
+  let li = makeEmitInput domain [] [] 0 [] [] ""
+  let wi = makeWasmEmitInput domain []
   match route
     "llvm-stats" =>
       let (text, stats) = llvmStats li plan cp
@@ -2067,14 +2183,45 @@ emissionText route victim =
       wat
     _ => wasmUnchecked wi plan cp
 
-emissionRefused : String -> String -> <IO, Exec, Env> Expectation
-emissionRefused route victim = match boundedVerbSeconds 90 "env" [
+-- A native sibling process carries its runner's framed results before the
+-- victim executes. Only those frames are excluded from renderer-output checks.
+rendererOutputLines : List String -> List String
+rendererOutputLines [] = []
+rendererOutputLines (line :: rest) =
+  if stringStartsWith "@@__mdk_native_test__@@" line then
+    if contains ".start" line then
+      rendererOutputLines rest
+    else match rest
+      _ :: afterValue => rendererOutputLines afterValue
+      [] => []
+  else if line == "" then
+    rendererOutputLines rest
+  else
+    line :: rendererOutputLines rest
+
+emissionRefused : String ->
+  String ->
+  <IO, Exec, Env, FileRead, FileWrite> Expectation
+emissionRefused route victim =
+  withScratchDir (dir => emissionRefusedAt (dir ++ "/destination") route victim)
+
+emissionRefusedAt : String ->
+  String ->
+  String ->
+  <IO, Exec, Env, FileRead> Expectation
+emissionRefusedAt destination route victim = match boundedVerbSeconds 90 "env" [
   "\{emissionProbeVar}=\{route}/\{victim}",
+  "MEDAKA_EMISSION_DESTINATION=" ++ destination,
   executablePath (),
 ]
   Err e => fail e
   Ok (code, out, err) => expectEach [
     ("refuses", expectNotEqual 0 code),
+    (
+      "empty renderer stdout",
+      expectEqual "" (joinNl (rendererOutputLines (split "\n" out))),
+    ),
+    ("no artifact", expectFalse (fileExists destination)),
     ("class", expectTextContainsAll [emissionNeedle victim] (out ++ err)),
     (
       "no output returned",
@@ -2093,6 +2240,9 @@ test "gateway emission seams refuse F1-F6 and a mismatched target before returni
     Some selected => match split "/" selected
       [route, victim] =>
         let text = emissionText route victim
+        let _ = match getEnv "MEDAKA_EMISSION_DESTINATION"
+          Some destination => writeFile destination text
+          None => Ok ()
         let _ = putStrLn ("EMISSION_RETURNED_SENTINEL" ++ text)
         pass
       _ => fail "invalid emission probe selector"
@@ -2153,7 +2303,7 @@ test "gateway returns fatal defects separately from target extern findings" =
           validateForEmission
             target
             PreludeFreeRuntime
-            (buildEmitPlan target (emissionVictim victim))
+            (buildEmitPlan target PreludeFreeRuntime (emissionVictim victim))
             (emissionVictim victim)
         map
           (victim => (
@@ -2179,8 +2329,12 @@ test "gateway preserves runtime domain identity and rejects a loaded missing row
   let preludeFree = PreludeFreeRuntime
   let missing =
     runtimeDomain (externDecls (parse "extern zzEmissionMissingRow : Int"))
-  let plan = buildEmitPlan LlvmBackend emissionControl
-  let check domain = validateForEmission LlvmBackend domain plan emissionControl
+  let check domain =
+    validateForEmission
+      LlvmBackend
+      domain
+      (buildEmitPlan LlvmBackend domain emissionControl)
+      emissionControl
   expectEach [
     (
       "loaded empty stays loaded",
@@ -2217,7 +2371,7 @@ test "gateway preserves collision priority and backend dict-tag widths" =
       (validateForEmission
         backend
         PreludeFreeRuntime
-        (buildEmitPlan backend cp)
+        (buildEmitPlan backend PreludeFreeRuntime cp)
         cp).defects
   expectEach [
     (
@@ -2242,10 +2396,10 @@ test "gateway preserves collision priority and backend dict-tag widths" =
 
 test "gateway valid controls return module text and unavailable externs stay record-visible" =
   let cp = emissionVictim "not-provided"
-  let lp = buildEmitPlan LlvmBackend cp
-  let wp = buildEmitPlan WasmBackend cp
-  let li = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
-  let wi = makeWasmEmitInputFull PreludeFreeRuntime [] []
+  let lp = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
+  let wp = buildEmitPlan WasmBackend PreludeFreeRuntime cp
+  let li = makeEmitInput PreludeFreeRuntime [] [] 0 [] [] ""
+  let wi = makeWasmEmitInput PreludeFreeRuntime []
   let (_, le) = llvmRecord li lp cp
   let (_, we) = wasmRecord wi wp cp
   expectEach [
@@ -2311,7 +2465,7 @@ test "runtime domain projection unwraps attributed externs without dropping decl
     validateForEmission
       LlvmBackend
       domain
-      (buildEmitPlan LlvmBackend emissionControl)
+      (buildEmitPlan LlvmBackend domain emissionControl)
       emissionControl
   expectEach [
     (
@@ -2351,13 +2505,14 @@ editMethodFacts edit (CProgram gs cs ts impls ms facts) = CProgram
   { facts | factMethodResults = edit facts.factMethodResults }
 
 methodFactFaults : CProgram -> List String
-methodFactFaults cp = validateMethodResults (buildEmitPlan LlvmBackend cp) cp
+methodFactFaults cp =
+  validateMethodResults (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
 
 test "method result facts validate before either backend emits" =
   expectAll
     (map
       (backend =>
-        let plan = buildEmitPlan backend methodFactControl
+        let plan = buildEmitPlan backend PreludeFreeRuntime methodFactControl
         expectAll [
           expectEqual [] (validateMethodResults plan methodFactControl),
           expectEqual
@@ -2374,7 +2529,7 @@ test "method result facts validate before either backend emits" =
 
 test "method result validation refuses a missing row and a missing plan key" =
   let missing = editMethodFacts (_ => []) methodFactControl
-  let plan = buildEmitPlan LlvmBackend methodFactControl
+  let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime methodFactControl
   expectAll [
     expectTextContainsAll
       ["method result", "missing declaration fact", "Chain#step"]
@@ -2422,7 +2577,7 @@ test "method result validation refuses duplicate qualified keys" =
 
 test "method result validation refuses a callback position lost from the plan" =
   let changed = editMethodFacts (map withoutCallbackPositions) methodFactControl
-  let plan = buildEmitPlan LlvmBackend changed
+  let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime changed
   expectTextContainsAll
     ["method result", "index disagrees"]
     (joinNl (validateMethodResults plan methodFactControl))
@@ -2432,7 +2587,7 @@ test "method result validation refuses a fact arity above its Core impl entry" =
     editMethodFacts
       (map (row => { row | callbackPositions = [2], valueArity = 3 }))
       methodFactControl
-  let plan = buildEmitPlan LlvmBackend changed
+  let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime changed
   expectTextContainsAll
     [
       "method result",
@@ -2493,6 +2648,30 @@ test "missing method result facts are fatal for both backends" =
               (validateForEmission
                 backend
                 PreludeFreeRuntime
-                (buildEmitPlan backend cp)
+                (buildEmitPlan backend PreludeFreeRuntime cp)
                 cp).defects)))
       [LlvmBackend, WasmBackend])
+
+test "all requirement defects refuse before output on every renderer and playground" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (flatMap
+          (route =>
+            map
+              (victim => ("\{route}/\{victim}", emissionRefused route victim))
+              externVictims)
+          (emissionRoutes ++ ["playground"]))
+
+test "Wasm import projection omissions refuse before output on every Wasm renderer" =
+  match getEnv emissionProbeVar
+    Some _ => pass
+    None =>
+      expectEach
+        (map
+          (route => (route, emissionRefused route "extern-import"))
+          [
+            "wasm-strict", "wasm-record", "wasm-census", "wasm-unchecked",
+            "playground"
+          ])

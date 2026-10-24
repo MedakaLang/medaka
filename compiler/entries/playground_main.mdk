@@ -1,3 +1,4 @@
+import types.extern_source.{externSourceHeadRows}
 -- lint-disable-file rule-duplicate-body
 -- (The hover/completion helpers below are DELIBERATELY reimplemented from the
 --  same logic in compiler/tools/lsp.mdk rather than shared: importing lsp.mdk
@@ -150,11 +151,13 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
 }
 import types.private_mangle.{mangleUnitsEv}
-import types.program_facts.{factsOfElabWith}
+import types.program_facts.{
+  factsOfElabSources, factsWithEvidence, withCheckedExternSources
+}
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{
   emitProgram,
-  makeWasmEmitInputFull,
+  makeWasmEmitInput,
 }
 import backend.emit_plan.{buildEmitPlanReached}
 
@@ -725,8 +728,16 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
   -- #2809: the program is elaborated as written (`finishClean`), then its
   -- elaborated trees are mangled.
   let (coreE, modulesE) = executed
+  let externFacts =
+    withCheckedExternSources
+      checkedFfiExternTypeNamesModules
+      outputs
+      coreE
+      modulesE
+      (factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable)
   let (coreD, modulesM, evTableM) = mangleUnitsEv evTable coreE modulesE
-  let facts = factsForExecutedTrees (factsOfElabWith evTableM elab) modulesE
+  let facts =
+    factsForExecutedTrees (factsWithEvidence evTableM externFacts) modulesE
   let modules2 = stampModulePaths paths modulesM
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
@@ -734,20 +745,20 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
-  let ffiRows =
+  let _ =
     validateFfiExternTypeNames
-      (checkedFfiExternTypeNamesModules outputs modules2)
+      (externSourceHeadRows (optionOr [] facts.pfExternSources))
   let input =
-    makeWasmEmitInputFull
+    makeWasmEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
-      ffiRows
   -- Mirrors wasm_emit_modules_main.emitTail: bind the lowered
   -- program, then drop the impl bodies (and the plain bindings only they
   -- reached) that no dispatchable method name in this program can reach.  Without
   -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
   let lowered = lowerProgramEmitWith facts allDecls
-  let (plan, reached) = buildEmitPlanReached ffiRows lowered
+  let (plan, reached) =
+    buildEmitPlanReached (runtimeDomain (externDecls runtimeDecls)) lowered
   let wat = emitProgram input plan reached
   let _ = emitWatMarker warnTriples
   putStr wat

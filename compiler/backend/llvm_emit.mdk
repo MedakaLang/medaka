@@ -169,9 +169,12 @@
 --            cp_count is cached either way, so stringLength is O(1).
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
+import types.extern_source.{ExternBindingKind(..)}
+import backend.extern_requirements.{ExternRequirements, requirementFacts}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{
   hostRows,
+  hostSymbol,
   isWildPat,
   Lit(..),
   Pat(..),
@@ -191,6 +194,9 @@ import frontend.ast.{
   isBoxed64Head,
   isTaggedFixedHead,
 }
+import ir.extern_types.{ExternDeclFact(..)}
+import ir.extern_lower.{externRuntimeKey}
+import types.runtime_abi_types.{CallableShape(..)}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -745,16 +751,6 @@ data LTy =
 -- semantic state from a previous emission.
 data EmitInputData = EmitInputData {
   ctorFieldIndex : OrdMap (List String),
-  -- each `stdlib/runtime.mdk` extern's declared arity
-  -- (`ir.core_ir_lower.externArities`), the parameter count of its first-class
-  -- (eta-wrapped) form
-  externArityIndex : OrdMap Int,
-  -- #2074: the USER-declared externs only (the runtime catalog's own names are
-  -- subtracted at the mint, `ir.core_ir_lower.ffiExternTypeNames`), keyed by the
-  -- extern's program-wide name (`types.private_mangle.externSymbolName`) →
-  -- (C symbol, (declared param type-head names, declared return type-head name)).
-  -- This is the ONLY table that answers "is this name a foreign call?".
-  ffiExternIndex : OrdMap (String, (List String, String)),
   emitHalf : Int,
   preludeBinds : List String,
   -- Exact prelude impl ownership, method -> canonical impl key -> the symbol tag
@@ -780,17 +776,13 @@ export
 makeEmitInput : RuntimeExternDomain ->
   List (String, (String, String, Int)) ->
   List (String, List String) ->
-  List (String, Int) ->
   Int ->
   List String ->
   List (String, String, String) ->
   String ->
-  List (String, (List (String, String), (List String, String))) ->
   EmitInput
-makeEmitInput domain methodIfaces ctorFieldTypes externArities emitHalf preludeBinds preludeImpls srcName ffiExternTypes = EmitInputData {
+makeEmitInput domain methodIfaces ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
-  externArityIndex = omFromPairs (reverseL externArities) omEmpty,
-  ffiExternIndex = omFromPairs (reverseL (hostRows "c" ffiExternTypes)) omEmpty,
   emitHalf = emitHalf,
   preludeBinds = preludeBinds,
   preludeImplIndex = preludeImplIndexOf preludeImpls omEmpty,
@@ -866,6 +858,8 @@ data Emit = Emit {
   -- what every binder of the program holds (`DeclFacts.factBinders`), keyed by
   -- the ordinal of the row's id
   binderRows : BM.Map Int BinderRow,
+  externFacts : OrdMap ExternDeclFact,
+  nativePrototypes : List ExternDeclFact,
   -- the super count of each interface word (`DeclFacts.factSupers`); a word
   -- absent from it has no supers
   superCounts : OrdMap Int,
@@ -1855,15 +1849,15 @@ emitVar e env x =
     ("3", LTBool)
   else if isLocal env x then
     lookupVarG e env x
-  else if isConstantName x then
-    emitConstantVar e x
+  else if isConstantName e x then
+    emitConstantVar e (runtimeName e x)
   else if isCtor e x then
     if ctorArity e x == 0 then emitCtorAlloc e x [] else emitCtorEtaClosure e x
   else if isKnownFn e x then
     emitEtaClosure e x
   else if isKnownFn e (canonFnName e x) then
     emitEtaClosure e (canonFnName e x)
-  else if isAnyExtern x then
+  else if isAnyExtern e x then
     emitExternEtaClosure e x
   else if isFfiExtern e x then
     emitFfiEtaClosure e x
@@ -1933,8 +1927,8 @@ lookupVarG e env x = match omLookup x env
         let _ = emit e "  \{r} = load i64, ptr @mdk_g_\{x}"
         (r, LTInt)
       None =>
-        if isUnprovidedOn LlvmBackend x then
-          unprovidedExtern e x
+        if isUnprovidedOn LlvmBackend (runtimeName e x) then
+          unprovidedExtern e (runtimeName e x)
         else
           gapE
             e
@@ -3430,8 +3424,8 @@ emitU64RawApp : Emit ->
   (CExpr, List CExpr) ->
   String
 emitU64RawApp e env ex (CVar f _, args)
-  | isW64RawKernel f (lengthS args) && not (isLocal env f) =
-    emitU64Kernel e env f args
+  | isW64RawKernel (runtimeName e f) (lengthS args) && not (isLocal env f) =
+    emitU64Kernel e env (runtimeName e f) args
   | isLocal env f = unboxU64 e (fst (emitExpr e env ex))
   | otherwise = match u64KernelAlias e f args
     Some k => emitU64Kernel e env k args
@@ -3662,7 +3656,7 @@ staticIsU64 e env ex = match flattenApp ex []
   (CVar f _, args) =>
     if isLocal env f then
       False
-    else if isU64RawKernel f (lengthS args) then
+    else if isU64RawKernel (runtimeName e f) (lengthS args) then
       True
     else match u64KernelAlias e f args
       Some k => isU64RawKernel k (lengthS args)
@@ -3737,7 +3731,7 @@ emitU32Raw e env (CLet False (PVar x a bid) e1 e2) = match e1
     untagU32 e (fst (emitExpr e env (CLet False (PVar x a bid) e1 e2)))
   _ => emitU32Raw e (bindLetRaw e env x bid e1 e2) e2
 emitU32Raw e env ex = match flattenApp ex []
-  (CVar f _, [a]) if isTruncate32 f && not (isLocal env f) =>
+  (CVar f _, [a]) if isTruncate32 (runtimeName e f) && not (isLocal env f) =>
     u32TruncateRaw e env a
   (CVar f _, args) =>
     if isLocal env f then
@@ -3879,14 +3873,14 @@ intRaw e env x = match flattenApp x []
   (CVar f _, args) =>
     if isLocal env f then
       untagInt e (fst (emitExpr e env x))
-    else match (intRawBitOp f, args)
+    else match (intRawBitOp (runtimeName e f), args)
       (Some instr, [a, b]) =>
         let p = intRaw e env a
         let q = intRaw e env b
         let r = freshReg e
         let _ = emit e "  \{r} = \{instr} i64 \{p}, \{q}"
         r
-      _ => match (f, args)
+      _ => match (runtimeName e f, args)
         ("u32ToInt", [a]) =>
           let v = emitU32Raw e env a
           let z = freshReg e
@@ -3929,9 +3923,9 @@ static32Kind e env ex = match flattenApp ex []
   (CVar f _, args) =>
     if isLocal env f then
       RawWord
-    else if isTruncate32 f then
+    else if isTruncate32 (runtimeName e f) then
       if lengthS args == 1 then
-        if f == "i32Truncate" then RawI32 else RawU32
+        if runtimeName e f == "i32Truncate" then RawI32 else RawU32
       else
         RawWord
     else match u32Inline e env f args
@@ -4179,11 +4173,12 @@ u64EscapesArgs _ _ _ [] = 0
 -- positions.
 u64ArgRaw : Emit -> String -> List CExpr -> List Bool
 u64ArgRaw e f args =
+  let key = runtimeName e f
   let n = lengthS args
-  if f == "u64TruncateToInt" && n == 1 then
+  if key == "u64TruncateToInt" && n == 1 then
     [True]
-  else if isW64RawKernel f n then
-    u64KernelArgRaw f
+  else if isW64RawKernel key n then
+    u64KernelArgRaw key
   else match u64KernelAlias e f args
     Some k => if k == "u64TruncateToInt" then [True] else u64KernelArgRaw k
     None => match rawWorkerCall e f n
@@ -4207,7 +4202,7 @@ u64Shaped _ (CBinPrim op _ _ tag _) = isU64Head tag && isArithOp op
 u64Shaped e (CIf _ t f) = u64Shaped e t && u64Shaped e f
 u64Shaped e ex = match flattenApp ex []
   (CVar f _, args) =>
-    if isU64RawKernel f (lengthS args) then
+    if isU64RawKernel (runtimeName e f) (lengthS args) then
       True
     else match u64KernelAlias e f args
       Some k => isU64RawKernel k (lengthS args)
@@ -4322,7 +4317,7 @@ u64KernelAlias : Emit -> String -> List CExpr -> Option String
 u64KernelAlias e f args = match omLookup (canonFnName e f) !e.gDispBindMap
   Some (CBind _ [CClause pats body] _ _) => match paramNames pats
     Some ps =>
-      if lengthS ps == lengthS args then u64AliasBody ps body args else None
+      if lengthS ps == lengthS args then u64AliasBody e ps body args else None
     None => None
   _ => None
 
@@ -4332,9 +4327,9 @@ paramNames [] = Some []
 paramNames ((PVar n _ _) :: rest) = map (n :: _) (paramNames rest)
 paramNames _ = None
 
-u64AliasBody : List String -> CExpr -> List CExpr -> Option String
-u64AliasBody ps (CIf (CBinPrim "<" (CVar k _) zero _ _) _ body) args = match (
-  u64KernelApplied ps (skipOtherwise body),
+u64AliasBody : Emit -> List String -> CExpr -> List CExpr -> Option String
+u64AliasBody e ps (CIf (CBinPrim "<" (CVar k _) zero _ _) _ body) args = match (
+  u64KernelApplied e ps (skipOtherwise body),
   ps,
   args,
   intLitOf zero,
@@ -4344,7 +4339,7 @@ u64AliasBody ps (CIf (CBinPrim "<" (CVar k _) zero _ _) _ body) args = match (
       if isU64ShiftKernel kern && amount == k && n >= 0 then Some kern else None
     None => None
   _ => None
-u64AliasBody ps body _ = match u64KernelApplied ps body
+u64AliasBody e ps body _ = match u64KernelApplied e ps body
   Some kern => if isU64ShiftKernel kern then None else Some kern
   None => None
 
@@ -4363,10 +4358,11 @@ skipOtherwise (CIf (CVar o _) b _)
 skipOtherwise ex = ex
 
 -- `body` is a kernel applied to exactly the parameters `ps`, in order.
-u64KernelApplied : List String -> CExpr -> Option String
-u64KernelApplied ps body = match flattenApp body []
+u64KernelApplied : Emit -> List String -> CExpr -> Option String
+u64KernelApplied e ps body = match flattenApp body []
   (CVar kern _, xs) =>
-    if inU64Family kern && argsAreParams ps xs then Some kern else None
+    let key = runtimeName e kern
+    if inU64Family key && argsAreParams ps xs then Some key else None
   _ => None
 
 argsAreParams : List String -> List CExpr -> Bool
@@ -4587,8 +4583,8 @@ externEmitter LlvmFallthrough = None
 -- Is `name` a runtime extern lowered through `externEmitter`?  Drives both the
 -- saturated CApp head path (emitExternApplied) and the value-position eta-wrap
 -- (emitVar → emitExternEtaClosure).
-isAnyExtern : String -> Bool
-isAnyExtern name = match llvmFamily name
+isAnyExtern : Emit -> String -> Bool
+isAnyExtern e name = match llvmFamily (runtimeName e name)
   Some f => isLlvmExternFamily f
   None => False
 
@@ -4604,13 +4600,13 @@ inU64Family name = match llvmFamily name
   Some LlvmU64 => True
   _ => False
 
-isRefCellName : String -> Bool
-isRefCellName name = match llvmFamily name
+isRefCellName : Emit -> String -> Bool
+isRefCellName e name = match llvmFamily (runtimeName e name)
   Some LlvmRefCell => True
   _ => False
 
-isConstantName : String -> Bool
-isConstantName name = match llvmFamily name
+isConstantName : Emit -> String -> Bool
+isConstantName e name = match llvmFamily (runtimeName e name)
   Some LlvmConstant => True
   _ => False
 
@@ -4628,11 +4624,13 @@ emitExternApplied : Emit ->
   String ->
   List CExpr ->
   (String, LTy)
-emitExternApplied e env fname args = match llvmFamily fname
-  Some f => match externEmitter f
-    Some fn => fn e env fname args
+emitExternApplied e env symbol args =
+  let fname = runtimeName e symbol
+  match llvmFamily fname
+    Some f => match externEmitter f
+      Some fn => fn e env fname args
+      None => panic (notAnExternFamily fname)
     None => panic (notAnExternFamily fname)
-  None => panic (notAnExternFamily fname)
 
 notAnExternFamily : String -> String
 notAnExternFamily fname =
@@ -4649,33 +4647,22 @@ notAnExternFamily fname =
 -- §2.  So it gets its own arm in `emitApp`'s CVar-head ladder — placed AFTER
 -- `isAnyExtern` and before `isCtor` — rather than a fourth row in the catalog.
 --
--- 🚨 ORDER IS THE BUILTIN-NAME EXEMPTION.  `isAnyExtern` is consulted FIRST in
--- both `emitApp` and `emitVar`, so a local `extern bitAnd : …` redeclaring a
--- catalog name still runs the BUILTIN's codegen — the fact
--- `ffiIsBuiltinExternName` (compiler/types/typecheck.mdk) exempts from slice 1's
--- crossable-set guard.  The index itself is belt AND braces: the mint
--- (`ir.core_ir_lower.ffiExternTypeNames`) subtracts `stdlib/runtime.mdk`'s own
--- extern names, so a runtime extern name with no llvm family in the catalog
--- still cannot become a foreign call here.
---
--- 🚨 THE CROSSABLE SET IS NOT REDEFINED HERE.  `ffiCrossableHead` below is the
--- SET OF TYPE-HEAD NAMES that slice 1's `ffiCrossableTy`
--- (compiler/types/typecheck.mdk) accepts — its `ffiCrossableConName` six plus its
--- `Array Int` arm's head — restated in the only vocabulary this file has
--- (the `tyHeadName` strings an `ffiExternIndex` row carries, not `Ty`).  It is a
--- CONSISTENCY GUARD, not a second gate: every signature reaching here has already
--- passed `ffiCrossableTy` at check time, so a head this predicate rejects is an
--- internal inconsistency and reports as a loud gap, never a quiet skip.
+-- Catalog names use builtin lowering before the foreign-call path. Selected
+-- `externFacts` carry the checked call shape and host symbol for user externs.
 
 -- the declared (param type-head names, return type-head name) of a USER extern,
 -- or None when `name` is not one.
 ffiSigOf : Emit -> String -> Option (List String, String)
-ffiSigOf e name = map snd (omLookup name e.input.ffiExternIndex)
+ffiSigOf e name = match omLookup name e.externFacts
+  Some fact if fact.bindingKind == ForeignBinding
+    && isSome (hostSymbol "c" fact.hostBindings) =>
+    map (shape => (shape.parameterHeads, shape.resultHead)) fact.callableShape
+  _ => None
 
 -- the C symbol a user extern links to: its `bind c` symbol, else its own name.
 ffiSymOf : Emit -> String -> String
-ffiSymOf e name = match omLookup name e.input.ffiExternIndex
-  Some (sym, _) => sym
+ffiSymOf e name = match omLookup name e.externFacts
+  Some fact => optionOr name (hostSymbol "c" fact.hostBindings)
   None => name
 
 isFfiExtern : Emit -> String -> Bool
@@ -4761,40 +4748,31 @@ ffiJoinComma [] = ""
 ffiJoinComma [x] = x
 ffiJoinComma (x :: rest) = "\{x}, \{ffiJoinComma rest}"
 
--- One `declare` per user extern, plus the two runtime marshalling helpers, right
--- after the preamble.  ⚠️ EMPTY INDEX ⇒ NOTHING EMITTED: a program with no user
--- extern (every program in the corpus, the compiler itself included) gets
--- byte-identical IR to the pre-#2074 emitter, which is what the emitter gates
--- pin.  Declares are emitted for EVERY declared user extern, called or not — an
--- unused `declare` produces no relocation, so an uncalled extern still links.
+-- Prototype ownership includes unused declarations; expression bindings use only
+-- the selected requirements. Two aliases share a declaration after ABI validation.
 emitFfiDeclares : Emit -> Unit
-emitFfiDeclares e = match omKeys e.input.ffiExternIndex
+emitFfiDeclares e = match e.nativePrototypes
   [] => ()
-  names =>
+  rows =>
     let _ = emit e "declare ptr @mdk_ffi_array_int_out(i64)"
     let _ = emit e "declare void @mdk_ffi_array_int_in(i64, ptr)"
     let _ = emit e "declare i64 @mdk_ffi_str_in(ptr)"
-    emitFfiDeclareEach e names
+    emitFfiDeclareSeen e omEmpty rows
 
-emitFfiDeclareEach : Emit -> List String -> Unit
-emitFfiDeclareEach e names = emitFfiDeclareSeen e omEmpty names
-
--- Two Medaka names bound to one C symbol share one `declare`; the validator
--- (`ffiCheckExternRowsDistinct`) already guarantees their signatures agree.
-emitFfiDeclareSeen : Emit -> OrdMap Unit -> List String -> Unit
+emitFfiDeclareSeen : Emit -> OrdMap Unit -> List ExternDeclFact -> Unit
 emitFfiDeclareSeen _ _ [] = ()
-emitFfiDeclareSeen e seen (n :: rest) =
-  let sym = ffiSymOf e n
-  match omLookup sym seen
-    Some _ => emitFfiDeclareSeen e seen rest
-    None =>
-      let _ = match ffiSigOf e n
-        Some (ptys, rty) =>
-          emit
-            e
-            "declare \{ffiCRetTy rty} @\{sym}(\{ffiJoinComma (map ffiCParamTy (ffiValueParams ptys))})"
-        None => ()
-      emitFfiDeclareSeen e (omInsert sym () seen) rest
+emitFfiDeclareSeen e seen (fact :: rest) =
+  let sym = optionOr fact.declaredName (hostSymbol "c" fact.hostBindings)
+  if omHasKey sym seen then
+    emitFfiDeclareSeen e seen rest
+  else
+    let _ = match fact.callableShape
+      Some shape =>
+        emit
+          e
+          "declare \{ffiCRetTy shape.resultHead} @\{sym}(\{ffiJoinComma (map ffiCParamTy (ffiValueParams shape.parameterHeads))})"
+      None => panic ("internal error: missing-extern-abi: " ++ fact.symbol)
+    emitFfiDeclareSeen e (omInsert sym () seen) rest
 
 -- SATURATED foreign call.  Arguments emit left-to-right exactly as every other
 -- call shape does, then each is marshalled per its DECLARED type head — never per
@@ -5440,7 +5418,7 @@ emitFloatD e env (ex@(CBinPrim op l r _ _)) =
 emitFloatD e env ex = emitFloatLeaf e env ex
 
 emitFloatLeaf : Emit -> OrdMap (String, LTy) -> CExpr -> String
-emitFloatLeaf e env ex = match floatFromIntArg ex
+emitFloatLeaf e env ex = match floatFromIntArg e env ex
   Some a =>
     let (aw, _) = emitExpr e env a
     let i = untagInt e aw
@@ -5483,8 +5461,14 @@ floatFwFp e f = match lookupAssoc f !e.floatFwSet
 -- in a statically-Float context, `intToFloat x` / `fromInt x` (@ Float) is just an
 -- int→double conversion: emit `sitofp` directly instead of the extern/impl call's
 -- box-then-unbox. Returns the Int arg if `ex` is such a call (head name match, arity 1).
-floatFromIntArg : CExpr -> Option CExpr
-floatFromIntArg ex = match flattenApp ex []
+floatFromIntArg : Emit -> OrdMap (String, LTy) -> CExpr -> Option CExpr
+floatFromIntArg e env ex = match flattenApp ex []
+  (CVar f _, a :: []) =>
+    if runtimeName e f == "intToFloat" && not (isLocal env f)
+      || f == "fromInt" then
+      Some a
+    else
+      None
   (h, a :: []) =>
     if headNameIs h "intToFloat" || headNameIs h "fromInt" then Some a else None
   _ => None
@@ -6995,8 +6979,8 @@ emitApp e env app =
             _ => runtimeLTy RTValue
           (r, resultTy)
         _ => panic "llvm: file bound takes a grant and a thunk"
-      else if isRefCellName fname then
-        emitRefCellExtern e env fname args
+      else if isRefCellName e fname then
+        emitRefCellExtern e env (runtimeName e fname) args
       else if fname == siteSentinelName then
         emitSiteLiteral e args
       else if isLocal env fname then
@@ -7011,7 +6995,7 @@ emitApp e env app =
         -- correct (eval treats the param as the local it is).  Mirrors emitVar's
         -- isLocal-first priority for the same name in VALUE position.
         emitIndirect e env hd args mode
-      else if isAnyExtern fname && hasArgs args then
+      else if isAnyExtern e fname && hasArgs args then
         emitExternApplied e env fname args
       else if isSome (u64KernelAlias e fname args) then
         -- a `u64` wrapper around one kernel (`u64KernelAlias`): the kernel
@@ -9900,7 +9884,7 @@ emitEtaDefine e lamName fname arity =
 -- per-family arity is hardcoded.
 emitExternEtaClosure : Emit -> String -> (String, LTy)
 emitExternEtaClosure e name =
-  let lamName = "mdk_eta_\{name}\{mangleScoped e}"
+  let lamName = "mdk_eta_\{injectiveIdent name}\{mangleScoped e}"
   let _ = emitExternEtaDefine e lamName name (externArity e name)
   emitConstClosure e lamName (externArity e name)
 
@@ -9938,14 +9922,13 @@ emitMethodEtaDefine e lamName name arity =
   let _ = endDefine e scope
   bufRef e := saved
 
--- the declared arity of extern `name` = the arrow count of its runtime signature
--- (`EmitInput.externArityIndex`).  An extern with no recorded signature defaults
--- to arity 1 (every current extern is annotated, so this is a defensive
--- fallback, not a live path).
+-- Grant parameters are already present in Core; eta wrappers forward them once.
 externArity : Emit -> String -> Int
-externArity e name = match omLookup name e.input.externArityIndex
-  Some n => n
-  None => 1
+externArity e name = match omLookup name e.externFacts
+  Some fact => match fact.callableShape
+    Some shape => shape.loweredCoreArity
+    None => panic ("internal error: missing-extern-abi: " ++ name)
+  None => panic ("internal error: missing-extern-requirement: " ++ name)
 
 -- emit the captureless extern-eta forwarder `@mdk_etaN(i64 %clos, %arg…) {
 -- <inline applied-extern body over %arg0..%arg(N-1)>; ret }` into the side buffer
@@ -13646,7 +13629,8 @@ bindGroupStamp e env (CBind name _ _ bid) =
 -- (putStr/putStrLn/…) return Unit but are not functions of the program, so they
 -- resolve to LTUnit up front, matching the real emit path (`emitIoExtern`).
 callRetTy : Emit -> String -> LTy
-callRetTy e fname = if inIoFamily fname then LTUnit else fnRetTy e fname
+callRetTy e fname =
+  if inIoFamily (runtimeName e fname) then LTUnit else fnRetTy e fname
 
 -- a block's value is its last statement's; a trailing `let` yields Unit
 blockTy : Emit -> OrdMap (String, LTy) -> List CStmt -> LTy
@@ -14431,7 +14415,7 @@ tableStats e = [
   ("implEntries", listLen !e.implEntries),
   ("globalsReg", listLen !e.globalsReg),
   ("ctorType", optOmSize !e.ctorTypeMap),
-  ("externArity", omSize e.input.externArityIndex),
+  ("externArity", omSize e.externFacts),
   ("knownFnMap", optOmSize !e.knownFnMap),
   ("sigMap", optOmSize !e.sigMap),
 ]
@@ -14458,6 +14442,7 @@ programEmitConfig gapMode input plan groups = EmitStateConfig {
   lazyNames = plan.lazyGlobals,
   trmc = plan.trmc,
   methodResults = plan.methodResults,
+  externRequirements = plan.externRequirements,
   dispGroups = Some plan.dispGroups,
 }
 
@@ -14561,6 +14546,7 @@ data EmitStateConfig = EmitStateConfig {
   lazyNames : List String,
   trmc : TrmcVerdicts,
   methodResults : OrdMap (OrdMap MethodResultFact),
+  externRequirements : ExternRequirements,
   dispGroups : Option (List DispGroup),
 }
 
@@ -14628,6 +14614,8 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     buf = Ref [],
     fnNames = Ref (collectFns groups),
     binderRows = rows,
+    externFacts = requirementFacts cfg.externRequirements,
+    nativePrototypes = cfg.externRequirements.nativePrototypes,
     superCounts = omFromPairs facts.factSupers omEmpty,
     globalTys = globalStampTys rows (filter (b => not (isFnBind b)) groups),
     lams = Ref [],
@@ -15063,6 +15051,7 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
     lazyNames = [],
     trmc = plan.trmc,
     methodResults = plan.methodResults,
+    externRequirements = plan.externRequirements,
     dispGroups = None,
   }
   let found = unprovidedExterns Record input plan cp
@@ -15101,3 +15090,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
   let _ = setGapBind e ("val " ++ name)
   let _ = gapU e "non-nullary / multi-clause value binding"
   emitTopBindsGaps e env rest
+
+runtimeName : Emit -> String -> String
+runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)

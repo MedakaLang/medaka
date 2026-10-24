@@ -1,5 +1,5 @@
 # META
-source_lines=1584
+source_lines=1629
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -74,6 +74,9 @@ stages=DESUGAR,MARK
 -- would not lower the extern there.  The program checked is the one the
 -- emitter received, after any reachability filter its entry ran.
 
+import ir.extern_types.{ExternDeclFact(..), ExternUse(..)}
+import ir.extern_uses.{collectExternUses}
+import ir.extern_lower.{externRuntimeKey}
 import ir.core_ir.{
   CExpr(..),
   CField(..),
@@ -125,6 +128,9 @@ import frontend.ast.{
   isFixedIntHead, isBoxed64Head
 }
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
+import backend.extern_requirements.{
+  validateExternRequirements, requirementHostRows
+}
 import backend.global_plan.{validateGlobalInit}
 import backend.emit_target.{Backend(..), backendName}
 import backend.emit_plan.{EmitPlan, indexMethodResults, lookupMethodResult}
@@ -176,7 +182,7 @@ validateForEmission : Backend ->
   CProgram ->
   EmissionValidation
 validateForEmission backend domain plan cp =
-  match emissionDefects backend plan cp
+  match emissionDefects backend domain plan cp
     [] =>
       let names = match domain
         PreludeFreeRuntime => []
@@ -192,8 +198,12 @@ validateForEmission backend domain plan cp =
         }
     bad => EmissionValidation { defects = bad, externFindings = [] }
 
-emissionDefects : Backend -> EmitPlan -> CProgram -> List CoreDefect
-emissionDefects backend plan cp =
+emissionDefects : Backend ->
+  RuntimeExternDomain ->
+  EmitPlan ->
+  CProgram ->
+  List CoreDefect
+emissionDefects backend domain plan cp =
   if backendName plan.target /= backendName backend then
     [
       CoreDefect
@@ -204,6 +214,10 @@ emissionDefects backend plan cp =
     None => match dictTagCollision backend cp
       Some message => [CoreDefect message]
       None => firstShapeDefect [
+        () => validateExternMetadata cp,
+        () =>
+          validateExternRequirements backend domain cp plan.externRequirements,
+        () => validateRequirementProjection backend plan,
         () => validateGlobalInit cp plan.lazyGlobals plan.globalInit,
         () => validateRecords cp,
         () => validateBinderStamps cp,
@@ -222,6 +236,27 @@ firstShapeDefect [] = []
 firstShapeDefect (check :: rest) = match check ()
   [] => firstShapeDefect rest
   bad => [CoreDefect ("internal error: " ++ joinWith "\n" bad)]
+
+validateRequirementProjection : Backend -> EmitPlan -> List String
+validateRequirementProjection WasmBackend plan =
+  if map
+      (imp => (imp.medakaName, (imp.jsName, (imp.params, imp.result))))
+      plan.jsImports
+    == requirementHostRows plan.externRequirements then
+    []
+  else
+    ["extern-import-mismatch"]
+validateRequirementProjection _ _ = []
+
+validateExternMetadata : CProgram -> List String
+validateExternMetadata (cp@(CProgram _ _ _ _ _ facts)) =
+  flatMap
+    (use => match omLookup use.useSymbol facts.factExterns
+      None => ["unknown-extern-declaration: " ++ use.useSymbol]
+      Some fact => match fact.callableShape
+        None => ["missing-extern-abi: " ++ fact.symbol]
+        Some _ => [])
+    (collectExternUses cp)
 
 export
 findingExtern : ExternFinding -> String
@@ -813,6 +848,7 @@ data EvFacts = EvFacts {
   efRequires : OrdMap Int,
   efSupers : OrdMap Int,
   efMethods : OrdMap (OrdMap MethodResultFact),
+  efExterns : OrdMap ExternDeclFact,
 }
 
 walkProgram : Backend -> CProgram -> Walk
@@ -830,6 +866,7 @@ walkProgram backend (prog@(CProgram groups ctors _ impls mctx facts)) =
         efRequires = omFromPairs facts.factRequires omEmpty,
         efSupers = omFromPairs facts.factSupers omEmpty,
         efMethods = indexMethodResults facts.factMethodResults,
+        efExterns = facts.factExterns,
       }
       ""
   walkImpls ctx impls (walkBinds ctx groups noFindings)
@@ -1253,10 +1290,12 @@ headText (CLam _ _) = "a lambda"
 headText _ = "an expression"
 
 noteVar : Ctx -> CallScope -> String -> Walk -> Walk
-noteVar (Ctx backend top _ _ _ _ binding) scope x (w@(Walk seen found bad scalar calls ctxs evs results)) =
+noteVar (Ctx backend top _ _ _ facts binding) scope x (w@(Walk seen found bad scalar calls ctxs evs results)) =
   if omHasKey x scope || omHasKey x seen then
     w
-  else match unprovidedOn backend x
+  else match (unprovidedOn
+    backend
+    (optionOr "" (externRuntimeKey facts.efExterns x)))
     None => w
     Some (kind, why) =>
       if isProgramName top x then
@@ -1264,7 +1303,13 @@ noteVar (Ctx backend top _ _ _ _ binding) scope x (w@(Walk seen found bad scalar
       else
         Walk
           (omInsert x () seen)
-          (ExternFinding x backend kind why binding :: found)
+          (ExternFinding
+              (optionOr x (externRuntimeKey facts.efExterns x))
+              backend
+              kind
+              why
+              binding
+            :: found)
           bad
           scalar
           calls
@@ -1587,6 +1632,9 @@ export
 renderBinderRefusal : List String -> String
 renderBinderRefusal bad = joinWith "\n" bad
 # DESUGAR
+(DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true) (mem "ExternUse" true))))
+(DUse false (UseGroup ("ir" "extern_uses") ((mem "collectExternUses" false))))
+(DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false))))
 (DUse false (UseAlias ("map") "BM"))
@@ -1594,6 +1642,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true) (mem "isFixedIntHead" false) (mem "isBoxed64Head" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
+(DUse false (UseGroup ("backend" "extern_requirements") ((mem "validateExternRequirements" false) (mem "requirementHostRows" false))))
 (DUse false (UseGroup ("backend" "global_plan") ((mem "validateGlobalInit" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true) (mem "backendName" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" false) (mem "indexMethodResults" false) (mem "lookupMethodResult" false))))
@@ -1607,12 +1656,17 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DTypeSig true "coreDefectMessage" (TyFun (TyCon "CoreDefect") (TyCon "String")))
 (DFunDef false "coreDefectMessage" ((PCon "CoreDefect" (PVar "message"))) (EVar "message"))
 (DTypeSig true "validateForEmission" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "EmissionValidation"))))))
-(DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
-(DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect"))))))
-(DFunDef false "emissionDefects" ((PVar "backend") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EVar "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
+(DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "domain")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
+(DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect")))))))
+(DFunDef false "emissionDefects" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EVar "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EVar "validateExternMetadata") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "validateExternRequirements") (EVar "backend")) (EVar "domain")) (EVar "cp")) (EFieldAccess (EVar "plan") "externRequirements"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateRequirementProjection") (EVar "backend")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
 (DTypeSig false "firstShapeDefect" (TyFun (TyApp (TyCon "List") (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "CoreDefect"))))
 (DFunDef false "firstShapeDefect" ((PList)) (EListLit))
 (DFunDef false "firstShapeDefect" ((PCons (PVar "check") (PVar "rest"))) (EMatch (EApp (EVar "check") (ELit LUnit)) (arm (PList) () (EApp (EVar "firstShapeDefect") (EVar "rest"))) (arm (PVar "bad") () (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad"))))))))
+(DTypeSig false "validateRequirementProjection" (TyFun (TyCon "Backend") (TyFun (TyCon "EmitPlan") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "validateRequirementProjection" ((PCon "WasmBackend") (PVar "plan")) (EIf (EBinOp "==" (EApp (EApp (EVar "map") (ELam ((PVar "imp")) (ETuple (EFieldAccess (EVar "imp") "medakaName") (ETuple (EFieldAccess (EVar "imp") "jsName") (ETuple (EFieldAccess (EVar "imp") "params") (EFieldAccess (EVar "imp") "result")))))) (EFieldAccess (EVar "plan") "jsImports")) (EApp (EVar "requirementHostRows") (EFieldAccess (EVar "plan") "externRequirements"))) (EListLit) (EListLit (ELit (LString "extern-import-mismatch")))))
+(DFunDef false "validateRequirementProjection" (PWild PWild) (EListLit))
+(DTypeSig false "validateExternMetadata" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "validateExternMetadata" ((PAs "cp" (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts")))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "use")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "use") "useSymbol")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "unknown-extern-declaration: ")) (EFieldAccess (EVar "use") "useSymbol")))) (arm (PCon "Some" (PVar "fact")) () (EMatch (EFieldAccess (EVar "fact") "callableShape") (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "missing-extern-abi: ")) (EFieldAccess (EVar "fact") "symbol")))) (arm (PCon "Some" PWild) () (EListLit))))))) (EApp (EVar "collectExternUses") (EVar "cp"))))
 (DTypeSig true "findingExtern" (TyFun (TyCon "ExternFinding") (TyCon "String")))
 (DFunDef false "findingExtern" ((PCon "ExternFinding" (PVar "name") PWild PWild PWild PWild)) (EVar "name"))
 (DTypeSig true "findingBinding" (TyFun (TyCon "ExternFinding") (TyCon "String")))
@@ -1753,9 +1807,9 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DTypeSig false "noFindings" (TyCon "Walk"))
 (DFunDef false "noFindings" () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Walk") (EVar "omEmpty")) (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EListLit)))
 (DData Private "Ctx" () ((variant "Ctx" (ConPos (TyCon "Backend") (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "ArityEnv") (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyCon "EvFacts") (TyCon "String")))) ())
-(DData Private "EvFacts" () ((variant "EvFacts" (ConNamed (field "efRequires" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "efSupers" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "efMethods" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))))))) ())
+(DData Private "EvFacts" () ((variant "EvFacts" (ConNamed (field "efRequires" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "efSupers" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "efMethods" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "efExterns" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")))))) ())
 (DTypeSig false "walkProgram" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyCon "Walk"))))
-(DFunDef false "walkProgram" ((PVar "backend") (PAs "prog" (PCon "CProgram" (PVar "groups") (PVar "ctors") PWild (PVar "impls") (PVar "mctx") (PVar "facts")))) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EApp (EVar "programNames") (EVar "groups")) (EVar "ctors")) (EVar "omEmpty"))) (DoLet false false (PVar "env") (EApp (EVar "programArities") (EVar "prog"))) (DoLet false false (PVar "ctx") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Ctx") (EVar "backend")) (EVar "top")) (EVar "env")) (EApp (EApp (EVar "omFromPairs") (EVar "mctx")) (EVar "omEmpty"))) (EApp (EApp (EVar "dictParamCounts") (EVar "groups")) (EVar "omEmpty"))) (ERecordCreate "EvFacts" ((fa "efRequires" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factRequires")) (EVar "omEmpty"))) (fa "efSupers" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "efMethods" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults")))))) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "walkImpls") (EVar "ctx")) (EVar "impls")) (EApp (EApp (EApp (EVar "walkBinds") (EVar "ctx")) (EVar "groups")) (EVar "noFindings"))))))
+(DFunDef false "walkProgram" ((PVar "backend") (PAs "prog" (PCon "CProgram" (PVar "groups") (PVar "ctors") PWild (PVar "impls") (PVar "mctx") (PVar "facts")))) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EApp (EVar "programNames") (EVar "groups")) (EVar "ctors")) (EVar "omEmpty"))) (DoLet false false (PVar "env") (EApp (EVar "programArities") (EVar "prog"))) (DoLet false false (PVar "ctx") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Ctx") (EVar "backend")) (EVar "top")) (EVar "env")) (EApp (EApp (EVar "omFromPairs") (EVar "mctx")) (EVar "omEmpty"))) (EApp (EApp (EVar "dictParamCounts") (EVar "groups")) (EVar "omEmpty"))) (ERecordCreate "EvFacts" ((fa "efRequires" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factRequires")) (EVar "omEmpty"))) (fa "efSupers" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "efMethods" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (fa "efExterns" (EFieldAccess (EVar "facts") "factExterns"))))) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "walkImpls") (EVar "ctx")) (EVar "impls")) (EApp (EApp (EApp (EVar "walkBinds") (EVar "ctx")) (EVar "groups")) (EVar "noFindings"))))))
 (DTypeSig false "walkBinds" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "Walk") (TyCon "Walk")))))
 (DFunDef false "walkBinds" (PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkBinds" ((PVar "ctx") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EVar "walkBinds") (EVar "ctx")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkClauses") (EApp (EApp (EVar "inBinding") (EVar "ctx")) (EVar "name"))) (EVar "omEmpty")) (EVar "clauses")) (EVar "w"))))
@@ -1903,7 +1957,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "headText" ((PCon "CLam" PWild PWild)) (ELit (LString "a lambda")))
 (DFunDef false "headText" (PWild) (ELit (LString "an expression")))
 (DTypeSig false "noteVar" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "noteVar" ((PCon "Ctx" (PVar "backend") (PVar "top") PWild PWild PWild PWild (PVar "binding")) (PVar "scope") (PVar "x") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad") (PVar "scalar") (PVar "calls") (PVar "ctxs") (PVar "evs") (PVar "results")))) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen"))) (EVar "w") (EMatch (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EVar "x")) (arm (PCon "None") () (EVar "w")) (arm (PCon "Some" (PTuple (PVar "kind") (PVar "why"))) () (EIf (EApp (EApp (EVar "isProgramName") (EVar "top")) (EVar "x")) (EVar "w") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ExternFinding") (EVar "x")) (EVar "backend")) (EVar "kind")) (EVar "why")) (EVar "binding")) (EVar "found"))) (EVar "bad")) (EVar "scalar")) (EVar "calls")) (EVar "ctxs")) (EVar "evs")) (EVar "results")))))))
+(DFunDef false "noteVar" ((PCon "Ctx" (PVar "backend") (PVar "top") PWild PWild PWild (PVar "facts") (PVar "binding")) (PVar "scope") (PVar "x") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad") (PVar "scalar") (PVar "calls") (PVar "ctxs") (PVar "evs") (PVar "results")))) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen"))) (EVar "w") (EMatch (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "facts") "efExterns")) (EVar "x")))) (arm (PCon "None") () (EVar "w")) (arm (PCon "Some" (PTuple (PVar "kind") (PVar "why"))) () (EIf (EApp (EApp (EVar "isProgramName") (EVar "top")) (EVar "x")) (EVar "w") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ExternFinding") (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "facts") "efExterns")) (EVar "x")))) (EVar "backend")) (EVar "kind")) (EVar "why")) (EVar "binding")) (EVar "found"))) (EVar "bad")) (EVar "scalar")) (EVar "calls")) (EVar "ctxs")) (EVar "evs")) (EVar "results")))))))
 (DTypeSig false "walkList" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkList" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkList" ((PVar "ctx") (PVar "scope") (PCons (PVar "e") (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
@@ -2045,6 +2099,9 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DTypeSig true "renderBinderRefusal" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "renderBinderRefusal" ((PVar "bad")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad")))
 # MARK
+(DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true) (mem "ExternUse" true))))
+(DUse false (UseGroup ("ir" "extern_uses") ((mem "collectExternUses" false))))
+(DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false))))
 (DUse false (UseAlias ("map") "BM"))
@@ -2052,6 +2109,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true) (mem "isFixedIntHead" false) (mem "isBoxed64Head" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
+(DUse false (UseGroup ("backend" "extern_requirements") ((mem "validateExternRequirements" false) (mem "requirementHostRows" false))))
 (DUse false (UseGroup ("backend" "global_plan") ((mem "validateGlobalInit" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true) (mem "backendName" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" false) (mem "indexMethodResults" false) (mem "lookupMethodResult" false))))
@@ -2065,12 +2123,17 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DTypeSig true "coreDefectMessage" (TyFun (TyCon "CoreDefect") (TyCon "String")))
 (DFunDef false "coreDefectMessage" ((PCon "CoreDefect" (PVar "message"))) (EVar "message"))
 (DTypeSig true "validateForEmission" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "EmissionValidation"))))))
-(DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
-(DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect"))))))
-(DFunDef false "emissionDefects" ((PVar "backend") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
+(DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "domain")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
+(DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect")))))))
+(DFunDef false "emissionDefects" ((PVar "backend") (PVar "domain") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EVar "validateExternMetadata") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "validateExternRequirements") (EVar "backend")) (EVar "domain")) (EVar "cp")) (EFieldAccess (EVar "plan") "externRequirements"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateRequirementProjection") (EVar "backend")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
 (DTypeSig false "firstShapeDefect" (TyFun (TyApp (TyCon "List") (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "CoreDefect"))))
 (DFunDef false "firstShapeDefect" ((PList)) (EListLit))
 (DFunDef false "firstShapeDefect" ((PCons (PVar "check") (PVar "rest"))) (EMatch (EApp (EVar "check") (ELit LUnit)) (arm (PList) () (EApp (EVar "firstShapeDefect") (EVar "rest"))) (arm (PVar "bad") () (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad"))))))))
+(DTypeSig false "validateRequirementProjection" (TyFun (TyCon "Backend") (TyFun (TyCon "EmitPlan") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "validateRequirementProjection" ((PCon "WasmBackend") (PVar "plan")) (EIf (EBinOp "==" (EApp (EApp (EMethodRef "map") (ELam ((PVar "imp")) (ETuple (EFieldAccess (EVar "imp") "medakaName") (ETuple (EFieldAccess (EVar "imp") "jsName") (ETuple (EFieldAccess (EVar "imp") "params") (EFieldAccess (EVar "imp") "result")))))) (EFieldAccess (EVar "plan") "jsImports")) (EApp (EVar "requirementHostRows") (EFieldAccess (EVar "plan") "externRequirements"))) (EListLit) (EListLit (ELit (LString "extern-import-mismatch")))))
+(DFunDef false "validateRequirementProjection" (PWild PWild) (EListLit))
+(DTypeSig false "validateExternMetadata" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "validateExternMetadata" ((PAs "cp" (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts")))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "use")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "use") "useSymbol")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "unknown-extern-declaration: ")) (EFieldAccess (EVar "use") "useSymbol")))) (arm (PCon "Some" (PVar "fact")) () (EMatch (EFieldAccess (EVar "fact") "callableShape") (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "missing-extern-abi: ")) (EFieldAccess (EVar "fact") "symbol")))) (arm (PCon "Some" PWild) () (EListLit))))))) (EApp (EVar "collectExternUses") (EVar "cp"))))
 (DTypeSig true "findingExtern" (TyFun (TyCon "ExternFinding") (TyCon "String")))
 (DFunDef false "findingExtern" ((PCon "ExternFinding" (PVar "name") PWild PWild PWild PWild)) (EVar "name"))
 (DTypeSig true "findingBinding" (TyFun (TyCon "ExternFinding") (TyCon "String")))
@@ -2211,9 +2274,9 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DTypeSig false "noFindings" (TyCon "Walk"))
 (DFunDef false "noFindings" () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Walk") (EVar "omEmpty")) (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EListLit)))
 (DData Private "Ctx" () ((variant "Ctx" (ConPos (TyCon "Backend") (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "ArityEnv") (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyCon "EvFacts") (TyCon "String")))) ())
-(DData Private "EvFacts" () ((variant "EvFacts" (ConNamed (field "efRequires" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "efSupers" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "efMethods" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))))))) ())
+(DData Private "EvFacts" () ((variant "EvFacts" (ConNamed (field "efRequires" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "efSupers" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "efMethods" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "efExterns" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")))))) ())
 (DTypeSig false "walkProgram" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyCon "Walk"))))
-(DFunDef false "walkProgram" ((PVar "backend") (PAs "prog" (PCon "CProgram" (PVar "groups") (PVar "ctors") PWild (PVar "impls") (PVar "mctx") (PVar "facts")))) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EApp (EVar "programNames") (EVar "groups")) (EVar "ctors")) (EVar "omEmpty"))) (DoLet false false (PVar "env") (EApp (EVar "programArities") (EVar "prog"))) (DoLet false false (PVar "ctx") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Ctx") (EVar "backend")) (EVar "top")) (EVar "env")) (EApp (EApp (EVar "omFromPairs") (EVar "mctx")) (EVar "omEmpty"))) (EApp (EApp (EVar "dictParamCounts") (EVar "groups")) (EVar "omEmpty"))) (ERecordCreate "EvFacts" ((fa "efRequires" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factRequires")) (EVar "omEmpty"))) (fa "efSupers" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "efMethods" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults")))))) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "walkImpls") (EVar "ctx")) (EVar "impls")) (EApp (EApp (EApp (EVar "walkBinds") (EVar "ctx")) (EVar "groups")) (EVar "noFindings"))))))
+(DFunDef false "walkProgram" ((PVar "backend") (PAs "prog" (PCon "CProgram" (PVar "groups") (PVar "ctors") PWild (PVar "impls") (PVar "mctx") (PVar "facts")))) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EApp (EVar "programNames") (EVar "groups")) (EVar "ctors")) (EVar "omEmpty"))) (DoLet false false (PVar "env") (EApp (EVar "programArities") (EVar "prog"))) (DoLet false false (PVar "ctx") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Ctx") (EVar "backend")) (EVar "top")) (EVar "env")) (EApp (EApp (EVar "omFromPairs") (EVar "mctx")) (EVar "omEmpty"))) (EApp (EApp (EVar "dictParamCounts") (EVar "groups")) (EVar "omEmpty"))) (ERecordCreate "EvFacts" ((fa "efRequires" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factRequires")) (EVar "omEmpty"))) (fa "efSupers" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "efMethods" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (fa "efExterns" (EFieldAccess (EVar "facts") "factExterns"))))) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "walkImpls") (EVar "ctx")) (EVar "impls")) (EApp (EApp (EApp (EVar "walkBinds") (EVar "ctx")) (EVar "groups")) (EVar "noFindings"))))))
 (DTypeSig false "walkBinds" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "Walk") (TyCon "Walk")))))
 (DFunDef false "walkBinds" (PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkBinds" ((PVar "ctx") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EVar "walkBinds") (EVar "ctx")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkClauses") (EApp (EApp (EVar "inBinding") (EVar "ctx")) (EVar "name"))) (EVar "omEmpty")) (EVar "clauses")) (EVar "w"))))
@@ -2361,7 +2424,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "headText" ((PCon "CLam" PWild PWild)) (ELit (LString "a lambda")))
 (DFunDef false "headText" (PWild) (ELit (LString "an expression")))
 (DTypeSig false "noteVar" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "noteVar" ((PCon "Ctx" (PVar "backend") (PVar "top") PWild PWild PWild PWild (PVar "binding")) (PVar "scope") (PVar "x") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad") (PVar "scalar") (PVar "calls") (PVar "ctxs") (PVar "evs") (PVar "results")))) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen"))) (EVar "w") (EMatch (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EVar "x")) (arm (PCon "None") () (EVar "w")) (arm (PCon "Some" (PTuple (PVar "kind") (PVar "why"))) () (EIf (EApp (EApp (EVar "isProgramName") (EVar "top")) (EVar "x")) (EVar "w") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ExternFinding") (EVar "x")) (EVar "backend")) (EVar "kind")) (EVar "why")) (EVar "binding")) (EVar "found"))) (EVar "bad")) (EVar "scalar")) (EVar "calls")) (EVar "ctxs")) (EVar "evs")) (EVar "results")))))))
+(DFunDef false "noteVar" ((PCon "Ctx" (PVar "backend") (PVar "top") PWild PWild PWild (PVar "facts") (PVar "binding")) (PVar "scope") (PVar "x") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad") (PVar "scalar") (PVar "calls") (PVar "ctxs") (PVar "evs") (PVar "results")))) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen"))) (EVar "w") (EMatch (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "facts") "efExterns")) (EVar "x")))) (arm (PCon "None") () (EVar "w")) (arm (PCon "Some" (PTuple (PVar "kind") (PVar "why"))) () (EIf (EApp (EApp (EVar "isProgramName") (EVar "top")) (EVar "x")) (EVar "w") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ExternFinding") (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "facts") "efExterns")) (EVar "x")))) (EVar "backend")) (EVar "kind")) (EVar "why")) (EVar "binding")) (EVar "found"))) (EVar "bad")) (EVar "scalar")) (EVar "calls")) (EVar "ctxs")) (EVar "evs")) (EVar "results")))))))
 (DTypeSig false "walkList" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkList" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkList" ((PVar "ctx") (PVar "scope") (PCons (PVar "e") (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))

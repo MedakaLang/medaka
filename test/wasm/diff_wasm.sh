@@ -145,6 +145,62 @@ WORK="$(mktemp -d)"
 RESULTS="$(mktemp -d)"
 trap 'rm -rf "$WORK" "$RESULTS"' EXIT
 
+c6_run() {
+  c6_name="$1"; c6_source="$2"; c6_expected="$3"
+  c6_mode="${4:-}"
+  c6_base="$WORK/c6-$c6_name"
+  printf '%s\n' "$c6_source" > "$c6_base.mdk"
+  if ! "$EMITBIN" "$c6_base.mdk" > "$c6_base.wat" 2> "$c6_base.err" ||
+     ! wasm-tools parse "$c6_base.wat" -o "$c6_base.wasm" 2>> "$c6_base.err" ||
+     ! wasm-tools validate --features=all "$c6_base.wasm" 2>> "$c6_base.err" ||
+     ! "$NODE" "$RUNJS" "$c6_base.wasm" > "$c6_base.out" 2>> "$c6_base.err" ||
+     [ -s "$c6_base.err" ] ||
+     { [ "$c6_mode" = ref ] && ! grep -F '(type $str' "$c6_base.wat" >/dev/null; } ||
+     { [ "$c6_mode" = scalar ] && grep -F '(type $str' "$c6_base.wat" >/dev/null; } ||
+     ! printf '%s\n' "$c6_expected" | cmp -s - "$c6_base.out"; then
+    echo "FAIL C6 $c6_name"
+    cat "$c6_base.err"
+    return 1
+  fi
+  echo "ok   C6 $c6_name"
+}
+
+c6_fail=0
+c6_run local-putStrLn-ref 'main = let putStrLn = True in if putStrLn then 42 else 0' 42 ref || c6_fail=1
+c6_run local-int-scalar 'main = let answer = 42 in answer' 42 scalar || c6_fail=1
+for c6_constant in pi e intMinBound intMaxBound charMinBound charMaxBound; do
+  c6_run "$c6_constant-scalar" "$c6_constant = 42
+main = $c6_constant" 42 || c6_fail=1
+  c6_run "$c6_constant-ref" "$c6_constant = 42
+main =
+  let _ = 0.0
+  $c6_constant" 42 || c6_fail=1
+  c6_run "$c6_constant-lexical" "main = let $c6_constant = 42 in $c6_constant" 42 || c6_fail=1
+  c6_seed='""'; c6_value="$c6_constant"
+  case "$c6_constant" in
+    pi) c6_seed=0.0; c6_expected=3.141592653589793 ;;
+    e) c6_seed=0.0; c6_expected=2.718281828459045 ;;
+    intMinBound) c6_expected=-4611686018427387904 ;;
+    intMaxBound) c6_expected=4611686018427387903 ;;
+    charMinBound) c6_value="charCode $c6_constant"; c6_expected=0 ;;
+    charMaxBound) c6_value="charCode $c6_constant"; c6_expected=1114111 ;;
+  esac
+  c6_run "$c6_constant-builtin" "main =
+  let _ = $c6_seed
+  $c6_value" "$c6_expected" || c6_fail=1
+  printf 'main = %s\n' "$c6_constant" > "$WORK/c6-bare.mdk"
+  "$EMITBIN" "$WORK/c6-bare.mdk" > "$WORK/c6-bare.wat" 2> "$WORK/c6-bare.err"
+  c6_status=$?
+  if [ "$c6_status" -ne 1 ] || [ -s "$WORK/c6-bare.wat" ] ||
+     ! grep -F "unbound variable '$c6_constant' (scalar mode:" "$WORK/c6-bare.err" > /dev/null; then
+    echo "FAIL C6 $c6_constant scalar refusal"
+    c6_fail=1
+  else
+    echo "ok   C6 $c6_constant scalar refusal"
+  fi
+done
+[ "$c6_fail" -eq 0 ] || exit 1
+
 # Fan fixtures across an xargs -P pool of --one workers (see top of file).
 # Each worker does: medaka build oracle (-O0) + run, wasm emit, wasm-tools
 # parse/validate, node run, diff. NODE is resolved to its absolute path here (post

@@ -1,3 +1,4 @@
+import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- WasmGC GAP-CENSUS driver — copy of wasm_emit_modules_main.mdk, but instead of
 -- emitting WAT it runs emitProgramGaps over the whole module graph and prints one
 -- recorded gap per line ("<binding>\t<reason>").  Needs NO `main` in the input.
@@ -34,7 +35,7 @@ import backend.extern_catalog.{runtimeDomain}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{externDecls, Decl}
 import types.typecheck.{
-  elaborateModules,
+  elaborateModulesWithReport,
   constrainedSigNames,
   preludeReturnPosDictNames,
   preludeArgPosDictNames,
@@ -46,9 +47,9 @@ import ir.core_ir_lower.{
   declaredRecordFieldOrders,
 }
 import types.private_mangle.{mangleUnitsEv}
-import types.program_facts.{factsOfElabWith}
+import types.program_facts.{factsOfElabSources, factsWithEvidence}
 import ir.dce.{dceFilter}
-import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInputFull}
+import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 
 import entries.entry_support.{driveModules}
@@ -63,8 +64,11 @@ runEmit : DriveInputs ->
   <IO> Unit
 runEmit inputs runtimeDecls coreDecls modules =
   -- #2809: elaborate the program as written, then mangle its elaborated trees.
-  let elab = elaborateModules inputs runtimeDecls coreDecls modules
+  let (elab, _, outputs) =
+    elaborateModulesWithReport inputs False None runtimeDecls coreDecls modules
   let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let externFacts =
+    factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let allDecls0 = coreD ++ flatMap snd modules2
   -- GAP CENSUS: do NOT run dceFilter.  DCE roots reachability from `main`, and the
@@ -76,10 +80,14 @@ runEmit inputs runtimeDecls coreDecls modules =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
-  let input =
-    makeWasmEmitInputFull (runtimeDomain (externDecls runtimeDecls)) [] []
-  let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) allDecls
-  let gaps = emitProgramGaps input (buildEmitPlan WasmBackend cp) cp
+  let input = makeWasmEmitInput (runtimeDomain (externDecls runtimeDecls)) []
+  let cp =
+    lowerProgramEmitWith (factsWithEvidence evTableM externFacts) allDecls
+  let gaps =
+    emitProgramGaps
+      input
+      (buildEmitPlan WasmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
+      cp
   printGaps gaps
 
 printGaps : List String -> <IO> Unit

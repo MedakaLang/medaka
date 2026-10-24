@@ -1,3 +1,4 @@
+import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- Shared scaffolding for the per-stage probe entry points (compiler/entries/*.mdk).
 --
 -- Every `medaka run` probe repeats the same loader/setup boilerplate: read a
@@ -11,7 +12,9 @@
 
 import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..), EvId}
 import types.publish.{CheckedProgram(..), TcReport(..)}
-import types.program_facts.{ProgramFacts, factsOfChecked}
+import types.program_facts.{
+  ProgramFacts, factsOfChecked, withCheckedExternSources, factsWithEvidence
+}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar, desugarIn, mapProg}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
@@ -721,12 +724,19 @@ emitElaborated outputs asyncDriver emitTail runtimeDecls coreDecls modules repor
         Err msg => failWith msg
         Ok (coreW, modulesW) => match report.trChecked
           Some checked =>
+            let externFacts =
+              withCheckedExternSources
+                checkedFfiExternTypeNamesModules
+                outputs
+                coreW
+                modulesW
+                (factsOfChecked checked)
             let (coreD, modules2, table) =
               mangleUnitsEv checked.cpEvidence coreW modulesW
             emitTail
               outputs
               (factsForExecutedTrees
-                (factsOfChecked { checked | cpEvidence = table })
+                (factsWithEvidence table externFacts)
                 modulesW)
               runtimeDecls
               coreD

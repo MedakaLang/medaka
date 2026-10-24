@@ -1,0 +1,8 @@
+import frontend.parser.{parse}
+import types.runtime_abi.{runtimeRowsFromSource, renderRuntimeAbi}
+
+main = match args ()
+  [path] => match readFile path
+    Ok src => putStr (renderRuntimeAbi (runtimeRowsFromSource (parse src)))
+    Err msg => panic msg
+  _ => panic "usage: runtime_abi_gen_main <runtime.mdk>"

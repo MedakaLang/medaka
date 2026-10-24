@@ -53,7 +53,7 @@ import backend.extern_catalog.{
   wasmUseRows,
   wasmUses,
 }
-import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
+import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 
 import eval.eval.{externBindings, ioExternBindings}
@@ -289,10 +289,9 @@ test "(c) eval: the catalog binds exactly the externs the interpreter's tables b
 emitWat : String -> (String, List String)
 emitWat src =
   let decls = grantWholeDomain (desugar (parse src))
-  let input =
-    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
+  let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
-  emitProgramRecord input (buildEmitPlan WasmBackend cp) cp
+  emitProgramRecord input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
 
 -- A program whose one source of `use` is the call to extern `name` emits `marker`,
 -- a definition the demand's runtime group, type or host import block carries.

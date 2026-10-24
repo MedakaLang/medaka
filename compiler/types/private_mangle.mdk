@@ -99,6 +99,7 @@
 -- let / lambda arg / match-pattern var) named `f` shadows it.  Mirrors the
 -- binder-threading of typecheck.mdk's `rewriteArgScoped`.
 
+import types.extern_source.{sourceExternSymbol, externDisplayName}
 import frontend.ast.{
   letBindName,
   Decl(..),
@@ -1198,9 +1199,7 @@ externDeclEntries name (_ :: rest) = externDeclEntries name rest
 -- name is always of this kind (T-FFI-BUILTIN-BIND refuses its clauses) and the
 -- emitters dispatch it by that spelling, so it keeps it.
 externSymbolName : String -> ExternDecl -> String
-externSymbolName mid ed = match ed.edBinds
-  [] => ed.edName
-  _ => mangledName mid ed.edName
+externSymbolName mid ed = sourceExternSymbol mid ed.edName
 
 -- The name an extern's declaration wrote, for a message, from its program-wide
 -- name and its (host, symbol) bindings.  A declaration without clauses has the
@@ -1210,6 +1209,7 @@ externSymbolName mid ed = match ed.edBinds
 export
 externDeclaredName : String -> List (String, String) -> String
 externDeclaredName n binds
+  | isSome (externDisplayName n) = optionOr n (externDisplayName n)
   | binds == [("c", n)] = n
   | otherwise = match stringIndexOf "__" n
     Some i => stringSlice (i + 2) (stringLength n) n

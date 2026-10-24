@@ -1,3 +1,4 @@
+import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- Sibling test module for `compiler/ir/core_ir_sexp.mdk` and
 -- `compiler/ir/core_ir_sexp_parse.mdk` ([P-TEST-SIBLING]).
 --
@@ -21,7 +22,7 @@ import test.{
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{defaultDriveInputs, elaborateOneFacts, grantWholeDomain}
-import types.program_facts.{factsOfElabWith}
+import types.program_facts.{factsOfElabSources, factsWithEvidence}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import frontend.ast.{
   BinderId(..), Decl, Lit(..), Pat(..), Addr(..), noDeclLoc, noBinderId
@@ -51,7 +52,7 @@ import driver.loader.{
   loadProgramFilesLocatedE,
   stdlibOwnership,
 }
-import types.typecheck.{elaborateModules, driveInputsFor}
+import types.typecheck.{elaborateModulesWithReport, driveInputsFor}
 import frontend.desugar.{desugarIn}
 import test_process.{underRoot}
 import support.util.{listLen}
@@ -281,6 +282,7 @@ test "two occurrences of one binder id stay one binder" =
         factRequires = [],
         factSupers = [],
         factEntryOutcome = None,
+        factExterns = noDeclFacts.factExterns,
         factBinders = [
           BinderRow {
             brId = shared,
@@ -377,17 +379,21 @@ loweredEntry runtimeDecls coreDecls entry roots =
       let pairs = map dropPathTriple mods
       let (flatStdlib, ownedStdlib) =
         stdlibOwnership entry roots (underRoot "stdlib") pairs
-      let elab =
-        elaborateModules
+      let (elab, _, outputs) =
+        elaborateModulesWithReport
           (driveInputsFor None flatStdlib ownedStdlib)
+          False
+          None
           runtimeDecls
           coreDecls
           (map (p => (fst p, desugarIn (fst p) (snd p))) pairs)
       let (coreE, modulesE, _, _, evTable, _, _) = elab
+      let externFacts =
+        factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
       let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
       Ok
         (lowerProgramEmitWith
-          (factsOfElabWith evTableM elab)
+          (factsWithEvidence evTableM externFacts)
           (dceFilter (coreD ++ flatMap snd modules2)))
 
 -- Each binder occurrence's row, in the binder walk's order, as text: what an

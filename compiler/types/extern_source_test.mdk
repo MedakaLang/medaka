@@ -1,0 +1,77 @@
+import frontend.parser.{parse}
+import types.extern_source.{
+  sourceExternSymbol, runtimeExternSymbol, sourceExterns, externDisplayName,
+  ExternSource(..), ExternBindingKind(..), ExternProvenance(..)
+}
+import types.runtime_abi_types.{CallableShape(..)}
+import test.{expectAll, expectEqual, expectNotEqual}
+
+test "extern symbols use byte lengths and preserve module and source identity" = expectAll
+  [
+    expectEqual "$extern$r2:pi" (runtimeExternSymbol "pi"),
+    expectEqual "$extern$u3:a.b6:shared" (sourceExternSymbol "a.b" "shared"),
+    expectNotEqual
+      (sourceExternSymbol "a.b" "shared")
+      (sourceExternSymbol "a_b" "shared"),
+    expectEqual "$extern$u2:é1:f" (sourceExternSymbol "é" "f"),
+    expectEqual (Some "f") (externDisplayName (sourceExternSymbol "é" "f")),
+  ]
+
+test "checked heads determine both arities through a whole-arrow alias" =
+  let decls =
+    parse
+      """
+    type FfiCharCall = Char -> <FFI "c"> Char
+    extern ffiCharNext : FfiCharCall
+    """
+  let heads = [("ffiCharNext", ([("c", "ffiCharNext")], (["Char"], "Char")))]
+  expectAll [
+    expectEqual
+      [(1, 1, ["Char"], "Char", "v1:FfiCharCall")]
+      (flatMap
+        (row => match row.sourceAbi
+          Some shape => [
+            (
+              shape.writtenValueArity,
+              shape.loweredCoreArity,
+              shape.parameterHeads,
+              shape.resultHead,
+              shape.canonicalSignature,
+            ),
+          ]
+          None => [])
+        (sourceExterns CheckedSource "ffi_alias_whole" heads decls)),
+    expectEqual
+      [(0, 0)]
+      (flatMap
+        (row => match row.sourceAbi
+          Some shape => [(shape.writtenValueArity, shape.loweredCoreArity)]
+          None => [])
+        (sourceExterns RawSource "ffi_alias_whole" [] decls)),
+  ]
+
+test "C and JS aliases and builtin exemptions keep their separate identities" =
+  let rows =
+    sourceExterns
+      RawSource
+      "m"
+      []
+      (parse
+        """
+    extern shared : Int -> Int
+      bind c "c_shared"
+      bind js "jsShared"
+    extern intToString : Int -> String
+    """)
+  expectAll [
+    expectEqual
+      ["$extern$u1:m6:shared", "$extern$u1:m11:intToString"]
+      (map (row => row.sourceSymbol) rows),
+    expectEqual
+      [ForeignBinding, RuntimeBinding "intToString"]
+      (map (row => row.sourceBinding) rows),
+    expectEqual
+      [[("c", "c_shared"), ("js", "jsShared")], [("c", "intToString")]]
+      (map (row => row.sourceHosts) rows),
+    expectEqual [RawSource, RawSource] (map (row => row.sourceProvenance) rows),
+  ]

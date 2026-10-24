@@ -1,0 +1,7 @@
+public export data CallableShape = CallableShape {
+  writtenValueArity : Int,
+  loweredCoreArity : Int,
+  parameterHeads : List String,
+  resultHead : String,
+  canonicalSignature : String,
+} deriving (Eq, Debug)

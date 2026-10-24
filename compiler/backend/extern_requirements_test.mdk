@@ -1,0 +1,428 @@
+import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
+import backend.emit_plan.{buildEmitPlan}
+import types.runtime_abi.{runtimeRowsFromSource}
+import test_process.{boundedVerbSeconds, underRoot}
+import ir.core_ir_sexp_parse.{parseCProgram}
+import support.util.{listLen}
+import string.{contains, lines, split}
+import test.{fail, pass, expectNotEqual}
+import types.runtime_abi_types.{CallableShape(..)}
+import backend.extern_requirements.{
+  ExternRequirements(..), ExternRequirement(..), RequirementBinding(..),
+  planExterns, validateExternRequirements
+}
+import backend.emit_target.{Backend(..)}
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_plan.{buildEmitPlanReached}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.program_facts.{emptyFacts}
+import types.extern_source.{runtimeExternSymbol, ExternBindingKind(..)}
+import ir.core_ir_lower.{lowerProgramEmitWith}
+import ir.core_ir.{CProgram(..), DeclFacts(..), CExpr(..)}
+import ir.extern_lower.{walkExternVars, externFactIndex}
+import ir.extern_types.{ExternDeclFact(..), ExternUse(..), ExternUseKind(..)}
+import support.ordmap.{omEmpty, omInsert, omLookup}
+import support.util.{joinNl}
+import test.{
+  Expectation, expectAll, expectEach, expectEqual, expectTextContainsAll
+}
+
+lowered : String -> CProgram
+lowered = parse >> desugar >> annotateProgram >> lowerProgramEmitWith emptyFacts
+
+symbols : ExternRequirements -> List String
+symbols requirements = map (row => row.declaration.symbol) requirements.rows
+
+problems : CProgram -> ExternRequirements -> List String
+problems = validateExternRequirements LlvmBackend PreludeFreeRuntime
+
+requiresDefect : String -> CProgram -> ExternRequirements -> Expectation
+requiresDefect needle cp requirements =
+  expectTextContainsAll [needle] (joinNl (problems cp requirements))
+
+alterFirst : (ExternRequirement -> ExternRequirement) ->
+  ExternRequirements ->
+  ExternRequirements
+alterFirst f requirements = match requirements.rows
+  row :: rest => { requirements | rows = f row :: rest }
+  [] => requirements
+
+runtimeControl : CProgram
+runtimeControl = lowered "main = bitAnd 6 3"
+
+runtimeRequirements : ExternRequirements
+runtimeRequirements = planExterns LlvmBackend PreludeFreeRuntime runtimeControl
+
+test "selection follows Core uses and retains the complete explicit runtime domain" =
+  let p = lowered "main = intToString 42"
+  let u = lowered "main = charCode charMaxBound"
+  let select = planExterns LlvmBackend PreludeFreeRuntime
+  let loaded = planExterns LlvmBackend (LoadedRuntimeExterns []) p
+  expectAll [
+    expectEqual [runtimeExternSymbol "intToString"] (symbols (select p)),
+    expectEqual
+      [runtimeExternSymbol "charMaxBound", runtimeExternSymbol "charCode"]
+      (symbols (select u)),
+    expectEqual (symbols (select p)) (symbols (select p)),
+    expectEqual
+      []
+      (validateExternRequirements
+        LlvmBackend
+        (LoadedRuntimeExterns [])
+        p
+        loaded),
+    expectEqual "loaded" (match loaded.runtimeDomain
+      LoadedRuntimeExterns [] => "loaded"
+      _ => "wrong"),
+    expectEqual [] (symbols (select (lowered "main = unknownOrdinary"))),
+    expectEqual
+      []
+      (symbols (select (lowered "f bitAnd = bitAnd 6 3\nmain = 42"))),
+  ]
+
+test "whole and reached selection use the returned Core without another reach" =
+  let cp = lowered "unused x = intToString x\nmain = 42"
+  let whole = planExterns WasmBackend PreludeFreeRuntime cp
+  let (plan, reached) = buildEmitPlanReached PreludeFreeRuntime cp
+  expectAll [
+    expectEqual [runtimeExternSymbol "intToString"] (symbols whole),
+    expectEqual [] (symbols plan.externRequirements),
+    expectEqual
+      []
+      (validateExternRequirements
+        WasmBackend
+        PreludeFreeRuntime
+        reached
+        plan.externRequirements),
+  ]
+
+test "value, saturated and partial occurrences retain their use kind and argument count" =
+  let cp =
+    lowered
+      "value = bitAnd\nsaturated = bitAnd 6 3\npartial = bitAnd 6\nmain = 42"
+  let selected = planExterns LlvmBackend PreludeFreeRuntime cp
+  expectEqual
+    [(ExternValue, 0), (ExternApplication, 2), (ExternApplication, 1)]
+    (flatMap
+      (row =>
+        map (use => (use.useKind, use.suppliedCoreArguments)) row.selectedUses)
+      selected.rows)
+
+test "requirements reject missing, duplicate, unknown, target, binding and use mutations" =
+  let cp = runtimeControl
+  let good = runtimeRequirements
+  expectAll [
+    expectEqual [] (problems cp good),
+    requiresDefect "missing-extern-requirement" cp { good | rows = [] },
+    requiresDefect "duplicate-extern-requirement" cp { good |
+      rows = good.rows ++ good.rows,
+    },
+    requiresDefect "extern-target-mismatch" cp { good | target = WasmBackend },
+    requiresDefect "extern-domain-mismatch" cp { good |
+      runtimeDomain = LoadedRuntimeExterns [],
+    },
+    requiresDefect
+      "extern-binding-mismatch"
+      cp
+      (alterFirst
+        (row => { row | selectedBinding = RuntimeRequirement "bitOr" })
+        good),
+    requiresDefect
+      "extern-use-mismatch"
+      cp
+      (alterFirst (row => { row | selectedUses = [] }) good),
+    requiresDefect "unknown-extern-requirement" (lowered "main = 42") good,
+  ]
+
+corruptAbi : (CallableShape -> CallableShape) -> ExternRequirements
+corruptAbi f =
+  alterFirst
+    (row => { row |
+      declaration = { row.declaration |
+        callableShape = map f row.declaration.callableShape,
+      },
+    })
+    runtimeRequirements
+
+test "requirement ABI mutations cannot agree with a deleted derived projection" =
+  expectEach
+    (map
+      ((name, requirements) => (
+        name,
+        requiresDefect "extern-abi-mismatch" runtimeControl requirements,
+      ))
+      [
+        (
+          "written arity",
+          corruptAbi (shape => { shape | writtenValueArity = 7 }),
+        ),
+        ("Core arity", corruptAbi (shape => { shape | loweredCoreArity = 7 })),
+        (
+          "parameter head",
+          corruptAbi (shape => { shape | parameterHeads = ["Float", "Int"] }),
+        ),
+        ("result head", corruptAbi (shape => { shape | resultHead = "Float" })),
+        (
+          "schema",
+          corruptAbi (shape => { shape | canonicalSignature = "v2:wrong" }),
+        ),
+      ])
+
+alterFact : (ExternDeclFact -> ExternDeclFact) -> CProgram -> CProgram
+alterFact f (CProgram bs ca ct impls mc facts) =
+  let key = runtimeExternSymbol "bitAnd"
+  let inventory = match omLookup key facts.factExterns
+    Some fact => omInsert key (f fact) facts.factExterns
+    None => facts.factExterns
+  CProgram bs ca ct impls mc { facts | factExterns = inventory }
+
+test "full Core facts independently reject key, missing ABI and canonical runtime ABI defects" =
+  let missing =
+    alterFact (fact => { fact | callableShape = None }) runtimeControl
+  let wrong =
+    alterFact
+      (fact => { fact |
+        callableShape =
+          map (shape => { shape | loweredCoreArity = 1 }) fact.callableShape,
+      })
+      runtimeControl
+  let badKey = alterFact (fact => { fact | symbol = "wrong" }) runtimeControl
+  let reserved =
+    walkExternVars
+      (_ _ _ addr => CVar "$extern$unknown" addr)
+      (lowered "main = ordinary")
+  let check needle cp =
+    requiresDefect needle cp (planExterns LlvmBackend PreludeFreeRuntime cp)
+  expectAll [
+    check "missing-extern-abi" missing,
+    check "extern-abi-mismatch" wrong,
+    check "extern-declaration-key-mismatch" badKey,
+    check "unknown-extern-declaration" reserved,
+  ]
+
+foreignControl : CProgram
+foreignControl =
+  lowered
+    """
+extern foreignAdd : Int -> Int -> Int
+  bind c "host_add"
+  bind js "hostAdd"
+main = foreignAdd 40 2
+"""
+
+test "target bindings keep C, JS and runtime identity distinct" =
+  let native = planExterns LlvmBackend PreludeFreeRuntime foreignControl
+  let wasm = planExterns WasmBackend PreludeFreeRuntime foreignControl
+  expectAll [
+    expectEqual
+      [ForeignRequirement "c" (Some "host_add")]
+      (map (row => row.selectedBinding) native.rows),
+    expectEqual
+      [ForeignRequirement "js" (Some "hostAdd")]
+      (map (row => row.selectedBinding) wasm.rows),
+    expectEqual [] (problems foreignControl native),
+    expectEqual
+      []
+      (validateExternRequirements
+        WasmBackend
+        PreludeFreeRuntime
+        foreignControl
+        wasm),
+    requiresDefect
+      "extern-binding-mismatch"
+      foreignControl
+      (alterFirst
+        (row => { row |
+          selectedBinding = ForeignRequirement "c" (Some "wrong_alias"),
+        })
+        native),
+    expectEqual
+      [RuntimeRequirement "bitAnd"]
+      (map (row => row.selectedBinding) runtimeRequirements.rows),
+  ]
+
+test "native prototypes preserve unused declarations and enforce one C symbol ABI" =
+  let unused =
+    lowered """
+extern unused : Int -> Int
+  bind c "unused_host"
+main = 42
+"""
+  let requirements = planExterns LlvmBackend PreludeFreeRuntime unused
+  let aliases =
+    lowered
+      """
+extern first : Int -> Int
+  bind c "same_host"
+extern second : Float -> Int
+  bind c "same_host"
+main = 42
+"""
+  expectAll [
+    expectEqual [] (symbols requirements),
+    expectEqual
+      ["unused"]
+      (map (fact => fact.declaredName) requirements.nativePrototypes),
+    expectEqual [] (problems unused requirements),
+    requiresDefect "extern-prototype-mismatch" unused { requirements |
+      nativePrototypes = [],
+    },
+    requiresDefect
+      "extern-abi-mismatch: C alias"
+      aliases
+      (planExterns LlvmBackend PreludeFreeRuntime aliases),
+  ]
+
+nativeArityMismatches : List String
+nativeArityMismatches = [
+  "appendFile",
+  "arrayBlit",
+  "arrayFill",
+  "arrayGetUnsafe",
+  "arrayMake",
+  "arrayMakeWith",
+  "arraySetUnsafe",
+  "atan2",
+  "bitAnd",
+  "bitOr",
+  "bitXor",
+  "byteBlockBlit",
+  "byteBlockCopyUnsafe",
+  "byteBlockGetUnsafe",
+  "byteBlockSetUnsafe",
+  "bytesToFloat64",
+  "canonicalizePath",
+  "fileExists",
+  "fileMode",
+  "floatRem",
+  "fsync",
+  "hypot",
+  "indexErrorAtSite",
+  "intBitAnd",
+  "intBitOr",
+  "intBitXor",
+  "intShiftLeft",
+  "intShiftRight",
+  "ioPoll",
+  "listDir",
+  "makeDir",
+  "netConnectStart",
+  "netRecv",
+  "netSend",
+  "netSendBytesFrom",
+  "netSendFrom",
+  "netSetNonblock",
+  "netSetNonblockListener",
+  "netSetTimeout",
+  "netShutdown",
+  "netTcpConnect",
+  "netTcpListen",
+  "netTryRecv",
+  "netTryRecvBytes",
+  "netTrySend",
+  "netTrySendBytesFrom",
+  "netTrySendFrom",
+  "panicAt",
+  "pow",
+  "randomInt",
+  "readFile",
+  "readFileBytes",
+  "removeDir",
+  "removeFile",
+  "rename",
+  "runCommand",
+  "runCommandBatch",
+  "shiftLeft",
+  "shiftRight",
+  "sliceError",
+  "statFile",
+  "stringCompare",
+  "stringCountOccurrences",
+  "stringEndsWith",
+  "stringIndexOf",
+  "stringJoin",
+  "stringLastIndexOf",
+  "stringSlice",
+  "stringStartsWith",
+  "u64BitAnd",
+  "u64BitOr",
+  "u64BitXor",
+  "u64MulHigh",
+  "u64ShiftLeft",
+  "u64ShiftRight",
+  "writeFile",
+  "writeFileBytes",
+  "writeFileMode",
+]
+
+checkEtaArity : CallableShape -> String -> Expectation
+checkEtaArity shape name =
+  let cp = lowered ("main = let _ = " ++ name ++ " in 42")
+  let input = makeEmitInput PreludeFreeRuntime [] [] 0 [] [] ""
+  let (text, _) =
+    emitProgramRecord input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
+  let definitions =
+    filter (line => contains "define internal i64 @mdk_eta_" line) (lines text)
+  expectEqual
+    [shape.loweredCoreArity]
+    (map (line => listLen (split "," line) - 1) definitions)
+
+test "every native census mismatch eta wrapper uses the independently parsed runtime Core arity" =
+  match readFile (underRoot "stdlib/runtime.mdk")
+    Err e => fail e
+    Ok source =>
+      let abi =
+        fold
+          (index (name, shape) => omInsert name shape index)
+          omEmpty
+          (runtimeRowsFromSource (parse source))
+      expectEach
+        (map
+          (name => (
+            name,
+            match omLookup name abi
+              None => fail ("runtime declaration disappeared: " ++ name)
+              Some shape => checkEtaArity shape name,
+          ))
+          nativeArityMismatches)
+
+duplicateProbeVar : String
+duplicateProbeVar = "MEDAKA_EXTERN_DUPLICATE_PROBE"
+
+duplicateDecodedProgram : String
+duplicateDecodedProgram =
+  """
+(CProgram () () () () () (facts () () () none (externs
+(extern symbol origin name foreign () missing-abi raw)
+(extern symbol origin name foreign () missing-abi raw))))
+"""
+
+test "source and decoded declaration rows reject duplicates before map insertion" =
+  match getEnv duplicateProbeVar
+    Some "decoded" =>
+      let (CProgram _ _ _ _ _ facts) = parseCProgram duplicateDecodedProgram
+      expectEqual None (omLookup "symbol" facts.factExterns)
+    Some "source" => match runtimeRequirements.rows
+      row :: _ =>
+        let index = externFactIndex [row.declaration, row.declaration]
+        expectEqual None (omLookup row.declaration.symbol index)
+      [] => fail "missing runtime test row"
+    Some _ => fail "invalid duplicate selector"
+    None =>
+      expectEach
+        (map
+          (kind => (
+            kind,
+            match boundedVerbSeconds 90 "env" [
+              duplicateProbeVar ++ "=" ++ kind,
+              executablePath (),
+            ]
+              Err e => fail e
+              Ok (code, out, err) => expectAll [
+                expectNotEqual 0 code,
+                expectTextContainsAll ["duplicate-extern-declaration"] err,
+              ],
+          ))
+          ["decoded", "source"])

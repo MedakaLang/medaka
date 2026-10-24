@@ -1,0 +1,46 @@
+import frontend.parser.{parse}
+import types.runtime_abi.{runtimeAbi, runtimeRowsFromSource, renderRuntimeAbi}
+import types.runtime_abi_data.{runtimeAbiRows}
+import types.runtime_abi_types.{CallableShape(..)}
+import types.runtime_grants.{fileGrantExterns}
+import support.ordmap.{omLookup, omFromPairs, omEmpty, omKeys}
+import support.util.{listLen}
+import test_process.{underRoot}
+import test.{expectEqual, expectAll, expectSome, expectOkThen}
+
+test "the complete generated ABI is the runtime source projection in both directions" =
+  expectOkThen
+    (src =>
+      let projected = runtimeRowsFromSource (parse src)
+      let keys = omKeys (omFromPairs projected omEmpty)
+      expectAll [
+        expectEqual projected runtimeAbiRows,
+        expectEqual runtimeAbiRows projected,
+        expectEqual (listLen projected) (listLen keys),
+        expectEqual 210 (listLen projected),
+        expectEqual
+          (renderRuntimeAbi projected)
+          (renderRuntimeAbi (runtimeRowsFromSource (parse src))),
+      ])
+    (readFile (underRoot "stdlib/runtime.mdk"))
+
+test "runtime ABI keeps written and lowered arities and callback signatures distinct" = expectAll
+  [
+    expectEqual
+      (Some (1, 2))
+      (map
+        (s => (s.writtenValueArity, s.loweredCoreArity))
+        (runtimeAbi "readFile")),
+    expectEqual
+      (Some (2, 4))
+      (map
+        (s => (s.writtenValueArity, s.loweredCoreArity))
+        (runtimeAbi "rename")),
+    expectEqual (Some (1, 1)) (omLookup "statFile" fileGrantExterns),
+    expectEqual
+      (Some (["Int", ""], "Array"))
+      (map
+        (s => (s.parameterHeads, s.resultHead))
+        (runtimeAbi "arrayMakeWith")),
+    expectSome (runtimeAbi "arrayMakeWith"),
+  ]

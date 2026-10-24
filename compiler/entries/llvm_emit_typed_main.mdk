@@ -1,3 +1,5 @@
+import types.extern_source.{externSourceHeadRows}
+import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- TYPED driver for the Stage 2.4 LLVM de-risking spike (slice 6 — typeclass
 -- dispatch).  The typed analog of llvm_emit_main.mdk: it runs the SAME front end
 -- `medaka build` ships (desugar → elaborateModules: RKey/EDictAt route stamping
@@ -29,18 +31,17 @@ import types.typecheck.{
   checkedFfiExternTypeNames,
 }
 import types.private_mangle.{mangleUnitsEv}
-import types.program_facts.{factsOfElabWith}
+import types.program_facts.{factsOfElabSources, factsWithEvidence}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmitWith,
   methodIfaceTable,
   ctorFieldTypeNames,
-  externArities,
   validateFfiExternTypeNames,
 }
 import ir.core_ir.{
-  CProgram(..), CBind(..), CClause(..), CExpr(..), DeclFacts(..)
+  CProgram(..), CBind(..), CClause(..), CExpr(..), DeclFacts(..), noDeclFacts
 }
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
@@ -89,7 +90,7 @@ emitIsolation runtimePath pPath pPlusUPath =
 -- `main` is stamped, as every lowered binder is, so the emitter reaches the node.
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
-  let input = makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" []
+  let input = makeEmitInput PreludeFreeRuntime [] [] 0 [] [] ""
   let mainId = BinderId "" 0
   let cp =
     CProgram
@@ -103,6 +104,7 @@ emitGapIsolation =
         factRequires = [],
         factSupers = [],
         factEntryOutcome = None,
+        factExterns = noDeclFacts.factExterns,
         factBinders = [
           BinderRow {
             brId = mainId,
@@ -113,11 +115,12 @@ emitGapIsolation =
           },
         ],
       }
-  let plan = buildEmitPlan LlvmBackend cp
+  let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
   let (_, gaps) = emitProgramRecord input plan cp
   if contains "?\tunsupported Core IR node CMatch" gaps then
     let _ = putStr "LLVM_GAP_RECORD_OK\n"
-    let _ = emitProgram input (buildEmitPlan LlvmBackend cp) cp
+    let _ =
+      emitProgram input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
     failWith
       "LLVM gap isolation failure: strict emission returned after a recorded gap"
   else
@@ -138,20 +141,27 @@ runEmit runtimeDecls preludeDecls userDecls =
     livePrelude
     [("__user__", userDecls)]
   let (coreE, modulesE, _, _, evTable, _, _) = elab
+  let externFacts =
+    factsOfElabSources checkedFfiExternTypeNamesModules outputs elab evTable
   let (coreD, modules2, evTableM) = mangleUnitsEv evTable coreE modulesE
   let mangled = coreD ++ flatMap snd modules2
+  let _ =
+    validateFfiExternTypeNames
+      (externSourceHeadRows (optionOr [] externFacts.pfExternSources))
   let input =
     makeEmitInput
       (runtimeDomain (externDecls runtimeDecls))
       (methodIfaceTable mangled)
       (ctorFieldTypeNames mangled)
-      (externArities runtimeDecls)
       0
       []
       []
       ""
-      (validateFfiExternTypeNames (checkedFfiExternTypeNames mangled))
-  let cp = lowerProgramEmitWith (factsOfElabWith evTableM elab) mangled
-  emitProgram input (buildEmitPlan LlvmBackend cp) cp
+
+  let cp = lowerProgramEmitWith (factsWithEvidence evTableM externFacts) mangled
+  emitProgram
+    input
+    (buildEmitPlan LlvmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
+    cp
 
 main = oracleMain ()

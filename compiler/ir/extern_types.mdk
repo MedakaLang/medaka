@@ -1,0 +1,23 @@
+import types.runtime_abi_types.{CallableShape}
+import types.extern_source.{ExternBindingKind, ExternProvenance}
+
+public export data ExternDeclFact = ExternDeclFact {
+  symbol : String,
+  originModule : String,
+  declaredName : String,
+  bindingKind : ExternBindingKind,
+  hostBindings : List (String, String),
+  callableShape : Option CallableShape,
+  provenance : ExternProvenance,
+} deriving (Eq, Debug)
+
+public export data ExternUseKind =
+  | ExternValue
+  | ExternApplication
+  deriving (Eq, Debug)
+
+public export data ExternUse = ExternUse {
+  useSymbol : String,
+  useKind : ExternUseKind,
+  suppliedCoreArguments : Int,
+} deriving (Eq, Debug)

@@ -370,7 +370,7 @@ ctorTypeEntries _ = []
 -- user extern the program reaches (`T-TARGET-NO-BINDING`).  A driver that
 -- evaluates without that check still can, such as `check-policy`'s sample
 -- run, so the arm stays.  Intentional local duplicate of
--- `ir.core_ir_lower.externDeclNamesOf` rather than an import: `core_ir_lower`
+-- the removed lowering helper rather than an import: `core_ir_lower`
 -- already imports `eval.eval`, so the reverse import would cycle.
 export
 ffiExternNamesRef : Ref (List String)

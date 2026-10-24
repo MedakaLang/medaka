@@ -25,17 +25,17 @@ import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmitWith,
 }
-import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
+import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 
 -- the emitted WAT of `src`, as the modules entry would print it for that program
 watOf : String -> String
 watOf src =
   let decls = grantWholeDomain (desugar (parse src))
-  let input =
-    makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
+  let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
-  let (text, _) = emitProgramRecord input (buildEmitPlan WasmBackend cp) cp
+  let (text, _) =
+    emitProgramRecord input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
   text
 
 -- the (segment id, escaped payload) of one `(data $strseg_N "…")` line

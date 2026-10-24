@@ -30,7 +30,7 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
 }
-import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
+import backend.wasm_emit.{emitProgram, makeWasmEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 
 main = match args ()
@@ -46,11 +46,11 @@ withTarget targetPath = match readFile targetPath
     -- the SAME decl list that is lowered, so the head table and the lowered
     -- program's impl entries are projections of one program.
     let annotated = annotateProgram decls
-    let input =
-      makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
+    let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
     -- No typechecker ran, so the lowering stamps every binder `RTValue`; the
     -- signatures the source declares restate what they type.
     let cp =
       stampDeclaredSignatures decls (lowerProgramEmitWith emptyFacts annotated)
-    putStr (emitProgram input (buildEmitPlan WasmBackend cp) cp)
+    putStr
+      (emitProgram input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp)
   Err msg => ePutStrLn msg

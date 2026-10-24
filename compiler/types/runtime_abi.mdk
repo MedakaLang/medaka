@@ -1,0 +1,76 @@
+import frontend.ast.{Decl(..), ExternDecl(..), Ty(..)}
+import types.runtime_abi_types.{CallableShape(..)}
+import types.runtime_abi_data.{runtimeAbiRows}
+import types.runtime_grants.{runtimePathCount}
+import types.repr.{ppTy}
+import support.ordmap.{OrdMap, omEmpty, omFromPairs, omLookup}
+import support.util.{listLen, escStr, joinWith}
+
+export
+runtimeAbiIndex : OrdMap CallableShape
+runtimeAbiIndex = omFromPairs runtimeAbiRows omEmpty
+
+export
+runtimeAbi : String -> Option CallableShape
+runtimeAbi name = omLookup name runtimeAbiIndex
+
+export
+signatureHeads : Ty -> (List String, String)
+signatureHeads (TyConstrained _ t) = signatureHeads t
+signatureHeads (TyEffect _ _ t) = signatureHeads t
+signatureHeads (TyNamed _ t _) = signatureHeads t
+signatureHeads (TyQual t _ _) = signatureHeads t
+signatureHeads (TyFun arg rest) =
+  let (args, ret) = signatureHeads rest
+  (signatureHead arg :: args, ret)
+signatureHeads t = ([], signatureHead t)
+
+signatureHead : Ty -> String
+signatureHead (TyCon { tyConName = name }) = name
+signatureHead (TyVar name) = name
+signatureHead (TyApp f _) = signatureHead f
+signatureHead (TyConstrained _ t) = signatureHead t
+signatureHead (TyEffect _ _ t) = signatureHead t
+signatureHead (TyNamed _ t _) = signatureHead t
+signatureHead (TyQual t _ _) = signatureHead t
+signatureHead _ = ""
+
+export
+sourceShape : Ty -> CallableShape
+sourceShape ty =
+  let (params, ret) = signatureHeads ty
+  let arity = listLen params
+  CallableShape {
+    writtenValueArity = arity,
+    loweredCoreArity = arity,
+    parameterHeads = params,
+    resultHead = ret,
+    canonicalSignature = "v1:" ++ ppTy ty,
+  }
+
+export
+runtimeRowsFromSource : List Decl -> List (String, CallableShape)
+runtimeRowsFromSource [] = []
+runtimeRowsFromSource ((DExtern ed) :: rest) =
+  let shape = sourceShape ed.edTy
+  (
+      ed.edName,
+      { shape |
+        loweredCoreArity = shape.writtenValueArity + runtimePathCount ed.edName,
+      },
+    )
+    :: runtimeRowsFromSource rest
+runtimeRowsFromSource ((DAttrib _ inner) :: rest) =
+  runtimeRowsFromSource (inner :: rest)
+runtimeRowsFromSource (_ :: rest) = runtimeRowsFromSource rest
+
+export
+renderRuntimeAbi : List (String, CallableShape) -> String
+renderRuntimeAbi rows =
+  "import types.runtime_abi_types.{CallableShape(..)}\n\nexport\nruntimeAbiRows : List (String, CallableShape)\nruntimeAbiRows = [\n"
+    ++ joinWith "" (map renderRow rows)
+    ++ "]\n"
+
+renderRow : (String, CallableShape) -> String
+renderRow (name, s) =
+  "  (\{escStr name}, CallableShape { writtenValueArity = \{intToString s.writtenValueArity}, loweredCoreArity = \{intToString s.loweredCoreArity}, parameterHeads = [\{joinWith ", " (map escStr s.parameterHeads)}], resultHead = \{escStr s.resultHead}, canonicalSignature = \{escStr s.canonicalSignature} }),\n"

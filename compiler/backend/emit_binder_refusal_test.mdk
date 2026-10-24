@@ -21,13 +21,14 @@ import ir.core_ir.{
   CallMode(..),
   CallSite(..),
   DeclFacts(..),
+  noDeclFacts,
 }
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import backend.core_validate.{validateBinderStamps}
 import backend.emit_plan.{buildEmitPlan}
 
 import backend.llvm_emit.{emitProgram as llvmEmit, makeEmitInput}
-import backend.wasm_emit.{emitProgram as wasmEmit, makeWasmEmitInputFull}
+import backend.wasm_emit.{emitProgram as wasmEmit, makeWasmEmitInput}
 
 probeVar : String
 probeVar = "MEDAKA_BINDER_REFUSAL_PROBE"
@@ -71,6 +72,7 @@ program paramRow =
       factRequires = [],
       factSupers = [],
       factEntryOutcome = None,
+      factExterns = noDeclFacts.factExterns,
       factBinders =
         [row "f" 1 RTValue (Some RTInt), row "main" 2 RTInt (Some RTInt)]
           ++ (if paramRow then [row "x" 3 RTInt None] else []),
@@ -79,15 +81,15 @@ program paramRow =
 llvmText : CProgram -> String
 llvmText cp =
   llvmEmit
-    (makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" [])
-    (buildEmitPlan LlvmBackend cp)
+    (makeEmitInput PreludeFreeRuntime [] [] 0 [] [] "")
+    (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
     cp
 
 wasmText : CProgram -> String
 wasmText cp =
   wasmEmit
-    (makeWasmEmitInputFull PreludeFreeRuntime [] [])
-    (buildEmitPlan WasmBackend cp)
+    (makeWasmEmitInput PreludeFreeRuntime [])
+    (buildEmitPlan WasmBackend PreludeFreeRuntime cp)
     cp
 
 -- What the refusal says about `x`.
