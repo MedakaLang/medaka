@@ -384,7 +384,11 @@ runStaged on targetPath rsrc csrc tsrc =
   let tE0 = now ()
   let aE0 = allocSnap ()
   let oE0 = opSnap ()
-  let _ = emitProgram input (buildEmitPlan LlvmBackend cprog) cprog
+  let _ =
+    emitProgram
+      input
+      (buildEmitPlan LlvmBackend (runtimeDomain (externDecls rDecls)) cprog)
+      cprog
   let tE1 = now ()
   let _ =
     emitPhaseAO
@@ -504,7 +508,14 @@ wasmStage on True outputs runtimeDecls live cprog declsOp =
   let tWe0 = now ()
   let aWe0 = allocSnap ()
   let oWe0 = opSnap ()
-  let _ = wasmText input (buildEmitPlan WasmBackend cprog) cprog
+  let _ =
+    wasmText
+      input
+      (buildEmitPlan
+        WasmBackend
+        (runtimeDomain (externDecls runtimeDecls))
+        cprog)
+      cprog
   let tWe1 = now ()
   emitPhaseAO
     on

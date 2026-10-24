@@ -52,5 +52,6 @@ withTarget targetPath = match readFile targetPath
     -- signatures the source declares restate what they type.
     let cp =
       stampDeclaredSignatures decls (lowerProgramEmitWith emptyFacts annotated)
-    putStr (emitProgram input (buildEmitPlan WasmBackend cp) cp)
+    putStr
+      (emitProgram input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp)
   Err msg => ePutStrLn msg

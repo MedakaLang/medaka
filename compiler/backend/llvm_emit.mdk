@@ -169,9 +169,12 @@
 --            cp_count is cached either way, so stringLength is O(1).
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
+import types.extern_source.{ExternBindingKind(..)}
+import backend.extern_requirements.{ExternRequirements, requirementFacts}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{
   hostRows,
+  hostSymbol,
   isWildPat,
   Lit(..),
   Pat(..),
@@ -870,6 +873,7 @@ data Emit = Emit {
   -- the ordinal of the row's id
   binderRows : BM.Map Int BinderRow,
   externFacts : OrdMap ExternDeclFact,
+  nativePrototypes : List ExternDeclFact,
   -- the super count of each interface word (`DeclFacts.factSupers`); a word
   -- absent from it has no supers
   superCounts : OrdMap Int,
@@ -4677,12 +4681,16 @@ notAnExternFamily fname =
 -- the declared (param type-head names, return type-head name) of a USER extern,
 -- or None when `name` is not one.
 ffiSigOf : Emit -> String -> Option (List String, String)
-ffiSigOf e name = map snd (omLookup name e.input.ffiExternIndex)
+ffiSigOf e name = match omLookup name e.externFacts
+  Some fact if fact.bindingKind == ForeignBinding
+    && isSome (hostSymbol "c" fact.hostBindings) =>
+    map (shape => (shape.parameterHeads, shape.resultHead)) fact.callableShape
+  _ => None
 
 -- the C symbol a user extern links to: its `bind c` symbol, else its own name.
 ffiSymOf : Emit -> String -> String
-ffiSymOf e name = match omLookup name e.input.ffiExternIndex
-  Some (sym, _) => sym
+ffiSymOf e name = match omLookup name e.externFacts
+  Some fact => optionOr name (hostSymbol "c" fact.hostBindings)
   None => name
 
 isFfiExtern : Emit -> String -> Bool
@@ -4768,40 +4776,31 @@ ffiJoinComma [] = ""
 ffiJoinComma [x] = x
 ffiJoinComma (x :: rest) = "\{x}, \{ffiJoinComma rest}"
 
--- One `declare` per user extern, plus the two runtime marshalling helpers, right
--- after the preamble.  ⚠️ EMPTY INDEX ⇒ NOTHING EMITTED: a program with no user
--- extern (every program in the corpus, the compiler itself included) gets
--- byte-identical IR to the pre-#2074 emitter, which is what the emitter gates
--- pin.  Declares are emitted for EVERY declared user extern, called or not — an
--- unused `declare` produces no relocation, so an uncalled extern still links.
+-- Prototype ownership includes unused declarations; expression bindings use only
+-- the selected requirements. Two aliases share a declaration after ABI validation.
 emitFfiDeclares : Emit -> Unit
-emitFfiDeclares e = match omKeys e.input.ffiExternIndex
+emitFfiDeclares e = match e.nativePrototypes
   [] => ()
-  names =>
+  rows =>
     let _ = emit e "declare ptr @mdk_ffi_array_int_out(i64)"
     let _ = emit e "declare void @mdk_ffi_array_int_in(i64, ptr)"
     let _ = emit e "declare i64 @mdk_ffi_str_in(ptr)"
-    emitFfiDeclareEach e names
+    emitFfiDeclareSeen e omEmpty rows
 
-emitFfiDeclareEach : Emit -> List String -> Unit
-emitFfiDeclareEach e names = emitFfiDeclareSeen e omEmpty names
-
--- Two Medaka names bound to one C symbol share one `declare`; the validator
--- (`ffiCheckExternRowsDistinct`) already guarantees their signatures agree.
-emitFfiDeclareSeen : Emit -> OrdMap Unit -> List String -> Unit
+emitFfiDeclareSeen : Emit -> OrdMap Unit -> List ExternDeclFact -> Unit
 emitFfiDeclareSeen _ _ [] = ()
-emitFfiDeclareSeen e seen (n :: rest) =
-  let sym = ffiSymOf e n
-  match omLookup sym seen
-    Some _ => emitFfiDeclareSeen e seen rest
-    None =>
-      let _ = match ffiSigOf e n
-        Some (ptys, rty) =>
-          emit
-            e
-            "declare \{ffiCRetTy rty} @\{sym}(\{ffiJoinComma (map ffiCParamTy (ffiValueParams ptys))})"
-        None => ()
-      emitFfiDeclareSeen e (omInsert sym () seen) rest
+emitFfiDeclareSeen e seen (fact :: rest) =
+  let sym = optionOr fact.declaredName (hostSymbol "c" fact.hostBindings)
+  if omHasKey sym seen then
+    emitFfiDeclareSeen e seen rest
+  else
+    let _ = match fact.callableShape
+      Some shape =>
+        emit
+          e
+          "declare \{ffiCRetTy shape.resultHead} @\{sym}(\{ffiJoinComma (map ffiCParamTy (ffiValueParams shape.parameterHeads))})"
+      None => panic ("internal error: missing-extern-abi: " ++ fact.symbol)
+    emitFfiDeclareSeen e (omInsert sym () seen) rest
 
 -- SATURATED foreign call.  Arguments emit left-to-right exactly as every other
 -- call shape does, then each is marshalled per its DECLARED type head — never per
@@ -9945,15 +9944,13 @@ emitMethodEtaDefine e lamName name arity =
   let _ = endDefine e scope
   bufRef e := saved
 
--- the declared arity of extern `name` = the arrow count of its runtime signature
--- (`EmitInput.externArityIndex`).  An extern with no recorded signature defaults
--- to arity 1 (every current extern is annotated, so this is a defensive
--- fallback, not a live path).
+-- Grant parameters are already present in Core; eta wrappers forward them once.
 externArity : Emit -> String -> Int
-externArity e name =
-  match omLookup (runtimeName e name) e.input.externArityIndex
-    Some n => n
-    None => 1
+externArity e name = match omLookup name e.externFacts
+  Some fact => match fact.callableShape
+    Some shape => shape.loweredCoreArity
+    None => panic ("internal error: missing-extern-abi: " ++ name)
+  None => panic ("internal error: missing-extern-requirement: " ++ name)
 
 -- emit the captureless extern-eta forwarder `@mdk_etaN(i64 %clos, %arg…) {
 -- <inline applied-extern body over %arg0..%arg(N-1)>; ret }` into the side buffer
@@ -14440,7 +14437,7 @@ tableStats e = [
   ("implEntries", listLen !e.implEntries),
   ("globalsReg", listLen !e.globalsReg),
   ("ctorType", optOmSize !e.ctorTypeMap),
-  ("externArity", omSize e.input.externArityIndex),
+  ("externArity", omSize e.externFacts),
   ("knownFnMap", optOmSize !e.knownFnMap),
   ("sigMap", optOmSize !e.sigMap),
 ]
@@ -14467,6 +14464,7 @@ programEmitConfig gapMode input plan groups = EmitStateConfig {
   lazyNames = plan.lazyGlobals,
   trmc = plan.trmc,
   methodResults = plan.methodResults,
+  externRequirements = plan.externRequirements,
   dispGroups = Some plan.dispGroups,
 }
 
@@ -14570,6 +14568,7 @@ data EmitStateConfig = EmitStateConfig {
   lazyNames : List String,
   trmc : TrmcVerdicts,
   methodResults : OrdMap (OrdMap MethodResultFact),
+  externRequirements : ExternRequirements,
   dispGroups : Option (List DispGroup),
 }
 
@@ -14637,7 +14636,8 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     buf = Ref [],
     fnNames = Ref (collectFns groups),
     binderRows = rows,
-    externFacts = facts.factExterns,
+    externFacts = requirementFacts cfg.externRequirements,
+    nativePrototypes = cfg.externRequirements.nativePrototypes,
     superCounts = omFromPairs facts.factSupers omEmpty,
     globalTys = globalStampTys rows (filter (b => not (isFnBind b)) groups),
     lams = Ref [],
@@ -15073,6 +15073,7 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
     lazyNames = [],
     trmc = plan.trmc,
     methodResults = plan.methodResults,
+    externRequirements = plan.externRequirements,
     dispGroups = None,
   }
   let found = unprovidedExterns Record input plan cp

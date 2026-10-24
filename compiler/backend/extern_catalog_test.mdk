@@ -292,7 +292,7 @@ emitWat src =
   let input =
     makeWasmEmitInputFull PreludeFreeRuntime (ctorFieldTypeNames decls) []
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
-  emitProgramRecord input (buildEmitPlan WasmBackend cp) cp
+  emitProgramRecord input (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
 
 -- A program whose one source of `use` is the call to extern `name` emits `marker`,
 -- a definition the demand's runtime group, type or host import block carries.

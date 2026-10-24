@@ -762,7 +762,8 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
   -- reached) that no dispatchable method name in this program can reach.  Without
   -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
   let lowered = lowerProgramEmitWith facts allDecls
-  let (plan, reached) = buildEmitPlanReached ffiRows lowered
+  let (plan, reached) =
+    buildEmitPlanReached (runtimeDomain (externDecls runtimeDecls)) lowered
   let wat = emitProgram input plan reached
   let _ = emitWatMarker warnTriples
   putStr wat

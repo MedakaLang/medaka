@@ -124,6 +124,9 @@ import frontend.ast.{
   isFixedIntHead, isBoxed64Head
 }
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
+import backend.extern_requirements.{
+  validateExternRequirements, requirementHostRows
+}
 import backend.global_plan.{validateGlobalInit}
 import backend.emit_target.{Backend(..), backendName}
 import backend.emit_plan.{EmitPlan, indexMethodResults, lookupMethodResult}
@@ -175,7 +178,7 @@ validateForEmission : Backend ->
   CProgram ->
   EmissionValidation
 validateForEmission backend domain plan cp =
-  match emissionDefects backend plan cp
+  match emissionDefects backend domain plan cp
     [] =>
       let names = match domain
         PreludeFreeRuntime => []
@@ -191,8 +194,12 @@ validateForEmission backend domain plan cp =
         }
     bad => EmissionValidation { defects = bad, externFindings = [] }
 
-emissionDefects : Backend -> EmitPlan -> CProgram -> List CoreDefect
-emissionDefects backend plan cp =
+emissionDefects : Backend ->
+  RuntimeExternDomain ->
+  EmitPlan ->
+  CProgram ->
+  List CoreDefect
+emissionDefects backend domain plan cp =
   if backendName plan.target /= backendName backend then
     [
       CoreDefect
@@ -204,6 +211,9 @@ emissionDefects backend plan cp =
       Some message => [CoreDefect message]
       None => firstShapeDefect [
         () => validateExternMetadata cp,
+        () =>
+          validateExternRequirements backend domain cp plan.externRequirements,
+        () => validateRequirementProjection backend plan,
         () => validateGlobalInit cp plan.lazyGlobals plan.globalInit,
         () => validateRecords cp,
         () => validateBinderStamps cp,
@@ -222,6 +232,17 @@ firstShapeDefect [] = []
 firstShapeDefect (check :: rest) = match check ()
   [] => firstShapeDefect rest
   bad => [CoreDefect ("internal error: " ++ joinWith "\n" bad)]
+
+validateRequirementProjection : Backend -> EmitPlan -> List String
+validateRequirementProjection WasmBackend plan =
+  if map
+      (imp => (imp.medakaName, (imp.jsName, (imp.params, imp.result))))
+      plan.jsImports
+    == requirementHostRows plan.externRequirements then
+    []
+  else
+    ["extern-import-mismatch"]
+validateRequirementProjection _ _ = []
 
 validateExternMetadata : CProgram -> List String
 validateExternMetadata (cp@(CProgram _ _ _ _ _ facts)) =

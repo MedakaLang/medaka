@@ -2,6 +2,9 @@
 -- and neither recomputes.  Built once, right after lowering, from the program an
 -- emitter is about to receive.
 
+import backend.extern_requirements.{
+  ExternRequirements, planExterns, requirementHostRows
+}
 import backend.global_plan.{GlobalInitPlan, planGlobals}
 import backend.emit_target.{Backend(..)}
 import frontend.ast.{Lit(..), Pat(..), hostRows}
@@ -25,6 +28,7 @@ import ir.core_ir.{
   CTree(..),
 }
 import backend.extern_catalog.{
+  RuntimeExternDomain,
   WasmUse(..),
   fileBoundHostKeys,
   wasmHostKeys,
@@ -83,6 +87,7 @@ import backend.trmc_analysis.{
 -- three are empty on an LLVM plan.
 public export data EmitPlan = EmitPlan {
   target : Backend,
+  externRequirements : ExternRequirements,
   entryOutcome : Option EntryFact,
   methodResults : OrdMap (OrdMap MethodResultFact),
   wasmOnlyReach : Option ReachUnits,
@@ -148,40 +153,38 @@ public export data TrmcVerdicts = TrmcVerdicts {
 }
 
 export
-buildEmitPlan : Backend -> CProgram -> EmitPlan
-buildEmitPlan target prog = planOver target None [] prog
+buildEmitPlan : Backend -> RuntimeExternDomain -> CProgram -> EmitPlan
+buildEmitPlan target domain prog = planOver target domain None prog
 
 -- The wasm modules entries' builder: reach first, then every plan field over the
--- reached program, which is also the program the emitter must receive.  `ffiRows`
--- are the program's user FFI externs, each with its bindings and signature heads
--- (`types.typecheck.checkedFfiExternTypeNamesModules`).
+-- reached program, which is also the program the emitter must receive. The
+-- complete runtime domain is retained separately from the reached selection.
 export
-buildEmitPlanReached : List (String, (List (String, String), (List String, String))) ->
-  CProgram ->
-  (EmitPlan, CProgram)
-buildEmitPlanReached ffiRows prog =
+buildEmitPlanReached : RuntimeExternDomain -> CProgram -> (EmitPlan, CProgram)
+buildEmitPlanReached domain prog =
   let reached = wasmReachFilter prog
   let units = ReachUnits {
     total = programUnitCount prog,
     kept = programUnitCount reached,
   }
-  (planOver WasmBackend (Some units) ffiRows reached, reached)
+  (planOver WasmBackend domain (Some units) reached, reached)
 
 programUnitCount : CProgram -> Int
 programUnitCount (CProgram groups _ _ impls _ _) =
   listLen groups + listLen impls
 
 planOver : Backend ->
+  RuntimeExternDomain ->
   Option ReachUnits ->
-  List (String, (List (String, String), (List String, String))) ->
   CProgram ->
   EmitPlan
-planOver target reach ffiRows prog =
+planOver target domain reach prog =
   let (CProgram groups ctorArs _ impls _ facts) = prog
   -- first entry wins on a repeated constructor name, as in both emitters' tables
   let ctors = omFromPairs (reverseL ctorArs) omEmpty
   let fns = filterList isTopFn groups
-  let (demand, keys, js) = match target
+  let requirements = planExterns target domain prog
+  let (demand, keys, _) = match target
     WasmBackend =>
       wasmDemandOf
         facts.factExterns
@@ -194,6 +197,7 @@ planOver target reach ffiRows prog =
   let eager = eagerReachMap groups
   EmitPlan {
     target = target,
+    externRequirements = requirements,
     entryOutcome = facts.factEntryOutcome,
     methodResults = indexMethodResults facts.factMethodResults,
     wasmOnlyReach = reach,
@@ -210,7 +214,17 @@ planOver target reach ffiRows prog =
     dispGroups = planDispatchGroups ctors fns groups impls,
     wasmDemand = demand,
     hostKeys = keys,
-    jsImports = js,
+    jsImports = match target
+      WasmBackend =>
+        map
+          ((symbol, (host, (params, result))) => JsImport {
+            medakaName = symbol,
+            jsName = host,
+            params = params,
+            result = result,
+          })
+          (requirementHostRows requirements)
+      _ => [],
   }
 
 export

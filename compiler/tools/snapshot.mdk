@@ -663,7 +663,11 @@ llvmOf runtimeDecls allDecls cp =
       []
       ""
       (externHeadRows cp)
-  let (text, gaps) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
+  let (text, gaps) =
+    emitProgramRecord
+      input
+      (buildEmitPlan LlvmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
+      cp
   withGaps ";" text gaps
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
@@ -673,7 +677,11 @@ wasmOf runtimeDecls allDecls cp =
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
       (externHeadRows cp)
-  let (text, gaps) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
+  let (text, gaps) =
+    wasmRecord
+      input
+      (buildEmitPlan WasmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
+      cp
   withGaps ";;" text gaps
 
 withGaps : String -> String -> List String -> String

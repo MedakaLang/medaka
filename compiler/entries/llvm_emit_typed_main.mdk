@@ -116,11 +116,12 @@ emitGapIsolation =
           },
         ],
       }
-  let plan = buildEmitPlan LlvmBackend cp
+  let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
   let (_, gaps) = emitProgramRecord input plan cp
   if contains "?\tunsupported Core IR node CMatch" gaps then
     let _ = putStr "LLVM_GAP_RECORD_OK\n"
-    let _ = emitProgram input (buildEmitPlan LlvmBackend cp) cp
+    let _ =
+      emitProgram input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
     failWith
       "LLVM gap isolation failure: strict emission returned after a recorded gap"
   else
@@ -158,6 +159,9 @@ runEmit runtimeDecls preludeDecls userDecls =
       (validateFfiExternTypeNames
         (externSourceHeadRows (optionOr [] externFacts.pfExternSources)))
   let cp = lowerProgramEmitWith (factsWithEvidence evTableM externFacts) mangled
-  emitProgram input (buildEmitPlan LlvmBackend cp) cp
+  emitProgram
+    input
+    (buildEmitPlan LlvmBackend (runtimeDomain (externDecls runtimeDecls)) cp)
+    cp
 
 main = oracleMain ()

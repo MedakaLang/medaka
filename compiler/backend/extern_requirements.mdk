@@ -1,0 +1,228 @@
+import backend.emit_target.{Backend(..), backendName}
+import backend.extern_catalog.{RuntimeExternDomain(..), catalogRow}
+import ir.core_ir.{CProgram(..), DeclFacts(..)}
+import ir.extern_types.{ExternDeclFact(..), ExternUse(..)}
+import ir.extern_uses.{collectExternUses}
+import types.extern_source.{ExternBindingKind(..)}
+import types.runtime_abi_types.{CallableShape(..)}
+import types.runtime_abi.{runtimeAbi, sourceShape}
+import frontend.ast.{hostSymbol}
+import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert, omKeys, omHasKey}
+import support.util.{listLen, reverseL, startsWith}
+
+public export data RequirementBinding =
+  | RuntimeRequirement String
+  | ForeignRequirement String (Option String)
+  deriving (Eq, Debug)
+
+public export data ExternRequirement = ExternRequirement {
+  declaration : ExternDeclFact,
+  selectedBinding : RequirementBinding,
+  selectedUses : List ExternUse,
+} deriving (Eq, Debug)
+
+public export data ExternRequirements = ExternRequirements {
+  target : Backend,
+  runtimeDomain : RuntimeExternDomain,
+  rows : List ExternRequirement,
+  nativePrototypes : List ExternDeclFact,
+}
+
+bindingFor : Backend -> ExternDeclFact -> RequirementBinding
+bindingFor _ (ExternDeclFact { bindingKind = (RuntimeBinding key) }) =
+  RuntimeRequirement key
+bindingFor backend fact =
+  let host = match backend
+    LlvmBackend => "c"
+    WasmBackend => "js"
+    EvalBackend => "eval"
+  ForeignRequirement host (hostSymbol host fact.hostBindings)
+
+useIndex : List ExternUse -> OrdMap (List ExternUse)
+useIndex =
+  fold
+    (acc use =>
+      omInsert
+        use.useSymbol
+        (use :: optionOr [] (omLookup use.useSymbol acc))
+        acc)
+    omEmpty
+
+export
+planExterns : Backend -> RuntimeExternDomain -> CProgram -> ExternRequirements
+planExterns target domain (cp@(CProgram _ _ _ _ _ facts)) =
+  let uses = useIndex (collectExternUses cp)
+  ExternRequirements {
+    target = target,
+    runtimeDomain = domain,
+    nativePrototypes = prototypesFor target facts.factExterns,
+    rows =
+      filterMap
+        (symbol =>
+          map
+            (fact => ExternRequirement {
+              declaration = fact,
+              selectedBinding = bindingFor target fact,
+              selectedUses = reverseL (optionOr [] (omLookup symbol uses)),
+            })
+            (omLookup symbol facts.factExterns))
+        (omKeys uses),
+  }
+
+-- Consumers index the validated selection, never the complete declaration domain.
+export
+requirementFacts : ExternRequirements -> OrdMap ExternDeclFact
+requirementFacts requirements =
+  fold
+    (acc row => omInsert row.declaration.symbol row.declaration acc)
+    omEmpty
+    requirements.rows
+
+export
+requirementHostRows : ExternRequirements ->
+  List (String, (String, (List String, String)))
+requirementHostRows requirements =
+  filterMap
+    (row => match (row.selectedBinding, row.declaration.callableShape)
+      (ForeignRequirement _ (Some host), Some shape) => Some (
+        row.declaration.symbol,
+        (host, (shape.parameterHeads, shape.resultHead)),
+      )
+      _ => None)
+    requirements.rows
+
+export
+validateExternRequirements : Backend ->
+  RuntimeExternDomain ->
+  CProgram ->
+  ExternRequirements ->
+  List String
+validateExternRequirements backend domain (cp@(CProgram _ _ _ _ _ facts)) requirements =
+  let uses = useIndex (collectExternUses cp)
+  let (selected, duplicates) =
+    fold
+      ((index, bad) row =>
+        let symbol = row.declaration.symbol
+        (
+          omInsert symbol row index,
+          if omHasKey symbol index then
+            "duplicate-extern-requirement: " ++ symbol :: bad
+          else
+            bad,
+        ))
+      (omEmpty, [])
+      requirements.rows
+  (if backendName backend /= backendName requirements.target then
+      ["extern-target-mismatch: " ++ backendName requirements.target]
+    else
+      [])
+    ++ (if sameDomain domain requirements.runtimeDomain then
+      []
+    else
+      ["extern-domain-mismatch"])
+    ++ reverseL duplicates
+    ++ flatMap
+      (key => match omLookup key facts.factExterns
+        Some fact if key /= fact.symbol =>
+          ["extern-declaration-key-mismatch: " ++ key]
+        _ => [])
+      (omKeys facts.factExterns)
+    ++ flatMap
+      (symbol => match omLookup symbol facts.factExterns
+        None => ["unknown-extern-declaration: " ++ symbol]
+        Some fact =>
+          validateShape fact
+            ++ (match omLookup symbol selected
+              None => ["missing-extern-requirement: " ++ symbol]
+              Some row =>
+                (if row.declaration.bindingKind /= fact.bindingKind
+                    || row.declaration.hostBindings /= fact.hostBindings
+                    || row.declaration.originModule /= fact.originModule
+                    || row.declaration.declaredName /= fact.declaredName
+                    || row.selectedBinding /= bindingFor backend fact then
+                    ["extern-binding-mismatch: " ++ symbol]
+                  else
+                    [])
+                  ++ (if row.declaration.callableShape /= fact.callableShape
+                    || row.declaration.provenance /= fact.provenance then
+                    ["extern-abi-mismatch: " ++ symbol]
+                  else
+                    [])
+                  ++ (if row.selectedUses
+                    /= reverseL (optionOr [] (omLookup symbol uses)) then
+                    ["extern-use-mismatch: " ++ symbol]
+                  else
+                    [])))
+      (omKeys uses)
+    ++ flatMap
+      (row =>
+        if omHasKey row.declaration.symbol uses then
+          []
+        else
+          ["unknown-extern-requirement: " ++ row.declaration.symbol])
+      requirements.rows
+    ++ (if requirements.nativePrototypes
+      /= prototypesFor backend facts.factExterns then
+      ["extern-prototype-mismatch"]
+    else
+      [])
+    ++ flatMap validateShape requirements.nativePrototypes
+    ++ validateAliases backend requirements.nativePrototypes
+
+validateShape : ExternDeclFact -> List String
+validateShape fact = match fact.callableShape
+  None => ["missing-extern-abi: " ++ fact.symbol]
+  Some shape =>
+    let bad = ["extern-abi-mismatch: " ++ fact.symbol]
+    if shape.writtenValueArity /= listLen shape.parameterHeads
+      || shape.loweredCoreArity < shape.writtenValueArity
+      || not (startsWith "v1:" shape.canonicalSignature)
+      || shape.resultHead == "" then
+      bad
+    else match fact.bindingKind
+      ForeignBinding =>
+        if shape.loweredCoreArity /= shape.writtenValueArity then bad else []
+      RuntimeBinding key => match (runtimeAbi key, catalogRow key)
+        (Some canonical, Some _) => if shape /= canonical then bad else []
+        _ => ["extern-binding-mismatch: " ++ fact.symbol]
+
+sameDomain : RuntimeExternDomain -> RuntimeExternDomain -> Bool
+sameDomain PreludeFreeRuntime PreludeFreeRuntime = True
+sameDomain (LoadedRuntimeExterns a) (LoadedRuntimeExterns b) =
+  map (ed => (ed.edName, sourceShape ed.edTy)) a
+    == map (ed => (ed.edName, sourceShape ed.edTy)) b
+sameDomain _ _ = False
+
+-- Native prototypes remain complete even when no expression uses a declaration.
+prototypesFor : Backend -> OrdMap ExternDeclFact -> List ExternDeclFact
+prototypesFor LlvmBackend facts =
+  filterMap
+    (key => match omLookup key facts
+      Some fact if fact.bindingKind == ForeignBinding
+        && isSome (hostSymbol "c" fact.hostBindings) => Some fact
+      _ => None)
+    (omKeys facts)
+prototypesFor _ _ = []
+
+validateAliases : Backend -> List ExternDeclFact -> List String
+validateAliases LlvmBackend rows =
+  let (_, bad) =
+    fold
+      ((seen, bad) fact => match (
+        hostSymbol "c" fact.hostBindings,
+        fact.callableShape,
+      )
+        (Some host, Some shape) =>
+          let abi = (shape.parameterHeads, shape.resultHead)
+          (
+            omInsert host abi seen,
+            match omLookup host seen
+              Some previous if previous /= abi =>
+                "extern-abi-mismatch: C alias " ++ host :: bad
+              _ => bad,
+          )
+        _ => (seen, bad))
+      (omEmpty, [])
+      rows
+  reverseL bad
+validateAliases _ _ = []

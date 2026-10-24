@@ -1,3 +1,4 @@
+import backend.extern_catalog.{RuntimeExternDomain(..)}
 -- Sibling test for `compiler/backend/emit_plan.mdk` ([P-TEST-SIBLING]).
 --
 -- Run natively: the structural test reads the two emitter sources.
@@ -91,7 +92,7 @@ program binds =
     (CProgram binds [] [] [] [] noDeclFacts)
 
 planOf : List CBind -> EmitPlan
-planOf binds = buildEmitPlan LlvmBackend (program binds)
+planOf binds = buildEmitPlan LlvmBackend PreludeFreeRuntime (program binds)
 
 reachOf : String -> EmitPlan -> List String
 reachOf n plan = match omLookup n plan.eagerReach
@@ -167,7 +168,9 @@ test "a cycle's members share one reach set" = expectAll [
 test "the plan carries the target it was built with" = expectAll [
   labelFail
     "wasm"
-    (expectTrue (isWasm (buildEmitPlan WasmBackend (program mixed)).target)),
+    (expectTrue
+      (isWasm
+        (buildEmitPlan WasmBackend PreludeFreeRuntime (program mixed)).target)),
   labelFail "native" (expectFalse (isWasm (planOf mixed).target)),
 ]
 
@@ -181,7 +184,10 @@ entryOutcomeProgram =
 
 planOutcomeExpectation : Backend -> Expectation
 planOutcomeExpectation target =
-  match (buildEmitPlan target entryOutcomeProgram).entryOutcome
+  match ((buildEmitPlan
+    target
+    PreludeFreeRuntime
+    entryOutcomeProgram).entryOutcome)
     Some outcome => expectAll [
       expectFalse outcome.entryMainIsUnit,
       expectTrue outcome.entryMainIsFloat,
@@ -329,7 +335,7 @@ bindNm : CBind -> String
 bindNm (CBind n _ _ _) = n
 
 test "wasm reach keeps a dispatch-only impl and its lazy global, drops the rest" =
-  let (plan, reached) = buildEmitPlanReached [] reachProgram
+  let (plan, reached) = buildEmitPlanReached PreludeFreeRuntime reachProgram
   expectAll [
     labelFail
       "the m impl survives, the k impl does not"
@@ -361,7 +367,7 @@ test "wasm reach keeps a dispatch-only impl and its lazy global, drops the rest"
   ]
 
 test "an unreached plan reports no reach and keeps every unit" =
-  let plan = buildEmitPlan WasmBackend reachProgram
+  let plan = buildEmitPlan WasmBackend PreludeFreeRuntime reachProgram
   expectAll [
     labelFail
       "no wasmOnlyReach"
@@ -390,7 +396,10 @@ prim op l r = CBinPrim op l r "" noDeclLoc
 
 trmcPlan : List (String, Int) -> List CBind -> EmitPlan
 trmcPlan ctors binds =
-  buildEmitPlan LlvmBackend (CProgram binds ctors [] [] [] noDeclFacts)
+  buildEmitPlan
+    LlvmBackend
+    PreludeFreeRuntime
+    (CProgram binds ctors [] [] [] noDeclFacts)
 
 -- upto lo hi = if lo > hi then [] else lo :: upto (lo + 1) hi
 uptoLeaf : CExpr
@@ -523,7 +532,10 @@ uptoImpl word =
 implTrmc : String -> Bool
 implTrmc word =
   let plan =
-    buildEmitPlan LlvmBackend (CProgram [] [] [] [uptoImpl word] [] noDeclFacts)
+    buildEmitPlan
+      LlvmBackend
+      PreludeFreeRuntime
+      (CProgram [] [] [] [uptoImpl word] [] noDeclFacts)
   isTrmcImpl plan.trmc "upto" "K"
 
 test "an impl group recursing through its own instance word is TRMC-eligible" = expectAll
@@ -540,7 +552,10 @@ test "an impl group recursing through its own instance word is TRMC-eligible" = 
 -- externs are `Inline` and carry no key of their own.
 hostKeysOf : Backend -> CExpr -> List String
 hostKeysOf target mainBody =
-  (buildEmitPlan target (program [val "main" mainBody])).hostKeys
+  (buildEmitPlan
+    target
+    PreludeFreeRuntime
+    (program [val "main" mainBody])).hostKeys
 
 unit : CExpr
 unit = CLit LUnit
@@ -851,6 +866,7 @@ test "statFile demands the 4-tuple type; a pure program demands none" = expectAl
         [4]
         (buildEmitPlan
           WasmBackend
+          PreludeFreeRuntime
           (program [
             val "main" (call "statFile" [ref "p", CList []]),
           ])).wasmDemand.tupleArities),
@@ -860,6 +876,7 @@ test "statFile demands the 4-tuple type; a pure program demands none" = expectAl
         []
         (buildEmitPlan
           WasmBackend
+          PreludeFreeRuntime
           (program [
             val "main" (prim "+" (int 1) (int 2)),
           ])).wasmDemand.tupleArities),
@@ -906,7 +923,8 @@ argsKeys : List String
 argsKeys = ["mdk_arg_byte", "mdk_arg_len", "mdk_args_count"]
 
 keysOf : List CBind -> List String
-keysOf binds = (buildEmitPlan WasmBackend (program binds)).hostKeys
+keysOf binds =
+  (buildEmitPlan WasmBackend PreludeFreeRuntime (program binds)).hostKeys
 
 test "a binder named like an extern demands nothing; the extern itself does" = expectAll
   [
@@ -1019,6 +1037,7 @@ test "a binder named like an extern demands nothing; the extern itself does" = e
         []
         (buildEmitPlan
           WasmBackend
+          PreludeFreeRuntime
           (CProgram
             []
             []
@@ -1045,6 +1064,7 @@ test "a binder named like an extern demands nothing; the extern itself does" = e
         []
         (buildEmitPlan
           WasmBackend
+          PreludeFreeRuntime
           (program [fn "count" ["args"] (call "args" [unit])])).wasmDemand.uses),
   ]
 
@@ -1095,18 +1115,11 @@ test "a top-level definition named like an extern, as the emitter resolves it" =
 
 -- ── the `jsffi` imports (docs/spec/WASM-SEMANTICS.md section 3.1) ──────────
 
--- `jsUp` binds `js` (and `c`), `cNeg` binds only `c`.
-jsRows : List (String, (List (String, String), (List String, String)))
-jsRows = [
-  ("jsUp", ([("c", "c_up"), ("js", "jsUpper")], (["String"], "String"))),
-  ("cNeg", ([("c", "c_neg")], (["Int"], "Int"))),
-]
-
 -- the reached wasm plan's imports as (Medaka name, JS name, field), and its
 -- host keys
 jsPlanOf : List CBind -> (List (String, String, String), List String)
 jsPlanOf binds =
-  let (plan, _) = buildEmitPlanReached jsRows (program binds)
+  let (plan, _) = buildEmitPlanReached PreludeFreeRuntime (program binds)
   (
     map (imp => (imp.medakaName, imp.jsName, jsImportField imp)) plan.jsImports,
     plan.hostKeys,
@@ -1185,7 +1198,7 @@ test "method result plan index preserves qualified interface identity on both ba
   expectAll
     (map
       (backend =>
-        let plan = buildEmitPlan backend cp
+        let plan = buildEmitPlan backend PreludeFreeRuntime cp
         expectAll [
           expectEqual
             (Some left)

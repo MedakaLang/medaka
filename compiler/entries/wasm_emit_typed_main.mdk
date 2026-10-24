@@ -81,6 +81,7 @@ import backend.wasm_emit.{
   emitProgramRecord as emitRecordWithPlan,
   emitProgramGaps as emitGapsWithPlan,
   makeWasmEmitInput,
+  inputRuntimeExternsW,
   makeWasmEmitInputFull,
 }
 import entries.entry_support.{driveRuntime}
@@ -92,19 +93,32 @@ import support.ordmap.{OrdMap, omFromPairs, omEmpty, omLookup}
 
 -- Every emission here builds its own plan from the program it emits.
 emitProgram : WasmEmitInput -> CProgram -> String
-emitProgram input cp = emitWithPlan input (buildEmitPlan WasmBackend cp) cp
+emitProgram input cp =
+  emitWithPlan
+    input
+    (buildEmitPlan WasmBackend (inputRuntimeExternsW input) cp)
+    cp
 
 emitProgramUnchecked : WasmEmitInput -> CProgram -> String
 emitProgramUnchecked input cp =
-  emitUncheckedWithPlan input (buildEmitPlan WasmBackend cp) cp
+  emitUncheckedWithPlan
+    input
+    (buildEmitPlan WasmBackend (inputRuntimeExternsW input) cp)
+    cp
 
 emitProgramRecord : WasmEmitInput -> CProgram -> (String, List String)
 emitProgramRecord input cp =
-  emitRecordWithPlan input (buildEmitPlan WasmBackend cp) cp
+  emitRecordWithPlan
+    input
+    (buildEmitPlan WasmBackend (inputRuntimeExternsW input) cp)
+    cp
 
 emitProgramGaps : WasmEmitInput -> CProgram -> List String
 emitProgramGaps input cp =
-  emitGapsWithPlan input (buildEmitPlan WasmBackend cp) cp
+  emitGapsWithPlan
+    input
+    (buildEmitPlan WasmBackend (inputRuntimeExternsW input) cp)
+    cp
 
 main = match args ()
   "--reemit-trmc-state" :: _ => reemitTrmcState ()
@@ -273,7 +287,11 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         -- Dummy program (proves the fact alone moves the output, P_NE_MAIN) --
         -- unchecked for the same reason as the four above.  Every other field
         -- mirrors typedInput's, so that fact is the only thing that varies.
-        let mainPlan = buildEmitPlan WasmBackend mainProgram
+        let mainPlan =
+          buildEmitPlan
+            WasmBackend
+            (runtimeDomain (externDecls runtimeDecls))
+            mainProgram
         let floatPlan = match mainPlan.entryOutcome
           Some outcome => { mainPlan |
             entryOutcome = Some ({ outcome | entryMainIsFloat = True }),

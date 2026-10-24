@@ -235,7 +235,7 @@ inlang-backend-emit-binder-refusal-test:
 ## The emission plan's lazy/eager global classification, and the structural check
 ## that neither emitter recomputes it. Native: the check reads the emitter sources.
 inlang-backend-emit-plan-test:
-	./medaka test --native compiler/backend/emit_plan_test.mdk
+	./medaka test --native compiler/backend/emit_plan_test.mdk compiler/backend/extern_requirements_test.mdk
 	./medaka test compiler/backend/global_plan_test.mdk
 
 ## The built-in wall's derived pin: every profile x every NotProvided catalog

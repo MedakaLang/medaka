@@ -82,14 +82,14 @@ llvmText : CProgram -> String
 llvmText cp =
   llvmEmit
     (makeEmitInput PreludeFreeRuntime [] [] [] 0 [] [] "" [])
-    (buildEmitPlan LlvmBackend cp)
+    (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
     cp
 
 wasmText : CProgram -> String
 wasmText cp =
   wasmEmit
     (makeWasmEmitInputFull PreludeFreeRuntime [] [])
-    (buildEmitPlan WasmBackend cp)
+    (buildEmitPlan WasmBackend PreludeFreeRuntime cp)
     cp
 
 -- What the refusal says about `x`.
