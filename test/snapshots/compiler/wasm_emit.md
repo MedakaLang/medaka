@@ -1,11 +1,11 @@
 # META
-source_lines=11107
+source_lines=11093
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_demand.{
   WasmDemandPlan, WasmTypeContext, wasmTypeContext, hasWasmHelper,
   selectWasmBin, ctorFloatFieldIndex, exprHasFallthrough, isCmpOp, envMark,
-  paramEntries, envMarksOf, envWithMarks
+  paramEntries, envMarksOf, envWithMarks, appHead, isPlainParam, isValBind
 }
 import backend.wasm_demand as WD
 import backend.wasm_demand.{JsImport(..), WasmDemand(..)}
@@ -1863,11 +1863,6 @@ noteWasmUse emit UseStrJoin = setRef emit.useStrJoin True
 cFieldExpr : CField -> CExpr
 cFieldExpr (CField _ _ e) = e
 
-isPlainParam : Pat -> Bool
-isPlainParam (PVar _ _ _) = True
-isPlainParam PWild = True
-isPlainParam _ = False
-
 -- the set of top-level fn names that appear as VALUES (bare ref in a non-call
 -- position, or partially / over applied) anywhere in the program — these need a
 -- closure wrapper so they can flow through `(ref eq)` slots / be applied indirectly.
@@ -3095,10 +3090,6 @@ isUnitExtern : String -> Bool
 -- lint-disable-next-line rule-duplicate-body
 isUnitExtern name =
   contains name ["putStr", "putStrLn", "ePutStr", "ePutStrLn", "flushStdout"]
-
-appHead : CExpr -> CExpr
-appHead (CApp f _ _) = appHead f
-appHead e = e
 
 refPrintFor : Prog -> WTy -> List String
 refPrintFor _ WInt = ["    call $mdk_unbox_int", "    call $mdk_print_int"]
@@ -10113,11 +10104,6 @@ bindConFieldsGo prog env c (p :: rest) v i =
 
 -- ── helpers shared by both modes ─────────────────────────────────────────────
 
--- top-level binding classification (W2 + W3, identical).
-isValBind : CBind -> Bool
-isValBind (CBind name [CClause [] _] _ _) = name /= "main"
-isValBind _ = False
-
 isFnBind : CBind -> Bool
 isFnBind (CBind "main" _ _ _) = False
 isFnBind b = not (isValBind b)
@@ -11110,7 +11096,7 @@ hasFamilyW prog symbol tag =
     Some family => WD.wasmFamilyTag family == tag
     None => False
 # DESUGAR
-(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "WasmTypeContext" false) (mem "wasmTypeContext" false) (mem "hasWasmHelper" false) (mem "selectWasmBin" false) (mem "ctorFloatFieldIndex" false) (mem "exprHasFallthrough" false) (mem "isCmpOp" false) (mem "envMark" false) (mem "paramEntries" false) (mem "envMarksOf" false) (mem "envWithMarks" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "WasmTypeContext" false) (mem "wasmTypeContext" false) (mem "hasWasmHelper" false) (mem "selectWasmBin" false) (mem "ctorFloatFieldIndex" false) (mem "exprHasFallthrough" false) (mem "isCmpOp" false) (mem "envMark" false) (mem "paramEntries" false) (mem "envMarksOf" false) (mem "envWithMarks" false) (mem "appHead" false) (mem "isPlainParam" false) (mem "isValBind" false))))
 (DUse false (UseAlias ("backend" "wasm_demand") "WD"))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true) (mem "WasmDemand" true))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false))))
@@ -11428,10 +11414,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseStrJoin")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrJoin")) (EVar "True")))
 (DTypeSig false "cFieldExpr" (TyFun (TyCon "CField") (TyCon "CExpr")))
 (DFunDef false "cFieldExpr" ((PCon "CField" PWild PWild (PVar "e"))) (EVar "e"))
-(DTypeSig false "isPlainParam" (TyFun (TyCon "Pat") (TyCon "Bool")))
-(DFunDef false "isPlainParam" ((PCon "PVar" PWild PWild PWild)) (EVar "True"))
-(DFunDef false "isPlainParam" ((PCon "PWild")) (EVar "True"))
-(DFunDef false "isPlainParam" (PWild) (EVar "False"))
 (DTypeSig false "scanFnValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "scanFnValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "groups")) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "scanBindValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "groups"))))
 (DTypeSig false "scanImplValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -11678,9 +11660,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "stampPrintKind" (PWild) (EVar "WInt"))
 (DTypeSig false "isUnitExtern" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isUnitExtern" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "flushStdout")))))
-(DTypeSig false "appHead" (TyFun (TyCon "CExpr") (TyCon "CExpr")))
-(DFunDef false "appHead" ((PCon "CApp" (PVar "f") PWild PWild)) (EApp (EVar "appHead") (EVar "f")))
-(DFunDef false "appHead" ((PVar "e")) (EVar "e"))
 (DTypeSig false "refPrintFor" (TyFun (TyCon "Prog") (TyFun (TyCon "WTy") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refPrintFor" (PWild (PCon "WInt")) (EListLit (ELit (LString "    call $mdk_unbox_int")) (ELit (LString "    call $mdk_print_int"))))
 (DFunDef false "refPrintFor" (PWild (PCon "WBool")) (EListLit (ELit (LString "    ref.cast (ref i31)")) (ELit (LString "    i31.get_u")) (ELit (LString "    call $mdk_print_bool"))))
@@ -12829,9 +12808,6 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "bindConFieldsGo" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "bindConFieldsGo" (PWild (PVar "env") PWild (PList) PWild PWild) (ETuple (EListLit) (EVar "env")))
 (DFunDef false "bindConFieldsGo" ((PVar "prog") (PVar "env") (PVar "c") (PCons (PVar "p") (PVar "rest")) (PVar "v") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnippet") (EBinOp "++" (EVar "v") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "c"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "display") (EApp (EVar "ctorStructName") (EVar "c")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "cur") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "fieldSnippet"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindConFieldsGo") (EVar "prog")) (EVar "env2")) (EVar "c")) (EVar "rest")) (EVar "v")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "cur") (EVar "more")) (EVar "env3")))))
-(DTypeSig false "isValBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
-(DFunDef false "isValBind" ((PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)) PWild PWild)) (EBinOp "/=" (EVar "name") (ELit (LString "main"))))
-(DFunDef false "isValBind" (PWild) (EVar "False"))
 (DTypeSig false "isFnBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isFnBind" ((PCon "CBind" (PLit (LString "main")) PWild PWild PWild)) (EVar "False"))
 (DFunDef false "isFnBind" ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isValBind") (EVar "b"))))
@@ -13202,7 +13178,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "hasFamilyW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "hasFamilyW" ((PVar "prog") (PVar "symbol") (PVar "tag")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EApp (EVar "runtimeNameW") (EVar "prog")) (EVar "symbol"))) (EFieldAccess (EApp (EVar "emitDemandW") (EApp (EVar "progEmit") (EVar "prog"))) "catalogFamilies")) (arm (PCon "Some" (PVar "family")) () (EBinOp "==" (EApp (EVar "WD.wasmFamilyTag") (EVar "family")) (EVar "tag"))) (arm (PCon "None") () (EVar "False"))))
 # MARK
-(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "WasmTypeContext" false) (mem "wasmTypeContext" false) (mem "hasWasmHelper" false) (mem "selectWasmBin" false) (mem "ctorFloatFieldIndex" false) (mem "exprHasFallthrough" false) (mem "isCmpOp" false) (mem "envMark" false) (mem "paramEntries" false) (mem "envMarksOf" false) (mem "envWithMarks" false))))
+(DUse false (UseGroup ("backend" "wasm_demand") ((mem "WasmDemandPlan" false) (mem "WasmTypeContext" false) (mem "wasmTypeContext" false) (mem "hasWasmHelper" false) (mem "selectWasmBin" false) (mem "ctorFloatFieldIndex" false) (mem "exprHasFallthrough" false) (mem "isCmpOp" false) (mem "envMark" false) (mem "paramEntries" false) (mem "envMarksOf" false) (mem "envWithMarks" false) (mem "appHead" false) (mem "isPlainParam" false) (mem "isValBind" false))))
 (DUse false (UseAlias ("backend" "wasm_demand") "WD"))
 (DUse false (UseGroup ("backend" "wasm_demand") ((mem "JsImport" true) (mem "WasmDemand" true))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false))))
@@ -13520,10 +13496,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseStrJoin")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrJoin")) (EVar "True")))
 (DTypeSig false "cFieldExpr" (TyFun (TyCon "CField") (TyCon "CExpr")))
 (DFunDef false "cFieldExpr" ((PCon "CField" PWild PWild (PVar "e"))) (EVar "e"))
-(DTypeSig false "isPlainParam" (TyFun (TyCon "Pat") (TyCon "Bool")))
-(DFunDef false "isPlainParam" ((PCon "PVar" PWild PWild PWild)) (EVar "True"))
-(DFunDef false "isPlainParam" ((PCon "PWild")) (EVar "True"))
-(DFunDef false "isPlainParam" (PWild) (EVar "False"))
 (DTypeSig false "scanFnValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "scanFnValueUses" ((PVar "fnNames") (PVar "ctorArs") (PVar "groups")) (EApp (EVar "dedupKeep") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "scanBindValueUses") (EVar "fnNames")) (EVar "ctorArs"))) (EVar "groups"))))
 (DTypeSig false "scanImplValueUses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -13770,9 +13742,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "stampPrintKind" (PWild) (EVar "WInt"))
 (DTypeSig false "isUnitExtern" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isUnitExtern" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "flushStdout")))))
-(DTypeSig false "appHead" (TyFun (TyCon "CExpr") (TyCon "CExpr")))
-(DFunDef false "appHead" ((PCon "CApp" (PVar "f") PWild PWild)) (EApp (EVar "appHead") (EVar "f")))
-(DFunDef false "appHead" ((PVar "e")) (EVar "e"))
 (DTypeSig false "refPrintFor" (TyFun (TyCon "Prog") (TyFun (TyCon "WTy") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refPrintFor" (PWild (PCon "WInt")) (EListLit (ELit (LString "    call $mdk_unbox_int")) (ELit (LString "    call $mdk_print_int"))))
 (DFunDef false "refPrintFor" (PWild (PCon "WBool")) (EListLit (ELit (LString "    ref.cast (ref i31)")) (ELit (LString "    i31.get_u")) (ELit (LString "    call $mdk_print_bool"))))
@@ -14921,9 +14890,6 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "bindConFieldsGo" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "bindConFieldsGo" (PWild (PVar "env") PWild (PList) PWild PWild) (ETuple (EListLit) (EVar "env")))
 (DFunDef false "bindConFieldsGo" ((PVar "prog") (PVar "env") (PVar "c") (PCons (PVar "p") (PVar "rest")) (PVar "v") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnippet") (EBinOp "++" (EVar "v") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "c"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EMethodRef "display") (EApp (EVar "ctorStructName") (EVar "c")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "cur") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "fieldSnippet"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindConFieldsGo") (EVar "prog")) (EVar "env2")) (EVar "c")) (EVar "rest")) (EVar "v")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "cur") (EVar "more")) (EVar "env3")))))
-(DTypeSig false "isValBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
-(DFunDef false "isValBind" ((PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)) PWild PWild)) (EBinOp "/=" (EVar "name") (ELit (LString "main"))))
-(DFunDef false "isValBind" (PWild) (EVar "False"))
 (DTypeSig false "isFnBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isFnBind" ((PCon "CBind" (PLit (LString "main")) PWild PWild PWild)) (EVar "False"))
 (DFunDef false "isFnBind" ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isValBind") (EVar "b"))))

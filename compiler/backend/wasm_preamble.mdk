@@ -1,6 +1,6 @@
 import backend.wasm_demand.{
   WasmDemandPlan, PlannedImport, helperOrder, hasWasmHelper, jsWireParam,
-  jsWireResult
+  jsWireResult, unaryF64Sig, binaryF64Sig
 }
 import backend.wasm_demand.{JsImport(..)}
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
@@ -1770,12 +1770,6 @@ hostImportSigOf "mdk_file_bound_enter" =
   Some " (param i32) (param i32) (result i32)"
 hostImportSigOf "mdk_file_bound_exit" = Some ""
 hostImportSigOf _ = None
-
-unaryF64Sig : String
-unaryF64Sig = " (param f64) (result f64)"
-
-binaryF64Sig : String
-binaryF64Sig = " (param f64) (param f64) (result f64)"
 
 -- stringToFloat host seam: the guest pushes the string's bytes via the path channel
 -- (mdk_path_reset + mdk_path_push, shared with IO) then calls mdk_str_to_float, which

@@ -1,5 +1,5 @@
 # META
-source_lines=2297
+source_lines=2302
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{
@@ -249,7 +249,8 @@ noteBinop acc "/" = { acc | seenDivGuard = True }
 noteBinop acc "%" = { acc | seenDivGuard = True }
 noteBinop acc _ = acc
 
--- the emitter's value-global partition (`isValBind` in wasm_emit.mdk)
+-- Top-level nullary values become globals; `main` remains the program entry.
+export
 isValBind : CBind -> Bool
 isValBind (CBind name [CClause [] _] _ _) = name /= "main"
 isValBind _ = False
@@ -461,6 +462,7 @@ multiOrPatternClauses [CClause pats _] =
   anyList (p => not (isPlainParam p)) pats
 multiOrPatternClauses _ = True
 
+export
 isPlainParam : Pat -> Bool
 isPlainParam (PVar _ _ _) = True
 isPlainParam PWild = True
@@ -916,6 +918,7 @@ export
 isCmpOp : String -> Bool
 isCmpOp op = contains op ["==", "/=", "<", ">", "<=", ">="]
 
+export
 appHead : CExpr -> CExpr
 appHead (CApp f _ _) = appHead f
 appHead e = e
@@ -2151,9 +2154,11 @@ hostImportSigOf "mdk_file_bound_enter" =
 hostImportSigOf "mdk_file_bound_exit" = Some ""
 hostImportSigOf _ = None
 
+export
 unaryF64Sig : String
 unaryF64Sig = " (param f64) (result f64)"
 
+export
 binaryF64Sig : String
 binaryF64Sig = " (param f64) (param f64) (result f64)"
 
@@ -2368,7 +2373,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "/"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
 (DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "%"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
 (DFunDef false "noteBinop" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "isValBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
+(DTypeSig true "isValBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isValBind" ((PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)) PWild PWild)) (EBinOp "/=" (EVar "name") (ELit (LString "main"))))
 (DFunDef false "isValBind" (PWild) (EVar "False"))
 (DTypeSig false "bindIn" (TyFun (TyCon "DemandScope") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "DemandScope"))))
@@ -2484,7 +2489,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "multiOrPatternClauses" ((PList)) (EVar "False"))
 (DFunDef false "multiOrPatternClauses" ((PList (PCon "CClause" (PVar "pats") PWild))) (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isPlainParam") (EVar "p"))))) (EVar "pats")))
 (DFunDef false "multiOrPatternClauses" (PWild) (EVar "True"))
-(DTypeSig false "isPlainParam" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DTypeSig true "isPlainParam" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "isPlainParam" ((PCon "PVar" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isPlainParam" ((PCon "PWild")) (EVar "True"))
 (DFunDef false "isPlainParam" (PWild) (EVar "False"))
@@ -2631,7 +2636,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "isArithOp" ((PVar "op")) (EApp (EApp (EVar "contains") (EVar "op")) (EListLit (ELit (LString "+")) (ELit (LString "-")) (ELit (LString "*")) (ELit (LString "/")) (ELit (LString "%")))))
 (DTypeSig true "isCmpOp" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isCmpOp" ((PVar "op")) (EApp (EApp (EVar "contains") (EVar "op")) (EListLit (ELit (LString "==")) (ELit (LString "/=")) (ELit (LString "<")) (ELit (LString ">")) (ELit (LString "<=")) (ELit (LString ">=")))))
-(DTypeSig false "appHead" (TyFun (TyCon "CExpr") (TyCon "CExpr")))
+(DTypeSig true "appHead" (TyFun (TyCon "CExpr") (TyCon "CExpr")))
 (DFunDef false "appHead" ((PCon "CApp" (PVar "f") PWild PWild)) (EApp (EVar "appHead") (EVar "f")))
 (DFunDef false "appHead" ((PVar "e")) (EVar "e"))
 (DData Public "WasmDemandInputs" () ((variant "WasmDemandInputs" (ConNamed (field "ctorFloatFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int")))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "trmcVerdicts" (TyCon "TrmcVerdicts")) (field "dispatchGroups" (TyApp (TyCon "List") (TyCon "DispGroup")))))) ())
@@ -2993,9 +2998,9 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
-(DTypeSig false "unaryF64Sig" (TyCon "String"))
+(DTypeSig true "unaryF64Sig" (TyCon "String"))
 (DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
-(DTypeSig false "binaryF64Sig" (TyCon "String"))
+(DTypeSig true "binaryF64Sig" (TyCon "String"))
 (DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
 (DTypeSig true "jsWireParam" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "jsWireParam" ((PLit (LString "Unit"))) (ELit (LString "")))
@@ -3102,7 +3107,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "/"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
 (DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "%"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
 (DFunDef false "noteBinop" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "isValBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
+(DTypeSig true "isValBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isValBind" ((PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)) PWild PWild)) (EBinOp "/=" (EVar "name") (ELit (LString "main"))))
 (DFunDef false "isValBind" (PWild) (EVar "False"))
 (DTypeSig false "bindIn" (TyFun (TyCon "DemandScope") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "DemandScope"))))
@@ -3218,7 +3223,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "multiOrPatternClauses" ((PList)) (EVar "False"))
 (DFunDef false "multiOrPatternClauses" ((PList (PCon "CClause" (PVar "pats") PWild))) (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isPlainParam") (EVar "p"))))) (EVar "pats")))
 (DFunDef false "multiOrPatternClauses" (PWild) (EVar "True"))
-(DTypeSig false "isPlainParam" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DTypeSig true "isPlainParam" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "isPlainParam" ((PCon "PVar" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isPlainParam" ((PCon "PWild")) (EVar "True"))
 (DFunDef false "isPlainParam" (PWild) (EVar "False"))
@@ -3365,7 +3370,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "isArithOp" ((PVar "op")) (EApp (EApp (EVar "contains") (EVar "op")) (EListLit (ELit (LString "+")) (ELit (LString "-")) (ELit (LString "*")) (ELit (LString "/")) (ELit (LString "%")))))
 (DTypeSig true "isCmpOp" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isCmpOp" ((PVar "op")) (EApp (EApp (EVar "contains") (EVar "op")) (EListLit (ELit (LString "==")) (ELit (LString "/=")) (ELit (LString "<")) (ELit (LString ">")) (ELit (LString "<=")) (ELit (LString ">=")))))
-(DTypeSig false "appHead" (TyFun (TyCon "CExpr") (TyCon "CExpr")))
+(DTypeSig true "appHead" (TyFun (TyCon "CExpr") (TyCon "CExpr")))
 (DFunDef false "appHead" ((PCon "CApp" (PVar "f") PWild PWild)) (EApp (EVar "appHead") (EVar "f")))
 (DFunDef false "appHead" ((PVar "e")) (EVar "e"))
 (DData Public "WasmDemandInputs" () ((variant "WasmDemandInputs" (ConNamed (field "ctorFloatFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int")))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "trmcVerdicts" (TyCon "TrmcVerdicts")) (field "dispatchGroups" (TyApp (TyCon "List") (TyCon "DispGroup")))))) ())
@@ -3727,9 +3732,9 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
 (DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
-(DTypeSig false "unaryF64Sig" (TyCon "String"))
+(DTypeSig true "unaryF64Sig" (TyCon "String"))
 (DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
-(DTypeSig false "binaryF64Sig" (TyCon "String"))
+(DTypeSig true "binaryF64Sig" (TyCon "String"))
 (DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
 (DTypeSig true "jsWireParam" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "jsWireParam" ((PLit (LString "Unit"))) (ELit (LString "")))
