@@ -147,10 +147,12 @@ entriesAboveSegment entries = match !preludeEvidenceRef
       entries
 
 denseIndexOf : EvTable -> EvIndex
-denseIndexOf entries = match emptyIndexFor entries
-  EvIndex lo arr =>
-    let _ = fillEvidence lo arr entries
-    EvIndex lo arr
+denseIndexOf entries =
+  let index = emptyIndexFor entries
+  match index
+    EvIndex lo arr =>
+      let _ = fillEvidence lo arr entries
+      index
 
 -- An index with a slot for every ordinal from the smallest to the largest in
 -- [entries] and nothing filled; the caller fills it and decides what a repeated

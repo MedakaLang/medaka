@@ -17,24 +17,22 @@ import frontend.ast.{
 import frontend.desugar_cache.{desugaredPrelude}
 import string as S
 import support.sexp_value.{SexpError(..)}
-import types.interface_sexp.{InterfaceFault(..), sha256Hex}
+import types.framed_test_support.{testKeyAt, withDigestOf}
+import types.interface_sexp as Framing
+import types.interface_sexp.{InterfaceFault(..)}
 import types.prelude_elab.{
   PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile, elabKeyOf,
   seedPreludeElab, preludeElabHit, formatVersion, binderSpan, relocDecls,
-  readElabKey
+  readElabKey, BinderRun(..)
 }
-import types.prelude_interface.{InterfaceKey(..), interfaceKeyOf, keysMatch}
+import types.prelude_interface.{InterfaceKey(..), keysMatch}
 import types.publish.{CheckedProgram(..), TcReport(..)}
 import types.runtime_types.{BinderRow(..)}
 import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
 import map.{entries}
 
 testKey : InterfaceKey
-testKey =
-  interfaceKeyOf
-    formatVersion
-    [("runtime.mdk", "aa"), ("core.mdk", "bb")]
-    "compiler-x"
+testKey = testKeyAt formatVersion
 
 -- Core elaborated with no user module, as the writer does it.
 coreElab : Unit -> <Env "MEDAKA_ROOT", FileRead> Option PreludeElab
@@ -72,18 +70,7 @@ faultText (Malformed e) = "malformed \{e.sePath}"
 -- The file with its header's digest rewritten to match [body] after the first
 -- line, so only the body is wrong.
 withBody : String -> String -> String
-withBody file extra = match S.indexOf "\n" file
-  None => file
-  Some i =>
-    let header = S.take i file
-    let body = S.drop (i + 1) file ++ extra
-    let claimed =
-      S.take
-        64
-        (S.drop
-          (S.length "(digest " + optionOr 0 (S.indexOf "(digest " header))
-          header)
-    "\{S.replace claimed (sha256Hex body) header}\n\{body}"
+withBody file extra = withDigestOf file (Framing.bodyOf file ++ extra)
 
 -- Why a read refused, as the fault's own text, or `ok`.
 why : Result InterfaceFault a -> String
@@ -498,9 +485,17 @@ leafRows =
 -- A row's binders move by [offset]; a row with none keeps its span.
 movesBy : Int -> (String, Decl) -> Expectation
 movesBy offset (label, d) =
-  let (first, count) = binderSpan [d]
-  let expected = if count > 0 then (first + offset, count) else (first, count)
+  let expected = map (shiftRun offset) (binderSpan [d])
   labelFail label (expectEqual expected (binderSpan (relocDecls offset [d])))
+
+-- [run] moved by [offset]; a run of no binders stays where it is.
+shiftRun : Int -> BinderRun -> BinderRun
+shiftRun offset run
+  | run.brCount > 0 = BinderRun {
+    brFirst = run.brFirst + offset,
+    brCount = run.brCount,
+  }
+  | otherwise = run
 
 test "every walker arm that reaches a binder moves it, and no other node holds one" =
   let binderRows = declRows ++ patRows ++ exprRows
@@ -508,7 +503,7 @@ test "every walker arm that reaches a binder moves it, and no other node holds o
     labelFail
       "each binder row holds exactly the one binder"
       (expectEqual
-        (map (_ => (0, 1)) binderRows)
+        (map (_ => Some BinderRun { brFirst = 0, brCount = 1 }) binderRows)
         (map (row => binderSpan [snd row]) binderRows)),
     expectAll (map (movesBy 7) (binderRows ++ leafRows)),
   ]

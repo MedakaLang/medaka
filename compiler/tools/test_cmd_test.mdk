@@ -6,7 +6,7 @@ import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import tools.doctest.{Engine(..)}
 import tools.test_cmd.{
-  treesUnread, childJobsPrefix, childGcMarkersPrefix, helperElabDiags
+  treesUnread, childJobsPrefix, childGcMarkersPrefix, helperElabDiags, runTest
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
@@ -20,7 +20,7 @@ import test.{
   Expectation, expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue,
   fail
 }
-import test_process.{medakaBin, withScratchDir}
+import test_process.{medakaBin, underRoot, withScratchDir}
 
 noProps : List Decl
 noProps = parse "f : Int -> Int\nf x = x + 1\n\ntest \"t\" = f 1 == 2\n"
@@ -280,3 +280,37 @@ test "an ill-typed doctest example fails alone under the interpreter" = withScra
         expectFalse (contains "unrouted dictionary slot" e2),
       ]
       _ => fail "could not spawn medaka test")
+
+-- The prelude is read from the directory of runtime.mdk, so a core.mdk from
+-- anywhere else is refused (the verb exits 1 on the False).  The pair beside it
+-- is what every `medaka test` run uses.
+test "runTest refuses a core.mdk that is not the one beside runtime.mdk" = withScratchDir
+  (dir =>
+    let target = "\{dir}/target.mdk"
+    match (
+      readFile (underRoot "stdlib/core.mdk"),
+      writeFile target "main = 1\n",
+    )
+      (Ok core, Ok _) => match writeFile "\{dir}/core.mdk" core
+        Err e => fail e
+        Ok _ =>
+          expectFalse
+            (runTest
+              [EngInterp]
+              (underRoot "stdlib/runtime.mdk")
+              "\{dir}/core.mdk"
+              target
+              [dir]
+              100
+              None)
+      _ => fail "could not stage the scratch files")
+
+test "medaka test runs a target against the core.mdk beside runtime.mdk" = withScratchDir
+  (dir => match writeFile "\{dir}/target.mdk" "main = 1\n"
+    Err e => fail e
+    Ok _ => match runVerb medakaBin ["test", "\{dir}/target.mdk"]
+      Ok (code, out, _) => expectAll [
+        expectEqual 0 code,
+        expectTrue (contains "(no doctests found)" out),
+      ]
+      Err e => fail e)

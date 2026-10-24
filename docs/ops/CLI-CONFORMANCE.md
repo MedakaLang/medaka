@@ -423,7 +423,11 @@ body does not decode, or whose counters do not describe its trees, is stale ther
 core texts as before and print one stderr line, `prelude decls stale: parsing stdlib/core.mdk
 (<component>)`. The verbs that print it are `check`, `check --json`, `lsp`, `mcp`, `run`, `run --json`,
 `build`, `build --json`, `check-policy`, `manifest`, `repl` and plain `test` (which also exits 1 on it
-under `MEDAKA_STRICT`); `doc` and `test --json` load silently.
+under `MEDAKA_STRICT`); `doc` and `test --json` load silently. The set is the callers of
+`loadCheckPrelude`, `takeShippedPrelude`, `reportChildTrees`, `nativeTreesReport` and
+`jsonPreludeNotices` in `compiler/driver/medaka_cli.mdk` and of `holdTestPrelude True` in
+`compiler/tools/test_cmd.mdk`; `make cli-conformance-census` lists the verbs but not which load
+the prelude's files.
 Under `--json`, `run` and `build` carry the line as the envelope's `stalePreludeDecls` field, and
 `check --json` prints it on stderr only. `MEDAKA_STRICT` (any non-empty value) stops the verb on the
 line with exit 1, as it does for the trees line.

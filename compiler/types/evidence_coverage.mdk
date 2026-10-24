@@ -75,16 +75,13 @@ evidenceFaults : Option (List Decl, List (String, List Decl)) ->
   List EvidenceFault
 evidenceFaults trees table =
   let own = entriesAboveSegment table
-  match emptyIndexFor own
+  let index = emptyIndexFor own
+  match index
     EvIndex lo arr =>
       let dups = fillIndex lo arr own []
       let sites = match trees
         None => []
-        Some (core, mods) =>
-          modsFaults
-            (EvIndex lo arr)
-            mods
-            (declsFaults (EvIndex lo arr) core [])
+        Some (core, mods) => modsFaults index mods (declsFaults index core [])
       reverseL dups ++ reverseL sites
 
 fillIndex : Int ->

@@ -40,13 +40,13 @@ import driver.build_cmd.{
   defaultMedakaRoot,
   readPreludeSources,
   loadPreludeInterface,
-  preludeStaleLine,
+  PreludeInputs(..),
+  SideFile(..),
+  staleLine,
   shippedInputs,
-  TreesVerdict,
+  FileVerdict,
   checkPreludeElab,
   loadPreludeElab,
-  preludeTreesLine,
-  preludeDeclsLine,
   preludeDeclsVerdict,
   reportStaleLine,
 }
@@ -479,73 +479,76 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
 -- then the declarations `readPreludeSources` took or did not.  Under
 -- MEDAKA_STRICT a stale file stops the verb, as a stale binary does.  `run`
 -- and `build` do not call this: `run --json`'s machine channel is stderr.
-loadCheckPrelude : String -> String -> String -> <IO> Unit
-loadCheckPrelude stdlibDir rsrc csrc =
-  let inputs = shippedInputs stdlibDir rsrc csrc
-  let verdict = loadPreludeInterface inputs
-  let _ = reportStaleLine dieMsg None (preludeStaleLine verdict)
-  reportDecls False dieMsg stdlibDir rsrc csrc
+loadCheckPrelude : PreludeInputs -> <IO> Unit
+loadCheckPrelude prelude =
+  let verdict = loadPreludeInterface prelude
+  let _ = reportStaleLine dieMsg None (staleLine InterfaceFile verdict)
+  reportDecls None dieMsg prelude
 
 -- The same load for a verb outside the check family, which prints nothing: a
 -- stale file only means core is checked from source.
-seedCheckPrelude : String -> String -> String -> <IO> Unit
-seedCheckPrelude stdlibDir rsrc csrc =
-  let _ = loadPreludeInterface (shippedInputs stdlibDir rsrc csrc)
+seedCheckPrelude : PreludeInputs -> <IO> Unit
+seedCheckPrelude prelude =
+  let _ = loadPreludeInterface prelude
   ()
 
 -- A tree-arm verb's report of the prelude's elaborated trees, made once by the
 -- verb's own process: one stderr line when `stdlib/core.mdke` is stale, a stop
 -- under MEDAKA_STRICT (through [stop]), and nothing for a missing, disabled or
--- loaded file.  [deferred] (`run --json`, C4) stages the line for the envelope.
-reportTrees : Bool -> (String -> <IO> Unit) -> TreesVerdict -> <IO> Unit
-reportTrees deferred stop verdict =
-  reportStaleLine
-    stop
-    (deferredInto deferred "stalePreludeTrees")
-    (preludeTreesLine verdict)
+-- loaded file.  [staging] (`run --json`, C4) stages the line for the envelope.
+reportTrees : Option (String -> Unit) ->
+  (String -> <IO> Unit) ->
+  FileVerdict ->
+  <IO> Unit
+reportTrees staging stop verdict =
+  reportStaleLine stop staging (staleLine TreesFile verdict)
 
 -- The same report for the prelude's declarations (`stdlib/core.mdkd`), made
 -- after the verb's own demand of the trees, so a body that failed to decode
 -- there is reported too.
-reportDecls : Bool ->
+reportDecls : Option (String -> Unit) ->
   (String -> <IO> Unit) ->
-  String ->
-  String ->
-  String ->
+  PreludeInputs ->
   <IO> Unit
-reportDecls deferred stop stdlibDir rsrc csrc =
+reportDecls staging stop prelude =
   reportStaleLine
     stop
-    (deferredInto deferred "stalePreludeDecls")
-    (preludeDeclsLine (preludeDeclsVerdict (shippedInputs stdlibDir rsrc csrc)))
+    staging
+    (staleLine DeclsFile (preludeDeclsVerdict prelude))
 
--- `run --json`'s staging of a stale line as the envelope's [field].
+-- `run --json`'s staging of a stale line as the envelope's [field], when
+-- [jsonMode]; none otherwise.
 deferredInto : Bool -> String -> Option (String -> Unit)
 deferredInto False _ = None
 deferredInto True field = Some (msg =>
   pendingPreludeNotices := !pendingPreludeNotices ++ [(field, msg)])
 
+-- A verb that stages no line.
+unstaged : String -> Option (String -> Unit)
+unstaged _ = None
+
 -- `run`'s prelude: hold the interface and the elaborated trees beside `core.mdk`,
 -- so its drive skips core's pass, and report the trees' and the declarations'
--- verdicts.
-takeShippedPrelude : Bool -> String -> String -> String -> <IO> Unit
-takeShippedPrelude jsonMode stdlibDir rsrc csrc =
-  let inputs = shippedInputs stdlibDir rsrc csrc
-  let _ = loadPreludeInterface inputs
-  let _ = reportTrees jsonMode runAbort (loadPreludeElab inputs)
-  reportDecls jsonMode runAbort stdlibDir rsrc csrc
+-- verdicts, each staged as [stagingFor] says for its envelope field.
+takeShippedPrelude : (String -> Option (String -> Unit)) ->
+  PreludeInputs ->
+  <IO> Unit
+takeShippedPrelude stagingFor prelude =
+  let _ = loadPreludeInterface prelude
+  let _ =
+    reportTrees
+      (stagingFor "stalePreludeTrees")
+      runAbort
+      (loadPreludeElab prelude)
+  reportDecls (stagingFor "stalePreludeDecls") runAbort prelude
 
 -- The trees' verdict for a verb whose emitter children take them (`build`,
 -- `test`), read without decoding them; the children print nothing.  The
 -- declarations' verdict is this process's own.
-reportChildTrees : String -> String -> String -> <IO> Unit
-reportChildTrees stdlibDir rsrc csrc =
-  let _ =
-    reportTrees
-      False
-      dieMsg
-      (checkPreludeElab (shippedInputs stdlibDir rsrc csrc))
-  reportDecls False dieMsg stdlibDir rsrc csrc
+reportChildTrees : PreludeInputs -> <IO> Unit
+reportChildTrees prelude =
+  let _ = reportTrees None dieMsg (checkPreludeElab prelude)
+  reportDecls None dieMsg prelude
 
 -- Is this argv `medaka run … --json …`?  The predicate is deliberately the
 -- BYTE-IDENTICAL one `runRunCmd` uses to compute its own `jsonMode`
@@ -794,14 +797,14 @@ runCheckCmd argv =
       perfArm perfT0
       carryTargetProfile (lastValue "--target" a) target
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-      let rtPath = root ++ "/stdlib/runtime.mdk"
-      let corePath = root ++ "/stdlib/core.mdk"
       let stdlibDir = root ++ "/stdlib"
       let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
       match readPreludeSources stdlibDir
         Err msg => dieMsg msg
-        Ok (rsrc, csrc) =>
-          let _ = loadCheckPrelude stdlibDir rsrc csrc
+        Ok prelude =>
+          let rsrc = prelude.pnRuntimeSrc
+          let csrc = prelude.pnCoreSrc
+          let _ = loadCheckPrelude prelude
           if jsonMode then
             -- E: `--types` requests a human-text scheme dump; the `--json`
             -- envelope has no field for one (structured diagnostics only), so
@@ -1535,93 +1538,85 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
     Err e =>
       let _ = println (cjSourceReadJson input e)
       stageExit 1
-    Ok entrySrc =>
-      let rtPath = root ++ "/stdlib/runtime.mdk"
-      let corePath = root ++ "/stdlib/core.mdk"
-      match readPreludeSources stdlibDir
-        Err msg =>
-          let _ = println (cjBuildFailedJson input msg)
-          stageExit 1
-        Ok (rsrc, csrc) =>
-          let notices = jsonPreludeNotices target stdlibDir rsrc csrc
-          let medaka = envOr "MEDAKA" "medaka"
-          let cc = envOr "CC" "clang"
-          let keepIrCli = flag "--keep-ir" a
-          let stampBuild = flag "--stamp-build" a
-          let outPath = match outOpt
-            Some o => o
-            None => defaultOutPath target input
-          let ask =
-            GateAsk { askAllowInternal = allowInternal, askDiagJson = True }
-          -- `quietEmitStderr = True`: the child's verdict arrives as the
-          -- envelope (`diagEnvelope`), so its human copy is not forwarded.
-          match (runBuild
-            root
-            medaka
-            cc
-            target
-            input
-            outPath
-            keepIrCli
-            True
-            stampBuild
-            (Some ask))
-            -- #2243: the build's own notes (a failed `--keep-ir` copy) join
-            -- the entry file's `diagnostics` array rather than vanishing
-            -- with the status line this channel never prints.
-            Ok rep => match rep.diagEnvelope
-              Some (entry, envelope) =>
+    Ok entrySrc => match readPreludeSources stdlibDir
+      Err msg =>
+        let _ = println (cjBuildFailedJson input msg)
+        stageExit 1
+      Ok prelude =>
+        let notices = jsonPreludeNotices target prelude
+        let medaka = envOr "MEDAKA" "medaka"
+        let cc = envOr "CC" "clang"
+        let keepIrCli = flag "--keep-ir" a
+        let stampBuild = flag "--stamp-build" a
+        let outPath = match outOpt
+          Some o => o
+          None => defaultOutPath target input
+        let ask =
+          GateAsk { askAllowInternal = allowInternal, askDiagJson = True }
+        -- `quietEmitStderr = True`: the child's verdict arrives as the
+        -- envelope (`diagEnvelope`), so its human copy is not forwarded.
+        match (runBuild
+          root
+          medaka
+          cc
+          target
+          input
+          outPath
+          keepIrCli
+          True
+          stampBuild
+          (Some ask))
+          -- #2243: the build's own notes (a failed `--keep-ir` copy) join
+          -- the entry file's `diagnostics` array rather than vanishing
+          -- with the status line this channel never prints.
+          Ok rep => match rep.diagEnvelope
+            Some (entry, envelope) =>
+              println
+                (withPreludeFields
+                  notices
+                  (envelopeWithNotes entry rep.notes envelope))
+            None =>
+              let _ =
                 println
                   (withPreludeFields
                     notices
-                    (envelopeWithNotes entry rep.notes envelope))
-              None =>
-                let _ =
-                  println
-                    (withPreludeFields
-                      notices
-                      (cjBuildFailedJson
-                        input
-                        "error: the emitter wrote no diagnostics envelope; an emitter built from an older medaka does not write one"))
-                stageExit 1
-            Err rep => match rep.diagEnvelope
-              -- The front end refused the program.
-              Some (_, envelope) =>
-                let _ = println (withPreludeFields notices envelope)
-                stageExit 1
-              -- A build-stage FAILURE already carried its notes: they are
-              -- part of the rendered message, exactly as the plain CLI
-              -- prints them, inside the one R-BUILD-FAILED diagnostic.
-              None =>
-                let _ =
-                  println
-                    (withPreludeFields
-                      notices
-                      (cjBuildFailedJson input (ppBuildReport rep)))
-                stageExit 1
+                    (cjBuildFailedJson
+                      input
+                      "error: the emitter wrote no diagnostics envelope; an emitter built from an older medaka does not write one"))
+              stageExit 1
+          Err rep => match rep.diagEnvelope
+            -- The front end refused the program.
+            Some (_, envelope) =>
+              let _ = println (withPreludeFields notices envelope)
+              stageExit 1
+            -- A build-stage FAILURE already carried its notes: they are
+            -- part of the rendered message, exactly as the plain CLI
+            -- prints them, inside the one R-BUILD-FAILED diagnostic.
+            None =>
+              let _ =
+                println
+                  (withPreludeFields
+                    notices
+                    (cjBuildFailedJson input (ppBuildReport rep)))
+              stageExit 1
 
 -- `build --json`'s stale lines, carried in its envelope as the field each
 -- names rather than as prose; under MEDAKA_STRICT a line stops the verb, as a
 -- stale binary does, before any envelope exists.  Only a native build's emitter
 -- child takes the trees; this process took the declarations.
-jsonPreludeNotices : BuildTarget ->
-  String ->
-  String ->
-  String ->
-  <IO> List (String, String)
-jsonPreludeNotices target stdlibDir rsrc csrc =
-  let inputs = shippedInputs stdlibDir rsrc csrc
+jsonPreludeNotices : BuildTarget -> PreludeInputs -> <IO> List (String, String)
+jsonPreludeNotices target prelude =
   let staged = Ref []
   let stage = field => Some (msg => staged := staged.value ++ [(field, msg)])
   let trees = match target
-    TNative => preludeTreesLine (checkPreludeElab inputs)
+    TNative => staleLine TreesFile (checkPreludeElab prelude)
     TWasm => None
   let _ = reportStaleLine dieMsg (stage "stalePreludeTrees") trees
   let _ =
     reportStaleLine
       dieMsg
       (stage "stalePreludeDecls")
-      (preludeDeclsLine (preludeDeclsVerdict inputs))
+      (staleLine DeclsFile (preludeDeclsVerdict prelude))
   staged.value
 
 -- [envelope] with each of [notices] appended as its field.
@@ -2483,8 +2478,8 @@ runBuildPlainCmd a =
           None => defaultOutPath target input
         match readPreludeSources (root ++ "/stdlib")
           Err msg => dieMsg msg
-          Ok (rsrc, csrc) =>
-            let _ = nativeTreesReport target root rsrc csrc
+          Ok prelude =>
+            let _ = nativeTreesReport target prelude
             match (runBuild
               root
               medaka
@@ -2508,11 +2503,9 @@ runBuildPlainCmd a =
 
 -- `build`'s report of the prelude's files: only a native build's emitter child
 -- takes the trees, and this process took the declarations.
-nativeTreesReport : BuildTarget -> String -> String -> String -> <IO> Unit
-nativeTreesReport TNative root rsrc csrc =
-  reportChildTrees (root ++ "/stdlib") rsrc csrc
-nativeTreesReport TWasm root rsrc csrc =
-  reportDecls False dieMsg (root ++ "/stdlib") rsrc csrc
+nativeTreesReport : BuildTarget -> PreludeInputs -> <IO> Unit
+nativeTreesReport TNative prelude = reportChildTrees prelude
+nativeTreesReport TWasm prelude = reportDecls None dieMsg prelude
 
 -- `medaka build --json`'s own argument-parsing arm: a flag error still goes
 -- through `parseBuildArgs`, but a bad-args message is now the JSON envelope
@@ -2868,8 +2861,6 @@ runRunCmd argv =
       perfArm perfT0
       carryTargetProfile (runTargetFlag argv) target
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-      let rtPath = root ++ "/stdlib/runtime.mdk"
-      let corePath = root ++ "/stdlib/core.mdk"
       let stdlibDir = root ++ "/stdlib"
       let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
       let allowInternal = runFlagGiven "--allow-internal" argv
@@ -2877,7 +2868,9 @@ runRunCmd argv =
       -- (eval.mdk's pArgs reads this Ref): `medaka run prog.mdk a b` ⇒ ["a","b"],
       -- matching what the same program's compiled binary sees.
       progArgsRef := progArgs
-      let (rsrc, csrc) = orExit (readPreludeSources stdlibDir)
+      let prelude = orExit (readPreludeSources stdlibDir)
+      let rsrc = prelude.pnRuntimeSrc
+      let csrc = prelude.pnCoreSrc
       -- Parse the user modules with parseLocated (real ELoc spans) so a
       -- runtime error (E-*) can report a correct file:L:C.  Plain loadProgram
       -- uses placeholder-loc `parse`, which collapses every span to 1:0.
@@ -2897,7 +2890,7 @@ runRunCmd argv =
       -- a pure error-rendering function).
       let modsWithPath = match loadProgramFilesLocatedE (_ => None) target roots
         Err lerr =>
-          let _ = takeShippedPrelude jsonMode stdlibDir rsrc csrc
+          let _ = takeShippedPrelude (deferredInto jsonMode) prelude
           let _ = orExit (mapErr (ppParseError tsrc target) (parseResult tsrc))
           let _ = runAbort (moduleLoadErrText tsrc target stdlibDir lerr)
           panic "unreachable"
@@ -2914,7 +2907,7 @@ runRunCmd argv =
       let rtD = desugaredPrelude rsrc
       let coreD = desugaredPrelude csrc
       let modsD = map desugarPair mods
-      let _ = takeShippedPrelude jsonMode stdlibDir rsrc csrc
+      let _ = takeShippedPrelude (deferredInto jsonMode) prelude
       let trusted = projectTrustedMods target roots stdlibDir mods
       -- #2072: the FFI-stamp discriminator, handed to typecheck alongside the
       -- #1713 reference-trust set above.  Different predicate, deliberately: this
@@ -3305,12 +3298,10 @@ runTestProjectCmd engines cases filterOpt seedOpt =
 runTestJsonCmd : List Engine -> Int -> Option String -> String -> <IO> Unit
 runTestJsonCmd engines cases filterOpt target =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let rtPath = root ++ "/stdlib/runtime.mdk"
-  let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   let r = do
-    (rsrc, csrc) <- readPreludeSources stdlibDir
-    let _ = seedCheckPrelude stdlibDir rsrc csrc
+    prelude <- readPreludeSources stdlibDir
+    let _ = seedCheckPrelude prelude
     tsrc <- readSource target
     let userDecls = targetDesugared tsrc
     if filterMatchedNothing filterOpt tsrc userDecls then
@@ -3320,8 +3311,8 @@ runTestJsonCmd engines cases filterOpt target =
       let (typeError, runs, props, tests, typecheckSkipped) =
         runTestGradedReport
           engines
-          rsrc
-          csrc
+          prelude.pnRuntimeSrc
+          prelude.pnCoreSrc
           target
           tsrc
           userDecls
@@ -3392,7 +3383,7 @@ reportSupervisedTrees stdlibDir rtPath corePath = match (
   readFile rtPath,
   readFile corePath,
 )
-  (Ok rsrc, Ok csrc) => reportChildTrees stdlibDir rsrc csrc
+  (Ok rsrc, Ok csrc) => reportChildTrees (shippedInputs stdlibDir rsrc csrc)
   _ => ()
 
 -- ── doc ───────────────────────────────────────────────────────────────────
@@ -3451,15 +3442,14 @@ runDocTargets (_ :: _ :: _) =
 runDocTargets (target :: _) =
   let _ = carryTargetProfile None target
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let rtPath = root ++ "/stdlib/runtime.mdk"
-  let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
   let r = do
-    (rsrc, csrc) <- readPreludeSources stdlibDir
-    let _ = seedCheckPrelude stdlibDir rsrc csrc
+    prelude <- readPreludeSources stdlibDir
+    let _ = seedCheckPrelude prelude
     tsrc <- readSource target
-    Ok (putStr (runDoc rsrc csrc tsrc target roots))
+    Ok
+      (putStr (runDoc prelude.pnRuntimeSrc prelude.pnCoreSrc tsrc target roots))
   match r
     Err msg => dieMsg msg
     Ok v => v
@@ -3473,18 +3463,16 @@ runDocLibraryTargets _ [] =
 runDocLibraryTargets outDir targets =
   let _ = carryTargetProfile None (optionOr "." (head targets))
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let rtPath = root ++ "/stdlib/runtime.mdk"
-  let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   let r = do
-    (rsrc, csrc) <- readPreludeSources stdlibDir
-    let _ = seedCheckPrelude stdlibDir rsrc csrc
+    prelude <- readPreludeSources stdlibDir
+    let _ = seedCheckPrelude prelude
     _ <- ensureOutDir outDir
     -- A `*_test.mdk` sibling holds a module's tests, not library surface, so
     -- the library reference has no page for it ([P-TEST-SIBLING]).
     mds <- collectModuleDocs
-      rsrc
-      csrc
+      prelude.pnRuntimeSrc
+      prelude.pnCoreSrc
       stdlibDir
       (filter (t => not (endsWith "_test.mdk" t)) targets)
     -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
@@ -3680,34 +3668,34 @@ analyzeTarget target =
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
   -- An unreadable prelude or target is not an analysis result: exit here.
-  let (rsrc, csrc) = orExit (readPreludeSources stdlibDir)
+  let prelude = orExit (readPreludeSources stdlibDir)
   let tsrc = orExit (readSource target)
   match loadProgramFilesLocatedE (_ => None) target roots
     Err lerr => match parseResult tsrc
       Err e => Err (ppParseError tsrc target e)
       Ok _ => Err (moduleLoadErrText tsrc target stdlibDir lerr)
-    Ok modsWithPath =>
-      analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath
+    Ok modsWithPath => analyzeLoaded prelude target roots stdlibDir modsWithPath
 
 -- One front-end run (`frontEnd`) whose drive is the elaboration the verb reads.
 -- A graph resolve rejects is refused with its resolve errors and not driven;
 -- past resolve, the gate is `run`'s: the per-module diagnostics of the one elaboration, rendered located
 -- against each module's own file, then anything only the graph-end drain saw.
-analyzeLoaded : String ->
-  String ->
+analyzeLoaded : PreludeInputs ->
   String ->
   List String ->
   String ->
   List (String, String, List Decl) ->
   <IO> Result String EntryAnalysis
-analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
+analyzeLoaded prelude target roots stdlibDir modsWithPath =
+  let rsrc = prelude.pnRuntimeSrc
+  let csrc = prelude.pnCoreSrc
   let mods = map dropPathTriple modsWithPath
   let pathMap = map modIdToPath modsWithPath
   let trusted = projectTrustedMods target roots stdlibDir mods
   let rtD = desugaredPrelude rsrc
   let coreD = desugaredPrelude csrc
   let modsD = map desugarPair mods
-  let _ = takeShippedPrelude False stdlibDir rsrc csrc
+  let _ = takeShippedPrelude unstaged prelude
   let front =
     frontEnd
       (stdlibExportsReader stdlibDir)
@@ -4368,16 +4356,14 @@ runReplCmd : List String -> <IO> Unit
 runReplCmd [] =
   let _ = carryTargetProfile None (canonicalizePath "." ++ "/repl")
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let rtPath = root ++ "/stdlib/runtime.mdk"
-  let corePath = root ++ "/stdlib/core.mdk"
   let r = do
-    (rsrc, csrc) <- readPreludeSources (root ++ "/stdlib")
+    prelude <- readPreludeSources (root ++ "/stdlib")
     -- S-1/#2234 (F-converge): content-keyed prelude memo, same as every other
     -- verb's route; consumed live by `initSession` below.
-    let runtimeDecls = desugaredPrelude rsrc
-    let preludeDecls = desugaredPrelude csrc
+    let runtimeDecls = desugaredPrelude prelude.pnRuntimeSrc
+    let preludeDecls = desugaredPrelude prelude.pnCoreSrc
     let _ = initSession runtimeDecls preludeDecls
-    let _ = takeShippedPrelude False (root ++ "/stdlib") rsrc csrc
+    let _ = takeShippedPrelude unstaged prelude
     Ok (replLoop ())
   match r
     Err msg => dieMsg msg
@@ -4441,12 +4427,10 @@ runLspCmd (bad :: _) =
 runLspServerFromEnv : Unit -> <IO> Unit
 runLspServerFromEnv _ =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let rtPath = root ++ "/stdlib/runtime.mdk"
-  let corePath = root ++ "/stdlib/core.mdk"
   let r = do
-    (rsrc, csrc) <- readPreludeSources (root ++ "/stdlib")
-    let _ = loadCheckPrelude (root ++ "/stdlib") rsrc csrc
-    Ok (runServer rsrc csrc medakaVersion)
+    prelude <- readPreludeSources (root ++ "/stdlib")
+    let _ = loadCheckPrelude prelude
+    Ok (runServer prelude.pnRuntimeSrc prelude.pnCoreSrc medakaVersion)
   match r
     Err msg => dieMsg msg
     Ok v => v
@@ -4496,13 +4480,17 @@ runMcpCmd (bad :: _) =
 runMcpServerFromEnv : Unit -> <IO> Unit
 runMcpServerFromEnv _ =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let rtPath = root ++ "/stdlib/runtime.mdk"
-  let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   let r = do
-    (rsrc, csrc) <- readPreludeSources stdlibDir
-    let _ = loadCheckPrelude stdlibDir rsrc csrc
-    Ok (runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict medakaVersion)
+    prelude <- readPreludeSources stdlibDir
+    let _ = loadCheckPrelude prelude
+    Ok
+      (runMcpServer
+        prelude.pnRuntimeSrc
+        prelude.pnCoreSrc
+        stdlibDir
+        sourceStalenessVerdict
+        medakaVersion)
   match r
     Err msg => dieMsg msg
     Ok v => v

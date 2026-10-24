@@ -1870,3 +1870,14 @@ gate). On the compiler side the lever is what `check` retains (#4090), then type
 atomic allocation inside the existing `mdk_alloc` seam (#4091). The wall-time gate
 speedups in #4002 and #4016 came from fan-out and moved no CPU. A custom collector is
 not the first lever; #4061's prototype and the reasoning are summarised in #4093.
+
+## Decoder hot-path shapes in the prelude codec (`ast_codec`, `sexp_value`)
+
+Figures behind the shape comments in `compiler/frontend/ast_codec.mdk` and
+`compiler/support/sexp_value.mdk`, measured as the share of the prelude's decode time:
+
+| Shape | Cost |
+|---|---|
+| A top-level `Int` as a byte constant in the scanner (`sexp_value`) instead of a comparison | +21% |
+| A top-level `Int` as a constructor tag read in a guard (`ast_codec`) instead of a call to a constant function | +45% |
+| `readTagged` reached through two closures from `readExpr`/`readPat` | +10%; +2.8% with those two spelling the shell out |

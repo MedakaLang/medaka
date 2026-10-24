@@ -1,5 +1,5 @@
 # META
-source_lines=443
+source_lines=448
 stages=DESUGAR,MARK
 # SOURCE
 -- S-expression values with one canonical rendering and a fail-closed reader.
@@ -9,7 +9,7 @@ stages=DESUGAR,MARK
 -- unless it is empty or holds whitespace, parens, `"`, `;` or `\`.
 
 import array.{fromList}
-import list.{reverse}
+import list.{reverse, lookup}
 
 -- The two constructors coincide with `Result` by shape only; this is a value tree.
 -- lint-disable-next-line rule-clone-type
@@ -28,8 +28,9 @@ textOf : List Int -> String
 textOf bytes = stringFromUtf8Bytes (fromList bytes)
 
 -- The bytes the grammar gives a meaning. Each is a predicate rather than a
--- constant: a top-level `Int` is a forced global read on every use, which
--- costs +21% decode of the prelude, where a comparison inlines to an immediate.
+-- constant: a top-level `Int` is a forced global read on every use, where a
+-- comparison inlines to an immediate (compiler/PERF-RESULTS.md, "Decoder
+-- hot-path shapes").
 export
 isOpenByte : Int -> Bool
 isOpenByte b = b == 40
@@ -65,14 +66,18 @@ isSpecialByte b = isWsByte b || isOpenByte b || isCloseByte b || isStrayByte b
 needsQuote : String -> Bool
 needsQuote s = s == "" || any isSpecialByte (bytesOf s)
 
+-- The control bytes the renderer writes as a backslash and a letter:
+-- (byte, letter) for newline, tab and carriage return.
+letterEscapes : List (Int, Int)
+letterEscapes = [(10, 110), (9, 116), (13, 114)]
+
 escapeByte : Int -> List Int
 escapeByte b
   | isBackslashByte b = [byteBackslash, byteBackslash]
   | isQuoteByte b = [byteBackslash, byteQuote]
-  | b == 10 = [byteBackslash, 110]
-  | b == 9 = [byteBackslash, 116]
-  | b == 13 = [byteBackslash, 114]
-  | otherwise = [b]
+  | otherwise = match lookup b letterEscapes
+    Some letter => [byteBackslash, letter]
+    None => [b]
 
 renderAtom : String -> String
 renderAtom s
@@ -125,22 +130,18 @@ scanQuote b n p esc
     else if isBackslashByte c then
       if p + 1 >= n then
         (-1, esc)
-      else if unescapeByte (byteBlockGetUnsafe (p + 1) b) < 0 then
+      else if isNone (unescapeByte (byteBlockGetUnsafe (p + 1) b)) then
         (-2 - p, esc)
       else
         scanQuote b n (p + 2) True
     else
       scanQuote b n (p + 1) esc
 
--- The byte an escape letter stands for, or -1.
-unescapeByte : Int -> Int
+-- The byte an escape letter stands for, if the renderer writes one.
+unescapeByte : Int -> Option Int
 unescapeByte b
-  | isBackslashByte b = b
-  | isQuoteByte b = b
-  | b == 110 = 10
-  | b == 116 = 9
-  | b == 114 = 13
-  | otherwise = -1
+  | isBackslashByte b || isQuoteByte b = Some b
+  | otherwise = lookup b (map (p => (snd p, fst p)) letterEscapes)
 
 unescapeGo : ByteBlock -> Int -> Int -> ByteBlock -> Int -> Int
 unescapeGo b i j out k
@@ -148,8 +149,8 @@ unescapeGo b i j out k
   | otherwise =
     let c = byteBlockGetUnsafe i b
     if isBackslashByte c then
-      let _ =
-        byteBlockSetUnsafe k (unescapeByte (byteBlockGetUnsafe (i + 1) b)) out
+      let letter = byteBlockGetUnsafe (i + 1) b
+      let _ = byteBlockSetUnsafe k (optionOr letter (unescapeByte letter)) out
       unescapeGo b (i + 2) j out (k + 1)
     else
       let _ = byteBlockSetUnsafe k c out
@@ -301,15 +302,19 @@ cursorAtEnd cur =
   not (cursorFailed cur)
     && skipWsAt cur.scBytes cur.scLen cur.scPos.value >= cur.scLen
 
+-- Steps over the byte just peeked when [matched], else fails the cursor.  First
+-- order on purpose: the readers call this on the decode hot path.
+stepIfMatched : Bool -> SexpCursor -> Unit
+stepIfMatched matched cur =
+  if matched then cursorAdvance cur else cursorFail cur ()
+
 export
 cursorOpen : SexpCursor -> Unit
-cursorOpen cur =
-  if isOpenByte (cursorPeek cur) then cursorAdvance cur else cursorFail cur ()
+cursorOpen cur = stepIfMatched (isOpenByte (cursorPeek cur)) cur
 
 export
 cursorClose : SexpCursor -> Unit
-cursorClose cur =
-  if isCloseByte (cursorPeek cur) then cursorAdvance cur else cursorFail cur ()
+cursorClose cur = stepIfMatched (isCloseByte (cursorPeek cur)) cur
 
 -- [v], with the cursor left at [p].
 stopAt : SexpCursor -> Int -> a -> a
@@ -447,7 +452,7 @@ expectList arity path (SList items)
 expectList _ path _ = shapeError path "expected a list"
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
-(DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "reverse" false) (mem "lookup" false))))
 (DData Public "SExp" () ((variant "SAtom" (ConPos (TyCon "String"))) (variant "SList" (ConPos (TyApp (TyCon "List") (TyCon "SExp"))))) ())
 (DImpl true "Eq" ((TyCon "SExp")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "SAtom" (PVar "__a0")) (PCon "SAtom" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "SList" (PVar "__a0")) (PCon "SList" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "SExp")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SAtom" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SAtom ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "SList" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SList ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
@@ -478,8 +483,10 @@ expectList _ path _ = shapeError path "expected a list"
 (DFunDef false "isSpecialByte" ((PVar "b")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isWsByte") (EVar "b")) (EApp (EVar "isOpenByte") (EVar "b"))) (EApp (EVar "isCloseByte") (EVar "b"))) (EApp (EVar "isStrayByte") (EVar "b"))))
 (DTypeSig false "needsQuote" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "needsQuote" ((PVar "s")) (EBinOp "||" (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EApp (EVar "any") (EVar "isSpecialByte")) (EApp (EVar "bytesOf") (EVar "s")))))
+(DTypeSig false "letterEscapes" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "letterEscapes" () (EListLit (ETuple (ELit (LInt 10)) (ELit (LInt 110))) (ETuple (ELit (LInt 9)) (ELit (LInt 116))) (ETuple (ELit (LInt 13)) (ELit (LInt 114)))))
 (DTypeSig false "escapeByte" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))
-(DFunDef false "escapeByte" ((PVar "b")) (EIf (EApp (EVar "isBackslashByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteBackslash")) (EIf (EApp (EVar "isQuoteByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteQuote")) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 10))) (EListLit (EVar "byteBackslash") (ELit (LInt 110))) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 9))) (EListLit (EVar "byteBackslash") (ELit (LInt 116))) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 13))) (EListLit (EVar "byteBackslash") (ELit (LInt 114))) (EIf (EVar "otherwise") (EListLit (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "escapeByte" ((PVar "b")) (EIf (EApp (EVar "isBackslashByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteBackslash")) (EIf (EApp (EVar "isQuoteByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteQuote")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookup") (EVar "b")) (EVar "letterEscapes")) (arm (PCon "Some" (PVar "letter")) () (EListLit (EVar "byteBackslash") (EVar "letter"))) (arm (PCon "None") () (EListLit (EVar "b")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "renderAtom" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "renderAtom" ((PVar "s")) (EIf (EApp (EVar "needsQuote") (EVar "s")) (EApp (EVar "textOf") (EBinOp "++" (EBinOp "++" (EListLit (EVar "byteQuote")) (EApp (EApp (EVar "flatMap") (EVar "escapeByte")) (EApp (EVar "bytesOf") (EVar "s")))) (EListLit (EVar "byteQuote")))) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "renderSExp" (TyFun (TyCon "SExp") (TyCon "String")))
@@ -496,11 +503,11 @@ expectList _ path _ = shapeError path "expected a list"
 (DTypeSig false "isStrayByte" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isStrayByte" ((PVar "b")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuoteByte") (EVar "b")) (EApp (EVar "isSemiByte") (EVar "b"))) (EApp (EVar "isBackslashByte") (EVar "b"))))
 (DTypeSig false "scanQuote" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "scanQuote" ((PVar "b") (PVar "n") (PVar "p") (PVar "esc")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (ETuple (EVar "p") (EVar "esc")) (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EBinOp "<" (EApp (EVar "unescapeByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "b"))) (ELit (LInt 0))) (ETuple (EBinOp "-" (EUnOp "-" (ELit (LInt 2))) (EVar "p")) (EVar "esc")) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "True")))) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "esc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "unescapeByte" (TyFun (TyCon "Int") (TyCon "Int")))
-(DFunDef false "unescapeByte" ((PVar "b")) (EIf (EApp (EVar "isBackslashByte") (EVar "b")) (EVar "b") (EIf (EApp (EVar "isQuoteByte") (EVar "b")) (EVar "b") (EIf (EBinOp "==" (EVar "b") (ELit (LInt 110))) (ELit (LInt 10)) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 116))) (ELit (LInt 9)) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 114))) (ELit (LInt 13)) (EIf (EVar "otherwise") (EUnOp "-" (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "scanQuote" ((PVar "b") (PVar "n") (PVar "p") (PVar "esc")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (ETuple (EVar "p") (EVar "esc")) (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EApp (EVar "isNone") (EApp (EVar "unescapeByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "b")))) (ETuple (EBinOp "-" (EUnOp "-" (ELit (LInt 2))) (EVar "p")) (EVar "esc")) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "True")))) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "esc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "unescapeByte" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "unescapeByte" ((PVar "b")) (EIf (EBinOp "||" (EApp (EVar "isBackslashByte") (EVar "b")) (EApp (EVar "isQuoteByte") (EVar "b"))) (EApp (EVar "Some") (EVar "b")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookup") (EVar "b")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EVar "letterEscapes"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "unescapeGo" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "unescapeGo" ((PVar "b") (PVar "i") (PVar "j") (PVar "out") (PVar "k")) (EIf (EBinOp ">=" (EVar "i") (EVar "j")) (EVar "k") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EApp (EVar "unescapeByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b")))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EVar "c")) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "unescapeGo" ((PVar "b") (PVar "i") (PVar "j") (PVar "out") (PVar "k")) (EIf (EBinOp ">=" (EVar "i") (EVar "j")) (EVar "k") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EBlock (DoLet false false (PVar "letter") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EApp (EApp (EVar "optionOr") (EVar "letter")) (EApp (EVar "unescapeByte") (EVar "letter")))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EVar "c")) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "quotedText" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "String"))))))
 (DFunDef false "quotedText" ((PVar "b") (PVar "i") (PVar "j") (PVar "esc")) (EIf (EVar "esc") (EBlock (DoLet false false (PVar "out") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "j") (EVar "i")))) (DoLet false false (PVar "k") (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EVar "i")) (EVar "j")) (EVar "out")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "byteBlockToString") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EVar "k")) (EVar "out"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "sliceText") (EVar "b")) (EVar "i")) (EVar "j")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readNode" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "SExp") (TyCon "Int")))))))
@@ -526,10 +533,12 @@ expectList _ path _ = shapeError path "expected a list"
 (DFunDef false "cursorPeek" ((PVar "cur")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EFieldAccess (EFieldAccess (EVar "cur") "scPos") "value"))) (DoLet false false PWild (EApp (EApp (EVar "cursorStep") (EVar "cur")) (EVar "p"))) (DoExpr (EIf (EBinOp "<" (EVar "p") (EFieldAccess (EVar "cur") "scLen")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EFieldAccess (EVar "cur") "scBytes")) (EUnOp "-" (ELit (LInt 1)))))))
 (DTypeSig true "cursorAtEnd" (TyFun (TyCon "SexpCursor") (TyCon "Bool")))
 (DFunDef false "cursorAtEnd" ((PVar "cur")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "cursorFailed") (EVar "cur"))) (EBinOp ">=" (EApp (EApp (EApp (EVar "skipWsAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EFieldAccess (EFieldAccess (EVar "cur") "scPos") "value")) (EFieldAccess (EVar "cur") "scLen"))))
+(DTypeSig false "stepIfMatched" (TyFun (TyCon "Bool") (TyFun (TyCon "SexpCursor") (TyCon "Unit"))))
+(DFunDef false "stepIfMatched" ((PVar "matched") (PVar "cur")) (EIf (EVar "matched") (EApp (EVar "cursorAdvance") (EVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit LUnit))))
 (DTypeSig true "cursorOpen" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))
-(DFunDef false "cursorOpen" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EApp (EVar "cursorAdvance") (EVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit LUnit))))
+(DFunDef false "cursorOpen" ((PVar "cur")) (EApp (EApp (EVar "stepIfMatched") (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur")))) (EVar "cur")))
 (DTypeSig true "cursorClose" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))
-(DFunDef false "cursorClose" ((PVar "cur")) (EIf (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EApp (EVar "cursorAdvance") (EVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit LUnit))))
+(DFunDef false "cursorClose" ((PVar "cur")) (EApp (EApp (EVar "stepIfMatched") (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur")))) (EVar "cur")))
 (DTypeSig false "stopAt" (TyFun (TyCon "SexpCursor") (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyVar "a")))))
 (DFunDef false "stopAt" ((PVar "cur") (PVar "p") (PVar "v")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "cursorStep") (EVar "cur")) (EVar "p"))) (DoExpr (EVar "v"))))
 (DTypeSig false "digitsInto" (TyFun (TyCon "SexpCursor") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
@@ -558,7 +567,7 @@ expectList _ path _ = shapeError path "expected a list"
 (DFunDef false "expectList" (PWild (PVar "path") PWild) (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected a list"))))
 # MARK
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
-(DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "reverse" false) (mem "lookup" false))))
 (DData Public "SExp" () ((variant "SAtom" (ConPos (TyCon "String"))) (variant "SList" (ConPos (TyApp (TyCon "List") (TyCon "SExp"))))) ())
 (DImpl true "Eq" ((TyCon "SExp")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "SAtom" (PVar "__a0")) (PCon "SAtom" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "SList" (PVar "__a0")) (PCon "SList" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "SExp")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SAtom" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SAtom ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "SList" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SList ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
@@ -589,8 +598,10 @@ expectList _ path _ = shapeError path "expected a list"
 (DFunDef false "isSpecialByte" ((PVar "b")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isWsByte") (EVar "b")) (EApp (EVar "isOpenByte") (EVar "b"))) (EApp (EVar "isCloseByte") (EVar "b"))) (EApp (EVar "isStrayByte") (EVar "b"))))
 (DTypeSig false "needsQuote" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "needsQuote" ((PVar "s")) (EBinOp "||" (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EApp (EDictApp "any") (EVar "isSpecialByte")) (EApp (EVar "bytesOf") (EVar "s")))))
+(DTypeSig false "letterEscapes" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "letterEscapes" () (EListLit (ETuple (ELit (LInt 10)) (ELit (LInt 110))) (ETuple (ELit (LInt 9)) (ELit (LInt 116))) (ETuple (ELit (LInt 13)) (ELit (LInt 114)))))
 (DTypeSig false "escapeByte" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))
-(DFunDef false "escapeByte" ((PVar "b")) (EIf (EApp (EVar "isBackslashByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteBackslash")) (EIf (EApp (EVar "isQuoteByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteQuote")) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 10))) (EListLit (EVar "byteBackslash") (ELit (LInt 110))) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 9))) (EListLit (EVar "byteBackslash") (ELit (LInt 116))) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 13))) (EListLit (EVar "byteBackslash") (ELit (LInt 114))) (EIf (EVar "otherwise") (EListLit (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "escapeByte" ((PVar "b")) (EIf (EApp (EVar "isBackslashByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteBackslash")) (EIf (EApp (EVar "isQuoteByte") (EVar "b")) (EListLit (EVar "byteBackslash") (EVar "byteQuote")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookup") (EVar "b")) (EVar "letterEscapes")) (arm (PCon "Some" (PVar "letter")) () (EListLit (EVar "byteBackslash") (EVar "letter"))) (arm (PCon "None") () (EListLit (EVar "b")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "renderAtom" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "renderAtom" ((PVar "s")) (EIf (EApp (EVar "needsQuote") (EVar "s")) (EApp (EVar "textOf") (EBinOp "++" (EBinOp "++" (EListLit (EVar "byteQuote")) (EApp (EApp (EDictApp "flatMap") (EVar "escapeByte")) (EApp (EVar "bytesOf") (EVar "s")))) (EListLit (EVar "byteQuote")))) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "renderSExp" (TyFun (TyCon "SExp") (TyCon "String")))
@@ -607,11 +618,11 @@ expectList _ path _ = shapeError path "expected a list"
 (DTypeSig false "isStrayByte" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isStrayByte" ((PVar "b")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuoteByte") (EVar "b")) (EApp (EVar "isSemiByte") (EVar "b"))) (EApp (EVar "isBackslashByte") (EVar "b"))))
 (DTypeSig false "scanQuote" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "scanQuote" ((PVar "b") (PVar "n") (PVar "p") (PVar "esc")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (ETuple (EVar "p") (EVar "esc")) (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EBinOp "<" (EApp (EVar "unescapeByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "b"))) (ELit (LInt 0))) (ETuple (EBinOp "-" (EUnOp "-" (ELit (LInt 2))) (EVar "p")) (EVar "esc")) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "True")))) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "esc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "unescapeByte" (TyFun (TyCon "Int") (TyCon "Int")))
-(DFunDef false "unescapeByte" ((PVar "b")) (EIf (EApp (EVar "isBackslashByte") (EVar "b")) (EVar "b") (EIf (EApp (EVar "isQuoteByte") (EVar "b")) (EVar "b") (EIf (EBinOp "==" (EVar "b") (ELit (LInt 110))) (ELit (LInt 10)) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 116))) (ELit (LInt 9)) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 114))) (ELit (LInt 13)) (EIf (EVar "otherwise") (EUnOp "-" (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "scanQuote" ((PVar "b") (PVar "n") (PVar "p") (PVar "esc")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (ETuple (EVar "p") (EVar "esc")) (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EApp (EVar "isNone") (EApp (EVar "unescapeByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "b")))) (ETuple (EBinOp "-" (EUnOp "-" (ELit (LInt 2))) (EVar "p")) (EVar "esc")) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "True")))) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "esc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "unescapeByte" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "unescapeByte" ((PVar "b")) (EIf (EBinOp "||" (EApp (EVar "isBackslashByte") (EVar "b")) (EApp (EVar "isQuoteByte") (EVar "b"))) (EApp (EVar "Some") (EVar "b")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookup") (EVar "b")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EVar "letterEscapes"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "unescapeGo" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "unescapeGo" ((PVar "b") (PVar "i") (PVar "j") (PVar "out") (PVar "k")) (EIf (EBinOp ">=" (EVar "i") (EVar "j")) (EVar "k") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EApp (EVar "unescapeByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b")))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EVar "c")) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "unescapeGo" ((PVar "b") (PVar "i") (PVar "j") (PVar "out") (PVar "k")) (EIf (EBinOp ">=" (EVar "i") (EVar "j")) (EVar "k") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EBlock (DoLet false false (PVar "letter") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EApp (EApp (EVar "optionOr") (EVar "letter")) (EApp (EVar "unescapeByte") (EVar "letter")))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EVar "c")) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "quotedText" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "String"))))))
 (DFunDef false "quotedText" ((PVar "b") (PVar "i") (PVar "j") (PVar "esc")) (EIf (EVar "esc") (EBlock (DoLet false false (PVar "out") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "j") (EVar "i")))) (DoLet false false (PVar "k") (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EVar "i")) (EVar "j")) (EVar "out")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "byteBlockToString") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EVar "k")) (EVar "out"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "sliceText") (EVar "b")) (EVar "i")) (EVar "j")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readNode" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "SExp") (TyCon "Int")))))))
@@ -637,10 +648,12 @@ expectList _ path _ = shapeError path "expected a list"
 (DFunDef false "cursorPeek" ((PVar "cur")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EFieldAccess (EFieldAccess (EVar "cur") "scPos") "value"))) (DoLet false false PWild (EApp (EApp (EVar "cursorStep") (EVar "cur")) (EVar "p"))) (DoExpr (EIf (EBinOp "<" (EVar "p") (EFieldAccess (EVar "cur") "scLen")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EFieldAccess (EVar "cur") "scBytes")) (EUnOp "-" (ELit (LInt 1)))))))
 (DTypeSig true "cursorAtEnd" (TyFun (TyCon "SexpCursor") (TyCon "Bool")))
 (DFunDef false "cursorAtEnd" ((PVar "cur")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "cursorFailed") (EVar "cur"))) (EBinOp ">=" (EApp (EApp (EApp (EVar "skipWsAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EFieldAccess (EFieldAccess (EVar "cur") "scPos") "value")) (EFieldAccess (EVar "cur") "scLen"))))
+(DTypeSig false "stepIfMatched" (TyFun (TyCon "Bool") (TyFun (TyCon "SexpCursor") (TyCon "Unit"))))
+(DFunDef false "stepIfMatched" ((PVar "matched") (PVar "cur")) (EIf (EVar "matched") (EApp (EVar "cursorAdvance") (EVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit LUnit))))
 (DTypeSig true "cursorOpen" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))
-(DFunDef false "cursorOpen" ((PVar "cur")) (EIf (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EApp (EVar "cursorAdvance") (EVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit LUnit))))
+(DFunDef false "cursorOpen" ((PVar "cur")) (EApp (EApp (EVar "stepIfMatched") (EApp (EVar "isOpenByte") (EApp (EVar "cursorPeek") (EVar "cur")))) (EVar "cur")))
 (DTypeSig true "cursorClose" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))
-(DFunDef false "cursorClose" ((PVar "cur")) (EIf (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur"))) (EApp (EVar "cursorAdvance") (EVar "cur")) (EApp (EApp (EVar "cursorFail") (EVar "cur")) (ELit LUnit))))
+(DFunDef false "cursorClose" ((PVar "cur")) (EApp (EApp (EVar "stepIfMatched") (EApp (EVar "isCloseByte") (EApp (EVar "cursorPeek") (EVar "cur")))) (EVar "cur")))
 (DTypeSig false "stopAt" (TyFun (TyCon "SexpCursor") (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyVar "a")))))
 (DFunDef false "stopAt" ((PVar "cur") (PVar "p") (PVar "v")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "cursorStep") (EVar "cur")) (EVar "p"))) (DoExpr (EVar "v"))))
 (DTypeSig false "digitsInto" (TyFun (TyCon "SexpCursor") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))

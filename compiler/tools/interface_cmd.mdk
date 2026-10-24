@@ -36,7 +36,7 @@ import types.interface_sexp.{
 }
 import types.prelude_elab.{
   PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile, elabKeyOf,
-  elabDigestOf, renderElabFault, readElabKey
+  framedDigestOf, renderElabFault, readElabKey
 }
 import types.prelude_decls.{
   PreludeDecls(..), preludeDeclsOf, encodeDeclsFile, readDeclsFile, declsKeyOf,
@@ -218,7 +218,7 @@ elaborateCore runtimeSrc coreSrc =
 declsOf : String -> String -> PreludeElab -> Result String PreludeDecls
 declsOf runtimeSrc coreSrc elab = do
   pd <- preludeDeclsOf (desugaredPrelude runtimeSrc) (desugaredPrelude coreSrc)
-  if pd.pdCoreBase == elab.peBinderBase then
+  if pd.pdCore.ptBase == elab.peBinderBase then
     Ok pd
   else
     Err
@@ -307,8 +307,8 @@ writeCmd modulePath targets
     ]
       Err e => failWith "medaka interface write: \{e}"
       Ok _ =>
-        let _ = putStrLn "wrote \{interfacePath modulePath}"
-        let _ = putStrLn "wrote \{elabPath modulePath}"
+        putStrLn "wrote \{interfacePath modulePath}"
+        putStrLn "wrote \{elabPath modulePath}"
         putStrLn "wrote \{declsPath modulePath}"
 
 -- ── show ────────────────────────────────────────────────────────────────────
@@ -324,18 +324,22 @@ sectionLines n total s =
       (row => "  row \{fst row} : \{ppPubScheme (snd row)}")
       s.isInterface.piCore
 
+-- What every framed file's show opens with, then [middle], then the file's own
+-- [digest].
+showHeaderLines : InterfaceKey -> List String -> String -> List String
+showHeaderLines key middle digest =
+  ["format \{key.ikFormat}"]
+    ++ map (s => "source \{fst s} sha256 \{snd s}") key.ikSources
+    ++ ["compiler \{key.ikCompiler}"]
+    ++ middle
+    ++ ["digest \{digest}"]
+
 -- The header and every section of a decoded file; [digest] is the file's own.
 export
 showLines : String -> PreludeInterfaceFile -> List String
 showLines digest f =
   let total = length f.ifSections
-  ["format \{f.ifKey.ikFormat}"]
-    ++ map (s => "source \{fst s} sha256 \{snd s}") f.ifKey.ikSources
-    ++ [
-      "compiler \{f.ifKey.ikCompiler}",
-      "sections \{total}",
-      "digest \{digest}",
-    ]
+  showHeaderLines f.ifKey ["sections \{total}"] digest
     ++ flatMap
       (p => sectionLines (fst p) total (snd p))
       (zip [1..=total] f.ifSections)
@@ -354,19 +358,18 @@ showCmd path
 export
 showDeclsLines : String -> InterfaceKey -> PreludeDecls -> List String
 showDeclsLines digest key pd =
-  ["format \{key.ikFormat}"]
-    ++ map (s => "source \{fst s} sha256 \{snd s}") key.ikSources
-    ++ [
-      "compiler \{key.ikCompiler}",
-      "runtime decls \{length pd.pdRuntime}",
-      "core decls \{length pd.pdCore}",
-      "binders \{pd.pdRuntimeBinders + pd.pdCoreBinders}",
-      "Nr \{pd.pdRuntimeBinders}",
-      "B0r \{pd.pdRuntimeBase}",
-      "Nc \{pd.pdCoreBinders}",
-      "B0c \{pd.pdCoreBase}",
-      "digest \{digest}",
+  showHeaderLines
+    key
+    [
+      "runtime decls \{length pd.pdRuntime.ptDecls}",
+      "core decls \{length pd.pdCore.ptDecls}",
+      "binders \{pd.pdRuntime.ptBinders + pd.pdCore.ptBinders}",
+      "Nr \{pd.pdRuntime.ptBinders}",
+      "B0r \{pd.pdRuntime.ptBase}",
+      "Nc \{pd.pdCore.ptBinders}",
+      "B0c \{pd.pdCore.ptBase}",
     ]
+    digest
 
 showDeclsFile : String -> <IO> Unit
 showDeclsFile path = match readFile path
@@ -375,16 +378,15 @@ showDeclsFile path = match readFile path
     Err fault =>
       failWith "medaka interface show: `\{path}`: \{renderDeclsFault fault}"
     Ok (key, pd) =>
-      putStrLn (joinNl (showDeclsLines (elabDigestOf text) key pd))
+      putStrLn (joinNl (showDeclsLines (framedDigestOf text) key pd))
 
 -- The header and counts of an elaborated-trees file; [digest] is the file's own.
 export
 showElabLines : String -> InterfaceKey -> PreludeElab -> List String
 showElabLines digest key pe =
-  ["format \{key.ikFormat}"]
-    ++ map (s => "source \{fst s} sha256 \{snd s}") key.ikSources
-    ++ [
-      "compiler \{key.ikCompiler}",
+  showHeaderLines
+    key
+    [
       "decls \{length pe.peDecls}",
       "evidence \{length pe.peEvidence}",
       "binder rows \{length pe.peBinders}",
@@ -392,8 +394,8 @@ showElabLines digest key pe =
       "L \{pe.peLocalCounter}",
       "N \{pe.peBinderCount}",
       "B0 \{pe.peBinderBase}",
-      "digest \{digest}",
     ]
+    digest
 
 showElabFile : String -> <IO> Unit
 showElabFile path = match readFile path
@@ -401,7 +403,8 @@ showElabFile path = match readFile path
   Ok text => match readElabFile text
     Err fault =>
       failWith "medaka interface show: `\{path}`: \{renderElabFault fault}"
-    Ok (key, pe) => putStrLn (joinNl (showElabLines (elabDigestOf text) key pe))
+    Ok (key, pe) =>
+      putStrLn (joinNl (showElabLines (framedDigestOf text) key pe))
 
 showFile : String -> <IO> Unit
 showFile path = match readFile path

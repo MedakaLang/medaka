@@ -231,8 +231,8 @@ readBinderId cur =
 
 -- A value of a type with several constructors is `(k field...)` or the bare
 -- `k`; [tagged] reads the first, [bare] the second. `readExpr` and `readPat`
--- spell the same shell out: the call through two closures costs them +10% of
--- the prelude's decode, and +2.8% with those two inline.
+-- spell the same shell out: the call through two closures costs measurably more
+-- on the decode hot path (compiler/PERF-RESULTS.md, "Decoder hot-path shapes").
 readTagged : (Int -> SexpCursor -> a) ->
   (Int -> SexpCursor -> a) ->
   SexpCursor ->
@@ -252,9 +252,9 @@ refuse dflt _ cur = cursorFail cur dflt
 
 -- ── tags ───────────────────────────────────────────────────────────────────
 -- Constructor numbers, shared by writers and readers. A tag is a function of
--- `()`, not an `Int` constant: a top-level `Int` is a lazily forced global, and
--- a guard on one costs +45% of decode, where a call to a constant function
--- costs nothing.
+-- `()`, not an `Int` constant: a top-level `Int` is a lazily forced global, so a
+-- guard on one costs far more than a call to a constant function
+-- (compiler/PERF-RESULTS.md, "Decoder hot-path shapes").
 tagAtom : Int -> SExp
 tagAtom n = SAtom (intToString n)
 
