@@ -1,5 +1,5 @@
 # META
-source_lines=206
+source_lines=214
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's desugared declarations as a file.
@@ -30,11 +30,11 @@ import support.sexp_value.{
   SExp(..), SexpError(..), atomInt, cursorAtEnd, cursorOf, cursorOffset,
   parseSExp, renderSExp
 }
-import types.interface_sexp.{InterfaceFault(..), sha256Hex}
-import types.prelude_elab.{
-  BinderRun(..), binderRunIs, binderSpan, checkedFramed, failure, firstLine,
-  framedHeader, refuse, renderFramedFault
+import types.interface_frame.{
+  InterfaceFault(..), KeyGate, checkedFramed, failure, firstLine, framedFile,
+  keyFields, noGate, refuse, renderFramedFault
 }
+import types.prelude_elab.{BinderRun(..), binderRunIs, binderSpan}
 import types.prelude_interface.{InterfaceKey(..)}
 
 -- ── the value ───────────────────────────────────────────────────────────────
@@ -106,7 +106,7 @@ encodeDeclsFile : InterfaceKey -> PreludeDecls -> String
 encodeDeclsFile key pd =
   let covered =
     "\{renderSExp (countersNode pd)}\n\{renderSExp (declsSExp pd.pdRuntime.ptDecls)}\n\{renderSExp (declsSExp pd.pdCore.ptDecls)}\n"
-  "\{renderSExp (framedHeader "medaka-decls" declsFormatVersion key (sha256Hex covered))}\n\{covered}"
+  framedFile "medaka-decls" declsFormatVersion (keyFields key) covered
 
 export
 renderDeclsFault : InterfaceFault -> String
@@ -117,7 +117,15 @@ renderDeclsFault fault =
 -- version, header and digest are checked, without decoding them.
 export
 readDeclsFramed : String -> Result InterfaceFault (InterfaceKey, String)
-readDeclsFramed text = checkedFramed "medaka-decls" declsFormatVersion text
+readDeclsFramed = readDeclsFramedGated noGate
+
+-- `readDeclsFramed` for a file [gate] has to find fresh: a stale key is refused
+-- before the digest is checked.
+export
+readDeclsFramedGated : KeyGate ->
+  String ->
+  Result InterfaceFault (InterfaceKey, String)
+readDeclsFramedGated = checkedFramed "medaka-decls" declsFormatVersion
 
 -- The key a file's header claims, after its version, header and digest are
 -- checked, without decoding the body.
@@ -213,8 +221,8 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "readDecls" false))))
 (DUse false (UseAlias ("string") "S"))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "parseSExp" false) (mem "renderSExp" false))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceFault" true) (mem "sha256Hex" false))))
-(DUse false (UseGroup ("types" "prelude_elab") ((mem "BinderRun" true) (mem "binderRunIs" false) (mem "binderSpan" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedHeader" false) (mem "refuse" false) (mem "renderFramedFault" false))))
+(DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedFile" false) (mem "keyFields" false) (mem "noGate" false) (mem "refuse" false) (mem "renderFramedFault" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "BinderRun" true) (mem "binderRunIs" false) (mem "binderSpan" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))
 (DData Public "PreludeTree" () ((variant "PreludeTree" (ConNamed (field "ptDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "ptBinders" (TyCon "Int")) (field "ptBase" (TyCon "Int"))))) ())
 (DData Public "PreludeDecls" () ((variant "PreludeDecls" (ConNamed (field "pdRuntime" (TyCon "PreludeTree")) (field "pdCore" (TyCon "PreludeTree"))))) ())
@@ -231,11 +239,13 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DTypeSig false "countersNode" (TyFun (TyCon "PreludeDecls") (TyCon "SExp")))
 (DFunDef false "countersNode" ((PVar "pd")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "counters"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptBinders"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptBase"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBinders"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBase"))))))
 (DTypeSig true "encodeDeclsFile" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "PreludeDecls") (TyCon "String"))))
-(DFunDef false "encodeDeclsFile" ((PVar "key") (PVar "pd")) (EBlock (DoLet false false (PVar "covered") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EVar "countersNode") (EVar "pd"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EVar "declsSExp") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptDecls"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EVar "declsSExp") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptDecls"))))) (ELit (LString "\n")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EApp (EApp (EApp (EVar "framedHeader") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EVar "key")) (EApp (EVar "sha256Hex") (EVar "covered")))))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "covered"))) (ELit (LString ""))))))
+(DFunDef false "encodeDeclsFile" ((PVar "key") (PVar "pd")) (EBlock (DoLet false false (PVar "covered") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EVar "countersNode") (EVar "pd"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EVar "declsSExp") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptDecls"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "renderSExp") (EApp (EVar "declsSExp") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptDecls"))))) (ELit (LString "\n")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "framedFile") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EApp (EVar "keyFields") (EVar "key"))) (EVar "covered")))))
 (DTypeSig true "renderDeclsFault" (TyFun (TyCon "InterfaceFault") (TyCon "String")))
 (DFunDef false "renderDeclsFault" ((PVar "fault")) (EApp (EApp (EApp (EVar "renderFramedFault") (ELit (LString "prelude declarations"))) (EVar "declsFormatVersion")) (EVar "fault")))
 (DTypeSig true "readDeclsFramed" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "String")))))
-(DFunDef false "readDeclsFramed" ((PVar "text")) (EApp (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EVar "text")))
+(DFunDef false "readDeclsFramed" () (EApp (EVar "readDeclsFramedGated") (EVar "noGate")))
+(DTypeSig true "readDeclsFramedGated" (TyFun (TyCon "KeyGate") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "String"))))))
+(DFunDef false "readDeclsFramedGated" () (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")))
 (DTypeSig true "readDeclsKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey"))))
 (DFunDef false "readDeclsKey" ((PVar "text")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "readDeclsFramed") (EVar "text"))))
 (DTypeSig true "readDeclsFile" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeDecls")))))
@@ -258,8 +268,8 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "readDecls" false))))
 (DUse false (UseAlias ("string") "S"))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "atomInt" false) (mem "cursorAtEnd" false) (mem "cursorOf" false) (mem "cursorOffset" false) (mem "parseSExp" false) (mem "renderSExp" false))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceFault" true) (mem "sha256Hex" false))))
-(DUse false (UseGroup ("types" "prelude_elab") ((mem "BinderRun" true) (mem "binderRunIs" false) (mem "binderSpan" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedHeader" false) (mem "refuse" false) (mem "renderFramedFault" false))))
+(DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "checkedFramed" false) (mem "failure" false) (mem "firstLine" false) (mem "framedFile" false) (mem "keyFields" false) (mem "noGate" false) (mem "refuse" false) (mem "renderFramedFault" false))))
+(DUse false (UseGroup ("types" "prelude_elab") ((mem "BinderRun" true) (mem "binderRunIs" false) (mem "binderSpan" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" true))))
 (DData Public "PreludeTree" () ((variant "PreludeTree" (ConNamed (field "ptDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "ptBinders" (TyCon "Int")) (field "ptBase" (TyCon "Int"))))) ())
 (DData Public "PreludeDecls" () ((variant "PreludeDecls" (ConNamed (field "pdRuntime" (TyCon "PreludeTree")) (field "pdCore" (TyCon "PreludeTree"))))) ())
@@ -276,11 +286,13 @@ negativeRun run = run.brFirst < 0 || run.brCount < 0
 (DTypeSig false "countersNode" (TyFun (TyCon "PreludeDecls") (TyCon "SExp")))
 (DFunDef false "countersNode" ((PVar "pd")) (EApp (EVar "SList") (EListLit (EApp (EVar "SAtom") (ELit (LString "counters"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptBinders"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptBase"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBinders"))) (EApp (EVar "SAtom") (EApp (EVar "intToString") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptBase"))))))
 (DTypeSig true "encodeDeclsFile" (TyFun (TyCon "InterfaceKey") (TyFun (TyCon "PreludeDecls") (TyCon "String"))))
-(DFunDef false "encodeDeclsFile" ((PVar "key") (PVar "pd")) (EBlock (DoLet false false (PVar "covered") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EVar "countersNode") (EVar "pd"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EVar "declsSExp") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptDecls"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EVar "declsSExp") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptDecls"))))) (ELit (LString "\n")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EApp (EApp (EApp (EVar "framedHeader") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EVar "key")) (EApp (EVar "sha256Hex") (EVar "covered")))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "covered"))) (ELit (LString ""))))))
+(DFunDef false "encodeDeclsFile" ((PVar "key") (PVar "pd")) (EBlock (DoLet false false (PVar "covered") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EVar "countersNode") (EVar "pd"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EVar "declsSExp") (EFieldAccess (EFieldAccess (EVar "pd") "pdRuntime") "ptDecls"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "renderSExp") (EApp (EVar "declsSExp") (EFieldAccess (EFieldAccess (EVar "pd") "pdCore") "ptDecls"))))) (ELit (LString "\n")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "framedFile") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EApp (EVar "keyFields") (EVar "key"))) (EVar "covered")))))
 (DTypeSig true "renderDeclsFault" (TyFun (TyCon "InterfaceFault") (TyCon "String")))
 (DFunDef false "renderDeclsFault" ((PVar "fault")) (EApp (EApp (EApp (EVar "renderFramedFault") (ELit (LString "prelude declarations"))) (EVar "declsFormatVersion")) (EVar "fault")))
 (DTypeSig true "readDeclsFramed" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "String")))))
-(DFunDef false "readDeclsFramed" ((PVar "text")) (EApp (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")) (EVar "text")))
+(DFunDef false "readDeclsFramed" () (EApp (EVar "readDeclsFramedGated") (EVar "noGate")))
+(DTypeSig true "readDeclsFramedGated" (TyFun (TyCon "KeyGate") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "String"))))))
+(DFunDef false "readDeclsFramedGated" () (EApp (EApp (EVar "checkedFramed") (ELit (LString "medaka-decls"))) (EVar "declsFormatVersion")))
 (DTypeSig true "readDeclsKey" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyCon "InterfaceKey"))))
 (DFunDef false "readDeclsKey" ((PVar "text")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "readDeclsFramed") (EVar "text"))))
 (DTypeSig true "readDeclsFile" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "InterfaceFault")) (TyTuple (TyCon "InterfaceKey") (TyCon "PreludeDecls")))))

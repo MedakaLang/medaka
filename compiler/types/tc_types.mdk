@@ -970,9 +970,7 @@ public export data TraceSink = TraceSink {
 -- What a driver hands a drive as its first argument: the stdlib ownership of the
 -- loader's module list, the trace sink (`None`: every trace off), the selected
 -- target profile's `IO` grants and name (`""` for none), carried as data so this
--- module need not import `types.target_profile`, and the run `markModules`
--- returned when the drive checks the trees it marked (`None` otherwise): the mint
--- keeps that run's base and cell arrays.  [diPreludeKey] is the desugar-cache
+-- module need not import `types.target_profile`.  [diPreludeKey] is the desugar-cache
 -- generation pair of the two prelude trees the drive is handed, when its driver
 -- knows it: the tree arm continues from the prelude's shipped trees only under it.
 public export data DriveInputs = DriveInputs {
@@ -983,7 +981,6 @@ public export data DriveInputs = DriveInputs {
   diTrace : Option TraceSink,
   diIoJoinGrants : List (String, EffParamTy),
   diProfileName : String,
-  diMarked : Option GraphRun,
   diPreludeKey : Option (Int, Int),
 }
 
@@ -999,7 +996,8 @@ public export data DriveInputs = DriveInputs {
 -- reads.  `doEffvarNext` is the drive's effect-variable counter at its end: a
 -- consumer that mints effect variables over `doInvocationView`'s schemes
 -- (`lastInvocationOps`) starts its own counter there, so its ids cannot collide with
--- an id the drive's schemes hold.
+-- an id the drive's schemes hold.  `doServedModules` counts the modules the
+-- drive served from recorded interfaces instead of checking.
 public export data DriveOutputs = DriveOutputs {
   doManifestRequests : List ManifestRequest,
   doManifests : List CapabilityManifest,
@@ -1014,6 +1012,7 @@ public export data DriveOutputs = DriveOutputs {
   doFfiAliases : List (TabKey, AliasDecl),
   doOrdIndex : OrdMap Int,
   doEffvarNext : Int,
+  doServedModules : Int,
 }
 
 -- The outputs of a program no drive checked.
@@ -1033,6 +1032,7 @@ emptyDriveOutputs _ = DriveOutputs {
   doFfiAliases = [],
   doOrdIndex = omEmpty,
   doEffvarNext = 0,
+  doServedModules = 0,
 }
 
 export
@@ -1794,26 +1794,18 @@ public export data GraphRun = GraphRun {
   evCounter : Ref Int,
   -- The counter's value when this graph lineage began (`graphLineageRun`).  Every
   -- array indexed by ordinal holds only ordinals from here up, so an id below it is
-  -- from an earlier graph.  It travels with `evCells` through `copyGraphRun`, so a
-  -- memo snapshot keeps answering for the ids it was taken with.
+  -- from an earlier graph.
   evBase : Int,
-  -- Set by `markModules` on the run it returns, whose marking minted this lineage's
-  -- cells before the driver it feeds mints the graph.  The mint keeps those cells
-  -- when the driver's inputs carry the run (`DriveInputs.diMarked`), not on this flag.
-  markedAhead : Bool,
   -- The ordinal below which every method cell has been judged complete
   -- (`judgeEvidence`).  Each drain judges the cells minted since the last one and
-  -- raises it to `evCounter`; it rides `copyGraphRun`, so a memo hit restores a
-  -- prefix already judged and the prefix's holes are not reported a second time.
+  -- raises it to `evCounter`, so a module drained at its own end has its holes
+  -- reported once.
   evJudged : Ref Int,
   -- #2549 M2: the solved evidence, one entry per goal, appended by the graph-end
   -- drain as each module's stampers finish.  It is a SECOND RENDERING of the routes
   -- the stampers wrote into their cells, read back from those same cells, never an
   -- independently-derived answer.
   evTable : Ref EvTable,
-  -- Immutable observations projected while a memo snapshot seals drained ordinary
-  -- returns.  They are diagnostic/test visibility only and are never solver input.
-  memoMethodReturns : Ref (List MethodReturnMemoView),
   -- #2705: the method-occurrence cells, indexed by the node's evidence ORDINAL less
   -- `evBase`, so a stamper's lookup is O(1) and the array spans one lineage, not the
   -- process.  Sized by doubling as ids are minted.  `graphLineageRun` starts it empty.
@@ -1850,12 +1842,18 @@ public export data GraphRun = GraphRun {
 }
 
 -- What one graph run hands the next: the evidence-ordinal counter, the binder-name
--- state and the grant state, as the objects of the run most recently minted or restored (not copies),
+-- state and the grant state, as the objects of the run most recently minted (not copies),
 -- so the next lineage continues from the counter's value at the next mint.
+-- `lnTyvarHigh` and `lnEffvarHigh` are the highest type- and effect-variable
+-- counters any drive that serves module interfaces ended at.  Such a drive starts
+-- its counters there, so no variable it mints shares an id with a variable an
+-- interface it serves was recorded with.
 public export data Lineage = Lineage {
   lnEvCounter : Ref Int,
   lnLocalAbs : LocalAbsState,
   lnGrants : GrantState,
+  lnTyvarHigh : Ref Int,
+  lnEffvarHigh : Ref Int,
 }
 
 -- The process's interners: what outlives a drive on purpose.  The evidence lineage
@@ -2086,6 +2084,9 @@ public export data ModuleCells = ModuleCells {
   -- The module's constructors and variance table, read by `driveOutputsNow` into
   -- `DriveOutputs` — see `InvocationView`.
   invocationViewRef : Ref InvocationView,
+  -- The module's own rows of the constructor and record populations, as
+  -- `appendDataUniverse` registered them: what a recorded interface replays.
+  ownPopsRef : Ref (SpellingPop Scheme, SpellingPop RecordInfo),
 }
 
 -- DICT-SEMANTICS §3 W2: the one termination measure every `requires` walk shares.  A
@@ -3184,38 +3185,24 @@ public export data PreludePreamble = PreludePreamble {
 --     `medaka test`'s phases and the emit entries consume.
 public export data GraphOut = GOutDiags | GOutTrees
 
--- ── module-chain memo ─────────────────────────────────────────────────────────
--- The diagnostics fold (`driveGraphK GOutDiags`) checks modules dependency-first and
--- the entry module last.  On the playground and the LSP the entry changes every
--- keystroke while its imports do not — so the threaded state after each NON-entry
--- module is snapshotted under that module's key, and the next call resumes from
--- the longest matching prefix, checking only what follows.  Each step holds what a
--- miss would have left behind at that point: the fold's `depEnv`/`accData`/
--- `accAll`, the results collected so far, one `GraphCtx` snapshot (`snapshotGraphCtx`:
--- DETACHED copies of the `crossRun` and `graphRun` sub-records and the extern-name
--- map; a hit reads only those three) and the module's own record.
--- Keys come from the caller: a chain key (which prelude generations, which entry
--- and roots) and one `Option String` per module (mid + path + the EXACT source
--- the loader parsed — `loadedSourceOf`); a `None` step is never recorded and ends
--- recording for the steps after it.  The entry (last) module is never recorded.
--- The memo key also carries `chainGraphKey`: the instance heads and constrained
--- signature names of EVERY module including the entry, which an earlier step reads
--- through the graph but its own source key cannot see.
-public export data ChainStep = ChainStep {
-  csKey : String,
-  csDepEnv : List (String, List (String, ExportBinding)),
-  csAccData : List Decl,
-  csAccAll : List Decl,
-  csResults : List ModDiags,
-  csCtx : GraphCtx,
-  csModule : ModuleCtx,
+-- ── serving modules from their interfaces ─────────────────────────────────────
+-- A drive's serve policy (`foldModules`), consulted once for each module before the
+-- entry.  It serves the module from a recorded interface (`ServeHit`: the module's
+-- own export bindings and its payload, and the policy for the next module), or has
+-- it checked (`ServeCheck`: given the module's record after its check, its own export
+-- bindings and the payloads so far, newest first, it returns those payloads and the
+-- policy for the next module).  `msServed` counts the modules served and `msFrozen`
+-- the oldest payloads already frozen, which the drive's graph-end freeze skips.  The
+-- interfaces themselves are `types/module_interface.mdk`'s.
+public export data ModuleServe e = ModuleServe {
+  msServed : Int,
+  msFrozen : Int,
+  msStep : String -> List Decl -> ModuleCtx -> ServeStep e,
 }
 
-public export data ChainMemo = ChainMemo {
-  chKey : String,
-  chSteps : List ChainStep,
-  chReplayed : Int,
-}
+public export data ServeStep e =
+  | ServeHit (List (String, ExportBinding)) e (ModuleServe e)
+  | ServeCheck (ModuleCtx -> List (String, ExportBinding) -> List (String, e) -> (List (String, e), ModuleServe e))
 
 -- ── THE graph driver ─────────────────────────────────────────────────────────
 -- What a whole-graph drive produces, for either output selection.  `gdPerMod`,

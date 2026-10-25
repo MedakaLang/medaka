@@ -3,7 +3,6 @@ import support.util.{
   dedupBy,
   lenKey,
   editDistance,
-  matchingStepPrefix,
   splitNl,
   joinNl,
   parseDecChecked,
@@ -66,31 +65,6 @@ prop "edit distance is symmetric, bounded and satisfies the triangle inequality"
     && ab <= max (stringLength a) (stringLength b)
     && ab <= editDistance a c + editDistance c b
     && editDistance a a == 0
-
--- The replayable prefix is bounded by total - 1 and stops at the first gap.
-prefixModel : List String -> List (Option String) -> Int -> List String
-prefixModel _ _ limit
-  | limit <= 0 = []
-prefixModel [] _ _ = []
-prefixModel _ [] _ = []
-prefixModel (step :: steps) (key :: keys) limit = match key
-  Some k => if step == k then step :: prefixModel steps keys (limit - 1) else []
-  None => []
-
-lastModel : List String -> Option String
-lastModel [] = None
-lastModel [x] = Some x
-lastModel (_ :: xs) = lastModel xs
-
-prop "memo prefix restoration equals the positional model" (steps : List String) (keys : List (Option String)) (total : Int) =
-  let wanted = prefixModel steps keys (total - 1)
-  matchingStepPrefix identity steps keys total == (wanted, lastModel wanted)
-
-prop "memo prefix restoration never replays the final item" (steps : List String) (raw : Int) =
-  let total = (raw % 15 + 15) % 15
-  let wanted = take (max 0 (total - 1)) steps
-  matchingStepPrefix identity steps (map Some steps) total
-    == (wanted, lastModel wanted)
 
 prop "decimal parsing round-trips nonnegative integers with zeros and separators" (raw : Int) =
   let n = abs raw

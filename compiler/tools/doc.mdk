@@ -69,6 +69,7 @@ import support.util.{
 }
 import support.path.{baseOf, chopExt}
 import support.stage_count.{stageExit}
+import support.ordmap.{omEmpty}
 import driver.diagnostics.{projectEntrySchemes}
 import driver.loader.{moduleIdOfPath}
 import frontend.desugar.{dataDerivers, newtypeDerivers, typeKindedParams}
@@ -854,7 +855,7 @@ originModuleSchemes runtimeSrc coreSrc roots path =
     Some p =>
       match (projectEntrySchemes
         (Ref [])
-        (Ref [])
+        (Ref omEmpty)
         (_ => None)
         p
         roots
@@ -1843,7 +1844,7 @@ docSchemesFor : String ->
 docSchemesFor runtimeSrc coreSrc filename roots rawUser =
   match (projectEntrySchemes
     (Ref [])
-    (Ref [])
+    (Ref omEmpty)
     (_ => None)
     filename
     roots

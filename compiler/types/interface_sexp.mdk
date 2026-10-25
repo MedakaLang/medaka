@@ -101,9 +101,6 @@
 -- node, a section count that differs from the nodes present, or any component
 -- refusal is an `Err`, never a partial record.
 import list.{mapAccumL, sortOn}
-import crypto.sha256_fast.{sha256Fast}
-import hex as Hex
-import bytes.{encodeUtf8}
 import string as S
 import map as IdMap
 import map.{Map}
@@ -111,6 +108,10 @@ import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
 import support.util.{dedupBy}
 import support.sexp_value.{
   SExp(..), SexpError(..), renderSExp, parseSExp, expectAtom, atomInt, atomBool
+}
+import types.interface_frame.{
+  InterfaceFault(..), KeyGate, bodyOf, declaredVersion, framedFile, gated,
+  headerOf, keyFields, noGate, readKeyFields, sha256Hex
 }
 import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}
 import types.publish.{
@@ -139,12 +140,15 @@ import frontend.ast.{
 
 -- ── writing ─────────────────────────────────────────────────────────────────
 
+export
 tagged : String -> List SExp -> SExp
 tagged head fields = SList (SAtom head :: fields)
 
+export
 intNode : Int -> SExp
 intNode n = SAtom (intToString n)
 
+export
 boolNode : Bool -> SExp
 boolNode b = SAtom (if b then "true" else "false")
 
@@ -549,6 +553,7 @@ headOf (SAtom s) = s
 headOf (SList ((SAtom h) :: _)) = h
 headOf (SList _) = "a list"
 
+export
 refuse : String -> SExp -> String -> Result SexpError a
 refuse path node what = Err SexpError {
   seOffset = 0,
@@ -557,6 +562,7 @@ refuse path node what = Err SexpError {
 }
 
 -- [heads] pairs each head a position admits with its field count.
+export
 misfit : String -> List (String, Int) -> SExp -> Result SexpError a
 misfit path heads node = match find (h => fst h == headOf node) heads
   Some (_, n) => refuse path node "expected \{n} field(s)"
@@ -566,6 +572,7 @@ misfit path heads node = match find (h => fst h == headOf node) heads
       node
       "unknown head; expected one of \{stringJoin ", " (map fst heads)}"
 
+export
 at : String -> String -> Int -> String
 at path head i = "\{path}/\{head}.\{i}"
 
@@ -910,7 +917,7 @@ bindingOfSExp node = misfit "binding" [("binding", 2)] node
 
 -- ── reading the other components ────────────────────────────────────────────
 
-type Reader a = String -> SExp -> Result SexpError a
+export type Reader a = String -> SExp -> Result SexpError a
 
 -- [dec] read at [path]: its refusal's path is put under [path].
 export
@@ -1326,29 +1333,15 @@ sortedJoins joins = dedupBy joinText (sortOn joinText joins)
 joinText : List Atom -> String
 joinText j = renderSExp (joinNode j)
 
+export
 pairAtoms : (String, String) -> SExp
 pairAtoms = pairSExp SAtom SAtom
 
--- The SHA-256 of a text, in lower-case hex.
-export
-sha256Hex : String -> String
-sha256Hex text = Hex.encode (sha256Fast (encodeUtf8 text))
+headerTag : String
+headerTag = "medaka-interface"
 
-headerNode : InterfaceKey -> Int -> String -> SExp
-headerNode key count digest = tagged "medaka-interface" [
-  intNode interfaceFormatVersion,
-  tagged "sources" [listSExp pairAtoms key.ikSources],
-  tagged "compiler" [SAtom key.ikCompiler],
-  tagged "sections" [intNode count],
-  tagged "digest" [SAtom digest],
-]
-
--- What the digest covers: the file's text after its first line.
-export
-bodyOf : String -> String
-bodyOf text = match S.indexOf "\n" text
-  Some i => S.drop (i + 1) text
-  None => ""
+sectionsField : Int -> SExp
+sectionsField count = tagged "sections" [intNode count]
 
 joinNode : List Atom -> SExp
 joinNode = listSExp atomSExp
@@ -1376,13 +1369,18 @@ kindNode (KAuth label pattern) =
 
 export
 invocationViewSExp : PublishedInvocationView -> SExp
-invocationViewSExp (PublishedInvocationView ctors pols kinds) = tagged
-  "invocation-view"
-  [
-    listSExp pubSchemeSExp ctors,
-    listSExp (pairSExp tabKeySExp (listSExp polarityNode)) pols,
-    listSExp (pairSExp tabKeySExp (listSExp kindNode)) kinds,
-  ]
+invocationViewSExp (PublishedInvocationView ctors pols kinds) =
+  if any (c => not (isEmpty c.psContext)) ctors then
+    panic "invocation constructors must have empty contexts"
+  else match (filter
+    notFrozen
+    (flatMap (liveCells "invocation constructor") ctors))
+    [] => tagged "invocation-view" [
+      listSExp pubSchemeSExp ctors,
+      listSExp (pairSExp tabKeySExp (listSExp polarityNode)) pols,
+      listSExp (pairSExp tabKeySExp (listSExp kindNode)) kinds,
+    ]
+    faults => panic "invocation view is not frozen: \{debug faults}"
 
 decPolarity : Reader Polarity
 decPolarity _ (SAtom "co") = Ok PCo
@@ -1500,10 +1498,14 @@ encodeInterface f =
   match flatMap (s => interfaceFaults s.isInterface) f.ifSections
     [] =>
       let body = stringJoin "" (map sectionLine f.ifSections)
-      let header = headerNode f.ifKey (length f.ifSections) (sha256Hex body)
-      "\{renderSExp header}\n\{body}"
+      framedFile
+        headerTag
+        interfaceFormatVersion
+        (keyFields f.ifKey ++ [sectionsField (length f.ifSections)])
+        body
     faults => panic "interface row is not frozen: \{debug faults}"
 
+export
 decPairAtoms : Reader (String, String)
 decPairAtoms = pairOfSExp expectAtom expectAtom
 
@@ -1592,6 +1594,7 @@ decInterface path (SList [SAtom "interface", n1, n2, n3, n4, n5, n6, n7, n8, n9,
         invocation)
 decInterface path node = misfit path [("interface", 20)] node
 
+export
 decJoins : Reader (List (List Atom))
 decJoins path (SList [SAtom "joins", js]) =
   listOfSExp (listOfSExp (nested atomOfSExp)) (at path "joins" 1) js
@@ -1607,35 +1610,14 @@ decSection path node = misfit path [("section", 2)] node
 -- The key, the number of section nodes the file claims to hold and the digest
 -- it claims.  The version is read before the shape.
 decHeader : Reader (InterfaceKey, Int, String)
-decHeader path (SList ((SAtom "medaka-interface") :: v :: rest)) = do
-  version <- atomInt (at path "medaka-interface" 1) v
-  if version == interfaceFormatVersion then match rest
-    [SList [SAtom "sources", srcs], SList [SAtom "compiler", c], SList [SAtom "sections", cnt], SList [SAtom "digest", d]] =>
-      do
-        sources <- listOfSExp decPairAtoms (at path "sources" 1) srcs
-        compiler <- expectAtom (at path "compiler" 1) c
-        count <- atomInt (at path "sections" 1) cnt
-        claimed <- expectAtom (at path "digest" 1) d
-        Ok (
-          InterfaceKey {
-            ikFormat = version,
-            ikSources = sources,
-            ikCompiler = compiler,
-          },
-          count,
-          claimed,
-        )
-    _ =>
-      misfit
-        path
-        [("medaka-interface", 5)]
-        (SList (SAtom "medaka-interface" :: v :: rest))
-  else
-    refuse
-      (at path "medaka-interface" 1)
-      v
-      "format version \{version}, this compiler reads \{interfaceFormatVersion}"
-decHeader path node = misfit path [("medaka-interface", 5)] node
+decHeader path node = do
+  (fields, claimed) <- headerOf headerTag interfaceFormatVersion 3 node
+  (key, rest) <- readKeyFields interfaceFormatVersion fields
+  match rest
+    [SList [SAtom "sections", cnt]] => do
+      count <- atomInt (at path "sections" 1) cnt
+      Ok (key, count, claimed)
+    _ => misfit path [(headerTag, 6)] node
 
 -- The text is read as the items of one list, since a parse reads one node.
 -- The header's section count must equal the section nodes present, and the
@@ -1645,29 +1627,41 @@ export
 decodeInterface : String -> Result SexpError PreludeInterfaceFile
 decodeInterface text = do
   top <- parseSExp ("(" ++ text ++ ")")
-  map fst (decodeParsed (bodyOf text) top)
+  map fst (mapErr sexpFault (decodeParsed noGate (bodyOf text) top))
 
--- Why a file did not decode: its header declares a format version other than
--- the one this compiler reads, or it is malformed in some other way.
--- lint-disable-next-line rule-clone-type
-public export data InterfaceFault = WrongFormat Int | Malformed SexpError
+sexpFault : InterfaceFault -> SexpError
+sexpFault (Malformed e) = e
+sexpFault fault = SexpError {
+  seOffset = 0,
+  sePath = "header",
+  seWhat = renderFault fault,
+}
 
 export
 renderFault : InterfaceFault -> String
 renderFault (WrongFormat v) =
   "format version \{v}, this compiler reads \{interfaceFormatVersion}"
 renderFault (Malformed e) = "\{e.sePath}: \{e.seWhat}"
+renderFault (StaleKey component) = "stale: \{component}"
 
 -- The decoded file with the digest its header claims, or why it is refused.
 export
 readInterface : String -> Result InterfaceFault (PreludeInterfaceFile, String)
-readInterface text = match parseSExp ("(" ++ text ++ ")")
-  Err e => Err (Malformed e)
-  Ok top => match declaredVersion top
-    Some v if v /= interfaceFormatVersion => Err (WrongFormat v)
-    _ => mapErr Malformed (decodeParsed (bodyOf text) top)
+readInterface = readInterfaceGated noGate
 
--- The key a file's header line claims, read off that line alone: the sections
+-- `readInterface` for a file [gate] has to find fresh: the header's key goes to
+-- [gate] before any section is decoded, and a stale key is `StaleKey`.
+export
+readInterfaceGated : KeyGate ->
+  String ->
+  Result InterfaceFault (PreludeInterfaceFile, String)
+readInterfaceGated gate text = match parseSExp ("(" ++ text ++ ")")
+  Err e => Err (Malformed e)
+  Ok top => match topVersion top
+    Some v if v /= interfaceFormatVersion => Err (WrongFormat v)
+    _ => decodeParsed gate (bodyOf text) top
+
+-- The key a file's header claims, read off that line alone: the sections
 -- are neither decoded nor digested, so a fresh key says the file was written
 -- for these sources by this compiler, not that its body is whole.
 export
@@ -1678,34 +1672,40 @@ readInterfaceKey text =
     None => text
   match parseSExp line
     Err e => Err (Malformed e)
-    Ok header => match declaredVersion (SList [header])
+    Ok header => match declaredVersion headerTag header
       Some v if v /= interfaceFormatVersion => Err (WrongFormat v)
       _ =>
         mapErr Malformed (map ((key, _, _) => key) (decHeader "header" header))
 
 -- The version the first node declares, when it declares one.
-declaredVersion : SExp -> Option Int
-declaredVersion (SList ((SList ((SAtom "medaka-interface") :: v :: _)) :: _)) =
-  match atomInt "" v
-    Ok n => Some n
-    Err _ => None
-declaredVersion _ = None
+topVersion : SExp -> Option Int
+topVersion (SList (header :: _)) = declaredVersion headerTag header
+topVersion _ = None
 
-decodeParsed : String -> SExp -> Result SexpError (PreludeInterfaceFile, String)
-decodeParsed body (SList (header :: sections)) = do
-  (key, count, claimed) <- decHeader "header" header
-  secs <- decList decSection "file" (SList sections)
+decodeParsed : KeyGate ->
+  String ->
+  SExp ->
+  Result InterfaceFault (PreludeInterfaceFile, String)
+decodeParsed gate body (SList (header :: sections)) = do
+  (key, count, claimed) <- mapErr Malformed (decHeader "header" header)
+  _ <- gated gate key
+  secs <- mapErr Malformed (decList decSection "file" (SList sections))
   let found = sha256Hex body
   if length secs /= count then
-    refuse
-      "header/sections.1"
-      header
-      "header counts \{count} section(s), the file holds \{length secs}"
+    mapErr
+      Malformed
+      (refuse
+        "header/sections.1"
+        header
+        "header counts \{count} section(s), the file holds \{length secs}")
   else if found /= claimed then
-    refuse
-      "header/digest.1"
-      header
-      "digest \{S.take 12 claimed} expected, \{S.take 12 found} found"
+    mapErr
+      Malformed
+      (refuse
+        "header/digest.1"
+        header
+        "digest \{S.take 12 claimed} expected, \{S.take 12 found} found")
   else
     Ok (PreludeInterfaceFile { ifKey = key, ifSections = secs }, claimed)
-decodeParsed _ top = refuse "file" top "expected a header node"
+decodeParsed _ _ top =
+  mapErr Malformed (refuse "file" top "expected a header node")

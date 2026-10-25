@@ -76,6 +76,7 @@ driveOutputsNow : ModuleCtx -> EntryOutcome -> DriveOutputs
 driveOutputsNow mctx outcome = DriveOutputs {
   doManifestRequests = [],
   doManifests = [],
+  doServedModules = 0,
   doEntryOutcome = outcome,
   doHadTypeErrors = mctx.mcGraph.typeErrorsSticky.value,
   doHadMatchWarnings = not (isEmpty mctx.mcCells.matchWarnings.value),

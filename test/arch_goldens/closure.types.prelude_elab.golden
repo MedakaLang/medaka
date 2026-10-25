@@ -21,7 +21,7 @@ types.effect_solver
 types.evidence
 types.evidence_complete
 types.evidence_coverage
-types.interface_sexp
+types.interface_frame
 types.invocation_basis
 types.manifest_publish
 types.prelude_interface

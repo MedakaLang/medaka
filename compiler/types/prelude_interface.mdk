@@ -76,6 +76,7 @@ public export data GraphRunSeed = GraphRunSeed {
 zonkMonoList : ZState -> List Mono -> (ZState, List Mono)
 zonkMonoList = mapAccumL zonkMono
 
+export
 zonkSlot : PredicateSlot -> PredicateSlot
 zonkSlot (PredicateSlot { psIface = iface, psArgs = (PSArgsKnown args), psBoundIds = ids }) = PredicateSlot {
   psIface = iface,
@@ -84,10 +85,12 @@ zonkSlot (PredicateSlot { psIface = iface, psArgs = (PSArgsKnown args), psBoundI
 }
 zonkSlot slot = slot
 
+export
 zonkMethodSlot : MethodPredicateSlot -> MethodPredicateSlot
 zonkMethodSlot (MethodPredicateSlot { mpsPredicate = p, mpsPositions = ps }) =
   MethodPredicateSlot { mpsPredicate = zonkSlot p, mpsPositions = ps }
 
+export
 zonkRecord : RecordInfo -> RecordInfo
 zonkRecord (RecordInfo ids authIds result fields index) =
   let (z1, result1) = zonkMono emptyZonk result
@@ -108,6 +111,7 @@ export
 thawScheme : PubScheme -> Scheme
 thawScheme p = (freezePub p.psScheme p.psContext).psScheme
 
+export
 mapSlots : (a -> a) -> List (k, List a) -> List (k, List a)
 mapSlots f = map (row => (fst row, map f (snd row)))
 

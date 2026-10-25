@@ -1,0 +1,107 @@
+-- Helpers the tests of the module interface cache share (`module_interface_test`,
+-- `module_interface_sexp_test`, `typecheck_test`): a keyed drive over named
+-- sources, the fixture chain leaf, mid, entry, and the rendering of a report.
+import frontend.ast.{Decl}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse, parseLocated}
+import support.util.{joinNl}
+import types.publish.{ModDiags, TcDiag(..), TcReport(..), ppPubScheme}
+import types.tc_types.{DriveOutputs(..), GraphCtx}
+import types.typecheck.{defaultDriveInputs, checkModulesChainReportForGraph}
+
+-- The drive's `valueMain` argument for a graph whose entry is no value `main`.
+export
+noValueMain : Bool
+noValueMain = False
+
+-- One keyed drive over [mods], (module id, source) in dependency order, under the
+-- chain key [chainKey] and the prelude key (seed, seed + 1).  Every module but the
+-- last carries its source as its step key; the last is the entry, which never
+-- records.  [runtime] and [core] are the prelude's declarations.
+export
+keyedDrive : Int ->
+  String ->
+  List Decl ->
+  List Decl ->
+  List (String, String) ->
+  ((TcReport, DriveOutputs), GraphCtx)
+keyedDrive seed chainKey runtime core mods =
+  checkModulesChainReportForGraph
+    defaultDriveInputs
+    noValueMain
+    (Some (seed, seed + 1))
+    chainKey
+    (stepKeys mods)
+    runtime
+    core
+    (map (m => (fst m, desugar (parseLocated (snd m)))) mods)
+
+-- [keyedDrive] with no prelude declarations.
+export
+bareDrive : Int ->
+  String ->
+  List (String, String) ->
+  ((TcReport, DriveOutputs), GraphCtx)
+bareDrive seed chainKey mods =
+  keyedDrive seed chainKey [] (desugar (parse "")) mods
+
+stepKeys : List (String, String) -> List (Option String)
+stepKeys [] = []
+stepKeys [_] = [None]
+stepKeys (m :: rest) = Some (snd m) :: stepKeys rest
+
+export
+leafSrc : String
+leafSrc = joinNl [
+  "export data Box a = Box a | Empty",
+  "export wrap x = Box x",
+  "export unwrap : Box Int -> Int",
+  "unwrap b = match b",
+  "  Box n => n",
+  "  Empty => 0",
+]
+
+-- [leaf] is the id of the module [midSrc] imports.
+export
+midSrc : String -> String
+midSrc leaf = joinNl [
+  "import \{leaf}.{Box(..), wrap}",
+  "export twice x = wrap (wrap x)",
+]
+
+export
+entrySrc : String -> String
+entrySrc mid = joinNl ["import \{mid}.{twice}", "entry = twice 1"]
+
+-- One keyed drive over the chain leaf, mid, entry, whose modules are named
+-- [p]_leaf, [p]_mid and [p]_entry.  The result is the rendered report, the number
+-- of modules the drive served and the graph record it ended in.
+export
+chainDrive : String ->
+  Int ->
+  String ->
+  String ->
+  String ->
+  (List String, Int, GraphCtx)
+chainDrive p seed chainKey leafText entryText =
+  let ((report, outputs), gctx) = bareDrive seed chainKey [
+    ("\{p}_leaf", leafText),
+    ("\{p}_mid", midSrc "\{p}_leaf"),
+    ("\{p}_entry", entryText),
+  ]
+  (render report, outputs.doServedModules, gctx)
+
+export
+render : TcReport -> List String
+render r = flatMap renderRow r.trDiagnostics
+
+export
+renderRow : ModDiags -> List String
+renderRow (mid, (schemes, errs, warns)) =
+  map (s => "\{mid}.\{fst s} : \{ppPubScheme (snd s)}") schemes
+    ++ map (d => "\{mid} error \{diagCode d}") errs
+    ++ map (d => "\{mid} warning \{diagCode d}") warns
+
+export
+diagCode : TcDiag -> String
+diagCode (TcDiag code _ _ _ _ _) = code

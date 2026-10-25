@@ -1,5 +1,5 @@
 # META
-source_lines=11109
+source_lines=11113
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_demand.{
@@ -9462,7 +9462,10 @@ emitVariantUpdateRef prog env d con base fields =
 
 -- the shared copy-with-overrides: stash the base into a scratch local, then build a
 -- struct.new whose tag is the ctor ordinal and whose fields are, per ordinal, the
--- override expr (if present) or a struct.get of the stashed base.
+-- override expr (if present) or a struct.get of the stashed base.  The base local
+-- stays live across the override exprs, so they are emitted one depth deeper: an
+-- update nested in an override (`{ r | f = { r.f | g = v } }`) stashes its own base
+-- in `$__rub<d+1>` instead of overwriting this one.
 emitUpdateCopy : Prog ->
   List String ->
   Int ->
@@ -9493,7 +9496,7 @@ oneUpdateField : Prog ->
   Int ->
   List String
 oneUpdateField prog env d ctor bL fields idx = match findUpdateExpr idx fields
-  Some ex => emitRefExpr prog env d ex
+  Some ex => emitRefExpr prog env (d + 1) ex
   None => [
     "local.get " ++ bL,
     "ref.cast (ref $" ++ ctorStructName ctor ++ ")",
@@ -10831,19 +10834,20 @@ maxIndexAt (CList es) d = foldMaxI (map (x => maxIndexAt x d) es)
 maxIndexAt (CArray es) d = foldMaxI (map (x => maxIndexAt x d) es)
 maxIndexAt (CRecord _ fields) d =
   foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields)
--- CRecordUpdate/CVariantUpdate stash the base in $__rub<d> at their own emit site.
+-- CRecordUpdate/CVariantUpdate stash the base in $__rub<d> at their own emit site
+-- and emit their override exprs at d+1 (emitUpdateCopy).
 maxIndexAt (CRecordUpdate _ b fields) d =
   maxI
     d
     (maxI
       (maxIndexAt b d)
-      (foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields)))
+      (foldMaxI (map (x => maxIndexAt (cFieldExpr x) (d + 1)) fields)))
 maxIndexAt (CVariantUpdate _ b fields) d =
   maxI
     d
     (maxI
       (maxIndexAt b d)
-      (foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields)))
+      (foldMaxI (map (x => maxIndexAt (cFieldExpr x) (d + 1)) fields)))
 maxIndexAt (CFieldAccess e1 _ _ _) d = maxIndexAt e1 d
 -- These four nodes each allocate depth-`d` scratch locals ($__rl*/$__ra*/$__ix*/
 -- $__sl* at suffix `d`) at their OWN emit site, so they must contribute `d` even
@@ -12764,7 +12768,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitUpdateCopy" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitUpdateCopy" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ctor") (PVar "base") (PVar "fields")) (EBlock (DoLet false false (PVar "sfx") (EApp (EVar "intToString") (EVar "d"))) (DoLet false false (PVar "bL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LString "__rub"))) (EVar "sfx"))) (DoLet false false (PVar "baseI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "base")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (ELit (LString "local.set ")) (EVar "bL"))))) (DoLet false false (PVar "tagField") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "ctor")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "baseI") (EVar "tagField")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "idx")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "oneUpdateField") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ctor")) (EVar "bL")) (EVar "fields")) (EVar "idx")))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "ctor"))))) (EListLit (EBinOp "++" (ELit (LString "struct.new $")) (EApp (EVar "ctorStructName") (EVar "ctor"))))))))
 (DTypeSig false "oneUpdateField" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "oneUpdateField" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ctor") (PVar "bL") (PVar "fields") (PVar "idx")) (EMatch (EApp (EApp (EVar "findUpdateExpr") (EVar "idx")) (EVar "fields")) (arm (PCon "Some" (PVar "ex")) () (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex"))) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "bL")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "idx") (ELit (LInt 1)))))) (ELit (LString "")))))))
+(DFunDef false "oneUpdateField" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ctor") (PVar "bL") (PVar "fields") (PVar "idx")) (EMatch (EApp (EApp (EVar "findUpdateExpr") (EVar "idx")) (EVar "fields")) (arm (PCon "Some" (PVar "ex")) () (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (EVar "ex"))) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "bL")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "idx") (ELit (LInt 1)))))) (ELit (LString "")))))))
 (DTypeSig false "findUpdateExpr" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "Option") (TyCon "CExpr")))))
 (DFunDef false "findUpdateExpr" (PWild (PList)) (EVar "None"))
 (DFunDef false "findUpdateExpr" ((PVar "idx") (PCons (PCon "CField" PWild (PVar "o") (PVar "ex")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "o") (EVar "idx")) (EApp (EVar "Some") (EVar "ex")) (EApp (EApp (EVar "findUpdateExpr") (EVar "idx")) (EVar "rest"))))
@@ -13072,8 +13076,8 @@ hasFamilyW prog symbol tag =
 (DFunDef false "maxIndexAt" ((PCon "CList" (PVar "es")) (PVar "d")) (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EVar "x")) (EVar "d")))) (EVar "es"))))
 (DFunDef false "maxIndexAt" ((PCon "CArray" (PVar "es")) (PVar "d")) (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EVar "x")) (EVar "d")))) (EVar "es"))))
 (DFunDef false "maxIndexAt" ((PCon "CRecord" PWild (PVar "fields")) (PVar "d")) (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EApp (EVar "cFieldExpr") (EVar "x"))) (EVar "d")))) (EVar "fields"))))
-(DFunDef false "maxIndexAt" ((PCon "CRecordUpdate" PWild (PVar "b") (PVar "fields")) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d"))) (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EApp (EVar "cFieldExpr") (EVar "x"))) (EVar "d")))) (EVar "fields"))))))
-(DFunDef false "maxIndexAt" ((PCon "CVariantUpdate" PWild (PVar "b") (PVar "fields")) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d"))) (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EApp (EVar "cFieldExpr") (EVar "x"))) (EVar "d")))) (EVar "fields"))))))
+(DFunDef false "maxIndexAt" ((PCon "CRecordUpdate" PWild (PVar "b") (PVar "fields")) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d"))) (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EApp (EVar "cFieldExpr") (EVar "x"))) (EBinOp "+" (EVar "d") (ELit (LInt 1)))))) (EVar "fields"))))))
+(DFunDef false "maxIndexAt" ((PCon "CVariantUpdate" PWild (PVar "b") (PVar "fields")) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d"))) (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EApp (EVar "cFieldExpr") (EVar "x"))) (EBinOp "+" (EVar "d") (ELit (LInt 1)))))) (EVar "fields"))))))
 (DFunDef false "maxIndexAt" ((PCon "CFieldAccess" (PVar "e1") PWild PWild PWild) (PVar "d")) (EApp (EApp (EVar "maxIndexAt") (EVar "e1")) (EVar "d")))
 (DFunDef false "maxIndexAt" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "lo")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "hi")) (EVar "d")))))
 (DFunDef false "maxIndexAt" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "lo")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "hi")) (EVar "d")))))
@@ -14851,7 +14855,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitUpdateCopy" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitUpdateCopy" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ctor") (PVar "base") (PVar "fields")) (EBlock (DoLet false false (PVar "sfx") (EApp (EVar "intToString") (EVar "d"))) (DoLet false false (PVar "bL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LString "__rub"))) (EVar "sfx"))) (DoLet false false (PVar "baseI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "base")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (ELit (LString "local.set ")) (EVar "bL"))))) (DoLet false false (PVar "tagField") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "ctor")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "baseI") (EVar "tagField")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "idx")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "oneUpdateField") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ctor")) (EVar "bL")) (EVar "fields")) (EVar "idx")))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "ctor"))))) (EListLit (EBinOp "++" (ELit (LString "struct.new $")) (EApp (EVar "ctorStructName") (EVar "ctor"))))))))
 (DTypeSig false "oneUpdateField" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "oneUpdateField" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ctor") (PVar "bL") (PVar "fields") (PVar "idx")) (EMatch (EApp (EApp (EVar "findUpdateExpr") (EVar "idx")) (EVar "fields")) (arm (PCon "Some" (PVar "ex")) () (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex"))) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "bL")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EMethodRef "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "idx") (ELit (LInt 1)))))) (ELit (LString "")))))))
+(DFunDef false "oneUpdateField" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ctor") (PVar "bL") (PVar "fields") (PVar "idx")) (EMatch (EApp (EApp (EVar "findUpdateExpr") (EVar "idx")) (EVar "fields")) (arm (PCon "Some" (PVar "ex")) () (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (EVar "ex"))) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "bL")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EMethodRef "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "idx") (ELit (LInt 1)))))) (ELit (LString "")))))))
 (DTypeSig false "findUpdateExpr" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "Option") (TyCon "CExpr")))))
 (DFunDef false "findUpdateExpr" (PWild (PList)) (EVar "None"))
 (DFunDef false "findUpdateExpr" ((PVar "idx") (PCons (PCon "CField" PWild (PVar "o") (PVar "ex")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "o") (EVar "idx")) (EApp (EVar "Some") (EVar "ex")) (EApp (EApp (EVar "findUpdateExpr") (EVar "idx")) (EVar "rest"))))
@@ -15159,8 +15163,8 @@ hasFamilyW prog symbol tag =
 (DFunDef false "maxIndexAt" ((PCon "CList" (PVar "es")) (PVar "d")) (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EVar "x")) (EVar "d")))) (EVar "es"))))
 (DFunDef false "maxIndexAt" ((PCon "CArray" (PVar "es")) (PVar "d")) (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EVar "x")) (EVar "d")))) (EVar "es"))))
 (DFunDef false "maxIndexAt" ((PCon "CRecord" PWild (PVar "fields")) (PVar "d")) (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EApp (EVar "cFieldExpr") (EVar "x"))) (EVar "d")))) (EVar "fields"))))
-(DFunDef false "maxIndexAt" ((PCon "CRecordUpdate" PWild (PVar "b") (PVar "fields")) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d"))) (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EApp (EVar "cFieldExpr") (EVar "x"))) (EVar "d")))) (EVar "fields"))))))
-(DFunDef false "maxIndexAt" ((PCon "CVariantUpdate" PWild (PVar "b") (PVar "fields")) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d"))) (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EApp (EVar "cFieldExpr") (EVar "x"))) (EVar "d")))) (EVar "fields"))))))
+(DFunDef false "maxIndexAt" ((PCon "CRecordUpdate" PWild (PVar "b") (PVar "fields")) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d"))) (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EApp (EVar "cFieldExpr") (EVar "x"))) (EBinOp "+" (EVar "d") (ELit (LInt 1)))))) (EVar "fields"))))))
+(DFunDef false "maxIndexAt" ((PCon "CVariantUpdate" PWild (PVar "b") (PVar "fields")) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d"))) (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EApp (EVar "cFieldExpr") (EVar "x"))) (EBinOp "+" (EVar "d") (ELit (LInt 1)))))) (EVar "fields"))))))
 (DFunDef false "maxIndexAt" ((PCon "CFieldAccess" (PVar "e1") PWild PWild PWild) (PVar "d")) (EApp (EApp (EVar "maxIndexAt") (EVar "e1")) (EVar "d")))
 (DFunDef false "maxIndexAt" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "lo")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "hi")) (EVar "d")))))
 (DFunDef false "maxIndexAt" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "lo")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "hi")) (EVar "d")))))

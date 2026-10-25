@@ -302,7 +302,7 @@ ALLOWLIST_EOF
 # graph-lifetime solver state (counters, goal channels, cell arrays), not a table.
 graphctx_container_allowed=$(cat <<'ALLOWLIST_EOF'
 crossRun -- the `CrossRun` sub-record: the cross-module accumulators, fresh at every mint (`freshCrossRun`), pinned field by field by cross_allowed above
-graphRun -- the `GraphRun` sub-record: the graph lineage and solver channels, started at every mint by `graphLineageRun` from the interners' lineage (keeping the base and cells of the run `markModules` returned when the drive's inputs carry it as `diMarked`); keyed by nothing
+graphRun -- the `GraphRun` sub-record: the graph lineage and solver channels, started at every mint by `graphLineageRun` from the interners' lineage; keyed by nothing
 trace -- the drive's `Option TraceSink`, the `diTrace` of its inputs, set at every mint by `mintGraphCtx`; `None` on every production drive, a test's sink otherwise; keyed by nothing
 graphAdmittedMethodsRef -- module id -> the (dependency id, method name) pairs that `deAliasMethodImports` ADMITS for dispatch in that module without the program binding the bare name (every method of an alias-imported module; a member-aliased method whose alias the pass drops). Outer key is the loader module id, so it is a scope, not a bare-name table; inner pairs carry the supplying module. Built by `renameAliasedMethods`, the pass that synthesizes the admissions, and installed whole by the drive's mint (`mintGraphCtx`'s `admitted` argument; the two projection drives pass the empty map) before any module is seeded. Read by `importSeed` so the typechecker's import-ambiguity set (a name two BINDING imports supply, the resolver's `ambiguousSet` key) never counts an admission the resolver never saw; shadow cell I22 is the fixture that caught the version without it
 ALLOWLIST_EOF
@@ -1058,7 +1058,7 @@ check_parity_row() {
     echo "  (looked for: $name), at:"
     printf '%s\n' "$stray"
     echo "  graphPreamble is the one Module-mode driver entry; every other whole-graph"
-    echo "  body -- elaborateModules, driveGraphK, chainGo, a new top-level driver --"
+    echo "  body -- elaborateModules, driveGraphK, a new top-level driver --"
     echo "  must PROJECT it, never carry its own copy.  A second copy is what #2791"
     echo "  exploited: a fix landing in one entry and not the other, silently, with"
     echo "  run and check disagreeing."
@@ -1084,35 +1084,29 @@ echo "      in the file carries a copy of any row"
 
 # THE SINGLE-ENTRY ROW. The rows above prove each writer has exactly one site and
 # that the site is graphPreamble. This one proves the CALL COUNT: graphPreamble
-# is called from exactly these four sites, one row each with its reason:
-#   driveGraphK                  -- the one graph driver
-#   checkModulesChainReportForGraph -- the keyed chain arm (`chainGo`'s caller). It
-#                                    mirrors driveGraphK's prologue by hand because
-#                                    the memo resumes mid-fold, and it needs the
-#                                    preamble's core closure and contexts to build
-#                                    the drive's TcReport (sprint arch-p1-6, the
-#                                    report-on-every-drive slice, licensed this call)
+# is called from exactly these three sites, one row each with its reason:
+#   driveGraphK                  -- the one graph driver; a keyed diagnostics drive
+#                                    serves modules from their interfaces inside it
 #   checkModulesPreambleK        -- the two-component projection for the
 #                                    schemes-only `checkModulesK`
 #   checkModulesPartialK         -- the schemes-only drive that also returns its
 #                                    PartialAnalysis, so it projects the core
-#                                    closure and contexts as well (same slice)
-# A fifth call site is a new Module-mode entry and must be adjudicated here, not
+#                                    closure and contexts as well
+# A fourth call site is a new Module-mode entry and must be adjudicated here, not
 # merged silently.
 # every non-comment mention of the name that is not one of its own two definition
 # lines (signature + equation, both at column 0) is a call site.
 gp_calls=$(grep -n 'graphPreamble' "$TC" | grep -v ':[[:space:]]*--' | grep -vc '^[0-9]*:graphPreamble ' || true)
-if [ "$gp_calls" -ne 4 ]; then
+if [ "$gp_calls" -ne 3 ]; then
   echo "FAIL: graphPreamble has $gp_calls call site(s) in compiler/types/typecheck.mdk,"
-  echo "  expected exactly 4 (driveGraphK, the keyed chain arm of"
-  echo "  checkModulesChainReportForGraph, and the checkModulesPreambleK and"
+  echo "  expected exactly 3 (driveGraphK, and the checkModulesPreambleK and"
   echo "  checkModulesPartialK projections)."
-  echo "  A fifth caller is a new Module-mode driver entry.  REMEDY: route it through"
+  echo "  A fourth caller is a new Module-mode driver entry.  REMEDY: route it through"
   echo "  driveGraphK's output selection instead, or -- if a genuinely new entry is"
   echo "  intended -- raise this count HERE, in the same commit, with a reason."
   exit 1
 fi
-echo "  ok: graphPreamble has exactly 4 call sites (two drivers + two projections)"
+echo "  ok: graphPreamble has exactly 3 call sites (one driver + two projections)"
 
 # ORDER: populateEffectDomainsGraph must precede the declEnvsRef := write, at BOTH
 # entries -- the #2789 class. An envelope built before effect domains are
@@ -1309,6 +1303,7 @@ occursCheckFailed W -- one Bool; not a table
 openedAuthvarsRef W -- Map keyed by authority-variable id; ids are run-unique
 openedExistentialsRef W -- list of cells; not keyed
 openedExistentialsStackRef W -- stack of lists of cells; not keyed
+ownPopsRef W -- this module`s own constructor and record population rows, written once at its end; keyed by declaration identity, the key of the universe populations they replay into
 patLitDeferred W -- list; not keyed
 patLitPending W -- list; not keyed
 pendingJoinsRef W -- list of undecided joins; not keyed

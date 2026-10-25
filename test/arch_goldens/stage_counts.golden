@@ -330,8 +330,8 @@ lsp.b_references_twice.typecheck.drive	1
 lsp.b_references_twice.typecheck.module	8
 lsp.c_didchange.exit	0
 lsp.c_didchange.desugar	5
-lsp.c_didchange.exhaust.guards	8
-lsp.c_didchange.exhaust.oracle	14
+lsp.c_didchange.exhaust.guards	5
+lsp.c_didchange.exhaust.oracle	11
 lsp.c_didchange.lex.pairs	5
 lsp.c_didchange.load.cached	4
 lsp.c_didchange.parse.prescan	5
@@ -352,3 +352,16 @@ lsp.d_hover.read.source	2
 lsp.d_hover.resolve	2
 lsp.d_hover.typecheck.drive	1
 lsp.d_hover.typecheck.module	2
+lsp.e_leaf_edit.exit	0
+lsp.e_leaf_edit.desugar	6
+lsp.e_leaf_edit.exhaust.guards	5
+lsp.e_leaf_edit.exhaust.oracle	11
+lsp.e_leaf_edit.lex.offsets	1
+lsp.e_leaf_edit.lex.pairs	7
+lsp.e_leaf_edit.load.cached	2
+lsp.e_leaf_edit.parse.positions	1
+lsp.e_leaf_edit.parse.prescan	7
+lsp.e_leaf_edit.read.source	3
+lsp.e_leaf_edit.resolve	3
+lsp.e_leaf_edit.typecheck.drive	4
+lsp.e_leaf_edit.typecheck.module	8
