@@ -89,6 +89,24 @@ scenarioFixtures = [
   ("agree/main.mdk", agreeMainText),
 ]
 
+-- A graph resolve rejects: `ib` uses the method `name` without importing it, so
+-- `ib` and every importer are rejected before any typecheck.  The two entries
+-- differ only in whether they declare a doctest, which selects `medaka test`'s
+-- arm.
+rejectedFixtures : List (String, String)
+rejectedFixtures = [
+  ("rej/ia.mdk", "export\ninterface Named a where\n  name : a -> String\n"),
+  (
+    "rej/ib.mdk",
+    "import ia.{Named(..)}\n\npublic export data V = V\n\nexport impl Named V where\n  name _ = \"v\"\n\nexport\nf : V -> String\nf v = name v\n",
+  ),
+  (
+    "rej/withdoc.mdk",
+    "import ib.{V(..), f}\n\n-- > g\n-- 1\nexport\ng : Int\ng = 1\n",
+  ),
+  ("rej/nodoc.mdk", "import ib.{V(..), f}\n\nexport\ng : Int\ng = 1\n"),
+]
+
 -- Writes each (relative name, text) pair under dir, creating its parent directory
 -- first, and stops at the first failed step.
 writeFixtures : String ->
@@ -172,6 +190,27 @@ refuteCase target wantCode unwanted =
           "\{target}: exited \{intToString code} (expected \{intToString wantCode})"
       else
         expectAbsent unwanted (out ++ err)
+
+-- One `medaka test` run on target: the exit code must equal wantCode, and the
+-- combined output must contain every needle and none of the unwanted ones.
+gateCase : String ->
+  List String ->
+  Int ->
+  List String ->
+  List String ->
+  <Exec, IO> Expectation
+gateCase target engineArgs wantCode needles unwanted =
+  match spawnTest "" (["test"] ++ engineArgs ++ [target])
+    Err e => fail "could not spawn medaka test on \{target}: \{e}"
+    Ok (code, out, err) =>
+      if code /= wantCode then
+        fail
+          "\{target}: exited \{intToString code} (expected \{intToString wantCode})"
+      else
+        expectAll [
+          expectTextContainsAll needles (out ++ err),
+          expectAbsent unwanted (out ++ err),
+        ]
 
 -- `medaka test` and `medaka check` must reach the same verdict on target, and when
 -- both reject, every `error: ` line `check` printed must appear in `test`'s output.
@@ -412,6 +451,33 @@ test "medaka test announces the skip only when it skips: cells j, m, f, g" = inT
         runCase "\{dir}/proj/main.mdk" [] 1 [
           "requires it to `medaka check` first", "type mismatch: Int vs String"
         ],
+      ),
+    ],
+  ])
+
+-- The gate judges a resolve-rejected graph by its resolve errors on both arms,
+-- and never hands it to the tree drive, which panics on the unbound method.
+test "medaka test reports a resolve-rejected graph's resolve error: cells w, x" = inTree
+  rejectedFixtures
+  (dir => expectAll [
+    expectEach [
+      (
+        "w doctest arm: the resolve error, no panic",
+        gateCase
+          "\{dir}/rej/withdoc.mdk"
+          ["--engines", "eval"]
+          1
+          ["requires it to `medaka check` first", "unbound variable `name`"]
+          ["E-PANIC"],
+      ),
+      (
+        "x no-doctest arm: the resolve error, no panic",
+        gateCase
+          "\{dir}/rej/nodoc.mdk"
+          ["--engines", "eval"]
+          1
+          ["requires it to `medaka check` first", "unbound variable `name`"]
+          ["E-PANIC"],
       ),
     ],
   ])
