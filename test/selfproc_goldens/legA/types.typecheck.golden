@@ -991,8 +991,10 @@ effectSiteOf : ModuleCtx -> String -> Option String -> Option Authority -> Optio
 effectUndeterminedMsg : String -> String -> List String -> String
 effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
+elabDriveResult : GraphDrive -> (((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs), GraphCtx)
 elabModuleStamp : ModuleCtx -> String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl, ModuleCtx)
 elaborateModules : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts)
+elaborateModulesChainReport : DriveInputs -> Bool -> (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs)
 elaborateModulesGraph : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), GraphCtx)
 elaborateModulesReport : DriveInputs -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
 elaborateModulesWithReport : DriveInputs -> Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, ElabFacts), TcReport, DriveOutputs)
@@ -1365,7 +1367,6 @@ grantSpine : Expr -> List Expr -> (Expr, List Expr)
 grantStmt : GraphCtx -> PassEvidence -> DoStmt -> DoStmt
 grantTerm : GraphCtx -> List GrantBinder -> Authority -> Expr
 grantTerms : GraphCtx -> GrantOcc -> List Expr
-grantTopKey : String -> String -> String
 grantUse : GraphCtx -> String -> EvId -> Expr
 grantVarParams : GraphCtx -> List GrantBinder -> List (Ref Authvar) -> List String -> Option (List String)
 grantWholeDomain : List Decl -> List Decl
@@ -2055,8 +2056,6 @@ methodBodySubject : MethodBodyKind -> String -> String -> String
 methodCandAdmitted : GraphCtx -> List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 methodCandImported : GraphCtx -> List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 methodCandsAt : String -> Int -> MethodEnv -> List MethodRow
-methodCellEntries : GraphCtx -> Unit -> List EvEntry
-methodCellEntriesFrom : Array (Option EvCell) -> Int -> List EvEntry -> List EvEntry
 methodCellLookup : GraphCtx -> EvId -> Result String EvCell
 methodCellOf : GraphCtx -> EvId -> EvCell
 methodConstraintNameOf : List String -> IfaceMethod -> List String
@@ -3000,7 +2999,6 @@ selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (Str
 selfNameRows : List Decl -> List (String, a) -> List (String, a)
 selfQualEntries : String -> Map String Unit -> List ((String, String), a) -> List (String, a)
 serveOps : ServeOps
-setCellArity : GraphCtx -> EvId -> Int -> Unit
 setDictEligible : GraphCtx -> List String -> Unit
 setFunConstraintEntry : ModuleCtx -> String -> List PredicateSlot -> Unit
 setFunPredicateSlots : ModuleCtx -> List (String, List PredicateSlot) -> Unit
@@ -3008,6 +3006,7 @@ setGrantOcc : GraphCtx -> EvId -> GrantOcc -> Unit
 setMainSchemeIfEntry : GraphCtx -> Bool -> List (String, PubScheme) -> Unit
 setMethodPredicateSlotEntry : ModuleCtx -> String -> List MethodPredicateSlot -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
+setOccurrenceArity : GraphCtx -> PassEvidence -> EvId -> Int -> Unit
 settleClosedBody : ModuleCtx -> Mono -> Int -> Int -> Int -> Unit
 settleDeferredPatLits : ModuleCtx -> Unit -> Unit
 settlePatLits : DynCtx -> List (Mono, Int, Option Loc) -> Unit
@@ -3059,11 +3058,8 @@ sigVarsWithRows : List (String, Ref Effvar) -> SigVars -> SigVars
 signedTopNames : List Decl -> Map String Unit -> Map String Unit
 sigsOf : List Decl -> List (String, Ty)
 singleTyparamIfaceMethod : ModuleCtx -> String -> Bool
-siteCellEntries : GraphCtx -> Unit -> List EvEntry
-siteCellEntriesFrom : Array (Option (EvId, SiteCell)) -> Int -> List EvEntry -> List EvEntry
 siteCellLookup : GraphCtx -> EvId -> Result String SiteCell
 siteCellOf : GraphCtx -> EvId -> SiteCell
-siteCellValue : SiteCell -> EvVal
 siteEntry : Obligation -> List PendingEntry
 siteFloatCell : GraphCtx -> EvId -> Ref (Option Float)
 siteHeadCell : GraphCtx -> EvId -> Ref String

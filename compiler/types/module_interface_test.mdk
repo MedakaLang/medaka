@@ -7,11 +7,14 @@ import test.{
   expectEach, expectEqual, expectFalse, expectGreaterThan, expectSatisfies,
   expectTrue, fail
 }
-import frontend.ast.{Decl}
+import frontend.ast.{Decl, EvEntry(..), EvId(..)}
+import frontend.ast_codec.{declsSExp, evEntriesSExp}
+import eval.eval.{evalModulesOutputFacts}
+import types.program_facts.{factsOfChecked}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import list.{filter, drop}
-import support.ordmap.{omHasKey}
+import list.{filter, drop, take, sort, indexed}
+import support.ordmap.{OrdMap, omEmpty, omFromPairs, omHasKey, omLookup}
 import types.module_interface.{
   ModuleInterface(..), FrozenExport(..), ModuleKey(..), applyModuleInterface,
   currentModuleInterfaces, retainModuleInterfaces
@@ -19,12 +22,14 @@ import types.module_interface.{
 import types.module_interface_test_support.{
   bareDrive, chainDrive, entrySrc, keyedDrive, leafSrc, render, renderRow
 }
-import types.publish.{ModDiags, PubScheme(..), ppPubScheme, TcReport(..)}
+import types.publish.{
+  CheckedProgram(..), ModDiags, PubScheme(..), ppPubScheme, TcReport(..)
+}
 import types.capability_manifest.{
   CapabilityManifest, ManifestSelector(..), EntryKey(..), InvocationProtocol(..)
 }
 import types.interface_sexp.{invocationViewSExp}
-import support.sexp_value.{renderSExp}
+import support.sexp_value.{SExp(..), renderSExp}
 import types.invocation_basis.{readInvocationView}
 import types.repr.{Mono(..), Tyvar(..)}
 import frontend.ast.{TyConOrigin(..)}
@@ -37,9 +42,9 @@ import types.tc_types.{
 }
 import types.typecheck.{
   defaultDriveInputs, checkModules, checkModulesChainReportFor,
-  elaborateModulesWithReport
+  elaborateModulesWithReport, elaborateModulesChainReport
 }
-import support.util.{joinNl}
+import support.util.{joinNl, contains, dedup}
 
 -- ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -492,3 +497,266 @@ test "reading an owning basis copies constructor cells and teardown drops retain
         ),
         ("teardown", expectEqual [] remaining),
       ]
+
+-- ── a tree drive serves the modules' trees ──────────────────────────────────
+
+-- One keyed tree drive over [mods], (module id, source) in dependency order, under
+-- [chainKey] and the prelude key (seed, seed + 1): the passed trees of each module
+-- before the entry, then the evidence entries of every fixture module, each rendered
+-- with every evidence ordinal of a fixture module and every grant parameter number
+-- replaced by its rank; the run output; and the number of modules the drive served.
+-- The entry is checked by every drive, and its binder ordinals are the process's
+-- next ones, so its tree is left out.
+treeDrive : Int ->
+  String ->
+  List Decl ->
+  List Decl ->
+  List (String, String) ->
+  (List String, String, Int)
+treeDrive seed chainKey runtime core mods =
+  let (_, report, outputs) =
+    elaborateModulesChainReport
+      defaultDriveInputs
+      False
+      (seed, seed + 1)
+      chainKey
+      (treeSteps mods)
+      runtime
+      core
+      (map (m => (fst m, desugar (parseLocated (snd m)))) mods)
+  let mids = map fst mods
+  match report.trChecked
+    Some c => match c.cpTrees
+      Some (coreTrees, modTrees) =>
+        let served = take (length modTrees - 1) modTrees
+        let nodes =
+          map (m => SList [SAtom (fst m), declsSExp (snd m)]) served
+            ++ map (e => evEntriesSExp [e]) (ownEntries mids c.cpEvidence)
+        let ordinals = rankOf (flatMap (ordinalsIn mids) nodes)
+        let grants = rankOf (flatMap grantNumbersIn nodes)
+        let rendered =
+          map (n => renderSExp (ranked mids ordinals grants n)) nodes
+        (
+          take (length served) rendered ++ sort (drop (length served) rendered),
+          evalModulesOutputFacts (factsOfChecked c) coreTrees modTrees,
+          outputs.doServedModules,
+        )
+      None => (["no trees"], "", outputs.doServedModules)
+    None => (["no checked program"], "", outputs.doServedModules)
+
+-- Every module's source as its step key but the entry's.
+treeSteps : List (String, String) -> List (Option String)
+treeSteps [] = []
+treeSteps [_] = [None]
+treeSteps (m :: rest) = Some (snd m) :: treeSteps rest
+
+ownEntries : List String -> List EvEntry -> List EvEntry
+ownEntries mids entries =
+  filter
+    (e => match e
+      EvEntry (EvId m _) _ => contains m mids)
+    entries
+
+-- The evidence ordinals of [mids]' ids in [node]: a two-atom list whose head is a
+-- module id of the fixture.
+ordinalsIn : List String -> SExp -> List Int
+ordinalsIn mids (SList [SAtom m, SAtom n])
+  | contains m mids = intsOf (stringToInt n)
+ordinalsIn mids (SList items) = flatMap (ordinalsIn mids) items
+ordinalsIn _ _ = []
+
+grantNumbersIn : SExp -> List Int
+grantNumbersIn (SAtom a) = match S.stripPrefix "$grant_arg_" a
+  Some n => intsOf (stringToInt n)
+  None => []
+grantNumbersIn (SList items) = flatMap grantNumbersIn items
+
+intsOf : Option Int -> List Int
+intsOf (Some n) = [n]
+intsOf None = []
+
+-- Each number's rank among [ns], by its decimal text.
+rankOf : List Int -> OrdMap String
+rankOf ns =
+  omFromPairs
+    (map
+      (p => (intToString (snd p), "#\{intToString (fst p)}"))
+      (indexed (sort (dedupInts ns))))
+    omEmpty
+
+dedupInts : List Int -> List Int
+dedupInts ns =
+  map (n => optionOr 0 (stringToInt n)) (dedup (map intToString ns))
+
+ranked : List String -> OrdMap String -> OrdMap String -> SExp -> SExp
+ranked mids ordinals grants (SList [SAtom m, SAtom n])
+  | contains m mids = SList [SAtom m, SAtom (optionOr n (omLookup n ordinals))]
+ranked mids ordinals grants (SList items) =
+  SList (map (ranked mids ordinals grants) items)
+ranked _ _ grants (SAtom a) = match S.stripPrefix "$grant_arg_" a
+  Some n => SAtom "$grant_arg_\{optionOr n (omLookup n grants)}"
+  None => SAtom a
+
+preludePair : Unit -> <FileRead> Option (List Decl, List Decl)
+preludePair _ = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok runtime, Ok core) => Some (desugar (parse runtime), desugar (parse core))
+  _ => None
+
+-- A library with return-position methods, a module whose impl's only use of its
+-- `requires` dictionary is an operator, an importer declaring a constrained function
+-- of the library's name, and the entry.
+servedTreeMods : List (String, String)
+servedTreeMods = [
+  (
+    "st_lib",
+    joinNl [
+      "export",
+      "pad : Monoid a => a -> a",
+      "pad x = append x empty",
+      "export",
+      "wrap : Applicative f => a -> f a",
+      "wrap x = pure x",
+      "export",
+      "twice x = append x x",
+    ],
+  ),
+  (
+    "st_box",
+    joinNl [
+      "public export data Box a = Box a",
+      "impl Eq (Box a) requires Eq a where",
+      "  eq (Box x) (Box y) = x == y",
+      "export",
+      "same : Eq a => Box a -> Box a -> String",
+      "same a b = if a == b then \"same\" else \"differ\"",
+    ],
+  ),
+  (
+    "st_user",
+    joinNl [
+      "import st_lib.{wrap}",
+      "import st_box.{Box(..), same}",
+      "export",
+      "pad : Display a => a -> String",
+      "pad x = \"[\" ++ display x ++ \"]\"",
+      "export",
+      "both : Int -> (String, Option Int, String)",
+      "both n = (pad n, wrap n, same (Box n) (Box n))",
+    ],
+  ),
+  (
+    "st_entry",
+    joinNl [
+      "import st_lib as L",
+      "import st_user.{pad, both}",
+      "main =",
+      "  println (L.pad \"a\")",
+      "  println (pad 3)",
+      "  println (both 4)",
+      "  println (L.twice \"ab\")",
+    ],
+  ),
+]
+
+test "a tree drive serves every module before the entry; the passed trees, evidence and output are the cold drive's" =
+  match preludePair ()
+    Some (runtime, core) =>
+      let (cold, coldOut, coldServed) =
+        treeDrive 4691 "st-k" runtime core servedTreeMods
+      let (warm, warmOut, warmServed) =
+        treeDrive 4691 "st-k" runtime core servedTreeMods
+      expectEach [
+        ("the first drive serves nothing", expectEqual 0 coldServed),
+        ("the second serves the three libraries", expectEqual 3 warmServed),
+        (
+          "the passed trees and the evidence are the cold drive's",
+          expectEqual cold warm,
+        ),
+        ("the output is the cold drive's", expectEqual coldOut warmOut),
+        (
+          "the program runs",
+          expectEqual "a\n[3]\n([4], Some 4, same)\nabab\n" coldOut,
+        ),
+      ]
+    None => fail "could not read the prelude pair"
+
+-- An interface whose method takes an authority grant, used in every shape in the
+-- module that declares it, and a reader that opens an existential authority.
+grantTreeMods : List (String, String)
+grantTreeMods = [
+  (
+    "gt_src",
+    joinNl [
+      "export interface Source s where",
+      "  load : s -> (path : String) -> <FileRead path> Result String String",
+      "  loadTwice : s -> (path : String) -> <FileRead path> Result String String",
+      "  loadTwice src path = match load src path",
+      "    Ok a => map (b => a ++ b) (load src path)",
+      "    Err e => Err e",
+      "public export data Disk = Disk",
+      "public export data Echo = Echo",
+      "impl Source Disk where",
+      "  load _ path = readFile path",
+      "impl Source Echo where",
+      "  load _ = p => Ok (\"echo \" ++ p)",
+      "export",
+      "viaMethod : String -> <FileRead \"cfg/*\"> Result String String",
+      "viaMethod name = load Disk (\"cfg/\" ++ name)",
+      "export",
+      "viaDefault : String -> <FileRead \"cfg/*\"> Result String String",
+      "viaDefault name = loadTwice Disk (\"cfg/\" ++ name)",
+      "export",
+      "viaPartial : String -> <FileRead \"cfg/*\"> Result String String",
+      "viaPartial name =",
+      "  let f = load Disk",
+      "  f (\"cfg/\" ++ name)",
+    ],
+  ),
+  (
+    "gt_any",
+    joinNl [
+      "public export data Handle (p : Authority FileRead) = Handle (String @p)",
+      "public export data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)",
+      "readIt : Handle p -> <FileRead p> Result String String",
+      "readIt (Handle s) = readFile s",
+      "export",
+      "readAny : AnyHandle -> <FileRead> Result String String",
+      "readAny a = match a",
+      "  AnyHandle h => readIt h",
+    ],
+  ),
+  (
+    "gt_entry",
+    joinNl [
+      "import gt_src.{Source, load, Echo(..), viaMethod, viaDefault, viaPartial}",
+      "import gt_any.{AnyHandle(..), Handle(..), readAny}",
+      "main =",
+      "  let readers = (viaMethod, viaDefault, viaPartial, readAny)",
+      "  println (load Echo \"x\")",
+    ],
+  ),
+]
+
+test "a served module's grant-taking method occurrences publish the cold drive's arities and grants" =
+  match preludePair ()
+    Some (runtime, core) =>
+      let (cold, coldOut, _) = treeDrive 4693 "gt-k" runtime core grantTreeMods
+      let (warm, warmOut, warmServed) =
+        treeDrive 4693 "gt-k" runtime core grantTreeMods
+      expectEach [
+        ("the second drive serves both libraries", expectEqual 2 warmServed),
+        (
+          "the passed trees and the evidence are the cold drive's",
+          expectEqual cold warm,
+        ),
+        ("the output is the cold drive's", expectEqual coldOut warmOut),
+        ("the program runs", expectEqual "Ok (echo x)\n" coldOut),
+        (
+          "the served reader of an opened existential passes the whole domain",
+          expectTrue (any (S.contains "(1 readIt) (12 ())") warm),
+        ),
+      ]
+    None => fail "could not read the prelude pair"

@@ -3,11 +3,11 @@
 --
 -- The policy reaches the drive's drain and its open-variable test through
 -- `ServeOps`, which `typecheck.mdk` builds once; this module imports nothing from it.
-import list.{drop, take}
+import list.{drop, take, sort}
 import frontend.visibility.{useModuleIds}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 import support.util.{
-  anyList, dedup, filterList, isNonEmptyL, isSome, listLen, zipL
+  anyList, dedup, filterList, isNonEmptyL, isSome, joinNl, listLen, zipL
 }
 import types.chain_key.{chainGraphKey}
 import types.invocation_basis.{readInvocationView}
@@ -16,8 +16,10 @@ import types.module_interface.{
   ModuleInterface,
   ModuleRows,
   applyModuleInterface,
+  applyModuleTrees,
   captureModuleRows,
   freezeModuleInterface,
+  freezeModuleTrees,
   freshModuleSerial,
   moduleCacheHit,
   moduleInterfaceIdentity,
@@ -42,11 +44,12 @@ public export data ServeOps = ServeOps {
 -- A diagnostics drive's per-module payload (`graphModuleWorker`).
 export type DiagsPayload = (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView)
 
--- The serve policy's state: the source keys of the modules still to come, the graph
--- key, the identity of each module so far, the modules checked and not recorded, and
--- the counts `ModuleServe` reports.
+-- The serve policy's state: whether the drive serves trees, the source keys of the
+-- modules still to come, the graph key, the identity of each module so far, the
+-- modules checked and not recorded, and the counts `ModuleServe` reports.
 export data ServeState = ServeState {
   ssOps : ServeOps,
+  ssTrees : Bool,
   ssCapture : OrdMap Unit,
   ssKeys : List (Option String),
   ssGraph : String,
@@ -70,6 +73,7 @@ serveStateOf : ServeOps ->
   ServeState
 serveStateOf ops capture gctx modules (chain, steps) = ServeState {
   ssOps = ops,
+  ssTrees = False,
   ssCapture = capture,
   ssKeys = steps,
   ssGraph =
@@ -100,15 +104,23 @@ diagsServe : ServeState -> ModuleServe DiagsPayload
 diagsServe st = ModuleServe {
   msServed = st.ssServed,
   msFrozen = st.ssFrozen,
-  msStep = diagsServeStep st,
+  msStep = serveStep st,
 }
 
-diagsServeStep : ServeState ->
+-- A keyed tree drive's serve policy: `diagsServe`'s, over interfaces that carry the
+-- module's trees (`ModuleTrees`).  The key's graph part also names the drive's
+-- selection and the promotion harvest of the modules before this one, which its
+-- marking reads.  A served module contributes its own promotions to the harvest.
+export
+treeServe : ServeState -> ModuleServe DiagsPayload
+treeServe st = diagsServe { st | ssTrees = True }
+
+serveStep : ServeState ->
   String ->
   List Decl ->
   ModuleCtx ->
   ServeStep DiagsPayload
-diagsServeStep st mid prog prev =
+serveStep st mid prog prev =
   let next = { st | ssKeys = drop 1 st.ssKeys, ssRows = st.ssRows + 1 }
   match st.ssKeys
     (Some source) :: _ =>
@@ -119,16 +131,16 @@ diagsServeStep st mid prog prev =
           map
             (m => (m, optionOr "" (omLookup m st.ssIdents)))
             (dedup (useModuleIds prog)),
-        mkGraph = st.ssGraph,
+        mkGraph = graphPart st prev,
       }
-      match moduleCacheHit key
+      match servable st (moduleCacheHit key)
         Some mi =>
           let ((_, (schemes, errs, warns)), own) =
             applyModuleInterface prev.mcGraph mi
           ServeHit
             own
             (
-              [],
+              servedTrees st prev mi,
               schemes,
               errs,
               warns,
@@ -148,6 +160,25 @@ diagsServeStep st mid prog prev =
             else
               recordScoped next key before mctx own done mark)
     _ => ServeCheck (_ _ done => (done, diagsServe (unrecordedState next mid)))
+
+-- The key's graph part for the module [prev] precedes.
+graphPart : ServeState -> ModuleCtx -> String
+graphPart st prev
+  | st.ssTrees =
+    joinNl
+      ("\{st.ssGraph}\ntrees" :: sort prev.mcGraph.promotionHarvestRef.value)
+  | otherwise = st.ssGraph
+
+-- A tree drive serves only an interface that carries trees.
+servable : ServeState -> Option ModuleInterface -> Option ModuleInterface
+servable st (Some mi)
+  | st.ssTrees && isNone mi.miTrees = None
+servable _ hit = hit
+
+servedTrees : ServeState -> ModuleCtx -> ModuleInterface -> List Decl
+servedTrees st prev mi = match mi.miTrees
+  Some trees if st.ssTrees => applyModuleTrees prev.mcGraph trees
+  _ => []
 
 -- A served row extends the frozen prefix when every row before it is frozen.
 servedState : ServeState -> String -> ModuleInterface -> ServeState
@@ -260,6 +291,11 @@ recordChecked st key before mctx own done =
     [] => (drained, diagsServe st)
     (mid, (marked, schemes, errs, warns, _)) :: older =>
       let published = freezeRows schemes
+      let trees =
+        if st.ssTrees then
+          Some (freezeModuleTrees mid marked published before mctx)
+        else
+          None
       let mi =
         freezeModuleInterface
           key
@@ -268,6 +304,7 @@ recordChecked st key before mctx own done =
           own
           before
           mctx
+          trees
       recordModuleInterface mi
       (
         (
