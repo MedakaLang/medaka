@@ -1,5 +1,5 @@
 # META
-source_lines=284
+source_lines=277
 stages=DESUGAR,MARK
 # SOURCE
 -- Evidence coverage: does a published evidence table answer every site its
@@ -39,7 +39,7 @@ import frontend.ast.{
 }
 import support.util.{reverseL}
 import types.route_key.{
-  EvIndex(..), evidenceLookup, entriesAboveSegment, emptyIndexFor
+  EvIndex, evidenceLookup, entriesAboveSegment, emptyIndexFor, claimSlot
 }
 
 -- The five answer kinds a published entry can have.
@@ -80,26 +80,19 @@ evidenceFaults : Option (List Decl, List (String, List Decl)) ->
 evidenceFaults trees table =
   let own = entriesAboveSegment table
   let index = emptyIndexFor own
-  match index
-    EvIndex lo arr =>
-      let dups = fillIndex lo arr own []
-      let sites = match trees
-        None => []
-        Some (core, mods) => modsFaults index mods (declsFaults index core [])
-      reverseL dups ++ reverseL sites
+  let dups = fillIndex index own []
+  let sites = match trees
+    None => []
+    Some (core, mods) => modsFaults index mods (declsFaults index core [])
+  reverseL dups ++ reverseL sites
 
-fillIndex : Int ->
-  Array (Option EvEntry) ->
-  EvTable ->
-  List EvidenceFault ->
-  List EvidenceFault
-fillIndex _ _ [] acc = acc
-fillIndex lo arr ((e@(EvEntry (EvId _ i) _)) :: rest) acc =
-  match arrayGetUnsafe (i - lo) arr
-    None =>
-      let _ = arraySetUnsafe (i - lo) (Some e) arr
-      fillIndex lo arr rest acc
-    Some _ => fillIndex lo arr rest (DuplicateOrdinal i :: acc)
+fillIndex : EvIndex -> EvTable -> List EvidenceFault -> List EvidenceFault
+fillIndex _ [] acc = acc
+fillIndex idx ((e@(EvEntry (EvId _ i) _)) :: rest) acc =
+  if claimSlot idx e then
+    fillIndex idx rest acc
+  else
+    fillIndex idx rest (DuplicateOrdinal i :: acc)
 
 -- The fault of one site, consed onto [acc]; none for a covered or unminted site.
 site : EvIndex -> EvId -> EvShape -> List EvidenceFault -> List EvidenceFault
@@ -289,7 +282,7 @@ kvsFaults idx ((k, v) :: rest) acc =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" true) (mem "evidenceLookup" false) (mem "entriesAboveSegment" false) (mem "emptyIndexFor" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evidenceLookup" false) (mem "entriesAboveSegment" false) (mem "emptyIndexFor" false) (mem "claimSlot" false))))
 (DData Public "EvShape" () ((variant "ShapeOne" (ConPos)) (variant "ShapeMany" (ConPos)) (variant "ShapeMethod" (ConPos)) (variant "ShapeLit" (ConPos)) (variant "ShapeHead" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "EvShape")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ShapeOne") (PCon "ShapeOne")) () (EVar "True")) (arm (PTuple (PCon "ShapeMany") (PCon "ShapeMany")) () (EVar "True")) (arm (PTuple (PCon "ShapeMethod") (PCon "ShapeMethod")) () (EVar "True")) (arm (PTuple (PCon "ShapeLit") (PCon "ShapeLit")) () (EVar "True")) (arm (PTuple (PCon "ShapeHead") (PCon "ShapeHead")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "EvShape")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "ShapeOne") () (ELit (LString "ShapeOne"))) (arm (PCon "ShapeMany") () (ELit (LString "ShapeMany"))) (arm (PCon "ShapeMethod") () (ELit (LString "ShapeMethod"))) (arm (PCon "ShapeLit") () (ELit (LString "ShapeLit"))) (arm (PCon "ShapeHead") () (ELit (LString "ShapeHead")))))))
@@ -303,10 +296,10 @@ kvsFaults idx ((k, v) :: rest) acc =
 (DFunDef false "evShapeOf" ((PCon "EvLit" PWild PWild)) (EVar "ShapeLit"))
 (DFunDef false "evShapeOf" ((PCon "EvHead" PWild)) (EVar "ShapeHead"))
 (DTypeSig true "evidenceFaults" (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyFun (TyCon "EvTable") (TyApp (TyCon "List") (TyCon "EvidenceFault")))))
-(DFunDef false "evidenceFaults" ((PVar "trees") (PVar "table")) (EBlock (DoLet false false (PVar "own") (EApp (EVar "entriesAboveSegment") (EVar "table"))) (DoLet false false (PVar "index") (EApp (EVar "emptyIndexFor") (EVar "own"))) (DoExpr (EMatch (EVar "index") (arm (PCon "EvIndex" (PVar "lo") (PVar "arr")) () (EBlock (DoLet false false (PVar "dups") (EApp (EApp (EApp (EApp (EVar "fillIndex") (EVar "lo")) (EVar "arr")) (EVar "own")) (EListLit))) (DoLet false false (PVar "sites") (EMatch (EVar "trees") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "core") (PVar "mods"))) () (EApp (EApp (EApp (EVar "modsFaults") (EVar "index")) (EVar "mods")) (EApp (EApp (EApp (EVar "declsFaults") (EVar "index")) (EVar "core")) (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EVar "reverseL") (EVar "dups")) (EApp (EVar "reverseL") (EVar "sites"))))))))))
-(DTypeSig false "fillIndex" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault")))))))
-(DFunDef false "fillIndex" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "fillIndex" ((PVar "lo") (PVar "arr") (PCons (PAs "e" (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild)) (PVar "rest")) (PVar "acc")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EVar "arr")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EApp (EVar "Some") (EVar "e"))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "fillIndex") (EVar "lo")) (EVar "arr")) (EVar "rest")) (EVar "acc"))))) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "fillIndex") (EVar "lo")) (EVar "arr")) (EVar "rest")) (EBinOp "::" (EApp (EVar "DuplicateOrdinal") (EVar "i")) (EVar "acc"))))))
+(DFunDef false "evidenceFaults" ((PVar "trees") (PVar "table")) (EBlock (DoLet false false (PVar "own") (EApp (EVar "entriesAboveSegment") (EVar "table"))) (DoLet false false (PVar "index") (EApp (EVar "emptyIndexFor") (EVar "own"))) (DoLet false false (PVar "dups") (EApp (EApp (EApp (EVar "fillIndex") (EVar "index")) (EVar "own")) (EListLit))) (DoLet false false (PVar "sites") (EMatch (EVar "trees") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "core") (PVar "mods"))) () (EApp (EApp (EApp (EVar "modsFaults") (EVar "index")) (EVar "mods")) (EApp (EApp (EApp (EVar "declsFaults") (EVar "index")) (EVar "core")) (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EVar "reverseL") (EVar "dups")) (EApp (EVar "reverseL") (EVar "sites"))))))
+(DTypeSig false "fillIndex" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault"))))))
+(DFunDef false "fillIndex" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "fillIndex" ((PVar "idx") (PCons (PAs "e" (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild)) (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "claimSlot") (EVar "idx")) (EVar "e")) (EApp (EApp (EApp (EVar "fillIndex") (EVar "idx")) (EVar "rest")) (EVar "acc")) (EApp (EApp (EApp (EVar "fillIndex") (EVar "idx")) (EVar "rest")) (EBinOp "::" (EApp (EVar "DuplicateOrdinal") (EVar "i")) (EVar "acc")))))
 (DTypeSig false "site" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyFun (TyCon "EvShape") (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault")))))))
 (DFunDef false "site" ((PVar "idx") (PAs "ev" (PCon "EvId" (PVar "m") (PVar "i"))) (PVar "want") (PVar "acc")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (ELit (LString "site"))) (EVar "ev")) (arm (PCon "Err" PWild) () (EBinOp "::" (EApp (EApp (EApp (EVar "MissingEntry") (EVar "m")) (EVar "i")) (EVar "want")) (EVar "acc"))) (arm (PCon "Ok" (PVar "v")) () (EBlock (DoLet false false (PVar "got") (EApp (EVar "evShapeOf") (EVar "v"))) (DoExpr (EIf (EBinOp "==" (EVar "got") (EVar "want")) (EVar "acc") (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "WrongShape") (EVar "m")) (EVar "i")) (EVar "want")) (EVar "got")) (EVar "acc"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "modsFaults" (TyFun (TyCon "EvIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault"))))))
@@ -417,7 +410,7 @@ kvsFaults idx ((k, v) :: rest) acc =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" true) (mem "evidenceLookup" false) (mem "entriesAboveSegment" false) (mem "emptyIndexFor" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evidenceLookup" false) (mem "entriesAboveSegment" false) (mem "emptyIndexFor" false) (mem "claimSlot" false))))
 (DData Public "EvShape" () ((variant "ShapeOne" (ConPos)) (variant "ShapeMany" (ConPos)) (variant "ShapeMethod" (ConPos)) (variant "ShapeLit" (ConPos)) (variant "ShapeHead" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "EvShape")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ShapeOne") (PCon "ShapeOne")) () (EVar "True")) (arm (PTuple (PCon "ShapeMany") (PCon "ShapeMany")) () (EVar "True")) (arm (PTuple (PCon "ShapeMethod") (PCon "ShapeMethod")) () (EVar "True")) (arm (PTuple (PCon "ShapeLit") (PCon "ShapeLit")) () (EVar "True")) (arm (PTuple (PCon "ShapeHead") (PCon "ShapeHead")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "EvShape")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "ShapeOne") () (ELit (LString "ShapeOne"))) (arm (PCon "ShapeMany") () (ELit (LString "ShapeMany"))) (arm (PCon "ShapeMethod") () (ELit (LString "ShapeMethod"))) (arm (PCon "ShapeLit") () (ELit (LString "ShapeLit"))) (arm (PCon "ShapeHead") () (ELit (LString "ShapeHead")))))))
@@ -431,10 +424,10 @@ kvsFaults idx ((k, v) :: rest) acc =
 (DFunDef false "evShapeOf" ((PCon "EvLit" PWild PWild)) (EVar "ShapeLit"))
 (DFunDef false "evShapeOf" ((PCon "EvHead" PWild)) (EVar "ShapeHead"))
 (DTypeSig true "evidenceFaults" (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyFun (TyCon "EvTable") (TyApp (TyCon "List") (TyCon "EvidenceFault")))))
-(DFunDef false "evidenceFaults" ((PVar "trees") (PVar "table")) (EBlock (DoLet false false (PVar "own") (EApp (EVar "entriesAboveSegment") (EVar "table"))) (DoLet false false (PVar "index") (EApp (EVar "emptyIndexFor") (EVar "own"))) (DoExpr (EMatch (EMethodRef "index") (arm (PCon "EvIndex" (PVar "lo") (PVar "arr")) () (EBlock (DoLet false false (PVar "dups") (EApp (EApp (EApp (EApp (EVar "fillIndex") (EVar "lo")) (EVar "arr")) (EVar "own")) (EListLit))) (DoLet false false (PVar "sites") (EMatch (EVar "trees") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "core") (PVar "mods"))) () (EApp (EApp (EApp (EVar "modsFaults") (EMethodRef "index")) (EVar "mods")) (EApp (EApp (EApp (EVar "declsFaults") (EMethodRef "index")) (EVar "core")) (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EVar "reverseL") (EVar "dups")) (EApp (EVar "reverseL") (EVar "sites"))))))))))
-(DTypeSig false "fillIndex" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault")))))))
-(DFunDef false "fillIndex" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "fillIndex" ((PVar "lo") (PVar "arr") (PCons (PAs "e" (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild)) (PVar "rest")) (PVar "acc")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EVar "arr")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EApp (EVar "Some") (EVar "e"))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "fillIndex") (EVar "lo")) (EVar "arr")) (EVar "rest")) (EVar "acc"))))) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "fillIndex") (EVar "lo")) (EVar "arr")) (EVar "rest")) (EBinOp "::" (EApp (EVar "DuplicateOrdinal") (EVar "i")) (EVar "acc"))))))
+(DFunDef false "evidenceFaults" ((PVar "trees") (PVar "table")) (EBlock (DoLet false false (PVar "own") (EApp (EVar "entriesAboveSegment") (EVar "table"))) (DoLet false false (PVar "index") (EApp (EVar "emptyIndexFor") (EVar "own"))) (DoLet false false (PVar "dups") (EApp (EApp (EApp (EVar "fillIndex") (EMethodRef "index")) (EVar "own")) (EListLit))) (DoLet false false (PVar "sites") (EMatch (EVar "trees") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "core") (PVar "mods"))) () (EApp (EApp (EApp (EVar "modsFaults") (EMethodRef "index")) (EVar "mods")) (EApp (EApp (EApp (EVar "declsFaults") (EMethodRef "index")) (EVar "core")) (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EVar "reverseL") (EVar "dups")) (EApp (EVar "reverseL") (EVar "sites"))))))
+(DTypeSig false "fillIndex" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault"))))))
+(DFunDef false "fillIndex" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "fillIndex" ((PVar "idx") (PCons (PAs "e" (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild)) (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "claimSlot") (EVar "idx")) (EVar "e")) (EApp (EApp (EApp (EVar "fillIndex") (EVar "idx")) (EVar "rest")) (EVar "acc")) (EApp (EApp (EApp (EVar "fillIndex") (EVar "idx")) (EVar "rest")) (EBinOp "::" (EApp (EVar "DuplicateOrdinal") (EVar "i")) (EVar "acc")))))
 (DTypeSig false "site" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyFun (TyCon "EvShape") (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault")))))))
 (DFunDef false "site" ((PVar "idx") (PAs "ev" (PCon "EvId" (PVar "m") (PVar "i"))) (PVar "want") (PVar "acc")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (ELit (LString "site"))) (EVar "ev")) (arm (PCon "Err" PWild) () (EBinOp "::" (EApp (EApp (EApp (EVar "MissingEntry") (EVar "m")) (EVar "i")) (EVar "want")) (EVar "acc"))) (arm (PCon "Ok" (PVar "v")) () (EBlock (DoLet false false (PVar "got") (EApp (EVar "evShapeOf") (EVar "v"))) (DoExpr (EIf (EBinOp "==" (EVar "got") (EVar "want")) (EVar "acc") (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "WrongShape") (EVar "m")) (EVar "i")) (EVar "want")) (EVar "got")) (EVar "acc"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "modsFaults" (TyFun (TyCon "EvIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault"))))))
