@@ -772,10 +772,13 @@ import types.module_interface.{
   setServedArity,
   freezeModuleInterface,
   freshModuleSerial,
+  forgetLocalRows,
   grantTopKey,
+  methodGrantKey,
   moduleCacheHit,
   moduleInterfaceIdentity,
   recordModuleInterface,
+  setGrantIds,
 }
 import types.prelude_interface.{
   PreludeInterface,
@@ -10538,10 +10541,13 @@ graphLineageRun lineage =
   localAbs.lasQuantified := omEmpty
   -- Grant-marked occurrences survive.  The sourceless variables do not: the
   -- inference that follows registers them under ids the restarted counter mints
-  -- again.  Nor do the file bounds, keyed by site: a check of the module adds its
-  -- own, whose variables are this drive's, and a bound an earlier check left would
-  -- be read against them.  A served module's come back with its trees.
+  -- again.  Nor do the method-body binders, keyed by the ordinals of a scope store
+  -- this run starts afresh.  Nor do the file bounds, keyed by site: a check of the
+  -- module adds its own, whose variables are this drive's, and a bound an earlier
+  -- check left would be read against them.  A served module's come back with its
+  -- trees.  The tables keyed by names are kept (`GrantState`).
   grants.gsSourceless := Tip
+  grants.gsBodies := Tip
   grants.gsBounds := omEmpty
   grants.gsValueBounds := omEmpty
   GraphRun { fresh |
@@ -16157,12 +16163,11 @@ localAbsFor gctx name =
     None => None
 
 -- Forget what a previous inference of the same binder left, before any member of
--- its group is inferred (a group member's body records its siblings' uses).
+-- its group is inferred (a group member's body records its siblings' uses): an
+-- earlier inference in this drive, or a check of the module id in an earlier one.
 forgetLocalAbs : GraphCtx -> String -> Unit
 forgetLocalAbs gctx name =
-  let st = gctx.graphRun.localAbs
-  st.lasBinders := omDelete name st.lasBinders.value
-  st.lasRecOccs := omDelete name st.lasRecOccs.value
+  forgetLocalRows gctx.graphRun.localAbs gctx.graphRun.grants name
 
 -- Enter a candidate local binder's own scope before its right-hand side is
 -- inferred.
@@ -16740,32 +16745,30 @@ recordStandaloneAt mctx name hd occurrence = match spineHeadEv hd
       (funArity occurrence.svoInstance.mtiBody)
   None => ()
 
-methodGrantKey : String -> String -> String
-methodGrantKey ifaceWord method = "\{ifaceWord}#\{method}"
-
 methodGrantOf : GraphCtx -> String -> String -> Option MethodGrant
 methodGrantOf gctx ifaceWord method =
   omLookup
     (methodGrantKey ifaceWord method)
     gctx.graphRun.grants.gsMethods.value
 
--- The interface methods a module declares whose type quantifies authorities.  The
--- grants follow the arrows the written type spells, since that declared arity is
--- what the backends read; a result an alias names a function stays the result.
+-- The interface methods a module declares whose type quantifies authorities; any
+-- other method it declares has no row, whatever an earlier check of the module id
+-- left.  The grants follow the arrows the written type spells, since that declared
+-- arity is what the backends read; a result an alias names a function stays the
+-- result.
 recordMethodGrants : GraphCtx -> List MethodSchemeRow -> Unit
 recordMethodGrants gctx rows =
   let st = gctx.graphRun.grants
   st.gsMethods :=
     fold
-      (acc row => match methodGrantOfRow row
-        Some mg =>
-          omInsert
-            (methodGrantKey
-              (ifaceWordOf row.msrIface.irOrigin row.msrIface.irName)
-              row.msrName)
-            mg
-            acc
-        None => acc)
+      (acc row =>
+        let key =
+          methodGrantKey
+            (ifaceWordOf row.msrIface.irOrigin row.msrIface.irName)
+            row.msrName
+        match methodGrantOfRow row
+          Some mg => omInsert key mg acc
+          None => omDelete key acc)
       st.gsMethods.value
       rows
 
@@ -16860,7 +16863,8 @@ grantChainAt gctx (sid@(ScopeId i)) =
 -- A generalized top-level group: each member whose scheme quantifies
 -- authorities takes them as parameters, and each use of such a member inside
 -- the group that instantiated nothing (its type was the member's own) forwards
--- them.
+-- them.  A member that takes none has no row, whatever an earlier check of the
+-- module id left.
 recordTopGrants : GraphCtx ->
   String ->
   List (String, Scheme) ->
@@ -16868,23 +16872,15 @@ recordTopGrants : GraphCtx ->
   Unit
 recordTopGrants gctx mid schemes grouped =
   let st = gctx.graphRun.grants
-  let taking =
-    if grantsEnabled gctx () then
-      flatMap
-        ((n, sch) => match grantOrder sch
-          [] => []
-          ids => [(n, ids)])
-        schemes
-    else
-      []
+  let enabled = grantsEnabled gctx ()
+  let granted =
+    map ((n, sch) => (n, if enabled then grantOrder sch else [])) schemes
+  let _ =
+    each (e => setGrantIds st.gsTopIds (grantTopKey mid (fst e), snd e)) granted
+  let taking = filterList (e => isNonEmptyL (snd e)) granted
   match taking
     [] => ()
     _ =>
-      st.gsTopIds :=
-        fold
-          (m entry => omInsert (grantTopKey mid (fst entry)) (snd entry) m)
-          st.gsTopIds.value
-          taking
       st.gsTakers := omFromNames (map fst taking) st.gsTakers.value
       fold
         (_ (m, _) =>

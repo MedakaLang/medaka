@@ -1,5 +1,5 @@
 # META
-source_lines=57178
+source_lines=57174
 stages=DESUGAR,MARK
 # SOURCE
 import types.invocation_basis.{
@@ -776,10 +776,13 @@ import types.module_interface.{
   setServedArity,
   freezeModuleInterface,
   freshModuleSerial,
+  forgetLocalRows,
   grantTopKey,
+  methodGrantKey,
   moduleCacheHit,
   moduleInterfaceIdentity,
   recordModuleInterface,
+  setGrantIds,
 }
 import types.prelude_interface.{
   PreludeInterface,
@@ -10542,10 +10545,13 @@ graphLineageRun lineage =
   localAbs.lasQuantified := omEmpty
   -- Grant-marked occurrences survive.  The sourceless variables do not: the
   -- inference that follows registers them under ids the restarted counter mints
-  -- again.  Nor do the file bounds, keyed by site: a check of the module adds its
-  -- own, whose variables are this drive's, and a bound an earlier check left would
-  -- be read against them.  A served module's come back with its trees.
+  -- again.  Nor do the method-body binders, keyed by the ordinals of a scope store
+  -- this run starts afresh.  Nor do the file bounds, keyed by site: a check of the
+  -- module adds its own, whose variables are this drive's, and a bound an earlier
+  -- check left would be read against them.  A served module's come back with its
+  -- trees.  The tables keyed by names are kept (`GrantState`).
   grants.gsSourceless := Tip
+  grants.gsBodies := Tip
   grants.gsBounds := omEmpty
   grants.gsValueBounds := omEmpty
   GraphRun { fresh |
@@ -16161,12 +16167,11 @@ localAbsFor gctx name =
     None => None
 
 -- Forget what a previous inference of the same binder left, before any member of
--- its group is inferred (a group member's body records its siblings' uses).
+-- its group is inferred (a group member's body records its siblings' uses): an
+-- earlier inference in this drive, or a check of the module id in an earlier one.
 forgetLocalAbs : GraphCtx -> String -> Unit
 forgetLocalAbs gctx name =
-  let st = gctx.graphRun.localAbs
-  st.lasBinders := omDelete name st.lasBinders.value
-  st.lasRecOccs := omDelete name st.lasRecOccs.value
+  forgetLocalRows gctx.graphRun.localAbs gctx.graphRun.grants name
 
 -- Enter a candidate local binder's own scope before its right-hand side is
 -- inferred.
@@ -16744,32 +16749,30 @@ recordStandaloneAt mctx name hd occurrence = match spineHeadEv hd
       (funArity occurrence.svoInstance.mtiBody)
   None => ()
 
-methodGrantKey : String -> String -> String
-methodGrantKey ifaceWord method = "\{ifaceWord}#\{method}"
-
 methodGrantOf : GraphCtx -> String -> String -> Option MethodGrant
 methodGrantOf gctx ifaceWord method =
   omLookup
     (methodGrantKey ifaceWord method)
     gctx.graphRun.grants.gsMethods.value
 
--- The interface methods a module declares whose type quantifies authorities.  The
--- grants follow the arrows the written type spells, since that declared arity is
--- what the backends read; a result an alias names a function stays the result.
+-- The interface methods a module declares whose type quantifies authorities; any
+-- other method it declares has no row, whatever an earlier check of the module id
+-- left.  The grants follow the arrows the written type spells, since that declared
+-- arity is what the backends read; a result an alias names a function stays the
+-- result.
 recordMethodGrants : GraphCtx -> List MethodSchemeRow -> Unit
 recordMethodGrants gctx rows =
   let st = gctx.graphRun.grants
   st.gsMethods :=
     fold
-      (acc row => match methodGrantOfRow row
-        Some mg =>
-          omInsert
-            (methodGrantKey
-              (ifaceWordOf row.msrIface.irOrigin row.msrIface.irName)
-              row.msrName)
-            mg
-            acc
-        None => acc)
+      (acc row =>
+        let key =
+          methodGrantKey
+            (ifaceWordOf row.msrIface.irOrigin row.msrIface.irName)
+            row.msrName
+        match methodGrantOfRow row
+          Some mg => omInsert key mg acc
+          None => omDelete key acc)
       st.gsMethods.value
       rows
 
@@ -16864,7 +16867,8 @@ grantChainAt gctx (sid@(ScopeId i)) =
 -- A generalized top-level group: each member whose scheme quantifies
 -- authorities takes them as parameters, and each use of such a member inside
 -- the group that instantiated nothing (its type was the member's own) forwards
--- them.
+-- them.  A member that takes none has no row, whatever an earlier check of the
+-- module id left.
 recordTopGrants : GraphCtx ->
   String ->
   List (String, Scheme) ->
@@ -16872,23 +16876,15 @@ recordTopGrants : GraphCtx ->
   Unit
 recordTopGrants gctx mid schemes grouped =
   let st = gctx.graphRun.grants
-  let taking =
-    if grantsEnabled gctx () then
-      flatMap
-        ((n, sch) => match grantOrder sch
-          [] => []
-          ids => [(n, ids)])
-        schemes
-    else
-      []
+  let enabled = grantsEnabled gctx ()
+  let granted =
+    map ((n, sch) => (n, if enabled then grantOrder sch else [])) schemes
+  let _ =
+    each (e => setGrantIds st.gsTopIds (grantTopKey mid (fst e), snd e)) granted
+  let taking = filterList (e => isNonEmptyL (snd e)) granted
   match taking
     [] => ()
     _ =>
-      st.gsTopIds :=
-        fold
-          (m entry => omInsert (grantTopKey mid (fst entry)) (snd entry) m)
-          st.gsTopIds.value
-          taking
       st.gsTakers := omFromNames (map fst taking) st.gsTakers.value
       fold
         (_ (m, _) =>
@@ -57230,7 +57226,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseAlias ("types" "runtime_grants") "RuntimeGrants"))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfElab" false))))
 (DUse false (UseGroup ("types" "serve_policy") ((mem "ServeOps" true) (mem "serveStateOf" false) (mem "diagsServe" false) (mem "treeServe" false))))
-(DUse false (UseGroup ("types" "module_interface") ((mem "ModuleKey" true) (mem "ModuleInterface" false) (mem "ModuleRows" false) (mem "applyModuleInterface" false) (mem "captureModuleRows" false) (mem "cellEntriesFrom" false) (mem "servedEntriesFrom" false) (mem "setServedArity" false) (mem "freezeModuleInterface" false) (mem "freshModuleSerial" false) (mem "grantTopKey" false) (mem "moduleCacheHit" false) (mem "moduleInterfaceIdentity" false) (mem "recordModuleInterface" false))))
+(DUse false (UseGroup ("types" "module_interface") ((mem "ModuleKey" true) (mem "ModuleInterface" false) (mem "ModuleRows" false) (mem "applyModuleInterface" false) (mem "captureModuleRows" false) (mem "cellEntriesFrom" false) (mem "servedEntriesFrom" false) (mem "setServedArity" false) (mem "freezeModuleInterface" false) (mem "freshModuleSerial" false) (mem "forgetLocalRows" false) (mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "moduleCacheHit" false) (mem "moduleInterfaceIdentity" false) (mem "recordModuleInterface" false) (mem "setGrantIds" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" false) (mem "freezeInterface" false) (mem "thawInterface" false) (mem "seedPreludeInterface" false) (mem "preludeCacheHit" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" true) (mem "heldPreludeEvCounter" false) (mem "preludeElabFor" false) (mem "withShippedRows" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
@@ -58883,7 +58879,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "freshEvId" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "EvId"))))
 (DFunDef false "freshEvId" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun")) (DoLet false false (PVar "n") (EFieldAccess (EFieldAccess (EVar "g") "evCounter") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evCounter")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "EvId") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentModuleRef") "value")) (EVar "n")))))
 (DTypeSig false "graphLineageRun" (TyFun (TyCon "Lineage") (TyCon "GraphRun")))
-(DFunDef false "graphLineageRun" ((PVar "lineage")) (EBlock (DoLet false false (PVar "n") (EFieldAccess (EFieldAccess (EVar "lineage") "lnEvCounter") "value")) (DoLet false false (PVar "base") (EVar "n")) (DoLet false false (PVar "localAbs") (EFieldAccess (EVar "lineage") "lnLocalAbs")) (DoLet false false (PVar "grants") (EFieldAccess (EVar "lineage") "lnGrants")) (DoLet false false (PVar "fresh") (EApp (EVar "freshGraphRun") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "fresh") "evCounter")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "fresh") "evJudged")) (EVar "base"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "localAbs") "lasQuantified")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsSourceless")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsBounds")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsValueBounds")) (EVar "omEmpty"))) (DoExpr (EVariantUpdate "GraphRun" (EVar "fresh") ((fa "localAbs" (EVar "localAbs")) (fa "grants" (EVar "grants")) (fa "evBase" (EVar "base")))))))
+(DFunDef false "graphLineageRun" ((PVar "lineage")) (EBlock (DoLet false false (PVar "n") (EFieldAccess (EFieldAccess (EVar "lineage") "lnEvCounter") "value")) (DoLet false false (PVar "base") (EVar "n")) (DoLet false false (PVar "localAbs") (EFieldAccess (EVar "lineage") "lnLocalAbs")) (DoLet false false (PVar "grants") (EFieldAccess (EVar "lineage") "lnGrants")) (DoLet false false (PVar "fresh") (EApp (EVar "freshGraphRun") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "fresh") "evCounter")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "fresh") "evJudged")) (EVar "base"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "localAbs") "lasQuantified")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsSourceless")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsBodies")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsBounds")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsValueBounds")) (EVar "omEmpty"))) (DoExpr (EVariantUpdate "GraphRun" (EVar "fresh") ((fa "localAbs" (EVar "localAbs")) (fa "grants" (EVar "grants")) (fa "evBase" (EVar "base")))))))
 (DTypeSig false "sealMethodReturnGoals" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView")))))))
 (DFunDef false "sealMethodReturnGoals" ((PVar "gctx") (PVar "evidence") (PVar "goals")) (EApp (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "gctx")) (EVar "evidence")) (EApp (EVar "reverseL") (EVar "goals"))) (ETuple (EListLit) (EListLit))))
 (DTypeSig false "sealMethodReturnGoalsFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))))))))
@@ -60043,7 +60039,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "localAbsFor" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LocalAbs")))))
 (DFunDef false "localAbsFor" ((PVar "gctx") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "localAbs") "lasBinders") "value")) (arm (PCon "Some" (PVar "found")) () (EVar "found")) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "forgetLocalAbs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "forgetLocalAbs" ((PVar "gctx") (PVar "name")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "localAbs")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "lasBinders")) (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "st") "lasBinders") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "lasRecOccs")) (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "st") "lasRecOccs") "value"))))))
+(DFunDef false "forgetLocalAbs" ((PVar "gctx") (PVar "name")) (EApp (EApp (EApp (EVar "forgetLocalRows") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "localAbs")) (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EVar "name")))
 (DTypeSig false "openLocalScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "ScopeId"))))
 (DFunDef false "openLocalScope" ((PVar "mctx") (PVar "name")) (EBlock (DoLet false false (PVar "parent") (EApp (EApp (EVar "captureScope") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "sid") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EApp (EApp (EVar "currentScopeStore") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (EApp (EVar "Some") (EVar "parent"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentLevel") "value")) (EFieldAccess (EApp (EApp (EVar "Scopes.scopeFrame") (EApp (EApp (EVar "currentScopeStore") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (EVar "parent")) "sfModuleId")) (EApp (EVar "LocalBindingOwner") (EVar "name")))) (DoLet false false PWild (EApp (EApp (EVar "openScope") (EVar "mctx")) (EVar "sid"))) (DoExpr (EVar "sid"))))
 (DTypeSig false "openLocalScopeIf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ScopeId")))))
@@ -60170,12 +60166,10 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "spineHeadEv" (PWild) (EVar "None"))
 (DTypeSig false "recordStandaloneAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "SelectedValueOccurrence") (TyCon "Unit"))))))
 (DFunDef false "recordStandaloneAt" ((PVar "mctx") (PVar "name") (PVar "hd") (PVar "occurrence")) (EMatch (EApp (EVar "spineHeadEv") (EVar "hd")) (arm (PCon "Some" (PVar "ev")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordStandaloneGrantOcc") (EVar "mctx")) (EVar "name")) (EVar "ev")) (EFieldAccess (EVar "occurrence") "svoScheme")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiSubstitution") "misAuthSubst")) (EApp (EVar "funArity") (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")))) (arm (PCon "None") () (ELit LUnit))))
-(DTypeSig false "methodGrantKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "methodGrantKey" ((PVar "ifaceWord") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "methodGrantOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodGrant"))))))
 (DFunDef false "methodGrantOf" ((PVar "gctx") (PVar "ifaceWord") (PVar "method")) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "methodGrantKey") (EVar "ifaceWord")) (EVar "method"))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsMethods") "value")))
 (DTypeSig false "recordMethodGrants" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "MethodSchemeRow")) (TyCon "Unit"))))
-(DFunDef false "recordMethodGrants" ((PVar "gctx") (PVar "rows")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsMethods")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "row")) (EMatch (EApp (EVar "methodGrantOfRow") (EVar "row")) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "methodGrantKey") (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin")) (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irName"))) (EFieldAccess (EVar "row") "msrName"))) (EVar "mg")) (EVar "acc"))) (arm (PCon "None") () (EVar "acc"))))) (EFieldAccess (EFieldAccess (EVar "st") "gsMethods") "value")) (EVar "rows"))))))
+(DFunDef false "recordMethodGrants" ((PVar "gctx") (PVar "rows")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsMethods")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "row")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "methodGrantKey") (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin")) (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irName"))) (EFieldAccess (EVar "row") "msrName"))) (DoExpr (EMatch (EApp (EVar "methodGrantOfRow") (EVar "row")) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "mg")) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EVar "omDelete") (EVar "key")) (EVar "acc")))))))) (EFieldAccess (EFieldAccess (EVar "st") "gsMethods") "value")) (EVar "rows"))))))
 (DTypeSig false "methodGrantOfRow" (TyFun (TyCon "MethodSchemeRow") (TyApp (TyCon "Option") (TyCon "MethodGrant"))))
 (DFunDef false "methodGrantOfRow" ((PVar "row")) (EMatch (EFieldAccess (EVar "row") "msrScheme") (arm (PCon "Forall" PWild PWild PWild PWild (PVar "force") (PVar "body")) () (EMatch (EApp (EVar "grantOrder") (EFieldAccess (EVar "row") "msrScheme")) (arm (PList) () (EVar "None")) (arm (PVar "ids") () (EBlock (DoLet false false (PVar "cells") (EApp (EApp (EVar "authCellsIn") (EVar "body")) (EApp (EApp (EVar "authRowCells") (EVar "force")) (EVar "Tip")))) (DoExpr (EApp (EVar "Some") (ERecordCreate "MethodGrant" ((fa "mgArity" (EApp (EVar "tyArrowCount") (EFieldAccess (EVar "row") "msrType"))) (fa "mgNames" (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EMatch (EApp (EApp (EVar "IdMap.get") (EVar "i")) (EVar "cells")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "authvarName") (EVar "cell")))) (arm (PCon "None") () (ELit (LString "")))))) (EVar "ids")))))))))))))
 (DTypeSig false "tyArrowCount" (TyFun (TyCon "Ty") (TyCon "Int")))
@@ -60194,7 +60188,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "grantChainAt" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ScopeId") (TyApp (TyCon "List") (TyCon "GrantBinder")))))
 (DFunDef false "grantChainAt" ((PVar "gctx") (PAs "sid" (PCon "ScopeId" (PVar "i")))) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "Scopes.scopeFrame") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (EVar "sid"))) (DoLet false false (PVar "outer") (EMatch (EFieldAccess (EVar "frame") "sfParent") (arm (PCon "Some" (PVar "parent")) () (EApp (EApp (EVar "grantChainAt") (EVar "gctx")) (EVar "parent"))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "own") (EMatch (EFieldAccess (EVar "frame") "sfOwner") (arm (PCon "BindingOwner" (PVar "n")) () (EBinOp "::" (EApp (EApp (EVar "TopGrantBinder") (EFieldAccess (EVar "frame") "sfModuleId")) (EVar "n")) (EVar "outer"))) (arm (PCon "LocalBindingOwner" (PVar "n")) () (EBinOp "::" (EApp (EVar "LocalGrantBinder") (EVar "n")) (EVar "outer"))) (arm PWild () (EVar "outer")))) (DoExpr (EMatch (EApp (EApp (EVar "IdMap.get") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsBodies") "value")) (arm (PCon "Some" (PVar "body")) () (EBinOp "::" (EVar "body") (EVar "own"))) (arm (PCon "None") () (EVar "own"))))))
 (DTypeSig false "recordTopGrants" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyCon "Unit"))))))
-(DFunDef false "recordTopGrants" ((PVar "gctx") (PVar "mid") (PVar "schemes") (PVar "grouped")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoLet false false (PVar "taking") (EIf (EApp (EApp (EVar "grantsEnabled") (EVar "gctx")) (ELit LUnit)) (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "n") (PVar "sch"))) (EMatch (EApp (EVar "grantOrder") (EVar "sch")) (arm (PList) () (EListLit)) (arm (PVar "ids") () (EListLit (ETuple (EVar "n") (EVar "ids"))))))) (EVar "schemes")) (EListLit))) (DoExpr (EMatch (EVar "taking") (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsTopIds")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "entry")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "grantTopKey") (EVar "mid")) (EApp (EVar "fst") (EVar "entry")))) (EApp (EVar "snd") (EVar "entry"))) (EVar "m")))) (EFieldAccess (EFieldAccess (EVar "st") "gsTopIds") "value")) (EVar "taking")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsTakers")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "taking"))) (EFieldAccess (EFieldAccess (EVar "st") "gsTakers") "value")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PTuple (PVar "m") PWild)) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "clause")) (EApp (EApp (EApp (EApp (EApp (EVar "recordRecursiveGrants") (EVar "gctx")) (EVar "mid")) (EVar "m")) (EVar "taking")) (EApp (EVar "snd") (EVar "clause"))))) (ELit LUnit)) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (ELit LUnit)) (EVar "schemes")))))))))
+(DFunDef false "recordTopGrants" ((PVar "gctx") (PVar "mid") (PVar "schemes") (PVar "grouped")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoLet false false (PVar "enabled") (EApp (EApp (EVar "grantsEnabled") (EVar "gctx")) (ELit LUnit))) (DoLet false false (PVar "granted") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "n") (PVar "sch"))) (ETuple (EVar "n") (EIf (EVar "enabled") (EApp (EVar "grantOrder") (EVar "sch")) (EListLit))))) (EVar "schemes"))) (DoLet false false PWild (EApp (EApp (EVar "each") (ELam ((PVar "e")) (EApp (EApp (EVar "setGrantIds") (EFieldAccess (EVar "st") "gsTopIds")) (ETuple (EApp (EApp (EVar "grantTopKey") (EVar "mid")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "granted"))) (DoLet false false (PVar "taking") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EVar "isNonEmptyL") (EApp (EVar "snd") (EVar "e"))))) (EVar "granted"))) (DoExpr (EMatch (EVar "taking") (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsTakers")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "taking"))) (EFieldAccess (EFieldAccess (EVar "st") "gsTakers") "value")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PTuple (PVar "m") PWild)) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "clause")) (EApp (EApp (EApp (EApp (EApp (EVar "recordRecursiveGrants") (EVar "gctx")) (EVar "mid")) (EVar "m")) (EVar "taking")) (EApp (EVar "snd") (EVar "clause"))))) (ELit LUnit)) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (ELit LUnit)) (EVar "schemes")))))))))
 (DTypeSig false "recordRecursiveGrants" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Expr") (TyCon "Unit")))))))
 (DFunDef false "recordRecursiveGrants" ((PVar "gctx") (PVar "mid") (PVar "m") (PVar "taking") (PVar "body")) (EBlock (DoLet false false (PVar "visit") (ELam ((PVar "e")) (EMatch (EVar "e") (arm (PCon "EDictAt" (PVar "n") (PVar "ev")) () (EMatch (ETuple (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "taking")) (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev"))) (arm (PTuple (PCon "Some" (PVar "ids")) (PCon "None")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setGrantOcc") (EVar "gctx")) (EVar "ev")) (ERecordCreate "GrantOcc" ((fa "goCallee" (EVar "n")) (fa "goCells" (EListLit)) (fa "goRecIds" (EVar "ids")) (fa "goTrailing" (EVar "None")) (fa "goChain" (EListLit (EApp (EApp (EVar "TopGrantBinder") (EVar "mid")) (EVar "m")))) (fa "goStandalone" (EVar "False")))))) (DoExpr (EVar "e")))) (arm PWild () (EVar "e")))) (arm PWild () (EVar "e"))))) (DoLet false false PWild (EApp (EApp (EVar "mapExpr") (EVar "visit")) (EVar "body"))) (DoExpr (ELit LUnit))))
 (DTypeSig false "registerLocalGrants" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "Unit")))))
@@ -66465,7 +66459,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseAlias ("types" "runtime_grants") "RuntimeGrants"))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfElab" false))))
 (DUse false (UseGroup ("types" "serve_policy") ((mem "ServeOps" true) (mem "serveStateOf" false) (mem "diagsServe" false) (mem "treeServe" false))))
-(DUse false (UseGroup ("types" "module_interface") ((mem "ModuleKey" true) (mem "ModuleInterface" false) (mem "ModuleRows" false) (mem "applyModuleInterface" false) (mem "captureModuleRows" false) (mem "cellEntriesFrom" false) (mem "servedEntriesFrom" false) (mem "setServedArity" false) (mem "freezeModuleInterface" false) (mem "freshModuleSerial" false) (mem "grantTopKey" false) (mem "moduleCacheHit" false) (mem "moduleInterfaceIdentity" false) (mem "recordModuleInterface" false))))
+(DUse false (UseGroup ("types" "module_interface") ((mem "ModuleKey" true) (mem "ModuleInterface" false) (mem "ModuleRows" false) (mem "applyModuleInterface" false) (mem "captureModuleRows" false) (mem "cellEntriesFrom" false) (mem "servedEntriesFrom" false) (mem "setServedArity" false) (mem "freezeModuleInterface" false) (mem "freshModuleSerial" false) (mem "forgetLocalRows" false) (mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "moduleCacheHit" false) (mem "moduleInterfaceIdentity" false) (mem "recordModuleInterface" false) (mem "setGrantIds" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" false) (mem "freezeInterface" false) (mem "thawInterface" false) (mem "seedPreludeInterface" false) (mem "preludeCacheHit" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" true) (mem "heldPreludeEvCounter" false) (mem "preludeElabFor" false) (mem "withShippedRows" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
@@ -68118,7 +68112,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "freshEvId" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "EvId"))))
 (DFunDef false "freshEvId" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun")) (DoLet false false (PVar "n") (EFieldAccess (EFieldAccess (EVar "g") "evCounter") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evCounter")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "EvId") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentModuleRef") "value")) (EVar "n")))))
 (DTypeSig false "graphLineageRun" (TyFun (TyCon "Lineage") (TyCon "GraphRun")))
-(DFunDef false "graphLineageRun" ((PVar "lineage")) (EBlock (DoLet false false (PVar "n") (EFieldAccess (EFieldAccess (EVar "lineage") "lnEvCounter") "value")) (DoLet false false (PVar "base") (EVar "n")) (DoLet false false (PVar "localAbs") (EFieldAccess (EVar "lineage") "lnLocalAbs")) (DoLet false false (PVar "grants") (EFieldAccess (EVar "lineage") "lnGrants")) (DoLet false false (PVar "fresh") (EApp (EVar "freshGraphRun") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "fresh") "evCounter")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "fresh") "evJudged")) (EVar "base"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "localAbs") "lasQuantified")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsSourceless")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsBounds")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsValueBounds")) (EVar "omEmpty"))) (DoExpr (EVariantUpdate "GraphRun" (EVar "fresh") ((fa "localAbs" (EVar "localAbs")) (fa "grants" (EVar "grants")) (fa "evBase" (EVar "base")))))))
+(DFunDef false "graphLineageRun" ((PVar "lineage")) (EBlock (DoLet false false (PVar "n") (EFieldAccess (EFieldAccess (EVar "lineage") "lnEvCounter") "value")) (DoLet false false (PVar "base") (EVar "n")) (DoLet false false (PVar "localAbs") (EFieldAccess (EVar "lineage") "lnLocalAbs")) (DoLet false false (PVar "grants") (EFieldAccess (EVar "lineage") "lnGrants")) (DoLet false false (PVar "fresh") (EApp (EVar "freshGraphRun") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "fresh") "evCounter")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "fresh") "evJudged")) (EVar "base"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "localAbs") "lasQuantified")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsSourceless")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsBodies")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsBounds")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "grants") "gsValueBounds")) (EVar "omEmpty"))) (DoExpr (EVariantUpdate "GraphRun" (EVar "fresh") ((fa "localAbs" (EVar "localAbs")) (fa "grants" (EVar "grants")) (fa "evBase" (EVar "base")))))))
 (DTypeSig false "sealMethodReturnGoals" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView")))))))
 (DFunDef false "sealMethodReturnGoals" ((PVar "gctx") (PVar "evidence") (PVar "goals")) (EApp (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "gctx")) (EVar "evidence")) (EApp (EVar "reverseL") (EVar "goals"))) (ETuple (EListLit) (EListLit))))
 (DTypeSig false "sealMethodReturnGoalsFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))))))))
@@ -69278,7 +69272,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "localAbsFor" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LocalAbs")))))
 (DFunDef false "localAbsFor" ((PVar "gctx") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "localAbs") "lasBinders") "value")) (arm (PCon "Some" (PVar "found")) () (EVar "found")) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "forgetLocalAbs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "forgetLocalAbs" ((PVar "gctx") (PVar "name")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "localAbs")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "lasBinders")) (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "st") "lasBinders") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "lasRecOccs")) (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "st") "lasRecOccs") "value"))))))
+(DFunDef false "forgetLocalAbs" ((PVar "gctx") (PVar "name")) (EApp (EApp (EApp (EVar "forgetLocalRows") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "localAbs")) (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EVar "name")))
 (DTypeSig false "openLocalScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "ScopeId"))))
 (DFunDef false "openLocalScope" ((PVar "mctx") (PVar "name")) (EBlock (DoLet false false (PVar "parent") (EApp (EApp (EVar "captureScope") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "sid") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EApp (EApp (EVar "currentScopeStore") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (EApp (EVar "Some") (EVar "parent"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentLevel") "value")) (EFieldAccess (EApp (EApp (EVar "Scopes.scopeFrame") (EApp (EApp (EVar "currentScopeStore") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (EVar "parent")) "sfModuleId")) (EApp (EVar "LocalBindingOwner") (EVar "name")))) (DoLet false false PWild (EApp (EApp (EVar "openScope") (EVar "mctx")) (EVar "sid"))) (DoExpr (EVar "sid"))))
 (DTypeSig false "openLocalScopeIf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ScopeId")))))
@@ -69405,12 +69399,10 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "spineHeadEv" (PWild) (EVar "None"))
 (DTypeSig false "recordStandaloneAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "SelectedValueOccurrence") (TyCon "Unit"))))))
 (DFunDef false "recordStandaloneAt" ((PVar "mctx") (PVar "name") (PVar "hd") (PVar "occurrence")) (EMatch (EApp (EVar "spineHeadEv") (EVar "hd")) (arm (PCon "Some" (PVar "ev")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordStandaloneGrantOcc") (EVar "mctx")) (EVar "name")) (EVar "ev")) (EFieldAccess (EVar "occurrence") "svoScheme")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiSubstitution") "misAuthSubst")) (EApp (EVar "funArity") (EFieldAccess (EFieldAccess (EVar "occurrence") "svoInstance") "mtiBody")))) (arm (PCon "None") () (ELit LUnit))))
-(DTypeSig false "methodGrantKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "methodGrantKey" ((PVar "ifaceWord") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "methodGrantOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodGrant"))))))
 (DFunDef false "methodGrantOf" ((PVar "gctx") (PVar "ifaceWord") (PVar "method")) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "methodGrantKey") (EVar "ifaceWord")) (EVar "method"))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsMethods") "value")))
 (DTypeSig false "recordMethodGrants" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "MethodSchemeRow")) (TyCon "Unit"))))
-(DFunDef false "recordMethodGrants" ((PVar "gctx") (PVar "rows")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsMethods")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "row")) (EMatch (EApp (EVar "methodGrantOfRow") (EVar "row")) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "methodGrantKey") (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin")) (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irName"))) (EFieldAccess (EVar "row") "msrName"))) (EVar "mg")) (EVar "acc"))) (arm (PCon "None") () (EVar "acc"))))) (EFieldAccess (EFieldAccess (EVar "st") "gsMethods") "value")) (EVar "rows"))))))
+(DFunDef false "recordMethodGrants" ((PVar "gctx") (PVar "rows")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsMethods")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "row")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "methodGrantKey") (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin")) (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irName"))) (EFieldAccess (EVar "row") "msrName"))) (DoExpr (EMatch (EApp (EVar "methodGrantOfRow") (EVar "row")) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "mg")) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EVar "omDelete") (EVar "key")) (EVar "acc")))))))) (EFieldAccess (EFieldAccess (EVar "st") "gsMethods") "value")) (EVar "rows"))))))
 (DTypeSig false "methodGrantOfRow" (TyFun (TyCon "MethodSchemeRow") (TyApp (TyCon "Option") (TyCon "MethodGrant"))))
 (DFunDef false "methodGrantOfRow" ((PVar "row")) (EMatch (EFieldAccess (EVar "row") "msrScheme") (arm (PCon "Forall" PWild PWild PWild PWild (PVar "force") (PVar "body")) () (EMatch (EApp (EVar "grantOrder") (EFieldAccess (EVar "row") "msrScheme")) (arm (PList) () (EVar "None")) (arm (PVar "ids") () (EBlock (DoLet false false (PVar "cells") (EApp (EApp (EVar "authCellsIn") (EVar "body")) (EApp (EApp (EVar "authRowCells") (EVar "force")) (EVar "Tip")))) (DoExpr (EApp (EVar "Some") (ERecordCreate "MethodGrant" ((fa "mgArity" (EApp (EVar "tyArrowCount") (EFieldAccess (EVar "row") "msrType"))) (fa "mgNames" (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EMatch (EApp (EApp (EVar "IdMap.get") (EVar "i")) (EVar "cells")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "authvarName") (EVar "cell")))) (arm (PCon "None") () (ELit (LString "")))))) (EVar "ids")))))))))))))
 (DTypeSig false "tyArrowCount" (TyFun (TyCon "Ty") (TyCon "Int")))
@@ -69429,7 +69421,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "grantChainAt" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ScopeId") (TyApp (TyCon "List") (TyCon "GrantBinder")))))
 (DFunDef false "grantChainAt" ((PVar "gctx") (PAs "sid" (PCon "ScopeId" (PVar "i")))) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "Scopes.scopeFrame") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (EVar "sid"))) (DoLet false false (PVar "outer") (EMatch (EFieldAccess (EVar "frame") "sfParent") (arm (PCon "Some" (PVar "parent")) () (EApp (EApp (EVar "grantChainAt") (EVar "gctx")) (EVar "parent"))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "own") (EMatch (EFieldAccess (EVar "frame") "sfOwner") (arm (PCon "BindingOwner" (PVar "n")) () (EBinOp "::" (EApp (EApp (EVar "TopGrantBinder") (EFieldAccess (EVar "frame") "sfModuleId")) (EVar "n")) (EVar "outer"))) (arm (PCon "LocalBindingOwner" (PVar "n")) () (EBinOp "::" (EApp (EVar "LocalGrantBinder") (EVar "n")) (EVar "outer"))) (arm PWild () (EVar "outer")))) (DoExpr (EMatch (EApp (EApp (EVar "IdMap.get") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsBodies") "value")) (arm (PCon "Some" (PVar "body")) () (EBinOp "::" (EVar "body") (EVar "own"))) (arm (PCon "None") () (EVar "own"))))))
 (DTypeSig false "recordTopGrants" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyCon "Unit"))))))
-(DFunDef false "recordTopGrants" ((PVar "gctx") (PVar "mid") (PVar "schemes") (PVar "grouped")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoLet false false (PVar "taking") (EIf (EApp (EApp (EVar "grantsEnabled") (EVar "gctx")) (ELit LUnit)) (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "n") (PVar "sch"))) (EMatch (EApp (EVar "grantOrder") (EVar "sch")) (arm (PList) () (EListLit)) (arm (PVar "ids") () (EListLit (ETuple (EVar "n") (EVar "ids"))))))) (EVar "schemes")) (EListLit))) (DoExpr (EMatch (EVar "taking") (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsTopIds")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "entry")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "grantTopKey") (EVar "mid")) (EApp (EVar "fst") (EVar "entry")))) (EApp (EVar "snd") (EVar "entry"))) (EVar "m")))) (EFieldAccess (EFieldAccess (EVar "st") "gsTopIds") "value")) (EVar "taking")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsTakers")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "taking"))) (EFieldAccess (EFieldAccess (EVar "st") "gsTakers") "value")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PTuple (PVar "m") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "clause")) (EApp (EApp (EApp (EApp (EApp (EVar "recordRecursiveGrants") (EVar "gctx")) (EVar "mid")) (EVar "m")) (EVar "taking")) (EApp (EVar "snd") (EVar "clause"))))) (ELit LUnit)) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (ELit LUnit)) (EVar "schemes")))))))))
+(DFunDef false "recordTopGrants" ((PVar "gctx") (PVar "mid") (PVar "schemes") (PVar "grouped")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoLet false false (PVar "enabled") (EApp (EApp (EVar "grantsEnabled") (EVar "gctx")) (ELit LUnit))) (DoLet false false (PVar "granted") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "n") (PVar "sch"))) (ETuple (EVar "n") (EIf (EVar "enabled") (EApp (EVar "grantOrder") (EVar "sch")) (EListLit))))) (EVar "schemes"))) (DoLet false false PWild (EApp (EApp (EVar "each") (ELam ((PVar "e")) (EApp (EApp (EVar "setGrantIds") (EFieldAccess (EVar "st") "gsTopIds")) (ETuple (EApp (EApp (EVar "grantTopKey") (EVar "mid")) (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "granted"))) (DoLet false false (PVar "taking") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EVar "isNonEmptyL") (EApp (EVar "snd") (EVar "e"))))) (EVar "granted"))) (DoExpr (EMatch (EVar "taking") (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsTakers")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "taking"))) (EFieldAccess (EFieldAccess (EVar "st") "gsTakers") "value")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PTuple (PVar "m") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "clause")) (EApp (EApp (EApp (EApp (EApp (EVar "recordRecursiveGrants") (EVar "gctx")) (EVar "mid")) (EVar "m")) (EVar "taking")) (EApp (EVar "snd") (EVar "clause"))))) (ELit LUnit)) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (ELit LUnit)) (EVar "schemes")))))))))
 (DTypeSig false "recordRecursiveGrants" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Expr") (TyCon "Unit")))))))
 (DFunDef false "recordRecursiveGrants" ((PVar "gctx") (PVar "mid") (PVar "m") (PVar "taking") (PVar "body")) (EBlock (DoLet false false (PVar "visit") (ELam ((PVar "e")) (EMatch (EVar "e") (arm (PCon "EDictAt" (PVar "n") (PVar "ev")) () (EMatch (ETuple (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "taking")) (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev"))) (arm (PTuple (PCon "Some" (PVar "ids")) (PCon "None")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setGrantOcc") (EVar "gctx")) (EVar "ev")) (ERecordCreate "GrantOcc" ((fa "goCallee" (EVar "n")) (fa "goCells" (EListLit)) (fa "goRecIds" (EVar "ids")) (fa "goTrailing" (EVar "None")) (fa "goChain" (EListLit (EApp (EApp (EVar "TopGrantBinder") (EVar "mid")) (EVar "m")))) (fa "goStandalone" (EVar "False")))))) (DoExpr (EVar "e")))) (arm PWild () (EVar "e")))) (arm PWild () (EVar "e"))))) (DoLet false false PWild (EApp (EApp (EVar "mapExpr") (EVar "visit")) (EVar "body"))) (DoExpr (ELit LUnit))))
 (DTypeSig false "registerLocalGrants" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "Unit")))))

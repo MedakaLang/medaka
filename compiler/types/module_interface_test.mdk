@@ -859,3 +859,102 @@ test "an interface a diagnostics drive recorded is a miss for a tree drive and a
     ("a tree drive over the same graph serves nothing", expectEqual 0 miss),
     ("a second tree drive serves what the first recorded", expectEqual 2 hit),
   ]
+
+-- ── one module id checked again in a lineage ─────────────────────────────────
+
+-- Module `lib` in two contents: [grantLib] has a top-level `f`, a local `go` and a
+-- method `Rd.rd` that take grants, [freeLib] a top-level `f`, a local `go` and a
+-- method `Rd.rd` of the same names that take none.  Both mint `go`'s renamed binder
+-- first, so its name is the same.
+grantLib : String
+grantLib = joinNl [
+  "public export data Handle (p : Authority FileRead) = Handle (String @p)",
+  "export",
+  "bad name =",
+  "  let go (Handle s) = readFile s",
+  "  go (Handle name)",
+  "export",
+  "f (Handle s) = readFile s",
+  "export interface Rd a where",
+  "  rd : a -> (path : String) -> <FileRead path> Result String String",
+  "public export data T = T",
+  "impl Rd T where",
+  "  rd _ path = Ok path",
+]
+
+freeLib : String
+freeLib = joinNl [
+  "export",
+  "shout s =",
+  "  let go t = t ++ \"!\"",
+  "  go s",
+  "export",
+  "f s = s ++ \"?\"",
+  "export interface Rd a where",
+  "  rd : a -> String -> String",
+  "public export data T = T",
+  "impl Rd T where",
+  "  rd _ s = s ++ \".\"",
+]
+
+libEntry : String
+libEntry = joinNl [
+  "import lib.{shout, f, Rd(..), T(..), rd}",
+  "via : Rd a => a -> String",
+  "via x = rd x \"z\"",
+  "main =",
+  "  println (shout \"x\")",
+  "  println (f \"y\")",
+  "  println (via T)",
+]
+
+grantEntry : String
+grantEntry = joinNl ["import lib.{bad, f}", "main = println 1"]
+
+test "a second check of a module id keeps none of the first check's grant rows" =
+  match preludePair ()
+    Some (runtime, core) =>
+      let _ = treeDrive 4711 "lr-k1" runtime core [
+        ("lib", grantLib),
+        ("lr_entry", grantEntry),
+      ]
+      let (_, out, served) = treeDrive 4711 "lr-k2" runtime core [
+        ("lib", freeLib),
+        ("lr_entry", libEntry),
+      ]
+      expectEach [
+        ("the second drive checks the module", expectEqual 0 served),
+        (
+          "its grant-free binders take no grants",
+          expectEqual "x!\ny?\nz.\n" out,
+        ),
+      ]
+    None => fail "could not read the prelude pair"
+
+-- The middle drive is unkeyed, so it checks the other content without recording it
+-- over the first.
+test "a serve of a module id keeps none of another content's grant rows" =
+  match preludePair ()
+    Some (runtime, core) =>
+      let free = [("lib", freeLib), ("ls_entry", libEntry)]
+      let (coldNodes, cold, _) = treeDrive 4713 "ls-k1" runtime core free
+      let _ =
+        length
+          (checkModules defaultDriveInputs runtime core [
+            ("lib", desugar (parseLocated grantLib)),
+            ("ls_entry", desugar (parseLocated grantEntry)),
+          ])
+      let (warmNodes, warm, served) = treeDrive 4713 "ls-k1" runtime core free
+      expectEach [
+        ("the cold drive runs", expectEqual "x!\ny?\nz.\n" cold),
+        ("the third drive serves the module", expectEqual 1 served),
+        (
+          "the passed trees and the evidence are the cold drive's",
+          expectEqual coldNodes warmNodes,
+        ),
+        (
+          "its grant-free binders take no grants",
+          expectEqual "x!\ny?\nz.\n" warm,
+        ),
+      ]
+    None => fail "could not read the prelude pair"
