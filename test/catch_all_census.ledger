@@ -35,7 +35,7 @@ declMethodIdentsOf	Decl	2/14
 declMethodNamesOf	Decl	3/14
 declNameLocs	Decl	1/14
 declRefNames	Decl	7/14
-declRow	Decl	2/14
+declRow	Decl	3/14
 definerShadowArgHead	Expr	2/42
 definerShadowVarHead	Expr	3/42
 derivingTypeLoc	Decl	3/14
