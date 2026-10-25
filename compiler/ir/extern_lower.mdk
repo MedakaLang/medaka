@@ -64,7 +64,7 @@ lowerExterns input decls (prog@(CProgram groups _ _ _ _ facts)) =
         ++ (if isSome input.pfExternSources then
           []
         else
-          map (s => (s.sourceName, externFact s)) sources))
+          map (s => ((s : ExternSource).sourceName, externFact s)) sources))
       omEmpty
   let globals = omFromNames (map ((CBind n _ _ _) => n) groups) omEmpty
   let selected =

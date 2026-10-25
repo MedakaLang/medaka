@@ -1,13 +1,24 @@
+import types.capability_manifest.{
+  CapabilityManifest(..), ManifestRequest(..), ManifestLookup(..),
+  InvocationProtocol(..), FrozenAtom(..), FrozenAuthority(..), FrozenVariable,
+  lookupManifest
+}
+import types.capability_policy.{manifestAllowed}
+import map as FV
+import map.{Map(..)}
+import types.effect_domain.{renderAxisVal}
+import frontend.ast.{TyConOrigin(..)}
+import string.{trimLeft}
 import types.effect_domain.{
   canonParam, drender, isSubTop, Param(..), pathClimbs, pathSpelling
 }
 import types.effect_authority.{authHasVars, authConsts}
+import types.effect_param_decode.{decodeSetParam}
 import types.effect_policy as EP
 import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain,
   allOk
 }
-import types.effect_invocation.{invocationSummary, InvocationOps}
 import types.effect_rows.{atomKey, atomLabel, atomAuth, renderAtom, Atom(..)}
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
 -- policy checker (WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md).
@@ -52,8 +63,6 @@ import types.typecheck.{
   elaborateModulesWithReport,
   entrySplit,
   pubSchemes,
-  lastInvocationOps,
-  decodeSetParam,
   bindingGrantArity,
 }
 import types.program_facts.{factsOfElab, withFacts}
@@ -207,17 +216,6 @@ policyLabels [] = []
 policyLabels ((l, p) :: rest) =
   l ++ effParamSurface quoteTok p :: policyLabels rest
 
--- ── 4. effect ATOMS from a scheme ────────────────────────────────────────
--- What the host can make an entry perform: the invocation summary
--- (`types/effect_invocation.mdk`), over the checked program's own
--- constructors and variance table (`lastInvocationOps`).
-
--- The label view of an atom list (for header rendering + chain keys).  Each atom
--- renders `label` (⊤ param) or `label "pat"` (concrete) via drender — byte-
--- identical to WS-1a for ⊤ params (drender ⊤ = "").
-atomLabels : List Atom -> List String
-atomLabels atoms = map renderAtom atoms
-
 -- ── 7. accept: run the plugin on a sample request with stub capabilities ─────
 -- Synthetic stub funDefs that shadow the user-declared platform externs.  Parsed
 -- from source so we don't hand-build the `stringConcat`/literal AST.  `logEvent`
@@ -325,10 +323,9 @@ lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 -- `--fn <name>` is arbitrary CLI input looked up directly by bare name
 -- (`lookupAssoc` is a first-match scan), so an entry redefinition of a prelude
 -- name must win, and a prelude name (`--fn println`) must be present rather
--- than read as effect-free.  `tiOps` is taken from the drive's own outputs, and
--- so is `tiAutoPrintCall`: when the drivers that run the program print a value `main`
--- (`shouldAutoPrintMain` reads the drive's `main` type), the scheme of the
--- prelude `println` the wrap applies to it.  The binding rule reads the
+-- than read as effect-free. `tiAutoPrintCall` retains only the diagnostic
+-- provenance for a value main's printing wrapper. Admission reads the frozen
+-- manifests in `tiOutputs`. The binding rule reads the
 -- program the drive read: `tiCore` and `tiModules` are its desugared prelude and
 -- module graph (the entry last), and `tiRuntime` is `stdlib/runtime.mdk`, whose
 -- externs are the built-ins: a module that declares one again runs the
@@ -336,7 +333,6 @@ lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 -- the effect domains and the grants flag are read from.
 public export data TargetInputs = TargetInputs {
   tiSchemes : List (String, Scheme),
-  tiOps : InvocationOps,
   tiEntryDecls : List Decl,
   tiAutoPrintCall : Option Scheme,
   tiCore : List Decl,
@@ -382,7 +378,6 @@ analyzeProgramReport inputs valueMain executes rtD coreD modsD =
     elaborateModulesWithReport inputs valueMain executes rtD coreD modsD
   let (preludePub, ownPub, _, _) = entrySplit report
   let preludeSchemes = pubSchemes preludePub
-  let ops = lastInvocationOps outputs
   let autoPrintCall =
     if shouldAutoPrintMain outputs.doEntryOutcome coreD modsD then
       lookupAssoc "println" preludeSchemes
@@ -393,7 +388,6 @@ analyzeProgramReport inputs valueMain executes rtD coreD modsD =
       eaElab = elaborated,
       eaTarget = TargetInputs {
         tiSchemes = pubSchemes ownPub ++ preludeSchemes,
-        tiOps = ops,
         tiEntryDecls = entryModuleDecls modsD,
         tiAutoPrintCall = autoPrintCall,
         tiCore = coreD,
@@ -436,21 +430,17 @@ policyVerdict : List (String, EffParamTy) ->
   PolicyOutcome
 policyVerdict policy analysis fnName =
   let schemes = analysis.eaTarget.tiSchemes
-  -- Existence is checked against the complete scheme list, not effTable:
-  -- fnEffectsTable deliberately omits verified-pure bindings, so using it as
-  -- a name index would reject a real pure entry exactly like an absent one.
-  match lookupAssoc fnName schemes
-    None => PolicyReject "rejected. no '\{fnName}' entry found\n"
-    Some fnScheme =>
-      let fnEffects = invocationSummary analysis.eaTarget.tiOps fnScheme
+  match (lookupAssoc fnName schemes, hostManifest analysis fnName)
+    (Some fnScheme, Ok manifest) =>
+      let fnEffects = manifest.atoms
       let outputs = analysis.eaTarget.tiOutputs
-      match policyRefusals outputs.doEffectDomains fnEffects policy
+      match manifestAllowed outputs.doEffectDomains manifest policy
         PolicyAdmitted =>
           let effStr =
             if listIsEmpty fnEffects then
               "pure"
             else
-              "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
+              "<" ++ joinWith ", " (map frozenAtomText fnEffects) ++ ">"
           let header = "accepted. \{fnName} requires only \{effStr}\n"
           -- The sample is a String; only an entry taking and returning one is
           -- run.  It stays a thunk so the verdict prints first.
@@ -469,9 +459,12 @@ policyVerdict policy analysis fnName =
           let effTable = fnEffectsTable schemes
           let chain = viaChain callGraph effTable fnName (firstOf forbidden)
           let header =
-            "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
+            "rejected. \{fnName} requires <\{joinWith ", " (map frozenAtomText fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
           let via = "   reached via: " ++ joinWith " → " chain ++ "\n"
           PolicyReject (header ++ via ++ stringConcat lines)
+
+    (_, Err message) => PolicyReject ("rejected. " ++ message ++ "\n")
+    (None, _) => PolicyReject "rejected. no '\{fnName}' entry found\n"
 
 takesAndReturnsString : Scheme -> Bool
 takesAndReturnsString (Forall _ _ _ _ _ mono) = match normalize mono
@@ -635,10 +628,135 @@ public export data ManifestArgs = ManifestArgs (Option String) String
 export
 runManifest : EntryAnalysis -> String -> Result String String
 runManifest analysis fnName =
-  match lookupAssoc fnName analysis.eaTarget.tiSchemes
-    None => Err "no '\{fnName}' entry found"
-    Some sch =>
-      Ok (manifestToml (invocationSummary analysis.eaTarget.tiOps sch))
+  map frozenManifestToml (hostManifest analysis fnName)
+
+hostManifest : EntryAnalysis -> String -> Result String CapabilityManifest
+hostManifest analysis name =
+  let outputs = analysis.eaTarget.tiOutputs
+  let selected =
+    filter
+      (r =>
+        r.entry.binding == name
+          && (match r.protocol
+            HostInvocation => True
+            ExecutedMain => False))
+      outputs.doManifestRequests
+  match selected
+    [request] =>
+      match (lookupManifest
+        request
+        outputs.doManifestRequests
+        outputs.doManifests)
+        Published manifest => Ok manifest
+        _ => Err "missing checked manifest for '\{name}'"
+    [] => Err "no '\{name}' entry requested"
+    _ => Err "ambiguous checked manifest for '\{name}'"
+
+frozenManifestToml : CapabilityManifest -> String
+frozenManifestToml manifest =
+  let labels = fold indexFrozenLabel Tip manifest.atoms
+  let key a =
+    if snd
+      (optionOr
+        ("", False)
+        (FV.get (a : FrozenAtom).label labels)) then match a.origin
+      OriginModule mid => tomlQuote "\{mid}.\{a.label}"
+      _ => a.label
+    else
+      a.label
+  "[package.capabilities]\n"
+    ++ joinTomlLines (map (frozenAtomToml key) manifest.atoms)
+
+indexFrozenLabel : Map String (String, Bool) ->
+  FrozenAtom ->
+  Map String (String, Bool)
+indexFrozenLabel labels atom =
+  let origin = frozenOrigin atom.origin
+  let (first, collision) = optionOr (origin, False) (FV.get atom.label labels)
+  FV.set atom.label (first, collision || first /= origin) labels
+
+frozenOrigin : TyConOrigin -> String
+frozenOrigin (OriginModule mid) = "module:" ++ mid
+frozenOrigin OriginBuiltin = "builtin"
+frozenOrigin OriginUnresolved = "unresolved"
+
+frozenAtomToml : (FrozenAtom -> String) -> FrozenAtom -> String
+frozenAtomToml key a =
+  let label = key a
+  match frozenConsts a.authority
+    Some ps if anyList pathClimbs ps => label ++ " = true"
+    Some [p] => "\{label} = \{paramToml p}"
+    Some (ps@(_ :: _ :: _)) =>
+      "\{label} = [\{joinWith ", " (map paramToml ps)}]"
+    _ => match FV.values (frozenVars a.authority Tip)
+      [] => label ++ " = true"
+      vars => "\{label} = true  # unresolved: \{frozenVariablesWhy vars}"
+
+frozenConsts : FrozenAuthority -> Option (List Param)
+frozenConsts (FrozenConst p) = Some [p]
+frozenConsts (FrozenJoin members) =
+  map (flatMap identity) (frozenConstantMembers members)
+frozenConsts _ = None
+
+frozenConstantMembers : List FrozenAuthority -> Option (List (List Param))
+frozenConstantMembers [] = Some []
+frozenConstantMembers (member :: rest) = do
+  ps <- frozenConsts member
+  more <- frozenConstantMembers rest
+  Some (ps :: more)
+
+frozenVarName : FrozenVariable -> String
+frozenVarName v = optionOr ("k" ++ intToString v.localId) v.sourceName
+
+frozenVars : FrozenAuthority -> Map Int FrozenVariable -> Map Int FrozenVariable
+frozenVars (FrozenVar v) vars = FV.set v.localId v vars
+frozenVars (FrozenJoin members) vars =
+  fold (acc a => frozenVars a acc) vars members
+frozenVars (FrozenProduct axes) vars =
+  fold (acc a => frozenVars (snd a) acc) vars axes
+frozenVars _ vars = vars
+
+frozenVariablesWhy : List FrozenVariable -> String
+frozenVariablesWhy vars = match map (v => "`" ++ frozenVarName v ++ "`") vars
+  [one] => "authority variable \{one}"
+  names => "authority variables \{joinWith ", " names}"
+
+export
+frozenAtomText : FrozenAtom -> String
+frozenAtomText atom = match atom.authority
+  FrozenJoin [] => atom.label ++ " {}"
+  FrozenJoin members =>
+    joinWith ", " (map (a => atom.label ++ frozenAuthorityText a) members)
+  authority => atom.label ++ frozenAuthorityText authority
+
+frozenAuthorityText : FrozenAuthority -> String
+frozenAuthorityText (FrozenConst p) = drender p
+frozenAuthorityText (FrozenVar v) = " " ++ frozenVarName v
+frozenAuthorityText (FrozenJoin []) = " {}"
+frozenAuthorityText (FrozenJoin members) =
+  " ("
+    ++ joinWith " | " (map (a => trimLeft (frozenAuthorityText a)) members)
+    ++ ")"
+frozenAuthorityText (FrozenProduct axes) =
+  " "
+    ++ joinWith
+      " "
+      (map
+        (a => "\{fst a}=\{frozenAxisText (snd a)}")
+        (filter
+          (a => match snd a
+            FrozenConst p => not (isSubTop p)
+            _ => True)
+          axes))
+
+frozenAxisText : FrozenAuthority -> String
+frozenAxisText (FrozenConst p) = renderAxisVal p
+frozenAxisText (FrozenVar v) = frozenVarName v
+frozenAxisText (FrozenJoin []) = "{}"
+frozenAxisText (FrozenJoin members) =
+  "(" ++ joinWith " | " (map frozenAxisText members) ++ ")"
+frozenAxisText authority =
+  "(" ++ trimLeft (frozenAuthorityText authority) ++ ")"
 
 -- Render the manifest as --allow tokens for round-trip through check-policy.
 -- PPrefix (Some s) → "Label=s"

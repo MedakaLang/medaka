@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
 import types.extern_source.{externSourceHeadRows}
 -- MULTI-MODULE WasmGC emit driver (slice W9) — the WasmGC peer of
@@ -78,13 +79,14 @@ main = driveEmitLocated emitTail
 
 -- Build the explicit WasmGC input and emit an already-elaborated program.
 emitTail : List (String, String, List Decl) ->
+  ManifestRequirement ->
   DriveOutputs ->
   ProgramFacts ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-emitTail mods outputs facts runtimeDecls coreD modules1 =
+emitTail mods requirement outputs facts runtimeDecls coreD modules1 =
   let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
@@ -97,6 +99,7 @@ emitTail mods outputs facts runtimeDecls coreD modules1 =
       (externSourceHeadRows (optionOr [] facts.pfExternSources))
   let input =
     makeWasmEmitInput
+      requirement
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
   let lowered = lowerProgramEmitWith facts allDecls

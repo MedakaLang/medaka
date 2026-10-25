@@ -7,23 +7,38 @@ import test.{
   expectEach, expectEqual, expectFalse, expectGreaterThan, expectSatisfies,
   expectTrue, fail
 }
+import frontend.ast.{Decl}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import list.{filter}
+import list.{filter, drop}
 import support.ordmap.{omHasKey}
 import types.module_interface.{
   ModuleInterface(..), FrozenExport(..), ModuleKey(..), applyModuleInterface,
-  currentModuleInterfaces
+  currentModuleInterfaces, retainModuleInterfaces
 }
 import types.module_interface_test_support.{
   bareDrive, chainDrive, entrySrc, keyedDrive, leafSrc, render, renderRow
 }
-import types.publish.{ModDiags, PubScheme(..), ppPubScheme}
+import types.publish.{ModDiags, PubScheme(..), ppPubScheme, TcReport(..)}
+import types.capability_manifest.{
+  CapabilityManifest, ManifestSelector(..), EntryKey(..), InvocationProtocol(..)
+}
+import types.interface_sexp.{invocationViewSExp}
+import support.sexp_value.{renderSExp}
+import types.invocation_basis.{readInvocationView}
+import types.repr.{Mono(..), Tyvar(..)}
+import frontend.ast.{TyConOrigin(..)}
+extern allocBytes : Unit -> <IO> Float
+import string as S
 import types.repr.{ppSchemeCon, Scheme(..)}
 import types.tc_types.{
-  DriveOutputs(..), ExportBinding(..), GraphCtx(..), CrossRun(..)
+  DriveOutputs(..), DriveInputs(..), ExportBinding(..), GraphCtx(..),
+  CrossRun(..), InvocationView(..), PublishedInvocationView(..)
 }
-import types.typecheck.{defaultDriveInputs, checkModules}
+import types.typecheck.{
+  defaultDriveInputs, checkModules, checkModulesChainReportFor,
+  elaborateModulesWithReport
+}
 import support.util.{joinNl}
 
 -- ── fixtures ────────────────────────────────────────────────────────────────
@@ -273,3 +288,135 @@ test "a module whose live root is open records nothing; it and its importers are
         ),
       ]
     _ => fail "could not read the prelude pair"
+
+export
+ownerSelectors : List ManifestSelector
+ownerSelectors = [
+  ExactEntry
+    EntryKey { moduleId = "basis_dep", binding = "make" }
+    HostInvocation,
+  ExactEntry
+    EntryKey { moduleId = "basis_entry", binding = "main" }
+    HostInvocation,
+]
+
+export
+ownerDrive : List ManifestSelector -> (TcReport, DriveOutputs)
+ownerDrive selectors =
+  checkModulesChainReportFor
+    { defaultDriveInputs | diManifestRequests = selectors }
+    False
+    (Some (4681, 4682))
+    "basis-owner"
+    [Some "basis-dep-source", None]
+    []
+    []
+    ownerModules
+
+ownerModules : List (String, List Decl)
+ownerModules = [
+  (
+    "basis_dep",
+    desugar
+      (parseLocated
+        """effect Clock
+export data Box = Box (Unit -> <Clock> Unit)
+export data Pair a = Pair a
+tick : Unit -> <Clock> Unit
+tick _ = ()
+export make = Box tick
+"""),
+  ),
+  (
+    "basis_entry",
+    desugar (parseLocated """import basis_dep.{Box, make}
+main = make
+"""),
+  ),
+]
+
+export
+ownerAtoms : DriveOutputs -> List (String, List String)
+ownerAtoms outputs =
+  map
+    (m => (
+      (m : CapabilityManifest).request.entry.moduleId,
+      map (a => a.label) m.atoms,
+    ))
+    outputs.doManifests
+
+test "recording without requests retains the exact owner for a later served request" =
+  let (_, cold) = ownerDrive []
+  let (warmReport, warm) = ownerDrive ownerSelectors
+  let (_, again) = ownerDrive (drop 1 ownerSelectors)
+  let (_, trees, treeOut) =
+    elaborateModulesWithReport
+      { defaultDriveInputs | diManifestRequests = ownerSelectors }
+      False
+      None
+      []
+      []
+      ownerModules
+  expectEach [
+    ("cold serves zero", expectEqual 0 cold.doServedModules),
+    ("cold publishes nothing", expectEqual [] (ownerAtoms cold)),
+    ("warm serves owner", expectEqual 1 warm.doServedModules),
+    ("warm checks", expectTrue (isSome warmReport.trChecked)),
+    (
+      "warm owner and importer",
+      expectEqual
+        [("basis_dep", ["Clock"]), ("basis_entry", [])]
+        (ownerAtoms warm),
+    ),
+    ("changed request still serves", expectEqual 1 again.doServedModules),
+    (
+      "changed request only",
+      expectEqual [("basis_entry", [])] (ownerAtoms again),
+    ),
+    ("tree checks", expectTrue (isSome trees.trChecked)),
+    ("tree serves no diagnostic tree", expectEqual 0 treeOut.doServedModules),
+    (
+      "tree owner and importer",
+      expectEqual (ownerAtoms warm) (ownerAtoms treeOut),
+    ),
+  ]
+
+test "reading an owning basis copies constructor cells and teardown drops retained data" =
+  let start = allocBytes ()
+  let _ = ownerDrive []
+  let coldBytes = allocBytes () - start
+  match interfaceOf "basis_dep"
+    None => fail "owner interface missing"
+    Some mi =>
+      let encoded = renderSExp (invocationViewSExp mi.miInvocationView)
+      let (InvocationView ctors _ _) = readInvocationView mi.miInvocationView
+      let changed =
+        fold
+          (n sc => match sc
+            Forall _ _ _ _ _ (TFun (TVar cell) _ _) =>
+              cell := Link (TCon "Bool" OriginBuiltin)
+              n + 1
+            _ => n)
+          0
+          ctors
+      let (PublishedInvocationView frozen _ _) = mi.miInvocationView
+      let warmStart = allocBytes ()
+      let (_, warm) = ownerDrive ownerSelectors
+      let warmBytes = allocBytes () - warmStart
+      let afterRead = renderSExp (invocationViewSExp mi.miInvocationView)
+      let _ = bareDrive 4683 "basis-unrelated" [("unrelated", "main = ()")]
+      let _ = retainModuleInterfaces []
+      let remaining = map (i => i.miKey.mkModule) (currentModuleInterfaces ())
+      println
+        "owner basis receipt: schemes=\{length frozen} bytes=\{S.length encoded} coldAlloc=\{coldBytes} warmAlloc=\{warmBytes} retainedAfterTeardown=\{length remaining}"
+      expectEach [
+        ("copied constructor exercised", expectGreaterThan 0 changed),
+        ("basis detached", expectEqual encoded afterRead),
+        (
+          "replay after mutation",
+          expectEqual
+            [("basis_dep", ["Clock"]), ("basis_entry", [])]
+            (ownerAtoms warm),
+        ),
+        ("teardown", expectEqual [] remaining),
+      ]

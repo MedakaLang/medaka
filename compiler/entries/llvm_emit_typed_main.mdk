@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import types.extern_source.{externSourceHeadRows}
 import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- TYPED driver for the Stage 2.4 LLVM de-risking spike (slice 6 — typeclass
@@ -90,7 +91,7 @@ emitIsolation runtimePath pPath pPlusUPath =
 -- `main` is stamped, as every lowered binder is, so the emitter reaches the node.
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
-  let input = makeEmitInput PreludeFreeRuntime [] [] 0 [] [] ""
+  let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
   let mainId = BinderId "" 0
   let cp =
     CProgram
@@ -105,6 +106,7 @@ emitGapIsolation =
         factSupers = [],
         factEntryOutcome = None,
         factExterns = noDeclFacts.factExterns,
+        factManifests = [],
         factBinders = [
           BinderRow {
             brId = mainId,
@@ -150,6 +152,7 @@ runEmit runtimeDecls preludeDecls userDecls =
       (externSourceHeadRows (optionOr [] externFacts.pfExternSources))
   let input =
     makeEmitInput
+      RawUnchecked
       (runtimeDomain (externDecls runtimeDecls))
       (methodIfaceTable mangled)
       (ctorFieldTypeNames mangled)

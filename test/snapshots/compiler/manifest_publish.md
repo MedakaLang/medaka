@@ -1,0 +1,199 @@
+# META
+source_lines=141
+stages=DESUGAR,MARK
+# SOURCE
+-- This is the only bridge from checked authority cells to capability data.
+import types.capability_manifest.{
+  ManifestRequest,
+  InvocationProtocol(..),
+  CapabilityManifest(..),
+  FrozenAtom(..),
+  FrozenAuthority(..),
+  FrozenVariable(..),
+  ManifestDefect(..),
+  validateManifest,
+}
+import types.effect_invocation.{InvocationOps, invocationSummary}
+import types.repr.{Scheme}
+import types.effect_authority.{Authority(..), Authvar(..), authNorm, authvarId}
+import types.effect_rows.{Atom(..), EffLabel(..), atomsUnion}
+import types.effect_param_decode.{dtopIn}
+import types.effect_domain.{Param}
+import list.{mapAccumL}
+import map as M
+import map.{Map(..)}
+
+-- Public module ids can name both a user module and the shipped prelude.
+-- This owner exists only while checked schemes are being summarized.
+-- lint-disable-next-line rule-clone-type
+public export data InvocationOwner =
+  | SourceModule String
+  | ShippedPrelude
+  deriving (Eq, Ord, Debug)
+
+public export data ManifestEntryInput = ManifestEntryInput {
+  request : ManifestRequest,
+  owner : InvocationOwner,
+  scheme : Scheme,
+  wrappers : List (InvocationOwner, Scheme),
+}
+
+export
+publishManifests : List (String, Param) ->
+  (InvocationOwner -> Option InvocationOps) ->
+  List ManifestEntryInput ->
+  Result (List ManifestDefect) (List CapabilityManifest)
+publishManifests domains resolveOps inputs =
+  let defects =
+    flatMap
+      ((ManifestEntryInput request owner _ wrappers) =>
+        let owners =
+          owner
+            :: (match request.protocol
+              HostInvocation => []
+              ExecutedMain => map fst wrappers)
+        flatMap
+          (owner => match resolveOps owner
+            Some _ => []
+            None => [
+              ManifestDefect
+                ("no checked invocation view for "
+                  ++ (match owner
+                    SourceModule mid => "module '" ++ mid
+                    ShippedPrelude => "shipped prelude 'core")
+                  ++ "'"),
+            ])
+          owners)
+      inputs
+  if not (isEmpty defects) then
+    Err defects
+  else
+    let summary owner scheme = match resolveOps owner
+      Some ops => invocationSummary ops scheme
+      None => panic "validated invocation owner is missing"
+    let (_, manifests) =
+      mapAccumL
+        (state (ManifestEntryInput request owner scheme wrappers) =>
+          let atoms = summary owner scheme
+          let charged = match request.protocol
+            HostInvocation => atoms
+            ExecutedMain =>
+              fold
+                (acc (key, scheme) => atomsUnion acc (summary key scheme))
+                atoms
+                wrappers
+          let (more, frozen) = freezeAtomsWith domains state charged
+          (
+            more,
+            CapabilityManifest { request = request, atoms = frozen },
+          ))
+        Tip
+        inputs
+    match flatMap validateManifest manifests
+      [] => Ok manifests
+      invalid => Err invalid
+
+-- Compatibility callers freeze their atom batch with the same identity rules.
+export
+freezeAtoms : List (String, Param) -> List Atom -> List FrozenAtom
+freezeAtoms domains atoms = snd (freezeAtomsWith domains Tip atoms)
+
+freezeAtomsWith : List (String, Param) ->
+  Map Int FrozenVariable ->
+  List Atom ->
+  (Map Int FrozenVariable, List FrozenAtom)
+freezeAtomsWith domains = mapAccumL
+  (state (Atom (EffLabel label origin) authority) =>
+    let (more, frozen) = freezeAuthority state (authNorm authority)
+    (
+      more,
+      FrozenAtom {
+        label = label,
+        origin = origin,
+        domainTop = dtopIn domains (EffLabel label origin),
+        authority = frozen,
+      },
+    ))
+
+freezeAuthority : Map Int FrozenVariable ->
+  Authority ->
+  (Map Int FrozenVariable, FrozenAuthority)
+freezeAuthority state (AConst p) = (state, FrozenConst p)
+freezeAuthority state (AJoin members) =
+  let (more, frozen) = mapAccumL freezeAuthority state members
+  (more, FrozenJoin frozen)
+freezeAuthority state (AProduct axes) =
+  let (more, frozen) =
+    mapAccumL
+      (s (name, authority) =>
+        let (next, value) = freezeAuthority s authority
+        (next, (name, value)))
+      state
+      axes
+  (more, FrozenProduct frozen)
+freezeAuthority state (AVar cell) = match !cell
+  ALink _ _ target => freezeAuthority state (authNorm target)
+  AUnbound _ _ top pattern name => match M.get (authvarId cell) state
+    Some variable => (state, FrozenVar variable)
+    None =>
+      let variable = FrozenVariable {
+        localId = M.size state,
+        domainTop = top,
+        patternOnly = pattern,
+        sourceName = name,
+      }
+      (M.set (authvarId cell) variable state, FrozenVar variable)
+# DESUGAR
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequest" false) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true) (mem "ManifestDefect" true) (mem "validateManifest" false))))
+(DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" false) (mem "invocationSummary" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authNorm" false) (mem "authvarId" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "atomsUnion" false))))
+(DUse false (UseGroup ("types" "effect_param_decode") ((mem "dtopIn" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
+(DUse false (UseGroup ("list") ((mem "mapAccumL" false))))
+(DUse false (UseAlias ("map") "M"))
+(DUse false (UseGroup ("map") ((mem "Map" true))))
+(DData Public "InvocationOwner" () ((variant "SourceModule" (ConPos (TyCon "String"))) (variant "ShippedPrelude" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "InvocationOwner")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "SourceModule" (PVar "__a0")) (PCon "SourceModule" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "ShippedPrelude") (PCon "ShippedPrelude")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Ord" ((TyCon "InvocationOwner")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "SourceModule" (PVar "__a0")) (PCon "SourceModule" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "SourceModule" (PVar "__a0")) (PCon "ShippedPrelude")) () (EVar "Lt")) (arm (PTuple (PCon "ShippedPrelude") (PCon "SourceModule" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "ShippedPrelude") (PCon "ShippedPrelude")) () (EVar "Eq"))))))
+(DImpl true "Debug" ((TyCon "InvocationOwner")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SourceModule" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SourceModule ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "ShippedPrelude") () (ELit (LString "ShippedPrelude")))))))
+(DData Public "ManifestEntryInput" () ((variant "ManifestEntryInput" (ConNamed (field "request" (TyCon "ManifestRequest")) (field "owner" (TyCon "InvocationOwner")) (field "scheme" (TyCon "Scheme")) (field "wrappers" (TyApp (TyCon "List") (TyTuple (TyCon "InvocationOwner") (TyCon "Scheme"))))))) ())
+(DTypeSig true "publishManifests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyFun (TyCon "InvocationOwner") (TyApp (TyCon "Option") (TyCon "InvocationOps"))) (TyFun (TyApp (TyCon "List") (TyCon "ManifestEntryInput")) (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "ManifestDefect"))) (TyApp (TyCon "List") (TyCon "CapabilityManifest")))))))
+(DFunDef false "publishManifests" ((PVar "domains") (PVar "resolveOps") (PVar "inputs")) (EBlock (DoLet false false (PVar "defects") (EApp (EApp (EVar "flatMap") (ELam ((PCon "ManifestEntryInput" (PVar "request") (PVar "owner") PWild (PVar "wrappers"))) (EBlock (DoLet false false (PVar "owners") (EBinOp "::" (EVar "owner") (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EListLit)) (arm (PCon "ExecutedMain") () (EApp (EApp (EVar "map") (EVar "fst")) (EVar "wrappers")))))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "owner")) (EMatch (EApp (EVar "resolveOps") (EVar "owner")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EListLit (EApp (EVar "ManifestDefect") (EBinOp "++" (EBinOp "++" (ELit (LString "no checked invocation view for ")) (EMatch (EVar "owner") (arm (PCon "SourceModule" (PVar "mid")) () (EBinOp "++" (ELit (LString "module '")) (EVar "mid"))) (arm (PCon "ShippedPrelude") () (ELit (LString "shipped prelude 'core"))))) (ELit (LString "'"))))))))) (EVar "owners")))))) (EVar "inputs"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "isEmpty") (EVar "defects"))) (EApp (EVar "Err") (EVar "defects")) (EBlock (DoLet false true (PVar "summary") (ELam ((PVar "owner")) (ELam ((PVar "scheme")) (EMatch (EApp (EVar "resolveOps") (EVar "owner")) (arm (PCon "Some" (PVar "ops")) () (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EVar "scheme"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "validated invocation owner is missing")))))))) (DoLet false false (PTuple PWild (PVar "manifests")) (EApp (EApp (EApp (EVar "mapAccumL") (ELam ((PVar "state") (PCon "ManifestEntryInput" (PVar "request") (PVar "owner") (PVar "scheme") (PVar "wrappers"))) (EBlock (DoLet false false (PVar "atoms") (EApp (EApp (EVar "summary") (EVar "owner")) (EVar "scheme"))) (DoLet false false (PVar "charged") (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EVar "atoms")) (arm (PCon "ExecutedMain") () (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "key") (PVar "scheme"))) (EApp (EApp (EVar "atomsUnion") (EVar "acc")) (EApp (EApp (EVar "summary") (EVar "key")) (EVar "scheme"))))) (EVar "atoms")) (EVar "wrappers"))))) (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EApp (EVar "freezeAtomsWith") (EVar "domains")) (EVar "state")) (EVar "charged"))) (DoExpr (ETuple (EVar "more") (ERecordCreate "CapabilityManifest" ((fa "request" (EVar "request")) (fa "atoms" (EVar "frozen"))))))))) (EVar "Tip")) (EVar "inputs"))) (DoExpr (EMatch (EApp (EApp (EVar "flatMap") (EVar "validateManifest")) (EVar "manifests")) (arm (PList) () (EApp (EVar "Ok") (EVar "manifests"))) (arm (PVar "invalid") () (EApp (EVar "Err") (EVar "invalid"))))))))))
+(DTypeSig true "freezeAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "FrozenAtom")))))
+(DFunDef false "freezeAtoms" ((PVar "domains") (PVar "atoms")) (EApp (EVar "snd") (EApp (EApp (EApp (EVar "freezeAtomsWith") (EVar "domains")) (EVar "Tip")) (EVar "atoms"))))
+(DTypeSig false "freezeAtomsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyTuple (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyApp (TyCon "List") (TyCon "FrozenAtom")))))))
+(DFunDef false "freezeAtomsWith" ((PVar "domains")) (EApp (EVar "mapAccumL") (ELam ((PVar "state") (PCon "Atom" (PCon "EffLabel" (PVar "label") (PVar "origin")) (PVar "authority"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EVar "freezeAuthority") (EVar "state")) (EApp (EVar "authNorm") (EVar "authority")))) (DoExpr (ETuple (EVar "more") (ERecordCreate "FrozenAtom" ((fa "label" (EVar "label")) (fa "origin" (EVar "origin")) (fa "domainTop" (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EVar "label")) (EVar "origin")))) (fa "authority" (EVar "frozen"))))))))))
+(DTypeSig false "freezeAuthority" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyFun (TyCon "Authority") (TyTuple (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyCon "FrozenAuthority")))))
+(DFunDef false "freezeAuthority" ((PVar "state") (PCon "AConst" (PVar "p"))) (ETuple (EVar "state") (EApp (EVar "FrozenConst") (EVar "p"))))
+(DFunDef false "freezeAuthority" ((PVar "state") (PCon "AJoin" (PVar "members"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EApp (EVar "mapAccumL") (EVar "freezeAuthority")) (EVar "state")) (EVar "members"))) (DoExpr (ETuple (EVar "more") (EApp (EVar "FrozenJoin") (EVar "frozen"))))))
+(DFunDef false "freezeAuthority" ((PVar "state") (PCon "AProduct" (PVar "axes"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EApp (EVar "mapAccumL") (ELam ((PVar "s") (PTuple (PVar "name") (PVar "authority"))) (EBlock (DoLet false false (PTuple (PVar "next") (PVar "value")) (EApp (EApp (EVar "freezeAuthority") (EVar "s")) (EVar "authority"))) (DoExpr (ETuple (EVar "next") (ETuple (EVar "name") (EVar "value"))))))) (EVar "state")) (EVar "axes"))) (DoExpr (ETuple (EVar "more") (EApp (EVar "FrozenProduct") (EVar "frozen"))))))
+(DFunDef false "freezeAuthority" ((PVar "state") (PCon "AVar" (PVar "cell"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild PWild (PVar "target")) () (EApp (EApp (EVar "freezeAuthority") (EVar "state")) (EApp (EVar "authNorm") (EVar "target")))) (arm (PCon "AUnbound" PWild PWild (PVar "top") (PVar "pattern") (PVar "name")) () (EMatch (EApp (EApp (EVar "M.get") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "state")) (arm (PCon "Some" (PVar "variable")) () (ETuple (EVar "state") (EApp (EVar "FrozenVar") (EVar "variable")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "variable") (ERecordCreate "FrozenVariable" ((fa "localId" (EApp (EVar "M.size") (EVar "state"))) (fa "domainTop" (EVar "top")) (fa "patternOnly" (EVar "pattern")) (fa "sourceName" (EVar "name"))))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "M.set") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "variable")) (EVar "state")) (EApp (EVar "FrozenVar") (EVar "variable"))))))))))
+# MARK
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequest" false) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true) (mem "ManifestDefect" true) (mem "validateManifest" false))))
+(DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" false) (mem "invocationSummary" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authNorm" false) (mem "authvarId" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "atomsUnion" false))))
+(DUse false (UseGroup ("types" "effect_param_decode") ((mem "dtopIn" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
+(DUse false (UseGroup ("list") ((mem "mapAccumL" false))))
+(DUse false (UseAlias ("map") "M"))
+(DUse false (UseGroup ("map") ((mem "Map" true))))
+(DData Public "InvocationOwner" () ((variant "SourceModule" (ConPos (TyCon "String"))) (variant "ShippedPrelude" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "InvocationOwner")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "SourceModule" (PVar "__a0")) (PCon "SourceModule" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "ShippedPrelude") (PCon "ShippedPrelude")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Ord" ((TyCon "InvocationOwner")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "SourceModule" (PVar "__a0")) (PCon "SourceModule" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "SourceModule" (PVar "__a0")) (PCon "ShippedPrelude")) () (EVar "Lt")) (arm (PTuple (PCon "ShippedPrelude") (PCon "SourceModule" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "ShippedPrelude") (PCon "ShippedPrelude")) () (EVar "Eq"))))))
+(DImpl true "Debug" ((TyCon "InvocationOwner")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SourceModule" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SourceModule ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "ShippedPrelude") () (ELit (LString "ShippedPrelude")))))))
+(DData Public "ManifestEntryInput" () ((variant "ManifestEntryInput" (ConNamed (field "request" (TyCon "ManifestRequest")) (field "owner" (TyCon "InvocationOwner")) (field "scheme" (TyCon "Scheme")) (field "wrappers" (TyApp (TyCon "List") (TyTuple (TyCon "InvocationOwner") (TyCon "Scheme"))))))) ())
+(DTypeSig true "publishManifests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyFun (TyCon "InvocationOwner") (TyApp (TyCon "Option") (TyCon "InvocationOps"))) (TyFun (TyApp (TyCon "List") (TyCon "ManifestEntryInput")) (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "ManifestDefect"))) (TyApp (TyCon "List") (TyCon "CapabilityManifest")))))))
+(DFunDef false "publishManifests" ((PVar "domains") (PVar "resolveOps") (PVar "inputs")) (EBlock (DoLet false false (PVar "defects") (EApp (EApp (EDictApp "flatMap") (ELam ((PCon "ManifestEntryInput" (PVar "request") (PVar "owner") PWild (PVar "wrappers"))) (EBlock (DoLet false false (PVar "owners") (EBinOp "::" (EVar "owner") (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EListLit)) (arm (PCon "ExecutedMain") () (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "wrappers")))))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "owner")) (EMatch (EApp (EVar "resolveOps") (EVar "owner")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EListLit (EApp (EVar "ManifestDefect") (EBinOp "++" (EBinOp "++" (ELit (LString "no checked invocation view for ")) (EMatch (EVar "owner") (arm (PCon "SourceModule" (PVar "mid")) () (EBinOp "++" (ELit (LString "module '")) (EVar "mid"))) (arm (PCon "ShippedPrelude") () (ELit (LString "shipped prelude 'core"))))) (ELit (LString "'"))))))))) (EVar "owners")))))) (EVar "inputs"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EVar "defects"))) (EApp (EVar "Err") (EVar "defects")) (EBlock (DoLet false true (PVar "summary") (ELam ((PVar "owner")) (ELam ((PVar "scheme")) (EMatch (EApp (EVar "resolveOps") (EVar "owner")) (arm (PCon "Some" (PVar "ops")) () (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EVar "scheme"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "validated invocation owner is missing")))))))) (DoLet false false (PTuple PWild (PVar "manifests")) (EApp (EApp (EApp (EVar "mapAccumL") (ELam ((PVar "state") (PCon "ManifestEntryInput" (PVar "request") (PVar "owner") (PVar "scheme") (PVar "wrappers"))) (EBlock (DoLet false false (PVar "atoms") (EApp (EApp (EVar "summary") (EVar "owner")) (EVar "scheme"))) (DoLet false false (PVar "charged") (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EVar "atoms")) (arm (PCon "ExecutedMain") () (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "key") (PVar "scheme"))) (EApp (EApp (EVar "atomsUnion") (EVar "acc")) (EApp (EApp (EVar "summary") (EVar "key")) (EVar "scheme"))))) (EVar "atoms")) (EVar "wrappers"))))) (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EApp (EVar "freezeAtomsWith") (EVar "domains")) (EVar "state")) (EVar "charged"))) (DoExpr (ETuple (EVar "more") (ERecordCreate "CapabilityManifest" ((fa "request" (EVar "request")) (fa "atoms" (EVar "frozen"))))))))) (EVar "Tip")) (EVar "inputs"))) (DoExpr (EMatch (EApp (EApp (EDictApp "flatMap") (EVar "validateManifest")) (EVar "manifests")) (arm (PList) () (EApp (EVar "Ok") (EVar "manifests"))) (arm (PVar "invalid") () (EApp (EVar "Err") (EVar "invalid"))))))))))
+(DTypeSig true "freezeAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "FrozenAtom")))))
+(DFunDef false "freezeAtoms" ((PVar "domains") (PVar "atoms")) (EApp (EVar "snd") (EApp (EApp (EApp (EVar "freezeAtomsWith") (EVar "domains")) (EVar "Tip")) (EVar "atoms"))))
+(DTypeSig false "freezeAtomsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyTuple (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyApp (TyCon "List") (TyCon "FrozenAtom")))))))
+(DFunDef false "freezeAtomsWith" ((PVar "domains")) (EApp (EVar "mapAccumL") (ELam ((PVar "state") (PCon "Atom" (PCon "EffLabel" (PVar "label") (PVar "origin")) (PVar "authority"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EVar "freezeAuthority") (EVar "state")) (EApp (EVar "authNorm") (EVar "authority")))) (DoExpr (ETuple (EVar "more") (ERecordCreate "FrozenAtom" ((fa "label" (EVar "label")) (fa "origin" (EVar "origin")) (fa "domainTop" (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EVar "label")) (EVar "origin")))) (fa "authority" (EVar "frozen"))))))))))
+(DTypeSig false "freezeAuthority" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyFun (TyCon "Authority") (TyTuple (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyCon "FrozenAuthority")))))
+(DFunDef false "freezeAuthority" ((PVar "state") (PCon "AConst" (PVar "p"))) (ETuple (EVar "state") (EApp (EVar "FrozenConst") (EVar "p"))))
+(DFunDef false "freezeAuthority" ((PVar "state") (PCon "AJoin" (PVar "members"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EApp (EVar "mapAccumL") (EVar "freezeAuthority")) (EVar "state")) (EVar "members"))) (DoExpr (ETuple (EVar "more") (EApp (EVar "FrozenJoin") (EVar "frozen"))))))
+(DFunDef false "freezeAuthority" ((PVar "state") (PCon "AProduct" (PVar "axes"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EApp (EVar "mapAccumL") (ELam ((PVar "s") (PTuple (PVar "name") (PVar "authority"))) (EBlock (DoLet false false (PTuple (PVar "next") (PVar "value")) (EApp (EApp (EVar "freezeAuthority") (EVar "s")) (EVar "authority"))) (DoExpr (ETuple (EVar "next") (ETuple (EVar "name") (EVar "value"))))))) (EVar "state")) (EVar "axes"))) (DoExpr (ETuple (EVar "more") (EApp (EVar "FrozenProduct") (EVar "frozen"))))))
+(DFunDef false "freezeAuthority" ((PVar "state") (PCon "AVar" (PVar "cell"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild PWild (PVar "target")) () (EApp (EApp (EVar "freezeAuthority") (EVar "state")) (EApp (EVar "authNorm") (EVar "target")))) (arm (PCon "AUnbound" PWild PWild (PVar "top") (PVar "pattern") (PVar "name")) () (EMatch (EApp (EApp (EVar "M.get") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "state")) (arm (PCon "Some" (PVar "variable")) () (ETuple (EVar "state") (EApp (EVar "FrozenVar") (EVar "variable")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "variable") (ERecordCreate "FrozenVariable" ((fa "localId" (EApp (EVar "M.size") (EVar "state"))) (fa "domainTop" (EVar "top")) (fa "patternOnly" (EVar "pattern")) (fa "sourceName" (EVar "name"))))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "M.set") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "variable")) (EVar "state")) (EApp (EVar "FrozenVar") (EVar "variable"))))))))))

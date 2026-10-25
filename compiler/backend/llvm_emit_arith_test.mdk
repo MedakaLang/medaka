@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 -- Arithmetic whose operand arrives through a polymorphic call still has its solved
 -- scalar type at the use site. Native emission must preserve these values while
 -- selecting checked inline Int arithmetic. The constrained generic control keeps
@@ -80,6 +81,7 @@ arithProgram tag =
       factSupers = [],
       factEntryOutcome = None,
       factExterns = noDeclFacts.factExterns,
+      factManifests = [],
       factBinders = [
         BinderRow {
           brId = BinderId "arith" 1,
@@ -116,7 +118,7 @@ arithLlvm : String -> String
 arithLlvm tag =
   let cp = arithProgram tag
   emitProgram
-    (makeEmitInput PreludeFreeRuntime [] [] 0 [] [] "")
+    (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
     (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
     cp
 
@@ -184,7 +186,7 @@ numericLlvm facts impls body =
             [(1, "main"), (2, "raw"), (3, "intToFloat"), (4, "x")],
       }
   emitProgram
-    (makeEmitInput PreludeFreeRuntime [] [] 0 [] [] "")
+    (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
     (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
     cp
 

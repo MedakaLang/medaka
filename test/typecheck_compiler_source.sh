@@ -312,9 +312,13 @@ originun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/ast_codec.mdk
 compiler/frontend/ast_codec_test.mdk
 compiler/frontend/resolve.mdk
+compiler/ir/core_ir_sexp.mdk
+compiler/ir/core_ir_sexp_parse.mdk
+compiler/tools/check_policy.mdk
 compiler/tools/native_props_test.mdk
 compiler/tools/prop_plan.mdk
 compiler/tools/prop_runner_test.mdk
+compiler/types/capability_manifest.mdk
 compiler/types/interface_sexp.mdk
 compiler/types/prelude_elab_test.mdk
 compiler/types/route_key.mdk
@@ -484,6 +488,16 @@ check_origin_observers compiler/tools/native_props_test.mdk \
   'stampDeclOwner (decl@(DData { dataOrigin = OriginUnresolved })) =
 stampDeclOwner (decl@(DNewtype { newtypeOrigin = OriginUnresolved })) =
 stampTy names (ty@(TyCon { tyConName, tyConOrigin = OriginUnresolved })) =' || exit 1
+
+# These sites observe origins or restore their explicit serialized value.
+check_origin_observers compiler/ir/core_ir_sexp.mdk \
+  'OriginUnresolved => "unresolved"' || exit 1
+check_origin_observers compiler/ir/core_ir_sexp_parse.mdk \
+  'SAtom "unresolved" => OriginUnresolved' || exit 1
+check_origin_observers compiler/tools/check_policy.mdk \
+  'frozenOrigin OriginUnresolved = "unresolved"' || exit 1
+check_origin_observers compiler/types/capability_manifest.mdk \
+  'OriginUnresolved => "unresolved:"' || exit 1
 
 # The LINE-GRAINED half of the typecheck.mdk entry above (see its comment). The
 # filename allow-list cannot tell the `Mono` layer from the `Ty` layer inside one

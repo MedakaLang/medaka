@@ -161,6 +161,11 @@ public export data ExternFinding =
 
 -- Defects are fatal in every emission mode; target extern findings may instead
 -- be recorded. The first failing validation family keeps its original order.
+import types.capability_manifest.{
+  ManifestRequirement(..), ManifestRequest(..), ManifestDefect(..),
+  CapabilityManifest, requestEqual, entryKeyEqual, validateManifest
+}
+
 public export data CoreDefect = CoreDefect String
 
 public export data EmissionValidation = EmissionValidation {
@@ -175,11 +180,12 @@ coreDefectMessage (CoreDefect message) = message
 export
 validateForEmission : Backend ->
   RuntimeExternDomain ->
+  ManifestRequirement ->
   EmitPlan ->
   CProgram ->
   EmissionValidation
-validateForEmission backend domain plan cp =
-  match emissionDefects backend domain plan cp
+validateForEmission backend domain requirement plan cp =
+  match emissionDefects backend domain requirement plan cp
     [] =>
       let names = match domain
         PreludeFreeRuntime => []
@@ -197,10 +203,11 @@ validateForEmission backend domain plan cp =
 
 emissionDefects : Backend ->
   RuntimeExternDomain ->
+  ManifestRequirement ->
   EmitPlan ->
   CProgram ->
   List CoreDefect
-emissionDefects backend domain plan cp =
+emissionDefects backend domain requirement plan cp =
   if backendName plan.target /= backendName backend then
     [
       CoreDefect
@@ -211,6 +218,7 @@ emissionDefects backend domain plan cp =
     None => match dictTagCollision backend cp
       Some message => [CoreDefect message]
       None => firstShapeDefect [
+        () => validateManifestCarriage requirement plan cp,
         () => validateExternMetadata cp,
         () =>
           validateExternRequirements backend domain cp plan.externRequirements,
@@ -228,6 +236,54 @@ emissionDefects backend domain plan cp =
             ++ validateMethodResults plan cp,
         () => validateTails cp,
       ]
+
+validateManifestCarriage : ManifestRequirement ->
+  EmitPlan ->
+  CProgram ->
+  List String
+validateManifestCarriage requirement plan (CProgram _ _ _ _ _ facts) =
+  let manifests = facts.factManifests
+  let structure =
+    flatMap
+      (m =>
+        map
+          ((ManifestDefect text) => "manifest: " ++ text)
+          (validateManifest m))
+      manifests
+  let expected = match requirement
+    RawUnchecked => []
+    CheckedEntry key protocol =>
+      let request = ManifestRequest { entry = key, protocol = protocol }
+      if any
+        (m => requestEqual request (m : CapabilityManifest).request)
+        manifests then
+        []
+      else if any
+        (m => entryKeyEqual key (m : CapabilityManifest).request.entry)
+        manifests then
+        ["manifest: wrong invocation protocol for checked entry"]
+      else if any
+        (m => (m : CapabilityManifest).request.entry.binding == key.binding)
+        manifests then
+        ["manifest: wrong module for checked entry"]
+      else if any (_ => True) manifests then
+        ["manifest: wrong binding for checked entry"]
+      else
+        ["manifest: missing checked entry manifest"]
+  expected
+    ++ structure
+    ++ (if manifestProjectionEqual
+      (map (m => (m : CapabilityManifest).request) manifests)
+      plan.manifestIndex then
+      []
+    else
+      ["manifest: emit plan projection disagrees with Core"])
+
+manifestProjectionEqual : List ManifestRequest -> List ManifestRequest -> Bool
+manifestProjectionEqual [] [] = True
+manifestProjectionEqual (a :: more) (b :: rest) =
+  requestEqual a b && manifestProjectionEqual more rest
+manifestProjectionEqual _ _ = False
 
 firstShapeDefect : List (Unit -> List String) -> List CoreDefect
 firstShapeDefect [] = []

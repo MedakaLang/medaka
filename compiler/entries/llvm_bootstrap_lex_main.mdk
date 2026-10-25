@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import types.extern_source.{externSourceHeadRows}
 -- BOOTSTRAP (B1) emit driver — the gap-TOLERANT multi-module emitter behind the
 -- FIRST native self-compile slice (test/bootstrap_lex.sh).  It is a near-clone of
@@ -75,6 +76,7 @@ runEmit inputs runtimeDecls coreDecls modules =
       (externSourceHeadRows (optionOr [] externFacts.pfExternSources))
   let input =
     makeEmitInput
+      RawUnchecked
       (runtimeDomain (externDecls runtimeDecls))
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)

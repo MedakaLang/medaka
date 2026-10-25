@@ -8,7 +8,8 @@ import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, viaChain, CallGraph, EffectTable
 }
 import types.effect_rows.{Atom(..), EffLabel(..), atomBuiltin, atomLabel}
-import types.typecheck.{atomOfLabel, ioJoinAtoms}
+import types.effect_param_decode.{atomOfLabel}
+import types.typecheck.{ioJoinAtoms}
 import types.target_profile.{hostLabels}
 import list.{take, sort}
 import support.ordmap.{omEmpty, omFromPairs}
@@ -75,13 +76,19 @@ atomOfLabelLabel l = match atomOfLabel noDomains l
 test "an unresolved authority needs a whole grant" =
   let partial = [("Net", EPLit "a.com/*")]
   expectAll [
-    expectTrue (refused (policyRefusals noDomains [unresolvedNet] partial)),
+    expectTrue
+      (refused
+        (policyRefusals [("Net", PPrefix None)] [unresolvedNet] partial)),
     expectEqual
-      1
-      (length
-        (refusalLines (policyRefusals noDomains [unresolvedNet] partial))),
+      ["   not proven: Net k (authority variable `k`)\n"]
+      (refusalLines
+        (policyRefusals [("Net", PPrefix None)] [unresolvedNet] partial)),
     expectFalse
-      (refused (policyRefusals noDomains [unresolvedNet] [wholeGrant "Net"])),
+      (refused
+        (policyRefusals
+          [("Net", PPrefix None)]
+          [unresolvedNet]
+          [wholeGrant "Net"])),
   ]
 
 callGraph : CallGraph

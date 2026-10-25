@@ -1,3 +1,8 @@
+import types.invocation_basis.{publishInvocationView, frozenInvocationView}
+import types.interface_sexp.{invocationViewSExp}
+import support.sexp_value.{renderSExp}
+import types.invocation_basis.{readInvocationView}
+import types.tc_types.{InvocationView(..)}
 -- Tests for the prelude interface value: freeze and thaw over a hand-built
 -- core pass result, the key comparison, and the one-entry process cache.
 --
@@ -111,6 +116,7 @@ sampleInterface _ =
     g.builtinExternNamesRef.value
     coreRows
     standaloneNames
+    (InvocationView [] [] [])
 
 -- What two interfaces must agree on to count as equal: every field of the
 -- record.  Schemes render with their context; a field whose type has no
@@ -137,6 +143,7 @@ renderInterface pi =
       "tyvar \{pi.piTyvarNext}",
       "effvar \{pi.piEffvarNext}",
       "standalone \{omKeys pi.piStandaloneNames}",
+      renderSExp (invocationViewSExp pi.piInvocationView),
     ]
 
 renderDispatch : ((IfaceRef, String), Int) -> String
@@ -210,6 +217,7 @@ roundTrip pi =
         ))
         (zip bindings.mbSchemes core)))
     pi.piStandaloneNames
+    (readInvocationView pi.piInvocationView)
 
 test "freeze after thaw after freeze renders equal" =
   let pi = sampleInterface ()
@@ -365,3 +373,45 @@ test "a prelude interface hit keeps the externs of a runtime driven before it" =
         (filter
           (n => not (omHasKey n catalog))
           ("zzForeignExternC" :: externNamesOf (fst real)))
+
+test "the owning invocation declaration basis is copied on freeze and read" =
+  let cell = Ref (Unbound 902 1)
+  let original =
+    InvocationView [Forall [] [] [] [] (EffRow [] None) (TVar cell)] [] []
+  let published = publishInvocationView original
+  let detached = readInvocationView published
+  let encoded = renderSExp (invocationViewSExp published)
+  cell := Link (TCon "Int" OriginBuiltin)
+  let _ = graphOf ()
+  let schemeText view = match view
+    InvocationView ctors _ _ =>
+      map (sc => ppPubScheme PubScheme { psScheme = sc, psContext = [] }) ctors
+  let mutate copy = match copy
+    InvocationView [Forall _ _ _ _ _ (TVar c)] _ _ =>
+      c := Link (TCon "Bool" OriginBuiltin)
+    _ => ()
+  let before = schemeText detached
+  let _ = mutate detached
+  expectEach [
+    ("source changed", expectEqual ["Int"] (schemeText original)),
+    (
+      "published scheme is detached",
+      expectEqual before (schemeText (readInvocationView published)),
+    ),
+    (
+      "copy mutation changed only the copy",
+      expectEqual ["Bool"] (schemeText detached),
+    ),
+    (
+      "serialized basis is stable",
+      expectEqual encoded (renderSExp (invocationViewSExp published)),
+    ),
+    (
+      "refreeze is equal",
+      expectEqual
+        encoded
+        (renderSExp
+          (invocationViewSExp
+            (publishInvocationView (readInvocationView published)))),
+    ),
+  ]

@@ -1,3 +1,4 @@
+import types.capability_manifest.{CapabilityManifest}
 -- Several tree-arm drives in one process, some continuing from the prelude's
 -- shipped trees (`stdlib/core.mdke`) and some elaborating core in-process.
 --
@@ -32,6 +33,11 @@ import types.publish.{CheckedProgram(..), TcReport(..)}
 import types.runtime_types.{BinderRow(..), binderRowIn}
 import types.tc_types.{DriveInputs(..)}
 import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
+import types.typecheck.{checkModulesChainReportFor}
+import types.prelude_elab.{seedPreludeElab, preludeElabOf}
+import types.capability_manifest.{
+  ManifestSelector(..), EntryKey(..), InvocationProtocol(..)
+}
 
 userSrc : String
 userSrc = joinNl [
@@ -186,3 +192,73 @@ test "drives continuing from the shipped trees agree with in-process ones" =
               (fold (acc n => min acc n) 1000000 userLocals)),
         ]
       _ => fail "a drive published no checked program"
+
+test "shipped trees retain core's owning abstract constructor basis" =
+  let core =
+    desugarIn
+      "core"
+      (parseLocated
+        "export data Box = Box (Unit -> <Clock> Unit)\nexport make : Box\nmake = Box (_ => ())")
+  let mods = [("entry", desugarIn "entry" (parseLocated "main = make"))]
+  let inputs = { defaultDriveInputs |
+    diManifestRequests = [
+      ExactEntry
+        EntryKey { moduleId = "core", binding = "make" }
+        HostInvocation,
+      ExactEntry
+        EntryKey { moduleId = "entry", binding = "main" }
+        HostInvocation,
+    ],
+  }
+  let (_, cold, _) = elaborateModulesWithReport inputs False None [] core mods
+  let (_, onlyCore, _) =
+    elaborateModulesWithReport defaultDriveInputs False None [] core []
+  let _ =
+    checkModulesChainReportFor
+      defaultDriveInputs
+      False
+      (Some (9980, 9981))
+      "shipped-owner"
+      []
+      []
+      core
+      []
+  match (cold.trChecked, onlyCore.trChecked)
+    (Some c, Some basis) => match basis.cpTrees
+      Some (trees, _) =>
+        let _ =
+          seedPreludeElab
+            (9980, 9981)
+            (preludeElabOf
+              trees
+              basis.cpEvidence
+              (map snd (entries basis.cpBinders)))
+        let available = isSome (preludeElabFor (9980, 9981) core)
+        let (_, warm, _) =
+          elaborateModulesWithReport
+            { inputs | diPreludeKey = Some (9980, 9981) }
+            False
+            None
+            []
+            core
+            mods
+        let labels checked =
+          map
+            (m => (
+              (m : CapabilityManifest).request.entry.moduleId,
+              map (a => a.label) m.atoms,
+            ))
+            checked.cpManifests
+        expectAll [
+          labelFail "shipped carrier available" (expectTrue available),
+          labelFail
+            "cold owners"
+            (expectEqual [("core", ["Clock"]), ("entry", [])] (labels c)),
+          labelFail
+            "shipped owners"
+            (expectEqual
+              (Some [("core", ["Clock"]), ("entry", [])])
+              (map labels warm.trChecked)),
+        ]
+      None => fail "core trees were not published"
+    _ => fail "cold owning-module drive failed"

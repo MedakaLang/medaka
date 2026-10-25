@@ -16,9 +16,7 @@ import frontend.ast.{
   FunClause(..),
   FieldAssign(..),
 }
-import types.effect_authority.{
-  Authority(..), authSub, authVars, authHasVars, authvarDefaultName, authJoinAll
-}
+import types.effect_authority.{authVars, authvarDefaultName}
 import types.effect_rows.{
   effLabelOrigin,
   atomLabelOf,
@@ -31,8 +29,13 @@ import types.effect_rows.{
 }
 import types.repr.{Scheme(..), Mono(..), normalize}
 import types.effect_domain.{Param}
-import types.typecheck.{decodeWrittenParam, atomOfLabel}
-import types.target_profile.{hostLabels}
+import types.capability_manifest.{
+  EntryKey(..), ManifestRequest(..), InvocationProtocol(..),
+  CapabilityManifest(..)
+}
+import types.manifest_publish.{freezeAtoms}
+import types.capability_policy.{manifestAllowed, permitFrozen}
+export import types.capability_policy.{PolicyVerdict(..), Permit(..), allOk}
 import support.util.{
   sortUniqS, joinWith, reverseL, filterList, contains, anyList
 }
@@ -40,115 +43,29 @@ import support.ordmap.{
   OrdMap, omEmpty, omFromPairs, omFromNames, omLookup, omHasKey
 }
 
--- ── the verdict ─────────────────────────────────────────────────────────────
--- Admitted, or refused with the labels of the refused atoms (in atom order) and
--- the report lines that explain them: each malformed entry's problem, then each
--- unresolved authority that a narrower grant could not be proven to cover.
-public export data PolicyVerdict =
-  | PolicyAdmitted
-  | PolicyRefused (List String) (List String)
-
--- The one call: the atoms an entry may perform against a policy, with each
--- label's domain read off [domains] (`doEffectDomains` of the drive that
--- registered them).  The explanation lines are built only on a refusal.
+-- The legacy atom API enters the same cell-free policy judgment.
 export
 policyRefusals : List (String, Param) ->
   List Atom ->
   List (String, EffParamTy) ->
   PolicyVerdict
-policyRefusals domains atoms policy = match filterForbidden domains atoms policy
-  [] => PolicyAdmitted
-  labels =>
-    PolicyRefused
-      labels
-      (policyProblems domains atoms policy
-        ++ notProvenLines domains atoms policy)
+policyRefusals domains atoms policy =
+  manifestAllowed
+    domains
+    CapabilityManifest {
+      request = ManifestRequest {
+        entry = EntryKey { moduleId = "", binding = "legacy" },
+        protocol = HostInvocation,
+      },
+      atoms = freezeAtoms domains atoms,
+    }
+    policy
 
-filterForbidden : List (String, Param) ->
-  List Atom ->
-  List (String, EffParamTy) ->
-  List String
-filterForbidden _ [] _ = []
-filterForbidden domains (a :: rest) policy = match permitOf domains a policy
-  Permitted => filterForbidden domains rest policy
-  _ => atomLabel a :: filterForbidden domains rest policy
-
--- Why each refused atom's policy entry could not be read, one report line per
--- malformed entry the verdict met.
-policyProblems : List (String, Param) ->
-  List Atom ->
-  List (String, EffParamTy) ->
-  List String
-policyProblems domains effs policy =
-  flatMap
-    (a => match permitOf domains a policy
-      Malformed m => ["   policy entry for \{atomLabel a}: \{m}\n"]
-      _ => [])
-    effs
-
-export data Permit = Permitted | Forbidden | Malformed String
-
--- Permitted iff the label is in the policy AND the inferred authority is
--- provably within what the label's entries admit together, each entry decoded
--- in the domain of the atom's own label: an authority still symbolic at the
--- manifest boundary is not proven and is not permitted, and an entry the
--- domain does not admit permits nothing.
 export
 permitOf : List (String, Param) -> Atom -> List (String, EffParamTy) -> Permit
-permitOf domains a policy = match (
-  atomLabel a == "IO",
-  policyEntriesFor a policy,
-)
-  (True, []) => permitIoAsJoin domains policy
-  (_, []) => Forbidden
-  (_, written) =>
-    match allOk (map (decodeWrittenParam domains (atomLabelOf a)) written)
-      -- The entries are read exactly, however many there are: a set is never
-      -- folded, so a manifest of any size is accepted back as a policy.
-      Ok pps =>
-        if authSub (atomAuth a) (authJoinAll (map AConst pps)) then
-          Permitted
-        else
-          Forbidden
-      Err m => Malformed m
-
--- Here `IO` is the join of the eleven host labels, so an `IO` atom under a
--- policy with no `IO` entry is permitted exactly when the policy admits every
--- one of the eleven at its top.  That is `IO`'s meaning with no profile, which
--- is `check-policy`'s case: its policy is a manifest, not a profile.  The one
--- caller that passes a profile's grants, `tools.target_check`, never passes an
--- `IO` atom, because the typechecker has already bounded `IO` by that
--- profile's join.
-permitIoAsJoin : List (String, Param) -> List (String, EffParamTy) -> Permit
-permitIoAsJoin domains policy =
-  firstNotPermitted
-    (map (l => permitOf domains (atomOfLabel domains l) policy) hostLabels)
-
-firstNotPermitted : List Permit -> Permit
-firstNotPermitted [] = Permitted
-firstNotPermitted (Permitted :: rest) = firstNotPermitted rest
-firstNotPermitted (p :: _) = p
-
--- An atom whose authority is still a variable at the host boundary, refused
--- by a policy entry narrower than the whole label: the entry may well cover
--- what the caller will choose, but nothing proves it.
-notProvenLines : List (String, Param) ->
-  List Atom ->
-  List (String, EffParamTy) ->
-  List String
-notProvenLines domains effs policy =
-  flatMap
-    (a => match (authHasVars (atomAuth a), permitOf domains a policy)
-      (True, Forbidden) => match policyEntriesFor a policy
-        _ :: _ =>
-          let unresolved =
-            Atom
-              (atomLabelOf a)
-              (authJoinAll (map AVar (authVars (atomAuth a))))
-          ["   not proven: \{renderAtom unresolved} (\{unresolvedWhy a})\n"]
-        [] => []
-      _ => [])
-    effs
+permitOf domains atom policy = match freezeAtoms domains [atom]
+  [frozen] => permitFrozen domains frozen policy
+  _ => Forbidden
 
 -- Why an atom's authority is unresolved: the variables it still names.
 export
@@ -160,39 +77,12 @@ unresolvedWhy a =
     [one] => "authority variable \{one}"
     _ => "authority variables \{joinWith ", " names}"
 
--- The entries for an atom: those under its qualified key, else those under
--- its bare label.
-policyEntriesFor : Atom -> List (String, EffParamTy) -> List EffParamTy
-policyEntriesFor a policy =
-  match entriesUnder (policySpelling (qualifiedKey a)) policy
-    [] => entriesUnder (atomLabel a) policy
-    es => es
-
-entriesUnder : String -> List (String, EffParamTy) -> List EffParamTy
-entriesUnder key policy = map snd (filterList (e => fst e == key) policy)
-
--- A policy token spells a qualified key without the TOML quotes.
-policySpelling : String -> String
-policySpelling k =
-  let n = stringLength k
-  if n >= 2 && stringSlice 0 1 k == "\"" && stringSlice (n - 1) n k == "\"" then
-    stringSlice 1 (n - 1) k
-  else
-    k
-
 -- `"mod.Name"` for a module-declared label, the bare name for a builtin.
 export
 qualifiedKey : Atom -> String
 qualifiedKey a = match effLabelOrigin (atomLabelOf a)
   OriginModule m => "\"\{m}.\{atomLabel a}\""
   _ => atomLabel a
-
--- Every result's value, or the first error.
-export
-allOk : List (Result String a) -> Result String (List a)
-allOk [] = Ok []
-allOk ((Err m) :: _) = Err m
-allOk ((Ok x) :: rest) = map (x :: _) (allOk rest)
 
 -- ── the call graph ──────────────────────────────────────────────────────────
 -- name → callees restricted to top-level names.  Keyed; on a repeated name the

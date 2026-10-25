@@ -155,7 +155,7 @@ open-bug pressure, not by layer.
 | F4 | Semantic tail sites. **Landed 2026-10-10** (sprint lowering-says-it-once) | tail flag on `CApp`/`CMethod` in tail position, computed once | `core_ir_lower` (the position is syntactic) | per-backend tail rediscovery in `emitAppTail` and its Wasm peer | #1349, #2577 | none |
 | F5 | Runtime types on binders, parameters, and returns. **Landed 2026-10-12** (sprint binders-say-what-they-hold): typecheck publishes one table, `BinderId` to `BinderRow` (`compiler/types/runtime_types.mdk`), over the domain `RTInt`/`RTFloat`/`RTBool`/`RTChar`/`RTString`/`RTUnit`/`RTU64`/`RTI64`/`RTU32`/`RTI32`/`RTU16`/`RTU8`/`RTCon`/`RTValue`; `core_ir_lower.stampBinders` snapshots it into `DeclFacts.factBinders`, and both emitters read the stamp | `BinderId` (module plus a graph-wide ordinal, minted at the end of desugar) on `PVar`, `PAs`, the record-pun field, `LetBind`, `DFunDef` and `CBind`; each row holds the binder's own type, its return type and whether a signature was declared. Closures, functions, type variables and generalized `Num a =>` binders are `RTValue`, never guessed | typecheck, read after defaulting and zonking at the end of the graph, beside the dispositions | DELETED: `inferSigs`, `paramUseTy`, `staticIsFloat`, `bodyFloatRet`, `declSigIndex`, Wasm `floatLocals`/`numPolyLocals`/`refMainKind` and the name-keyed parameter registries; `cexprIsFloat` keeps only its structural arms (variable to stamp, call to callee return stamp, literal) | #2545 and the N8 family (EMITTER-SEMANTICS section 9); #4035; #1951. Validator arm `core_validate.validateBinderStamps`, wired into both emitters' refusal seams: a binder with no row, or a row that disagrees with its use, is refused | none |
 | F6 | Explicit evidence and complete method dispositions. **Landed 2026-10-11** (sprint dispatch-names-its-target, S-evidence-carrier) | `CMethod String MethodEvidence` (`compiler/ir/core_ir.mdk`): the published interface word, arity, dispatch answer, the selected instance's prerequisite routes and the method's context routes; `CDict` keeps one route per `=>` slot; the accessors `givenNames`, `isGivenRooted`, `instanceWord` and `receiverEvidence` beside it; `CProgram`'s sixth field `DeclFacts` (each instance's `requires` count, each interface's super count), filled by the emitting lowering only | the per-occurrence evidence table M2 (#2549) publishes (`evMethodRoutes`/`evDictRoutes`, `compiler/types/route_key.mdk`); the disposition table `compiler/types/disposition.mdk` (#993, #1403); `core_ir_lower.emitDeclFacts` | route-word hedges, `emitDefaultRKey` (DELETED, s4-identity-keyed-defaults), the LLVM/Wasm superset-OR arms and `implEntryRouteKeyW`/`implEntryRouteKey(E)` recomputation (DELETED, #1403 X-E.C), and nine per-consumer route readers (DELETED, S-evidence-carrier: `trmc_analysis.routeDictNames`/`routeIsKey`, `wasm_emit.freeVarsRoute`/`routeKeyWordW`/`receiverRouteW`, `llvm_emit.methValDictNames`/`isDynamicMethodRoute`/`receiverRoute`, `core_ir_lower.isRuntimeDictRoute`) | #1068, #1020, #1046 and the route half of #1265, all CLOSED by M-EVIDENCE (PR #3480) and X-E.C (PR #3542); #3966 | none. Validator arm `core_validate.validateDispatchEvidence`, emit path only: a given a route reads is bound at the site; a projection reads a given; a head instance has an entry; a `CDict` of a top-level function supplies exactly its leading dictionaries, none `RNone`; no route is a scalar tag; a dictionary built at the site carries its interface's super count and its instance's `requires` count of dictionaries; a dispatch answered by a dictionary carries an interface word. Not checked, by measurement: a head instance's supers (they ride only when the entry needs a receiver) and its prerequisites (dict-passing drops a `requires` dictionary an entry's body does not read, so the site supplies more than the entry binds) |
-| F7 | Capability manifest | a Core-level manifest field extracted before row erasure | effects checker | the reachable-extern approximation of the manifest | #2426's class (missing host import must be a named rejection) | the effects manifest producer (EFFECTS sections 7-8) |
+| F7 | Capability manifest (P5.5) | immutable manifest value keyed by the requested entry and invocation protocol, carried in Core | checked drive publishes the selected entry scheme and checked wrapper schemes before row erasure | live post-publication queries and reachable-extern approximation of the manifest | #2426's class (missing host import must be a named rejection) | checked publication; the emission gateway validates the externally supplied requirement against plan and Core |
 
 **F5 and the N5 scalar slice (2026-09-26).** N5 of the integer epic (#3428)
 took only the scalar slice of #353, by Val's ruling: the LLVM backend keeps a
@@ -299,8 +299,9 @@ links back here.
 3. **R5 plan record** (no dependency; can run beside F1).
 4. **F1, F3, F2, F4, F5** in that order, one row per PR series, each with its
    R6 validator arm and L7 fixture.
-5. **F6** (#3966) landed 2026-10-11 (see its R4 row). **F7** waits for the
-   manifest producer.
+5. **F6** (#3966) landed 2026-10-11 (see its R4 row). **F7** is supplied by
+   checked-drive publication: policy, manifest and emission consume frozen
+   entry/protocol values after effect-row erasure.
 
 Compiler-source landing stays serialized through the one-PR golden lane and
 interleaves with the typechecker's steps; high-severity fixes keep priority
@@ -458,10 +459,18 @@ The backend arc consumes, but does not own, these facts:
 | Semantic runtime type facts | typecheck/lowering | #353, refined by X-0 |
 | Effects checked and authoritative `CapabilityManifest` extracted before row erasure | typechecker/effects | EFFECTS sections 7-8; current manifest/check-policy path |
 
-`CapabilityManifest` is not `ReachableExternRequirements`. The manifest is the verified
-entry-point effect row, including user labels and parameter domains. Physical
-planning may derive host imports from reachable externs but may not narrow or
-recompute the manifest.
+`CapabilityManifest` is not `ReachableExternRequirements`. A checked request names
+an entry and invocation protocol; publication distinguishes an unrequested entry,
+a requested entry that is missing, and a verified pure entry. It freezes the
+complete checked effect contract, including user labels and parameter domains,
+before row erasure. Policy, manifest rendering and target checks read this value,
+not live inference cells or post-publication queries. The emission gateway receives
+the expected `ManifestRequirement` from the checked invocation boundary and checks
+that requirement against the plan and Core before either renderer writes. Raw
+unchecked routes carry explicit raw provenance. Physical planning may derive host
+imports from reachable externs, but those imports neither narrow nor recompute the
+manifest: complete checked capabilities and physical extern/import demand answer
+different questions.
 
 The contract is parallel-friendly. X-0 first publishes additive draft carrier
 shapes. Independent producer adapters can populate and compare draft fields as

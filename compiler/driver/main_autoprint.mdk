@@ -1,3 +1,4 @@
+import string.{split}
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
 --
 -- A bare non-Unit VALUE `main` (`main = ("abc", 1.23)`, `main = [1,2,3]`, a
@@ -40,6 +41,42 @@ import frontend.ast.{
 import types.private_mangle.{mangledName}
 import types.publish.{TcReport(..), CheckedProgram(..), EntryOutcome(..)}
 import types.program_facts.{ProgramFacts(..)}
+import types.tc_types.{DriveInputs(..)}
+import types.capability_manifest.{
+  EntryKey(..), ManifestSelector(..), ManifestRequirement(..),
+  InvocationProtocol(..)
+}
+
+export
+mainEntryKey : List (String, List Decl) -> EntryKey
+mainEntryKey modules = EntryKey {
+  moduleId = match entryPair modules
+    Some (mid, _) => mid
+    None => "",
+  binding = "main",
+}
+
+export
+executedMainInputs : DriveInputs ->
+  EntryKey ->
+  List (String, List Decl) ->
+  DriveInputs
+executedMainInputs inputs driver modules = { inputs |
+  diExecutedMainDriver = Some driver,
+  diManifestRequests = match entryPair modules
+    Some (_, decls) =>
+      if isSome (findMainParams decls) then
+        ExactEntry (mainEntryKey modules) ExecutedMain
+          :: inputs.diManifestRequests
+      else
+        inputs.diManifestRequests
+    None => inputs.diManifestRequests,
+}
+
+export
+executedMainRequirement : List (String, List Decl) -> ManifestRequirement
+executedMainRequirement modules =
+  CheckedEntry (mainEntryKey modules) ExecutedMain
 
 -- The loader hands modules dependency-first, so the ENTRY module is last.
 entryPair : List (String, List Decl) -> Option (String, List Decl)
@@ -198,7 +235,7 @@ pinnedCopies origin pin (_ :: rest) = pinnedCopies origin pin rest
 -- 0 with nothing on stdout.
 export
 executedTrees : EntryOutcome ->
-  String ->
+  EntryKey ->
   (List Decl, List (String, List Decl)) ->
   (List Decl, List (String, List Decl)) ->
   Result String (List Decl, List (String, List Decl))
@@ -221,7 +258,7 @@ executedTrees outcome driver (coreD, modsD) (coreE, modsE) =
 -- gate refused it before this point, so reaching here is an internal error.
 export
 executedFromReport : TcReport ->
-  String ->
+  EntryKey ->
   (List Decl, List (String, List Decl)) ->
   Result String (List Decl, List (String, List Decl))
 executedFromReport report driver source = match report.trChecked
@@ -327,7 +364,10 @@ asyncModuleId = "async"
 -- Fires iff main's inferred type heads in `Async`, the entry `main` is a
 -- zero-arg VALUE, and the `async` module is loaded and defines `driver`.
 export
-shouldAsyncWrapMain : EntryOutcome -> String -> List (String, List Decl) -> Bool
+shouldAsyncWrapMain : EntryOutcome ->
+  EntryKey ->
+  List (String, List Decl) ->
+  Bool
 shouldAsyncWrapMain outcome driver modules =
   if not (outcome.eoMainIsAsync && outcome.eoMainAsyncPayloadIsUnit) then
     False
@@ -335,7 +375,9 @@ shouldAsyncWrapMain outcome driver modules =
     None => False
     Some (_, decls) => match findMainParams decls
       Some [] =>
-        any (p => fst p == asyncModuleId && definesFun driver (snd p)) modules
+        any
+          (p => fst p == driver.moduleId && definesFun driver.binding (snd p))
+          modules
       _ => False
 
 -- The one `Async` main shape the drivers cannot take: a payload other than
@@ -366,29 +408,33 @@ definesFun n (_ :: rest) = definesFun n rest
 -- The entry's `main : T` signature is dropped: the wrapped main's type is the
 -- driver's result, not `Async`.
 export
-asyncWrapModules : String ->
+asyncWrapModules : EntryKey ->
   List (String, List Decl) ->
   List (String, List Decl)
 asyncWrapModules driver modules =
-  wrapAsyncEntry (map (pinAsyncDriver driver) modules)
+  wrapAsyncEntry driver (map (pinAsyncDriver driver) modules)
 
-pinAsyncDriver : String -> (String, List Decl) -> (String, List Decl)
+pinAsyncDriver : EntryKey -> (String, List Decl) -> (String, List Decl)
 pinAsyncDriver driver (mid, decls) =
-  if mid == asyncModuleId then
-    (mid, decls ++ pinnedCopies driver asyncMainPinName decls)
+  if mid == driver.moduleId then
+    (mid, decls ++ pinnedCopies driver.binding asyncMainPinName decls)
   else
     (mid, decls)
 
-wrapAsyncEntry : List (String, List Decl) -> List (String, List Decl)
-wrapAsyncEntry = onEntry (decls =>
-  asyncPinImport :: wrapEntryMain (EVar asyncMainPinName) decls)
+wrapAsyncEntry : EntryKey ->
+  List (String, List Decl) ->
+  List (String, List Decl)
+wrapAsyncEntry driver = onEntry (decls =>
+  asyncPinImport driver :: wrapEntryMain (EVar asyncMainPinName) decls)
 
 synthLoc : Loc
 synthLoc = Loc "" 0 0 0 0
 
-asyncPinImport : Decl
-asyncPinImport =
+asyncPinImport : EntryKey -> Decl
+asyncPinImport driver =
   DUse
     False
-    (UseGroup [asyncModuleId] [UseMember asyncMainPinName False synthLoc None])
+    (UseGroup (split "." driver.moduleId) [
+      UseMember asyncMainPinName False synthLoc None,
+    ])
     synthLoc

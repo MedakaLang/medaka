@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_demand.{
   WasmDemandPlan, WasmDemand(..), wasmTypeContext, returnStamp, cexprStamp
 }
@@ -18,6 +19,55 @@ import ir.extern_lower.{walkExternVars, externVar, implicitRuntimeFacts}
 import support.ordmap.{omEmpty, omFromNames, omKeys}
 import support.util.{joinNl}
 import test.{Expectation, expectAll, expectEach, expectEqual, expectErrContains}
+import types.capability_manifest.{
+  EntryKey(..),
+  ManifestRequest(..),
+  InvocationProtocol(..),
+  CapabilityManifest(..),
+  FrozenAtom(..),
+  FrozenAuthority(..),
+}
+import types.effect_domain.{Param(..)}
+import frontend.ast.{TyConOrigin(..)}
+import ir.core_ir.{CProgram(..)}
+
+test "declared Clock remains published without adding physical Wasm demand" =
+  let manifest = CapabilityManifest {
+    request = ManifestRequest {
+      entry = EntryKey { moduleId = "source", binding = "declared" },
+      protocol = HostInvocation,
+    },
+    atoms = [
+      FrozenAtom {
+        label = "Clock",
+        origin = OriginBuiltin,
+        domainTop = PUnit,
+        authority = FrozenConst PUnit,
+      },
+    ],
+  }
+  let (baselinePlan, CProgram groups ctors types impls contexts facts) =
+    prepared "main = ()"
+  let cp = CProgram groups ctors types impls contexts { facts |
+    factManifests = [manifest],
+  }
+  let (plan, CProgram _ _ _ _ _ retained) =
+    prepareWasmPlan PreludeFreeRuntime omEmpty cp
+  expectAll [
+    expectEqual
+      (importFields (physical baselinePlan))
+      (importFields (physical plan)),
+    expectEqual (physical baselinePlan).helpers (physical plan).helpers,
+    expectEqual
+      [("source", "declared", ["Clock"])]
+      (map
+        (m => (
+          (m : CapabilityManifest).request.entry.moduleId,
+          (m : CapabilityManifest).request.entry.binding,
+          map (a => a.label) m.atoms,
+        ))
+        retained.factManifests),
+  ]
 
 prepared : String -> (EmitPlan, CProgram)
 prepared =
@@ -289,7 +339,8 @@ refusal : String -> (WasmDemandPlan -> WasmDemandPlan) -> Result String String
 refusal src mutate =
   let (plan, cp) = prepared src
   let bad = { plan | wasmPhysical = Some (mutate (physical plan)) }
-  let checked = validateForEmission WasmBackend PreludeFreeRuntime bad cp
+  let checked =
+    validateForEmission WasmBackend PreludeFreeRuntime RawUnchecked bad cp
   match checked.defects
     [] => Ok "output would be permitted"
     defects => Err (joinNl (map coreDefectMessage defects))
@@ -348,7 +399,10 @@ test "gap census preserves its forced reference walk without requiring main" =
   let (plan, cp) = prepared "f x y = x + y"
   expectEqual
     []
-    (emitProgramGaps (makeWasmEmitInput PreludeFreeRuntime []) plan cp)
+    (emitProgramGaps
+      (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
+      plan
+      cp)
 
 test "ordinary spellings cannot acquire a runtime declaration's result stamp" =
   let (_, cp) = prepared "main = 42"

@@ -1,7 +1,9 @@
 # META
-source_lines=3666
+source_lines=3680
 stages=DESUGAR,MARK
 # SOURCE
+import driver.main_autoprint.{executedMainInputs}
+import types.capability_manifest.{EntryKey(..)}
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
 --
 -- Runs all pipeline stages accumulating diagnostics
@@ -972,25 +974,37 @@ modOwnSchemes (mid, (schemes, _, _)) = (mid, schemes)
 -- graph's keyed drive under `chainKey` (`checkChainReport`).
 export
 checkReportOf : ChainSteps -> String -> FrontDriveIn -> (TcReport, DriveOutputs)
-checkReportOf steps chainKey d = match (d.fdMods, d.fdPairs)
-  ([], [up]) => checkModulesEntryFullReportK
-    d.fdInputs
-    (valueMainCandidate d.fdCore [up])
-    d.fdPreludeKey
-    d.fdRuntime
-    d.fdCore
-    [up]
-  (mods, pairs) =>
-    checkChainReport
-      steps
+checkReportOf steps chainKey original =
+  let d =
+    if original.fdInputs.diProfileName == "" then
+      original
+    else
+      { original |
+        fdInputs =
+          executedMainInputs
+            original.fdInputs
+            EntryKey { moduleId = "async", binding = "runAsyncMain" }
+            original.fdPairs,
+      }
+  match (d.fdMods, d.fdPairs)
+    ([], [up]) => checkModulesEntryFullReportK
       d.fdInputs
-      (valueMainCandidate d.fdCore pairs)
+      (valueMainCandidate d.fdCore [up])
       d.fdPreludeKey
-      chainKey
       d.fdRuntime
       d.fdCore
-      mods
-      pairs
+      [up]
+    (mods, pairs) =>
+      checkChainReport
+        steps
+        d.fdInputs
+        (valueMainCandidate d.fdCore pairs)
+        d.fdPreludeKey
+        chainKey
+        d.fdRuntime
+        d.fdCore
+        mods
+        pairs
 
 -- The check drive with its `CheckDrive`, taken off the report before anything
 -- else can drive.
@@ -3669,6 +3683,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
     True,
   )
 # DESUGAR
+(DUse false (UseGroup ("driver" "main_autoprint") ((mem "executedMainInputs" false))))
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
@@ -3802,7 +3818,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "modOwnSchemes" (TyFun (TyCon "ModDiags") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))
 (DFunDef false "modOwnSchemes" ((PTuple (PVar "mid") (PTuple (PVar "schemes") PWild PWild))) (ETuple (EVar "mid") (EVar "schemes")))
 (DTypeSig true "checkReportOf" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "String") (TyFun (TyCon "FrontDriveIn") (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs"))))))
-(DFunDef false "checkReportOf" ((PVar "steps") (PVar "chainKey") (PVar "d")) (EMatch (ETuple (EFieldAccess (EVar "d") "fdMods") (EFieldAccess (EVar "d") "fdPairs")) (arm (PTuple (PList) (PList (PVar "up"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullReportK") (EFieldAccess (EVar "d") "fdInputs")) (EApp (EApp (EVar "valueMainCandidate") (EFieldAccess (EVar "d") "fdCore")) (EListLit (EVar "up")))) (EFieldAccess (EVar "d") "fdPreludeKey")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EListLit (EVar "up")))) (arm (PTuple (PVar "mods") (PVar "pairs")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkChainReport") (EVar "steps")) (EFieldAccess (EVar "d") "fdInputs")) (EApp (EApp (EVar "valueMainCandidate") (EFieldAccess (EVar "d") "fdCore")) (EVar "pairs"))) (EFieldAccess (EVar "d") "fdPreludeKey")) (EVar "chainKey")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EVar "mods")) (EVar "pairs")))))
+(DFunDef false "checkReportOf" ((PVar "steps") (PVar "chainKey") (PVar "original")) (EBlock (DoLet false false (PVar "d") (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "original") "fdInputs") "diProfileName") (ELit (LString ""))) (EVar "original") (ERecordUpdate (EVar "original") ((fa "fdInputs" (EApp (EApp (EApp (EVar "executedMainInputs") (EFieldAccess (EVar "original") "fdInputs")) (ERecordCreate "EntryKey" ((fa "moduleId" (ELit (LString "async"))) (fa "binding" (ELit (LString "runAsyncMain")))))) (EFieldAccess (EVar "original") "fdPairs"))))))) (DoExpr (EMatch (ETuple (EFieldAccess (EVar "d") "fdMods") (EFieldAccess (EVar "d") "fdPairs")) (arm (PTuple (PList) (PList (PVar "up"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullReportK") (EFieldAccess (EVar "d") "fdInputs")) (EApp (EApp (EVar "valueMainCandidate") (EFieldAccess (EVar "d") "fdCore")) (EListLit (EVar "up")))) (EFieldAccess (EVar "d") "fdPreludeKey")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EListLit (EVar "up")))) (arm (PTuple (PVar "mods") (PVar "pairs")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkChainReport") (EVar "steps")) (EFieldAccess (EVar "d") "fdInputs")) (EApp (EApp (EVar "valueMainCandidate") (EFieldAccess (EVar "d") "fdCore")) (EVar "pairs"))) (EFieldAccess (EVar "d") "fdPreludeKey")) (EVar "chainKey")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EVar "mods")) (EVar "pairs")))))))
 (DTypeSig true "checkDriveReport" (TyFun (TyCon "String") (TyFun (TyCon "FrontDriveIn") (TyTuple (TyCon "CheckDrive") (TyCon "TcReport") (TyCon "DriveOutputs")))))
 (DFunDef false "checkDriveReport" ((PVar "chainKey") (PVar "d")) (EBlock (DoLet false false (PTuple (PVar "r") (PVar "outputs")) (EApp (EApp (EApp (EVar "checkReportOf") (EVar "NoSteps")) (EVar "chainKey")) (EVar "d"))) (DoLet false false (PVar "drive") (EMatch (ETuple (EFieldAccess (EVar "d") "fdMods") (EFieldAccess (EVar "d") "fdPairs")) (arm (PTuple (PList) (PList PWild)) () (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "schemes") PWild PWild) (EApp (EVar "entrySplit") (EVar "r"))) (DoExpr (ERecordCreate "CheckDrive" ((fa "cdEntrySchemes" (EApp (EVar "pubSchemes") (EVar "schemes"))) (fa "cdCoreSchemes" (EApp (EVar "pubSchemes") (EVar "coreSchemes"))) (fa "cdOutputs" (EVar "outputs")) (fa "cdMods" (EFieldAccess (EVar "d") "fdPairs")) (fa "cdPaths" (EListLit))))))) (arm (PTuple (PVar "mods") (PVar "pairs")) () (EApp (EApp (EApp (EApp (EVar "graphCheckDrive") (EVar "r")) (EVar "outputs")) (EVar "pairs")) (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "mods")))))) (DoExpr (ETuple (EVar "drive") (EVar "r") (EVar "outputs")))))
 (DTypeSig true "checkFrontDrive" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FrontDriveIn") (TyTuple (TyCon "CheckDump") (TyCon "TcReport") (TyCon "DriveOutputs"))))))
@@ -4185,6 +4201,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") PWild (PCon "LoadCycle" (PVar "cmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "cloc"))) () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "cpath") (EVar "csrc") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EApp (EVar "Some") (EVar "cloc"))) (EVar "None")) (EVar "None")))))) (EVar "True"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EVar "None")) (EVar "None")) (EVar "None")))))) (EVar "True")))))
 (DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EBlock (DoLet false false (PVar "mloc") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "src")))))) (DoLet false false (PVar "mhelp") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (EVar "None")) (arm (PVar "txt") () (EApp (EVar "Some") (EVar "txt"))))))) (DoLet false false (PVar "jmsg") (EBinOp "++" (EVar "lmsg") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" PWild) () (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "jmsg")) (EVar "mloc")) (EVar "mhelp")) (EVar "None")))))) (EVar "True")))))
 # MARK
+(DUse false (UseGroup ("driver" "main_autoprint") ((mem "executedMainInputs" false))))
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
@@ -4318,7 +4336,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "modOwnSchemes" (TyFun (TyCon "ModDiags") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))
 (DFunDef false "modOwnSchemes" ((PTuple (PVar "mid") (PTuple (PVar "schemes") PWild PWild))) (ETuple (EVar "mid") (EVar "schemes")))
 (DTypeSig true "checkReportOf" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "String") (TyFun (TyCon "FrontDriveIn") (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs"))))))
-(DFunDef false "checkReportOf" ((PVar "steps") (PVar "chainKey") (PVar "d")) (EMatch (ETuple (EFieldAccess (EVar "d") "fdMods") (EFieldAccess (EVar "d") "fdPairs")) (arm (PTuple (PList) (PList (PVar "up"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullReportK") (EFieldAccess (EVar "d") "fdInputs")) (EApp (EApp (EVar "valueMainCandidate") (EFieldAccess (EVar "d") "fdCore")) (EListLit (EVar "up")))) (EFieldAccess (EVar "d") "fdPreludeKey")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EListLit (EVar "up")))) (arm (PTuple (PVar "mods") (PVar "pairs")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkChainReport") (EVar "steps")) (EFieldAccess (EVar "d") "fdInputs")) (EApp (EApp (EVar "valueMainCandidate") (EFieldAccess (EVar "d") "fdCore")) (EVar "pairs"))) (EFieldAccess (EVar "d") "fdPreludeKey")) (EVar "chainKey")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EVar "mods")) (EVar "pairs")))))
+(DFunDef false "checkReportOf" ((PVar "steps") (PVar "chainKey") (PVar "original")) (EBlock (DoLet false false (PVar "d") (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "original") "fdInputs") "diProfileName") (ELit (LString ""))) (EVar "original") (ERecordUpdate (EVar "original") ((fa "fdInputs" (EApp (EApp (EApp (EVar "executedMainInputs") (EFieldAccess (EVar "original") "fdInputs")) (ERecordCreate "EntryKey" ((fa "moduleId" (ELit (LString "async"))) (fa "binding" (ELit (LString "runAsyncMain")))))) (EFieldAccess (EVar "original") "fdPairs"))))))) (DoExpr (EMatch (ETuple (EFieldAccess (EVar "d") "fdMods") (EFieldAccess (EVar "d") "fdPairs")) (arm (PTuple (PList) (PList (PVar "up"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullReportK") (EFieldAccess (EVar "d") "fdInputs")) (EApp (EApp (EVar "valueMainCandidate") (EFieldAccess (EVar "d") "fdCore")) (EListLit (EVar "up")))) (EFieldAccess (EVar "d") "fdPreludeKey")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EListLit (EVar "up")))) (arm (PTuple (PVar "mods") (PVar "pairs")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkChainReport") (EVar "steps")) (EFieldAccess (EVar "d") "fdInputs")) (EApp (EApp (EVar "valueMainCandidate") (EFieldAccess (EVar "d") "fdCore")) (EVar "pairs"))) (EFieldAccess (EVar "d") "fdPreludeKey")) (EVar "chainKey")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EVar "mods")) (EVar "pairs")))))))
 (DTypeSig true "checkDriveReport" (TyFun (TyCon "String") (TyFun (TyCon "FrontDriveIn") (TyTuple (TyCon "CheckDrive") (TyCon "TcReport") (TyCon "DriveOutputs")))))
 (DFunDef false "checkDriveReport" ((PVar "chainKey") (PVar "d")) (EBlock (DoLet false false (PTuple (PVar "r") (PVar "outputs")) (EApp (EApp (EApp (EVar "checkReportOf") (EVar "NoSteps")) (EVar "chainKey")) (EVar "d"))) (DoLet false false (PVar "drive") (EMatch (ETuple (EFieldAccess (EVar "d") "fdMods") (EFieldAccess (EVar "d") "fdPairs")) (arm (PTuple (PList) (PList PWild)) () (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "schemes") PWild PWild) (EApp (EVar "entrySplit") (EVar "r"))) (DoExpr (ERecordCreate "CheckDrive" ((fa "cdEntrySchemes" (EApp (EVar "pubSchemes") (EVar "schemes"))) (fa "cdCoreSchemes" (EApp (EVar "pubSchemes") (EVar "coreSchemes"))) (fa "cdOutputs" (EVar "outputs")) (fa "cdMods" (EFieldAccess (EVar "d") "fdPairs")) (fa "cdPaths" (EListLit))))))) (arm (PTuple (PVar "mods") (PVar "pairs")) () (EApp (EApp (EApp (EApp (EVar "graphCheckDrive") (EVar "r")) (EVar "outputs")) (EVar "pairs")) (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "mods")))))) (DoExpr (ETuple (EVar "drive") (EVar "r") (EVar "outputs")))))
 (DTypeSig true "checkFrontDrive" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FrontDriveIn") (TyTuple (TyCon "CheckDump") (TyCon "TcReport") (TyCon "DriveOutputs"))))))

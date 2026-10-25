@@ -1,0 +1,187 @@
+import frontend.ast.{
+  TabKey, Ns(..), TyConOrigin(..), tabKeyOf, tabKeyEq, lookupTab
+}
+import types.tc_types.{
+  TcEnv(..), ModuleCtx(..), InvocationView(..), PublishedInvocationView(..),
+  DriveOutputs(..), Polarity(..), Kind(..)
+}
+import types.publish.{PubScheme(..), freezePub, zonkScheme, emptyZonk}
+import types.repr.{Scheme(..), Mono(..), normalize, spineParts}
+import types.effect_authority.{Authority(..), authNorm, authvarId}
+import types.effect_invocation.{InvocationOps, Variance(..)}
+import types.manifest_publish.{InvocationOwner(..)}
+import types.registry.{spRows}
+import types.capability_manifest.{
+  ManifestSelector(..), EntryKey, InvocationProtocol(..)
+}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import support.util.{listLen, maxI}
+import list.{get, range}
+import map as IdMap
+
+export
+recordInvocationView : TcEnv -> Unit
+recordInvocationView env =
+  let universe =
+    flatMap
+      (cands =>
+        map
+          (c => match c
+            (_, _, sch) => sch)
+          cands)
+      (IdMap.values
+        (spRows env.teDyn.dcModule.mcGraph.crossRun.universeCtorPop.value))
+  env.teDyn.dcModule.mcCells.invocationViewRef :=
+    InvocationView
+      (IdMap.values env.teCtors ++ universe)
+      env.teDyn.dcModule.mcCells.dataParamPolarityRef.value
+      env.teDyn.dcModule.mcCells.dataParamKindsRef.value
+
+export
+frozenInvocationView : InvocationView -> InvocationView
+frozenInvocationView (InvocationView ctors pols kinds) =
+  InvocationView (map (c => snd (zonkScheme emptyZonk c)) ctors) pols kinds
+
+export
+publishInvocationView : InvocationView -> PublishedInvocationView
+publishInvocationView (InvocationView ctors pols kinds) =
+  PublishedInvocationView (map (c => freezePub c []) ctors) pols kinds
+
+export
+readInvocationView : PublishedInvocationView -> InvocationView
+readInvocationView (PublishedInvocationView ctors pols kinds) =
+  frozenInvocationView (InvocationView (map (c => c.psScheme) ctors) pols kinds)
+
+export
+requestedViewModules : List ManifestSelector -> OrdMap Unit
+requestedViewModules =
+  fold
+    (mods selector => match selector
+      ExactEntry key _ => omInsert key.moduleId () mods
+      EntryOverPrelude _ _ => mods)
+    omEmpty
+
+export
+requestedWrapperViewModules : List ManifestSelector ->
+  Option EntryKey ->
+  OrdMap Unit
+requestedWrapperViewModules selectors driver =
+  let modules = requestedViewModules selectors
+  let executed =
+    any
+      (selector => match selector
+        ExactEntry _ ExecutedMain => True
+        EntryOverPrelude _ ExecutedMain => True
+        _ => False)
+      selectors
+  if executed then
+    option modules (key => omInsert (key : EntryKey).moduleId () modules) driver
+  else
+    modules
+
+export
+invocationResolver : (InvocationView -> InvocationOps) ->
+  List (InvocationOwner, InvocationView) ->
+  InvocationOwner ->
+  Option InvocationOps
+invocationResolver makeOps views =
+  let index = IdMap.fromList views
+  mid => map makeOps (IdMap.get mid index)
+
+-- A slot's variance, read as invariant where its parameter is an effect row
+-- or an authority: an index is invariant (EFFECTS-SEMANTICS §6.4), whatever
+-- the variance table computed for it.
+export
+slotVariances : Option (List Polarity) ->
+  Option (List Kind) ->
+  Option (List Variance)
+slotVariances None None = None
+slotVariances pols kinds =
+  let ps = optionOr [] pols
+  let ks = optionOr [] kinds
+  Some
+    (map
+      (i => slotVariance (get i ps) (get i ks))
+      (range 0 (maxI (listLen ps) (listLen ks))))
+
+slotVariance : Option Polarity -> Option Kind -> Variance
+slotVariance _ (Some KRow) = VInv
+slotVariance _ (Some (KAuth _ _)) = VInv
+slotVariance (Some p) _ = varianceOf p
+slotVariance None _ = VInv
+
+varianceOf : Polarity -> Variance
+varianceOf PCo = VCo
+varianceOf PContra = VContra
+varianceOf PInv = VInv
+-- never published (`publishedPolarity`); read as the phantom it means
+varianceOf PPhantom = VCo
+
+-- Every constructor under its result head: the head's arguments as the
+-- constructor declares them, and its field types.
+export
+ctorsByHead : (Mono -> String) ->
+  List Scheme ->
+  OrdMap (List (List Mono, List Mono))
+ctorsByHead headKey schemes =
+  fold
+    (acc sch => match sch
+      Forall _ _ _ _ _ mono =>
+        let (fieldTys, result) = arrowParts mono
+        let (h, params) = spineParts result
+        let key = headKey h
+        omInsert key ((params, fieldTys) :: optionOr [] (omLookup key acc)) acc)
+    omEmpty
+    schemes
+
+export
+authorityParamSubst : List Mono -> List Mono -> List (Int, Authority)
+authorityParamSubst (p :: ps) (a :: rest) = match (normalize p, normalize a)
+  (TAuth q, TAuth actual) => match authNorm q
+    AVar cell => (authvarId cell, actual) :: authorityParamSubst ps rest
+    _ => authorityParamSubst ps rest
+  _ => authorityParamSubst ps rest
+authorityParamSubst _ _ = []
+
+arrowParts : Mono -> (List Mono, Mono)
+arrowParts m = match normalize m
+  TFun dom _ res =>
+    let (rest, result) = arrowParts res
+    (dom :: rest, result)
+  other => ([], other)
+
+-- The same read against an EXPLICIT table — the form `inferParamPolarities`
+-- uses, so the graph-wide seed builder (`declEnvPolarityChain`) and the per-run
+-- reader apply the SAME write-channel seed.  Two copies of the seed is exactly
+-- the drift this split exists to prevent.
+export
+paramPolaritiesIn : List (TabKey, List Polarity) ->
+  TabKey ->
+  Option (List Polarity)
+paramPolaritiesIn tab key
+  | tabKeyEq key (tabKeyOf NsType OriginBuiltin "Ref") = Some [PInv]
+  | tabKeyEq key (tabKeyOf NsType OriginBuiltin "Array") = Some [PInv]
+  | otherwise = lookupTab key tab
+
+export
+frozenInvocationOps : (DriveOutputs -> InvocationOps) ->
+  DriveOutputs ->
+  InvocationView ->
+  InvocationOps
+frozenInvocationOps makeOps outputs view =
+  makeOps { outputs | doInvocationView = frozenInvocationView view }
+
+export
+completionInvocationViews : ModuleCtx ->
+  InvocationView ->
+  List (String, InvocationView) ->
+  List (InvocationOwner, InvocationView)
+completionInvocationViews entry core views =
+  (ShippedPrelude, core)
+    :: map ((mid, view) => (SourceModule mid, view)) views
+      ++ [
+        (
+          SourceModule entry.mcCells.currentModuleRef.value,
+          entry.mcCells.invocationViewRef.value,
+        ),
+      ]

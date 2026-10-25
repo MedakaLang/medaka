@@ -1,5 +1,5 @@
 # META
-source_lines=565
+source_lines=748
 stages=DESUGAR,MARK
 # SOURCE
 -- The shapes the typechecker publishes, and the pure functions that freeze a
@@ -26,7 +26,21 @@ import types.runtime_types.{BinderTypeTable}
 import types.evidence_coverage.{EvidenceFault, evidenceFaults}
 import map as IdMap
 import map.{Map(..)}
-import list.{nub, reverse, mapAccumL}
+import list.{nub, reverse, mapAccumL, last}
+import support.ordmap.{OrdMap, omLookup}
+import types.capability_manifest.{
+  EntryKey(..),
+  ManifestRequest(..),
+  ManifestSelector(..),
+  InvocationProtocol(..),
+  CapabilityManifest,
+  ManifestDefect(..),
+}
+import types.effect_domain.{Param}
+import types.effect_invocation.{InvocationOps}
+import types.manifest_publish.{
+  InvocationOwner(..), ManifestEntryInput(..), publishManifests
+}
 
 -- ── structured typecheck diagnostic (TcDiag) ───────────────────────────────
 -- ONE structured record per accumulated diagnostic (errors AND match warnings):
@@ -80,6 +94,166 @@ ppPubScheme p = ppSchemeCon p.psContext p.psScheme
 export
 pubSchemes : List (String, PubScheme) -> List (String, Scheme)
 pubSchemes = map (b => (fst b, (snd b).psScheme))
+
+export
+publishedEntrySchemes : List (String, List (String, a)) -> List (String, a)
+publishedEntrySchemes modules = option [] snd (last modules)
+
+export
+publishCore : OrdMap (List VecObl) ->
+  List (String, Scheme) ->
+  List (String, PubScheme)
+publishCore contexts =
+  publishWithContexts (name => optionOr [] (omLookup name contexts))
+
+export
+publishWithContexts : (String -> List VecObl) ->
+  List (String, Scheme) ->
+  List (String, PubScheme)
+publishWithContexts context = map (b => (
+  fst b,
+  PubScheme {
+    psScheme = snd b,
+    psContext = context (fst b),
+  },
+))
+
+export
+publishedCore : Option (List (String, PubScheme)) ->
+  OrdMap (List VecObl) ->
+  List (String, Scheme) ->
+  List (String, PubScheme)
+publishedCore (Some rows) _ _ = rows
+publishedCore None contexts schemes = freezeRows (publishCore contexts schemes)
+
+-- Resolve against checked source rows before erasure; wrappers always name their
+-- owning module rather than the entry's same-spelled binding.
+export
+publishSelected : List (String, Param) ->
+  (InvocationOwner -> Option InvocationOps) ->
+  List ManifestSelector ->
+  List ModDiags ->
+  List (String, PubScheme) ->
+  EntryOutcome ->
+  Option EntryKey ->
+  Bool ->
+  (List ManifestRequest, List CapabilityManifest, List TcDiag)
+publishSelected _ _ [] _ _ _ _ _ = ([], [], [])
+publishSelected domains resolveOps selectors perMod core outcome executes valueMain =
+  let entry = optionOr ("", ([], [], [])) (last perMod)
+  let byModule =
+    IdMap.fromList
+      (map (m => (fst m, IdMap.fromList (reverse (modSchemes (snd m))))) perMod)
+  let coreRows = IdMap.fromList (reverse core)
+  let rows owner = match owner
+    SourceModule mid => optionOr Tip (IdMap.get mid byModule)
+    ShippedPrelude => coreRows
+  let ownerOf key =
+    if key.moduleId == "core"
+      && not (IdMap.has key.binding (rows (SourceModule "core"))) then
+      ShippedPrelude
+    else
+      SourceModule key.moduleId
+  let own = rows (SourceModule (fst entry))
+  let resolve selector = match selector
+    ExactEntry key protocol =>
+      (ManifestRequest { entry = key, protocol = protocol }, ownerOf key)
+    EntryOverPrelude name protocol =>
+      let isOwn = IdMap.has name own
+      (
+        ManifestRequest {
+          entry = EntryKey {
+            moduleId = if isOwn then fst entry else "core",
+            binding = name,
+          },
+          protocol = protocol,
+        },
+        if isOwn then SourceModule (fst entry) else ShippedPrelude,
+      )
+  let resolved = map resolve selectors
+  let selected = map fst resolved
+  let wrapper owner name =
+    map (p => (owner, p.psScheme)) (IdMap.get name (rows owner))
+  let wrappers request = match request.protocol
+    HostInvocation => []
+    ExecutedMain =>
+      if request.entry.moduleId /= fst entry
+        || request.entry.binding /= "main"
+        || not valueMain
+        || outcome.eoMainIsUnit then
+        []
+      else if outcome.eoMainIsAsync then
+        option
+          []
+          (key => option [] (w => [w]) (wrapper (ownerOf key) key.binding))
+          executes
+      else
+        option [] (w => [w]) (wrapper ShippedPrelude "println")
+  let inputs =
+    flatMap
+      ((request, owner) =>
+        option
+          []
+          (p => [
+            ManifestEntryInput {
+              request = request,
+              owner = owner,
+              scheme = p.psScheme,
+              wrappers = wrappers request,
+            },
+          ])
+          (IdMap.get request.entry.binding (rows owner)))
+      resolved
+  let missingDrivers =
+    flatMap
+      (request => match request.protocol
+        HostInvocation => []
+        ExecutedMain =>
+          if request.entry.moduleId == fst entry
+            && request.entry.binding == "main"
+            && valueMain
+            && outcome.eoMainIsAsync
+            && isEmpty (wrappers request) then
+            [
+              TcDiag
+                "T-MANIFEST-WRAPPER"
+                1
+                None
+                "no checked Async driver selected for executed main"
+                None
+                None,
+            ]
+          else
+            [])
+      selected
+  let missing =
+    missingDrivers
+      ++ flatMap
+        ((request, owner) =>
+          if IdMap.has request.entry.binding (rows owner) then
+            []
+          else
+            [
+              TcDiag
+                "T-MANIFEST-ENTRY"
+                1
+                None
+                ("no '" ++ request.entry.binding ++ "' entry found")
+                None
+                None,
+            ])
+        resolved
+  match publishManifests domains resolveOps inputs
+    Ok manifests => (selected, manifests, missing)
+    Err defects => (
+      selected,
+      [],
+      missing
+        ++ map
+          ((ManifestDefect message) =>
+            TcDiag "T-MANIFEST-INVALID" 1 None message None None)
+          defects,
+    )
 
 -- The three variable kinds count ids separately.
 public export data VarKind = TyVarK | EffVarK | AuthVarK deriving (Eq, Debug)
@@ -143,6 +317,7 @@ public export data CheckedProgram = CheckedProgram {
   cpEntryOutcome : EntryOutcome,
   cpTrees : Option (List Decl, List (String, List Decl)),
   cpWeak : List LiveCell,
+  cpManifests : List CapabilityManifest,
 }
 
 public export data EntryOutcome = EntryOutcome {
@@ -373,6 +548,8 @@ graphReport : List ModDiags ->
 graphReport perMod core residual evidence dispositions binders trees tables =
   graphReportWithOutcome
     noEntryOutcome
+    []
+    []
     perMod
     core
     residual
@@ -384,6 +561,8 @@ graphReport perMod core residual evidence dispositions binders trees tables =
 
 export
 graphReportWithOutcome : EntryOutcome ->
+  List CapabilityManifest ->
+  List TcDiag ->
   List ModDiags ->
   List (String, PubScheme) ->
   List (String, TcDiag) ->
@@ -393,11 +572,14 @@ graphReportWithOutcome : EntryOutcome ->
   Option (List Decl, List (String, List Decl)) ->
   EntryTables ->
   TcReport
-graphReportWithOutcome outcome perMod core residual evidence dispositions binders trees tables =
+graphReportWithOutcome outcome manifests manifestDiags perMod core residual evidence dispositions binders trees tables =
   let schemes = map (m => (fst m, modSchemes (snd m))) perMod
   let cells = graphCells (core :: map snd schemes)
   let judged =
-    if isEmpty residual && noModErrors perMod && all isWeak cells then
+    if isEmpty residual
+      && isEmpty manifestDiags
+      && noModErrors perMod
+      && all isWeak cells then
       let table = evidence ()
       Some (table, evidenceFaults trees table)
     else
@@ -412,12 +594,13 @@ graphReportWithOutcome outcome perMod core residual evidence dispositions binder
       cpEntryOutcome = outcome,
       cpTrees = trees,
       cpWeak = cells,
+      cpManifests = manifests,
     }
     _ => None
   TcReport {
     trPartial = partialAnalysis schemes core tables,
     trDiagnostics = perMod,
-    trResidual = residual,
+    trResidual = residual ++ map (d => (tables.etModule, d)) manifestDiags,
     trChecked = checked,
     trEvidenceFaults = match judged
       Some (_, faults) => faults
@@ -577,7 +760,12 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DUse false (UseGroup ("types" "evidence_coverage") ((mem "EvidenceFault" false) (mem "evidenceFaults" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("list") ((mem "nub" false) (mem "reverse" false) (mem "mapAccumL" false))))
+(DUse false (UseGroup ("list") ((mem "nub" false) (mem "reverse" false) (mem "mapAccumL" false) (mem "last" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestRequest" true) (mem "ManifestSelector" true) (mem "InvocationProtocol" true) (mem "CapabilityManifest" false) (mem "ManifestDefect" true))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
+(DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" false))))
+(DUse false (UseGroup ("types" "manifest_publish") ((mem "InvocationOwner" true) (mem "ManifestEntryInput" true) (mem "publishManifests" false))))
 (DData Public "TcDiag" () ((variant "TcDiag" (ConPos (TyCon "String") (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))) ())
 (DTypeSig true "tcCode" (TyFun (TyCon "TcDiag") (TyCon "String")))
 (DFunDef false "tcCode" ((PCon "TcDiag" (PVar "c") PWild PWild PWild PWild PWild)) (EVar "c"))
@@ -591,6 +779,18 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DFunDef false "ppPubScheme" ((PVar "p")) (EApp (EApp (EVar "ppSchemeCon") (EFieldAccess (EVar "p") "psContext")) (EFieldAccess (EVar "p") "psScheme")))
 (DTypeSig true "pubSchemes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
 (DFunDef false "pubSchemes" () (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (EFieldAccess (EApp (EVar "snd") (EVar "b")) "psScheme")))))
+(DTypeSig true "publishedEntrySchemes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))
+(DFunDef false "publishedEntrySchemes" ((PVar "modules")) (EApp (EApp (EApp (EVar "option") (EListLit)) (EVar "snd")) (EApp (EVar "last") (EVar "modules"))))
+(DTypeSig true "publishCore" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))
+(DFunDef false "publishCore" ((PVar "contexts")) (EApp (EVar "publishWithContexts") (ELam ((PVar "name")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "contexts"))))))
+(DTypeSig true "publishWithContexts" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))
+(DFunDef false "publishWithContexts" ((PVar "context")) (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (ERecordCreate "PubScheme" ((fa "psScheme" (EApp (EVar "snd") (EVar "b"))) (fa "psContext" (EApp (EVar "context") (EApp (EVar "fst") (EVar "b"))))))))))
+(DTypeSig true "publishedCore" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))))
+(DFunDef false "publishedCore" ((PCon "Some" (PVar "rows")) PWild PWild) (EVar "rows"))
+(DFunDef false "publishedCore" ((PCon "None") (PVar "contexts") (PVar "schemes")) (EApp (EVar "freezeRows") (EApp (EApp (EVar "publishCore") (EVar "contexts")) (EVar "schemes"))))
+(DTypeSig true "publishSelected" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyFun (TyCon "InvocationOwner") (TyApp (TyCon "Option") (TyCon "InvocationOps"))) (TyFun (TyApp (TyCon "List") (TyCon "ManifestSelector")) (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "Option") (TyCon "EntryKey")) (TyFun (TyCon "Bool") (TyTuple (TyApp (TyCon "List") (TyCon "ManifestRequest")) (TyApp (TyCon "List") (TyCon "CapabilityManifest")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))))
+(DFunDef false "publishSelected" (PWild PWild (PList) PWild PWild PWild PWild PWild) (ETuple (EListLit) (EListLit) (EListLit)))
+(DFunDef false "publishSelected" ((PVar "domains") (PVar "resolveOps") (PVar "selectors") (PVar "perMod") (PVar "core") (PVar "outcome") (PVar "executes") (PVar "valueMain")) (EBlock (DoLet false false (PVar "entry") (EApp (EApp (EVar "optionOr") (ETuple (ELit (LString "")) (ETuple (EListLit) (EListLit) (EListLit)))) (EApp (EVar "last") (EVar "perMod")))) (DoLet false false (PVar "byModule") (EApp (EVar "IdMap.fromList") (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "IdMap.fromList") (EApp (EVar "reverse") (EApp (EVar "modSchemes") (EApp (EVar "snd") (EVar "m")))))))) (EVar "perMod")))) (DoLet false false (PVar "coreRows") (EApp (EVar "IdMap.fromList") (EApp (EVar "reverse") (EVar "core")))) (DoLet false true (PVar "rows") (ELam ((PVar "owner")) (EMatch (EVar "owner") (arm (PCon "SourceModule" (PVar "mid")) () (EApp (EApp (EVar "optionOr") (EVar "Tip")) (EApp (EApp (EVar "IdMap.get") (EVar "mid")) (EVar "byModule")))) (arm (PCon "ShippedPrelude") () (EVar "coreRows"))))) (DoLet false true (PVar "ownerOf") (ELam ((PVar "key")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "key") "moduleId") (ELit (LString "core"))) (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EFieldAccess (EVar "key") "binding")) (EApp (EVar "rows") (EApp (EVar "SourceModule") (ELit (LString "core"))))))) (EVar "ShippedPrelude") (EApp (EVar "SourceModule") (EFieldAccess (EVar "key") "moduleId"))))) (DoLet false false (PVar "own") (EApp (EVar "rows") (EApp (EVar "SourceModule") (EApp (EVar "fst") (EVar "entry"))))) (DoLet false true (PVar "resolve") (ELam ((PVar "selector")) (EMatch (EVar "selector") (arm (PCon "ExactEntry" (PVar "key") (PVar "protocol")) () (ETuple (ERecordCreate "ManifestRequest" ((fa "entry" (EVar "key")) (fa "protocol" (EVar "protocol")))) (EApp (EVar "ownerOf") (EVar "key")))) (arm (PCon "EntryOverPrelude" (PVar "name") (PVar "protocol")) () (EBlock (DoLet false false (PVar "isOwn") (EApp (EApp (EVar "IdMap.has") (EVar "name")) (EVar "own"))) (DoExpr (ETuple (ERecordCreate "ManifestRequest" ((fa "entry" (ERecordCreate "EntryKey" ((fa "moduleId" (EIf (EVar "isOwn") (EApp (EVar "fst") (EVar "entry")) (ELit (LString "core")))) (fa "binding" (EVar "name"))))) (fa "protocol" (EVar "protocol")))) (EIf (EVar "isOwn") (EApp (EVar "SourceModule") (EApp (EVar "fst") (EVar "entry"))) (EVar "ShippedPrelude"))))))))) (DoLet false false (PVar "resolved") (EApp (EApp (EVar "map") (EVar "resolve")) (EVar "selectors"))) (DoLet false false (PVar "selected") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "resolved"))) (DoLet false true (PVar "wrapper") (ELam ((PVar "owner")) (ELam ((PVar "name")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EVar "owner") (EFieldAccess (EVar "p") "psScheme")))) (EApp (EApp (EVar "IdMap.get") (EVar "name")) (EApp (EVar "rows") (EVar "owner"))))))) (DoLet false true (PVar "wrappers") (ELam ((PVar "request")) (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EListLit)) (arm (PCon "ExecutedMain") () (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "request") "entry") "moduleId") (EApp (EVar "fst") (EVar "entry"))) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "request") "entry") "binding") (ELit (LString "main")))) (EApp (EVar "not") (EVar "valueMain"))) (EFieldAccess (EVar "outcome") "eoMainIsUnit")) (EListLit) (EIf (EFieldAccess (EVar "outcome") "eoMainIsAsync") (EApp (EApp (EApp (EVar "option") (EListLit)) (ELam ((PVar "key")) (EApp (EApp (EApp (EVar "option") (EListLit)) (ELam ((PVar "w")) (EListLit (EVar "w")))) (EApp (EApp (EVar "wrapper") (EApp (EVar "ownerOf") (EVar "key"))) (EFieldAccess (EVar "key") "binding"))))) (EVar "executes")) (EApp (EApp (EApp (EVar "option") (EListLit)) (ELam ((PVar "w")) (EListLit (EVar "w")))) (EApp (EApp (EVar "wrapper") (EVar "ShippedPrelude")) (ELit (LString "println")))))))))) (DoLet false false (PVar "inputs") (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "request") (PVar "owner"))) (EApp (EApp (EApp (EVar "option") (EListLit)) (ELam ((PVar "p")) (EListLit (ERecordCreate "ManifestEntryInput" ((fa "request" (EVar "request")) (fa "owner" (EVar "owner")) (fa "scheme" (EFieldAccess (EVar "p") "psScheme")) (fa "wrappers" (EApp (EVar "wrappers") (EVar "request")))))))) (EApp (EApp (EVar "IdMap.get") (EFieldAccess (EFieldAccess (EVar "request") "entry") "binding")) (EApp (EVar "rows") (EVar "owner")))))) (EVar "resolved"))) (DoLet false false (PVar "missingDrivers") (EApp (EApp (EVar "flatMap") (ELam ((PVar "request")) (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EListLit)) (arm (PCon "ExecutedMain") () (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "request") "entry") "moduleId") (EApp (EVar "fst") (EVar "entry"))) (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "request") "entry") "binding") (ELit (LString "main")))) (EVar "valueMain")) (EFieldAccess (EVar "outcome") "eoMainIsAsync")) (EApp (EVar "isEmpty") (EApp (EVar "wrappers") (EVar "request")))) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-MANIFEST-WRAPPER"))) (ELit (LInt 1))) (EVar "None")) (ELit (LString "no checked Async driver selected for executed main"))) (EVar "None")) (EVar "None"))) (EListLit)))))) (EVar "selected"))) (DoLet false false (PVar "missing") (EBinOp "++" (EVar "missingDrivers") (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "request") (PVar "owner"))) (EIf (EApp (EApp (EVar "IdMap.has") (EFieldAccess (EFieldAccess (EVar "request") "entry") "binding")) (EApp (EVar "rows") (EVar "owner"))) (EListLit) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-MANIFEST-ENTRY"))) (ELit (LInt 1))) (EVar "None")) (EBinOp "++" (EBinOp "++" (ELit (LString "no '")) (EFieldAccess (EFieldAccess (EVar "request") "entry") "binding")) (ELit (LString "' entry found")))) (EVar "None")) (EVar "None")))))) (EVar "resolved")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "publishManifests") (EVar "domains")) (EVar "resolveOps")) (EVar "inputs")) (arm (PCon "Ok" (PVar "manifests")) () (ETuple (EVar "selected") (EVar "manifests") (EVar "missing"))) (arm (PCon "Err" (PVar "defects")) () (ETuple (EVar "selected") (EListLit) (EBinOp "++" (EVar "missing") (EApp (EApp (EVar "map") (ELam ((PCon "ManifestDefect" (PVar "message"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-MANIFEST-INVALID"))) (ELit (LInt 1))) (EVar "None")) (EVar "message")) (EVar "None")) (EVar "None")))) (EVar "defects")))))))))
 (DData Public "VarKind" () ((variant "TyVarK" (ConPos)) (variant "EffVarK" (ConPos)) (variant "AuthVarK" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "VarKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TyVarK") (PCon "TyVarK")) () (EVar "True")) (arm (PTuple (PCon "EffVarK") (PCon "EffVarK")) () (EVar "True")) (arm (PTuple (PCon "AuthVarK") (PCon "AuthVarK")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "VarKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TyVarK") () (ELit (LString "TyVarK"))) (arm (PCon "EffVarK") () (ELit (LString "EffVarK"))) (arm (PCon "AuthVarK") () (ELit (LString "AuthVarK")))))))
@@ -603,7 +803,7 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DFunDef false "noEntryTables" () (ERecordCreate "EntryTables" ((fa "etModule" (ELit (LString ""))) (fa "etLocals" (EListLit)) (fa "etSeed" (EListLit)))))
 (DTypeSig true "partialAnalysis" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyCon "EntryTables") (TyCon "PartialAnalysis")))))
 (DFunDef false "partialAnalysis" ((PVar "schemes") (PVar "core") (PVar "tables")) (ERecordCreate "PartialAnalysis" ((fa "paModule" (EFieldAccess (EVar "tables") "etModule")) (fa "paSchemes" (EVar "schemes")) (fa "paCore" (EVar "core")) (fa "paLocals" (EFieldAccess (EVar "tables") "etLocals")) (fa "paSeed" (EFieldAccess (EVar "tables") "etSeed")))))
-(DData Public "CheckedProgram" () ((variant "CheckedProgram" (ConNamed (field "cpSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))) (field "cpCore" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "cpEvidence" (TyCon "EvTable")) (field "cpDispositions" (TyCon "DispositionTable")) (field "cpBinders" (TyCon "BinderTypeTable")) (field "cpEntryOutcome" (TyCon "EntryOutcome")) (field "cpTrees" (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))) (field "cpWeak" (TyApp (TyCon "List") (TyCon "LiveCell")))))) ())
+(DData Public "CheckedProgram" () ((variant "CheckedProgram" (ConNamed (field "cpSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))) (field "cpCore" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "cpEvidence" (TyCon "EvTable")) (field "cpDispositions" (TyCon "DispositionTable")) (field "cpBinders" (TyCon "BinderTypeTable")) (field "cpEntryOutcome" (TyCon "EntryOutcome")) (field "cpTrees" (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))) (field "cpWeak" (TyApp (TyCon "List") (TyCon "LiveCell"))) (field "cpManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest")))))) ())
 (DData Public "EntryOutcome" () ((variant "EntryOutcome" (ConNamed (field "eoMainIsUnit" (TyCon "Bool")) (field "eoMainIsFloat" (TyCon "Bool")) (field "eoMainIsAsync" (TyCon "Bool")) (field "eoMainAsyncPayloadIsUnit" (TyCon "Bool")) (field "eoAutoPrint" (TyApp (TyCon "Option") (TyCon "EvId")))))) ())
 (DTypeSig true "noEntryOutcome" (TyCon "EntryOutcome"))
 (DFunDef false "noEntryOutcome" () (ERecordCreate "EntryOutcome" ((fa "eoMainIsUnit" (EVar "False")) (fa "eoMainIsFloat" (EVar "False")) (fa "eoMainIsAsync" (EVar "False")) (fa "eoMainAsyncPayloadIsUnit" (EVar "False")) (fa "eoAutoPrint" (EVar "None")))))
@@ -651,9 +851,9 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DTypeSig true "freezeNewest" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyCon "ModDiags")))))
 (DFunDef false "freezeNewest" ((PVar "n") (PVar "rows")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "rows") (EIf (EVar "otherwise") (EMatch (EVar "rows") (arm (PList) () (EListLit)) (arm (PCons (PVar "m") (PVar "rest")) () (EBinOp "::" (EApp (EVar "freezeModDiags") (EVar "m")) (EApp (EApp (EVar "freezeNewest") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "graphReport" (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyFun (TyCon "Unit") (TyCon "EvTable")) (TyFun (TyCon "DispositionTable") (TyFun (TyCon "BinderTypeTable") (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyFun (TyCon "EntryTables") (TyCon "TcReport"))))))))))
-(DFunDef false "graphReport" ((PVar "perMod") (PVar "core") (PVar "residual") (PVar "evidence") (PVar "dispositions") (PVar "binders") (PVar "trees") (PVar "tables")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "graphReportWithOutcome") (EVar "noEntryOutcome")) (EVar "perMod")) (EVar "core")) (EVar "residual")) (EVar "evidence")) (EVar "dispositions")) (EVar "binders")) (EVar "trees")) (EVar "tables")))
-(DTypeSig true "graphReportWithOutcome" (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyFun (TyCon "Unit") (TyCon "EvTable")) (TyFun (TyCon "DispositionTable") (TyFun (TyCon "BinderTypeTable") (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyFun (TyCon "EntryTables") (TyCon "TcReport")))))))))))
-(DFunDef false "graphReportWithOutcome" ((PVar "outcome") (PVar "perMod") (PVar "core") (PVar "residual") (PVar "evidence") (PVar "dispositions") (PVar "binders") (PVar "trees") (PVar "tables")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "modSchemes") (EApp (EVar "snd") (EVar "m")))))) (EVar "perMod"))) (DoLet false false (PVar "cells") (EApp (EVar "graphCells") (EBinOp "::" (EVar "core") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "schemes"))))) (DoLet false false (PVar "judged") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmpty") (EVar "residual")) (EApp (EVar "noModErrors") (EVar "perMod"))) (EApp (EApp (EVar "all") (EVar "isWeak")) (EVar "cells"))) (EBlock (DoLet false false (PVar "table") (EApp (EVar "evidence") (ELit LUnit))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "table") (EApp (EApp (EVar "evidenceFaults") (EVar "trees")) (EVar "table")))))) (EVar "None"))) (DoLet false false (PVar "checked") (EMatch (EVar "judged") (arm (PCon "Some" (PTuple (PVar "table") (PList))) () (EApp (EVar "Some") (ERecordCreate "CheckedProgram" ((fa "cpSchemes" (EVar "schemes")) (fa "cpCore" (EVar "core")) (fa "cpEvidence" (EVar "table")) (fa "cpDispositions" (EVar "dispositions")) (fa "cpBinders" (EVar "binders")) (fa "cpEntryOutcome" (EVar "outcome")) (fa "cpTrees" (EVar "trees")) (fa "cpWeak" (EVar "cells")))))) (arm PWild () (EVar "None")))) (DoExpr (ERecordCreate "TcReport" ((fa "trPartial" (EApp (EApp (EApp (EVar "partialAnalysis") (EVar "schemes")) (EVar "core")) (EVar "tables"))) (fa "trDiagnostics" (EVar "perMod")) (fa "trResidual" (EVar "residual")) (fa "trChecked" (EVar "checked")) (fa "trEvidenceFaults" (EMatch (EVar "judged") (arm (PCon "Some" (PTuple PWild (PVar "faults"))) () (EVar "faults")) (arm (PCon "None") () (EListLit)))))))))
+(DFunDef false "graphReport" ((PVar "perMod") (PVar "core") (PVar "residual") (PVar "evidence") (PVar "dispositions") (PVar "binders") (PVar "trees") (PVar "tables")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "graphReportWithOutcome") (EVar "noEntryOutcome")) (EListLit)) (EListLit)) (EVar "perMod")) (EVar "core")) (EVar "residual")) (EVar "evidence")) (EVar "dispositions")) (EVar "binders")) (EVar "trees")) (EVar "tables")))
+(DTypeSig true "graphReportWithOutcome" (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "List") (TyCon "CapabilityManifest")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyFun (TyCon "Unit") (TyCon "EvTable")) (TyFun (TyCon "DispositionTable") (TyFun (TyCon "BinderTypeTable") (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyFun (TyCon "EntryTables") (TyCon "TcReport")))))))))))))
+(DFunDef false "graphReportWithOutcome" ((PVar "outcome") (PVar "manifests") (PVar "manifestDiags") (PVar "perMod") (PVar "core") (PVar "residual") (PVar "evidence") (PVar "dispositions") (PVar "binders") (PVar "trees") (PVar "tables")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "modSchemes") (EApp (EVar "snd") (EVar "m")))))) (EVar "perMod"))) (DoLet false false (PVar "cells") (EApp (EVar "graphCells") (EBinOp "::" (EVar "core") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "schemes"))))) (DoLet false false (PVar "judged") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmpty") (EVar "residual")) (EApp (EVar "isEmpty") (EVar "manifestDiags"))) (EApp (EVar "noModErrors") (EVar "perMod"))) (EApp (EApp (EVar "all") (EVar "isWeak")) (EVar "cells"))) (EBlock (DoLet false false (PVar "table") (EApp (EVar "evidence") (ELit LUnit))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "table") (EApp (EApp (EVar "evidenceFaults") (EVar "trees")) (EVar "table")))))) (EVar "None"))) (DoLet false false (PVar "checked") (EMatch (EVar "judged") (arm (PCon "Some" (PTuple (PVar "table") (PList))) () (EApp (EVar "Some") (ERecordCreate "CheckedProgram" ((fa "cpSchemes" (EVar "schemes")) (fa "cpCore" (EVar "core")) (fa "cpEvidence" (EVar "table")) (fa "cpDispositions" (EVar "dispositions")) (fa "cpBinders" (EVar "binders")) (fa "cpEntryOutcome" (EVar "outcome")) (fa "cpTrees" (EVar "trees")) (fa "cpWeak" (EVar "cells")) (fa "cpManifests" (EVar "manifests")))))) (arm PWild () (EVar "None")))) (DoExpr (ERecordCreate "TcReport" ((fa "trPartial" (EApp (EApp (EApp (EVar "partialAnalysis") (EVar "schemes")) (EVar "core")) (EVar "tables"))) (fa "trDiagnostics" (EVar "perMod")) (fa "trResidual" (EBinOp "++" (EVar "residual") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EFieldAccess (EVar "tables") "etModule") (EVar "d")))) (EVar "manifestDiags")))) (fa "trChecked" (EVar "checked")) (fa "trEvidenceFaults" (EMatch (EVar "judged") (arm (PCon "Some" (PTuple PWild (PVar "faults"))) () (EVar "faults")) (arm (PCon "None") () (EListLit)))))))))
 (DTypeSig true "graphCells" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (TyApp (TyCon "List") (TyCon "LiveCell"))))
 (DFunDef false "graphCells" ((PList)) (EListLit))
 (DFunDef false "graphCells" ((PCons (PVar "rows") (PVar "rest"))) (EApp (EApp (EVar "rowCells") (EVar "rows")) (EApp (EVar "graphCells") (EVar "rest"))))
@@ -716,7 +916,12 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DUse false (UseGroup ("types" "evidence_coverage") ((mem "EvidenceFault" false) (mem "evidenceFaults" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("list") ((mem "nub" false) (mem "reverse" false) (mem "mapAccumL" false))))
+(DUse false (UseGroup ("list") ((mem "nub" false) (mem "reverse" false) (mem "mapAccumL" false) (mem "last" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestRequest" true) (mem "ManifestSelector" true) (mem "InvocationProtocol" true) (mem "CapabilityManifest" false) (mem "ManifestDefect" true))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
+(DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" false))))
+(DUse false (UseGroup ("types" "manifest_publish") ((mem "InvocationOwner" true) (mem "ManifestEntryInput" true) (mem "publishManifests" false))))
 (DData Public "TcDiag" () ((variant "TcDiag" (ConPos (TyCon "String") (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))) ())
 (DTypeSig true "tcCode" (TyFun (TyCon "TcDiag") (TyCon "String")))
 (DFunDef false "tcCode" ((PCon "TcDiag" (PVar "c") PWild PWild PWild PWild PWild)) (EVar "c"))
@@ -730,6 +935,18 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DFunDef false "ppPubScheme" ((PVar "p")) (EApp (EApp (EVar "ppSchemeCon") (EFieldAccess (EVar "p") "psContext")) (EFieldAccess (EVar "p") "psScheme")))
 (DTypeSig true "pubSchemes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
 (DFunDef false "pubSchemes" () (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (EFieldAccess (EApp (EVar "snd") (EVar "b")) "psScheme")))))
+(DTypeSig true "publishedEntrySchemes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))
+(DFunDef false "publishedEntrySchemes" ((PVar "modules")) (EApp (EApp (EApp (EVar "option") (EListLit)) (EVar "snd")) (EApp (EVar "last") (EVar "modules"))))
+(DTypeSig true "publishCore" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))
+(DFunDef false "publishCore" ((PVar "contexts")) (EApp (EVar "publishWithContexts") (ELam ((PVar "name")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "contexts"))))))
+(DTypeSig true "publishWithContexts" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))
+(DFunDef false "publishWithContexts" ((PVar "context")) (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (ERecordCreate "PubScheme" ((fa "psScheme" (EApp (EVar "snd") (EVar "b"))) (fa "psContext" (EApp (EVar "context") (EApp (EVar "fst") (EVar "b"))))))))))
+(DTypeSig true "publishedCore" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))))
+(DFunDef false "publishedCore" ((PCon "Some" (PVar "rows")) PWild PWild) (EVar "rows"))
+(DFunDef false "publishedCore" ((PCon "None") (PVar "contexts") (PVar "schemes")) (EApp (EVar "freezeRows") (EApp (EApp (EVar "publishCore") (EVar "contexts")) (EVar "schemes"))))
+(DTypeSig true "publishSelected" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyFun (TyCon "InvocationOwner") (TyApp (TyCon "Option") (TyCon "InvocationOps"))) (TyFun (TyApp (TyCon "List") (TyCon "ManifestSelector")) (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "Option") (TyCon "EntryKey")) (TyFun (TyCon "Bool") (TyTuple (TyApp (TyCon "List") (TyCon "ManifestRequest")) (TyApp (TyCon "List") (TyCon "CapabilityManifest")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))))
+(DFunDef false "publishSelected" (PWild PWild (PList) PWild PWild PWild PWild PWild) (ETuple (EListLit) (EListLit) (EListLit)))
+(DFunDef false "publishSelected" ((PVar "domains") (PVar "resolveOps") (PVar "selectors") (PVar "perMod") (PVar "core") (PVar "outcome") (PVar "executes") (PVar "valueMain")) (EBlock (DoLet false false (PVar "entry") (EApp (EApp (EVar "optionOr") (ETuple (ELit (LString "")) (ETuple (EListLit) (EListLit) (EListLit)))) (EApp (EVar "last") (EVar "perMod")))) (DoLet false false (PVar "byModule") (EApp (EVar "IdMap.fromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "IdMap.fromList") (EApp (EVar "reverse") (EApp (EVar "modSchemes") (EApp (EVar "snd") (EVar "m")))))))) (EVar "perMod")))) (DoLet false false (PVar "coreRows") (EApp (EVar "IdMap.fromList") (EApp (EVar "reverse") (EVar "core")))) (DoLet false true (PVar "rows") (ELam ((PVar "owner")) (EMatch (EVar "owner") (arm (PCon "SourceModule" (PVar "mid")) () (EApp (EApp (EVar "optionOr") (EVar "Tip")) (EApp (EApp (EVar "IdMap.get") (EVar "mid")) (EVar "byModule")))) (arm (PCon "ShippedPrelude") () (EVar "coreRows"))))) (DoLet false true (PVar "ownerOf") (ELam ((PVar "key")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "key") "moduleId") (ELit (LString "core"))) (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EFieldAccess (EVar "key") "binding")) (EApp (EVar "rows") (EApp (EVar "SourceModule") (ELit (LString "core"))))))) (EVar "ShippedPrelude") (EApp (EVar "SourceModule") (EFieldAccess (EVar "key") "moduleId"))))) (DoLet false false (PVar "own") (EApp (EVar "rows") (EApp (EVar "SourceModule") (EApp (EVar "fst") (EVar "entry"))))) (DoLet false true (PVar "resolve") (ELam ((PVar "selector")) (EMatch (EVar "selector") (arm (PCon "ExactEntry" (PVar "key") (PVar "protocol")) () (ETuple (ERecordCreate "ManifestRequest" ((fa "entry" (EVar "key")) (fa "protocol" (EVar "protocol")))) (EApp (EVar "ownerOf") (EVar "key")))) (arm (PCon "EntryOverPrelude" (PVar "name") (PVar "protocol")) () (EBlock (DoLet false false (PVar "isOwn") (EApp (EApp (EVar "IdMap.has") (EVar "name")) (EVar "own"))) (DoExpr (ETuple (ERecordCreate "ManifestRequest" ((fa "entry" (ERecordCreate "EntryKey" ((fa "moduleId" (EIf (EVar "isOwn") (EApp (EVar "fst") (EVar "entry")) (ELit (LString "core")))) (fa "binding" (EVar "name"))))) (fa "protocol" (EVar "protocol")))) (EIf (EVar "isOwn") (EApp (EVar "SourceModule") (EApp (EVar "fst") (EVar "entry"))) (EVar "ShippedPrelude"))))))))) (DoLet false false (PVar "resolved") (EApp (EApp (EMethodRef "map") (EVar "resolve")) (EVar "selectors"))) (DoLet false false (PVar "selected") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "resolved"))) (DoLet false true (PVar "wrapper") (ELam ((PVar "owner")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EVar "owner") (EFieldAccess (EVar "p") "psScheme")))) (EApp (EApp (EVar "IdMap.get") (EVar "name")) (EApp (EVar "rows") (EVar "owner"))))))) (DoLet false true (PVar "wrappers") (ELam ((PVar "request")) (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EListLit)) (arm (PCon "ExecutedMain") () (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "request") "entry") "moduleId") (EApp (EVar "fst") (EVar "entry"))) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "request") "entry") "binding") (ELit (LString "main")))) (EApp (EVar "not") (EVar "valueMain"))) (EFieldAccess (EVar "outcome") "eoMainIsUnit")) (EListLit) (EIf (EFieldAccess (EVar "outcome") "eoMainIsAsync") (EApp (EApp (EApp (EVar "option") (EListLit)) (ELam ((PVar "key")) (EApp (EApp (EApp (EVar "option") (EListLit)) (ELam ((PVar "w")) (EListLit (EVar "w")))) (EApp (EApp (EVar "wrapper") (EApp (EVar "ownerOf") (EVar "key"))) (EFieldAccess (EVar "key") "binding"))))) (EVar "executes")) (EApp (EApp (EApp (EVar "option") (EListLit)) (ELam ((PVar "w")) (EListLit (EVar "w")))) (EApp (EApp (EVar "wrapper") (EVar "ShippedPrelude")) (ELit (LString "println")))))))))) (DoLet false false (PVar "inputs") (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "request") (PVar "owner"))) (EApp (EApp (EApp (EVar "option") (EListLit)) (ELam ((PVar "p")) (EListLit (ERecordCreate "ManifestEntryInput" ((fa "request" (EVar "request")) (fa "owner" (EVar "owner")) (fa "scheme" (EFieldAccess (EVar "p") "psScheme")) (fa "wrappers" (EApp (EVar "wrappers") (EVar "request")))))))) (EApp (EApp (EVar "IdMap.get") (EFieldAccess (EFieldAccess (EVar "request") "entry") "binding")) (EApp (EVar "rows") (EVar "owner")))))) (EVar "resolved"))) (DoLet false false (PVar "missingDrivers") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "request")) (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EListLit)) (arm (PCon "ExecutedMain") () (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "request") "entry") "moduleId") (EApp (EVar "fst") (EVar "entry"))) (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "request") "entry") "binding") (ELit (LString "main")))) (EVar "valueMain")) (EFieldAccess (EVar "outcome") "eoMainIsAsync")) (EApp (EMethodRef "isEmpty") (EApp (EVar "wrappers") (EVar "request")))) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-MANIFEST-WRAPPER"))) (ELit (LInt 1))) (EVar "None")) (ELit (LString "no checked Async driver selected for executed main"))) (EVar "None")) (EVar "None"))) (EListLit)))))) (EVar "selected"))) (DoLet false false (PVar "missing") (EBinOp "++" (EVar "missingDrivers") (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "request") (PVar "owner"))) (EIf (EApp (EApp (EVar "IdMap.has") (EFieldAccess (EFieldAccess (EVar "request") "entry") "binding")) (EApp (EVar "rows") (EVar "owner"))) (EListLit) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-MANIFEST-ENTRY"))) (ELit (LInt 1))) (EVar "None")) (EBinOp "++" (EBinOp "++" (ELit (LString "no '")) (EFieldAccess (EFieldAccess (EVar "request") "entry") "binding")) (ELit (LString "' entry found")))) (EVar "None")) (EVar "None")))))) (EVar "resolved")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "publishManifests") (EVar "domains")) (EVar "resolveOps")) (EVar "inputs")) (arm (PCon "Ok" (PVar "manifests")) () (ETuple (EVar "selected") (EVar "manifests") (EVar "missing"))) (arm (PCon "Err" (PVar "defects")) () (ETuple (EVar "selected") (EListLit) (EBinOp "++" (EVar "missing") (EApp (EApp (EMethodRef "map") (ELam ((PCon "ManifestDefect" (PVar "message"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-MANIFEST-INVALID"))) (ELit (LInt 1))) (EVar "None")) (EVar "message")) (EVar "None")) (EVar "None")))) (EVar "defects")))))))))
 (DData Public "VarKind" () ((variant "TyVarK" (ConPos)) (variant "EffVarK" (ConPos)) (variant "AuthVarK" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "VarKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TyVarK") (PCon "TyVarK")) () (EVar "True")) (arm (PTuple (PCon "EffVarK") (PCon "EffVarK")) () (EVar "True")) (arm (PTuple (PCon "AuthVarK") (PCon "AuthVarK")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "VarKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TyVarK") () (ELit (LString "TyVarK"))) (arm (PCon "EffVarK") () (ELit (LString "EffVarK"))) (arm (PCon "AuthVarK") () (ELit (LString "AuthVarK")))))))
@@ -742,7 +959,7 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DFunDef false "noEntryTables" () (ERecordCreate "EntryTables" ((fa "etModule" (ELit (LString ""))) (fa "etLocals" (EListLit)) (fa "etSeed" (EListLit)))))
 (DTypeSig true "partialAnalysis" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyCon "EntryTables") (TyCon "PartialAnalysis")))))
 (DFunDef false "partialAnalysis" ((PVar "schemes") (PVar "core") (PVar "tables")) (ERecordCreate "PartialAnalysis" ((fa "paModule" (EFieldAccess (EVar "tables") "etModule")) (fa "paSchemes" (EVar "schemes")) (fa "paCore" (EVar "core")) (fa "paLocals" (EFieldAccess (EVar "tables") "etLocals")) (fa "paSeed" (EFieldAccess (EVar "tables") "etSeed")))))
-(DData Public "CheckedProgram" () ((variant "CheckedProgram" (ConNamed (field "cpSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))) (field "cpCore" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "cpEvidence" (TyCon "EvTable")) (field "cpDispositions" (TyCon "DispositionTable")) (field "cpBinders" (TyCon "BinderTypeTable")) (field "cpEntryOutcome" (TyCon "EntryOutcome")) (field "cpTrees" (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))) (field "cpWeak" (TyApp (TyCon "List") (TyCon "LiveCell")))))) ())
+(DData Public "CheckedProgram" () ((variant "CheckedProgram" (ConNamed (field "cpSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))) (field "cpCore" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "cpEvidence" (TyCon "EvTable")) (field "cpDispositions" (TyCon "DispositionTable")) (field "cpBinders" (TyCon "BinderTypeTable")) (field "cpEntryOutcome" (TyCon "EntryOutcome")) (field "cpTrees" (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))) (field "cpWeak" (TyApp (TyCon "List") (TyCon "LiveCell"))) (field "cpManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest")))))) ())
 (DData Public "EntryOutcome" () ((variant "EntryOutcome" (ConNamed (field "eoMainIsUnit" (TyCon "Bool")) (field "eoMainIsFloat" (TyCon "Bool")) (field "eoMainIsAsync" (TyCon "Bool")) (field "eoMainAsyncPayloadIsUnit" (TyCon "Bool")) (field "eoAutoPrint" (TyApp (TyCon "Option") (TyCon "EvId")))))) ())
 (DTypeSig true "noEntryOutcome" (TyCon "EntryOutcome"))
 (DFunDef false "noEntryOutcome" () (ERecordCreate "EntryOutcome" ((fa "eoMainIsUnit" (EVar "False")) (fa "eoMainIsFloat" (EVar "False")) (fa "eoMainIsAsync" (EVar "False")) (fa "eoMainAsyncPayloadIsUnit" (EVar "False")) (fa "eoAutoPrint" (EVar "None")))))
@@ -790,9 +1007,9 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DTypeSig true "freezeNewest" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyCon "ModDiags")))))
 (DFunDef false "freezeNewest" ((PVar "n") (PVar "rows")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "rows") (EIf (EVar "otherwise") (EMatch (EVar "rows") (arm (PList) () (EListLit)) (arm (PCons (PVar "m") (PVar "rest")) () (EBinOp "::" (EApp (EVar "freezeModDiags") (EVar "m")) (EApp (EApp (EVar "freezeNewest") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "graphReport" (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyFun (TyCon "Unit") (TyCon "EvTable")) (TyFun (TyCon "DispositionTable") (TyFun (TyCon "BinderTypeTable") (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyFun (TyCon "EntryTables") (TyCon "TcReport"))))))))))
-(DFunDef false "graphReport" ((PVar "perMod") (PVar "core") (PVar "residual") (PVar "evidence") (PVar "dispositions") (PVar "binders") (PVar "trees") (PVar "tables")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "graphReportWithOutcome") (EVar "noEntryOutcome")) (EVar "perMod")) (EVar "core")) (EVar "residual")) (EVar "evidence")) (EVar "dispositions")) (EVar "binders")) (EVar "trees")) (EVar "tables")))
-(DTypeSig true "graphReportWithOutcome" (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyFun (TyCon "Unit") (TyCon "EvTable")) (TyFun (TyCon "DispositionTable") (TyFun (TyCon "BinderTypeTable") (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyFun (TyCon "EntryTables") (TyCon "TcReport")))))))))))
-(DFunDef false "graphReportWithOutcome" ((PVar "outcome") (PVar "perMod") (PVar "core") (PVar "residual") (PVar "evidence") (PVar "dispositions") (PVar "binders") (PVar "trees") (PVar "tables")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "modSchemes") (EApp (EVar "snd") (EVar "m")))))) (EVar "perMod"))) (DoLet false false (PVar "cells") (EApp (EVar "graphCells") (EBinOp "::" (EVar "core") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "schemes"))))) (DoLet false false (PVar "judged") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EMethodRef "isEmpty") (EVar "residual")) (EApp (EVar "noModErrors") (EVar "perMod"))) (EApp (EApp (EDictApp "all") (EVar "isWeak")) (EVar "cells"))) (EBlock (DoLet false false (PVar "table") (EApp (EVar "evidence") (ELit LUnit))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "table") (EApp (EApp (EVar "evidenceFaults") (EVar "trees")) (EVar "table")))))) (EVar "None"))) (DoLet false false (PVar "checked") (EMatch (EVar "judged") (arm (PCon "Some" (PTuple (PVar "table") (PList))) () (EApp (EVar "Some") (ERecordCreate "CheckedProgram" ((fa "cpSchemes" (EVar "schemes")) (fa "cpCore" (EVar "core")) (fa "cpEvidence" (EVar "table")) (fa "cpDispositions" (EVar "dispositions")) (fa "cpBinders" (EVar "binders")) (fa "cpEntryOutcome" (EVar "outcome")) (fa "cpTrees" (EVar "trees")) (fa "cpWeak" (EVar "cells")))))) (arm PWild () (EVar "None")))) (DoExpr (ERecordCreate "TcReport" ((fa "trPartial" (EApp (EApp (EApp (EVar "partialAnalysis") (EVar "schemes")) (EVar "core")) (EVar "tables"))) (fa "trDiagnostics" (EVar "perMod")) (fa "trResidual" (EVar "residual")) (fa "trChecked" (EVar "checked")) (fa "trEvidenceFaults" (EMatch (EVar "judged") (arm (PCon "Some" (PTuple PWild (PVar "faults"))) () (EVar "faults")) (arm (PCon "None") () (EListLit)))))))))
+(DFunDef false "graphReport" ((PVar "perMod") (PVar "core") (PVar "residual") (PVar "evidence") (PVar "dispositions") (PVar "binders") (PVar "trees") (PVar "tables")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "graphReportWithOutcome") (EVar "noEntryOutcome")) (EListLit)) (EListLit)) (EVar "perMod")) (EVar "core")) (EVar "residual")) (EVar "evidence")) (EVar "dispositions")) (EVar "binders")) (EVar "trees")) (EVar "tables")))
+(DTypeSig true "graphReportWithOutcome" (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "List") (TyCon "CapabilityManifest")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyFun (TyCon "Unit") (TyCon "EvTable")) (TyFun (TyCon "DispositionTable") (TyFun (TyCon "BinderTypeTable") (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyFun (TyCon "EntryTables") (TyCon "TcReport")))))))))))))
+(DFunDef false "graphReportWithOutcome" ((PVar "outcome") (PVar "manifests") (PVar "manifestDiags") (PVar "perMod") (PVar "core") (PVar "residual") (PVar "evidence") (PVar "dispositions") (PVar "binders") (PVar "trees") (PVar "tables")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "modSchemes") (EApp (EVar "snd") (EVar "m")))))) (EVar "perMod"))) (DoLet false false (PVar "cells") (EApp (EVar "graphCells") (EBinOp "::" (EVar "core") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "schemes"))))) (DoLet false false (PVar "judged") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EMethodRef "isEmpty") (EVar "residual")) (EApp (EMethodRef "isEmpty") (EVar "manifestDiags"))) (EApp (EVar "noModErrors") (EVar "perMod"))) (EApp (EApp (EDictApp "all") (EVar "isWeak")) (EVar "cells"))) (EBlock (DoLet false false (PVar "table") (EApp (EVar "evidence") (ELit LUnit))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "table") (EApp (EApp (EVar "evidenceFaults") (EVar "trees")) (EVar "table")))))) (EVar "None"))) (DoLet false false (PVar "checked") (EMatch (EVar "judged") (arm (PCon "Some" (PTuple (PVar "table") (PList))) () (EApp (EVar "Some") (ERecordCreate "CheckedProgram" ((fa "cpSchemes" (EVar "schemes")) (fa "cpCore" (EVar "core")) (fa "cpEvidence" (EVar "table")) (fa "cpDispositions" (EVar "dispositions")) (fa "cpBinders" (EVar "binders")) (fa "cpEntryOutcome" (EVar "outcome")) (fa "cpTrees" (EVar "trees")) (fa "cpWeak" (EVar "cells")) (fa "cpManifests" (EVar "manifests")))))) (arm PWild () (EVar "None")))) (DoExpr (ERecordCreate "TcReport" ((fa "trPartial" (EApp (EApp (EApp (EVar "partialAnalysis") (EVar "schemes")) (EVar "core")) (EVar "tables"))) (fa "trDiagnostics" (EVar "perMod")) (fa "trResidual" (EBinOp "++" (EVar "residual") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EFieldAccess (EVar "tables") "etModule") (EVar "d")))) (EVar "manifestDiags")))) (fa "trChecked" (EVar "checked")) (fa "trEvidenceFaults" (EMatch (EVar "judged") (arm (PCon "Some" (PTuple PWild (PVar "faults"))) () (EVar "faults")) (arm (PCon "None") () (EListLit)))))))))
 (DTypeSig true "graphCells" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (TyApp (TyCon "List") (TyCon "LiveCell"))))
 (DFunDef false "graphCells" ((PList)) (EListLit))
 (DFunDef false "graphCells" ((PCons (PVar "rows") (PVar "rest"))) (EApp (EApp (EVar "rowCells") (EVar "rows")) (EApp (EVar "graphCells") (EVar "rest"))))

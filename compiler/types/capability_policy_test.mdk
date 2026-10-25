@@ -1,0 +1,184 @@
+import test.{expectAll, expectEqual}
+import frontend.ast.{TyConOrigin(..), EffParamTy(..)}
+import types.capability_manifest.{
+  FrozenAtom(..),
+  FrozenAuthority(..),
+  FrozenVariable(..),
+  CapabilityManifest(..),
+  EntryKey(..),
+  InvocationProtocol(..),
+  ManifestRequest(..),
+}
+import types.capability_policy.{PolicyVerdict(..), manifestAllowed}
+import types.effect_domain.{Param(..)}
+import types.target_profile.{hostLabels}
+
+atom : String -> Param -> FrozenAuthority -> FrozenAtom
+atom label top authority = FrozenAtom {
+  label = label,
+  origin = OriginBuiltin,
+  domainTop = top,
+  authority = authority,
+}
+
+judge : List (String, Param) ->
+  List FrozenAtom ->
+  List (String, EffParamTy) ->
+  (List String, List String)
+judge domains atoms policy = match (manifestAllowed
+  (domains ++ [("Net", PPrefix None), ("FFI", PPrefix None)])
+  CapabilityManifest {
+    request = ManifestRequest {
+      entry = EntryKey { moduleId = "entry", binding = "main" },
+      protocol = HostInvocation,
+    },
+    atoms = atoms,
+  }
+  policy)
+  PolicyAdmitted => ([], [])
+  PolicyRefused labels lines => (labels, lines)
+
+variable : FrozenAuthority
+variable = FrozenVar FrozenVariable {
+  localId = 0,
+  domainTop = PPrefix None,
+  patternOnly = True,
+  sourceName = Some "path",
+}
+
+test "a label must be granted even when its authority is empty" = expectAll [
+  expectEqual ([], []) (judge [] [] []),
+  expectEqual
+    (["Net"], [])
+    (judge [] [atom "Net" (PPrefix None) (FrozenJoin [])] []),
+  expectEqual
+    ([], [])
+    (judge
+      []
+      [atom "Net" (PPrefix None) (FrozenJoin [])]
+      [("Net", EPLit "a/*")]),
+]
+
+test "every join operand must fit and grants have no cardinality widening" =
+  let prefixes =
+    map
+      (s => FrozenConst (PPrefix (Some s)))
+      ["a/*", "b/*", "c/*", "d/*", "e/*", "f/*", "g/*", "h/*", "i/*"]
+  let demand = atom "Net" (PPrefix None) (FrozenJoin prefixes)
+  let grants =
+    map
+      (s => ("Net", EPLit s))
+      ["a/*", "b/*", "c/*", "d/*", "e/*", "f/*", "g/*", "h/*", "i/*"]
+  expectAll [
+    expectEqual ([], []) (judge [] [demand] grants),
+    expectEqual (["Net"], []) (judge [] [demand] [("Net", EPLit "a/*")]),
+    expectEqual
+      (["Net"], [])
+      (judge
+        []
+        [atom "Net" (PPrefix None) (FrozenConst (PPrefix (Some "z/*")))]
+        grants),
+  ]
+
+test "a symbolic authority has a stable not-proven explanation and needs top" = expectAll
+  [
+    expectEqual
+      (["Net"], ["   not proven: Net path (authority variable `path`)\n"])
+      (judge [] [atom "Net" (PPrefix None) variable] [("Net", EPLit "cfg/*")]),
+    expectEqual
+      ([], [])
+      (judge [] [atom "Net" (PPrefix None) variable] [("Net", EPTop)]),
+  ]
+
+test "qualified grants take precedence independently for same-spelled labels" =
+  let a = { atom "Store" (PPrefix None) (FrozenConst (PPrefix (Some "a/*"))) |
+    origin = OriginModule "a",
+  }
+  let b = { a | origin = OriginModule "b" }
+  let domains = [("a::Store", PPrefix None), ("b::Store", PPrefix None)]
+  expectAll [
+    expectEqual
+      (["Store"], [])
+      (judge domains [a, b] [("Store", EPTop), ("a.Store", EPLit "other/*")]),
+    expectEqual
+      ([], [])
+      (judge domains [a, b] [("Store", EPTop), ("a.Store", EPLit "a/*")]),
+  ]
+
+test "IO fallback requires every host label and excludes FFI" =
+  let grants = map (l => (l, EPTop)) hostLabels
+  expectAll [
+    expectEqual
+      ([], [])
+      (judge [] [atom "IO" PUnit (FrozenConst PUnit)] grants),
+    expectEqual
+      (["IO"], [])
+      (judge [] [atom "IO" PUnit (FrozenConst PUnit)] [("Net", EPTop)]),
+    expectEqual
+      (["FFI"], [])
+      (judge [] [atom "FFI" (PPrefix None) (FrozenConst (PPrefix None))] grants),
+  ]
+
+test "symbolic products require one covering tuple while constant tuples can be covered together" =
+  let schema = PProduct [("Host", PPrefix None), ("Method", PSet None)]
+  let domains = [("Http", schema)]
+  let symbolic =
+    atom
+      "Http"
+      schema
+      (FrozenProduct [
+        ("Host", variable),
+        ("Method", FrozenConst (PSet (Some ["GET"]))),
+      ])
+  let topHost = [("Http", EPProduct [("Method", EPSet ["GET", "POST"])])]
+  let narrowHost =
+    [("Http", EPProduct [("Host", EPLit "cfg/*"), ("Method", EPSet ["GET"])])]
+  let constants =
+    atom
+      "Http"
+      schema
+      (FrozenConst
+        (PProduct [
+          ("Host", PPrefix (Some "cfg/*")),
+          ("Method", PSet (Some ["GET", "POST"])),
+        ]))
+  let pieces =
+    map
+      (method => (
+        "Http",
+        EPProduct [("Host", EPLit "cfg/*"), ("Method", EPSet [method])],
+      ))
+      ["GET", "POST"]
+  let symbolicBoth = { symbolic |
+    authority = FrozenProduct [
+      ("Host", variable),
+      ("Method", FrozenConst (PSet (Some ["GET", "POST"]))),
+    ],
+  }
+  let crossed = [
+    ("Http", EPProduct [("Method", EPSet ["GET"])]),
+    ("Http", EPProduct [("Host", EPLit "cfg/*"), ("Method", EPSet ["POST"])]),
+  ]
+  expectAll [
+    expectEqual ([], []) (judge domains [symbolic] topHost),
+    expectEqual
+      (["Http"], ["   not proven: Http path (authority variable `path`)\n"])
+      (judge domains [symbolic] narrowHost),
+    expectEqual ([], []) (judge domains [constants] pieces),
+    expectEqual
+      (["Http"], ["   not proven: Http path (authority variable `path`)\n"])
+      (judge domains [symbolicBoth] crossed),
+  ]
+
+test "malformed policy entries retain the invalid-effect-parameter diagnostic" =
+  expectEqual
+    (
+      ["Net"],
+      [
+        "   policy entry for Net: invalid effect parameter on <Net>: label `Net` takes a prefix pattern, not a set\n",
+      ],
+    )
+    (judge
+      []
+      [atom "Net" (PPrefix None) (FrozenConst (PPrefix None))]
+      [("Net", EPSet ["a"])])

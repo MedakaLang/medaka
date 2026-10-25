@@ -1,3 +1,5 @@
+import types.invocation_basis.{readInvocationView}
+import types.tc_types.{InvocationView(..)}
 -- Property rows for the interface file codec: a truncated file is refused
 -- rather than half-read, no flipped byte decodes to a different file (the
 -- header digest sees the ones the source hashes cannot), a header under another
@@ -20,7 +22,7 @@ import test_process.{underRoot}
 import types.effect_rows.{Atom, renderAtom}
 import types.interface_sexp_test.{prelude, fileKey}
 import types.interface_sexp.{
-  PreludeInterfaceFile(..), InterfaceSection(..), formatVersion,
+  PreludeInterfaceFile(..), InterfaceSection(..), interfaceFormatVersion,
   encodeInterface, decodeInterface, mergeSections, cacheOfSections,
   interfaceFaults
 }
@@ -251,13 +253,14 @@ test "no flipped body byte decodes to a different file" = expectAll [
 
 -- A header under another version, whatever its shape, is refused for its version.
 test "a header of another version is refused for its version, not its shape" =
-  match decodeInterface "(medaka-interface \{formatVersion + 1} (sources ()))\n"
+  match (decodeInterface
+    "(medaka-interface \{interfaceFormatVersion + 1} (sources ()))\n")
     Ok _ => fail "a later version decoded"
     Err e => expectAll [
       labelFail
         "message"
         (expectTrue
-          (S.contains "format version \{formatVersion + 1}" e.seWhat)),
+          (S.contains "format version \{interfaceFormatVersion + 1}" e.seWhat)),
       labelFail "path" (expectEqual "header/medaka-interface.1" e.sePath),
     ]
 
@@ -274,14 +277,17 @@ test "the real prelude's text under a later version is refused naming it" =
   match realText 11
     Err e => fail e
     Ok text =>
-      let later = "(medaka-interface \{formatVersion + 1}" ++ S.drop 19 text
+      let later =
+        "(medaka-interface \{interfaceFormatVersion + 1}" ++ S.drop 19 text
       match decodeInterface later
         Ok _ => fail "a later version decoded"
         Err e => expectAll [
           labelFail
             "message"
             (expectTrue
-              (S.contains "format version \{formatVersion + 1}" e.seWhat)),
+              (S.contains
+                "format version \{interfaceFormatVersion + 1}"
+                e.seWhat)),
           labelFail "path" (expectEqual "header/medaka-interface.1" e.sePath),
         ]
 
@@ -325,6 +331,7 @@ refrozen pi =
         ))
         (zip bindings.mbSchemes core)))
     pi.piStandaloneNames
+    (readInvocationView pi.piInvocationView)
 
 textOfInterface : PreludeInterface -> String
 textOfInterface pi =
@@ -505,7 +512,7 @@ withoutExterns s = InterfaceSection {
 tinyText : String
 tinyText = encodeInterface PreludeInterfaceFile {
   ifKey = InterfaceKey {
-    ikFormat = formatVersion,
+    ikFormat = interfaceFormatVersion,
     ikSources = [("core.mdk", "ab12")],
     ikCompiler = "medaka 0 (sha x)",
   },
@@ -566,3 +573,11 @@ test "an interface holding a linked core row is reported by row name" =
       expectEqual
         [LinkCell "linkedRow" TyVarK None]
         (interfaceFaults { pi | piCore = [("linkedRow", row)] })
+
+test "the previous interface format is stale before any old field can decode" =
+  match decodeInterface "(medaka-interface 2 (sources ()))\n"
+    Ok _ => fail "old interface decoded"
+    Err e => expectAll [
+      expectEqual "header/medaka-interface.1" e.sePath,
+      expectTrue (S.contains "format version 2, this compiler reads 3" e.seWhat),
+    ]

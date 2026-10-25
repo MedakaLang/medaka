@@ -89,14 +89,14 @@
 --   (medaka-interface <version> (sources ((<path> <hash>) ...)) (compiler <id>)
 --     (sections <n>) (digest <hex>))
 --   (section (joins (<join> ...)) <interface>)   a join is a list of `atom` nodes
---   (interface <field> x19)                   `PreludeInterface`, field order
+--   (interface <field> x20)                   `PreludeInterface`, field order
 -- `digest` is the SHA-256, in lower-case hex, of the file's bytes after the
 -- header line, the newline that ends it excluded: every section line with its
 -- own newline.  The reader hashes those bytes as they are, so no section is
 -- decoded and rendered again to be checked; the header key hashes source files,
 -- so only the digest sees a byte changed inside a section.
 -- A section's joins are written in the order of their rendered text.  A header
--- whose version is not `formatVersion` (read before the header's shape), a
+-- whose version is not `interfaceFormatVersion` (read before the header's shape), a
 -- digest that differs from the nodes present, a missing, truncated or extra
 -- node, a section count that differs from the nodes present, or any component
 -- refusal is an `Err`, never a partial record.
@@ -126,7 +126,8 @@ import types.repr.{
 }
 import types.tc_types.{
   RecordInfo(..), PredicateSlot(..), PredicateSlotArgs(..),
-  MethodPredicateSlot(..), CDeclaredPrefix(..), BuiltinClasses(..)
+  MethodPredicateSlot(..), CDeclaredPrefix(..), BuiltinClasses(..),
+  PublishedInvocationView(..), Kind(..), Polarity(..)
 }
 import types.effect_rows.{EffRow(..), Effvar(..), Atom(..), EffLabel(..)}
 import types.effect_authority.{Authority(..), Authvar(..)}
@@ -1289,8 +1290,8 @@ public export data PreludeInterfaceFile = PreludeInterfaceFile {
 }
 
 export
-formatVersion : Int
-formatVersion = 2
+interfaceFormatVersion : Int
+interfaceFormatVersion = 3
 
 export
 sectionsOfCache : List (List (List Atom), PreludeInterface) ->
@@ -1354,10 +1355,79 @@ sectionNode s = tagged "section" [
   interfaceNode s.isInterface,
 ]
 
+polarityNode : Polarity -> SExp
+polarityNode PCo = SAtom "co"
+polarityNode PContra = SAtom "contra"
+polarityNode PInv = SAtom "invariant"
+polarityNode PPhantom = SAtom "phantom"
+
+kindNode : Kind -> SExp
+kindNode KType = SAtom "type"
+kindNode KRow = SAtom "row"
+kindNode (KAuth label pattern) =
+  tagged "auth-kind" [effLabelSExp label, boolNode pattern]
+
+export
+invocationViewSExp : PublishedInvocationView -> SExp
+invocationViewSExp (PublishedInvocationView ctors pols kinds) =
+  if any (c => not (isEmpty c.psContext)) ctors then
+    panic "invocation constructors must have empty contexts"
+  else match (filter
+    notFrozen
+    (flatMap (liveCells "invocation constructor") ctors))
+    [] => tagged "invocation-view" [
+      listSExp pubSchemeSExp ctors,
+      listSExp (pairSExp tabKeySExp (listSExp polarityNode)) pols,
+      listSExp (pairSExp tabKeySExp (listSExp kindNode)) kinds,
+    ]
+    faults => panic "invocation view is not frozen: \{debug faults}"
+
+decPolarity : Reader Polarity
+decPolarity _ (SAtom "co") = Ok PCo
+decPolarity _ (SAtom "contra") = Ok PContra
+decPolarity _ (SAtom "invariant") = Ok PInv
+decPolarity _ (SAtom "phantom") = Ok PPhantom
+decPolarity path node =
+  misfit path [("co", 0), ("contra", 0), ("invariant", 0), ("phantom", 0)] node
+
+decKind : Reader Kind
+decKind _ (SAtom "type") = Ok KType
+decKind _ (SAtom "row") = Ok KRow
+decKind path (SList [SAtom "auth-kind", label, pattern]) = do
+  l <- nested effLabelOfSExp (at path "auth-kind" 1) label
+  p <- atomBool (at path "auth-kind" 2) pattern
+  Ok (KAuth l p)
+decKind path node = misfit path [("type", 0), ("row", 0), ("auth-kind", 2)] node
+
+decInvocationView : Reader PublishedInvocationView
+decInvocationView path (SList [SAtom "invocation-view", ctors, pols, kinds]) =
+  do
+    cs <- listOfSExp
+      (nested pubSchemeOfSExp)
+      (at path "invocation-view" 1)
+      ctors
+    ps <- listOfSExp
+      (pairOfSExp (nested tabKeyOfSExp) (listOfSExp decPolarity))
+      (at path "invocation-view" 2)
+      pols
+    ks <- listOfSExp
+      (pairOfSExp (nested tabKeyOfSExp) (listOfSExp decKind))
+      (at path "invocation-view" 3)
+      kinds
+    if any (c => not (isEmpty c.psContext)) cs then
+      refuse path ctors "invocation constructors must have empty contexts"
+    else
+      Ok (PublishedInvocationView cs ps ks)
+decInvocationView path node = misfit path [("invocation-view", 3)] node
+
+export
+invocationViewOfSExp : SExp -> Result SexpError PublishedInvocationView
+invocationViewOfSExp = decInvocationView "invocation-view"
+
 -- A constructor call over every field, so a field added to the record is a
 -- build error here until it has an arm.
 interfaceNode : PreludeInterface -> SExp
-interfaceNode (PreludeInterface funNames dispatch ctors ctorPop recordPop classes funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual ctorEx anyEx externs tyvarNext effvarNext core standalone) = tagged
+interfaceNode (PreludeInterface funNames dispatch ctors ctorPop recordPop classes funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual ctorEx anyEx externs tyvarNext effvarNext core standalone invocation) = tagged
   "interface"
   [
     ordMapSExp unitSExp funNames,
@@ -1387,6 +1457,7 @@ interfaceNode (PreludeInterface funNames dispatch ctors ctorPop recordPop classe
     intNode effvarNext,
     listSExp (pairSExp SAtom pubSchemeSExp) core,
     ordMapSExp unitSExp standalone,
+    invocationViewSExp invocation,
   ]
 
 -- The live cells a published row of the interface holds that a frozen row
@@ -1397,7 +1468,10 @@ interfaceFaults pi =
   filter
     notFrozen
     (flatMap (row => liveCells (fst row) (snd row)) pi.piCore
-      ++ popFaults "ctor" pi.piCtorPop)
+      ++ popFaults "ctor" pi.piCtorPop
+      ++ (match pi.piInvocationView
+        PublishedInvocationView ctors _ _ =>
+          flatMap (liveCells "invocation constructor") ctors))
 
 popFaults : String -> SpellingPop PubScheme -> List LiveCell
 popFaults label pop =
@@ -1416,7 +1490,7 @@ thd3 : (a, b, c) -> c
 thd3 (_, _, c) = c
 
 -- Panics, naming the row, on a section whose interface holds a live link.  The
--- file's header always carries `formatVersion`; `ikFormat` is not written, and
+-- file's header always carries `interfaceFormatVersion`; `ikFormat` is not written, and
 -- `decodeInterface` sets it.
 export
 encodeInterface : PreludeInterfaceFile -> String
@@ -1426,7 +1500,7 @@ encodeInterface f =
       let body = stringJoin "" (map sectionLine f.ifSections)
       framedFile
         headerTag
-        formatVersion
+        interfaceFormatVersion
         (keyFields f.ifKey ++ [sectionsField (length f.ifSections)])
         body
     faults => panic "interface row is not frozen: \{debug faults}"
@@ -1436,7 +1510,7 @@ decPairAtoms : Reader (String, String)
 decPairAtoms = pairOfSExp expectAtom expectAtom
 
 decInterface : Reader PreludeInterface
-decInterface path (SList [SAtom "interface", n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15, n16, n17, n18, n19]) =
+decInterface path (SList [SAtom "interface", n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15, n16, n17, n18, n19, n20]) =
   do
     let p = at path "interface"
     funNames <- ordMapOfSExp unitOfSExp (p 1) n1
@@ -1495,6 +1569,7 @@ decInterface path (SList [SAtom "interface", n1, n2, n3, n4, n5, n6, n7, n8, n9,
       (p 18)
       n18
     standalone <- ordMapOfSExp unitOfSExp (p 19) n19
+    invocation <- decInvocationView (p 20) n20
     Ok
       (PreludeInterface
         funNames
@@ -1515,8 +1590,9 @@ decInterface path (SList [SAtom "interface", n1, n2, n3, n4, n5, n6, n7, n8, n9,
         tyvarNext
         effvarNext
         core
-        standalone)
-decInterface path node = misfit path [("interface", 19)] node
+        standalone
+        invocation)
+decInterface path node = misfit path [("interface", 20)] node
 
 export
 decJoins : Reader (List (List Atom))
@@ -1535,8 +1611,8 @@ decSection path node = misfit path [("section", 2)] node
 -- it claims.  The version is read before the shape.
 decHeader : Reader (InterfaceKey, Int, String)
 decHeader path node = do
-  (fields, claimed) <- headerOf headerTag formatVersion 3 node
-  (key, rest) <- readKeyFields formatVersion fields
+  (fields, claimed) <- headerOf headerTag interfaceFormatVersion 3 node
+  (key, rest) <- readKeyFields interfaceFormatVersion fields
   match rest
     [SList [SAtom "sections", cnt]] => do
       count <- atomInt (at path "sections" 1) cnt
@@ -1564,7 +1640,7 @@ sexpFault fault = SexpError {
 export
 renderFault : InterfaceFault -> String
 renderFault (WrongFormat v) =
-  "format version \{v}, this compiler reads \{formatVersion}"
+  "format version \{v}, this compiler reads \{interfaceFormatVersion}"
 renderFault (Malformed e) = "\{e.sePath}: \{e.seWhat}"
 renderFault (StaleKey component) = "stale: \{component}"
 
@@ -1582,7 +1658,7 @@ readInterfaceGated : KeyGate ->
 readInterfaceGated gate text = match parseSExp ("(" ++ text ++ ")")
   Err e => Err (Malformed e)
   Ok top => match topVersion top
-    Some v if v /= formatVersion => Err (WrongFormat v)
+    Some v if v /= interfaceFormatVersion => Err (WrongFormat v)
     _ => decodeParsed gate (bodyOf text) top
 
 -- The key a file's header claims, read off that line alone: the sections
@@ -1597,7 +1673,7 @@ readInterfaceKey text =
   match parseSExp line
     Err e => Err (Malformed e)
     Ok header => match declaredVersion headerTag header
-      Some v if v /= formatVersion => Err (WrongFormat v)
+      Some v if v /= interfaceFormatVersion => Err (WrongFormat v)
       _ =>
         mapErr Malformed (map ((key, _, _) => key) (decHeader "header" header))
 
