@@ -130,6 +130,7 @@ serveStep st mid prog prev =
     ssIfaces = st.ssIfaces ++ interfaceRows mid prog,
     ssRows = st.ssRows + 1,
   }
+  let unrecorded done = (done, diagsServe (unrecordedState next mid))
   match st.ssKeys
     (Some source) :: _ =>
       let key = ModuleKey {
@@ -164,10 +165,10 @@ serveStep st mid prog prev =
           ServeCheck (mctx own done =>
             if anyList (m => omHasKey m st.ssUnrecorded) (map fst key.mkImports)
               || ownRootsOpen st.ssOps mctx.mcGraph mark then
-              (done, diagsServe (unrecordedState next mid))
+              unrecorded done
             else
               recordScoped next key before mctx own done mark)
-    _ => ServeCheck (_ _ done => (done, diagsServe (unrecordedState next mid)))
+    _ => ServeCheck (_ _ done => unrecorded done)
 
 -- The key's graph part for the module [prev] precedes: the graph key and the
 -- interface declarations of the modules before it, whose method names it reads by
@@ -193,10 +194,14 @@ servedTrees st prev mi = match mi.miTrees
 
 -- A served row extends the frozen prefix when every row before it is frozen.
 servedState : ServeState -> String -> ModuleInterface -> ServeState
-servedState st mid mi = { st |
+servedState st mid mi = { rowFrozen st mid mi | ssServed = st.ssServed + 1 }
+
+-- [st] with [mid]'s interface identity recorded and its row frozen when every row
+-- before it is.
+rowFrozen : ServeState -> String -> ModuleInterface -> ServeState
+rowFrozen st mid mi = { st |
   ssIdents = omInsert mid (moduleInterfaceIdentity mi) st.ssIdents,
   ssFrozen = if st.ssFrozen + 1 == st.ssRows then st.ssRows else st.ssFrozen,
-  ssServed = st.ssServed + 1,
 }
 
 unrecordedState : ServeState -> String -> ServeState
@@ -332,11 +337,7 @@ recordChecked st key before mctx own done =
             ),
           )
           :: older,
-        diagsServe { st |
-          ssIdents = omInsert mid (moduleInterfaceIdentity mi) st.ssIdents,
-          ssFrozen =
-            if st.ssFrozen + 1 == st.ssRows then st.ssRows else st.ssFrozen,
-        },
+        diagsServe (rowFrozen st mid mi),
       )
 
 -- [f] over the diagnostics rows of [done], each payload keeping its marked tree.

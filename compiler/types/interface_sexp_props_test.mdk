@@ -21,6 +21,7 @@ import support.ordmap.{omEmpty}
 import test_process.{underRoot}
 import types.effect_rows.{Atom, renderAtom}
 import types.interface_sexp_test.{prelude, fileKey}
+import types.module_interface_test_support.{graphOf}
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), interfaceFormatVersion,
   encodeInterface, decodeInterface, mergeSections, cacheOfSections,
@@ -36,10 +37,7 @@ import types.publish.{
   PubScheme(..), LiveCell(..), VarKind(..), liveCells, freezeRows
 }
 import types.tc_types.{GraphCtx(..)}
-import types.typecheck.{
-  checkModulesChainReportFor, checkModulesChainReportForGraph, chainArgs,
-  defaultDriveInputs
-}
+import types.typecheck.{checkModulesChainReportFor, defaultDriveInputs}
 
 -- ── drives ──────────────────────────────────────────────────────────────────
 
@@ -292,20 +290,6 @@ test "the real prelude's text under a later version is refused naming it" =
         ]
 
 -- ── 4. thaw and freeze ──────────────────────────────────────────────────────
-
-graphOf : Unit -> GraphCtx
-graphOf _ =
-  snd
-    (checkModulesChainReportForGraph
-      (chainArgs
-        defaultDriveInputs
-        False
-        None
-        ""
-        [None]
-        []
-        (desugar (parse "data Option a = None | Some a"))
-        [("m", desugar (parseLocated "x = 1"))]))
 
 -- Thawed into a fresh graph run and frozen again.  The published rows are
 -- re-frozen from the live schemes, paired with the contexts the thaw returned.

@@ -2172,9 +2172,9 @@ typecheckPassReport steps inputs runtimeP coreP preludeKey chainKey mods modPair
   -- A rejected graph still records the interfaces and pass entries of the modules
   -- it checks, and a later accepted graph serves them.  That is sound because a
   -- served module's key carries the graph part: the subset's `chainGraphKey`
-  -- equals the full graph's only when the blocked modules declare no impl and no
-  -- constrained signature, which are the only things they could add to what a
-  -- checked module reads.
+  -- equals the full graph's only when the blocked modules declare no impl, no
+  -- constrained signature and no interface, which are the only things they could add
+  -- to what a checked module reads (the key's interface prefix rows are the third).
   let blocked = resolveBlockedMods buckets omEmpty mods
   let checkedMods = filterList ((mid, _, _) => not (omHasKey mid blocked)) mods
   let checkedPairs =
@@ -2294,6 +2294,7 @@ typecheckDiagsFold outputs served runtimeP coreP mods modPairs tcByMid buckets =
     rpShadowGraph = ("core", preludeDecls) :: modPairs,
     rpOutputs = outputs,
     rpDesugared = desugaredPool,
+    rpTc = omFromPairs (reverseL tcByMid) omEmpty,
   }
   foldModuleTc
     passes
@@ -2304,14 +2305,13 @@ typecheckDiagsFold outputs served runtimeP coreP mods modPairs tcByMid buckets =
     omEmpty
     omEmpty
     mods
-    tcByMid
     buckets
 
 -- What every module's raw-tree passes share: the prelude's exports and decls, the
 -- graph's raw decls by module id (the constructor declarations a module's imports
 -- bind are found there), the prelude-standalone set, the desugared graph the
--- import-shadow detector reads, the desugared decls by module id, and the drive's
--- outputs.
+-- import-shadow detector reads, the desugared decls by module id, the drive's
+-- outputs, and the typechecker's (errs, warns) by module id.
 data RawPasses = RawPasses {
   rpCoreExports : ModuleExports,
   rpPool : OrdMap (List Decl),
@@ -2320,6 +2320,7 @@ data RawPasses = RawPasses {
   rpShadowGraph : List (String, List Decl),
   rpOutputs : DriveOutputs,
   rpDesugared : OrdMap (List Decl),
+  rpTc : OrdMap (List TcDiag, List TcDiag),
 }
 
 -- The chain key under which a caller's analyze serves the bucketing fold's
@@ -2491,11 +2492,10 @@ foldModuleTc : RawPasses ->
   OrdMap ModuleExports ->
   OrdMap Int ->
   List (String, String, List Decl) ->
-  List (String, (List TcDiag, List TcDiag)) ->
   List (String, List Diag) ->
   List (String, List Diag)
-foldModuleTc _ _ _ _ [] _ buckets = buckets
-foldModuleTc passes graph known ids ((mid, path, prog) :: rest) tcByMid buckets =
+foldModuleTc _ _ _ _ [] buckets = buckets
+foldModuleTc passes graph known ids ((mid, path, prog) :: rest) buckets =
   let (rawDiags, exp, ident) =
     servedPass
       FoldKind
@@ -2503,7 +2503,7 @@ foldModuleTc passes graph known ids ((mid, path, prog) :: rest) tcByMid buckets 
       ids
       (mid, path, prog)
       (_ => rawTreeDiags passes known (mid, path, prog))
-  let (tcErrs, tcWarns) = lookupTcDiags mid tcByMid
+  let (tcErrs, tcWarns) = optionOr ([], []) (omLookup mid passes.rpTc)
   let tcReported = match lookupBucket path buckets
     Some existing => not (resolveRejected existing)
     None => True
@@ -2515,7 +2515,6 @@ foldModuleTc passes graph known ids ((mid, path, prog) :: rest) tcByMid buckets 
     (omInsert exp.modId exp known)
     (withIdentity mid ident ids)
     rest
-    tcByMid
     (pushDiags path (rawDiags ++ errDiags ++ warnDiags) buckets)
 
 -- One module's derive, guard-exhaustiveness and two shadow diagnostics, and its
@@ -2745,14 +2744,6 @@ ifaceRowsText mid rows =
       :: map
         (row => "\{lenKey (fst row)}\{lenKey (joinNl (snd row))}")
         (optionOr [] rows))
-
-lookupTcDiags : String ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  (List TcDiag, List TcDiag)
-lookupTcDiags _ [] = ([], [])
-lookupTcDiags mid ((m, d) :: rest)
-  | m == mid = d
-  | otherwise = lookupTcDiags mid rest
 
 -- ── project text entry point (diff gate) ────────────────────────────────────
 -- Render the per-file buckets as one block per file:

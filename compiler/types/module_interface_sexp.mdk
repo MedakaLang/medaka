@@ -130,10 +130,12 @@ optionList : Option SExp -> SExp
 optionList None = SList []
 optionList (Some x) = SList [x]
 
--- A constructor call over every field, so a field added to the record is a
--- build error here until it has an arm.
+-- A constructor pattern over every field, so a field added to the record is a
+-- build error here until it has an arm.  The key and its text are not encoded (the
+-- file's header carries the identity) and neither is `miTrees`: an interface file
+-- carries no trees.
 interfaceNode : ModuleInterface -> SExp
-interfaceNode (ModuleInterface _ _ serial row exports funNames dispatchIdx dataCtors ctorPop recordPop funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual schemeObls existentials patternAuth anyEx evTable binders topIds grants takers sticky view _) = tagged
+interfaceNode (ModuleInterface _key _keyText serial row exports funNames dispatchIdx dataCtors ctorPop recordPop funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual schemeObls existentials patternAuth anyEx evTable binders topIds grants takers sticky view _trees) = tagged
   "module-interface"
   [
     intNode serial,

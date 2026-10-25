@@ -102,6 +102,7 @@
 import types.extern_source.{sourceExternSymbol, externDisplayName}
 import frontend.ast.{
   letBindName,
+  declBinderNames,
   Decl(..),
   ExternDecl(..),
   Expr(..),
@@ -1282,7 +1283,7 @@ notIfaceMethodKey methods (n, _) = not (omHasKey n methods)
 
 -- names of the methods of every `interface` DECLARED in this unit.  Mirrors
 -- `frontend/marker.mdk`'s `interfaceMethodNames`, plus the `DAttrib` unwrap that
--- `declDefNames` here already does.
+-- `declBinderNames` here already does.
 unitIfaceMethodNames : List Decl -> List String
 unitIfaceMethodNames [] = []
 unitIfaceMethodNames ((DInterface { methods, ... }) :: rest) =
@@ -1466,13 +1467,7 @@ lookupExports k ((m, ns) :: rest) =
 -- all top-level FUNCTION names defined in a unit (DFunDef + DLetGroup binders),
 -- wrapped through DAttrib.  Only function-shaped decls can collide as @mdk_<name>.
 unitDefNames : (String, List Decl) -> List String
-unitDefNames (_, decls) = flatMap declDefNames decls
-
-declDefNames : Decl -> List String
-declDefNames (DFunDef _ n _ _ _ _) = [n]
-declDefNames (DLetGroup _ binds) = map letBindName binds
-declDefNames (DAttrib _ d) = declDefNames d
-declDefNames _ = []
+unitDefNames (_, decls) = flatMap declBinderNames decls
 
 -- `<mid>__<name>` with the mid sanitized to a valid identifier (`/`, `.`, `-` →
 -- `_`).  The emitted symbol is `@mdk_<thisname>`, so only [A-Za-z0-9_] are safe.

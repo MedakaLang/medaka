@@ -710,7 +710,7 @@ import types.registry.{
   spCandsOf,
   spLookupIdent,
 }
-import types.chain_key.{chainGraphKey, constrainedSigName, isConstrainedTy}
+import types.chain_key.{constrainedSigName, isConstrainedTy}
 -- B-2.2-e: THE route-word mint, shared with `eval/eval.mdk` and
 -- `ir/core_ir_lower.mdk`.  Before this bite each of those spelled its own copy
 -- (`implKeyTc` here, `implKeyOf` there) over its own `Ty` printer; they are now
@@ -34387,9 +34387,13 @@ data PassEvidence = PassEvidence EvIndex (Ref (OrdMap EvVal))
 passIndex : PassEvidence -> EvIndex
 passIndex (PassEvidence idx _) = idx
 
--- The interface word, dispatch route and dict routes (impl dicts first) published
--- for method occurrence [ev].  A miss in both is the index's miss.
-passMethodOf : PassEvidence -> EvId -> (String, Route, List Route)
+-- What a method occurrence's published entry says: its interface word, dispatch
+-- route and dict routes (impl dicts first).
+data PassMethod = PassMethod String Route (List Route)
+
+-- The entry published for method occurrence [ev].  A miss in both is the index's
+-- miss.
+passMethodOf : PassEvidence -> EvId -> PassMethod
 passMethodOf (PassEvidence idx minted) ev =
   match evidenceLookup (Some idx) "method occurrence" ev
     Ok v => passMethodFacts v
@@ -34397,9 +34401,9 @@ passMethodOf (PassEvidence idx minted) ev =
       Some v => passMethodFacts v
       None => panic message
 
-passMethodFacts : EvVal -> (String, Route, List Route)
+passMethodFacts : EvVal -> PassMethod
 passMethodFacts (EvMethod iface _ tag impls meths) =
-  (iface, tag, impls ++ meths)
+  PassMethod iface tag (impls ++ meths)
 passMethodFacts _ =
   panic "evidence table: a method occurrence answered by another kind of entry"
 
@@ -34694,7 +34698,7 @@ grantUse gctx n ev =
 -- occurrence's cell (`setOccurrenceArity`).
 methodGrantUse : GraphCtx -> PassEvidence -> String -> EvId -> MethodGrantUse
 methodGrantUse gctx pe n ev =
-  let (iface, tag, _) = passMethodOf pe ev
+  let (PassMethod iface tag _) = passMethodOf pe ev
   let recorded = grantOccOf gctx ev
   let use = match tag
     RLocal sym _ => match standaloneOcc recorded
@@ -35562,7 +35566,7 @@ collectDictSites : PassEvidence -> Expr -> List String
 collectDictSites pe (EDictAt _ ev) =
   siteRDictNamesL (evDictRoutesIn (passIndex pe) ev)
 collectDictSites pe (EMethodAt _ _ ev) =
-  let (_, tag, dicts) = passMethodOf pe ev
+  let (PassMethod _ tag dicts) = passMethodOf pe ev
   siteRDictName tag ++ siteRDictNamesL dicts
 collectDictSites pe (ELoc _ e) = collectDictSites pe e
 collectDictSites pe (EDoOrigin _ e) = collectDictSites pe e
@@ -52851,7 +52855,7 @@ reexportSeed coreV ((DUse True path _) :: rest) depEnv =
       importFormSchemes depEnv path depSchemes ++ reexportSeed coreV rest depEnv
 reexportSeed coreV (_ :: rest) depEnv = reexportSeed coreV rest depEnv
 
--- ── UNIFIED per-module fold (#151) ─────────────────────────────────────────
+-- ── UNIFIED per-module fold ───────────────────────────────────────────────────
 -- The single home for the identical per-module skeleton the four module drivers
 -- (checkModules / checkModulesDiagsChain / checkModulesEntryFull / elaborateModules)
 -- share, so the next import-scoped-seed-style fix touches ONE place instead of
@@ -52880,18 +52884,13 @@ reexportSeed coreV (_ :: rest) depEnv = reexportSeed coreV rest depEnv
 -- foldModules owns ONLY the loop and performs NO mintGraphCtx: the reset
 -- boundary stays in each driver's preamble (a reset leaking in here would hand the
 -- `check*` drivers a reset they must not have).
--- #154 PR-C: `Accumulate` is the per-worker "needs" signal gating the two
--- accumulator concats.  The old unconditional `accData ++ publicDataDecls prog` /
--- `accAll ++ prog` copied a GROWING left operand every iteration → O(modules^2)
--- allocation across the graph (the residual PR-A left).  Each worker declares which
--- accumulator it actually reads, and the OTHER is threaded UNCHANGED (`else accData`
--- — no copy), so a path that consumes neither (the perf-gate `checkModules` path,
--- where `checkBodyImpl` binds `accData` as `Module _ _ _` and never reads it, and
--- `accAll` is `cmCheckWorker`'s ignored `_accAll`) does O(|prog|) per module = O(N)
--- total.  Byte-identity: under `AccumulateNone` the worker provably ignores both
--- accumulators, so the value threaded is unobserved; under `AccumulateBoth` the
--- concat is IDENTICAL to the old append (same operand order), so the elab/diag
--- witnesses are unchanged.  No worker reads one accumulator without the other.
+-- `Accumulate` is the per-worker "needs" signal gating the two accumulator
+-- concats.  Each worker declares which accumulator it reads; under
+-- `AccumulateNone` neither is read, so both are threaded unchanged (no copy of the
+-- growing left operand, which would make the graph O(modules^2) in allocation) and
+-- a path that consumes neither does O(|prog|) per module.  Under `AccumulateBoth`
+-- each is extended (`accData ++ publicDataDecls prog`, `accAll ++ prog`).  No
+-- worker reads one accumulator without the other.
 data Accumulate = AccumulateNone | AccumulateBoth
 
 foldModules : Accumulate ->
@@ -53370,8 +53369,8 @@ checkModulesPreambleK inputs preludeKey runtimeDecls coreDecls modules =
 -- it, so every user module reaches `checkBodyImpl`'s Module arm under its own id
 -- (`declEnvsOrdOf`), as `graphModuleWorker` does through `checkModuleFullDiags`; only
 -- the prelude is `""`, and a user module keyed `""` loses the qualified cross-module
--- tables (below).  It passes `accData` and `[]` implDecls (the #154 PR-C perf
--- property).
+-- tables (below).  It passes `accData` and `[]` implDecls (the perf-gate
+-- path reads neither accumulator).
 --
 -- 🚨 THIS IS NOT ATTRIBUTION-ONLY, AND THE FIRST DRAFT OF THIS COMMENT SAID IT WAS.
 -- The `""` key made `crossModuleSchemeOblsQualRef` and its three sibling qual tables
@@ -53538,10 +53537,9 @@ cmFold : List (String, Scheme) ->
   List (String, List Decl) ->
   (List (String, List (String, PubScheme)), ModuleCtx)
 cmFold runtimeSeed coreSchemes coreCtx modules =
-  -- #154 PR-C: cmCheckWorker reads NEITHER accData (checkModuleFull → Module path, where
-  -- checkBodyImpl binds it `_` and never reads it) NOR accAll (its `_accAll` param), so
-  -- both concats are pure waste here — the residual O(modules^2) the PR-A review found.
-  -- AccumulateNone threads them unchanged (no copy) and the `[] []` initials keep
+  -- cmCheckWorker reads NEITHER accData (checkModuleFull → Module path, where
+  -- checkBodyImpl binds it `_` and never reads it) NOR accAll (its `_accAll` param),
+  -- so AccumulateNone threads them unchanged (no copy) and the `[] []` initials keep
   -- the dead values empty → the whole perf-gate `checkModules` path is O(N).  #2705: this
   -- driver marks but does not solve — see `cmCheckWorker` — so it queues nothing and
   -- drains nothing.
@@ -54268,7 +54266,7 @@ driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDec
           GOutTrees => treeServe st)
       keyed
   if isSome serve then raiseToHighWater coreCtx.mcGraph
-  -- #154 PR-C: the worker reads BOTH accData (buildOracle `prog ++ accData`) and
+  -- The worker reads BOTH accData (buildOracle `prog ++ accData`) and
   -- accAll (checkModuleFullImpl implDecls), and
   -- both are order-observable (oracle first-wins, implDecls scan order), so both
   -- concats are RETAINED — this is not the perf-gate path, which is `cmCheckWorker`'s.
@@ -55155,7 +55153,7 @@ elaborateModules inputs runtimeDecls coreDecls0 modulesIn =
 export
 elaborateModulesGraph : DriveArgs -> (ElabResult, GraphCtx)
 elaborateModulesGraph args =
-  let ((result, _, _), gctx) = elabDriveResult (driveGraphK GOutTrees args)
+  let ((result, _, _), gctx) = elabTreesDrive args
   (result, gctx)
 
 -- `elaborateModules` together with the prelude's schemes and the entry module's own
@@ -55194,18 +55192,16 @@ elaborateModulesWithReport : DriveInputs ->
   (ElabResult, TcReport, DriveOutputs)
 elaborateModulesWithReport inputs valueMain executes runtimeDecls coreDecls0 modulesIn =
   fst
-    (elabDriveResult
-      (driveGraphK
-        GOutTrees
-        (DriveArgs
-          inputs
-          valueMain
-          executes
-          None
-          None
-          runtimeDecls
-          coreDecls0
-          modulesIn)))
+    (elabTreesDrive
+      (DriveArgs
+        inputs
+        valueMain
+        executes
+        None
+        None
+        runtimeDecls
+        coreDecls0
+        modulesIn))
 
 -- `elaborateModulesWithReport` keyed as `checkModulesChainReportFor` is: under the
 -- prelude generation pair and [chainKey], with one source key per module in
@@ -55223,18 +55219,20 @@ elaborateModulesChainReport : DriveInputs ->
   (ElabResult, TcReport, DriveOutputs)
 elaborateModulesChainReport inputs valueMain (rk, ck) chainKey stepKeys runtimeDecls coreDecls0 modulesIn =
   fst
-    (elabDriveResult
-      (driveGraphK
-        GOutTrees
-        (DriveArgs
-          inputs
-          valueMain
-          None
-          None
-          (Some (chainFullKey rk ck chainKey, stepKeys))
-          runtimeDecls
-          coreDecls0
-          modulesIn)))
+    (elabTreesDrive
+      (DriveArgs
+        inputs
+        valueMain
+        None
+        None
+        (Some (chainFullKey rk ck chainKey, stepKeys))
+        runtimeDecls
+        coreDecls0
+        modulesIn))
+
+-- The tree-producing drive of [args], as `elaborateModules` projects it.
+elabTreesDrive : DriveArgs -> ((ElabResult, TcReport, DriveOutputs), GraphCtx)
+elabTreesDrive args = elabDriveResult (driveGraphK GOutTrees args)
 
 elabDriveResult : GraphDrive -> ((ElabResult, TcReport, DriveOutputs), GraphCtx)
 elabDriveResult g = (

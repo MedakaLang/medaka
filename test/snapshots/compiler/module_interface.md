@@ -1,5 +1,5 @@
 # META
-source_lines=687
+source_lines=682
 stages=DESUGAR,MARK
 # SOURCE
 -- One module's checked diagnostics-arm contribution as a value, the key it is
@@ -50,7 +50,7 @@ stages=DESUGAR,MARK
 -- whose import was re-recorded misses without any digest.
 import frontend.ast.{
   TabKey, DataVis, Variant, EvTable, Ident, Decl(..), EvEntry(..), EvVal(..),
-  EvId(..), IfaceMethod(..), letBindName
+  EvId(..), IfaceMethod(..), declBinderNames
 }
 import list.{drop, take, mapAccumL}
 import map as M
@@ -85,8 +85,10 @@ import types.tc_types.{
 -- (the module id, its path and the exact source the loader parsed), the identity of
 -- each direct import, and the drive's graph key (its configuration, the prelude
 -- generation and chain key, and every module's instance heads and constrained
--- signature names, which a module reads whether or not it imports their definer).
--- An import that was checked and not recorded has a serial no interface carries.
+-- signature names, which a module reads whether or not it imports their definer),
+-- followed by the interface declarations of the modules before it, whose method
+-- names it reads by bare name; a tree drive also adds the promotion harvest of those
+-- modules.  An import that was checked and not recorded has a serial no interface carries.
 public export data ModuleKey = ModuleKey {
   mkModule : String,
   mkSource : String,
@@ -447,13 +449,6 @@ idsUnder keys table = map (k => (k, optionOr [] (omLookup k table))) keys
 topBinderNames : List Decl -> List String
 topBinderNames prog = dedup (flatMap declBinderNames prog)
 
-declBinderNames : Decl -> List String
-declBinderNames (DFunDef _ n _ _ _ _) = [n]
-declBinderNames (DLetGroup _ binds) = map letBindName binds
-declBinderNames (DAttrib _ d) = declBinderNames d
--- a declaration that binds no value with a body
-declBinderNames _ = []
-
 -- ── evidence cells ──────────────────────────────────────────────────────────
 
 -- Every method and site cell of [r] minted at ordinal [lo] or later, as published
@@ -690,7 +685,7 @@ export
 currentModuleInterfaces : Unit -> List ModuleInterface
 currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "TabKey" false) (mem "DataVis" false) (mem "Variant" false) (mem "EvTable" false) (mem "Ident" false) (mem "Decl" true) (mem "EvEntry" true) (mem "EvVal" true) (mem "EvId" true) (mem "IfaceMethod" true) (mem "letBindName" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "TabKey" false) (mem "DataVis" false) (mem "Variant" false) (mem "EvTable" false) (mem "Ident" false) (mem "Decl" true) (mem "EvEntry" true) (mem "EvVal" true) (mem "EvId" true) (mem "IfaceMethod" true) (mem "declBinderNames" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "take" false) (mem "mapAccumL" false))))
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
@@ -748,11 +743,6 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DFunDef false "idsUnder" ((PVar "keys") (PVar "table")) (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "table")))))) (EVar "keys")))
 (DTypeSig false "topBinderNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "topBinderNames" ((PVar "prog")) (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (EVar "declBinderNames")) (EVar "prog"))))
-(DTypeSig false "declBinderNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "declBinderNames" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
-(DFunDef false "declBinderNames" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")))
-(DFunDef false "declBinderNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBinderNames") (EVar "d")))
-(DFunDef false "declBinderNames" (PWild) (EListLit))
 (DTypeSig true "cellEntriesFrom" (TyFun (TyCon "GraphRun") (TyFun (TyCon "Int") (TyCon "EvTable"))))
 (DFunDef false "cellEntriesFrom" ((PVar "r") (PVar "lo")) (EBlock (DoLet false false (PVar "from") (EApp (EApp (EVar "max") (ELit (LInt 0))) (EBinOp "-" (EVar "lo") (EFieldAccess (EVar "r") "evBase")))) (DoLet false false (PVar "cells") (EFieldAccess (EFieldAccess (EVar "r") "evCells") "value")) (DoLet false false (PVar "sites") (EFieldAccess (EFieldAccess (EVar "r") "siteCells") "value")) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "methodCellEntriesFrom") (EVar "cells")) (EVar "from")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "cells")) (ELit (LInt 1)))) (EListLit)) (EApp (EApp (EApp (EApp (EVar "siteCellEntriesFrom") (EVar "sites")) (EVar "from")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "sites")) (ELit (LInt 1)))) (EListLit))))))
 (DTypeSig false "methodCellEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "EvTable"))))))
@@ -798,7 +788,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DTypeSig true "currentModuleInterfaces" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "ModuleInterface"))))
 (DFunDef false "currentModuleInterfaces" (PWild) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "M.entries") (EFieldAccess (EFieldAccess (EVar "moduleCacheRef") "value") "mcEntries"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "TabKey" false) (mem "DataVis" false) (mem "Variant" false) (mem "EvTable" false) (mem "Ident" false) (mem "Decl" true) (mem "EvEntry" true) (mem "EvVal" true) (mem "EvId" true) (mem "IfaceMethod" true) (mem "letBindName" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "TabKey" false) (mem "DataVis" false) (mem "Variant" false) (mem "EvTable" false) (mem "Ident" false) (mem "Decl" true) (mem "EvEntry" true) (mem "EvVal" true) (mem "EvId" true) (mem "IfaceMethod" true) (mem "declBinderNames" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "take" false) (mem "mapAccumL" false))))
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
@@ -856,11 +846,6 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DFunDef false "idsUnder" ((PVar "keys") (PVar "table")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "table")))))) (EVar "keys")))
 (DTypeSig false "topBinderNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "topBinderNames" ((PVar "prog")) (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (EVar "declBinderNames")) (EVar "prog"))))
-(DTypeSig false "declBinderNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "declBinderNames" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
-(DFunDef false "declBinderNames" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")))
-(DFunDef false "declBinderNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBinderNames") (EVar "d")))
-(DFunDef false "declBinderNames" (PWild) (EListLit))
 (DTypeSig true "cellEntriesFrom" (TyFun (TyCon "GraphRun") (TyFun (TyCon "Int") (TyCon "EvTable"))))
 (DFunDef false "cellEntriesFrom" ((PVar "r") (PVar "lo")) (EBlock (DoLet false false (PVar "from") (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EBinOp "-" (EVar "lo") (EFieldAccess (EVar "r") "evBase")))) (DoLet false false (PVar "cells") (EFieldAccess (EFieldAccess (EVar "r") "evCells") "value")) (DoLet false false (PVar "sites") (EFieldAccess (EFieldAccess (EVar "r") "siteCells") "value")) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "methodCellEntriesFrom") (EVar "cells")) (EVar "from")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "cells")) (ELit (LInt 1)))) (EListLit)) (EApp (EApp (EApp (EApp (EVar "siteCellEntriesFrom") (EVar "sites")) (EVar "from")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "sites")) (ELit (LInt 1)))) (EListLit))))))
 (DTypeSig false "methodCellEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "EvTable"))))))

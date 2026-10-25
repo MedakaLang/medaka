@@ -1,5 +1,5 @@
 # META
-source_lines=4921
+source_lines=4923
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -804,7 +804,8 @@ data DoctestTrees =
 -- never on the filtered synth decls.  The constructor decides whether the
 -- gate's elaboration is also the phases' input (`PreparedPair`) or an injected
 -- elaboration is still to come (`PreparedInject`).  Both arms gate the graph as
--- written through `gatedDrive`, so the filter cannot move a module's verdict.
+-- written (through `gatedDrive`, unless the module is exempt, which has no gate),
+-- so the filter cannot move a module's verdict.
 data Prepared =
   | PreparedPair TestPair
   | PreparedInject String (List (String, String, List Decl)) (List Decl)
@@ -833,7 +834,8 @@ data Prepared =
 --                 before the entry, and the injected one, whose examples are
 --                 spliced into the entry alone, serves them.
 --
--- On either arm a graph resolve rejects is never elaborated (`gatedDrive`).
+-- On either arm a graph resolve rejects is never elaborated (`gatedDrive`); an
+-- exempt module has no gate, so its graph is elaborated without that check.
 -- `hasDoctests` is the module's UNFILTERED doctest presence: the arm is chosen
 -- by what the module contains, so `--filter` cannot move it.
 --

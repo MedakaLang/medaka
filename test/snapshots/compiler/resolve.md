@@ -1,5 +1,5 @@
 # META
-source_lines=6238
+source_lines=6233
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -27,6 +27,7 @@ import frontend.ast.{
   recFieldBindings,
   isHint,
   letBindName,
+  declBinderNames,
   propParamName,
   Loc(..),
   declNameLoc,
@@ -2347,7 +2348,7 @@ sigEntryOf d = match dupSigOf d
 valueBinderNames : Decl -> List String
 valueBinderNames (DAttrib _ d) = valueBinderNames d
 valueBinderNames (DExtern (ExternDecl { edName = n, ... })) = [n]
-valueBinderNames d = declBindNames d
+valueBinderNames d = declBinderNames d
 
 orphanSigError : OrdMap Unit ->
   List String ->
@@ -2393,6 +2394,12 @@ dupValClause (DFunDef _ n ps body _ _) =
   Some (n, isEmptyL ps, firstExprLoc body)
 dupValClause _ = None
 
+-- a transparent decl (DTypeSig) is skipped entirely by the contiguity walk
+isTransparentDecl : Decl -> Bool
+isTransparentDecl (DAttrib _ d) = isTransparentDecl d
+isTransparentDecl (DTypeSig _ _ _ _) = True
+isTransparentDecl _ = False
+
 -- Phase 148: the clauses of a top-level value binding must be contiguous.  Two
 -- same-named DFunDef/DLetGroup clause-runs separated by an intervening clause-body
 -- decl are silently coalesced into one multi-clause function; flag the gap.
@@ -2402,18 +2409,6 @@ dupValClause _ = None
 -- closes every open name it does not itself bind.  Type signatures (DTypeSig) are
 -- TRANSPARENT — they neither open nor close a run, so the "all sigs, then all
 -- defs" grouping of a mutually-recursive pair is accepted.
-declBindNames : Decl -> List String
-declBindNames (DAttrib _ d) = declBindNames d
-declBindNames (DFunDef _ n _ _ _ _) = [n]
-declBindNames (DLetGroup _ bs) = map letBindName bs
-declBindNames _ = []
-
--- a transparent decl (DTypeSig) is skipped entirely by the contiguity walk
-isTransparentDecl : Decl -> Bool
-isTransparentDecl (DAttrib _ d) = isTransparentDecl d
-isTransparentDecl (DTypeSig _ _ _ _) = True
-isTransparentDecl _ = False
-
 contiguityErrors : List Decl -> List ResError
 contiguityErrors prog = contigGo omEmpty [] prog
 
@@ -2431,7 +2426,7 @@ contigGo _ _ [] = []
 contigGo closed opened (d :: rest)
   | isTransparentDecl d = contigGo closed opened rest
   | otherwise =
-    let ns = declBindNames d
+    let ns = declBinderNames d
     -- close every open name not bound by this decl
     let stillOpen = filterKeepOpen ns opened
     let nowClosed = closeMissing opened stillOpen closed
@@ -6242,7 +6237,7 @@ addOriginsProvenance acc n base (m :: rest) =
     rest
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "declBinderNames" false) (mem "propParamName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isEmptyL" false) (mem "selfBinding" false))))
@@ -6792,7 +6787,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "valueBinderNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "valueBinderNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "valueBinderNames") (EVar "d")))
 (DFunDef false "valueBinderNames" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true))) (EListLit (EVar "n")))
-(DFunDef false "valueBinderNames" ((PVar "d")) (EApp (EVar "declBindNames") (EVar "d")))
+(DFunDef false "valueBinderNames" ((PVar "d")) (EApp (EVar "declBinderNames") (EVar "d")))
 (DTypeSig false "orphanSigError" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "orphanSigError" ((PVar "bound") (PVar "unsigned") (PTuple (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")) (EListLit) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EVar "None"))) (EIf (EVar "otherwise") (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EApp (EApp (EVar "bestOfNames") (EApp (EVar "sugQueryOf") (EVar "n"))) (EVar "unsigned")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "dupValueBindingErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))
@@ -6804,11 +6799,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "dupValClause" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "dupValClause") (EVar "d")))
 (DFunDef false "dupValClause" ((PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") PWild PWild)) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "isEmptyL") (EVar "ps")) (EApp (EVar "firstExprLoc") (EVar "body")))))
 (DFunDef false "dupValClause" (PWild) (EVar "None"))
-(DTypeSig false "declBindNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "declBindNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBindNames") (EVar "d")))
-(DFunDef false "declBindNames" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
-(DFunDef false "declBindNames" ((PCon "DLetGroup" PWild (PVar "bs"))) (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "bs")))
-(DFunDef false "declBindNames" (PWild) (EListLit))
 (DTypeSig false "isTransparentDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "isTransparentDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "isTransparentDecl") (EVar "d")))
 (DFunDef false "isTransparentDecl" ((PCon "DTypeSig" PWild PWild PWild PWild)) (EVar "True"))
@@ -6817,7 +6807,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "contiguityErrors" ((PVar "prog")) (EApp (EApp (EApp (EVar "contigGo") (EVar "omEmpty")) (EListLit)) (EVar "prog")))
 (DTypeSig false "contigGo" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "contigGo" (PWild PWild (PList)) (EListLit))
-(DFunDef false "contigGo" ((PVar "closed") (PVar "opened") (PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "isTransparentDecl") (EVar "d")) (EApp (EApp (EApp (EVar "contigGo") (EVar "closed")) (EVar "opened")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "ns") (EApp (EVar "declBindNames") (EVar "d"))) (DoLet false false (PVar "stillOpen") (EApp (EApp (EVar "filterKeepOpen") (EVar "ns")) (EVar "opened"))) (DoLet false false (PVar "nowClosed") (EApp (EApp (EApp (EVar "closeMissing") (EVar "opened")) (EVar "stillOpen")) (EVar "closed"))) (DoLet false false (PVar "errs") (EApp (EApp (EApp (EVar "newlyDuplicated") (EApp (EVar "declLoc") (EVar "d"))) (EVar "nowClosed")) (EVar "ns"))) (DoLet false false (PVar "opened2") (EApp (EApp (EVar "unionStr") (EVar "stillOpen")) (EVar "ns"))) (DoLet false false (PVar "closed2") (EApp (EApp (EVar "deleteAllStr") (EVar "ns")) (EVar "nowClosed"))) (DoExpr (EBinOp "++" (EVar "errs") (EApp (EApp (EApp (EVar "contigGo") (EVar "closed2")) (EVar "opened2")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "contigGo" ((PVar "closed") (PVar "opened") (PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "isTransparentDecl") (EVar "d")) (EApp (EApp (EApp (EVar "contigGo") (EVar "closed")) (EVar "opened")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "ns") (EApp (EVar "declBinderNames") (EVar "d"))) (DoLet false false (PVar "stillOpen") (EApp (EApp (EVar "filterKeepOpen") (EVar "ns")) (EVar "opened"))) (DoLet false false (PVar "nowClosed") (EApp (EApp (EApp (EVar "closeMissing") (EVar "opened")) (EVar "stillOpen")) (EVar "closed"))) (DoLet false false (PVar "errs") (EApp (EApp (EApp (EVar "newlyDuplicated") (EApp (EVar "declLoc") (EVar "d"))) (EVar "nowClosed")) (EVar "ns"))) (DoLet false false (PVar "opened2") (EApp (EApp (EVar "unionStr") (EVar "stillOpen")) (EVar "ns"))) (DoLet false false (PVar "closed2") (EApp (EApp (EVar "deleteAllStr") (EVar "ns")) (EVar "nowClosed"))) (DoExpr (EBinOp "++" (EVar "errs") (EApp (EApp (EApp (EVar "contigGo") (EVar "closed2")) (EVar "opened2")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "filterKeepOpen" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "filterKeepOpen" (PWild (PList)) (EListLit))
 (DFunDef false "filterKeepOpen" ((PVar "ns") (PCons (PVar "o") (PVar "os"))) (EIf (EApp (EApp (EVar "contains") (EVar "o")) (EVar "ns")) (EBinOp "::" (EVar "o") (EApp (EApp (EVar "filterKeepOpen") (EVar "ns")) (EVar "os"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterKeepOpen") (EVar "ns")) (EVar "os")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -7705,7 +7695,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "addOriginsProvenance" ((PVar "acc") (PVar "n") (PVar "base") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "addOriginsProvenance") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "m")) (EListLit (ETuple (EVar "n") (EApp (EVar "declKey") (ETuple (EVar "m") (EVar "base"))))))) (EVar "n")) (EVar "base")) (EVar "rest")))
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "declBinderNames" false) (mem "propParamName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isEmptyL" false) (mem "selfBinding" false))))
@@ -8255,7 +8245,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "valueBinderNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "valueBinderNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "valueBinderNames") (EVar "d")))
 (DFunDef false "valueBinderNames" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true))) (EListLit (EVar "n")))
-(DFunDef false "valueBinderNames" ((PVar "d")) (EApp (EVar "declBindNames") (EVar "d")))
+(DFunDef false "valueBinderNames" ((PVar "d")) (EApp (EVar "declBinderNames") (EVar "d")))
 (DTypeSig false "orphanSigError" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "orphanSigError" ((PVar "bound") (PVar "unsigned") (PTuple (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")) (EListLit) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EVar "None"))) (EIf (EVar "otherwise") (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EApp (EApp (EVar "bestOfNames") (EApp (EVar "sugQueryOf") (EVar "n"))) (EVar "unsigned")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "dupValueBindingErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))
@@ -8267,11 +8257,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "dupValClause" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "dupValClause") (EVar "d")))
 (DFunDef false "dupValClause" ((PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") PWild PWild)) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "isEmptyL") (EVar "ps")) (EApp (EVar "firstExprLoc") (EVar "body")))))
 (DFunDef false "dupValClause" (PWild) (EVar "None"))
-(DTypeSig false "declBindNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "declBindNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBindNames") (EVar "d")))
-(DFunDef false "declBindNames" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
-(DFunDef false "declBindNames" ((PCon "DLetGroup" PWild (PVar "bs"))) (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "bs")))
-(DFunDef false "declBindNames" (PWild) (EListLit))
 (DTypeSig false "isTransparentDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "isTransparentDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "isTransparentDecl") (EVar "d")))
 (DFunDef false "isTransparentDecl" ((PCon "DTypeSig" PWild PWild PWild PWild)) (EVar "True"))
@@ -8280,7 +8265,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "contiguityErrors" ((PVar "prog")) (EApp (EApp (EApp (EVar "contigGo") (EVar "omEmpty")) (EListLit)) (EVar "prog")))
 (DTypeSig false "contigGo" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "contigGo" (PWild PWild (PList)) (EListLit))
-(DFunDef false "contigGo" ((PVar "closed") (PVar "opened") (PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "isTransparentDecl") (EVar "d")) (EApp (EApp (EApp (EVar "contigGo") (EVar "closed")) (EVar "opened")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "ns") (EApp (EVar "declBindNames") (EVar "d"))) (DoLet false false (PVar "stillOpen") (EApp (EApp (EVar "filterKeepOpen") (EVar "ns")) (EVar "opened"))) (DoLet false false (PVar "nowClosed") (EApp (EApp (EApp (EVar "closeMissing") (EVar "opened")) (EVar "stillOpen")) (EVar "closed"))) (DoLet false false (PVar "errs") (EApp (EApp (EApp (EVar "newlyDuplicated") (EApp (EVar "declLoc") (EVar "d"))) (EVar "nowClosed")) (EVar "ns"))) (DoLet false false (PVar "opened2") (EApp (EApp (EVar "unionStr") (EVar "stillOpen")) (EVar "ns"))) (DoLet false false (PVar "closed2") (EApp (EApp (EVar "deleteAllStr") (EVar "ns")) (EVar "nowClosed"))) (DoExpr (EBinOp "++" (EVar "errs") (EApp (EApp (EApp (EVar "contigGo") (EVar "closed2")) (EVar "opened2")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "contigGo" ((PVar "closed") (PVar "opened") (PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "isTransparentDecl") (EVar "d")) (EApp (EApp (EApp (EVar "contigGo") (EVar "closed")) (EVar "opened")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "ns") (EApp (EVar "declBinderNames") (EVar "d"))) (DoLet false false (PVar "stillOpen") (EApp (EApp (EVar "filterKeepOpen") (EVar "ns")) (EVar "opened"))) (DoLet false false (PVar "nowClosed") (EApp (EApp (EApp (EVar "closeMissing") (EVar "opened")) (EVar "stillOpen")) (EVar "closed"))) (DoLet false false (PVar "errs") (EApp (EApp (EApp (EVar "newlyDuplicated") (EApp (EVar "declLoc") (EVar "d"))) (EVar "nowClosed")) (EVar "ns"))) (DoLet false false (PVar "opened2") (EApp (EApp (EVar "unionStr") (EVar "stillOpen")) (EVar "ns"))) (DoLet false false (PVar "closed2") (EApp (EApp (EVar "deleteAllStr") (EVar "ns")) (EVar "nowClosed"))) (DoExpr (EBinOp "++" (EVar "errs") (EApp (EApp (EApp (EVar "contigGo") (EVar "closed2")) (EVar "opened2")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "filterKeepOpen" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "filterKeepOpen" (PWild (PList)) (EListLit))
 (DFunDef false "filterKeepOpen" ((PVar "ns") (PCons (PVar "o") (PVar "os"))) (EIf (EApp (EApp (EVar "contains") (EVar "o")) (EVar "ns")) (EBinOp "::" (EVar "o") (EApp (EApp (EVar "filterKeepOpen") (EVar "ns")) (EVar "os"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterKeepOpen") (EVar "ns")) (EVar "os")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

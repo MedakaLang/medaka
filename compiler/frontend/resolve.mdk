@@ -23,6 +23,7 @@ import frontend.ast.{
   recFieldBindings,
   isHint,
   letBindName,
+  declBinderNames,
   propParamName,
   Loc(..),
   declNameLoc,
@@ -2343,7 +2344,7 @@ sigEntryOf d = match dupSigOf d
 valueBinderNames : Decl -> List String
 valueBinderNames (DAttrib _ d) = valueBinderNames d
 valueBinderNames (DExtern (ExternDecl { edName = n, ... })) = [n]
-valueBinderNames d = declBindNames d
+valueBinderNames d = declBinderNames d
 
 orphanSigError : OrdMap Unit ->
   List String ->
@@ -2389,6 +2390,12 @@ dupValClause (DFunDef _ n ps body _ _) =
   Some (n, isEmptyL ps, firstExprLoc body)
 dupValClause _ = None
 
+-- a transparent decl (DTypeSig) is skipped entirely by the contiguity walk
+isTransparentDecl : Decl -> Bool
+isTransparentDecl (DAttrib _ d) = isTransparentDecl d
+isTransparentDecl (DTypeSig _ _ _ _) = True
+isTransparentDecl _ = False
+
 -- Phase 148: the clauses of a top-level value binding must be contiguous.  Two
 -- same-named DFunDef/DLetGroup clause-runs separated by an intervening clause-body
 -- decl are silently coalesced into one multi-clause function; flag the gap.
@@ -2398,18 +2405,6 @@ dupValClause _ = None
 -- closes every open name it does not itself bind.  Type signatures (DTypeSig) are
 -- TRANSPARENT — they neither open nor close a run, so the "all sigs, then all
 -- defs" grouping of a mutually-recursive pair is accepted.
-declBindNames : Decl -> List String
-declBindNames (DAttrib _ d) = declBindNames d
-declBindNames (DFunDef _ n _ _ _ _) = [n]
-declBindNames (DLetGroup _ bs) = map letBindName bs
-declBindNames _ = []
-
--- a transparent decl (DTypeSig) is skipped entirely by the contiguity walk
-isTransparentDecl : Decl -> Bool
-isTransparentDecl (DAttrib _ d) = isTransparentDecl d
-isTransparentDecl (DTypeSig _ _ _ _) = True
-isTransparentDecl _ = False
-
 contiguityErrors : List Decl -> List ResError
 contiguityErrors prog = contigGo omEmpty [] prog
 
@@ -2427,7 +2422,7 @@ contigGo _ _ [] = []
 contigGo closed opened (d :: rest)
   | isTransparentDecl d = contigGo closed opened rest
   | otherwise =
-    let ns = declBindNames d
+    let ns = declBinderNames d
     -- close every open name not bound by this decl
     let stillOpen = filterKeepOpen ns opened
     let nowClosed = closeMissing opened stillOpen closed
