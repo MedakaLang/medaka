@@ -9,6 +9,7 @@ import types.publish.{PubScheme(..), freezePub, zonkScheme, emptyZonk}
 import types.repr.{Scheme(..), Mono(..), normalize, spineParts}
 import types.effect_authority.{Authority(..), authNorm, authvarId}
 import types.effect_invocation.{InvocationOps, Variance(..)}
+import types.manifest_publish.{InvocationOwner(..)}
 import types.registry.{spRows}
 import types.capability_manifest.{
   ManifestSelector(..), EntryKey, InvocationProtocol(..)
@@ -80,8 +81,8 @@ requestedWrapperViewModules selectors driver =
 
 export
 invocationResolver : (InvocationView -> InvocationOps) ->
-  List (String, InvocationView) ->
-  String ->
+  List (InvocationOwner, InvocationView) ->
+  InvocationOwner ->
   Option InvocationOps
 invocationResolver makeOps views =
   let index = IdMap.fromList views
@@ -174,13 +175,13 @@ export
 completionInvocationViews : ModuleCtx ->
   InvocationView ->
   List (String, InvocationView) ->
-  List (String, InvocationView)
+  List (InvocationOwner, InvocationView)
 completionInvocationViews entry core views =
-  ("core", core)
-    :: views
+  (ShippedPrelude, core)
+    :: map ((mid, view) => (SourceModule mid, view)) views
       ++ [
         (
-          entry.mcCells.currentModuleRef.value,
+          SourceModule entry.mcCells.currentModuleRef.value,
           entry.mcCells.invocationViewRef.value,
         ),
       ]

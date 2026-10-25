@@ -1,5 +1,5 @@
 # META
-source_lines=186
+source_lines=187
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{
@@ -13,6 +13,7 @@ import types.publish.{PubScheme(..), freezePub, zonkScheme, emptyZonk}
 import types.repr.{Scheme(..), Mono(..), normalize, spineParts}
 import types.effect_authority.{Authority(..), authNorm, authvarId}
 import types.effect_invocation.{InvocationOps, Variance(..)}
+import types.manifest_publish.{InvocationOwner(..)}
 import types.registry.{spRows}
 import types.capability_manifest.{
   ManifestSelector(..), EntryKey, InvocationProtocol(..)
@@ -84,8 +85,8 @@ requestedWrapperViewModules selectors driver =
 
 export
 invocationResolver : (InvocationView -> InvocationOps) ->
-  List (String, InvocationView) ->
-  String ->
+  List (InvocationOwner, InvocationView) ->
+  InvocationOwner ->
   Option InvocationOps
 invocationResolver makeOps views =
   let index = IdMap.fromList views
@@ -178,13 +179,13 @@ export
 completionInvocationViews : ModuleCtx ->
   InvocationView ->
   List (String, InvocationView) ->
-  List (String, InvocationView)
+  List (InvocationOwner, InvocationView)
 completionInvocationViews entry core views =
-  ("core", core)
-    :: views
+  (ShippedPrelude, core)
+    :: map ((mid, view) => (SourceModule mid, view)) views
       ++ [
         (
-          entry.mcCells.currentModuleRef.value,
+          SourceModule entry.mcCells.currentModuleRef.value,
           entry.mcCells.invocationViewRef.value,
         ),
       ]
@@ -195,6 +196,7 @@ completionInvocationViews entry core views =
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false) (mem "spineParts" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authNorm" false) (mem "authvarId" false))))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" false) (mem "Variance" true))))
+(DUse false (UseGroup ("types" "manifest_publish") ((mem "InvocationOwner" true))))
 (DUse false (UseGroup ("types" "registry") ((mem "spRows" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestSelector" true) (mem "EntryKey" false) (mem "InvocationProtocol" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
@@ -213,7 +215,7 @@ completionInvocationViews entry core views =
 (DFunDef false "requestedViewModules" () (EApp (EApp (EVar "fold") (ELam ((PVar "mods") (PVar "selector")) (EMatch (EVar "selector") (arm (PCon "ExactEntry" (PVar "key") PWild) () (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "key") "moduleId")) (ELit LUnit)) (EVar "mods"))) (arm (PCon "EntryOverPrelude" PWild PWild) () (EVar "mods"))))) (EVar "omEmpty")))
 (DTypeSig true "requestedWrapperViewModules" (TyFun (TyApp (TyCon "List") (TyCon "ManifestSelector")) (TyFun (TyApp (TyCon "Option") (TyCon "EntryKey")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "requestedWrapperViewModules" ((PVar "selectors") (PVar "driver")) (EBlock (DoLet false false (PVar "modules") (EApp (EVar "requestedViewModules") (EVar "selectors"))) (DoLet false false (PVar "executed") (EApp (EApp (EVar "any") (ELam ((PVar "selector")) (EMatch (EVar "selector") (arm (PCon "ExactEntry" PWild (PCon "ExecutedMain")) () (EVar "True")) (arm (PCon "EntryOverPrelude" PWild (PCon "ExecutedMain")) () (EVar "True")) (arm PWild () (EVar "False"))))) (EVar "selectors"))) (DoExpr (EIf (EVar "executed") (EApp (EApp (EApp (EVar "option") (EVar "modules")) (ELam ((PVar "key")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EAnnot (EVar "key") (TyCon "EntryKey")) "moduleId")) (ELit LUnit)) (EVar "modules")))) (EVar "driver")) (EVar "modules")))))
-(DTypeSig true "invocationResolver" (TyFun (TyFun (TyCon "InvocationView") (TyCon "InvocationOps")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "InvocationView"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "InvocationOps"))))))
+(DTypeSig true "invocationResolver" (TyFun (TyFun (TyCon "InvocationView") (TyCon "InvocationOps")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InvocationOwner") (TyCon "InvocationView"))) (TyFun (TyCon "InvocationOwner") (TyApp (TyCon "Option") (TyCon "InvocationOps"))))))
 (DFunDef false "invocationResolver" ((PVar "makeOps") (PVar "views")) (EBlock (DoLet false false (PVar "index") (EApp (EVar "IdMap.fromList") (EVar "views"))) (DoExpr (ELam ((PVar "mid")) (EApp (EApp (EVar "map") (EVar "makeOps")) (EApp (EApp (EVar "IdMap.get") (EVar "mid")) (EVar "index")))))))
 (DTypeSig true "slotVariances" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity"))) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Variance"))))))
 (DFunDef false "slotVariances" ((PCon "None") (PCon "None")) (EVar "None"))
@@ -239,8 +241,8 @@ completionInvocationViews entry core views =
 (DFunDef false "paramPolaritiesIn" ((PVar "tab") (PVar "key")) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Ref")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "tab")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "frozenInvocationOps" (TyFun (TyFun (TyCon "DriveOutputs") (TyCon "InvocationOps")) (TyFun (TyCon "DriveOutputs") (TyFun (TyCon "InvocationView") (TyCon "InvocationOps")))))
 (DFunDef false "frozenInvocationOps" ((PVar "makeOps") (PVar "outputs") (PVar "view")) (EApp (EVar "makeOps") (ERecordUpdate (EVar "outputs") ((fa "doInvocationView" (EApp (EVar "frozenInvocationView") (EVar "view")))))))
-(DTypeSig true "completionInvocationViews" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "InvocationView") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "InvocationView"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "InvocationView")))))))
-(DFunDef false "completionInvocationViews" ((PVar "entry") (PVar "core") (PVar "views")) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "core")) (EBinOp "++" (EVar "views") (EListLit (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "entry") "mcCells") "currentModuleRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "entry") "mcCells") "invocationViewRef") "value"))))))
+(DTypeSig true "completionInvocationViews" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "InvocationView") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "InvocationView"))) (TyApp (TyCon "List") (TyTuple (TyCon "InvocationOwner") (TyCon "InvocationView")))))))
+(DFunDef false "completionInvocationViews" ((PVar "entry") (PVar "core") (PVar "views")) (EBinOp "::" (ETuple (EVar "ShippedPrelude") (EVar "core")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "mid") (PVar "view"))) (ETuple (EApp (EVar "SourceModule") (EVar "mid")) (EVar "view")))) (EVar "views")) (EListLit (ETuple (EApp (EVar "SourceModule") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "entry") "mcCells") "currentModuleRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "entry") "mcCells") "invocationViewRef") "value"))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "TabKey" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "tabKeyOf" false) (mem "tabKeyEq" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "TcEnv" true) (mem "ModuleCtx" true) (mem "InvocationView" true) (mem "PublishedInvocationView" true) (mem "DriveOutputs" true) (mem "Polarity" true) (mem "Kind" true))))
@@ -248,6 +250,7 @@ completionInvocationViews entry core views =
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false) (mem "spineParts" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authNorm" false) (mem "authvarId" false))))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" false) (mem "Variance" true))))
+(DUse false (UseGroup ("types" "manifest_publish") ((mem "InvocationOwner" true))))
 (DUse false (UseGroup ("types" "registry") ((mem "spRows" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestSelector" true) (mem "EntryKey" false) (mem "InvocationProtocol" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
@@ -266,7 +269,7 @@ completionInvocationViews entry core views =
 (DFunDef false "requestedViewModules" () (EApp (EApp (EMethodRef "fold") (ELam ((PVar "mods") (PVar "selector")) (EMatch (EVar "selector") (arm (PCon "ExactEntry" (PVar "key") PWild) () (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "key") "moduleId")) (ELit LUnit)) (EVar "mods"))) (arm (PCon "EntryOverPrelude" PWild PWild) () (EVar "mods"))))) (EVar "omEmpty")))
 (DTypeSig true "requestedWrapperViewModules" (TyFun (TyApp (TyCon "List") (TyCon "ManifestSelector")) (TyFun (TyApp (TyCon "Option") (TyCon "EntryKey")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "requestedWrapperViewModules" ((PVar "selectors") (PVar "driver")) (EBlock (DoLet false false (PVar "modules") (EApp (EVar "requestedViewModules") (EVar "selectors"))) (DoLet false false (PVar "executed") (EApp (EApp (EDictApp "any") (ELam ((PVar "selector")) (EMatch (EVar "selector") (arm (PCon "ExactEntry" PWild (PCon "ExecutedMain")) () (EVar "True")) (arm (PCon "EntryOverPrelude" PWild (PCon "ExecutedMain")) () (EVar "True")) (arm PWild () (EVar "False"))))) (EVar "selectors"))) (DoExpr (EIf (EVar "executed") (EApp (EApp (EApp (EVar "option") (EVar "modules")) (ELam ((PVar "key")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EAnnot (EVar "key") (TyCon "EntryKey")) "moduleId")) (ELit LUnit)) (EVar "modules")))) (EVar "driver")) (EVar "modules")))))
-(DTypeSig true "invocationResolver" (TyFun (TyFun (TyCon "InvocationView") (TyCon "InvocationOps")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "InvocationView"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "InvocationOps"))))))
+(DTypeSig true "invocationResolver" (TyFun (TyFun (TyCon "InvocationView") (TyCon "InvocationOps")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InvocationOwner") (TyCon "InvocationView"))) (TyFun (TyCon "InvocationOwner") (TyApp (TyCon "Option") (TyCon "InvocationOps"))))))
 (DFunDef false "invocationResolver" ((PVar "makeOps") (PVar "views")) (EBlock (DoLet false false (PVar "index") (EApp (EVar "IdMap.fromList") (EVar "views"))) (DoExpr (ELam ((PVar "mid")) (EApp (EApp (EMethodRef "map") (EVar "makeOps")) (EApp (EApp (EVar "IdMap.get") (EVar "mid")) (EMethodRef "index")))))))
 (DTypeSig true "slotVariances" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity"))) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Variance"))))))
 (DFunDef false "slotVariances" ((PCon "None") (PCon "None")) (EVar "None"))
@@ -292,5 +295,5 @@ completionInvocationViews entry core views =
 (DFunDef false "paramPolaritiesIn" ((PVar "tab") (PVar "key")) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Ref")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "tab")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "frozenInvocationOps" (TyFun (TyFun (TyCon "DriveOutputs") (TyCon "InvocationOps")) (TyFun (TyCon "DriveOutputs") (TyFun (TyCon "InvocationView") (TyCon "InvocationOps")))))
 (DFunDef false "frozenInvocationOps" ((PVar "makeOps") (PVar "outputs") (PVar "view")) (EApp (EVar "makeOps") (ERecordUpdate (EVar "outputs") ((fa "doInvocationView" (EApp (EVar "frozenInvocationView") (EVar "view")))))))
-(DTypeSig true "completionInvocationViews" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "InvocationView") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "InvocationView"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "InvocationView")))))))
-(DFunDef false "completionInvocationViews" ((PVar "entry") (PVar "core") (PVar "views")) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "core")) (EBinOp "++" (EVar "views") (EListLit (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "entry") "mcCells") "currentModuleRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "entry") "mcCells") "invocationViewRef") "value"))))))
+(DTypeSig true "completionInvocationViews" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "InvocationView") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "InvocationView"))) (TyApp (TyCon "List") (TyTuple (TyCon "InvocationOwner") (TyCon "InvocationView")))))))
+(DFunDef false "completionInvocationViews" ((PVar "entry") (PVar "core") (PVar "views")) (EBinOp "::" (ETuple (EVar "ShippedPrelude") (EVar "core")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "mid") (PVar "view"))) (ETuple (EApp (EVar "SourceModule") (EVar "mid")) (EVar "view")))) (EVar "views")) (EListLit (ETuple (EApp (EVar "SourceModule") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "entry") "mcCells") "currentModuleRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "entry") "mcCells") "invocationViewRef") "value"))))))

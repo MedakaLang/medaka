@@ -1,6 +1,5 @@
 -- This is the only bridge from checked authority cells to capability data.
 import types.capability_manifest.{
-  EntryKey,
   ManifestRequest,
   InvocationProtocol(..),
   CapabilityManifest(..),
@@ -20,33 +19,44 @@ import list.{mapAccumL}
 import map as M
 import map.{Map(..)}
 
+-- Public module ids can name both a user module and the shipped prelude.
+-- This owner exists only while checked schemes are being summarized.
+-- lint-disable-next-line rule-clone-type
+public export data InvocationOwner =
+  | SourceModule String
+  | ShippedPrelude
+  deriving (Eq, Ord, Debug)
+
 public export data ManifestEntryInput = ManifestEntryInput {
   request : ManifestRequest,
+  owner : InvocationOwner,
   scheme : Scheme,
-  wrappers : List (EntryKey, Scheme),
+  wrappers : List (InvocationOwner, Scheme),
 }
 
 export
 publishManifests : List (String, Param) ->
-  (String -> Option InvocationOps) ->
+  (InvocationOwner -> Option InvocationOps) ->
   List ManifestEntryInput ->
   Result (List ManifestDefect) (List CapabilityManifest)
 publishManifests domains resolveOps inputs =
   let defects =
     flatMap
-      ((ManifestEntryInput request _ wrappers) =>
+      ((ManifestEntryInput request owner _ wrappers) =>
         let owners =
-          request.entry
+          owner
             :: (match request.protocol
               HostInvocation => []
               ExecutedMain => map fst wrappers)
         flatMap
-          (key => match resolveOps key.moduleId
+          (owner => match resolveOps owner
             Some _ => []
             None => [
               ManifestDefect
-                ("no checked invocation view for module '"
-                  ++ key.moduleId
+                ("no checked invocation view for "
+                  ++ (match owner
+                    SourceModule mid => "module '" ++ mid
+                    ShippedPrelude => "shipped prelude 'core")
                   ++ "'"),
             ])
           owners)
@@ -54,13 +64,13 @@ publishManifests domains resolveOps inputs =
   if not (isEmpty defects) then
     Err defects
   else
-    let summary key scheme = match resolveOps key.moduleId
+    let summary owner scheme = match resolveOps owner
       Some ops => invocationSummary ops scheme
       None => panic "validated invocation owner is missing"
     let (_, manifests) =
       mapAccumL
-        (state (ManifestEntryInput request scheme wrappers) =>
-          let atoms = summary request.entry scheme
+        (state (ManifestEntryInput request owner scheme wrappers) =>
+          let atoms = summary owner scheme
           let charged = match request.protocol
             HostInvocation => atoms
             ExecutedMain =>

@@ -239,3 +239,34 @@ test "target_check: a user module named runtime keeps its own names" = withScrat
       "main.mdk"
       0
       ["rt x"])
+
+test "target_check: imported core and ordinary Float mains retain the shipped print capability" = withScratchDir
+  (dir =>
+    expectEach
+      (flatMap
+        (entry =>
+          map
+            (shadow =>
+              let source =
+                """
+import dep.{token}
+main : Float
+main = 6.0
+"""
+                  ++ (if shadow then "println _ = ()\n" else "")
+              (
+                "\{entry}, println shadow = \{if shadow then "yes" else "no"}",
+                programCase
+                  dir
+                  [
+                    ("medaka.toml", "[project]\nname = \"target-collision\"\n"),
+                    ("dep.mdk", "export token = ()\n"),
+                    (entry, source),
+                  ]
+                  ["check", "--json", "--target", "wasmgc/wasi-p2"]
+                  entry
+                  1
+                  ["T-TARGET-CAPABILITY", "Stdout"],
+              ))
+            [False, True])
+        ["core.mdk", "ordinary.mdk"]))

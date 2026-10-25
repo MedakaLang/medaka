@@ -34,7 +34,9 @@ import types.capability_manifest.{
 }
 import types.effect_domain.{Param}
 import types.effect_invocation.{InvocationOps}
-import types.manifest_publish.{ManifestEntryInput(..), publishManifests}
+import types.manifest_publish.{
+  InvocationOwner(..), ManifestEntryInput(..), publishManifests
+}
 
 -- ── structured typecheck diagnostic (TcDiag) ───────────────────────────────
 -- ONE structured record per accumulated diagnostic (errors AND match warnings):
@@ -124,7 +126,7 @@ publishedCore None contexts schemes = freezeRows (publishCore contexts schemes)
 -- owning module rather than the entry's same-spelled binding.
 export
 publishSelected : List (String, Param) ->
-  (String -> Option InvocationOps) ->
+  (InvocationOwner -> Option InvocationOps) ->
   List ManifestSelector ->
   List ModDiags ->
   List (String, PubScheme) ->
@@ -136,29 +138,38 @@ publishSelected _ _ [] _ _ _ _ _ = ([], [], [])
 publishSelected domains resolveOps selectors perMod core outcome executes valueMain =
   let entry = optionOr ("", ([], [], [])) (last perMod)
   let byModule =
-    IdMap.union
-      (IdMap.fromList
-        (map
-          (m => (fst m, IdMap.fromList (reverse (modSchemes (snd m)))))
-          perMod))
-      (IdMap.singleton "core" (IdMap.fromList (reverse core)))
-  let rows mid = optionOr Tip (IdMap.get mid byModule)
-  let own = rows (fst entry)
+    IdMap.fromList
+      (map (m => (fst m, IdMap.fromList (reverse (modSchemes (snd m))))) perMod)
+  let coreRows = IdMap.fromList (reverse core)
+  let rows owner = match owner
+    SourceModule mid => optionOr Tip (IdMap.get mid byModule)
+    ShippedPrelude => coreRows
+  let ownerOf key =
+    if key.moduleId == "core"
+      && not (IdMap.has key.binding (rows (SourceModule "core"))) then
+      ShippedPrelude
+    else
+      SourceModule key.moduleId
+  let own = rows (SourceModule (fst entry))
   let resolve selector = match selector
     ExactEntry key protocol =>
-      ManifestRequest { entry = key, protocol = protocol }
-    EntryOverPrelude name protocol => ManifestRequest {
-      entry = EntryKey {
-        moduleId = if IdMap.has name own then fst entry else "core",
-        binding = name,
-      },
-      protocol = protocol,
-    }
-  let selected = map resolve selectors
-  let wrapper mid name =
-    map
-      (p => (EntryKey { moduleId = mid, binding = name }, p.psScheme))
-      (IdMap.get name (rows mid))
+      (ManifestRequest { entry = key, protocol = protocol }, ownerOf key)
+    EntryOverPrelude name protocol =>
+      let isOwn = IdMap.has name own
+      (
+        ManifestRequest {
+          entry = EntryKey {
+            moduleId = if isOwn then fst entry else "core",
+            binding = name,
+          },
+          protocol = protocol,
+        },
+        if isOwn then SourceModule (fst entry) else ShippedPrelude,
+      )
+  let resolved = map resolve selectors
+  let selected = map fst resolved
+  let wrapper owner name =
+    map (p => (owner, p.psScheme)) (IdMap.get name (rows owner))
   let wrappers request = match request.protocol
     HostInvocation => []
     ExecutedMain =>
@@ -170,24 +181,25 @@ publishSelected domains resolveOps selectors perMod core outcome executes valueM
       else if outcome.eoMainIsAsync then
         option
           []
-          (key => option [] (w => [w]) (wrapper key.moduleId key.binding))
+          (key => option [] (w => [w]) (wrapper (ownerOf key) key.binding))
           executes
       else
-        option [] (w => [w]) (wrapper "core" "println")
+        option [] (w => [w]) (wrapper ShippedPrelude "println")
   let inputs =
     flatMap
-      (request =>
+      ((request, owner) =>
         option
           []
           (p => [
             ManifestEntryInput {
               request = request,
+              owner = owner,
               scheme = p.psScheme,
               wrappers = wrappers request,
             },
           ])
-          (IdMap.get request.entry.binding (rows request.entry.moduleId)))
-      selected
+          (IdMap.get request.entry.binding (rows owner)))
+      resolved
   let missingDrivers =
     flatMap
       (request => match request.protocol
@@ -213,8 +225,8 @@ publishSelected domains resolveOps selectors perMod core outcome executes valueM
   let missing =
     missingDrivers
       ++ flatMap
-        (request =>
-          if IdMap.has request.entry.binding (rows request.entry.moduleId) then
+        ((request, owner) =>
+          if IdMap.has request.entry.binding (rows owner) then
             []
           else
             [
@@ -226,7 +238,7 @@ publishSelected domains resolveOps selectors perMod core outcome executes valueM
                 None
                 None,
             ])
-        selected
+        resolved
   match publishManifests domains resolveOps inputs
     Ok manifests => (selected, manifests, missing)
     Err defects => (

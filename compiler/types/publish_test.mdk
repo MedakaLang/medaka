@@ -517,7 +517,8 @@ main = Done ()
     ),
   ]
 
-test "executed signed Float main adds checked core println and ignores the entry shadow" =
+floatMainCase : String -> Bool -> Expectation
+floatMainCase mid shadow =
   let core =
     desugar
       (parseLocated
@@ -531,22 +532,27 @@ println x = let _ = display x in ()
 """)
   let inputs = { defaultDriveInputs |
     diManifestRequests = [
-      ExactEntry
-        EntryKey { moduleId = "entry", binding = "main" }
-        HostInvocation,
-      ExactEntry EntryKey { moduleId = "entry", binding = "main" } ExecutedMain,
-      EntryOverPrelude "println" HostInvocation,
+      ExactEntry EntryKey { moduleId = mid, binding = "main" } HostInvocation,
+      ExactEntry EntryKey { moduleId = mid, binding = "main" } ExecutedMain,
+      if shadow then
+        ExactEntry
+          EntryKey { moduleId = mid, binding = "println" }
+          HostInvocation
+      else
+        EntryOverPrelude "println" HostInvocation,
     ],
   }
   let (elab, report, outputs) = elaborateModulesWithReport inputs True (Some
     "runMain") [] core [
     (
-      "entry",
-      desugar (parseLocated """
-println _ = ()
+      mid,
+      desugar
+        (parseLocated
+          ("""
 main : Float
 main = 6.0
-"""),
+"""
+            ++ (if shadow then "println _ = ()\n" else ""))),
     ),
   ]
   let (_, _, _, _, _, _, facts) = elab
@@ -555,25 +561,27 @@ main = 6.0
     (
       "host is pure",
       expectEqual
-        ("entry", [])
-        (lookupManifestView
-          (manifestRequest "entry" "main" HostInvocation)
-          outputs),
+        (mid, [])
+        (lookupManifestView (manifestRequest mid "main" HostInvocation) outputs),
     ),
     (
       "execution prints",
       expectEqual
-        ("entry", [("Stdout", "")])
-        (lookupManifestView
-          (manifestRequest "entry" "main" ExecutedMain)
-          outputs),
+        (mid, [("Stdout", "")])
+        (lookupManifestView (manifestRequest mid "main" ExecutedMain) outputs),
     ),
     (
-      "own println wins query",
+      "println selection uses its checked owner",
       expectEqual
-        ("entry", [])
+        (
+          if shadow then mid else "core",
+          if shadow then [] else [("Stdout", "")],
+        )
         (lookupManifestView
-          (manifestRequest "entry" "println" HostInvocation)
+          (manifestRequest
+            (if shadow then mid else "core")
+            "println"
+            HostInvocation)
           outputs),
     ),
     (
@@ -583,6 +591,18 @@ main = 6.0
         (map manifestAtoms facts.efManifests),
     ),
   ]
+
+test "executed signed Float mains keep shipped printing across core collisions and shadows" =
+  expectEach
+    (flatMap
+      (mid =>
+        map
+          (shadow => (
+            mid ++ (if shadow then " with println" else " without println"),
+            floatMainCase mid shadow,
+          ))
+          [False, True])
+      ["entry", "core"])
 
 int : Mono
 int = TCon "Int" OriginBuiltin

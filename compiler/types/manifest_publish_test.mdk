@@ -8,7 +8,7 @@ import types.effect_rows.{EffRow(..), atomBuiltin}
 import types.repr.{Scheme(..), Mono(..)}
 import types.effect_authority.{Authority(..), Authvar(..)}
 import types.manifest_publish.{
-  ManifestEntryInput(..), publishManifests, freezeAtoms
+  InvocationOwner(..), ManifestEntryInput(..), publishManifests, freezeAtoms
 }
 import types.capability_manifest.{
   EntryKey(..), InvocationProtocol(..), ManifestRequest(..), CapabilityManifest,
@@ -86,13 +86,14 @@ summary force mono = publishedText [input HostInvocation force mono []]
 input : InvocationProtocol ->
   EffRow ->
   Mono ->
-  List (EntryKey, Scheme) ->
+  List (InvocationOwner, Scheme) ->
   ManifestEntryInput
 input protocol force mono wrappers = ManifestEntryInput {
   request = ManifestRequest {
     entry = EntryKey { moduleId = "entry", binding = "main" },
     protocol = protocol,
   },
+  owner = SourceModule "entry",
   scheme = Forall [] [] [] [] force mono,
   wrappers = wrappers,
 }
@@ -205,7 +206,7 @@ test "constructor visibility and module identity control opening" = expectAll [
 
 test "executed requests charge checked wrappers while host requests stay pure" =
   let print = (
-    EntryKey { moduleId = "core", binding = "println" },
+    ShippedPrelude,
     Forall [] [] [] [] pure (TFun unit (rowWith "Stdout" PUnit) unit),
   )
   expectAll [
@@ -327,35 +328,42 @@ test "same-spelled label origins remain separate frozen atoms" =
       ))
       atoms)
 
-test "entry and executed wrapper resolve their own discriminating module views" =
-  let forOwner mid = Some ({ ops |
+test "user core entry and shipped wrapper resolve distinct invocation owners" =
+  let forOwner owner = Some ({ ops |
     appliedFields =
       _ => [
         TFun
           unit
-          (rowWith (if mid == "entry" then "Clock" else "Stdout") PUnit)
+          (rowWith
+            (if owner == SourceModule "core" then "Clock" else "Stdout")
+            PUnit)
           unit,
       ],
   })
   let wrapper = (
-    EntryKey { moduleId = "core", binding = "println" },
+    ShippedPrelude,
     Forall [] [] [] [] pure (con "Api"),
   )
-  let summarize protocol =
-    match (publishManifests [] forOwner [
-      input protocol pure (con "Api") [wrapper],
-    ])
-      Ok [manifest] => map (a => a.label) manifest.atoms
-      _ => []
+  let summarize protocol = match publishManifests [] forOwner [
+    { input protocol pure (con "Api") [wrapper] |
+      request = ManifestRequest {
+        entry = EntryKey { moduleId = "core", binding = "main" },
+        protocol = protocol,
+      },
+      owner = SourceModule "core",
+    },
+  ]
+    Ok [manifest] => map (a => a.label) manifest.atoms
+    _ => []
   expectAll [
     expectEqual ["Clock"] (summarize HostInvocation),
     expectEqual ["Clock", "Stdout"] (summarize ExecutedMain),
   ]
 
 test "missing wrapper owner is a publication defect only for executed protocol" =
-  let forOwner mid = if mid == "entry" then Some ops else None
+  let forOwner owner = if owner == SourceModule "entry" then Some ops else None
   let wrapper = (
-    EntryKey { moduleId = "core", binding = "println" },
+    ShippedPrelude,
     Forall [] [] [] [] pure unit,
   )
   let verdict protocol =
@@ -365,6 +373,6 @@ test "missing wrapper owner is a publication defect only for executed protocol" 
   expectAll [
     expectEqual [] (verdict HostInvocation),
     expectEqual
-      ["no checked invocation view for module 'core'"]
+      ["no checked invocation view for shipped prelude 'core'"]
       (verdict ExecutedMain),
   ]
