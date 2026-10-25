@@ -911,8 +911,6 @@ determineHeldGoal : ModuleCtx -> Map String Unit -> GoalWindow -> UObligation ->
 determineSweeps : ModuleCtx -> Map String Unit -> GoalWindow -> Int -> Unit
 determinedEntryAnswers : IfaceRef -> List Mono -> (ImplRow, List Mono) -> Bool
 determinedGoalInstance : ModuleCtx -> IfaceRef -> List Mono -> Option ImplRow
-diagsServe : ServeState -> ModuleServe (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)
-diagsServeStep : ServeState -> String -> List Decl -> ModuleCtx -> ServeStep (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)
 dictAppEntry : Obligation -> List PendingDictApp
 dictAppsIn : List Obligation -> List PendingDictApp
 dictAppsSince : GraphCtx -> Int -> List PendingDictApp
@@ -2427,7 +2425,6 @@ overrideScopedCtors : List Decl -> Map String (List (Ident, String, Scheme)) -> 
 overrideScopedRecords : ModuleCtx -> List Decl -> Map String (List (Ident, String, RecordInfo)) -> List String -> Unit
 ownContext : ModuleCtx -> String -> List VecObl
 ownMethodIdent : List Decl -> String -> Option Ident
-ownRootsOpen : GraphCtx -> QueueMark -> Bool
 ownerCandidates : ModuleCtx -> List String -> List (String, RecordInfo)
 ownerDeclMatches : GraphCtx -> Ident -> List String -> List (String, RecordInfo)
 ownerDeclOfReceiver : ModuleCtx -> Mono -> String -> List String -> Option (String, RecordInfo)
@@ -2463,7 +2460,6 @@ patternDomainMsg : String -> String -> String
 patternIndexMsg : Authority -> String
 patternSlotNamesIn : ModuleCtx -> Ty -> List String
 payloadAstTypes : ConPayload -> List Ty
-payloadRow : (String, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)) -> (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 payloadTypesE : ModuleCtx -> SigVars -> List (String, Mono) -> ConPayload -> List Mono
 peelArrows : Int -> Mono -> List Mono
 peelOntoParams : DynCtx -> Option Mono -> List Mono -> List Pat -> Unit
@@ -2629,9 +2625,6 @@ qualifyByTerms : ModuleCtx -> SigVars -> List EffParamTy -> Option Loc -> Mono -
 quantifiableAuthorities : TcEnv -> Map String (List (List Pat, Expr)) -> List ScopedMember -> ScopeRoles
 quantifiedVecObls : List Int -> List VecObl -> List VecObl
 quantifyFree : ModuleCtx -> List AuthResidual -> EffRow -> Mono -> Scheme
-queueMarkOf : GraphCtx -> QueueMark
-queueNewer : Int -> List a -> List a
-queueOlder : Int -> List a -> List a
 quotedNames : List String -> String
 raiseAuthvarLevel : Int -> Ref Authvar -> Unit
 raiseToHighWater : GraphCtx -> Unit
@@ -2668,7 +2661,6 @@ recordCandImported : GraphCtx -> List Decl -> String -> (Ident, String, RecordIn
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
 recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
 recordCandIsType : Ident -> Ident -> String -> Bool
-recordChecked : ServeState -> ModuleKey -> ModuleRows -> ModuleCtx -> List (String, ExportBinding) -> List (String, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)) -> (List (String, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)), ModuleServe (List Decl, List (String, PubScheme), List TcDiag, List TcDiag))
 recordClauseFileBound : ModuleCtx -> Expr -> Int -> Mono -> Unit
 recordCtors : GraphCtx -> TyConOrigin -> String -> DataVis -> List String -> List Variant -> Unit
 recordDeclKinds : ModuleCtx -> Decl -> Unit
@@ -2725,7 +2717,6 @@ recordRLocalSite : TcEnv -> String -> Ref Route -> Ref Inner -> Mono -> Unit
 recordRecursiveGrants : GraphCtx -> String -> String -> List (String, List Int) -> Expr -> Unit
 recordResultMono : RecordInfo -> Mono
 recordSchemeCallObligations : ModuleCtx -> Int -> List VecObl -> List (Int, Mono) -> Unit
-recordScoped : ServeState -> ModuleKey -> ModuleRows -> ModuleCtx -> List (String, ExportBinding) -> List (String, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)) -> QueueMark -> (List (String, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)), ModuleServe (List Decl, List (String, PubScheme), List TcDiag, List TcDiag))
 recordSelectedStandaloneRoutes : ModuleCtx -> String -> ShadowDicts -> List (Ref Route, Ref Inner) -> Mono -> Unit
 recordShadowStandaloneObls : TcEnv -> String -> List (Int, Mono) -> Unit
 recordSite : TcEnv -> String -> Scheme -> Ref String -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Ref Inner -> Mono -> MethodInstantiationSubst -> Mono
@@ -3043,8 +3034,7 @@ selectedRowReqMatch : ModuleCtx -> List Mono -> ImplRow -> Option (List (String,
 selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (String, a) -> List (String, a)
 selfNameRows : List Decl -> List (String, a) -> List (String, a)
 selfQualEntries : String -> Map String Unit -> List ((String, String), a) -> List (String, a)
-serveStateOf : GraphCtx -> List (String, List Decl) -> (String, List (Option String)) -> ServeState
-servedState : ServeState -> String -> ModuleInterface -> ServeState
+serveOps : ServeOps
 setDictEligible : GraphCtx -> List String -> Unit
 setFunConstraintEntry : ModuleCtx -> String -> List PredicateSlot -> Unit
 setFunPredicateSlots : ModuleCtx -> List (String, List PredicateSlot) -> Unit
@@ -3365,7 +3355,6 @@ unopMethodApp : ModuleCtx -> String -> Expr -> Route -> Expr
 unprotectedNumCandidates : Map String Unit -> List UObligation -> List Int
 unquantifiedAuthIds : Scheme -> Map Int Unit
 unreachableArmWarning : String
-unrecordedState : ServeState -> String -> ServeState
 unrigidSig : List (Ref Tyvar) -> Mono -> Mono
 unroutedGroundReqs : SiteCtx -> ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 unroutedResidual : SiteCtx -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
@@ -3437,8 +3426,6 @@ withCtors : ModuleCtx -> Map String Scheme -> TcEnv
 withDeclParamKinds : ModuleCtx -> List Decl -> (Unit -> a) -> a
 withDeclaredVars : ModuleCtx -> Map String Unit -> List Mono -> Map String Unit
 withFreeAuths : List (String, Ref Authvar) -> SigVars -> SigVars
-withMarked : ((String, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)), (String, (List (String, PubScheme), List TcDiag, List TcDiag))) -> (String, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag))
-withModDiags : (List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))) -> List (String, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)) -> List (String, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag))
 withheldGoals : GraphCtx -> List Mono -> List UObligation -> List UObligation
 withheldVectorVerdict : ModuleCtx -> Map String Unit -> GoalWindow -> UObligation -> Unit
 withoutVar : Ref Authvar -> Authority -> List Authority

@@ -1,0 +1,280 @@
+-- Which modules of a keyed drive are served, checked, recorded, and the per-drive
+-- state that decides it.
+--
+-- The policy reaches the drive's drain and its open-variable test through
+-- `ServeOps`, which `typecheck.mdk` builds once; this module imports nothing from it.
+import list.{drop, take}
+import frontend.visibility.{useModuleIds}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
+import support.util.{
+  anyList, dedup, filterList, isNonEmptyL, isSome, listLen, zipL
+}
+import types.chain_key.{chainGraphKey}
+import types.module_interface.{
+  ModuleKey(..),
+  ModuleInterface,
+  ModuleRows,
+  applyModuleInterface,
+  captureModuleRows,
+  freezeModuleInterface,
+  freshModuleSerial,
+  moduleCacheHit,
+  moduleInterfaceIdentity,
+  recordModuleInterface,
+}
+import types.publish.{ModDiags, PubScheme, TcDiag, freezeRows}
+import types.repr.{Mono}
+import types.tc_types.{
+  ExportBinding, GraphCtx(..), GraphRun(..), LiveGoal(..), ModuleCtx(..),
+  ModuleServe(..), ServeStep(..)
+}
+import frontend.ast.{Decl}
+
+-- What the policy needs from the typechecker: the drain of the queues a module's
+-- check left (its findings attached to the rows so far), and the unbound variables
+-- of a type.
+public export data ServeOps = ServeOps {
+  soDrain : ModuleCtx -> List ModDiags -> List ModDiags,
+  soUnboundIds : Mono -> List Int,
+}
+
+-- A diagnostics drive's per-module payload (`graphModuleWorker`).
+export type DiagsPayload = (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)
+
+-- The serve policy's state: the source keys of the modules still to come, the graph
+-- key, the identity of each module so far, the modules checked and not recorded, and
+-- the counts `ModuleServe` reports.
+export data ServeState = ServeState {
+  ssOps : ServeOps,
+  ssKeys : List (Option String),
+  ssGraph : String,
+  ssIdents : OrdMap String,
+  ssUnrecorded : OrdMap Unit,
+  ssRows : Int,
+  ssFrozen : Int,
+  ssServed : Int,
+}
+
+-- The policy's start for a drive over [modules] whose chain key and source keys are
+-- [keyed]: the graph key is the drive's configuration, the chain key, and every
+-- module's instance heads, interface declarations and constrained signature names,
+-- which a module reads whether or not it imports their definer (`chainGraphKey`).
+export
+serveStateOf : ServeOps ->
+  GraphCtx ->
+  List (String, List Decl) ->
+  (String, List (Option String)) ->
+  ServeState
+serveStateOf ops gctx modules (chain, steps) = ServeState {
+  ssOps = ops,
+  ssKeys = steps,
+  ssGraph =
+    if anyList isSome steps then
+      "\{gctx.config.value.tcKey}\n\{chain}\n\{chainGraphKey modules}"
+    else
+      "",
+  ssIdents = omEmpty,
+  ssUnrecorded = omEmpty,
+  ssRows = 0,
+  ssFrozen = 0,
+  ssServed = 0,
+}
+
+-- A keyed diagnostics drive's serve policy.  A module before the entry whose
+-- `ModuleKey` matches its interface's is served from it.  A miss is checked, and it
+-- is left unrecorded when its own check leaves a live root open, which a later
+-- module is to ground, or when a module it imports is unrecorded: either could not
+-- be replayed without a module outside its interface.  Every other miss records,
+-- including one after an unrecorded module, which does not import it.  A recording
+-- module is drained at its own end before its row is frozen and its interface taken,
+-- so an interface brings no queued goal; the drain is scoped to what the module's
+-- own check queued (`recordScoped`).  The key carries each direct import's identity,
+-- and an import checked and not recorded has a fresh serial no interface carries, so
+-- a change anywhere in a module's import closure re-checks it.
+export
+diagsServe : ServeState -> ModuleServe DiagsPayload
+diagsServe st = ModuleServe {
+  msServed = st.ssServed,
+  msFrozen = st.ssFrozen,
+  msStep = diagsServeStep st,
+}
+
+diagsServeStep : ServeState ->
+  String ->
+  List Decl ->
+  ModuleCtx ->
+  ServeStep DiagsPayload
+diagsServeStep st mid prog prev =
+  let next = { st | ssKeys = drop 1 st.ssKeys, ssRows = st.ssRows + 1 }
+  match st.ssKeys
+    (Some source) :: _ =>
+      let key = ModuleKey {
+        mkModule = mid,
+        mkSource = source,
+        mkImports =
+          map
+            (m => (m, optionOr "" (omLookup m st.ssIdents)))
+            (dedup (useModuleIds prog)),
+        mkGraph = st.ssGraph,
+      }
+      match moduleCacheHit key
+        Some mi =>
+          let ((_, (schemes, errs, warns)), own) =
+            applyModuleInterface prev.mcGraph mi
+          ServeHit
+            own
+            ([], schemes, errs, warns)
+            (diagsServe (servedState next mid mi))
+        None =>
+          let before = captureModuleRows prev.mcGraph
+          let mark = queueMarkOf prev.mcGraph
+          ServeCheck (mctx own done =>
+            if anyList (m => omHasKey m st.ssUnrecorded) (map fst key.mkImports)
+              || ownRootsOpen st.ssOps mctx.mcGraph mark then
+              (done, diagsServe (unrecordedState next mid))
+            else
+              recordScoped next key before mctx own done mark)
+    _ => ServeCheck (_ _ done => (done, diagsServe (unrecordedState next mid)))
+
+-- A served row extends the frozen prefix when every row before it is frozen.
+servedState : ServeState -> String -> ModuleInterface -> ServeState
+servedState st mid mi = { st |
+  ssIdents = omInsert mid (moduleInterfaceIdentity mi) st.ssIdents,
+  ssFrozen = if st.ssFrozen + 1 == st.ssRows then st.ssRows else st.ssFrozen,
+  ssServed = st.ssServed + 1,
+}
+
+unrecordedState : ServeState -> String -> ServeState
+unrecordedState st mid = { st |
+  ssIdents = omInsert mid (intToString (freshModuleSerial ())) st.ssIdents,
+  ssUnrecorded = omInsert mid () st.ssUnrecorded,
+}
+
+-- How much each queue the drain reads held before a module's check, and the next
+-- evidence ordinal: what that check queued is the head of each queue (newest first)
+-- beyond these lengths.
+data QueueMark = QueueMark {
+  qmCtxs : Int,
+  qmRoots : Int,
+  qmNumRoots : Int,
+  qmNumGoals : Int,
+  qmBinders : Int,
+  qmEvidence : Int,
+}
+
+queueMarkOf : GraphCtx -> QueueMark
+queueMarkOf gctx =
+  let g = gctx.graphRun
+  QueueMark {
+    qmCtxs = listLen g.stampCtxs.value,
+    qmRoots = listLen g.liveRoots.value,
+    qmNumRoots = listLen g.liveNumRoots.value,
+    qmNumGoals = listLen g.liveNumGoals.value,
+    qmBinders = listLen g.binderPending.value,
+    qmEvidence = g.evCounter.value,
+  }
+
+-- Some live root the module's own check queued still has a variable a later module
+-- could ground.
+ownRootsOpen : ServeOps -> GraphCtx -> QueueMark -> Bool
+ownRootsOpen ops gctx mark =
+  let roots = gctx.graphRun.liveRoots.value
+  anyList
+    (m => isNonEmptyL (ops.soUnboundIds m))
+    (take (listLen roots - mark.qmRoots) roots)
+
+-- The queue's entries from before [n] entries were held, and the [n] newest.
+queueOlder : Int -> List a -> List a
+queueOlder n xs = drop (listLen xs - n) xs
+
+queueNewer : Int -> List a -> List a
+queueNewer n xs = take (listLen xs - n) xs
+
+-- `recordChecked` with the drain scoped to the module's own queue: the entries queued
+-- before its check are set aside for the drive's later drains and restored after, and
+-- the evidence it minted is judged now and skipped by the later drain, so those
+-- drains see what they would have seen had the module not recorded.
+recordScoped : ServeState ->
+  ModuleKey ->
+  ModuleRows ->
+  ModuleCtx ->
+  List (String, ExportBinding) ->
+  List (String, DiagsPayload) ->
+  QueueMark ->
+  (List (String, DiagsPayload), ModuleServe DiagsPayload)
+recordScoped st key before mctx own done mark =
+  let g = mctx.mcGraph.graphRun
+  let mid = key.mkModule
+  let ctxs = queueOlder mark.qmCtxs g.stampCtxs.value
+  let roots = queueOlder mark.qmRoots g.liveRoots.value
+  let numRoots = queueOlder mark.qmNumRoots g.liveNumRoots.value
+  let numGoals = queueOlder mark.qmNumGoals g.liveNumGoals.value
+  let binders = queueOlder mark.qmBinders g.binderPending.value
+  let goals = filterList (lg => lg.lgModule /= mid) g.liveGoals.value
+  let judged = g.evJudged.value
+  let from = max judged mark.qmEvidence
+  g.stampCtxs := queueNewer mark.qmCtxs g.stampCtxs.value
+  g.liveRoots := queueNewer mark.qmRoots g.liveRoots.value
+  g.liveNumRoots := queueNewer mark.qmNumRoots g.liveNumRoots.value
+  g.liveNumGoals := queueNewer mark.qmNumGoals g.liveNumGoals.value
+  g.binderPending := queueNewer mark.qmBinders g.binderPending.value
+  g.liveGoals := filterList (lg => lg.lgModule == mid) g.liveGoals.value
+  g.evJudged := from
+  let result = recordChecked st key before mctx own done
+  g.evScopedJudged := (from, g.evCounter.value) :: g.evScopedJudged.value
+  g.evJudged := judged
+  g.stampCtxs := g.stampCtxs.value ++ ctxs
+  g.liveRoots := g.liveRoots.value ++ roots
+  g.liveNumRoots := g.liveNumRoots.value ++ numRoots
+  g.liveNumGoals := g.liveNumGoals.value ++ numGoals
+  g.binderPending := g.binderPending.value ++ binders
+  g.liveGoals := g.liveGoals.value ++ goals
+  result
+
+-- A checked module's record: drain what it queued, attach the drain's findings to
+-- the rows so far (whose errors decide which live findings stay), freeze its row and
+-- record its interface.  [done] is the payloads so far, this module's first.
+recordChecked : ServeState ->
+  ModuleKey ->
+  ModuleRows ->
+  ModuleCtx ->
+  List (String, ExportBinding) ->
+  List (String, DiagsPayload) ->
+  (List (String, DiagsPayload), ModuleServe DiagsPayload)
+recordChecked st key before mctx own done =
+  let drained = withModDiags (st.ssOps.soDrain mctx) done
+  match drained
+    [] => (drained, diagsServe st)
+    (mid, (marked, schemes, errs, warns)) :: older =>
+      let published = freezeRows schemes
+      let mi =
+        freezeModuleInterface
+          key
+          (freshModuleSerial ())
+          (mid, (published, errs, warns))
+          own
+          before
+          mctx
+      recordModuleInterface mi
+      (
+        (mid, (marked, published, errs, warns)) :: older,
+        diagsServe { st |
+          ssIdents = omInsert mid (moduleInterfaceIdentity mi) st.ssIdents,
+          ssFrozen =
+            if st.ssFrozen + 1 == st.ssRows then st.ssRows else st.ssFrozen,
+        },
+      )
+
+-- [f] over the diagnostics rows of [done], each payload keeping its marked tree.
+-- [f] keeps every row in place.
+withModDiags : (List ModDiags -> List ModDiags) ->
+  List (String, DiagsPayload) ->
+  List (String, DiagsPayload)
+withModDiags f done = map withMarked (zipL done (f (map payloadRow done)))
+
+payloadRow : (String, DiagsPayload) -> ModDiags
+payloadRow (mid, (_, schemes, errs, warns)) = (mid, (schemes, errs, warns))
+
+withMarked : ((String, DiagsPayload), ModDiags) -> (String, DiagsPayload)
+withMarked ((mid, (marked, _, _, _)), (_, (schemes, errs, warns))) =
+  (mid, (marked, schemes, errs, warns))
