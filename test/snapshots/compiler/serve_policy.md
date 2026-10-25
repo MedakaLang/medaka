@@ -1,5 +1,5 @@
 # META
-source_lines=355
+source_lines=365
 stages=DESUGAR,MARK
 # SOURCE
 -- Which modules of a keyed drive are served, checked, recorded, and the per-drive
@@ -8,6 +8,7 @@ stages=DESUGAR,MARK
 -- The policy reaches the drive's drain and its open-variable test through
 -- `ServeOps`, which `typecheck.mdk` builds once; this module imports nothing from it.
 import list.{drop, take, sort}
+import string.{lines}
 import frontend.visibility.{useModuleIds}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 import support.util.{
@@ -67,10 +68,11 @@ export data ServeState = ServeState {
 }
 
 -- The policy's start for a drive over [modules] whose chain key and source keys are
--- [keyed]: the graph key is the drive's configuration, the chain key, and every
--- module's instance heads and constrained signature names, which a module reads
--- whether or not it imports their definer (`chainGraphKey`).  A module's key adds
--- the interface declarations of the modules before it (`graphPart`).
+-- [keyed]: the graph key is the drive's configuration, the chain key's prelude
+-- generation (not its entry or roots), and every module's instance heads and
+-- constrained signature names, which a module reads whether or not it imports
+-- their definer (`chainGraphKey`).  A module's key adds the interface declarations
+-- of the modules before it (`graphPart`).
 export
 serveStateOf : ServeOps ->
   OrdMap Unit ->
@@ -85,7 +87,7 @@ serveStateOf ops capture gctx modules (chain, steps) = ServeState {
   ssKeys = steps,
   ssGraph =
     if anyList isSome steps then
-      "\{gctx.config.value.tcKey}\n\{chain}\n\{chainGraphKey modules}"
+      "\{gctx.config.value.tcKey}\n\{generationLine chain}\n\{chainGraphKey modules}"
     else
       "",
   ssIfaces = [],
@@ -95,6 +97,14 @@ serveStateOf ops capture gctx modules (chain, steps) = ServeState {
   ssFrozen = 0,
   ssServed = 0,
 }
+
+-- The chain key's first line, the prelude generation.  The entry is read only once the
+-- whole graph is checked, and the roots only choose the file an import resolves to,
+-- which a module's source key and its imports' identities already carry.
+generationLine : String -> String
+generationLine chain = match lines chain
+  first :: _ => first
+  [] => ""
 
 -- A keyed diagnostics drive's serve policy.  A module before the entry whose
 -- `ModuleKey` matches its interface's is served from it.  A miss is checked, and it
@@ -359,6 +369,7 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
   (mid, (marked, schemes, errs, warns, view))
 # DESUGAR
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "take" false) (mem "sort" false))))
+(DUse false (UseGroup ("string") ((mem "lines" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModuleIds" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinNl" false) (mem "listLen" false) (mem "zipL" false))))
@@ -373,7 +384,9 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
 (DTypeAlias true "DiagsPayload" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "Option") (TyCon "InvocationView"))))
 (DData Abstract "ServeState" () ((variant "ServeState" (ConNamed (field "ssOps" (TyCon "ServeOps")) (field "ssTrees" (TyCon "Bool")) (field "ssCapture" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ssKeys" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))) (field "ssGraph" (TyCon "String")) (field "ssIfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "ssIdents" (TyApp (TyCon "OrdMap") (TyCon "String"))) (field "ssUnrecorded" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ssRows" (TyCon "Int")) (field "ssFrozen" (TyCon "Int")) (field "ssServed" (TyCon "Int"))))) ())
 (DTypeSig true "serveStateOf" (TyFun (TyCon "ServeOps") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "ServeState")))))))
-(DFunDef false "serveStateOf" ((PVar "ops") (PVar "capture") (PVar "gctx") (PVar "modules") (PTuple (PVar "chain") (PVar "steps"))) (ERecordCreate "ServeState" ((fa "ssOps" (EVar "ops")) (fa "ssTrees" (EVar "False")) (fa "ssCapture" (EVar "capture")) (fa "ssKeys" (EVar "steps")) (fa "ssGraph" (EIf (EApp (EApp (EVar "anyList") (EVar "isSome")) (EVar "steps")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcKey"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "chain"))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "chainGraphKey") (EVar "modules")))) (ELit (LString ""))) (ELit (LString "")))) (fa "ssIfaces" (EListLit)) (fa "ssIdents" (EVar "omEmpty")) (fa "ssUnrecorded" (EVar "omEmpty")) (fa "ssRows" (ELit (LInt 0))) (fa "ssFrozen" (ELit (LInt 0))) (fa "ssServed" (ELit (LInt 0))))))
+(DFunDef false "serveStateOf" ((PVar "ops") (PVar "capture") (PVar "gctx") (PVar "modules") (PTuple (PVar "chain") (PVar "steps"))) (ERecordCreate "ServeState" ((fa "ssOps" (EVar "ops")) (fa "ssTrees" (EVar "False")) (fa "ssCapture" (EVar "capture")) (fa "ssKeys" (EVar "steps")) (fa "ssGraph" (EIf (EApp (EApp (EVar "anyList") (EVar "isSome")) (EVar "steps")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcKey"))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "generationLine") (EVar "chain")))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "chainGraphKey") (EVar "modules")))) (ELit (LString ""))) (ELit (LString "")))) (fa "ssIfaces" (EListLit)) (fa "ssIdents" (EVar "omEmpty")) (fa "ssUnrecorded" (EVar "omEmpty")) (fa "ssRows" (ELit (LInt 0))) (fa "ssFrozen" (ELit (LInt 0))) (fa "ssServed" (ELit (LInt 0))))))
+(DTypeSig false "generationLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "generationLine" ((PVar "chain")) (EMatch (EApp (EVar "lines") (EVar "chain")) (arm (PCons (PVar "first") PWild) () (EVar "first")) (arm (PList) () (ELit (LString "")))))
 (DTypeSig true "diagsServe" (TyFun (TyCon "ServeState") (TyApp (TyCon "ModuleServe") (TyCon "DiagsPayload"))))
 (DFunDef false "diagsServe" ((PVar "st")) (ERecordCreate "ModuleServe" ((fa "msServed" (EFieldAccess (EVar "st") "ssServed")) (fa "msFrozen" (EFieldAccess (EVar "st") "ssFrozen")) (fa "msStep" (EApp (EVar "serveStep") (EVar "st"))))))
 (DTypeSig true "treeServe" (TyFun (TyCon "ServeState") (TyApp (TyCon "ModuleServe") (TyCon "DiagsPayload"))))
@@ -414,6 +427,7 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
 (DFunDef false "withMarked" ((PTuple (PTuple (PVar "mid") (PTuple (PVar "marked") PWild PWild PWild (PVar "view"))) (PTuple PWild (PTuple (PVar "schemes") (PVar "errs") (PVar "warns"))))) (ETuple (EVar "mid") (ETuple (EVar "marked") (EVar "schemes") (EVar "errs") (EVar "warns") (EVar "view"))))
 # MARK
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "take" false) (mem "sort" false))))
+(DUse false (UseGroup ("string") ((mem "lines" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModuleIds" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "filterList" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "joinNl" false) (mem "listLen" false) (mem "zipL" false))))
@@ -428,7 +442,9 @@ withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
 (DTypeAlias true "DiagsPayload" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "Option") (TyCon "InvocationView"))))
 (DData Abstract "ServeState" () ((variant "ServeState" (ConNamed (field "ssOps" (TyCon "ServeOps")) (field "ssTrees" (TyCon "Bool")) (field "ssCapture" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ssKeys" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))) (field "ssGraph" (TyCon "String")) (field "ssIfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "ssIdents" (TyApp (TyCon "OrdMap") (TyCon "String"))) (field "ssUnrecorded" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ssRows" (TyCon "Int")) (field "ssFrozen" (TyCon "Int")) (field "ssServed" (TyCon "Int"))))) ())
 (DTypeSig true "serveStateOf" (TyFun (TyCon "ServeOps") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "ServeState")))))))
-(DFunDef false "serveStateOf" ((PVar "ops") (PVar "capture") (PVar "gctx") (PVar "modules") (PTuple (PVar "chain") (PVar "steps"))) (ERecordCreate "ServeState" ((fa "ssOps" (EVar "ops")) (fa "ssTrees" (EVar "False")) (fa "ssCapture" (EVar "capture")) (fa "ssKeys" (EVar "steps")) (fa "ssGraph" (EIf (EApp (EApp (EVar "anyList") (EVar "isSome")) (EVar "steps")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcKey"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "chain"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "chainGraphKey") (EVar "modules")))) (ELit (LString ""))) (ELit (LString "")))) (fa "ssIfaces" (EListLit)) (fa "ssIdents" (EVar "omEmpty")) (fa "ssUnrecorded" (EVar "omEmpty")) (fa "ssRows" (ELit (LInt 0))) (fa "ssFrozen" (ELit (LInt 0))) (fa "ssServed" (ELit (LInt 0))))))
+(DFunDef false "serveStateOf" ((PVar "ops") (PVar "capture") (PVar "gctx") (PVar "modules") (PTuple (PVar "chain") (PVar "steps"))) (ERecordCreate "ServeState" ((fa "ssOps" (EVar "ops")) (fa "ssTrees" (EVar "False")) (fa "ssCapture" (EVar "capture")) (fa "ssKeys" (EVar "steps")) (fa "ssGraph" (EIf (EApp (EApp (EVar "anyList") (EVar "isSome")) (EVar "steps")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcKey"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "generationLine") (EVar "chain")))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "chainGraphKey") (EVar "modules")))) (ELit (LString ""))) (ELit (LString "")))) (fa "ssIfaces" (EListLit)) (fa "ssIdents" (EVar "omEmpty")) (fa "ssUnrecorded" (EVar "omEmpty")) (fa "ssRows" (ELit (LInt 0))) (fa "ssFrozen" (ELit (LInt 0))) (fa "ssServed" (ELit (LInt 0))))))
+(DTypeSig false "generationLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "generationLine" ((PVar "chain")) (EMatch (EApp (EVar "lines") (EVar "chain")) (arm (PCons (PVar "first") PWild) () (EVar "first")) (arm (PList) () (ELit (LString "")))))
 (DTypeSig true "diagsServe" (TyFun (TyCon "ServeState") (TyApp (TyCon "ModuleServe") (TyCon "DiagsPayload"))))
 (DFunDef false "diagsServe" ((PVar "st")) (ERecordCreate "ModuleServe" ((fa "msServed" (EFieldAccess (EVar "st") "ssServed")) (fa "msFrozen" (EFieldAccess (EVar "st") "ssFrozen")) (fa "msStep" (EApp (EVar "serveStep") (EVar "st"))))))
 (DTypeSig true "treeServe" (TyFun (TyCon "ServeState") (TyApp (TyCon "ModuleServe") (TyCon "DiagsPayload"))))

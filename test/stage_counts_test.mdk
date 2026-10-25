@@ -373,10 +373,11 @@ driveProbes dir = [
       "eval",
       fixture "arbitrary.mdk",
     ],
-  -- #3902 the parent drives a graph that only the native child reads
+  -- the parent drives a graph that only the native child reads; the child shares
+  -- no module id with it (compiler/ARCHITECTURE-PLAYBOOK.md, C3b-2)
   probeRows "test_tonly_native" ["test", fixture "t_only.mdk"],
-  -- #2732 the parent's gate drive, which the child's strict refusal cannot
-  -- replace
+  -- the parent's gate drive, which the child's strict refusal cannot replace; the
+  -- child checks a different graph (compiler/ARCHITECTURE-PLAYBOOK.md, C3b-2)
   probeRows "test_doc_native" ["test", fixture "doc.mdk"],
   -- a stdlib module's doctest drive: the injected elaboration serves the modules
   -- the gate's drive recorded
@@ -395,6 +396,7 @@ test "stage_counts: per-verb stage counts match stage_counts.golden" = withScrat
       ],
       probeRows "run_hello" ["run", fixture "hello.mdk"],
       probeRows "build_hello" ["build", fixture "hello.mdk", "-o", "\{dir}/h"],
+      -- the native child's probe and runtime dependency are not the parent's modules
       probeRows "test_probe" ["test", fixture "test_probe.mdk"],
       probeRows "lint_probe" ["lint", fixture "lint_probe.mdk"],
       probeRowsExit "check_bad" 1 ["check", fixture "bad.mdk"],

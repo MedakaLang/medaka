@@ -181,6 +181,21 @@ test "an impl in a module the importer does not import invalidates the leaf's in
     ("an impl elsewhere serves nothing", expectEqual 0 afterImpl),
   ]
 
+-- ── the key leaves out the entry ───────────────────────────────────────────
+
+test "a shared module is served under another entry's chain key" =
+  let (_, firstServed, _) =
+    chainDrive "ke" 4671 "ke-entry-a" leafSrc (entrySrc "ke_mid")
+  let (_, secondServed, _) =
+    chainDrive "ke" 4671 "ke-entry-b" leafSrc (entrySrc "ke_mid")
+  expectEach [
+    ("the first drive serves nothing", expectEqual 0 firstServed),
+    (
+      "the second serves the leaf and the middle module",
+      expectEqual 2 secondServed,
+    ),
+  ]
+
 -- ── the counter high-water ──────────────────────────────────────────────────
 
 -- A leaf with many generic bindings, so its variable ids are well above a small

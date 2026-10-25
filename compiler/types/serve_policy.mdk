@@ -4,6 +4,7 @@
 -- The policy reaches the drive's drain and its open-variable test through
 -- `ServeOps`, which `typecheck.mdk` builds once; this module imports nothing from it.
 import list.{drop, take, sort}
+import string.{lines}
 import frontend.visibility.{useModuleIds}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 import support.util.{
@@ -63,10 +64,11 @@ export data ServeState = ServeState {
 }
 
 -- The policy's start for a drive over [modules] whose chain key and source keys are
--- [keyed]: the graph key is the drive's configuration, the chain key, and every
--- module's instance heads and constrained signature names, which a module reads
--- whether or not it imports their definer (`chainGraphKey`).  A module's key adds
--- the interface declarations of the modules before it (`graphPart`).
+-- [keyed]: the graph key is the drive's configuration, the chain key's prelude
+-- generation (not its entry or roots), and every module's instance heads and
+-- constrained signature names, which a module reads whether or not it imports
+-- their definer (`chainGraphKey`).  A module's key adds the interface declarations
+-- of the modules before it (`graphPart`).
 export
 serveStateOf : ServeOps ->
   OrdMap Unit ->
@@ -81,7 +83,7 @@ serveStateOf ops capture gctx modules (chain, steps) = ServeState {
   ssKeys = steps,
   ssGraph =
     if anyList isSome steps then
-      "\{gctx.config.value.tcKey}\n\{chain}\n\{chainGraphKey modules}"
+      "\{gctx.config.value.tcKey}\n\{generationLine chain}\n\{chainGraphKey modules}"
     else
       "",
   ssIfaces = [],
@@ -91,6 +93,14 @@ serveStateOf ops capture gctx modules (chain, steps) = ServeState {
   ssFrozen = 0,
   ssServed = 0,
 }
+
+-- The chain key's first line, the prelude generation.  The entry is read only once the
+-- whole graph is checked, and the roots only choose the file an import resolves to,
+-- which a module's source key and its imports' identities already carry.
+generationLine : String -> String
+generationLine chain = match lines chain
+  first :: _ => first
+  [] => ""
 
 -- A keyed diagnostics drive's serve policy.  A module before the entry whose
 -- `ModuleKey` matches its interface's is served from it.  A miss is checked, and it

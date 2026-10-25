@@ -1025,14 +1025,14 @@ accQs = [
 accCheck : QKind -> (String, Expectation)
 accCheck (QKind name run) =
   let pSrc2 = accPrefix False
-  let coldDrive = accDrive "acc-cold-\{name}" pSrc2 accEntry pSrc2
+  let coldDrive = accDrive "acc-cold-\{name}" pSrc2 accEntry "cold-\{name}"
   let cold = accRender coldDrive
   let held = accDrive "acc-p" pSrc2 accEntry pSrc2
   let heldBefore = accRender held
   let steps = run ()
   let after = accRender held
   let warm = accDrive "acc-p" pSrc2 accEntry pSrc2
-  let recold = accDrive "acc-recold-\{name}" pSrc2 accEntry pSrc2
+  let recold = accDrive "acc-recold-\{name}" pSrc2 accEntry "recold-\{name}"
   let hitRetained =
     if name == "keyed hit over a ground prefix" then
       expectGreaterThan 0 steps
@@ -1150,14 +1150,24 @@ instEntry : String
 instEntry = "import a.{useA}\nimport b.{bval}\nentry = useA bval\n"
 
 instErrors : String -> Bool -> List String
-instErrors key withImpl =
+instErrors = instErrorsSalted ""
+
+-- [instErrors] with every source key prefixed by [salt], so no module matches a
+-- recorded interface and the drive is a keyed miss throughout.
+instErrorsSalted : String -> String -> Bool -> List String
+instErrorsSalted salt key withImpl =
   let bSrc = instHolder withImpl
   let mods =
     checkModulesDiagsChain
       defaultDriveInputs
       (Some (4266, 4267))
       key
-      [Some instIface, Some instUse, Some bSrc, None]
+      [
+        Some (salt ++ instIface),
+        Some (salt ++ instUse),
+        Some (salt ++ bSrc),
+        None,
+      ]
       []
       (desugar (parse ""))
       [
@@ -1174,7 +1184,7 @@ instErrors key withImpl =
 test "a graph-visible instance dropped from a later prefix module: warm equals cold" =
   let _ = instErrors "inst-k" True
   let warm = instErrors "inst-k" False
-  let cold = instErrors "inst-cold" False
+  let cold = instErrorsSalted "cold:" "inst-cold" False
   expectEach [
     (
       "cold run reports the missing instance",
@@ -1189,7 +1199,7 @@ test "a graph-visible instance dropped from a later prefix module: warm equals c
 test "a graph-visible instance added to a later prefix module: warm equals cold" =
   let _ = instErrors "inst-k2" False
   let warm = instErrors "inst-k2" True
-  let cold = instErrors "inst-cold2" True
+  let cold = instErrorsSalted "cold:" "inst-cold2" True
   expectEqual cold warm
 
 -- The mark set: a later module's `=>` signature names a binding that an earlier
@@ -1210,7 +1220,11 @@ markEntry : String
 markEntry = "import a.{useA}\nimport b.{bval}\nentry = bval\n"
 
 markDrive : String -> Bool -> List String
-markDrive key constrained =
+markDrive = markDriveSalted ""
+
+-- [markDrive] with every source key prefixed by [salt], a keyed miss throughout.
+markDriveSalted : String -> String -> Bool -> List String
+markDriveSalted salt key constrained =
   let bSrc = markB constrained
   let (report, _) =
     checkModulesChainReportFor
@@ -1218,7 +1232,12 @@ markDrive key constrained =
       False
       (Some (4266, 4267))
       key
-      [Some instIface, Some markA, Some bSrc, None]
+      [
+        Some (salt ++ instIface),
+        Some (salt ++ markA),
+        Some (salt ++ bSrc),
+        None,
+      ]
       []
       (desugar (parse ""))
       [
@@ -1232,10 +1251,10 @@ markDrive key constrained =
 test "a later module's constrained signature name: warm evidence equals cold" =
   let _ = markDrive "mark-k" True
   let warmRemoved = markDrive "mark-k" False
-  let coldRemoved = markDrive "mark-cold" False
+  let coldRemoved = markDriveSalted "cold:" "mark-cold" False
   let _ = markDrive "mark-k2" False
   let warmAdded = markDrive "mark-k2" True
-  let coldAdded = markDrive "mark-cold2" True
+  let coldAdded = markDriveSalted "cold:" "mark-cold2" True
   expectEach [
     ("removed", expectEqual coldRemoved warmRemoved),
     ("added", expectEqual coldAdded warmAdded),
