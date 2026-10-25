@@ -135,7 +135,7 @@ import types.typecheck.{
   walkGoalSameProbe,
 }
 import types.target_profile.{selectProfile}
-import types.route_key.{EvIndex(..), evIndexOf}
+import types.route_key.{evIndexOf, evIndexSlotCount}
 import support.ordmap.{omEmpty, omFromNames, omKeys}
 import frontend.exhaust.{buildOracle}
 import support.util.{
@@ -5884,8 +5884,7 @@ elaborateSpansGraph _ =
         (parse numericPreludeSource)) [
         spanProgramModule,
       ])
-  match evIndexOf table
-    EvIndex _ arr => ((evCellsSpanProbe gctx, arrayLength arr), gctx)
+  ((evCellsSpanProbe gctx, evIndexSlotCount (evIndexOf table)), gctx)
 
 -- The method-cell index's length after one unkeyed `checkOneDiags` drive.
 diagsSpan : Unit -> Int

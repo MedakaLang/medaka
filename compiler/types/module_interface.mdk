@@ -66,7 +66,7 @@ import types.publish.{
 import types.registry.{SpellingPop, spInsert, spMap, spRows, spFloor}
 import types.effect_rows.{EffRow}
 import types.repr.{IfaceRef, Mono, VecObl}
-import types.route_key.{EvIndex(..), evidenceLookup, ifaceWordOf}
+import types.route_key.{EvIndex, evidenceLookup, ifaceWordOf, replaceEntryIn}
 import types.runtime_types.{BinderRow, BinderTypeTable, addBinderRow}
 import types.tc_types.{
   GraphCtx(..), CrossRun(..), GraphRun(..), GrantState(..), ModuleCtx(..),
@@ -517,14 +517,9 @@ siteCellValue (HeadSite h) = EvHead h.value
 export
 setServedArity : EvIndex -> EvId -> Int -> Unit
 setServedArity idx ev arity =
-  let (EvIndex lo arr) = idx
-  let (EvId _ i) = ev
   match evidenceLookup (Some idx) "served method occurrence" ev
     Ok (EvMethod iface _ tag impls meths) =>
-      arraySetUnsafe
-        (i - lo)
-        (Some (EvEntry ev (EvMethod iface arity tag impls meths)))
-        arr
+      replaceEntryIn idx (EvEntry ev (EvMethod iface arity tag impls meths))
     Ok _ =>
       panic
         "evidence table: a method occurrence answered by another kind of entry"

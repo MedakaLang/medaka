@@ -1,5 +1,5 @@
 # META
-source_lines=692
+source_lines=687
 stages=DESUGAR,MARK
 # SOURCE
 -- One module's checked diagnostics-arm contribution as a value, the key it is
@@ -70,7 +70,7 @@ import types.publish.{
 import types.registry.{SpellingPop, spInsert, spMap, spRows, spFloor}
 import types.effect_rows.{EffRow}
 import types.repr.{IfaceRef, Mono, VecObl}
-import types.route_key.{EvIndex(..), evidenceLookup, ifaceWordOf}
+import types.route_key.{EvIndex, evidenceLookup, ifaceWordOf, replaceEntryIn}
 import types.runtime_types.{BinderRow, BinderTypeTable, addBinderRow}
 import types.tc_types.{
   GraphCtx(..), CrossRun(..), GraphRun(..), GrantState(..), ModuleCtx(..),
@@ -521,14 +521,9 @@ siteCellValue (HeadSite h) = EvHead h.value
 export
 setServedArity : EvIndex -> EvId -> Int -> Unit
 setServedArity idx ev arity =
-  let (EvIndex lo arr) = idx
-  let (EvId _ i) = ev
   match evidenceLookup (Some idx) "served method occurrence" ev
     Ok (EvMethod iface _ tag impls meths) =>
-      arraySetUnsafe
-        (i - lo)
-        (Some (EvEntry ev (EvMethod iface arity tag impls meths)))
-        arr
+      replaceEntryIn idx (EvEntry ev (EvMethod iface arity tag impls meths))
     Ok _ =>
       panic
         "evidence table: a method occurrence answered by another kind of entry"
@@ -707,7 +702,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DUse false (UseGroup ("types" "registry") ((mem "SpellingPop" false) (mem "spInsert" false) (mem "spMap" false) (mem "spRows" false) (mem "spFloor" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false) (mem "Mono" false) (mem "VecObl" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" true) (mem "evidenceLookup" false) (mem "ifaceWordOf" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evidenceLookup" false) (mem "ifaceWordOf" false) (mem "replaceEntryIn" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" false) (mem "BinderTypeTable" false) (mem "addBinderRow" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "CrossRun" true) (mem "GraphRun" true) (mem "GrantState" true) (mem "ModuleCtx" true) (mem "ModuleCells" true) (mem "ExportBinding" true) (mem "PredicateSlot" false) (mem "MethodPredicateSlot" false) (mem "CDeclaredPrefix" false) (mem "RecordInfo" false) (mem "MethodGrant" false) (mem "PublishedInvocationView" false) (mem "EvCell" true) (mem "SiteCell" true) (mem "LocalAbs" true) (mem "LocalAbsState" true) (mem "GrantBinder" false))))
 (DData Public "ModuleKey" () ((variant "ModuleKey" (ConNamed (field "mkModule" (TyCon "String")) (field "mkSource" (TyCon "String")) (field "mkImports" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "mkGraph" (TyCon "String"))))) ())
@@ -769,7 +764,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DFunDef false "siteCellValue" ((PCon "LitSite" (PVar "f") (PVar "r"))) (EApp (EApp (EVar "EvLit") (EFieldAccess (EVar "f") "value")) (EFieldAccess (EVar "r") "value")))
 (DFunDef false "siteCellValue" ((PCon "HeadSite" (PVar "h"))) (EApp (EVar "EvHead") (EFieldAccess (EVar "h") "value")))
 (DTypeSig true "setServedArity" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyFun (TyCon "Int") (TyCon "Unit")))))
-(DFunDef false "setServedArity" ((PVar "idx") (PVar "ev") (PVar "arity")) (EBlock (DoLet false false (PCon "EvIndex" (PVar "lo") (PVar "arr")) (EVar "idx")) (DoLet false false (PCon "EvId" PWild (PVar "i")) (EVar "ev")) (DoExpr (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (ELit (LString "served method occurrence"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvMethod" (PVar "iface") PWild (PVar "tag") (PVar "impls") (PVar "meths"))) () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EApp (EVar "Some") (EApp (EApp (EVar "EvEntry") (EVar "ev")) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "iface")) (EVar "arity")) (EVar "tag")) (EVar "impls")) (EVar "meths"))))) (EVar "arr"))) (arm (PCon "Ok" PWild) () (EApp (EVar "panic") (ELit (LString "evidence table: a method occurrence answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))))
+(DFunDef false "setServedArity" ((PVar "idx") (PVar "ev") (PVar "arity")) (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (ELit (LString "served method occurrence"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvMethod" (PVar "iface") PWild (PVar "tag") (PVar "impls") (PVar "meths"))) () (EApp (EApp (EVar "replaceEntryIn") (EVar "idx")) (EApp (EApp (EVar "EvEntry") (EVar "ev")) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "iface")) (EVar "arity")) (EVar "tag")) (EVar "impls")) (EVar "meths"))))) (arm (PCon "Ok" PWild) () (EApp (EVar "panic") (ELit (LString "evidence table: a method occurrence answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "servedEntriesFrom" (TyFun (TyCon "EvIndex") (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "EvTable")))))
 (DFunDef false "servedEntriesFrom" ((PVar "idx") (PVar "base") (PVar "rows")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "servedEntryIn") (EVar "idx")) (EVar "base"))) (EVar "rows")))
 (DTypeSig false "servedEntryIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "Int") (TyFun (TyCon "EvEntry") (TyCon "EvEntry")))))
@@ -815,7 +810,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DUse false (UseGroup ("types" "registry") ((mem "SpellingPop" false) (mem "spInsert" false) (mem "spMap" false) (mem "spRows" false) (mem "spFloor" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false) (mem "Mono" false) (mem "VecObl" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" true) (mem "evidenceLookup" false) (mem "ifaceWordOf" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evidenceLookup" false) (mem "ifaceWordOf" false) (mem "replaceEntryIn" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" false) (mem "BinderTypeTable" false) (mem "addBinderRow" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "CrossRun" true) (mem "GraphRun" true) (mem "GrantState" true) (mem "ModuleCtx" true) (mem "ModuleCells" true) (mem "ExportBinding" true) (mem "PredicateSlot" false) (mem "MethodPredicateSlot" false) (mem "CDeclaredPrefix" false) (mem "RecordInfo" false) (mem "MethodGrant" false) (mem "PublishedInvocationView" false) (mem "EvCell" true) (mem "SiteCell" true) (mem "LocalAbs" true) (mem "LocalAbsState" true) (mem "GrantBinder" false))))
 (DData Public "ModuleKey" () ((variant "ModuleKey" (ConNamed (field "mkModule" (TyCon "String")) (field "mkSource" (TyCon "String")) (field "mkImports" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "mkGraph" (TyCon "String"))))) ())
@@ -877,7 +872,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DFunDef false "siteCellValue" ((PCon "LitSite" (PVar "f") (PVar "r"))) (EApp (EApp (EVar "EvLit") (EFieldAccess (EVar "f") "value")) (EFieldAccess (EVar "r") "value")))
 (DFunDef false "siteCellValue" ((PCon "HeadSite" (PVar "h"))) (EApp (EVar "EvHead") (EFieldAccess (EVar "h") "value")))
 (DTypeSig true "setServedArity" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyFun (TyCon "Int") (TyCon "Unit")))))
-(DFunDef false "setServedArity" ((PVar "idx") (PVar "ev") (PVar "arity")) (EBlock (DoLet false false (PCon "EvIndex" (PVar "lo") (PVar "arr")) (EVar "idx")) (DoLet false false (PCon "EvId" PWild (PVar "i")) (EVar "ev")) (DoExpr (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (ELit (LString "served method occurrence"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvMethod" (PVar "iface") PWild (PVar "tag") (PVar "impls") (PVar "meths"))) () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EApp (EVar "Some") (EApp (EApp (EVar "EvEntry") (EVar "ev")) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "iface")) (EVar "arity")) (EVar "tag")) (EVar "impls")) (EVar "meths"))))) (EVar "arr"))) (arm (PCon "Ok" PWild) () (EApp (EVar "panic") (ELit (LString "evidence table: a method occurrence answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))))
+(DFunDef false "setServedArity" ((PVar "idx") (PVar "ev") (PVar "arity")) (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (ELit (LString "served method occurrence"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvMethod" (PVar "iface") PWild (PVar "tag") (PVar "impls") (PVar "meths"))) () (EApp (EApp (EVar "replaceEntryIn") (EVar "idx")) (EApp (EApp (EVar "EvEntry") (EVar "ev")) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "iface")) (EVar "arity")) (EVar "tag")) (EVar "impls")) (EVar "meths"))))) (arm (PCon "Ok" PWild) () (EApp (EVar "panic") (ELit (LString "evidence table: a method occurrence answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "servedEntriesFrom" (TyFun (TyCon "EvIndex") (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "EvTable")))))
 (DFunDef false "servedEntriesFrom" ((PVar "idx") (PVar "base") (PVar "rows")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "servedEntryIn") (EVar "idx")) (EVar "base"))) (EVar "rows")))
 (DTypeSig false "servedEntryIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "Int") (TyFun (TyCon "EvEntry") (TyCon "EvEntry")))))

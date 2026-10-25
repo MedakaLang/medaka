@@ -19,7 +19,7 @@ import types.program_facts.{
   factsNow,
 }
 import types.route_key.{
-  EvIndex(..),
+  evIndexEntries,
   evIndexOf,
   evSiteRouteIn,
 }
@@ -156,16 +156,13 @@ twoModuleFacts =
         (m => (fst m, desugar (parseLocated (snd m))))
         [("pick_owner", owner), ("pick_entry", entry)]))
 
-isMethodSlot : Option EvEntry -> Bool
-isMethodSlot (Some (EvEntry _ (EvMethod _ _ _ _ _))) = True
-isMethodSlot _ = False
-
-indexSlots : EvIndex -> List (Option EvEntry)
-indexSlots (EvIndex _ arr) = toList arr
+isMethodEntry : EvEntry -> Bool
+isMethodEntry (EvEntry _ (EvMethod _ _ _ _ _)) = True
+isMethodEntry _ = False
 
 test "factsOfElab of a driven two-module program holds its method occurrences" =
-  let slots = indexSlots twoModuleFacts.pfEvidence
-  expectAll [expectTrue (any isMethodSlot slots)]
+  let entries = evIndexEntries twoModuleFacts.pfEvidence
+  expectAll [expectTrue (any isMethodEntry entries)]
 
 entryOutcomePrelude : List Decl
 entryOutcomePrelude =
