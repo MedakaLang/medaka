@@ -1,21 +1,27 @@
 -- The part of the module-chain memo key that covers what a recorded step reads
 -- from modules outside its own prefix: every instance head, which is visible to
--- the whole graph whether or not a module imports its definer, and every
--- constrained signature's bare name, which joins every module's dict-name set.
--- A step's own source key cannot see either when a later module declares them.
-import frontend.ast.{Decl(..), Ty(..), Require(..), ImplMethod(..)}
+-- the whole graph whether or not a module imports its definer, every interface
+-- declaration with its method names and the declaring module's position, which a
+-- module checked after it reads by bare name whether or not it imports it, and
+-- every constrained signature's bare name, which joins every module's dict-name
+-- set.  A step's own source key cannot see any of them when a later module declares
+-- them.
+import frontend.ast.{
+  Decl(..), Ty(..), Require(..), ImplMethod(..), ifaceMethodName
+}
+import list.{indexed}
 import support.util.{joinWith}
 import types.route_key.{implRouteKeyWord}
 
 export
 chainGraphKey : List (String, List Decl) -> String
-chainGraphKey modules = joinWith "\n" (flatMap moduleRows modules)
+chainGraphKey modules = joinWith "\n" (flatMap moduleRows (indexed modules))
 
-moduleRows : (String, List Decl) -> List String
-moduleRows (mid, decls) = flatMap (declRow mid) decls
+moduleRows : (Int, (String, List Decl)) -> List String
+moduleRows (pos, (mid, decls)) = flatMap (declRow pos mid) decls
 
-declRow : String -> Decl -> List String
-declRow mid (DImpl { iface, tys, reqs, methods, implOrigin }) =
+declRow : Int -> String -> Decl -> List String
+declRow _ mid (DImpl { iface, tys, reqs, methods, implOrigin }) =
   let reqWords =
     map
       (r => implRouteKeyWord r.requireOrigin r.requireHead r.requireArgs None)
@@ -28,8 +34,11 @@ declRow mid (DImpl { iface, tys, reqs, methods, implOrigin }) =
   [
     "\{mid} impl \{implRouteKeyWord implOrigin iface tys None} requires \{joinWith "," reqWords} with \{joinWith "," names}",
   ]
-declRow mid (DAttrib _ d) = declRow mid d
-declRow mid d = map (n => "\{mid} dict \{n}") (constrainedSigName d)
+declRow pos mid (DInterface { name, methods }) = [
+  "\{mid} interface \{name} with \{joinWith "," (map ifaceMethodName methods)} at \{intToString pos}",
+]
+declRow pos mid (DAttrib _ d) = declRow pos mid d
+declRow _ mid d = map (n => "\{mid} dict \{n}") (constrainedSigName d)
 
 -- A `=>`-constrained top-level signature's name, looking through attributes.
 export

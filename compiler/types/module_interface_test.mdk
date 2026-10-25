@@ -273,3 +273,75 @@ test "a module whose live root is open records nothing; it and its importers are
         ),
       ]
     _ => fail "could not read the prelude pair"
+
+-- ── modules after an unrecorded one ─────────────────────────────────────────
+
+-- [lp_lib] stays open (`openLib`); [lp_a] and [lp_b] come after it and import
+-- nothing; [lp_user] imports it and grounds it.
+liveGraph : String -> String -> String -> Int -> String -> (List String, Int)
+liveGraph runtime core chainKey seed userText =
+  let entryText = joinNl [
+    "import lp_user.{u}",
+    "import lp_a.{fa}",
+    "import lp_b.{fb}",
+    "entry = (u, fa 1, fb 1)",
+  ]
+  let ((report, outputs), _) = keyedDrive seed chainKey (desugar
+    (parse runtime)) (desugar (parse core)) [
+    ("lp_lib", openLib),
+    ("lp_a", "export fa x = (x, [x])"),
+    ("lp_b", "export fb x = (x, [x], 2)"),
+    ("lp_user", userText),
+    ("lp_entry", entryText),
+  ]
+  (render report, outputs.doServedModules)
+
+test "modules after an unrecorded module record and are served; its importers are re-checked" =
+  let userText = joinNl ["import lp_lib.{e20}", "export u = e20 (200 : U8)"]
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok runtime, Ok core) =>
+      let (first, firstServed) = liveGraph runtime core "lp-k" 4651 userText
+      let (second, secondServed) = liveGraph runtime core "lp-k" 4651 userText
+      let (cold, _) = liveGraph runtime core "lp-cold" 4652 userText
+      expectEach [
+        ("the first drive serves nothing", expectEqual 0 firstServed),
+        (
+          "the second serves the two independent modules",
+          expectEqual 2 secondServed,
+        ),
+        (
+          "the second drive prints what the first did",
+          expectEqual first second,
+        ),
+        ("a cold drive prints the same", expectEqual cold second),
+      ]
+    _ => fail "could not read the prelude pair"
+
+-- ── an interface declared outside the importers ─────────────────────────────
+
+-- [ix_m] uses the function [h] of [ix_d]; [ix_x] declares an interface with a
+-- method of that name.  The entry's import order decides which the checker sees.
+ifaceGraph : String -> Int -> Bool -> (List String, Int)
+ifaceGraph chainKey seed mFirst =
+  let dSrc = joinNl ["export h : a -> a", "h x = x"]
+  let mSrc =
+    joinNl ["import ix_d.{h}", "export useM : Int -> Int", "useM x = h x"]
+  let xSrc = joinNl ["export interface Hh a where", "  h : a -> a"]
+  let entryText =
+    joinNl ["import ix_m.{useM}", "import ix_x.{Hh}", "entry = useM 1"]
+  let mods =
+    if mFirst then
+      [("ix_d", dSrc), ("ix_m", mSrc), ("ix_x", xSrc), ("ix_entry", entryText)]
+    else
+      [("ix_d", dSrc), ("ix_x", xSrc), ("ix_m", mSrc), ("ix_entry", entryText)]
+  let ((report, outputs), _) = bareDrive seed chainKey mods
+  (render report, outputs.doServedModules)
+
+test "an interface declared in a module the user does not import is part of the graph key" =
+  let _ = ifaceGraph "ix-k" 4661 True
+  let (warm, warmServed) = ifaceGraph "ix-k" 4661 False
+  let (cold, _) = ifaceGraph "ix-cold" 4662 False
+  expectEach [
+    ("the x-first drive serves nothing", expectEqual 0 warmServed),
+    ("it prints what a cold x-first drive prints", expectEqual cold warm),
+  ]

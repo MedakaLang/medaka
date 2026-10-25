@@ -33,7 +33,7 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 | `disposition.mdk` | Whole-graph table of which method each impl supplies or inherits from the default; importable by `ir/`, `eval/`, `backend/` without `typecheck.mdk` | `dispositionLookup`, `buildDispositionTable` |
 | `route_key.mdk` | The only mint of an impl route word | `evMethodRoutesIn`, `numIntWord` |
 | `program_facts.mdk` | Leaf: the evidence index, dispositions and binder table of one typechecked program as a value, and the run-owned cell a bracket sets | `withFacts`, `factsNow` |
-| `chain_key.mdk` | The part of the module-chain memo key a step reads from modules outside its prefix: instance heads and constrained signature names | `chainGraphKey` |
+| `chain_key.mdk` | The part of the module-chain memo key a step reads from modules outside its prefix: instance heads, interface declarations and constrained signature names | `chainGraphKey` |
 | `runtime_types.mdk` | What each source binder holds at run time, keyed by `BinderId`, materialized after the drain | `RuntimeType`, `BinderRow` |
 | `annotate.mdk` | Lexical-addressing emission pass: variable references to addressed references, right before eval | `annotateProgram` |
 | `private_mangle.mdk` | Universal per-module name mangling for the flat multi-module emit path | `mangledName`, `hashName`, `injectiveIdent` |
