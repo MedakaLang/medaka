@@ -265,25 +265,69 @@ owes: a dependency-closure golden (G3) for the new module, snapshot `--new`, a L
 golden per new module with the selfproc gate's list grown, source-soundness coverage and
 the fixpoint.
 
-| Order | Module | Contents | Closure must not contain |
-|---|---|---|---|
-| 1 | `types/tc_types.mdk` | the 150 `data` declarations and the state records of S1 to S3 | any inference module |
-| 2 | `types/tc_diag.mdk` | the closed diagnostic type and its renderer (A5); error values are constructed at the detection sites and rendered here | any inference module |
-| 3 | `types/tc_algebra.mdk` | unify, occurs, levels, generalize, instantiate, zonk | solving, drivers |
-| 4 | `types/tc_infer_*.mdk` | expression, pattern, match, application, let-group inference, one module per language layer | drivers |
-| 5 | `types/tc_solve.mdk` | entailment, obligations, the policy-ordered epilogue (defaulting, ambiguity) | drivers |
-| 6 | `types/tc_global.mdk` | coherence, signature checks, cyclic superinterfaces, impl completeness | drivers |
-| 7 | `types/tc_driver.mdk` | graph and module drivers, promotion schedule, publication | nothing above it |
+**Amended 2026-10-26 (the Phase 4 cut; rulings P4-D1 to P4-D12, Val, recorded on #4206).**
+The seven-row table this section carried was replaced by the one below, derived at
+`e2f8b4840` from the file's measured call graph rather than from its section banners:
+`types/typecheck.mdk` has 3,409 top-level declarations, its only large strongly-connected
+component is the 64-declaration `infer` recursion (1,206 code lines), and a dependency-forced
+layering of every declaration (a declaration's layer is at least the max of its callees'; the
+tool and its inputs are under `/var/tmp/medaka-sprints/arch-p4/`) orders the rows below with
+no cross-layer conflict, so no inversion mechanism is needed (P4-D2). Three findings of that
+derivation corrected the old table: the `coh*` family is the instance-head *matcher* (algebra,
+not a global check); the solver sits *below* inference, because local `let` generalization
+calls improvement (GHC's order); patterns and the binding-group policy split out below the
+recursion. Sizes are measured by the partition pre-sprint (sprint 0) and ratified then; a module
+over 3,000 code lines states why in its header and joins `oversize.golden` under an
+`Arch-Pin-Raise:` trailer (A8). Module names below are the plan's; a row the pre-sprint finds
+under about 250 code lines after placement by rule merges into its neighbour, reported as a
+finding (P4-D1 rider).
 
-A boundary that still needs a back-import after S2 becomes a hooks-record field only if
-A6 admits it (rendering, tooling, backend facts); otherwise it stays a gateway-owned
-region inside its current module and the owed state move is filed.
+| Order | Module | Holds | Spec it implements | Precedent | Position |
+|---|---|---|---|---|---|
+| 0 | `types/tc_types.mdk` (landed, Phase 2 T1) | the data declarations and state records | — | types.ml; GHC.Tc.Types | — |
+| 1 | `types/tc_mono.mdk` | pure operations over `Mono`/`Scheme`: heads, variable ids, substitution, one-way matching and overlap | HM-CORE §2; DICT §3 specificity | btype.ml; GHC.Core.Unify | forced lowest |
+| 2 | `types/tc_state.mdk` | mints, copies and carries of the state records; the interners cell; the `Windowed` ops | TYPECHECK-CONTRACTS §5; CELL-LIFETIMES.md | Ctype level state; TcRnMonad mints | forced |
+| 3 | `types/tc_env.mdk` | construction of and lookup in the declaration envelopes and the term environment | DICT §8; SHADOW §1.0 | env.ml; GHC.Tc.Utils.Env | chosen |
+| 4 | `types/tc_diag.mdk` | the emission API over `TcDiag`, the detection counter, context-free renderers; a context-needing message builder lives beside its emitter (A5, P4-D3) | ERROR-QUALITY.md; A5 | Location + per-module `report_error`; GHC.Tc.Errors.Types/Ppr | chosen below unify |
+| 5 | `types/tc_unify.mdk` | fresh variables and levels, unification over types, rows, joins, indices and authority, the occurs check, the mismatch action, generalization and instantiation | HM-CORE §3, §4; EFFECTS §2.4, §5, §6.6 to §6.8 | ctype.ml; GHC.Tc.Utils.Unify, TcMType | forced |
+| 6 | `types/tc_decls.mdk` | declaration analysis: AST types to `Mono`, kinds, aliases, variants and records, effect domains, polarity, declared authority checks, `buildDeclEnvs` | DICT §1; EFFECTS §4.1, §6.1, §6.4 | typetexp.ml + typedecl.ml; GHC.Tc.TyCl | forced |
+| 7 | `types/tc_solve.mdk` | one solving judgment: entailment and selection, obligations and goals, the given store, improvement, site routes, numeric defaulting and ambiguity, the residual walk | DICT §3, §4.2, §5, §6.2, §6.3, §8; TYPECHECK-CONTRACTS §3 | GHC.Tc.Solver; rustc_trait_selection | forced below every I row |
+| 8 | `types/tc_shadow.mdk` | standalone-vs-method shadow resolution outside the recursion | SHADOW-SEMANTICS S1 to S9 | none (Medaka-specific) | forced |
+| 9 | `types/tc_effects.mdk` | the effect checks run at binding boundaries and impl bodies, grant and authority recording; wires the `effect_*` leaves into inference | EFFECTS §5, §6.2 to §6.9, §8 | none | forced |
+| 10 | `types/tc_occurrence.mdk` | method, operator and literal occurrence inference, site recording, evidence minting, the mark pass | DICT §4 (occurrences), §5, §8 I7; SHADOW S2-DECL | GHC.Tc.Gen.Head, Gen.App | forced |
+| 11 | `types/tc_groups.mdk` | binding-group analysis and the generalization policy at a boundary (the value restriction, group generalization) | HM-CORE §1, §4, §5; DICT §4.1 G2 | GHC.Rename.Bind + simplifyInfer; OCaml is_nonexpansive | forced below infer |
+| 12 | `types/tc_pat.mdk` | pattern inference | HM-CORE §3; EFFECTS §4.1 | GHC.Tc.Gen.Pat | forced below infer |
+| 13 | `types/tc_infer.mdk` | the expression inference recursion, signature pre-unification, exhaustiveness and wide-literal checks at their sites; helpers one arm family owns may sit in a `tc_infer_<family>` below it (sprint 0 decides) | DICT §4; HM-CORE §1 to §5; SHADOW §1.1; EFFECTS §3 | typecore.ml; GHC.Tc.Gen.Expr, Match, Bind | forced above every I row |
+| 14 | `types/tc_elab.mdk` | dict-passing elaboration, the grant rewrite, operator-to-method rewriting | DICT §4 (translation), §7; EFFECTS §8 | GHC.HsToCore evidence binding | chosen |
+| 15 | `types/tc_global.mdk` | the coherence scan, impl head, super-context and completeness checks, impl and default method bodies | DICT §6, §5.1, §3 super context | GHC.Tc.TyCl.Instance, Tc.Validity | chosen above elab |
+| 16 | `types/tc_module.mdk` | the per-module check in one order: declarations, top-level groups, impl and test bodies, final checks, the stamp drain and site resolution, binder-type materialization | TYPECHECK-CONTRACTS §3; DICT §4.2, §7.1; HM-CORE §5 | typemod.ml (per structure); GHC.Tc.Module tcRnSrcDecls | forced below the driver |
+| 17 | `types/typecheck.mdk` (stays; P4-D4) | the graph drive, the memos and interface continuation, serving, import seeding, publication, value-main judgment, configuration, the verb-facing API | TYPECHECK-CONTRACTS §4, §5; A2, A7 | typemod.ml type_implementation; GHC.Tc.Module + Driver.Make | top |
 
-**Exit criterion.** `types/typecheck.mdk` no longer exists or is under 3,000 code lines;
-every `types/` module has a closure golden; the largest `types/` module is the one whose
-header says why.
+*Position* says whether the graph forces the row's place (edges down, none up) or precedent
+chose it where either order is acyclic. Test-only probes stay in the module whose state they
+read, in a marked section exported to that module's sibling only; fixtures move to the
+siblings (P4-D8). Every module gets a `<module>_test.mdk` in its sprint, with the
+`typecheck_test.mdk` blocks whose subject moved plus API tests by the `write-tests` table; #3944's
+exclusion of white-box tests of `unify`, `generalize`, `instantiate` and `entail` is reversed by
+the split (P4-D7). A move is a source-order-preserving slice judged by identity oracles (IR
+identity with a plant control, wide-corpus output identity, the LEG A multiset check, an
+import-collision check, instruction counts within two percent); the idiom rewrite is a separate
+slice (P4-D6, D9, D11). No `Arch-Growth-Override:` is admitted in the phase (P4-D5).
 
----
+Sprints, serial, one orchestrator: 0 the partition pre-sprint (nothing lands; the sizes come
+back for ratification), 1 rows 1 to 4, 2 rows 5 and 6, 3 row 7, 4 rows 8 and 9, 5 rows 10 to 12,
+6 row 13, 7 rows 14 and 15, 8 row 16, 9 row 17's header plus the exit (this document's §6
+collapses to its criterion; `types/ARCHITECTURE.md` re-derived with a spec column;
+`TYPECHECK-ARCHITECTURE.md` to `archive/design/`; #4318), 10 the diagnostic code registry
+(`support/diag_codes.mdk`, one closed type for every stage's codes pinned to
+`DIAGNOSTIC-CODES-DESIGN.md` by a two-way test; P4-D3b, after the exit). Reviews on opus for
+sprints 0, 1, 6, 9 and 10, sonnet elsewhere (P4-D12). The plan, the facts, the contracts and the
+rulings are under `/var/tmp/medaka-sprints/arch-p4/`; milestone 42 holds the tracking issues.
+
+**Exit criterion.** `types/typecheck.mdk` is the entry module and is under 3,000 code lines;
+every `types/` module has a closure golden, a LEG A golden and a test sibling; the largest
+`types/` module is one whose header says why; `tc_diag`'s closure contains no inference module
+(A5); IR identity against the phase base holds over the self graph.
 
 ## 7. Phase 5: the backends (A4), in parallel with everything
 
@@ -318,10 +362,10 @@ exists when F3 lands, F3 adds the full view to the interface under a format-vers
 | Phase 1 V1, V2, V3 | milestone `Architecture: Phase 1 (output is a value)`; #2549 phase 2, M-PUBLISH (#2544, #4053), M-PIPELINE (#2874), run-once #4151, #4152, #4154, #4160, #4157, #3901, #3902 | landed 2026-10-18; residuals S4 (#2705), #4279, #4282 |
 | Phase 2 | milestone `Architecture: Phase 2 (state by lifetime)`; component X (`PerRun`, `resetState`); #2547 and #2548 landed 2026-09-03/04; S4 is #2705; T1 is #2586's first leaf | landed 2026-10-20; residuals #4317, #4318, #4350, #4355 and the found bug #4331 |
 | Phase 3 | M-CACHE #2732, run-once O3 (#3902) and O5 (#4169 to #4172, #3903); C3 also needs O4's #4167 and M-CACHE's #2797 (§5 amendment, point 3); #4284 before the tree-arm artifact | same work; prelude-first ordering, D6, D7, and the 2026-10-21 refinements in §5 |
-| Phase 4 | #2586, ruling 8 | same sequencing; this document names the layer axis and the per-module acceptance |
+| Phase 4 | #2586, ruling 8; milestone 42 | same sequencing; §6 names the eighteen modules, their order and the per-module acceptance (amended 2026-10-26) |
 | Phase 5 | #1398 R3 to R9, #4107 | unchanged |
 | F1 to F3 (§7 amendment) | `docs/design/TEST-SIBLING-ACCESS-DESIGN.md`, style ruling R35 | added 2026-10-19 |
-| none yet | M-IDENTITY, #2563 (identity-key every cross-module namespace) | No phase schedules it. Its remaining import-scope ladders are the `Sh` component of `types/` (`ARCHITECTURE.md` §3), which Phase 4's layer table does not yet place; when retired they read the F1 producer. |
+| none yet | M-IDENTITY, #2563 (identity-key every cross-module namespace) | No phase schedules it. Its remaining import-scope ladders are the `Sh` component of `types/` (`ARCHITECTURE.md` §3), which Phase 4's layer table places in `types/tc_shadow.mdk` (row 8); when retired they read the F1 producer. |
 | run-once O2, O4 | #4141 | they land as consequences of V3 (O2) and S2 (O4), and G6 pins them |
 | Targets epic #3661 | `docs/design/TARGETS-DESIGN.md`, milestones T2 to T5 | Since #4032 the selected profile's IO join is an input to inference, so it is part of every cache key (D7). #4053 (a second drive changes rendering) is V2's P-then-Q-then-P test; #4154 (the target gate re-elaborates) lands with V3, and G6 pins `check --target`; #4051 (every verb selects a profile) lands now, not after V3, and V3 deletes its per-verb plumbing; the IO-join cells in `DriverState` and `selectedProfile` are configuration for S1 and S3's `TcConfig`; T4 #3671 adds no lines to `types/typecheck.mdk` (G1); #3672 follows B1's extern-requirements field |
 
