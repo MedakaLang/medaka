@@ -1,27 +1,26 @@
--- The part of the module-chain memo key that covers what a recorded step reads
--- from modules outside its own prefix: every instance head, which is visible to
--- the whole graph whether or not a module imports its definer, every interface
--- declaration with its method names and the declaring module's position, which a
--- module checked after it reads by bare name whether or not it imports it, and
--- every constrained signature's bare name, which joins every module's dict-name
--- set.  A step's own source key cannot see any of them when a later module declares
--- them.
+-- The parts of the module-chain memo key that cover what a recorded step reads
+-- from modules outside its own prefix.  Every instance head is visible to the whole
+-- graph whether or not a module imports its definer, and every constrained
+-- signature's bare name joins every module's dict-name set (`chainGraphKey`).  An
+-- interface declaration's method names are read by bare name by every module
+-- checked after its declarer, whether or not it imports it, so a step's key carries
+-- the interface rows of the modules before it (`interfaceRows`).  A step's own
+-- source key cannot see any of them when another module declares them.
 import frontend.ast.{
   Decl(..), Ty(..), Require(..), ImplMethod(..), ifaceMethodName
 }
-import list.{indexed}
 import support.util.{joinWith}
 import types.route_key.{implRouteKeyWord}
 
 export
 chainGraphKey : List (String, List Decl) -> String
-chainGraphKey modules = joinWith "\n" (flatMap moduleRows (indexed modules))
+chainGraphKey modules = joinWith "\n" (flatMap moduleRows modules)
 
-moduleRows : (Int, (String, List Decl)) -> List String
-moduleRows (pos, (mid, decls)) = flatMap (declRow pos mid) decls
+moduleRows : (String, List Decl) -> List String
+moduleRows (mid, decls) = flatMap (declRow mid) decls
 
-declRow : Int -> String -> Decl -> List String
-declRow _ mid (DImpl { iface, tys, reqs, methods, implOrigin }) =
+declRow : String -> Decl -> List String
+declRow mid (DImpl { iface, tys, reqs, methods, implOrigin }) =
   let reqWords =
     map
       (r => implRouteKeyWord r.requireOrigin r.requireHead r.requireArgs None)
@@ -34,11 +33,20 @@ declRow _ mid (DImpl { iface, tys, reqs, methods, implOrigin }) =
   [
     "\{mid} impl \{implRouteKeyWord implOrigin iface tys None} requires \{joinWith "," reqWords} with \{joinWith "," names}",
   ]
-declRow pos mid (DInterface { name, methods }) = [
-  "\{mid} interface \{name} with \{joinWith "," (map ifaceMethodName methods)} at \{intToString pos}",
+declRow mid (DAttrib _ d) = declRow mid d
+declRow mid d = map (n => "\{mid} dict \{n}") (constrainedSigName d)
+
+-- Module [mid]'s interface declarations, each with its method names.
+export
+interfaceRows : String -> List Decl -> List String
+interfaceRows mid decls = flatMap (interfaceRow mid) decls
+
+interfaceRow : String -> Decl -> List String
+interfaceRow mid (DInterface { name, methods }) = [
+  "\{mid} interface \{name} with \{joinWith "," (map ifaceMethodName methods)}",
 ]
-declRow pos mid (DAttrib _ d) = declRow pos mid d
-declRow _ mid d = map (n => "\{mid} dict \{n}") (constrainedSigName d)
+interfaceRow mid (DAttrib _ d) = interfaceRow mid d
+interfaceRow _ _ = []
 
 -- A `=>`-constrained top-level signature's name, looking through attributes.
 export

@@ -363,9 +363,71 @@ test "an interface declared in a module the user does not import is part of the 
   let (warm, warmServed) = ifaceGraph "ix-k" 4661 False
   let (cold, _) = ifaceGraph "ix-cold" 4662 False
   expectEach [
-    ("the x-first drive serves nothing", expectEqual 0 warmServed),
+    (
+      "the x-first drive serves the modules before the reader",
+      expectEqual 2 warmServed,
+    ),
     ("it prints what a cold x-first drive prints", expectEqual cold warm),
   ]
+
+-- [io_x] declares an interface with a method of [io_d]'s [h], which [io_m] uses.
+-- [io_x] is the third module in both orders: before [io_m] in the first, after it in
+-- the second.
+orderGraph : String -> Int -> Bool -> (List String, Int)
+orderGraph chainKey seed xFirst =
+  let d = ("io_d", joinNl ["export h : a -> a", "h x = x"])
+  let m = (
+    "io_m",
+    joinNl ["import io_d.{h}", "export useM : Int -> Int", "useM x = h x"],
+  )
+  let x = ("io_x", joinNl ["export interface Hh a where", "  h : a -> a"])
+  let a = ("io_a", "export av = 1")
+  let b = ("io_b", "export bv = 2")
+  let entry = (
+    "io_entry",
+    joinNl [
+      "import io_m.{useM}",
+      "import io_x.{Hh}",
+      "import io_a.{av}",
+      "import io_b.{bv}",
+      "entry = useM av + bv",
+    ],
+  )
+  let mods = if xFirst then [a, b, x, d, m, entry] else [d, m, x, a, b, entry]
+  let ((report, outputs), _) = bareDrive seed chainKey mods
+  (render report, outputs.doServedModules)
+
+test "an interface declarer at the same position before and after its reader keys the reader apart" =
+  let (coldX, _) = orderGraph "io-cold-x" 4663 True
+  let (coldM, _) = orderGraph "io-cold-m" 4664 False
+  let _ = orderGraph "io-k" 4665 False
+  let (warmX, _) = orderGraph "io-k" 4665 True
+  let (warmM, _) = orderGraph "io-k" 4665 False
+  expectEach [
+    ("the two orders check differently", expectNotEqual coldX coldM),
+    ("x-first after m-first prints the cold x-first", expectEqual coldX warmX),
+    ("m-first after x-first prints the cold m-first", expectEqual coldM warmM),
+  ]
+
+-- [ov_a] and [ov_b], then an entry importing them, with [ov_x] declaring an
+-- interface after them when [withX].
+laterDeclarer : Int -> Bool -> Int
+laterDeclarer seed withX =
+  let x = ("ov_x", joinNl ["export interface Ov a where", "  ov : a -> a"])
+  let imports = joinNl ["import ov_a.{fa}", "import ov_b.{fb}"]
+  let entry =
+    if withX then
+      ("ov_entry", joinNl [imports, "import ov_x.{Ov}", "entry = fa (fb 1)"])
+    else
+      ("ov_entry", joinNl [imports, "entry = fa (fb 1)"])
+  let before = [("ov_a", "export fa x = x"), ("ov_b", "export fb x = x")]
+  let mods = if withX then before ++ [x, entry] else before ++ [entry]
+  let ((_, outputs), _) = bareDrive seed "ov-k" mods
+  outputs.doServedModules
+
+test "an interface declared after a module leaves that module served" =
+  let _ = laterDeclarer 4666 False
+  expectEqual 2 (laterDeclarer 4666 True)
 
 export
 ownerSelectors : List ManifestSelector
