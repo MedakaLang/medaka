@@ -726,6 +726,7 @@ ctorsByHead : List Scheme -> Map String (List (List Mono, List Mono))
 ctorsOfHead : ModuleCtx -> HeadKey -> Option (List String)
 currentModuleMarks : GraphCtx -> Unit -> GraphMarks
 currentScopeStore : GraphCtx -> Unit -> ScopeStore
+cutRanges : Int -> Int -> List (Int, Int) -> List (Int, Int)
 cycleReportLoc : Map String (Map String Unit) -> List Decl -> Int -> CeRow -> Option Loc
 cyclicSuperIfaceMsg : List String -> String
 dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
@@ -1951,7 +1952,6 @@ liveGoalsOf : ModuleCtx -> List Mono -> List LiveGoal
 liveLocsOf : ModuleCtx -> List Obligation -> List String
 liveMemberIds : ModuleCtx -> List Mono -> Map String Unit
 liveNumVarGo : Int -> List UObligation -> Option Mono
-liveRootsOpen : GraphCtx -> Unit -> Bool
 liveTailId : Ref Effvar -> Int
 liveVarIdsOf : ModuleCtx -> Mono -> List Int
 loadDataUniverse : ModuleCtx -> Int -> Unit
@@ -2427,6 +2427,7 @@ overrideScopedCtors : List Decl -> Map String (List (Ident, String, Scheme)) -> 
 overrideScopedRecords : ModuleCtx -> List Decl -> Map String (List (Ident, String, RecordInfo)) -> List String -> Unit
 ownContext : ModuleCtx -> String -> List VecObl
 ownMethodIdent : List Decl -> String -> Option Ident
+ownRootsOpen : GraphCtx -> QueueMark -> Bool
 ownerCandidates : ModuleCtx -> List String -> List (String, RecordInfo)
 ownerDeclMatches : GraphCtx -> Ident -> List String -> List (String, RecordInfo)
 ownerDeclOfReceiver : ModuleCtx -> Mono -> String -> List String -> Option (String, RecordInfo)
@@ -2628,6 +2629,9 @@ qualifyByTerms : ModuleCtx -> SigVars -> List EffParamTy -> Option Loc -> Mono -
 quantifiableAuthorities : TcEnv -> Map String (List (List Pat, Expr)) -> List ScopedMember -> ScopeRoles
 quantifiedVecObls : List Int -> List VecObl -> List VecObl
 quantifyFree : ModuleCtx -> List AuthResidual -> EffRow -> Mono -> Scheme
+queueMarkOf : GraphCtx -> QueueMark
+queueNewer : Int -> List a -> List a
+queueOlder : Int -> List a -> List a
 quotedNames : List String -> String
 raiseAuthvarLevel : Int -> Ref Authvar -> Unit
 raiseToHighWater : GraphCtx -> Unit
@@ -2721,6 +2725,7 @@ recordRLocalSite : TcEnv -> String -> Ref Route -> Ref Inner -> Mono -> Unit
 recordRecursiveGrants : GraphCtx -> String -> String -> List (String, List Int) -> Expr -> Unit
 recordResultMono : RecordInfo -> Mono
 recordSchemeCallObligations : ModuleCtx -> Int -> List VecObl -> List (Int, Mono) -> Unit
+recordScoped : ServeState -> ModuleKey -> ModuleRows -> ModuleCtx -> List (String, ExportBinding) -> List (String, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)) -> QueueMark -> (List (String, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)), ModuleServe (List Decl, List (String, PubScheme), List TcDiag, List TcDiag))
 recordSelectedStandaloneRoutes : ModuleCtx -> String -> ShadowDicts -> List (Ref Route, Ref Inner) -> Mono -> Unit
 recordShadowStandaloneObls : TcEnv -> String -> List (Int, Mono) -> Unit
 recordSite : TcEnv -> String -> Scheme -> Ref String -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Ref Inner -> Mono -> MethodInstantiationSubst -> Mono
@@ -3348,6 +3353,7 @@ unitMangledShadows : List String -> (String, List Decl) -> List (String, String)
 univConcreteBucket : ImplUniverse -> IfaceRef -> Option HeadKey -> List (List Ty, List Require)
 univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)
 univReceiverTag : List Ty -> Option HeadKey
+unjudgedRanges : Int -> Int -> List (Int, Int) -> List (Int, Int)
 unknownCtorMsg : String -> String
 unknownFieldFresh : ModuleCtx -> String -> String -> List String -> Mono
 unknownFieldMsg : String -> String -> String
