@@ -2075,7 +2075,6 @@ methodEntryHere : ModuleCtx -> String -> Option (IfaceRef, List String, Ty, List
 methodEnvBinding : MethodSchemeRow -> EnvBinding
 methodEnvGo : GraphCtx -> List DeclEnvModule -> MethodEnv -> MethodEnv
 methodExportsIndex : GraphCtx -> Unit -> Map String (List (String, Ident))
-methodGrantKey : String -> String -> String
 methodGrantOf : GraphCtx -> String -> String -> Option MethodGrant
 methodGrantOfRow : MethodSchemeRow -> Option MethodGrant
 methodGrantUse : GraphCtx -> PassEvidence -> String -> EvId -> MethodGrantUse

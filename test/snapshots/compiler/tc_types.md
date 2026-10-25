@@ -1,5 +1,5 @@
 # META
-source_lines=3509
+source_lines=3526
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -2463,6 +2463,23 @@ public export data GrantState = GrantState {
   gsValueBounds : Ref (OrdMap (List (Mono, List GrantBinder))),
   gsPassingModule : Ref String,
 }
+
+-- The binder-name and grant state belong to the lineage (`Lineage`), so a row
+-- outlives the drive that wrote it, and each table is kept by what its key is:
+--   * an evidence ordinal (`gsOccs`, `gsGrantOnly`) never repeats in a lineage, so
+--     the rows stay;
+--   * a variable id or scope ordinal the drive mints afresh (`lasQuantified`,
+--     `gsSourceless`, `gsBodies`) and a module's file-bound site (`gsBounds`,
+--     `gsValueBounds`) are cleared when the lineage starts (`graphLineageRun`); a
+--     served module's sourceless ids and bounds come back with its trees;
+--   * a name a module owns (`mid|name` in `gsTopIds`, a renamed local `x$mid$k$lb`
+--     in `lasBinders`, `lasRecOccs` and `gsLocalIds`, `mid::Iface#method` in
+--     `gsMethods`) is minted again by every check of that module id, so each check
+--     and each tree serve of the module replaces the row under every such key it
+--     decides, deleting the rows it has none for (`setGrantIds`, `forgetLocalRows`
+--     in `types/module_interface.mdk`).
+-- `gsTakers`, keyed by bare name, only arms a panic; the `gsLast*` cells and
+-- `gsPassingModule` are set before each read.
 
 -- How the constructors of one type disagree about a field: a constructor that
 -- does not declare it, two that declare it at different (0-based,
