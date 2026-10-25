@@ -2322,8 +2322,9 @@ public export data LocalAbsState = LocalAbsState {
   lasBinders : Ref (OrdMap (Option LocalAbs)),
   -- binder -> occurrences inferred before the binder generalized
   lasRecOccs : Ref (OrdMap (List (EvId, ScopeId))),
-  -- monotone for the whole graph, so a binder name is never minted twice
-  lasCounter : Ref Int,
+  -- the module being marked and the next suffix it mints, reset at each module's
+  -- `beginModuleMarking`: a name is a function of its module and marking order
+  lasNext : Ref (String, Int),
   -- every type variable a generalized local's scheme quantifies: no longer a
   -- monomorphic variable, so no later numeric boundary may ground it (#3516)
   lasQuantified : Ref (OrdMap Unit),
