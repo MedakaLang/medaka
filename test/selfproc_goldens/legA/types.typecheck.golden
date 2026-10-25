@@ -177,11 +177,10 @@ argumentIntoTyped : DynCtx -> Mono -> Mono -> Unit
 argumentNoun : Int -> String
 arithDispatchMethod : String -> Option String
 arithEntry : Obligation -> List (Ref Route, Mono)
-armDictSites : GraphCtx -> EvIndex -> Arm -> List (List Route)
+armDictSites : PassEvidence -> Arm -> List String
 armEVars : Arm -> List String
 armIsUnguarded : List Guard -> Bool
 armNumGuard : GraphCtx -> NumGuard -> ArmedGuard
-armSites : GraphCtx -> Arm -> List (Ref Route)
 armUnreachable : ModuleCtx -> Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
 arrowArity : Mono -> Int
 arrowsWithLastEffect : List Mono -> EffRow -> Mono -> Mono
@@ -286,14 +285,13 @@ bindsRename : GraphCtx -> List LetBind -> Map String String -> (List LetBind, Ma
 binopBuiltinHead : String -> String -> Bool
 binopDispatchMethod : String -> Option String
 binopMethod : String -> Option String
-binopMethodApp : ModuleCtx -> String -> Expr -> Expr -> Route -> Expr
+binopMethodApp : ModuleCtx -> PassEvidence -> String -> Expr -> Expr -> Route -> Expr
 binopPrimitiveHead : String -> Bool
 binopRouteSplit : Route -> (Route, List Route)
 binopSpanLoc : Expr -> Expr -> Option Loc
 blankModuleCtx : GraphCtx -> String -> ModuleCtx
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
 blockRecLet : TcEnv -> String -> Option Loc -> BinderId -> Expr -> TcEnv
-bodyRDictNames : GraphCtx -> EvIndex -> Expr -> List String
 boolOp : DynCtx -> Mono -> Mono -> Mono
 borrowedEffectCells : ModuleCtx -> Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
 bottomGrant : Expr
@@ -564,7 +562,7 @@ classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn
 classEnvFinish : ClassEnv -> ClassEnv
 classEnvRowsOf : GraphCtx -> Int -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) -> List CeRow
 clauseEagerlyRefsGroup : List String -> FunClause -> Bool
-clauseImplDictUser : ModuleCtx -> EvIndex -> IfaceRef -> Int -> ImplMethod -> List String
+clauseImplDictUser : ModuleCtx -> PassEvidence -> IfaceRef -> Int -> ImplMethod -> List String
 clauseIsNonFunction : FunClause -> Bool
 clauseIsValue : TcEnv -> FunClause -> Bool
 clauseRefs : (List Pat, Expr) -> List String
@@ -639,8 +637,7 @@ collectAuthAllowance : ModuleCtx -> List Authority -> Authority
 collectAuthvarIds : List Mono -> List Int
 collectByParam : List String -> List (String, Mono) -> List Mono
 collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
-collectDictSites : GraphCtx -> EvIndex -> Expr -> List (List Route)
-collectMethodSites : GraphCtx -> Expr -> List (Ref Route)
+collectDictSites : PassEvidence -> Expr -> List String
 collectModules : (Bool -> String -> a -> b -> b) -> b -> List (String, a) -> b
 collectProducedSummary : ModuleCtx -> List EffRow -> EffRow
 collectRowEffvarIds : List Mono -> List Int
@@ -911,7 +908,7 @@ dictParams : String -> Int -> List Pat
 dictParamsFrom : String -> Int -> Int -> List Pat
 dictParamsGo : String -> Int -> Int -> List Pat
 dictPass : ModuleCtx -> EvIndex -> String -> List String -> List Decl -> List Decl
-dictPassDecl : ModuleCtx -> EvIndex -> Map String Unit -> List String -> Decl -> Decl
+dictPassDecl : ModuleCtx -> PassEvidence -> Map String Unit -> List String -> Decl -> Decl
 dictPassLetBind : ModuleCtx -> Map String Unit -> LetBind -> LetBind
 dictPassModulesIfEnabled : ModuleCtx -> List String -> Bool -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 dictPassModulesScoped : ModuleCtx -> EvIndex -> List String -> List ((String, String), List PredicateSlot) -> Map String (Map String Unit) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
@@ -942,9 +939,8 @@ doBindArgHint : String -> String
 doBindArgMsg : String -> String
 doChainIsDeferred : Expr -> Bool
 doRequiresMonadMsg : String
-doStmtDictSites : GraphCtx -> EvIndex -> DoStmt -> List (List Route)
+doStmtDictSites : PassEvidence -> DoStmt -> List String
 doStmtEVars : DoStmt -> List String
-doStmtSites : GraphCtx -> DoStmt -> List (Ref Route)
 domainHasPatterns : Param -> Bool
 domainIsTupleOfArity : Mono -> Int -> Bool
 domainParam : Option String -> Param
@@ -1151,10 +1147,9 @@ ffiStampMode : GraphCtx -> String -> Bool
 ffiStampModeOwned : GraphCtx -> String -> Bool
 ffiTakeAtom : EffAtomTy -> List EffAtomTy -> List EffAtomTy -> List (String, Ty) -> Option (List (String, Ty), List EffAtomTy)
 ffiTyHeadNameWith : List (TabKey, (List String, Ty)) -> Ty -> String
-fieldAssignDictSites : GraphCtx -> EvIndex -> FieldAssign -> List (List Route)
+fieldAssignDictSites : PassEvidence -> FieldAssign -> List String
 fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
-fieldAssignSites : GraphCtx -> FieldAssign -> List (Ref Route)
 fieldDeclDescr : (String, RecordInfo) -> String
 fieldDeclReachFilter : ModuleCtx -> List (String, RecordInfo) -> List (String, RecordInfo)
 fieldDeclReachable : ModuleCtx -> (String, RecordInfo) -> Bool
@@ -1295,10 +1290,9 @@ fromAstTypeApp : ModuleCtx -> SigVars -> List (String, Mono) -> TyConOrigin -> S
 fromAstTypeE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Mono
 fromAstTypeVarApp : ModuleCtx -> SigVars -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
 funArity : Mono -> Int
-funClauseDictSites : GraphCtx -> EvIndex -> FunClause -> List (List Route)
+funClauseDictSites : PassEvidence -> FunClause -> List String
 funClauseEVars : FunClause -> List String
 funClausePair : FunClause -> (List Pat, Expr)
-funClauseSites : GraphCtx -> FunClause -> List (Ref Route)
 funDefs : List Decl -> List (String, (List Pat, Expr))
 funDomain : ModuleCtx -> Mono -> Mono
 gatesBodyCascade : MethodBodyKind -> Bool
@@ -1347,16 +1341,16 @@ goalsOfKindIn : GoalKind -> List Obligation -> List Obligation
 goalsOnVar : GoalWindow -> Int -> List Int
 goalsSince : GraphCtx -> Int -> List Obligation
 grantArrows : Int -> Ty -> Ty
-grantBody : GraphCtx -> Expr -> Expr
+grantBody : GraphCtx -> PassEvidence -> Expr -> Expr
 grantCalleeOf : ModuleCtx -> String -> GrantCallee
 grantChainAt : GraphCtx -> ScopeId -> List GrantBinder
-grantDecl : GraphCtx -> String -> Decl -> Decl
-grantExpr : GraphCtx -> Expr -> Expr
-grantExprInner : GraphCtx -> Expr -> Expr
+grantDecl : GraphCtx -> PassEvidence -> String -> Decl -> Decl
+grantExpr : GraphCtx -> PassEvidence -> Expr -> Expr
+grantExprInner : GraphCtx -> PassEvidence -> Expr -> Expr
 grantIdTerm : GraphCtx -> List GrantBinder -> Int -> Expr
-grantIfaceMethod : GraphCtx -> String -> IfaceMethod -> IfaceMethod
-grantImplMethod : GraphCtx -> String -> ImplMethod -> ImplMethod
-grantLetBind : GraphCtx -> List Pat -> LetBind -> LetBind
+grantIfaceMethod : GraphCtx -> PassEvidence -> String -> IfaceMethod -> IfaceMethod
+grantImplMethod : GraphCtx -> PassEvidence -> String -> ImplMethod -> ImplMethod
+grantLetBind : GraphCtx -> PassEvidence -> List Pat -> LetBind -> LetBind
 grantLocalRhs : GraphCtx -> String -> Expr -> Expr
 grantMethodParams : GraphCtx -> MethodGrant -> String -> List Pat -> Expr -> (List Pat, Expr)
 grantNameIn : TcEnv -> String -> Bool
@@ -1366,9 +1360,9 @@ grantOrder : Scheme -> List Int
 grantParamFor : GraphCtx -> List GrantBinder -> Int -> Option String
 grantParamName : String -> Int -> String
 grantParamPats : List a -> String -> List Pat
-grantPass : GraphCtx -> String -> List Decl -> List Decl
+grantPass : GraphCtx -> PassEvidence -> String -> List Decl -> List Decl
 grantSpine : Expr -> List Expr -> (Expr, List Expr)
-grantStmt : GraphCtx -> DoStmt -> DoStmt
+grantStmt : GraphCtx -> PassEvidence -> DoStmt -> DoStmt
 grantTerm : GraphCtx -> List GrantBinder -> Authority -> Expr
 grantTerms : GraphCtx -> GrantOcc -> List Expr
 grantTopKey : String -> String -> String
@@ -1401,9 +1395,8 @@ groupRefs : List (List Pat, Expr) -> List String
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
 growImplUniverse : List (IfaceRef, List Ty, List Require) -> ImplUniverse -> ImplUniverse
 guardArmEVars : GuardArm -> List String
-guardDictSites : GraphCtx -> EvIndex -> Guard -> List (List Route)
+guardDictSites : PassEvidence -> Guard -> List String
 guardEVars : Guard -> List String
-guardSites : GraphCtx -> Guard -> List (Ref Route)
 guardsDefaulting : GraphCtx -> UObligation -> Bool
 hadMatchWarnings : DriveOutputs -> Bool
 hadTypeErrors : DriveOutputs -> Bool
@@ -1556,7 +1549,7 @@ implDeclLoc : Decl -> Option (Option Loc)
 implDeclWithReqs : Decl -> List (IfaceRef, List Ty, List Require)
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
 implDictNames : String -> Int -> Int -> List String
-implDictPassMethods : ModuleCtx -> EvIndex -> IfaceRef -> Int -> List ImplMethod -> List ImplMethod
+implDictPassMethods : ModuleCtx -> PassEvidence -> IfaceRef -> Int -> List ImplMethod -> List ImplMethod
 implDictRoutesForRow : SiteCtx -> String -> ScopeId -> List Mono -> ImplRow -> List Route
 implGoalFixesHeadMsg : String -> String -> List String -> String
 implGoalResiduals : SiteCtx -> ReqWalk -> Map String Unit -> List PredicateSlot -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
@@ -1921,10 +1914,9 @@ leastIfaceSig : (String, Ty) -> Option (String, Ty) -> Option (String, Ty)
 leftmostPart : Expr -> Expr
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
 legacyReturnReqRoutesForRow : SiteCtx -> String -> ScopeId -> Mono -> ImplRow -> List Route
-letBindDictSites : GraphCtx -> EvIndex -> LetBind -> List (List Route)
+letBindDictSites : PassEvidence -> LetBind -> List String
 letBindEVars : LetBind -> List String
 letBindGeneralizes : TcEnv -> (LetBind, (String, BindingSummary)) -> (Bool, Mono)
-letBindSites : GraphCtx -> LetBind -> List (Ref Route)
 letGroupComponents : List LetBind -> List (List LetBind)
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 letPatRename : GraphCtx -> Pat -> Expr -> Map String String -> (Pat, Map String String)
@@ -2063,7 +2055,6 @@ methodBodySubject : MethodBodyKind -> String -> String -> String
 methodCandAdmitted : GraphCtx -> List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 methodCandImported : GraphCtx -> List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 methodCandsAt : String -> Int -> MethodEnv -> List MethodRow
-methodCellDicts : EvCell -> List (List Route)
 methodCellEntries : GraphCtx -> Unit -> List EvEntry
 methodCellEntriesFrom : Array (Option EvCell) -> Int -> List EvEntry -> List EvEntry
 methodCellLookup : GraphCtx -> EvId -> Result String EvCell
@@ -2087,7 +2078,7 @@ methodExportsIndex : GraphCtx -> Unit -> Map String (List (String, Ident))
 methodGrantKey : String -> String -> String
 methodGrantOf : GraphCtx -> String -> String -> Option MethodGrant
 methodGrantOfRow : MethodSchemeRow -> Option MethodGrant
-methodGrantUse : GraphCtx -> String -> EvId -> MethodGrantUse
+methodGrantUse : GraphCtx -> PassEvidence -> String -> EvId -> MethodGrantUse
 methodIfaceHere : ModuleCtx -> String -> Option IfaceRef
 methodImportedScope : GraphCtx -> Bool -> List Decl -> String -> List MethodRow -> MethodScope
 methodInterfacePredicateTemplate : List String -> List (String, Mono) -> List (Option Mono)
@@ -2203,7 +2194,7 @@ mintHeadSite : ModuleCtx -> Unit -> EvId
 mintLitSite : ModuleCtx -> Unit -> EvId
 mintMethodCell : ModuleCtx -> String -> EvId
 mintMethodCellRaw : ModuleCtx -> String -> Option Int -> Route -> List Route -> EvId
-mintMethodCellWith : ModuleCtx -> String -> Int -> Route -> List Route -> EvId
+mintMethodCellWith : ModuleCtx -> PassEvidence -> String -> Int -> Route -> List Route -> EvId
 mintOpSite : ModuleCtx -> Unit -> EvId
 mintParamReprs : ModuleCtx -> List String -> List Kind -> List Mono
 mintSite : ModuleCtx -> SiteCell -> EvId
@@ -2433,6 +2424,9 @@ paramVarianceGuard : DynCtx -> Mono -> Mono -> Mono -> Unit
 paramVarianceMismatchMsg : List Atom -> List Atom -> String
 parkOpenedExistentials : ModuleCtx -> Unit -> Unit
 partialExistentialUpdateMsg : String -> List String -> String
+passIndex : PassEvidence -> EvIndex
+passMethodFacts : EvVal -> (String, Route, List Route)
+passMethodOf : PassEvidence -> EvId -> (String, Route, List Route)
 patIsVar : Pat -> Bool
 patOpensExistentials : TcEnv -> Pat -> Bool
 patVarsListTc : List Pat -> List String
@@ -2894,7 +2888,7 @@ rewriteArgKv : ModuleCtx -> ArgRw -> Map String String -> (Expr, Expr) -> (Expr,
 rewriteArgLetBind : ModuleCtx -> ArgRw -> Map String String -> LetBind -> LetBind
 rewriteArgScoped : ModuleCtx -> ArgRw -> Map String String -> Expr -> Expr
 rewriteArgStmts : ModuleCtx -> ArgRw -> Map String String -> List DoStmt -> List DoStmt
-rewriteBinopExpr : ModuleCtx -> EvIndex -> Expr -> Expr
+rewriteBinopExpr : ModuleCtx -> PassEvidence -> Expr -> Expr
 rewriteLocalDictExpr : GraphCtx -> Expr -> Expr
 rewriteLocalDoStmt : GraphCtx -> DoStmt -> DoStmt
 rewriteLocalLetBind : GraphCtx -> LetBind -> LetBind
@@ -3006,6 +3000,7 @@ selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (Str
 selfNameRows : List Decl -> List (String, a) -> List (String, a)
 selfQualEntries : String -> Map String Unit -> List ((String, String), a) -> List (String, a)
 serveOps : ServeOps
+setCellArity : GraphCtx -> EvId -> Int -> Unit
 setDictEligible : GraphCtx -> List String -> Unit
 setFunConstraintEntry : ModuleCtx -> String -> List PredicateSlot -> Unit
 setFunPredicateSlots : ModuleCtx -> List (String, List PredicateSlot) -> Unit
@@ -3074,7 +3069,7 @@ siteFloatCell : GraphCtx -> EvId -> Ref (Option Float)
 siteHeadCell : GraphCtx -> EvId -> Ref String
 siteKindMonos : SiteKind -> List Mono
 siteObligation : GoalKind -> Ref Inner -> PendingEntry -> Obligation
-siteRDictName : Ref Route -> List String
+siteRDictName : Route -> List String
 siteRDictNamesL : List Route -> List String
 siteRouteCell : GraphCtx -> EvId -> Ref Route
 sitesFor : String -> Map String (List a) -> List a
@@ -3318,7 +3313,7 @@ unknownRecordFresh : ModuleCtx -> String -> Mono
 unknownRecordMsg : String -> String
 unmarkGrantOnly : GraphCtx -> EvId -> Unit
 unopMethod : String -> Option String
-unopMethodApp : ModuleCtx -> String -> Expr -> Route -> Expr
+unopMethodApp : ModuleCtx -> PassEvidence -> String -> Expr -> Route -> Expr
 unprotectedNumCandidates : Map String Unit -> List UObligation -> List Int
 unquantifiedAuthIds : Scheme -> Map Int Unit
 unreachableArmWarning : String
@@ -3341,7 +3336,7 @@ usePathModuleId : UsePath -> String
 usePathWitnesses : GraphCtx -> UsePath -> Bool -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 usePathWitnessesCtor : GraphCtx -> UsePath -> String -> String -> Ident -> Bool
 userExternSchemes : ModuleCtx -> Map String TyConOrigin -> List Decl -> List (String, Scheme)
-usesImplDict : GraphCtx -> EvIndex -> String -> Int -> Int -> Expr -> Bool
+usesImplDict : PassEvidence -> String -> Int -> Int -> Expr -> Bool
 valueJoinOps : DynCtx -> JoinContext -> (DynCtx -> List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
 valueSpanLoc : Expr -> Option Loc
 varHeadApps : String -> Ty -> List (List Ty)

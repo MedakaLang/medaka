@@ -1,5 +1,5 @@
 # META
-source_lines=57271
+source_lines=57238
 stages=DESUGAR,MARK
 # SOURCE
 import types.invocation_basis.{
@@ -729,6 +729,7 @@ import types.route_key.{
   evDictRoutesIn,
   evSiteRouteIn,
   evSiteLitIn,
+  evidenceLookup,
 }
 import types.disposition.{
   InstId(..),
@@ -10293,10 +10294,24 @@ mintMethodCell mctx seed =
     []
 
 -- The `dictPass` mints: a node constructed AFTER the drain, from a route another
--- node already solved, so its cells start at their final values.
-mintMethodCellWith : ModuleCtx -> String -> Int -> Route -> List Route -> EvId
-mintMethodCellWith mctx iface arity tag impls =
-  mintMethodCellRaw mctx iface (Some arity) tag impls
+-- node already solved, so its cells start at their final values.  The entry is
+-- recorded in [pe] as well: the index the pass reads was taken before the node
+-- existed.
+mintMethodCellWith : ModuleCtx ->
+  PassEvidence ->
+  String ->
+  Int ->
+  Route ->
+  List Route ->
+  EvId
+mintMethodCellWith mctx (PassEvidence _ minted) iface arity tag impls =
+  let ev = mintMethodCellRaw mctx iface (Some arity) tag impls
+  minted :=
+    omInsert
+      (intToString (evOrdinal ev))
+      (EvMethod iface arity tag impls [])
+      minted.value
+  ev
 
 mintMethodCellRaw : ModuleCtx ->
   String ->
@@ -10484,10 +10499,6 @@ cellStoreMisses gctx ev = (
 missText : Result String a -> String
 missText (Ok _) = ""
 missText (Err message) = message
-
--- The two dict-route lists a method occurrence carries, impl dicts first.
-methodCellDicts : EvCell -> List (List Route)
-methodCellDicts c = [c.ecImpl.value, c.ecMeth.value]
 
 -- Every minted method cell as a published entry, read back out of the cells the
 -- stampers wrote — the per-node half of the table `drivenEvidence` returns.
@@ -34409,39 +34420,64 @@ dictPass : ModuleCtx ->
   List Decl ->
   List Decl
 dictPass mctx idx mid names prog =
+  let pe = PassEvidence idx (Ref omEmpty)
   map
     (dictPassDecl
       mctx
-      idx
+      pe
       (omFromNames names omEmpty)
       (returnPosMethodNames prog))
     (mapProg
-      (e => rewriteLocalDictExpr mctx.mcGraph (rewriteBinopExpr mctx idx e))
-      (grantPass mctx.mcGraph mid prog))
+      (e => rewriteLocalDictExpr mctx.mcGraph (rewriteBinopExpr mctx pe e))
+      (grantPass mctx.mcGraph pe mid prog))
+
+-- What one `dictPass` call reads a method occurrence's published entry from: the
+-- drive's index, and then, by ordinal, the occurrences the call itself mints
+-- (`mintMethodCellWith`) after the index was taken.
+data PassEvidence = PassEvidence EvIndex (Ref (OrdMap EvVal))
+
+passIndex : PassEvidence -> EvIndex
+passIndex (PassEvidence idx _) = idx
+
+-- The interface word, dispatch route and dict routes (impl dicts first) published
+-- for method occurrence [ev].  A miss in both is the index's miss.
+passMethodOf : PassEvidence -> EvId -> (String, Route, List Route)
+passMethodOf (PassEvidence idx minted) ev =
+  match evidenceLookup (Some idx) "method occurrence" ev
+    Ok v => passMethodFacts v
+    Err message => match omLookup (intToString (evOrdinal ev)) minted.value
+      Some v => passMethodFacts v
+      None => panic message
+
+passMethodFacts : EvVal -> (String, Route, List Route)
+passMethodFacts (EvMethod iface _ tag impls meths) =
+  (iface, tag, impls ++ meths)
+passMethodFacts _ =
+  panic "evidence table: a method occurrence answered by another kind of entry"
 
 -- ── grant passing: the authority analogue of the dictionary pass ─────────────
 -- Runs before the dictionary rewrites of module [mid], so a binder's authority
 -- parameters land after the dictionary parameters those rewrites prepend, and
 -- each recorded use is applied to its grants while it still carries its id.
-grantPass : GraphCtx -> String -> List Decl -> List Decl
-grantPass gctx mid prog =
+grantPass : GraphCtx -> PassEvidence -> String -> List Decl -> List Decl
+grantPass gctx pe mid prog =
   let st = gctx.graphRun.grants
   let saved = st.gsPassingModule.value
   st.gsPassingModule := mid
-  let result = map (grantDecl gctx mid) prog
+  let result = map (grantDecl gctx pe mid) prog
   st.gsPassingModule := saved
   result
 
-grantDecl : GraphCtx -> String -> Decl -> Decl
-grantDecl gctx mid (DFunDef pub n pats body site bid) =
+grantDecl : GraphCtx -> PassEvidence -> String -> Decl -> Decl
+grantDecl gctx pe mid (DFunDef pub n pats body site bid) =
   DFunDef
     pub
     n
     (grantParamPats (topGrantIds gctx mid n) n ++ pats)
-    (grantBody gctx body)
+    (grantBody gctx pe body)
     site
     bid
-grantDecl gctx mid (DLetGroup pub binds) =
+grantDecl gctx pe mid (DLetGroup pub binds) =
   DLetGroup
     pub
     (map
@@ -34449,26 +34485,34 @@ grantDecl gctx mid (DLetGroup pub binds) =
         LetBind n clauses site bid =>
           grantLetBind
             gctx
+            pe
             (grantParamPats (topGrantIds gctx mid n) n)
             (LetBind n clauses site bid))
       binds)
-grantDecl gctx _ (d@(DInterface { name, ifaceOrigin, methods, ... })) = DInterface { d |
-  methods = map (grantIfaceMethod gctx (ifaceWordOf ifaceOrigin name)) methods,
+grantDecl gctx pe _ (d@(DInterface { name, ifaceOrigin, methods, ... })) = DInterface { d |
+  methods =
+    map (grantIfaceMethod gctx pe (ifaceWordOf ifaceOrigin name)) methods,
 }
-grantDecl gctx _ (d@(DImpl { iface, implOrigin, methods, ... })) = DImpl { d |
-  methods = map (grantImplMethod gctx (ifaceWordOf implOrigin iface)) methods,
+grantDecl gctx pe _ (d@(DImpl { iface, implOrigin, methods, ... })) = DImpl { d |
+  methods = map (grantImplMethod gctx pe (ifaceWordOf implOrigin iface)) methods,
 }
-grantDecl gctx _ (DProp pub name params body) =
-  DProp pub name params (grantExpr gctx body)
-grantDecl gctx _ (DTest pub name body) = DTest pub name (grantExpr gctx body)
-grantDecl gctx mid (DAttrib attrs d) = DAttrib attrs (grantDecl gctx mid d)
+grantDecl gctx pe _ (DProp pub name params body) =
+  DProp pub name params (grantExpr gctx pe body)
+grantDecl gctx pe _ (DTest pub name body) =
+  DTest pub name (grantExpr gctx pe body)
+grantDecl gctx pe mid (DAttrib attrs d) =
+  DAttrib attrs (grantDecl gctx pe mid d)
 -- a declaration with no expression body (data, signatures, imports, externs)
-grantDecl gctx _ d = d
+grantDecl gctx _ _ d = d
 
 -- A method that takes grants declares them after its value arguments, so the
 -- arity every backend reads off the declaration counts them.
-grantIfaceMethod : GraphCtx -> String -> IfaceMethod -> IfaceMethod
-grantIfaceMethod gctx word (IfaceMethod n ty def mloc) =
+grantIfaceMethod : GraphCtx ->
+  PassEvidence ->
+  String ->
+  IfaceMethod ->
+  IfaceMethod
+grantIfaceMethod gctx pe word (IfaceMethod n ty def mloc) =
   match methodGrantOf gctx word n
     None =>
       IfaceMethod
@@ -34476,7 +34520,7 @@ grantIfaceMethod gctx word (IfaceMethod n ty def mloc) =
         ty
         (map
           (d => match d
-            MethodDefault ps e => MethodDefault ps (grantBody gctx e))
+            MethodDefault ps e => MethodDefault ps (grantBody gctx pe e))
           def)
         mloc
     Some mg =>
@@ -34486,17 +34530,19 @@ grantIfaceMethod gctx word (IfaceMethod n ty def mloc) =
         (map
           (d => match d
             MethodDefault ps e =>
-              let (ps2, e2) = grantMethodParams gctx mg n ps (grantBody gctx e)
+              let (ps2, e2) =
+                grantMethodParams gctx mg n ps (grantBody gctx pe e)
               MethodDefault ps2 e2)
           def)
         mloc
 
-grantImplMethod : GraphCtx -> String -> ImplMethod -> ImplMethod
-grantImplMethod gctx word (ImplMethod n ps e) = match methodGrantOf gctx word n
-  None => ImplMethod n ps (grantBody gctx e)
-  Some mg =>
-    let (ps2, e2) = grantMethodParams gctx mg n ps (grantBody gctx e)
-    ImplMethod n ps2 e2
+grantImplMethod : GraphCtx -> PassEvidence -> String -> ImplMethod -> ImplMethod
+grantImplMethod gctx pe word (ImplMethod n ps e) =
+  match methodGrantOf gctx word n
+    None => ImplMethod n ps (grantBody gctx pe e)
+    Some mg =>
+      let (ps2, e2) = grantMethodParams gctx mg n ps (grantBody gctx pe e)
+      ImplMethod n ps2 e2
 
 -- A method clause's grant parameters, after its value parameters; a clause
 -- written with fewer parameters than the method's arity takes the missing ones
@@ -34540,13 +34586,13 @@ grantArrows g t
       (TyApp (tyConBuiltin "List" None) (tyConBuiltin "String" None))
       (grantArrows (g - 1) t)
 
-grantLetBind : GraphCtx -> List Pat -> LetBind -> LetBind
-grantLetBind gctx params (LetBind n clauses site bid) =
+grantLetBind : GraphCtx -> PassEvidence -> List Pat -> LetBind -> LetBind
+grantLetBind gctx pe params (LetBind n clauses site bid) =
   LetBind
     n
     (map
       (c => match c
-        FunClause ps body => FunClause (params ++ ps) (grantBody gctx body))
+        FunClause ps body => FunClause (params ++ ps) (grantBody gctx pe body))
       clauses)
     site
     bid
@@ -34571,9 +34617,9 @@ grantParamPats ids n =
 -- The top-down walk: a use of a file extern or a method is rebuilt with every
 -- argument it takes, so it sees its whole application spine before its
 -- arguments do.
-grantExpr : GraphCtx -> Expr -> Expr
-grantExpr gctx e =
-  let inner = grantExprInner gctx e
+grantExpr : GraphCtx -> PassEvidence -> Expr -> Expr
+grantExpr gctx pe e =
+  let inner = grantExprInner gctx pe e
   let st = gctx.graphRun.grants
   match st.gsValueBounds.value
     Tip => inner
@@ -34586,9 +34632,9 @@ grantExpr gctx e =
           bounds
       None => inner
 
-grantExprInner : GraphCtx -> Expr -> Expr
-grantExprInner gctx (ELam pats body) = ELam pats (grantBody gctx body)
-grantExprInner gctx (e@(EApp _ _)) = match grantSpine e []
+grantExprInner : GraphCtx -> PassEvidence -> Expr -> Expr
+grantExprInner gctx pe (ELam pats body) = ELam pats (grantBody gctx pe body)
+grantExprInner gctx pe (e@(EApp _ _)) = match grantSpine e []
   (EDictAt n ev, args) => match grantOccOf gctx ev
     Some occ => match occ.goTrailing
       Some arity =>
@@ -34597,59 +34643,61 @@ grantExprInner gctx (e@(EApp _ _)) = match grantSpine e []
           (EVar n)
           arity
           (grantTerms gctx occ)
-          (map (grantExpr gctx) args)
-      None => mapChildren (grantExpr gctx) e
-    None => mapChildren (grantExpr gctx) e
-  (EMethodAt n seed ev, args) => match methodGrantUse gctx n ev
+          (map (grantExpr gctx pe) args)
+      None => mapChildren (grantExpr gctx pe) e
+    None => mapChildren (grantExpr gctx pe) e
+  (EMethodAt n seed ev, args) => match methodGrantUse gctx pe n ev
     MethodGrants arity grants =>
       saturateGrants
         gctx.graphRun.grants
         (EMethodAt n seed ev)
         arity
         grants
-        (map (grantExpr gctx) args)
+        (map (grantExpr gctx pe) args)
     LeadingGrants _ grants =>
       applyExprs
         (applyExprs (EMethodAt n seed ev) grants)
-        (map (grantExpr gctx) args)
-    NoGrants => mapChildren (grantExpr gctx) e
-  _ => mapChildren (grantExpr gctx) e
-grantExprInner gctx (EDictAt n ev) = grantUse gctx n ev
-grantExprInner gctx (EMethodAt n seed ev) = match methodGrantUse gctx n ev
+        (map (grantExpr gctx pe) args)
+    NoGrants => mapChildren (grantExpr gctx pe) e
+  _ => mapChildren (grantExpr gctx pe) e
+grantExprInner gctx _ (EDictAt n ev) = grantUse gctx n ev
+grantExprInner gctx pe (EMethodAt n seed ev) = match methodGrantUse gctx pe n ev
   MethodGrants arity grants =>
     saturateGrants gctx.graphRun.grants (EMethodAt n seed ev) arity grants []
   LeadingGrants _ grants => applyExprs (EMethodAt n seed ev) grants
   NoGrants => EMethodAt n seed ev
-grantExprInner gctx (ELet m r (PVar x xloc bid) e1 e2) =
+grantExprInner gctx pe (ELet m r (PVar x xloc bid) e1 e2) =
   ELet
     m
     r
     (PVar x xloc bid)
-    (grantLocalRhs gctx x (grantExpr gctx e1))
-    (grantExpr gctx e2)
-grantExprInner gctx (ELetGroup binds body) =
+    (grantLocalRhs gctx x (grantExpr gctx pe e1))
+    (grantExpr gctx pe e2)
+grantExprInner gctx pe (ELetGroup binds body) =
   ELetGroup
     (map
       (b => match b
         LetBind x clauses site bid =>
           grantLetBind
             gctx
+            pe
             (grantParamPats (localGrantIds gctx x) x)
             (LetBind x clauses site bid))
       binds)
-    (grantExpr gctx body)
-grantExprInner gctx (EBlock stmts) = EBlock (map (grantStmt gctx) stmts)
+    (grantExpr gctx pe body)
+grantExprInner gctx pe (EBlock stmts) = EBlock (map (grantStmt gctx pe) stmts)
 -- every other node: its children, through the one traversal every pass shares
-grantExprInner gctx e = mapChildren (grantExpr gctx) e
+grantExprInner gctx pe e = mapChildren (grantExpr gctx pe) e
 
-grantStmt : GraphCtx -> DoStmt -> DoStmt
-grantStmt gctx (DoLet m r (PVar x xloc bid) e site) =
-  DoLet m r (PVar x xloc bid) (grantLocalRhs gctx x (grantExpr gctx e)) site
-grantStmt gctx (DoExpr e) = DoExpr (grantExpr gctx e)
-grantStmt gctx (DoBind p e) = DoBind p (grantExpr gctx e)
-grantStmt gctx (DoLet m r p e site) = DoLet m r p (grantExpr gctx e) site
-grantStmt gctx (DoAssign x e) = DoAssign x (grantExpr gctx e)
-grantStmt gctx (DoFieldAssign x fs e) = DoFieldAssign x fs (grantExpr gctx e)
+grantStmt : GraphCtx -> PassEvidence -> DoStmt -> DoStmt
+grantStmt gctx pe (DoLet m r (PVar x xloc bid) e site) =
+  DoLet m r (PVar x xloc bid) (grantLocalRhs gctx x (grantExpr gctx pe e)) site
+grantStmt gctx pe (DoExpr e) = DoExpr (grantExpr gctx pe e)
+grantStmt gctx pe (DoBind p e) = DoBind p (grantExpr gctx pe e)
+grantStmt gctx pe (DoLet m r p e site) = DoLet m r p (grantExpr gctx pe e) site
+grantStmt gctx pe (DoAssign x e) = DoAssign x (grantExpr gctx pe e)
+grantStmt gctx pe (DoFieldAssign x fs e) =
+  DoFieldAssign x fs (grantExpr gctx pe e)
 
 -- A local that quantifies authorities takes them ahead of its own parameters.
 grantLocalRhs : GraphCtx -> String -> Expr -> Expr
@@ -34693,12 +34741,13 @@ grantUse gctx n ev =
 -- shadows passes that binding's grants, which inference recorded when it typed
 -- the occurrence as the standalone; a grant-taking standalone reached without that
 -- record has no grants to pass, and is a compile-time failure.  The occurrence's
--- published arity counts the grants, as the backends read it.
-methodGrantUse : GraphCtx -> String -> EvId -> MethodGrantUse
-methodGrantUse gctx n ev =
-  let cell = methodCellOf gctx ev
+-- published arity counts the grants, as the backends read it; the published table
+-- is read out of the cells after the pass, so that count is written to the cell.
+methodGrantUse : GraphCtx -> PassEvidence -> String -> EvId -> MethodGrantUse
+methodGrantUse gctx pe n ev =
+  let (iface, tag, _) = passMethodOf pe ev
   let recorded = grantOccOf gctx ev
-  let use = match cell.ecTag.value
+  let use = match tag
     RLocal sym _ => match standaloneOcc recorded
       Some (arity, occ) => LeadingGrants arity (grantTerms gctx occ)
       None =>
@@ -34709,7 +34758,7 @@ methodGrantUse gctx n ev =
             "grant pass: '\{n}' is routed to a standalone binding that takes authority grants, but inference did not type this use as that binding"
         else
           NoGrants
-    _ => match methodGrantOf gctx cell.ecIface.value n
+    _ => match methodGrantOf gctx iface n
       None => NoGrants
       Some mg => match recorded
         Some occ =>
@@ -34719,10 +34768,15 @@ methodGrantUse gctx n ev =
             MethodGrants mg.mgArity (methodTerms gctx n mg occ)
         None => MethodGrants mg.mgArity (map (_ => bottomGrant) mg.mgNames)
   let _ = match use
-    MethodGrants arity grants => cell.ecArity := Some (arity + listLen grants)
-    LeadingGrants arity grants => cell.ecArity := Some (arity + listLen grants)
+    MethodGrants arity grants => setCellArity gctx ev (arity + listLen grants)
+    LeadingGrants arity grants => setCellArity gctx ev (arity + listLen grants)
     NoGrants => ()
   use
+
+setCellArity : GraphCtx -> EvId -> Int -> Unit
+setCellArity gctx ev arity =
+  let cell = methodCellOf gctx ev
+  cell.ecArity := Some arity
 
 -- A use recorded as the standalone binding a method occurrence shadows, with its
 -- value arity.
@@ -34995,9 +35049,9 @@ recordFileBound mctx body row =
             :: optionOr [] (omLookup key st.gsBounds.value))
           st.gsBounds.value
 
-grantBody : GraphCtx -> Expr -> Expr
-grantBody gctx body =
-  let inner = grantExpr gctx body
+grantBody : GraphCtx -> PassEvidence -> Expr -> Expr
+grantBody gctx pe body =
+  let inner = grantExpr gctx pe body
   match gctx.graphRun.grants.gsBounds.value
     Tip => inner
     boundsBySite =>
@@ -35141,33 +35195,34 @@ grantParamFor gctx (b :: rest) i =
 -- Packed instance prerequisites move into EMethodAt's implementation-dictionary
 -- routes. RNone and scalar routes preserve primitive operations, so primitive
 -- Num method bodies do not recursively call their own dictionary methods.
-rewriteBinopExpr : ModuleCtx -> EvIndex -> Expr -> Expr
-rewriteBinopExpr mctx idx (EBinOp op l r ev) = match evSiteRouteIn idx ev
-  RNone => EBinOp op l r ev
-  -- SHARED-FLOAT-RESIDUAL §3(C): an RScalar route is NOT a typeclass dispatch — it
-  -- is the scalar-type tag typecheck stamped on a monomorphic binop
-  -- (its primitive head on arithmetic, an allowed comparison tag on comparison).
-  -- Lowering does not read the
-  -- EBinOp's site id, so we carry the scalar type in a NODE by wrapping the binop
-  -- in `EAnnot … (TyCon tag)`.  Eval ignores the
-  -- annotation (`eval (EAnnot e _) = eval e`) and evaluates the binop dynamically
-  -- (Float-correct); lowering reads the annotation to stamp CBinPrim's scalar tag so
-  -- the native emitter picks that type's primitive without reading the operands'
-  -- structure.  This is the dispatch route READ-OUT the design names, relocated
-  -- from the (lost) ref cell to a (surviving) node.
-  --
-  -- #1110 (was a residual, DRAINED by the stamping PR): `tag` is a SCALAR-TYPE
-  -- TAG this pass synthesises (never a head the user wrote), and this runs AFTER
-  -- resolve, so nothing downstream would ever stamp it.  It takes the same
-  -- treatment as `parser.mdk`'s tuple head — the reserved BUILTIN origin, not the
-  -- module under elaboration, which resolve does not know and this pass would be
-  -- inventing.  Its only reader is `ir/core_ir_lower.mdk`'s
-  -- `lower (EAnnot (EBinOp …) (TyCon { tyConName }))`, which takes the NAME and
-  -- nothing else, so the origin is unobserved either way — but `OriginBuiltin` is
-  -- the TRUE identity of a scalar tag, and leaving `OriginUnresolved` on a
-  -- post-resolve node would keep the §8 I6.3 sentinel alive for no reason.
-  RScalar tag => EAnnot (EBinOp op l r ev) (tyConBuiltin tag None)
-  route => binopMethodApp mctx op l r route
+rewriteBinopExpr : ModuleCtx -> PassEvidence -> Expr -> Expr
+rewriteBinopExpr mctx pe (EBinOp op l r ev) =
+  match evSiteRouteIn (passIndex pe) ev
+    RNone => EBinOp op l r ev
+    -- SHARED-FLOAT-RESIDUAL §3(C): an RScalar route is NOT a typeclass dispatch — it
+    -- is the scalar-type tag typecheck stamped on a monomorphic binop
+    -- (its primitive head on arithmetic, an allowed comparison tag on comparison).
+    -- Lowering does not read the
+    -- EBinOp's site id, so we carry the scalar type in a NODE by wrapping the binop
+    -- in `EAnnot … (TyCon tag)`.  Eval ignores the
+    -- annotation (`eval (EAnnot e _) = eval e`) and evaluates the binop dynamically
+    -- (Float-correct); lowering reads the annotation to stamp CBinPrim's scalar tag so
+    -- the native emitter picks that type's primitive without reading the operands'
+    -- structure.  This is the dispatch route READ-OUT the design names, relocated
+    -- from the (lost) ref cell to a (surviving) node.
+    --
+    -- #1110 (was a residual, DRAINED by the stamping PR): `tag` is a SCALAR-TYPE
+    -- TAG this pass synthesises (never a head the user wrote), and this runs AFTER
+    -- resolve, so nothing downstream would ever stamp it.  It takes the same
+    -- treatment as `parser.mdk`'s tuple head — the reserved BUILTIN origin, not the
+    -- module under elaboration, which resolve does not know and this pass would be
+    -- inventing.  Its only reader is `ir/core_ir_lower.mdk`'s
+    -- `lower (EAnnot (EBinOp …) (TyCon { tyConName }))`, which takes the NAME and
+    -- nothing else, so the origin is unobserved either way — but `OriginBuiltin` is
+    -- the TRUE identity of a scalar tag, and leaving `OriginUnresolved` on a
+    -- post-resolve node would keep the §8 I6.3 sentinel alive for no reason.
+    RScalar tag => EAnnot (EBinOp op l r ev) (tyConBuiltin tag None)
+    route => binopMethodApp mctx pe op l r route
 -- PLAN.md #11: re-tag a source integer literal to its inferred runtime rep, a 3-way
 -- decision.  setNumlitFloats already
 -- decided: float cell `Some f` ⇒ concrete Float ⇒ `ELit (LFloat f)`; otherwise the
@@ -35179,7 +35234,7 @@ rewriteBinopExpr mctx idx (EBinOp op l r ev) = match evSiteRouteIn idx ev
 -- routes are packed in [dref] and split onto the EMethodAt impl-dict carrier here.
 -- Done in the same mapProg walk that rewrites binops, so
 -- eval/lower never see ENumLit and eval_arith / the emitter get matching tags.
-rewriteBinopExpr mctx idx (ENumLit n ev _) = match evSiteLitIn idx ev
+rewriteBinopExpr mctx pe (ENumLit n ev _) = match evSiteLitIn (passIndex pe) ev
   (Some f, _) => ELit (LFloat f)
   (None, dref) => match dref
     RNone => ELit (LInt n)
@@ -35197,6 +35252,7 @@ rewriteBinopExpr mctx idx (ENumLit n ev _) = match evSiteLitIn idx ev
           ""
           (mintMethodCellWith
             mctx
+            pe
             (builtinMethodIfaceWord mctx.mcGraph "fromInt")
             1
             (fst split)
@@ -35208,21 +35264,22 @@ rewriteBinopExpr mctx idx (ENumLit n ev _) = match evSiteLitIn idx ev
 -- route; Int/Float (RNone or a scalar tag) stay the literal EUnOp the eval builtin handles
 -- structurally (no recursion — Int's own `negate` body uses the BINOP `0 - a`, and
 -- Float's unary minus has a scalar operand).  `!` never routes (stays RNone).
-rewriteBinopExpr mctx idx (EUnOp op e ev) = match evSiteRouteIn idx ev
+rewriteBinopExpr mctx pe (EUnOp op e ev) = match evSiteRouteIn (passIndex pe) ev
   RNone => EUnOp op e ev
   -- a primitive operand's scalar tag: the builtin negation, as for an unrouted site
   RScalar _ => EUnOp op e ev
   RKey word _ _ if op == "-"
     && isI32Head (literalRouteHead word)
     && isSome (negatedI32Lit e) => ELit (LInt (optionOr 0 (negatedI32Lit e)))
-  route => unopMethodApp mctx op e route
+  route => unopMethodApp mctx pe op e route
 -- A wide literal is a `U64` or `I64` constant (`checkWideLiterals` has refused it
 -- at any other type, so a program that reaches eval/emit only has it at those).
 -- At `I64` the halves are the pattern of the magnitude; a `-` around it is the
 -- wrapping negation that makes `-2^63` `minBound`.
-rewriteBinopExpr mctx idx (EWideLit hi lo ev _) = match evSiteRouteIn idx ev
-  RKey word _ _ if isI64Head (literalRouteHead word) => ELit (LI64 hi lo)
-  _ => ELit (LU64 hi lo)
+rewriteBinopExpr mctx pe (EWideLit hi lo ev _) =
+  match evSiteRouteIn (passIndex pe) ev
+    RKey word _ _ if isI64Head (literalRouteHead word) => ELit (LI64 hi lo)
+    _ => ELit (LU64 hi lo)
 rewriteBinopExpr mctx _ e = e
 
 -- `-N` at `I32` is the constant `-N`: `-2147483648` is the one literal whose
@@ -35277,8 +35334,14 @@ binopRouteSplit : Route -> (Route, List Route)
 binopRouteSplit (RKey tag reqs sups) = (RKey tag [] sups, reqs)
 binopRouteSplit r = (r, [])
 
-binopMethodApp : ModuleCtx -> String -> Expr -> Expr -> Route -> Expr
-binopMethodApp mctx op l r route =
+binopMethodApp : ModuleCtx ->
+  PassEvidence ->
+  String ->
+  Expr ->
+  Expr ->
+  Route ->
+  Expr
+binopMethodApp mctx pe op l r route =
   let method = optionOr "eq" (binopDispatchMethod op)
   let split = binopRouteSplit route
   let call =
@@ -35289,6 +35352,7 @@ binopMethodApp mctx op l r route =
           ""
           (mintMethodCellWith
             mctx
+            pe
             (builtinMethodIfaceWord mctx.mcGraph method)
             2
             (fst split)
@@ -35305,8 +35369,8 @@ binopDispatchMethod op = match arithDispatchMethod op
 -- The EUnOp analogue of binopMethodApp: one operand, no `/=`-style postfix
 -- (unopMethod only ever routes `-`).  Reuses binopRouteSplit (a generic
 -- Route-ripping helper — nothing about it is binop-specific).
-unopMethodApp : ModuleCtx -> String -> Expr -> Route -> Expr
-unopMethodApp mctx op e route =
+unopMethodApp : ModuleCtx -> PassEvidence -> String -> Expr -> Route -> Expr
+unopMethodApp mctx pe op e route =
   let method = optionOr "negate" (unopMethod op)
   let split = binopRouteSplit route
   EApp
@@ -35315,6 +35379,7 @@ unopMethodApp mctx op e route =
       ""
       (mintMethodCellWith
         mctx
+        pe
         (builtinMethodIfaceWord mctx.mcGraph method)
         1
         (fst split)
@@ -35322,7 +35387,7 @@ unopMethodApp mctx op e route =
     e
 
 dictPassDecl : ModuleCtx ->
-  EvIndex ->
+  PassEvidence ->
   OrdMap Unit ->
   List String ->
   Decl ->
@@ -35346,11 +35411,11 @@ dictPassDecl mctx _ names _ (DLetGroup pub binds) =
 -- added UNIFORMLY across all clauses of a method when ANY clause uses the dict, so
 -- a multi-clause method keeps one arity).  The routes resolveSite/resolveArgStamp
 -- filled on the call-site EMethodAt's impl-dicts ref line up with these params.
-dictPassDecl mctx idx _ _ (d@(DImpl { iface, implOrigin, reqs, methods, ... })) = DImpl { d |
+dictPassDecl mctx pe _ _ (d@(DImpl { iface, implOrigin, reqs, methods, ... })) = DImpl { d |
   methods =
     implDictPassMethods
       mctx
-      idx
+      pe
       IfaceRef { irName = iface, irOrigin = implOrigin }
       (listLen reqs)
       methods,
@@ -35361,8 +35426,8 @@ dictPassDecl mctx idx _ _ (d@(DImpl { iface, implOrigin, reqs, methods, ... })) 
 -- inferDefaultMethod).
 dictPassDecl mctx _ _ _ (d@(DInterface { typarams, methods, ... })) =
   DInterface { d | methods = map (ifaceDictPassMethod typarams) methods }
-dictPassDecl mctx idx names ret (DAttrib attrs d) =
-  DAttrib attrs (dictPassDecl mctx idx names ret d)
+dictPassDecl mctx pe names ret (DAttrib attrs d) =
+  DAttrib attrs (dictPassDecl mctx pe names ret d)
 dictPassDecl mctx _ _ _ d = d
 
 -- DLetGroup binding dict-pass: prepend the member's dict params to every clause.
@@ -35433,29 +35498,23 @@ methodDictArityOf mctx key =
 -- params (the old `match reqs []=>d` early-out) mis-bound the dict into the first
 -- value parameter.
 implDictPassMethods : ModuleCtx ->
-  EvIndex ->
+  PassEvidence ->
   IfaceRef ->
   Int ->
   List ImplMethod ->
   List ImplMethod
-implDictPassMethods mctx idx iface nReq methods =
-  let users = dedup (flatMap (clauseImplDictUser mctx idx iface nReq) methods)
+implDictPassMethods mctx pe iface nReq methods =
+  let users = dedup (flatMap (clauseImplDictUser mctx pe iface nReq) methods)
   map (prependImplDictIfUser mctx iface nReq users) methods
 
 clauseImplDictUser : ModuleCtx ->
-  EvIndex ->
+  PassEvidence ->
   IfaceRef ->
   Int ->
   ImplMethod ->
   List String
-clauseImplDictUser mctx idx iface nReq (ImplMethod n _ body)
-  | usesImplDict
-    mctx.mcGraph
-    idx
-    n
-    (implMethodDictArity mctx iface n)
-    nReq
-    body = [n]
+clauseImplDictUser mctx pe iface nReq (ImplMethod n _ body)
+  | usesImplDict pe n (implMethodDictArity mctx iface n) nReq body = [n]
   | otherwise = []
 
 -- params = method-level dicts (slots 0..k-1) ++ impl-`requires` dicts (slots
@@ -35480,11 +35539,9 @@ prependImplDictIfUser mctx iface nReq users (ImplMethod n pats body) =
 -- one of THIS method's would-be impl-dict params? (the gate that distinguishes a
 -- body that consumes the element dict from a terminal one that doesn't).  Impl-dict
 -- slots are offset by the method's own method-level arity (S2), so probe at k..k+nReq-1.
-usesImplDict : GraphCtx -> EvIndex -> String -> Int -> Int -> Expr -> Bool
-usesImplDict gctx idx mname methodArity nReq body =
-  anyMember
-    (bodyRDictNames gctx idx body)
-    (implDictNames mname methodArity nReq)
+usesImplDict : PassEvidence -> String -> Int -> Int -> Expr -> Bool
+usesImplDict pe mname methodArity nReq body =
+  anyMember (collectDictSites pe body) (implDictNames mname methodArity nReq)
 
 implDictNames : String -> Int -> Int -> List String
 implDictNames mname methodArity nReq =
@@ -35511,21 +35568,11 @@ rangeFromCount start count
   | count <= 0 = []
   | otherwise = start :: rangeFromCount (start + 1) (count - 1)
 
--- the dict-param names every EMethodAt in [e] routes RDict to (post-resolveSites)
--- plus every EDictAt route-LIST that forwards RDict/RDictFwd to an impl param
--- (a `=>`-constrained helper call that threads the impl dict through, e.g.
--- `debug xs = "[\{debugListItems xs}]"` where `debugListItems` is an EDictAt).
-bodyRDictNames : GraphCtx -> EvIndex -> Expr -> List String
-bodyRDictNames gctx idx e =
-  flatMap siteRDictName (collectMethodSites gctx e)
-    ++ flatMap siteRDictNamesL (collectDictSites gctx idx e)
-
-siteRDictName : Ref Route -> List String
-siteRDictName r = match !r
-  RDict d => [d]
-  RDictFwd d => [d]
-  RProj inner _ => routeRDictName inner
-  _ => []
+siteRDictName : Route -> List String
+siteRDictName (RDict d) = [d]
+siteRDictName (RDictFwd d) = [d]
+siteRDictName (RProj inner _) = routeRDictName inner
+siteRDictName _ = []
 
 siteRDictNamesL : List Route -> List String
 siteRDictNamesL rs = flatMap routeRDictName rs
@@ -35544,166 +35591,86 @@ routeRDictName (RKey _ reqs sups) =
 routeRDictName (RProj r _) = routeRDictName r
 routeRDictName _ = []
 
--- every EMethodAt route ref reachable in [e] (a pure structural walk; reading a
--- ref's `.value` is done later by siteRDictName, not here)
-collectMethodSites : GraphCtx -> Expr -> List (Ref Route)
-collectMethodSites gctx (EMethodAt _ _ ev) = [(methodCellOf gctx ev).ecTag]
-collectMethodSites gctx (ELoc _ e) = collectMethodSites gctx e
-collectMethodSites gctx (EDoOrigin _ e) = collectMethodSites gctx e
-collectMethodSites gctx (EApp f x) =
-  collectMethodSites gctx f ++ collectMethodSites gctx x
-collectMethodSites gctx (ELam _ b) = collectMethodSites gctx b
-collectMethodSites gctx (ELet _ _ _ e1 e2) =
-  collectMethodSites gctx e1 ++ collectMethodSites gctx e2
-collectMethodSites gctx (ELetGroup binds body) =
-  flatMap (letBindSites gctx) binds ++ collectMethodSites gctx body
-collectMethodSites gctx (EMatch e arms) =
-  collectMethodSites gctx e ++ flatMap (armSites gctx) arms
-collectMethodSites gctx (EIf c t e) =
-  collectMethodSites gctx c
-    ++ collectMethodSites gctx t
-    ++ collectMethodSites gctx e
-collectMethodSites gctx (EBinOp _ l r _) =
-  collectMethodSites gctx l ++ collectMethodSites gctx r
-collectMethodSites gctx (EUnOp _ e _) = collectMethodSites gctx e
-collectMethodSites gctx (EInfix _ l r) =
-  collectMethodSites gctx l ++ collectMethodSites gctx r
-collectMethodSites gctx (EFieldAccess e _ _) = collectMethodSites gctx e
-collectMethodSites gctx (ETuple es) = flatMap (collectMethodSites gctx) es
-collectMethodSites gctx (EListLit es) = flatMap (collectMethodSites gctx) es
-collectMethodSites gctx (EArrayLit es) = flatMap (collectMethodSites gctx) es
-collectMethodSites gctx (ERangeList a b _) =
-  collectMethodSites gctx a ++ collectMethodSites gctx b
-collectMethodSites gctx (ERangeArray a b _) =
-  collectMethodSites gctx a ++ collectMethodSites gctx b
-collectMethodSites gctx (ESlice e a b _) =
-  collectMethodSites gctx e
-    ++ collectMethodSites gctx a
-    ++ collectMethodSites gctx b
-collectMethodSites gctx (EIndex e i) =
-  collectMethodSites gctx e ++ collectMethodSites gctx i
-collectMethodSites gctx (EAnnot e _) = collectMethodSites gctx e
-collectMethodSites gctx (EBlock stmts) = flatMap (doStmtSites gctx) stmts
-collectMethodSites gctx (ERecordCreate _ fs) =
-  flatMap (fieldAssignSites gctx) fs
-collectMethodSites gctx (ERecordUpdate e fs _) =
-  collectMethodSites gctx e ++ flatMap (fieldAssignSites gctx) fs
-collectMethodSites gctx (EVariantUpdate _ e fs) =
-  collectMethodSites gctx e ++ flatMap (fieldAssignSites gctx) fs
-collectMethodSites gctx _ = []
-
-letBindSites : GraphCtx -> LetBind -> List (Ref Route)
-letBindSites gctx (LetBind _ clauses _ _) =
-  flatMap (funClauseSites gctx) clauses
-
-funClauseSites : GraphCtx -> FunClause -> List (Ref Route)
-funClauseSites gctx (FunClause _ body) = collectMethodSites gctx body
-
-armSites : GraphCtx -> Arm -> List (Ref Route)
-armSites gctx (Arm _ guards body) =
-  flatMap (guardSites gctx) guards ++ collectMethodSites gctx body
-
-guardSites : GraphCtx -> Guard -> List (Ref Route)
-guardSites gctx (GBool e) = collectMethodSites gctx e
-guardSites gctx (GBind _ e) = collectMethodSites gctx e
-
-doStmtSites : GraphCtx -> DoStmt -> List (Ref Route)
-doStmtSites gctx (DoExpr e) = collectMethodSites gctx e
-doStmtSites gctx (DoLet _ _ _ e _) = collectMethodSites gctx e
-doStmtSites gctx (DoBind _ e) = collectMethodSites gctx e
-doStmtSites gctx (DoAssign _ e) = collectMethodSites gctx e
-doStmtSites gctx (DoFieldAssign _ _ e) = collectMethodSites gctx e
-
-fieldAssignSites : GraphCtx -> FieldAssign -> List (Ref Route)
-fieldAssignSites gctx (FieldAssign _ e) = collectMethodSites gctx e
-
--- mirror of collectMethodSites's structural walk, but collecting route LISTS
--- instead of EMethodAt's single route ref.
+-- The dict-param names the method occurrences and dictionary applications in [e]
+-- route to: an `EMethodAt`'s dispatch route (RDict/RDictFwd, post-resolveSites)
+-- and its impl-/method-dict route LISTS, and every `EDictAt` route list that
+-- forwards RDict/RDictFwd to an impl param (a `=>`-constrained helper call that
+-- threads the impl dict through, e.g. `debug xs = "[\{debugListItems xs}]"` where
+-- `debugListItems` is an EDictAt).
 --
--- #2549 M2: an `EDictAt`'s routes come from the published evidence table and an
--- `EMethodAt`'s still from its cells, so this yields the route lists themselves
--- rather than the cells that hold them.  Its one caller (`bodyRDictNames`)
--- dereferenced every cell immediately anyway, so no writer downstream loses a cell
--- it could have written.
-collectDictSites : GraphCtx -> EvIndex -> Expr -> List (List Route)
-collectDictSites gctx idx (EDictAt _ ev) = [evDictRoutesIn idx ev]
--- D3b-1: an EMethodAt arg-position site carries its element-dict routes in the
--- impl-/method-dicts route LISTS (not tagRef).  A nested `requires` impl whose
+-- An EMethodAt arg-position site carries its element-dict routes in the
+-- impl-/method-dict lists, not its dispatch route.  A nested `requires` impl whose
 -- body dispatches a method on its own element tyvar routes RDict $dict_<m>_<slot>
--- here — scan both so implDictPassMethods' usesImplDict gate sees it and prepends
--- the matching param.  [] on the golden path (resolveArgStamp never runs).
-collectDictSites gctx _ (EMethodAt _ _ ev) =
-  methodCellDicts (methodCellOf gctx ev)
-collectDictSites gctx idx (ELoc _ e) = collectDictSites gctx idx e
-collectDictSites gctx idx (EDoOrigin _ e) = collectDictSites gctx idx e
-collectDictSites gctx idx (EApp f x) =
-  collectDictSites gctx idx f ++ collectDictSites gctx idx x
-collectDictSites gctx idx (ELam _ b) = collectDictSites gctx idx b
-collectDictSites gctx idx (ELet _ _ _ e1 e2) =
-  collectDictSites gctx idx e1 ++ collectDictSites gctx idx e2
-collectDictSites gctx idx (ELetGroup binds body) =
-  flatMap (letBindDictSites gctx idx) binds ++ collectDictSites gctx idx body
-collectDictSites gctx idx (EMatch e arms) =
-  collectDictSites gctx idx e ++ flatMap (armDictSites gctx idx) arms
-collectDictSites gctx idx (EIf c t e) =
-  collectDictSites gctx idx c
-    ++ collectDictSites gctx idx t
-    ++ collectDictSites gctx idx e
-collectDictSites gctx idx (EBinOp _ l r _) =
-  collectDictSites gctx idx l ++ collectDictSites gctx idx r
-collectDictSites gctx idx (EUnOp _ e _) = collectDictSites gctx idx e
-collectDictSites gctx idx (EInfix _ l r) =
-  collectDictSites gctx idx l ++ collectDictSites gctx idx r
-collectDictSites gctx idx (EFieldAccess e _ _) = collectDictSites gctx idx e
-collectDictSites gctx idx (ETuple es) = flatMap (collectDictSites gctx idx) es
-collectDictSites gctx idx (EListLit es) = flatMap (collectDictSites gctx idx) es
-collectDictSites gctx idx (EArrayLit es) =
-  flatMap (collectDictSites gctx idx) es
-collectDictSites gctx idx (ERangeList a b _) =
-  collectDictSites gctx idx a ++ collectDictSites gctx idx b
-collectDictSites gctx idx (ERangeArray a b _) =
-  collectDictSites gctx idx a ++ collectDictSites gctx idx b
-collectDictSites gctx idx (ESlice e a b _) =
-  collectDictSites gctx idx e
-    ++ collectDictSites gctx idx a
-    ++ collectDictSites gctx idx b
-collectDictSites gctx idx (EIndex e i) =
-  collectDictSites gctx idx e ++ collectDictSites gctx idx i
-collectDictSites gctx idx (EAnnot e _) = collectDictSites gctx idx e
-collectDictSites gctx idx (EBlock stmts) =
-  flatMap (doStmtDictSites gctx idx) stmts
-collectDictSites gctx idx (ERecordCreate _ fs) =
-  flatMap (fieldAssignDictSites gctx idx) fs
-collectDictSites gctx idx (ERecordUpdate e fs _) =
-  collectDictSites gctx idx e ++ flatMap (fieldAssignDictSites gctx idx) fs
-collectDictSites gctx idx (EVariantUpdate _ e fs) =
-  collectDictSites gctx idx e ++ flatMap (fieldAssignDictSites gctx idx) fs
-collectDictSites gctx _ _ = []
+-- there, so both are scanned for implDictPassMethods' usesImplDict gate to prepend
+-- the matching param.
+collectDictSites : PassEvidence -> Expr -> List String
+collectDictSites pe (EDictAt _ ev) =
+  siteRDictNamesL (evDictRoutesIn (passIndex pe) ev)
+collectDictSites pe (EMethodAt _ _ ev) =
+  let (_, tag, dicts) = passMethodOf pe ev
+  siteRDictName tag ++ siteRDictNamesL dicts
+collectDictSites pe (ELoc _ e) = collectDictSites pe e
+collectDictSites pe (EDoOrigin _ e) = collectDictSites pe e
+collectDictSites pe (EApp f x) = collectDictSites pe f ++ collectDictSites pe x
+collectDictSites pe (ELam _ b) = collectDictSites pe b
+collectDictSites pe (ELet _ _ _ e1 e2) =
+  collectDictSites pe e1 ++ collectDictSites pe e2
+collectDictSites pe (ELetGroup binds body) =
+  flatMap (letBindDictSites pe) binds ++ collectDictSites pe body
+collectDictSites pe (EMatch e arms) =
+  collectDictSites pe e ++ flatMap (armDictSites pe) arms
+collectDictSites pe (EIf c t e) =
+  collectDictSites pe c ++ collectDictSites pe t ++ collectDictSites pe e
+collectDictSites pe (EBinOp _ l r _) =
+  collectDictSites pe l ++ collectDictSites pe r
+collectDictSites pe (EUnOp _ e _) = collectDictSites pe e
+collectDictSites pe (EInfix _ l r) =
+  collectDictSites pe l ++ collectDictSites pe r
+collectDictSites pe (EFieldAccess e _ _) = collectDictSites pe e
+collectDictSites pe (ETuple es) = flatMap (collectDictSites pe) es
+collectDictSites pe (EListLit es) = flatMap (collectDictSites pe) es
+collectDictSites pe (EArrayLit es) = flatMap (collectDictSites pe) es
+collectDictSites pe (ERangeList a b _) =
+  collectDictSites pe a ++ collectDictSites pe b
+collectDictSites pe (ERangeArray a b _) =
+  collectDictSites pe a ++ collectDictSites pe b
+collectDictSites pe (ESlice e a b _) =
+  collectDictSites pe e ++ collectDictSites pe a ++ collectDictSites pe b
+collectDictSites pe (EIndex e i) =
+  collectDictSites pe e ++ collectDictSites pe i
+collectDictSites pe (EAnnot e _) = collectDictSites pe e
+collectDictSites pe (EBlock stmts) = flatMap (doStmtDictSites pe) stmts
+collectDictSites pe (ERecordCreate _ fs) = flatMap (fieldAssignDictSites pe) fs
+collectDictSites pe (ERecordUpdate e fs _) =
+  collectDictSites pe e ++ flatMap (fieldAssignDictSites pe) fs
+collectDictSites pe (EVariantUpdate _ e fs) =
+  collectDictSites pe e ++ flatMap (fieldAssignDictSites pe) fs
+collectDictSites _ _ = []
 
-letBindDictSites : GraphCtx -> EvIndex -> LetBind -> List (List Route)
-letBindDictSites gctx idx (LetBind _ clauses _ _) =
-  flatMap (funClauseDictSites gctx idx) clauses
+letBindDictSites : PassEvidence -> LetBind -> List String
+letBindDictSites pe (LetBind _ clauses _ _) =
+  flatMap (funClauseDictSites pe) clauses
 
-funClauseDictSites : GraphCtx -> EvIndex -> FunClause -> List (List Route)
-funClauseDictSites gctx idx (FunClause _ body) = collectDictSites gctx idx body
+funClauseDictSites : PassEvidence -> FunClause -> List String
+funClauseDictSites pe (FunClause _ body) = collectDictSites pe body
 
-armDictSites : GraphCtx -> EvIndex -> Arm -> List (List Route)
-armDictSites gctx idx (Arm _ guards body) =
-  flatMap (guardDictSites gctx idx) guards ++ collectDictSites gctx idx body
+armDictSites : PassEvidence -> Arm -> List String
+armDictSites pe (Arm _ guards body) =
+  flatMap (guardDictSites pe) guards ++ collectDictSites pe body
 
-guardDictSites : GraphCtx -> EvIndex -> Guard -> List (List Route)
-guardDictSites gctx idx (GBool e) = collectDictSites gctx idx e
-guardDictSites gctx idx (GBind _ e) = collectDictSites gctx idx e
+guardDictSites : PassEvidence -> Guard -> List String
+guardDictSites pe (GBool e) = collectDictSites pe e
+guardDictSites pe (GBind _ e) = collectDictSites pe e
 
-doStmtDictSites : GraphCtx -> EvIndex -> DoStmt -> List (List Route)
-doStmtDictSites gctx idx (DoExpr e) = collectDictSites gctx idx e
-doStmtDictSites gctx idx (DoLet _ _ _ e _) = collectDictSites gctx idx e
-doStmtDictSites gctx idx (DoBind _ e) = collectDictSites gctx idx e
-doStmtDictSites gctx idx (DoAssign _ e) = collectDictSites gctx idx e
-doStmtDictSites gctx idx (DoFieldAssign _ _ e) = collectDictSites gctx idx e
+doStmtDictSites : PassEvidence -> DoStmt -> List String
+doStmtDictSites pe (DoExpr e) = collectDictSites pe e
+doStmtDictSites pe (DoLet _ _ _ e _) = collectDictSites pe e
+doStmtDictSites pe (DoBind _ e) = collectDictSites pe e
+doStmtDictSites pe (DoAssign _ e) = collectDictSites pe e
+doStmtDictSites pe (DoFieldAssign _ _ e) = collectDictSites pe e
 
-fieldAssignDictSites : GraphCtx -> EvIndex -> FieldAssign -> List (List Route)
-fieldAssignDictSites gctx idx (FieldAssign _ e) = collectDictSites gctx idx e
+fieldAssignDictSites : PassEvidence -> FieldAssign -> List String
+fieldAssignDictSites pe (FieldAssign _ e) = collectDictSites pe e
 
 dictArityOf : ModuleCtx -> String -> Int
 dictArityOf mctx n =
@@ -55480,8 +55447,8 @@ dictPassModulesIfEnabled : ModuleCtx ->
   (List Decl, List (String, List Decl))
 dictPassModulesIfEnabled mctx dictNames corePassed core2 modules2 =
   -- #2549 M2: index this sweep's solved evidence before anything reads a route
-  -- out of it.  Here because `dictPass` is itself a reader (`bodyRDictNames`),
-  -- and this is the Module arm's one funnel into it.
+  -- out of it.  Here because `dictPass` is itself a reader (`collectDictSites`,
+  -- `methodGrantUse`), and this is the Module arm's one funnel into it.
   let idx = evIndexOf (drivenEvidence mctx.mcGraph ())
   let promotedQ =
     mctx.mcGraph.crossRun.crossModuleFunPredicateSlotsQualRef.value
@@ -57313,7 +57280,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "eqStr" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "chainGraphKey" false) (mem "constrainedSigName" false) (mem "isConstrainedTy" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "EvIndex" false) (mem "evIndexOf" false) (mem "evDictRoutesIn" false) (mem "evSiteRouteIn" false) (mem "evSiteLitIn" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "EvIndex" false) (mem "evIndexOf" false) (mem "evDictRoutesIn" false) (mem "evSiteRouteIn" false) (mem "evSiteLitIn" false) (mem "evidenceLookup" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "validateDispositionTable" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "hostLabels" false) (mem "ioJoinGrants" false) (mem "profileName" false))))
 (DUse false (UseGroup ("types" "ffi_bindings") ((mem "FfiDiag" true) (mem "ffiCatalogNarrowMsg" false) (mem "ffiCatalogTailMsg" false) (mem "ffiDeclarationDiags" false) (mem "ffiNonCrossableMsg" false) (mem "ffiShadowMsg" false))))
@@ -58930,8 +58897,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "freshGraphRun" (PWild) (ERecordCreate "GraphRun" ((fa "tyvarCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "effvarCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "ctorExistentialsRef" (EApp (EVar "Ref") (EVar "Tip"))) (fa "patternAuthIdsRef" (EApp (EVar "Ref") (EVar "Tip"))) (fa "anyExistentialsRef" (EApp (EVar "Ref") (EVar "False"))) (fa "goals" (EApp (EVar "Ref") (EListLit))) (fa "numlitRefs" (EApp (EVar "Ref") (EListLit))) (fa "numlitN" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "activeDictVars" (EApp (EVar "Ref") (EListLit))) (fa "gGiven" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "moduleRanges" (EApp (EVar "Ref") (EListLit))) (fa "stampCtxs" (EApp (EVar "Ref") (EListLit))) (fa "goalsN" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "evCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "evBase" (ELit (LInt 0))) (fa "evJudged" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "evScopedJudged" (EApp (EVar "Ref") (EListLit))) (fa "evTable" (EApp (EVar "Ref") (EListLit))) (fa "evCells" (EApp (EVar "Ref") (EApp (EApp (EVar "arrayMake") (ELit (LInt 0))) (EVar "None")))) (fa "siteCells" (EApp (EVar "Ref") (EApp (EApp (EVar "arrayMake") (ELit (LInt 0))) (EVar "None")))) (fa "scopeStore" (EApp (EVar "Scopes.freshScopeStore") (ELit LUnit))) (fa "localAbs" (EApp (EVar "freshLocalAbsState") (ELit LUnit))) (fa "grants" (EApp (EVar "freshGrantState") (ELit LUnit))) (fa "binderPending" (EApp (EVar "Ref") (EListLit))) (fa "binderRows" (EApp (EVar "Ref") (EVar "emptyBinderTypes"))) (fa "liveRoots" (EApp (EVar "Ref") (EListLit))) (fa "liveNumRoots" (EApp (EVar "Ref") (EListLit))) (fa "liveNumGoals" (EApp (EVar "Ref") (EListLit))) (fa "liveGoals" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig false "mintMethodCell" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "EvId"))))
 (DFunDef false "mintMethodCell" ((PVar "mctx") (PVar "seed")) (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellRaw") (EVar "mctx")) (ELit (LString ""))) (EVar "None")) (EIf (EBinOp "==" (EVar "seed") (ELit (LString ""))) (EVar "RNone") (EApp (EApp (EVar "RLocal") (EVar "seed")) (EListLit)))) (EListLit)))
-(DTypeSig false "mintMethodCellWith" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "EvId")))))))
-(DFunDef false "mintMethodCellWith" ((PVar "mctx") (PVar "iface") (PVar "arity") (PVar "tag") (PVar "impls")) (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellRaw") (EVar "mctx")) (EVar "iface")) (EApp (EVar "Some") (EVar "arity"))) (EVar "tag")) (EVar "impls")))
+(DTypeSig false "mintMethodCellWith" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "EvId"))))))))
+(DFunDef false "mintMethodCellWith" ((PVar "mctx") (PCon "PassEvidence" PWild (PVar "minted")) (PVar "iface") (PVar "arity") (PVar "tag") (PVar "impls")) (EBlock (DoLet false false (PVar "ev") (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellRaw") (EVar "mctx")) (EVar "iface")) (EApp (EVar "Some") (EVar "arity"))) (EVar "tag")) (EVar "impls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "minted")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EApp (EVar "evOrdinal") (EVar "ev")))) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "iface")) (EVar "arity")) (EVar "tag")) (EVar "impls")) (EListLit))) (EFieldAccess (EVar "minted") "value")))) (DoExpr (EVar "ev"))))
 (DTypeSig false "mintMethodCellRaw" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "EvId")))))))
 (DFunDef false "mintMethodCellRaw" ((PVar "mctx") (PVar "iface") (PVar "arity") (PVar "tag") (PVar "impls")) (EBlock (DoLet false false (PVar "ev") (EApp (EApp (EVar "freshEvId") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "g") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun")) (DoLet false false (PVar "i") (EBinOp "-" (EApp (EVar "evOrdinal") (EVar "ev")) (EFieldAccess (EVar "g") "evBase"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "indexWithSlot") (EFieldAccess (EVar "g") "evCells")) (EVar "i"))) (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "method cell #")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "evOrdinal") (EVar "ev"))))) (ELit (LString " minted twice"))))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (ERecordCreate "EvCell" ((fa "ecId" (EVar "ev")) (fa "ecIface" (EApp (EVar "Ref") (EVar "iface"))) (fa "ecArity" (EApp (EVar "Ref") (EVar "arity"))) (fa "ecTag" (EApp (EVar "Ref") (EVar "tag"))) (fa "ecImpl" (EApp (EVar "Ref") (EVar "impls"))) (fa "ecMeth" (EApp (EVar "Ref") (EListLit))) (fa "ecLoc" (EApp (EVar "Ref") (EVar "None"))) (fa "ecName" (EApp (EVar "Ref") (ELit (LString "")))) (fa "ecInner" (EApp (EVar "Ref") (EVar "innerNone"))))))) (EVar "arr"))) (DoExpr (EVar "ev"))))
 (DTypeSig false "evOrdinal" (TyFun (TyCon "EvId") (TyCon "Int")))
@@ -58977,8 +58944,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "missText" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")) (TyCon "String")))
 (DFunDef false "missText" ((PCon "Ok" PWild)) (ELit (LString "")))
 (DFunDef false "missText" ((PCon "Err" (PVar "message"))) (EVar "message"))
-(DTypeSig false "methodCellDicts" (TyFun (TyCon "EvCell") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))
-(DFunDef false "methodCellDicts" ((PVar "c")) (EListLit (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value") (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value")))
 (DTypeSig false "methodCellEntries" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "EvTable"))))
 (DFunDef false "methodCellEntries" ((PVar "gctx") PWild) (EBlock (DoLet false false (PVar "arr") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evCells") "value")) (DoExpr (EApp (EApp (EApp (EVar "methodCellEntriesFrom") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit)))))
 (DTypeSig false "methodCellEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "EvTable")))))
@@ -63254,22 +63219,30 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "firstTvar" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Mono"))))))
 (DFunDef false "firstTvar" ((PVar "a") (PVar "b") (PVar "id")) (EMatch (EApp (EApp (EVar "findTvarInMono") (EVar "a")) (EVar "id")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EApp (EApp (EVar "findTvarInMono") (EVar "b")) (EVar "id")))))
 (DTypeSig false "dictPass" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "dictPass" ((PVar "mctx") (PVar "idx") (PVar "mid") (PVar "names") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "idx")) (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (ELam ((PVar "e")) (EApp (EApp (EVar "rewriteLocalDictExpr") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EVar "rewriteBinopExpr") (EVar "mctx")) (EVar "idx")) (EVar "e"))))) (EApp (EApp (EApp (EVar "grantPass") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "mid")) (EVar "prog")))))
-(DTypeSig false "grantPass" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "grantPass" ((PVar "gctx") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EVar "st") "gsPassingModule") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsPassingModule")) (EVar "mid"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "map") (EApp (EApp (EVar "grantDecl") (EVar "gctx")) (EVar "mid"))) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsPassingModule")) (EVar "saved"))) (DoExpr (EVar "result"))))
-(DTypeSig false "grantDecl" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "grantDecl" ((PVar "gctx") (PVar "mid") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EApp (EVar "topGrantIds") (EVar "gctx")) (EVar "mid")) (EVar "n"))) (EVar "n")) (EVar "pats"))) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "body"))) (EVar "site")) (EVar "bid")))
-(DFunDef false "grantDecl" ((PVar "gctx") (PVar "mid") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid")) () (EApp (EApp (EApp (EVar "grantLetBind") (EVar "gctx")) (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EApp (EVar "topGrantIds") (EVar "gctx")) (EVar "mid")) (EVar "n"))) (EVar "n"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EVar "site")) (EVar "bid"))))))) (EVar "binds"))))
-(DFunDef false "grantDecl" ((PVar "gctx") PWild (PAs "d" (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EApp (EVar "grantIfaceMethod") (EVar "gctx")) (EApp (EApp (EVar "ifaceWordOf") (EVar "ifaceOrigin")) (EVar "name")))) (EVar "methods"))))))
-(DFunDef false "grantDecl" ((PVar "gctx") PWild (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "implOrigin" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EApp (EVar "grantImplMethod") (EVar "gctx")) (EApp (EApp (EVar "ifaceWordOf") (EVar "implOrigin")) (EVar "iface")))) (EVar "methods"))))))
-(DFunDef false "grantDecl" ((PVar "gctx") PWild (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "body"))))
-(DFunDef false "grantDecl" ((PVar "gctx") PWild (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "body"))))
-(DFunDef false "grantDecl" ((PVar "gctx") (PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "grantDecl") (EVar "gctx")) (EVar "mid")) (EVar "d"))))
-(DFunDef false "grantDecl" ((PVar "gctx") PWild (PVar "d")) (EVar "d"))
-(DTypeSig false "grantIfaceMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod")))))
-(DFunDef false "grantIfaceMethod" ((PVar "gctx") (PVar "word") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PVar "def") (PVar "mloc"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "word")) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "e"))))))) (EVar "def"))) (EVar "mloc"))) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EApp (EApp (EApp (EVar "insertGrantArrows") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EVar "listLen") (EFieldAccess (EVar "mg") "mgNames"))) (EVar "ty"))) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "grantMethodParams") (EVar "gctx")) (EVar "mg")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "e")))) (DoExpr (EApp (EApp (EVar "MethodDefault") (EVar "ps2")) (EVar "e2")))))))) (EVar "def"))) (EVar "mloc")))))
-(DTypeSig false "grantImplMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod")))))
-(DFunDef false "grantImplMethod" ((PVar "gctx") (PVar "word") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "word")) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "e")))) (arm (PCon "Some" (PVar "mg")) () (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "grantMethodParams") (EVar "gctx")) (EVar "mg")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "e")))) (DoExpr (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps2")) (EVar "e2")))))))
+(DFunDef false "dictPass" ((PVar "mctx") (PVar "idx") (PVar "mid") (PVar "names") (PVar "prog")) (EBlock (DoLet false false (PVar "pe") (EApp (EApp (EVar "PassEvidence") (EVar "idx")) (EApp (EVar "Ref") (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (ELam ((PVar "e")) (EApp (EApp (EVar "rewriteLocalDictExpr") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EVar "rewriteBinopExpr") (EVar "mctx")) (EVar "pe")) (EVar "e"))))) (EApp (EApp (EApp (EApp (EVar "grantPass") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "pe")) (EVar "mid")) (EVar "prog")))))))
+(DData Private "PassEvidence" () ((variant "PassEvidence" (ConPos (TyCon "EvIndex") (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "EvVal")))))) ())
+(DTypeSig false "passIndex" (TyFun (TyCon "PassEvidence") (TyCon "EvIndex")))
+(DFunDef false "passIndex" ((PCon "PassEvidence" (PVar "idx") PWild)) (EVar "idx"))
+(DTypeSig false "passMethodOf" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route"))))))
+(DFunDef false "passMethodOf" ((PCon "PassEvidence" (PVar "idx") (PVar "minted")) (PVar "ev")) (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (ELit (LString "method occurrence"))) (EVar "ev")) (arm (PCon "Ok" (PVar "v")) () (EApp (EVar "passMethodFacts") (EVar "v"))) (arm (PCon "Err" (PVar "message")) () (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EApp (EVar "evOrdinal") (EVar "ev")))) (EFieldAccess (EVar "minted") "value")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "passMethodFacts") (EVar "v"))) (arm (PCon "None") () (EApp (EVar "panic") (EVar "message")))))))
+(DTypeSig false "passMethodFacts" (TyFun (TyCon "EvVal") (TyTuple (TyCon "String") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "passMethodFacts" ((PCon "EvMethod" (PVar "iface") PWild (PVar "tag") (PVar "impls") (PVar "meths"))) (ETuple (EVar "iface") (EVar "tag") (EBinOp "++" (EVar "impls") (EVar "meths"))))
+(DFunDef false "passMethodFacts" (PWild) (EApp (EVar "panic") (ELit (LString "evidence table: a method occurrence answered by another kind of entry"))))
+(DTypeSig false "grantPass" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "grantPass" ((PVar "gctx") (PVar "pe") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EVar "st") "gsPassingModule") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsPassingModule")) (EVar "mid"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "grantDecl") (EVar "gctx")) (EVar "pe")) (EVar "mid"))) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsPassingModule")) (EVar "saved"))) (DoExpr (EVar "result"))))
+(DTypeSig false "grantDecl" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl"))))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") (PVar "mid") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EApp (EVar "topGrantIds") (EVar "gctx")) (EVar "mid")) (EVar "n"))) (EVar "n")) (EVar "pats"))) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "body"))) (EVar "site")) (EVar "bid")))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") (PVar "mid") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid")) () (EApp (EApp (EApp (EApp (EVar "grantLetBind") (EVar "gctx")) (EVar "pe")) (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EApp (EVar "topGrantIds") (EVar "gctx")) (EVar "mid")) (EVar "n"))) (EVar "n"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EVar "site")) (EVar "bid"))))))) (EVar "binds"))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PAs "d" (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "grantIfaceMethod") (EVar "gctx")) (EVar "pe")) (EApp (EApp (EVar "ifaceWordOf") (EVar "ifaceOrigin")) (EVar "name")))) (EVar "methods"))))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "implOrigin" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "grantImplMethod") (EVar "gctx")) (EVar "pe")) (EApp (EApp (EVar "ifaceWordOf") (EVar "implOrigin")) (EVar "iface")))) (EVar "methods"))))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") (PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EVar "grantDecl") (EVar "gctx")) (EVar "pe")) (EVar "mid")) (EVar "d"))))
+(DFunDef false "grantDecl" ((PVar "gctx") PWild PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "grantIfaceMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))))
+(DFunDef false "grantIfaceMethod" ((PVar "gctx") (PVar "pe") (PVar "word") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PVar "def") (PVar "mloc"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "word")) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e"))))))) (EVar "def"))) (EVar "mloc"))) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EApp (EApp (EApp (EVar "insertGrantArrows") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EVar "listLen") (EFieldAccess (EVar "mg") "mgNames"))) (EVar "ty"))) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "grantMethodParams") (EVar "gctx")) (EVar "mg")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e")))) (DoExpr (EApp (EApp (EVar "MethodDefault") (EVar "ps2")) (EVar "e2")))))))) (EVar "def"))) (EVar "mloc")))))
+(DTypeSig false "grantImplMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))))
+(DFunDef false "grantImplMethod" ((PVar "gctx") (PVar "pe") (PVar "word") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "word")) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e")))) (arm (PCon "Some" (PVar "mg")) () (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "grantMethodParams") (EVar "gctx")) (EVar "mg")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e")))) (DoExpr (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps2")) (EVar "e2")))))))
 (DTypeSig false "grantMethodParams" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "MethodGrant") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))
 (DFunDef false "grantMethodParams" ((PVar "gctx") (PVar "mg") (PVar "n") (PVar "ps") (PVar "body")) (EBlock (DoLet false false (PVar "grants") (EApp (EApp (EVar "grantParamPats") (EFieldAccess (EVar "mg") "mgNames")) (EVar "n"))) (DoLet false false (PVar "given") (EApp (EVar "listLen") (EVar "ps"))) (DoExpr (EIf (EBinOp ">=" (EVar "given") (EFieldAccess (EVar "mg") "mgArity")) (ETuple (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "take") (EFieldAccess (EVar "mg") "mgArity")) (EVar "ps")) (EVar "grants")) (EApp (EApp (EVar "drop") (EFieldAccess (EVar "mg") "mgArity")) (EVar "ps"))) (EVar "body")) (EBlock (DoLet false false (PVar "missing") (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EApp (EVar "freshGrantName") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (ELit LUnit)))) (EApp (EApp (EVar "rangeFromCount") (EVar "given")) (EBinOp "-" (EFieldAccess (EVar "mg") "mgArity") (EVar "given"))))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "ps") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EVar "missing"))) (EVar "grants")) (EApp (EApp (EVar "applyExprs") (EVar "body")) (EApp (EApp (EVar "map") (EVar "EVar")) (EVar "missing"))))))))))
 (DTypeSig false "insertGrantArrows" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyCon "Ty")))))
@@ -63279,8 +63252,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "insertGrantArrows" (PWild (PVar "g") (PVar "t")) (EApp (EApp (EVar "grantArrows") (EVar "g")) (EVar "t")))
 (DTypeSig false "grantArrows" (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyCon "Ty"))))
 (DFunDef false "grantArrows" ((PVar "g") (PVar "t")) (EIf (EBinOp "<=" (EVar "g") (ELit (LInt 0))) (EVar "t") (EIf (EVar "otherwise") (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "TyApp") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "List"))) (EVar "None"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "String"))) (EVar "None")))) (EApp (EApp (EVar "grantArrows") (EBinOp "-" (EVar "g") (ELit (LInt 1)))) (EVar "t"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "grantLetBind" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
-(DFunDef false "grantLetBind" ((PVar "gctx") (PVar "params") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (EApp (EApp (EVar "FunClause") (EBinOp "++" (EVar "params") (EVar "ps"))) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "body"))))))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
+(DTypeSig false "grantLetBind" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))))
+(DFunDef false "grantLetBind" ((PVar "gctx") (PVar "pe") (PVar "params") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (EApp (EApp (EVar "FunClause") (EBinOp "++" (EVar "params") (EVar "ps"))) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "body"))))))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "topGrantIds" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "topGrantIds" ((PVar "gctx") (PVar "mid") (PVar "n")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "grantTopKey") (EVar "mid")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsTopIds") "value"))))
 (DTypeSig false "localGrantIds" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))
@@ -63289,24 +63262,24 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "grantParamName" ((PVar "n") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$auth_")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))
 (DTypeSig false "grantParamPats" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "grantParamPats" ((PVar "ids") (PVar "n")) (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EApp (EApp (EVar "PVar") (EApp (EApp (EVar "grantParamName") (EVar "n")) (EVar "i"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "rangeFromCount") (ELit (LInt 0))) (EApp (EVar "listLen") (EVar "ids")))))
-(DTypeSig false "grantExpr" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "grantExpr" ((PVar "gctx") (PVar "e")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "grantExprInner") (EVar "gctx")) (EVar "e"))) (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EVar "st") "gsValueBounds") "value") (arm (PCon "Tip") () (EVar "inner")) (arm PWild () (EMatch (EApp (EApp (EVar "fileValueKey") (EFieldAccess (EFieldAccess (EVar "st") "gsPassingModule") "value")) (EVar "e")) (arm (PCon "Some" (PVar "key")) () (EBlock (DoLet false false (PVar "bounds") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "st") "gsValueBounds") "value")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "result") (PTuple (PVar "ty") (PVar "chain"))) (EApp (EApp (EApp (EApp (EVar "fileBoundValue") (EVar "gctx")) (EVar "chain")) (EVar "ty")) (EVar "result")))) (EVar "inner")) (EVar "bounds"))))) (arm (PCon "None") () (EVar "inner"))))))))
-(DTypeSig false "grantExprInner" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "pats")) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "body"))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PAs "e" (PCon "EApp" PWild PWild))) (EMatch (EApp (EApp (EVar "grantSpine") (EVar "e")) (EListLit)) (arm (PTuple (PCon "EDictAt" (PVar "n") (PVar "ev")) (PVar "args")) () (EMatch (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev")) (arm (PCon "Some" (PVar "occ")) () (EMatch (EFieldAccess (EVar "occ") "goTrailing") (arm (PCon "Some" (PVar "arity")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EVar "EVar") (EVar "n"))) (EVar "arity")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ"))) (EApp (EApp (EVar "map") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "args")))) (arm (PCon "None") () (EApp (EApp (EVar "mapChildren") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "e"))))) (arm (PCon "None") () (EApp (EApp (EVar "mapChildren") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "e"))))) (arm (PTuple (PCon "EMethodAt" (PVar "n") (PVar "seed") (PVar "ev")) (PVar "args")) () (EMatch (EApp (EApp (EApp (EVar "methodGrantUse") (EVar "gctx")) (EVar "n")) (EVar "ev")) (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "arity")) (EVar "grants")) (EApp (EApp (EVar "map") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "args")))) (arm (PCon "LeadingGrants" PWild (PVar "grants")) () (EApp (EApp (EVar "applyExprs") (EApp (EApp (EVar "applyExprs") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "grants"))) (EApp (EApp (EVar "map") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "args")))) (arm (PCon "NoGrants") () (EApp (EApp (EVar "mapChildren") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "e"))))) (arm PWild () (EApp (EApp (EVar "mapChildren") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "e")))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EApp (EApp (EApp (EVar "grantUse") (EVar "gctx")) (EVar "n")) (EVar "ev")))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "EMethodAt" (PVar "n") (PVar "seed") (PVar "ev"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantUse") (EVar "gctx")) (EVar "n")) (EVar "ev")) (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "arity")) (EVar "grants")) (EListLit))) (arm (PCon "LeadingGrants" PWild (PVar "grants")) () (EApp (EApp (EVar "applyExprs") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "grants"))) (arm (PCon "NoGrants") () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev")))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "ELet" (PVar "m") (PVar "r") (PCon "PVar" (PVar "x") (PVar "xloc") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EApp (EApp (EApp (EVar "grantLocalRhs") (EVar "gctx")) (EVar "x")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e1")))) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e2"))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "x") (PVar "clauses") (PVar "site") (PVar "bid")) () (EApp (EApp (EApp (EVar "grantLetBind") (EVar "gctx")) (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EVar "localGrantIds") (EVar "gctx")) (EVar "x"))) (EVar "x"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "x")) (EVar "clauses")) (EVar "site")) (EVar "bid"))))))) (EVar "binds"))) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "body"))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EApp (EVar "grantStmt") (EVar "gctx"))) (EVar "stmts"))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "e")))
-(DTypeSig false "grantStmt" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "DoStmt") (TyCon "DoStmt"))))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoLet" (PVar "m") (PVar "r") (PCon "PVar" (PVar "x") (PVar "xloc") (PVar "bid")) (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EApp (EApp (EApp (EVar "grantLocalRhs") (EVar "gctx")) (EVar "x")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e")))) (EVar "site")))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e"))))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e"))))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e"))) (EVar "site")))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e"))))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e"))))
+(DTypeSig false "grantExpr" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "grantExpr" ((PVar "gctx") (PVar "pe") (PVar "e")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "grantExprInner") (EVar "gctx")) (EVar "pe")) (EVar "e"))) (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EVar "st") "gsValueBounds") "value") (arm (PCon "Tip") () (EVar "inner")) (arm PWild () (EMatch (EApp (EApp (EVar "fileValueKey") (EFieldAccess (EFieldAccess (EVar "st") "gsPassingModule") "value")) (EVar "e")) (arm (PCon "Some" (PVar "key")) () (EBlock (DoLet false false (PVar "bounds") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "st") "gsValueBounds") "value")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "result") (PTuple (PVar "ty") (PVar "chain"))) (EApp (EApp (EApp (EApp (EVar "fileBoundValue") (EVar "gctx")) (EVar "chain")) (EVar "ty")) (EVar "result")))) (EVar "inner")) (EVar "bounds"))))) (arm (PCon "None") () (EVar "inner"))))))))
+(DTypeSig false "grantExprInner" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "pats")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PAs "e" (PCon "EApp" PWild PWild))) (EMatch (EApp (EApp (EVar "grantSpine") (EVar "e")) (EListLit)) (arm (PTuple (PCon "EDictAt" (PVar "n") (PVar "ev")) (PVar "args")) () (EMatch (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev")) (arm (PCon "Some" (PVar "occ")) () (EMatch (EFieldAccess (EVar "occ") "goTrailing") (arm (PCon "Some" (PVar "arity")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EVar "EVar") (EVar "n"))) (EVar "arity")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "args")))) (arm (PCon "None") () (EApp (EApp (EVar "mapChildren") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "e"))))) (arm (PCon "None") () (EApp (EApp (EVar "mapChildren") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "e"))))) (arm (PTuple (PCon "EMethodAt" (PVar "n") (PVar "seed") (PVar "ev")) (PVar "args")) () (EMatch (EApp (EApp (EApp (EApp (EVar "methodGrantUse") (EVar "gctx")) (EVar "pe")) (EVar "n")) (EVar "ev")) (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "arity")) (EVar "grants")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "args")))) (arm (PCon "LeadingGrants" PWild (PVar "grants")) () (EApp (EApp (EVar "applyExprs") (EApp (EApp (EVar "applyExprs") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "grants"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "args")))) (arm (PCon "NoGrants") () (EApp (EApp (EVar "mapChildren") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "e"))))) (arm PWild () (EApp (EApp (EVar "mapChildren") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "e")))))
+(DFunDef false "grantExprInner" ((PVar "gctx") PWild (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EApp (EApp (EApp (EVar "grantUse") (EVar "gctx")) (EVar "n")) (EVar "ev")))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PCon "EMethodAt" (PVar "n") (PVar "seed") (PVar "ev"))) (EMatch (EApp (EApp (EApp (EApp (EVar "methodGrantUse") (EVar "gctx")) (EVar "pe")) (EVar "n")) (EVar "ev")) (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "arity")) (EVar "grants")) (EListLit))) (arm (PCon "LeadingGrants" PWild (PVar "grants")) () (EApp (EApp (EVar "applyExprs") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "grants"))) (arm (PCon "NoGrants") () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev")))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PCon "ELet" (PVar "m") (PVar "r") (PCon "PVar" (PVar "x") (PVar "xloc") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EApp (EApp (EApp (EVar "grantLocalRhs") (EVar "gctx")) (EVar "x")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e1")))) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e2"))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "x") (PVar "clauses") (PVar "site") (PVar "bid")) () (EApp (EApp (EApp (EApp (EVar "grantLetBind") (EVar "gctx")) (EVar "pe")) (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EVar "localGrantIds") (EVar "gctx")) (EVar "x"))) (EVar "x"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "x")) (EVar "clauses")) (EVar "site")) (EVar "bid"))))))) (EVar "binds"))) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EApp (EApp (EVar "grantStmt") (EVar "gctx")) (EVar "pe"))) (EVar "stmts"))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "e")))
+(DTypeSig false "grantStmt" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "DoStmt") (TyCon "DoStmt")))))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoLet" (PVar "m") (PVar "r") (PCon "PVar" (PVar "x") (PVar "xloc") (PVar "bid")) (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EApp (EApp (EApp (EVar "grantLocalRhs") (EVar "gctx")) (EVar "x")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e")))) (EVar "site")))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e"))))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e"))))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e"))) (EVar "site")))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e"))))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e"))))
 (DTypeSig false "grantLocalRhs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "grantLocalRhs" ((PVar "gctx") (PVar "x") (PVar "e")) (EMatch (EApp (EApp (EVar "localGrantIds") (EVar "gctx")) (EVar "x")) (arm (PList) () (EVar "e")) (arm (PVar "ids") () (EApp (EApp (EVar "prependLocalDicts") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EApp (EVar "grantParamName") (EVar "x")) (EVar "i")))) (EApp (EApp (EVar "rangeFromCount") (ELit (LInt 0))) (EApp (EVar "listLen") (EVar "ids"))))) (EVar "e")))))
 (DTypeSig false "grantSpine" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
@@ -63315,8 +63288,10 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "grantSpine" ((PVar "e") (PVar "args")) (ETuple (EVar "e") (EVar "args")))
 (DTypeSig false "grantUse" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Expr")))))
 (DFunDef false "grantUse" ((PVar "gctx") (PVar "n") (PVar "ev")) (EBlock (DoLet false false (PVar "head") (EIf (EApp (EApp (EVar "isGrantOnlyEv") (EVar "gctx")) (EVar "ev")) (EApp (EVar "EVar") (EVar "n")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")))) (DoExpr (EMatch (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev")) (arm (PCon "None") () (EVar "head")) (arm (PCon "Some" (PVar "occ")) () (EMatch (EFieldAccess (EVar "occ") "goTrailing") (arm (PCon "Some" (PVar "arity")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EVar "EVar") (EVar "n"))) (EVar "arity")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ"))) (EListLit))) (arm (PCon "None") () (EApp (EApp (EVar "applyExprs") (EVar "head")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ"))))))))))
-(DTypeSig false "methodGrantUse" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "MethodGrantUse")))))
-(DFunDef false "methodGrantUse" ((PVar "gctx") (PVar "n") (PVar "ev")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EVar "methodCellOf") (EVar "gctx")) (EVar "ev"))) (DoLet false false (PVar "recorded") (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev"))) (DoLet false false (PVar "use") (EMatch (EFieldAccess (EFieldAccess (EVar "cell") "ecTag") "value") (arm (PCon "RLocal" (PVar "sym") PWild) () (EMatch (EApp (EVar "standaloneOcc") (EVar "recorded")) (arm (PCon "Some" (PTuple (PVar "arity") (PVar "occ"))) () (EApp (EApp (EVar "LeadingGrants") (EVar "arity")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "n") (EVar "sym"))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsTakers") "value")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "grant pass: '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is routed to a standalone binding that takes authority grants, but inference did not type this use as that binding")))) (EVar "NoGrants"))))) (arm PWild () (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EFieldAccess (EFieldAccess (EVar "cell") "ecIface") "value")) (EVar "n")) (arm (PCon "None") () (EVar "NoGrants")) (arm (PCon "Some" (PVar "mg")) () (EMatch (EVar "recorded") (arm (PCon "Some" (PVar "occ")) () (EIf (EFieldAccess (EVar "occ") "goStandalone") (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "bottomGrant"))) (EFieldAccess (EVar "mg") "mgNames"))) (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EApp (EApp (EVar "methodTerms") (EVar "gctx")) (EVar "n")) (EVar "mg")) (EVar "occ"))))) (arm (PCon "None") () (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "bottomGrant"))) (EFieldAccess (EVar "mg") "mgNames")))))))))) (DoLet false false PWild (EMatch (EVar "use") (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cell") "ecArity")) (EApp (EVar "Some") (EBinOp "+" (EVar "arity") (EApp (EVar "listLen") (EVar "grants")))))) (arm (PCon "LeadingGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cell") "ecArity")) (EApp (EVar "Some") (EBinOp "+" (EVar "arity") (EApp (EVar "listLen") (EVar "grants")))))) (arm (PCon "NoGrants") () (ELit LUnit)))) (DoExpr (EVar "use"))))
+(DTypeSig false "methodGrantUse" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "MethodGrantUse"))))))
+(DFunDef false "methodGrantUse" ((PVar "gctx") (PVar "pe") (PVar "n") (PVar "ev")) (EBlock (DoLet false false (PTuple (PVar "iface") (PVar "tag") PWild) (EApp (EApp (EVar "passMethodOf") (EVar "pe")) (EVar "ev"))) (DoLet false false (PVar "recorded") (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev"))) (DoLet false false (PVar "use") (EMatch (EVar "tag") (arm (PCon "RLocal" (PVar "sym") PWild) () (EMatch (EApp (EVar "standaloneOcc") (EVar "recorded")) (arm (PCon "Some" (PTuple (PVar "arity") (PVar "occ"))) () (EApp (EApp (EVar "LeadingGrants") (EVar "arity")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "n") (EVar "sym"))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsTakers") "value")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "grant pass: '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is routed to a standalone binding that takes authority grants, but inference did not type this use as that binding")))) (EVar "NoGrants"))))) (arm PWild () (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "iface")) (EVar "n")) (arm (PCon "None") () (EVar "NoGrants")) (arm (PCon "Some" (PVar "mg")) () (EMatch (EVar "recorded") (arm (PCon "Some" (PVar "occ")) () (EIf (EFieldAccess (EVar "occ") "goStandalone") (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "bottomGrant"))) (EFieldAccess (EVar "mg") "mgNames"))) (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EApp (EApp (EVar "methodTerms") (EVar "gctx")) (EVar "n")) (EVar "mg")) (EVar "occ"))))) (arm (PCon "None") () (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "bottomGrant"))) (EFieldAccess (EVar "mg") "mgNames")))))))))) (DoLet false false PWild (EMatch (EVar "use") (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EVar "setCellArity") (EVar "gctx")) (EVar "ev")) (EBinOp "+" (EVar "arity") (EApp (EVar "listLen") (EVar "grants"))))) (arm (PCon "LeadingGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EVar "setCellArity") (EVar "gctx")) (EVar "ev")) (EBinOp "+" (EVar "arity") (EApp (EVar "listLen") (EVar "grants"))))) (arm (PCon "NoGrants") () (ELit LUnit)))) (DoExpr (EVar "use"))))
+(DTypeSig false "setCellArity" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvId") (TyFun (TyCon "Int") (TyCon "Unit")))))
+(DFunDef false "setCellArity" ((PVar "gctx") (PVar "ev") (PVar "arity")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EVar "methodCellOf") (EVar "gctx")) (EVar "ev"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cell") "ecArity")) (EApp (EVar "Some") (EVar "arity"))))))
 (DTypeSig false "standaloneOcc" (TyFun (TyApp (TyCon "Option") (TyCon "GrantOcc")) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "GrantOcc")))))
 (DFunDef false "standaloneOcc" ((PCon "Some" (PVar "occ"))) (EMatch (ETuple (EFieldAccess (EVar "occ") "goStandalone") (EFieldAccess (EVar "occ") "goTrailing")) (arm (PTuple (PCon "True") (PCon "Some" (PVar "arity"))) () (EApp (EVar "Some") (ETuple (EVar "arity") (EVar "occ")))) (arm PWild () (EVar "None"))))
 (DFunDef false "standaloneOcc" ((PCon "None")) (EVar "None"))
@@ -63370,8 +63345,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "fileBoundValue" ((PVar "gctx") (PVar "chain") (PVar "ty") (PVar "e")) (EIf (EApp (EVar "hasFileBoundValue") (EVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EBlock (DoLet false false (PVar "fn") (EApp (EApp (EVar "freshGrantName") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (ELit LUnit))) (DoLet false false (PVar "arg") (EApp (EApp (EVar "freshGrantName") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "fn")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (EVar "arg")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EApp (EVar "fileBoundExpr") (EVar "gctx")) (EVar "chain")) (EVar "row")) (EApp (EApp (EApp (EApp (EVar "fileBoundValue") (EVar "gctx")) (EVar "chain")) (EVar "result")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "fn"))) (EApp (EVar "EVar") (EVar "arg")))))))))) (arm (PCon "TQual" (PVar "inner") PWild) () (EApp (EApp (EApp (EApp (EVar "fileBoundValue") (EVar "gctx")) (EVar "chain")) (EVar "inner")) (EVar "e"))) (arm PWild () (EVar "e"))) (EVar "e")))
 (DTypeSig false "recordFileBound" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Expr") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
 (DFunDef false "recordFileBound" ((PVar "mctx") (PVar "body") (PVar "row")) (EBlock (DoLet false false (PTuple (PVar "atoms") (PVar "tails")) (EApp (EVar "rowFlat") (EVar "row"))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "tails")) (EApp (EApp (EVar "anyList") (EVar "narrowFileAtom")) (EVar "atoms"))) (EMatch (EApp (EVar "fileBodyLoc") (EVar "body")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "loc")) () (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "grants")) (DoLet false false (PVar "key") (EApp (EApp (EVar "fileBoundSite") (EApp (EApp (EVar "scopeFileBoundModule") (EVar "mctx")) (ELit LUnit))) (EVar "loc"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsBounds")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (ETuple (EVar "row") (EApp (EApp (EVar "grantChainAt") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "captureScope") (EVar "mctx")) (ELit LUnit)))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "st") "gsBounds") "value"))))) (EFieldAccess (EFieldAccess (EVar "st") "gsBounds") "value"))))))) (ELit LUnit)))))
-(DTypeSig false "grantBody" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "grantBody" ((PVar "gctx") (PVar "body")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "body"))) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsBounds") "value") (arm (PCon "Tip") () (EVar "inner")) (arm (PVar "boundsBySite") () (EBlock (DoLet false false (PVar "bounds") (EMatch (EApp (EVar "fileBodyLoc") (EVar "body")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "fileBoundSite") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsPassingModule") "value")) (EVar "loc"))) (EVar "boundsBySite")))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "result") (PTuple (PVar "row") (PVar "chain"))) (EApp (EApp (EApp (EApp (EVar "fileBoundExpr") (EVar "gctx")) (EVar "chain")) (EVar "row")) (EVar "result")))) (EVar "inner")) (EVar "bounds")))))))))
+(DTypeSig false "grantBody" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "grantBody" ((PVar "gctx") (PVar "pe") (PVar "body")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsBounds") "value") (arm (PCon "Tip") () (EVar "inner")) (arm (PVar "boundsBySite") () (EBlock (DoLet false false (PVar "bounds") (EMatch (EApp (EVar "fileBodyLoc") (EVar "body")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "fileBoundSite") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsPassingModule") "value")) (EVar "loc"))) (EVar "boundsBySite")))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "result") (PTuple (PVar "row") (PVar "chain"))) (EApp (EApp (EApp (EApp (EVar "fileBoundExpr") (EVar "gctx")) (EVar "chain")) (EVar "row")) (EVar "result")))) (EVar "inner")) (EVar "bounds")))))))))
 (DTypeSig false "narrowFileAtom" (TyFun (TyCon "Atom") (TyCon "Bool")))
 (DFunDef false "narrowFileAtom" ((PVar "atom")) (EMatch (EApp (EVar "atomLabelOf") (EVar "atom")) (arm (PCon "EffLabel" (PVar "label") (PCon "OriginBuiltin")) () (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "label") (ELit (LString "FileRead"))) (EBinOp "==" (EVar "label") (ELit (LString "FileWrite")))) (EApp (EVar "not") (EApp (EVar "authIsTop") (EApp (EVar "atomAuth") (EVar "atom")))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "recordClauseFileBound" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
@@ -63392,11 +63367,11 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "grantParamFor" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "grantParamFor" ((PVar "gctx") (PList) PWild) (EVar "None"))
 (DFunDef false "grantParamFor" ((PVar "gctx") (PCons (PVar "b") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PTuple (PVar "name") (PVar "ids")) (EMatch (EVar "b") (arm (PCon "TopGrantBinder" (PVar "mid") (PVar "n")) () (ETuple (EVar "n") (EApp (EApp (EApp (EVar "topGrantIds") (EVar "gctx")) (EVar "mid")) (EVar "n")))) (arm (PCon "LocalGrantBinder" (PVar "n")) () (ETuple (EVar "n") (EApp (EApp (EVar "localGrantIds") (EVar "gctx")) (EVar "n")))) (arm (PCon "BodyGrantBinder" (PVar "n") (PVar "bound")) () (ETuple (EVar "n") (EVar "bound"))))) (DoExpr (EMatch (EApp (EApp (EVar "indexOfId") (EVar "i")) (EVar "ids")) (arm (PCon "Some" (PVar "k")) () (EApp (EVar "Some") (EApp (EApp (EVar "grantParamName") (EVar "name")) (EVar "k")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "grantParamFor") (EVar "gctx")) (EVar "rest")) (EVar "i")))))))
-(DTypeSig false "rewriteBinopExpr" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "idx") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "ev"))) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EVar "idx")) (EVar "ev")) (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "ev"))) (arm (PCon "RScalar" (PVar "tag")) () (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "ev"))) (EApp (EApp (EVar "tyConBuiltin") (EVar "tag")) (EVar "None")))) (arm (PVar "route") () (EApp (EApp (EApp (EApp (EApp (EVar "binopMethodApp") (EVar "mctx")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "route")))))
-(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "idx") (PCon "ENumLit" (PVar "n") (PVar "ev") PWild)) (EMatch (EApp (EApp (EVar "evSiteLitIn") (EVar "idx")) (EVar "ev")) (arm (PTuple (PCon "Some" (PVar "f")) PWild) () (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PTuple (PCon "None") (PVar "dref")) () (EMatch (EVar "dref") (arm (PCon "RNone") () (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") ((GBool (EApp (EApp (EVar "fixedWidthLiteralFits") (EVar "route")) (EVar "n")))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") ((GBool (EApp (EApp (EVar "u64LiteralFits") (EVar "route")) (EVar "n")))) (EApp (EVar "ELit") (EApp (EApp (EVar "LU64") (EBinOp "/" (EVar "n") (ELit (LInt 4294967296)))) (EBinOp "%" (EVar "n") (ELit (LInt 4294967296)))))) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EApp (EVar "isI64Head") (EApp (EVar "literalRouteHead") (EVar "word"))))) (EBlock (DoLet false false (PVar "halves") (EApp (EVar "int64Halves") (EVar "n"))) (DoExpr (EApp (EVar "ELit") (EApp (EApp (EVar "LI64") (EApp (EVar "fst") (EVar "halves"))) (EApp (EVar "snd") (EVar "halves"))))))) (arm (PVar "route") () (EBlock (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (ELit (LString "fromInt"))) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit (LString "fromInt")))) (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))))))))))
-(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "idx") (PCon "EUnOp" (PVar "op") (PVar "e") (PVar "ev"))) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EVar "idx")) (EVar "ev")) (arm (PCon "RNone") () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "ev"))) (arm (PCon "RScalar" PWild) () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "ev"))) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isI32Head") (EApp (EVar "literalRouteHead") (EVar "word")))) (EApp (EVar "isSome") (EApp (EVar "negatedI32Lit") (EVar "e")))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EVar "negatedI32Lit") (EVar "e")))))) (arm (PVar "route") () (EApp (EApp (EApp (EApp (EVar "unopMethodApp") (EVar "mctx")) (EVar "op")) (EVar "e")) (EVar "route")))))
-(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "idx") (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") PWild)) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EVar "idx")) (EVar "ev")) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EApp (EVar "isI64Head") (EApp (EVar "literalRouteHead") (EVar "word"))))) (EApp (EVar "ELit") (EApp (EApp (EVar "LI64") (EVar "hi")) (EVar "lo")))) (arm PWild () (EApp (EVar "ELit") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))))
+(DTypeSig false "rewriteBinopExpr" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "pe") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "ev"))) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev")) (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "ev"))) (arm (PCon "RScalar" (PVar "tag")) () (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "ev"))) (EApp (EApp (EVar "tyConBuiltin") (EVar "tag")) (EVar "None")))) (arm (PVar "route") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "binopMethodApp") (EVar "mctx")) (EVar "pe")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "route")))))
+(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "pe") (PCon "ENumLit" (PVar "n") (PVar "ev") PWild)) (EMatch (EApp (EApp (EVar "evSiteLitIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev")) (arm (PTuple (PCon "Some" (PVar "f")) PWild) () (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PTuple (PCon "None") (PVar "dref")) () (EMatch (EVar "dref") (arm (PCon "RNone") () (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") ((GBool (EApp (EApp (EVar "fixedWidthLiteralFits") (EVar "route")) (EVar "n")))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") ((GBool (EApp (EApp (EVar "u64LiteralFits") (EVar "route")) (EVar "n")))) (EApp (EVar "ELit") (EApp (EApp (EVar "LU64") (EBinOp "/" (EVar "n") (ELit (LInt 4294967296)))) (EBinOp "%" (EVar "n") (ELit (LInt 4294967296)))))) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EApp (EVar "isI64Head") (EApp (EVar "literalRouteHead") (EVar "word"))))) (EBlock (DoLet false false (PVar "halves") (EApp (EVar "int64Halves") (EVar "n"))) (DoExpr (EApp (EVar "ELit") (EApp (EApp (EVar "LI64") (EApp (EVar "fst") (EVar "halves"))) (EApp (EVar "snd") (EVar "halves"))))))) (arm (PVar "route") () (EBlock (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (ELit (LString "fromInt"))) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit (LString "fromInt")))) (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))))))))))
+(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "pe") (PCon "EUnOp" (PVar "op") (PVar "e") (PVar "ev"))) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev")) (arm (PCon "RNone") () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "ev"))) (arm (PCon "RScalar" PWild) () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "ev"))) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isI32Head") (EApp (EVar "literalRouteHead") (EVar "word")))) (EApp (EVar "isSome") (EApp (EVar "negatedI32Lit") (EVar "e")))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EVar "negatedI32Lit") (EVar "e")))))) (arm (PVar "route") () (EApp (EApp (EApp (EApp (EApp (EVar "unopMethodApp") (EVar "mctx")) (EVar "pe")) (EVar "op")) (EVar "e")) (EVar "route")))))
+(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "pe") (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") PWild)) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev")) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EApp (EVar "isI64Head") (EApp (EVar "literalRouteHead") (EVar "word"))))) (EApp (EVar "ELit") (EApp (EApp (EVar "LI64") (EVar "hi")) (EVar "lo")))) (arm PWild () (EApp (EVar "ELit") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))))
 (DFunDef false "rewriteBinopExpr" ((PVar "mctx") PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "negatedI32Lit" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "negatedI32Lit" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "negatedI32Lit") (EVar "e")))
@@ -63416,18 +63391,18 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "binopRouteSplit" (TyFun (TyCon "Route") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "binopRouteSplit" ((PCon "RKey" (PVar "tag") (PVar "reqs") (PVar "sups"))) (ETuple (EApp (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EVar "sups")) (EVar "reqs")))
 (DFunDef false "binopRouteSplit" ((PVar "r")) (ETuple (EVar "r") (EListLit)))
-(DTypeSig false "binopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr")))))))
-(DFunDef false "binopMethodApp" ((PVar "mctx") (PVar "op") (PVar "l") (PVar "r") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "eq"))) (EApp (EVar "binopDispatchMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoLet false false (PVar "call") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 2))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "l"))) (EVar "r"))) (DoExpr (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "call")) (EVar "call")))))
+(DTypeSig false "binopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr"))))))))
+(DFunDef false "binopMethodApp" ((PVar "mctx") (PVar "pe") (PVar "op") (PVar "l") (PVar "r") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "eq"))) (EApp (EVar "binopDispatchMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoLet false false (PVar "call") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 2))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "l"))) (EVar "r"))) (DoExpr (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "call")) (EVar "call")))))
 (DTypeSig false "binopDispatchMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "binopDispatchMethod" ((PVar "op")) (EMatch (EApp (EVar "arithDispatchMethod") (EVar "op")) (arm (PCon "Some" (PVar "method")) () (EApp (EVar "Some") (EVar "method"))) (arm (PCon "None") () (EApp (EVar "binopMethod") (EVar "op")))))
-(DTypeSig false "unopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr"))))))
-(DFunDef false "unopMethodApp" ((PVar "mctx") (PVar "op") (PVar "e") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "negate"))) (EApp (EVar "unopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "e")))))
-(DTypeSig false "dictPassDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))))
+(DTypeSig false "unopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr")))))))
+(DFunDef false "unopMethodApp" ((PVar "mctx") (PVar "pe") (PVar "op") (PVar "e") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "negate"))) (EApp (EVar "unopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "e")))))
+(DTypeSig false "dictPassDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))))
 (DFunDef false "dictPassDecl" ((PVar "mctx") PWild (PVar "names") PWild (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EApp (EApp (EVar "dictArityOf") (EVar "mctx")) (EVar "n"))) (EVar "pats"))) (EVar "body")) (EVar "site")) (EVar "bid")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "pats")) (EVar "body")) (EVar "site")) (EVar "bid")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "dictPassDecl" ((PVar "mctx") PWild (PVar "names") PWild (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "dictPassLetBind") (EVar "mctx")) (EVar "names"))) (EVar "binds"))))
-(DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "idx") PWild PWild (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "implOrigin" None) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EApp (EApp (EApp (EVar "implDictPassMethods") (EVar "mctx")) (EVar "idx")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "implOrigin"))))) (EApp (EVar "listLen") (EVar "reqs"))) (EVar "methods"))))))
+(DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "pe") PWild PWild (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "implOrigin" None) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EApp (EApp (EApp (EVar "implDictPassMethods") (EVar "mctx")) (EVar "pe")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "implOrigin"))))) (EApp (EVar "listLen") (EVar "reqs"))) (EVar "methods"))))))
 (DFunDef false "dictPassDecl" ((PVar "mctx") PWild PWild PWild (PAs "d" (PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "ifaceDictPassMethod") (EVar "typarams"))) (EVar "methods"))))))
-(DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "idx") (PVar "names") (PVar "ret") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "idx")) (EVar "names")) (EVar "ret")) (EVar "d"))))
+(DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "pe") (PVar "names") (PVar "ret") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "pe")) (EVar "names")) (EVar "ret")) (EVar "d"))))
 (DFunDef false "dictPassDecl" ((PVar "mctx") PWild PWild PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "dictPassLetBind" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "dictPassLetBind" ((PVar "mctx") (PVar "names") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "prependDictClause") (EVar "n")) (EApp (EApp (EVar "dictArityOf") (EVar "mctx")) (EVar "n")))) (EVar "clauses"))) (EVar "site")) (EVar "bid")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EVar "site")) (EVar "bid")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -63440,14 +63415,14 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "ifaceDictPassDefault" ((PVar "n") (PVar "ty") (PVar "pats") (PVar "body") (PVar "mloc") (PVar "k")) (EIf (EBinOp ">" (EVar "k") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EVar "k")) (EVar "pats"))) (EVar "body")))) (EVar "mloc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EVar "body")))) (EVar "mloc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "methodDictArityOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "methodDictArityOf" ((PVar "mctx") (PVar "key")) (EApp (EVar "listLen") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "lookupMethodPredicateSlots") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodPredicateSlotsRef") "value")))))
-(DTypeSig false "implDictPassMethods" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ImplMethod"))))))))
-(DFunDef false "implDictPassMethods" ((PVar "mctx") (PVar "idx") (PVar "iface") (PVar "nReq") (PVar "methods")) (EBlock (DoLet false false (PVar "users") (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "clauseImplDictUser") (EVar "mctx")) (EVar "idx")) (EVar "iface")) (EVar "nReq"))) (EVar "methods")))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "prependImplDictIfUser") (EVar "mctx")) (EVar "iface")) (EVar "nReq")) (EVar "users"))) (EVar "methods")))))
-(DTypeSig false "clauseImplDictUser" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Int") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "clauseImplDictUser" ((PVar "mctx") (PVar "idx") (PVar "iface") (PVar "nReq") (PCon "ImplMethod" (PVar "n") PWild (PVar "body"))) (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EVar "usesImplDict") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "idx")) (EVar "n")) (EApp (EApp (EApp (EVar "implMethodDictArity") (EVar "mctx")) (EVar "iface")) (EVar "n"))) (EVar "nReq")) (EVar "body")) (EListLit (EVar "n")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "implDictPassMethods" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ImplMethod"))))))))
+(DFunDef false "implDictPassMethods" ((PVar "mctx") (PVar "pe") (PVar "iface") (PVar "nReq") (PVar "methods")) (EBlock (DoLet false false (PVar "users") (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "clauseImplDictUser") (EVar "mctx")) (EVar "pe")) (EVar "iface")) (EVar "nReq"))) (EVar "methods")))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "prependImplDictIfUser") (EVar "mctx")) (EVar "iface")) (EVar "nReq")) (EVar "users"))) (EVar "methods")))))
+(DTypeSig false "clauseImplDictUser" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Int") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "clauseImplDictUser" ((PVar "mctx") (PVar "pe") (PVar "iface") (PVar "nReq") (PCon "ImplMethod" (PVar "n") PWild (PVar "body"))) (EIf (EApp (EApp (EApp (EApp (EApp (EVar "usesImplDict") (EVar "pe")) (EVar "n")) (EApp (EApp (EApp (EVar "implMethodDictArity") (EVar "mctx")) (EVar "iface")) (EVar "n"))) (EVar "nReq")) (EVar "body")) (EListLit (EVar "n")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "prependImplDictIfUser" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod")))))))
 (DFunDef false "prependImplDictIfUser" ((PVar "mctx") (PVar "iface") (PVar "nReq") (PVar "users") (PCon "ImplMethod" (PVar "n") (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EApp (EVar "implMethodDictArity") (EVar "mctx")) (EVar "iface")) (EVar "n"))) (DoLet false false (PVar "implPats") (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "users")) (EApp (EApp (EApp (EVar "dictParamsFrom") (EVar "n")) (EVar "k")) (EVar "nReq")) (EListLit))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "k") (ELit (LInt 0))) (EApp (EVar "isEmptyL") (EVar "implPats"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "pats")) (EVar "body")) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EVar "k")) (EVar "implPats")) (EVar "pats"))) (EVar "body"))))))
-(DTypeSig false "usesImplDict" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyCon "Bool"))))))))
-(DFunDef false "usesImplDict" ((PVar "gctx") (PVar "idx") (PVar "mname") (PVar "methodArity") (PVar "nReq") (PVar "body")) (EApp (EApp (EVar "anyMember") (EApp (EApp (EApp (EVar "bodyRDictNames") (EVar "gctx")) (EVar "idx")) (EVar "body"))) (EApp (EApp (EApp (EVar "implDictNames") (EVar "mname")) (EVar "methodArity")) (EVar "nReq"))))
+(DTypeSig false "usesImplDict" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyCon "Bool")))))))
+(DFunDef false "usesImplDict" ((PVar "pe") (PVar "mname") (PVar "methodArity") (PVar "nReq") (PVar "body")) (EApp (EApp (EVar "anyMember") (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "body"))) (EApp (EApp (EApp (EVar "implDictNames") (EVar "mname")) (EVar "methodArity")) (EVar "nReq"))))
 (DTypeSig false "implDictNames" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "implDictNames" ((PVar "mname") (PVar "methodArity") (PVar "nReq")) (EApp (EApp (EVar "map") (EApp (EVar "dictParamName") (EVar "mname"))) (EApp (EApp (EVar "rangeFromCount") (EVar "methodArity")) (EVar "nReq"))))
 (DTypeSig false "implMethodDictArity" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyCon "Int")))))
@@ -63457,10 +63432,11 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "methodDictArityAtOrigin" ((PVar "mctx") PWild (PVar "key")) (EApp (EApp (EVar "methodDictArityOf") (EVar "mctx")) (EVar "key")))
 (DTypeSig false "rangeFromCount" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "rangeFromCount" ((PVar "start") (PVar "count")) (EIf (EBinOp "<=" (EVar "count") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EVar "start") (EApp (EApp (EVar "rangeFromCount") (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EBinOp "-" (EVar "count") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "bodyRDictNames" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "bodyRDictNames" ((PVar "gctx") (PVar "idx") (PVar "e")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "siteRDictName")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e"))) (EApp (EApp (EVar "flatMap") (EVar "siteRDictNamesL")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))))
-(DTypeSig false "siteRDictName" (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "siteRDictName" ((PVar "r")) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "RDict" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "RDictFwd" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "RProj" (PVar "inner") PWild) () (EApp (EVar "routeRDictName") (EVar "inner"))) (arm PWild () (EListLit))))
+(DTypeSig false "siteRDictName" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "siteRDictName" ((PCon "RDict" (PVar "d"))) (EListLit (EVar "d")))
+(DFunDef false "siteRDictName" ((PCon "RDictFwd" (PVar "d"))) (EListLit (EVar "d")))
+(DFunDef false "siteRDictName" ((PCon "RProj" (PVar "inner") PWild)) (EApp (EVar "routeRDictName") (EVar "inner")))
+(DFunDef false "siteRDictName" (PWild) (EListLit))
 (DTypeSig false "siteRDictNamesL" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "siteRDictNamesL" ((PVar "rs")) (EApp (EApp (EVar "flatMap") (EVar "routeRDictName")) (EVar "rs")))
 (DTypeSig false "routeRDictName" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
@@ -63469,95 +63445,51 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "routeRDictName" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "routeRDictName")) (EVar "reqs")) (EApp (EApp (EVar "flatMap") (EVar "routeRDictName")) (EVar "sups"))))
 (DFunDef false "routeRDictName" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "routeRDictName") (EVar "r")))
 (DFunDef false "routeRDictName" (PWild) (EListLit))
-(DTypeSig false "collectMethodSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EMethodAt" PWild PWild (PVar "ev"))) (EListLit (EFieldAccess (EApp (EApp (EVar "methodCellOf") (EVar "gctx")) (EVar "ev")) "ecTag")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "f")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "x"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ELam" PWild (PVar "b"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "b")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e1")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e2"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "letBindSites") (EVar "gctx"))) (EVar "binds")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "body"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EMatch" (PVar "e") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EVar "armSites") (EVar "gctx"))) (EVar "arms"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "c")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "t"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EBinOp" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "l")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "r"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EUnOp" PWild (PVar "e") PWild)) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EInfix" PWild (PVar "l") (PVar "r"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "l")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "r"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EFieldAccess" (PVar "e") PWild PWild)) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ETuple" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "collectMethodSites") (EVar "gctx"))) (EVar "es")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "collectMethodSites") (EVar "gctx"))) (EVar "es")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "collectMethodSites") (EVar "gctx"))) (EVar "es")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "a")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "b"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "a")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "b"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "a"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "b"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "i"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "doStmtSites") (EVar "gctx"))) (EVar "stmts")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldAssignSites") (EVar "gctx"))) (EVar "fs")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ERecordUpdate" (PVar "e") (PVar "fs") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldAssignSites") (EVar "gctx"))) (EVar "fs"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldAssignSites") (EVar "gctx"))) (EVar "fs"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") PWild) (EListLit))
-(DTypeSig false "letBindSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "letBindSites" ((PVar "gctx") (PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "funClauseSites") (EVar "gctx"))) (EVar "clauses")))
-(DTypeSig false "funClauseSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "funClauseSites" ((PVar "gctx") (PCon "FunClause" PWild (PVar "body"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "body")))
-(DTypeSig false "armSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "armSites" ((PVar "gctx") (PCon "Arm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "guardSites") (EVar "gctx"))) (EVar "guards")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "body"))))
-(DTypeSig false "guardSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "guardSites" ((PVar "gctx") (PCon "GBool" (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "guardSites" ((PVar "gctx") (PCon "GBind" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DTypeSig false "doStmtSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "doStmtSites" ((PVar "gctx") (PCon "DoExpr" (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "doStmtSites" ((PVar "gctx") (PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "doStmtSites" ((PVar "gctx") (PCon "DoBind" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "doStmtSites" ((PVar "gctx") (PCon "DoAssign" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "doStmtSites" ((PVar "gctx") (PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DTypeSig false "fieldAssignSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "FieldAssign") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "fieldAssignSites" ((PVar "gctx") (PCon "FieldAssign" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DTypeSig false "collectDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EDictAt" PWild (PVar "ev"))) (EListLit (EApp (EApp (EVar "evDictRoutesIn") (EVar "idx")) (EVar "ev"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") PWild (PCon "EMethodAt" PWild PWild (PVar "ev"))) (EApp (EVar "methodCellDicts") (EApp (EApp (EVar "methodCellOf") (EVar "gctx")) (EVar "ev"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "f")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "x"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ELam" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "b")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e1")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e2"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "letBindDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "binds")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "body"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EMatch" (PVar "e") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "armDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "arms"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "c")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "t"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EBinOp" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "l")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "r"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EUnOp" PWild (PVar "e") PWild)) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EInfix" PWild (PVar "l") (PVar "r"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "l")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "r"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EFieldAccess" (PVar "e") PWild PWild)) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ETuple" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "es")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "es")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "es")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "a")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "b"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "a")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "b"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "a"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "b"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "i"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "doStmtDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "stmts")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "fieldAssignDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "fs")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ERecordUpdate" (PVar "e") (PVar "fs") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "fieldAssignDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "fs"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "fieldAssignDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "fs"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") PWild PWild) (EListLit))
-(DTypeSig false "letBindDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "letBindDictSites" ((PVar "gctx") (PVar "idx") (PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "funClauseDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "clauses")))
-(DTypeSig false "funClauseDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "funClauseDictSites" ((PVar "gctx") (PVar "idx") (PCon "FunClause" PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "body")))
-(DTypeSig false "armDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "armDictSites" ((PVar "gctx") (PVar "idx") (PCon "Arm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "guardDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "guards")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "body"))))
-(DTypeSig false "guardDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "guardDictSites" ((PVar "gctx") (PVar "idx") (PCon "GBool" (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "guardDictSites" ((PVar "gctx") (PVar "idx") (PCon "GBind" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DTypeSig false "doStmtDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "doStmtDictSites" ((PVar "gctx") (PVar "idx") (PCon "DoExpr" (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "doStmtDictSites" ((PVar "gctx") (PVar "idx") (PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "doStmtDictSites" ((PVar "gctx") (PVar "idx") (PCon "DoBind" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "doStmtDictSites" ((PVar "gctx") (PVar "idx") (PCon "DoAssign" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "doStmtDictSites" ((PVar "gctx") (PVar "idx") (PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DTypeSig false "fieldAssignDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "FieldAssign") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "fieldAssignDictSites" ((PVar "gctx") (PVar "idx") (PCon "FieldAssign" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
+(DTypeSig false "collectDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EDictAt" PWild (PVar "ev"))) (EApp (EVar "siteRDictNamesL") (EApp (EApp (EVar "evDictRoutesIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EMethodAt" PWild PWild (PVar "ev"))) (EBlock (DoLet false false (PTuple PWild (PVar "tag") (PVar "dicts")) (EApp (EApp (EVar "passMethodOf") (EVar "pe")) (EVar "ev"))) (DoExpr (EBinOp "++" (EApp (EVar "siteRDictName") (EVar "tag")) (EApp (EVar "siteRDictNamesL") (EVar "dicts"))))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "f")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "x"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELam" PWild (PVar "b"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "b")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e1")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e2"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "letBindDictSites") (EVar "pe"))) (EVar "binds")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "body"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EMatch" (PVar "e") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EVar "armDictSites") (EVar "pe"))) (EVar "arms"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "c")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "t"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EBinOp" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "l")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "r"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EUnOp" PWild (PVar "e") PWild)) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EInfix" PWild (PVar "l") (PVar "r"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "l")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "r"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EFieldAccess" (PVar "e") PWild PWild)) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ETuple" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "collectDictSites") (EVar "pe"))) (EVar "es")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "collectDictSites") (EVar "pe"))) (EVar "es")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "collectDictSites") (EVar "pe"))) (EVar "es")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "a")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "b"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "a")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "b"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "a"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "b"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "i"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "doStmtDictSites") (EVar "pe"))) (EVar "stmts")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERecordUpdate" (PVar "e") (PVar "fs") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs"))))
+(DFunDef false "collectDictSites" (PWild PWild) (EListLit))
+(DTypeSig false "letBindDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "letBindDictSites" ((PVar "pe") (PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "funClauseDictSites") (EVar "pe"))) (EVar "clauses")))
+(DTypeSig false "funClauseDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "funClauseDictSites" ((PVar "pe") (PCon "FunClause" PWild (PVar "body"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "body")))
+(DTypeSig false "armDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "armDictSites" ((PVar "pe") (PCon "Arm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "guardDictSites") (EVar "pe"))) (EVar "guards")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "body"))))
+(DTypeSig false "guardDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "guardDictSites" ((PVar "pe") (PCon "GBool" (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "guardDictSites" ((PVar "pe") (PCon "GBind" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DTypeSig false "doStmtDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "doStmtDictSites" ((PVar "pe") (PCon "DoExpr" (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "doStmtDictSites" ((PVar "pe") (PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "doStmtDictSites" ((PVar "pe") (PCon "DoBind" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "doStmtDictSites" ((PVar "pe") (PCon "DoAssign" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "doStmtDictSites" ((PVar "pe") (PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DTypeSig false "fieldAssignDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "FieldAssign") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "fieldAssignDictSites" ((PVar "pe") (PCon "FieldAssign" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
 (DTypeSig false "dictArityOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "dictArityOf" ((PVar "mctx") (PVar "n")) (EApp (EVar "listLen") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "lookupPredicateSlots") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsIdxRef") "value")))))
 (DTypeSig false "dictParams" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Pat")))))
@@ -66595,7 +66527,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "eqStr" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "chain_key") ((mem "chainGraphKey" false) (mem "constrainedSigName" false) (mem "isConstrainedTy" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "EvIndex" false) (mem "evIndexOf" false) (mem "evDictRoutesIn" false) (mem "evSiteRouteIn" false) (mem "evSiteLitIn" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "EvIndex" false) (mem "evIndexOf" false) (mem "evDictRoutesIn" false) (mem "evSiteRouteIn" false) (mem "evSiteLitIn" false) (mem "evidenceLookup" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "validateDispositionTable" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "hostLabels" false) (mem "ioJoinGrants" false) (mem "profileName" false))))
 (DUse false (UseGroup ("types" "ffi_bindings") ((mem "FfiDiag" true) (mem "ffiCatalogNarrowMsg" false) (mem "ffiCatalogTailMsg" false) (mem "ffiDeclarationDiags" false) (mem "ffiNonCrossableMsg" false) (mem "ffiShadowMsg" false))))
@@ -68212,8 +68144,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "freshGraphRun" (PWild) (ERecordCreate "GraphRun" ((fa "tyvarCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "effvarCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "ctorExistentialsRef" (EApp (EVar "Ref") (EVar "Tip"))) (fa "patternAuthIdsRef" (EApp (EVar "Ref") (EVar "Tip"))) (fa "anyExistentialsRef" (EApp (EVar "Ref") (EVar "False"))) (fa "goals" (EApp (EVar "Ref") (EListLit))) (fa "numlitRefs" (EApp (EVar "Ref") (EListLit))) (fa "numlitN" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "activeDictVars" (EApp (EVar "Ref") (EListLit))) (fa "gGiven" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "moduleRanges" (EApp (EVar "Ref") (EListLit))) (fa "stampCtxs" (EApp (EVar "Ref") (EListLit))) (fa "goalsN" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "evCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "evBase" (ELit (LInt 0))) (fa "evJudged" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "evScopedJudged" (EApp (EVar "Ref") (EListLit))) (fa "evTable" (EApp (EVar "Ref") (EListLit))) (fa "evCells" (EApp (EVar "Ref") (EApp (EApp (EVar "arrayMake") (ELit (LInt 0))) (EVar "None")))) (fa "siteCells" (EApp (EVar "Ref") (EApp (EApp (EVar "arrayMake") (ELit (LInt 0))) (EVar "None")))) (fa "scopeStore" (EApp (EVar "Scopes.freshScopeStore") (ELit LUnit))) (fa "localAbs" (EApp (EVar "freshLocalAbsState") (ELit LUnit))) (fa "grants" (EApp (EVar "freshGrantState") (ELit LUnit))) (fa "binderPending" (EApp (EVar "Ref") (EListLit))) (fa "binderRows" (EApp (EVar "Ref") (EVar "emptyBinderTypes"))) (fa "liveRoots" (EApp (EVar "Ref") (EListLit))) (fa "liveNumRoots" (EApp (EVar "Ref") (EListLit))) (fa "liveNumGoals" (EApp (EVar "Ref") (EListLit))) (fa "liveGoals" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig false "mintMethodCell" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "EvId"))))
 (DFunDef false "mintMethodCell" ((PVar "mctx") (PVar "seed")) (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellRaw") (EVar "mctx")) (ELit (LString ""))) (EVar "None")) (EIf (EBinOp "==" (EVar "seed") (ELit (LString ""))) (EVar "RNone") (EApp (EApp (EVar "RLocal") (EVar "seed")) (EListLit)))) (EListLit)))
-(DTypeSig false "mintMethodCellWith" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "EvId")))))))
-(DFunDef false "mintMethodCellWith" ((PVar "mctx") (PVar "iface") (PVar "arity") (PVar "tag") (PVar "impls")) (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellRaw") (EVar "mctx")) (EVar "iface")) (EApp (EVar "Some") (EVar "arity"))) (EVar "tag")) (EVar "impls")))
+(DTypeSig false "mintMethodCellWith" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "EvId"))))))))
+(DFunDef false "mintMethodCellWith" ((PVar "mctx") (PCon "PassEvidence" PWild (PVar "minted")) (PVar "iface") (PVar "arity") (PVar "tag") (PVar "impls")) (EBlock (DoLet false false (PVar "ev") (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellRaw") (EVar "mctx")) (EVar "iface")) (EApp (EVar "Some") (EVar "arity"))) (EVar "tag")) (EVar "impls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "minted")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EApp (EVar "evOrdinal") (EVar "ev")))) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "iface")) (EVar "arity")) (EVar "tag")) (EVar "impls")) (EListLit))) (EFieldAccess (EVar "minted") "value")))) (DoExpr (EVar "ev"))))
 (DTypeSig false "mintMethodCellRaw" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "EvId")))))))
 (DFunDef false "mintMethodCellRaw" ((PVar "mctx") (PVar "iface") (PVar "arity") (PVar "tag") (PVar "impls")) (EBlock (DoLet false false (PVar "ev") (EApp (EApp (EVar "freshEvId") (EVar "mctx")) (ELit LUnit))) (DoLet false false (PVar "g") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun")) (DoLet false false (PVar "i") (EBinOp "-" (EApp (EVar "evOrdinal") (EVar "ev")) (EFieldAccess (EVar "g") "evBase"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "indexWithSlot") (EFieldAccess (EVar "g") "evCells")) (EVar "i"))) (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "method cell #")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "evOrdinal") (EVar "ev"))))) (ELit (LString " minted twice"))))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (ERecordCreate "EvCell" ((fa "ecId" (EVar "ev")) (fa "ecIface" (EApp (EVar "Ref") (EVar "iface"))) (fa "ecArity" (EApp (EVar "Ref") (EVar "arity"))) (fa "ecTag" (EApp (EVar "Ref") (EVar "tag"))) (fa "ecImpl" (EApp (EVar "Ref") (EVar "impls"))) (fa "ecMeth" (EApp (EVar "Ref") (EListLit))) (fa "ecLoc" (EApp (EVar "Ref") (EVar "None"))) (fa "ecName" (EApp (EVar "Ref") (ELit (LString "")))) (fa "ecInner" (EApp (EVar "Ref") (EVar "innerNone"))))))) (EVar "arr"))) (DoExpr (EVar "ev"))))
 (DTypeSig false "evOrdinal" (TyFun (TyCon "EvId") (TyCon "Int")))
@@ -68259,8 +68191,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "missText" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")) (TyCon "String")))
 (DFunDef false "missText" ((PCon "Ok" PWild)) (ELit (LString "")))
 (DFunDef false "missText" ((PCon "Err" (PVar "message"))) (EVar "message"))
-(DTypeSig false "methodCellDicts" (TyFun (TyCon "EvCell") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))
-(DFunDef false "methodCellDicts" ((PVar "c")) (EListLit (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value") (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value")))
 (DTypeSig false "methodCellEntries" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "EvTable"))))
 (DFunDef false "methodCellEntries" ((PVar "gctx") PWild) (EBlock (DoLet false false (PVar "arr") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evCells") "value")) (DoExpr (EApp (EApp (EApp (EVar "methodCellEntriesFrom") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit)))))
 (DTypeSig false "methodCellEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "EvTable")))))
@@ -72536,22 +72466,30 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "firstTvar" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Mono"))))))
 (DFunDef false "firstTvar" ((PVar "a") (PVar "b") (PVar "id")) (EMatch (EApp (EApp (EVar "findTvarInMono") (EVar "a")) (EVar "id")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EApp (EApp (EVar "findTvarInMono") (EVar "b")) (EVar "id")))))
 (DTypeSig false "dictPass" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "dictPass" ((PVar "mctx") (PVar "idx") (PVar "mid") (PVar "names") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "idx")) (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (ELam ((PVar "e")) (EApp (EApp (EVar "rewriteLocalDictExpr") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EVar "rewriteBinopExpr") (EVar "mctx")) (EVar "idx")) (EVar "e"))))) (EApp (EApp (EApp (EVar "grantPass") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "mid")) (EVar "prog")))))
-(DTypeSig false "grantPass" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "grantPass" ((PVar "gctx") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EVar "st") "gsPassingModule") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsPassingModule")) (EVar "mid"))) (DoLet false false (PVar "result") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "grantDecl") (EVar "gctx")) (EVar "mid"))) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsPassingModule")) (EVar "saved"))) (DoExpr (EVar "result"))))
-(DTypeSig false "grantDecl" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "grantDecl" ((PVar "gctx") (PVar "mid") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EApp (EVar "topGrantIds") (EVar "gctx")) (EVar "mid")) (EVar "n"))) (EVar "n")) (EVar "pats"))) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "body"))) (EVar "site")) (EVar "bid")))
-(DFunDef false "grantDecl" ((PVar "gctx") (PVar "mid") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid")) () (EApp (EApp (EApp (EVar "grantLetBind") (EVar "gctx")) (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EApp (EVar "topGrantIds") (EVar "gctx")) (EVar "mid")) (EVar "n"))) (EVar "n"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EVar "site")) (EVar "bid"))))))) (EVar "binds"))))
-(DFunDef false "grantDecl" ((PVar "gctx") PWild (PAs "d" (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "grantIfaceMethod") (EVar "gctx")) (EApp (EApp (EVar "ifaceWordOf") (EVar "ifaceOrigin")) (EVar "name")))) (EVar "methods"))))))
-(DFunDef false "grantDecl" ((PVar "gctx") PWild (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "implOrigin" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "grantImplMethod") (EVar "gctx")) (EApp (EApp (EVar "ifaceWordOf") (EVar "implOrigin")) (EVar "iface")))) (EVar "methods"))))))
-(DFunDef false "grantDecl" ((PVar "gctx") PWild (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "body"))))
-(DFunDef false "grantDecl" ((PVar "gctx") PWild (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "body"))))
-(DFunDef false "grantDecl" ((PVar "gctx") (PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "grantDecl") (EVar "gctx")) (EVar "mid")) (EVar "d"))))
-(DFunDef false "grantDecl" ((PVar "gctx") PWild (PVar "d")) (EVar "d"))
-(DTypeSig false "grantIfaceMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod")))))
-(DFunDef false "grantIfaceMethod" ((PVar "gctx") (PVar "word") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PVar "def") (PVar "mloc"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "word")) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "e"))))))) (EVar "def"))) (EVar "mloc"))) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EApp (EApp (EApp (EVar "insertGrantArrows") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EVar "listLen") (EFieldAccess (EVar "mg") "mgNames"))) (EVar "ty"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "grantMethodParams") (EVar "gctx")) (EVar "mg")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "e")))) (DoExpr (EApp (EApp (EVar "MethodDefault") (EVar "ps2")) (EVar "e2")))))))) (EVar "def"))) (EVar "mloc")))))
-(DTypeSig false "grantImplMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod")))))
-(DFunDef false "grantImplMethod" ((PVar "gctx") (PVar "word") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "word")) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "e")))) (arm (PCon "Some" (PVar "mg")) () (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "grantMethodParams") (EVar "gctx")) (EVar "mg")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "e")))) (DoExpr (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps2")) (EVar "e2")))))))
+(DFunDef false "dictPass" ((PVar "mctx") (PVar "idx") (PVar "mid") (PVar "names") (PVar "prog")) (EBlock (DoLet false false (PVar "pe") (EApp (EApp (EVar "PassEvidence") (EVar "idx")) (EApp (EVar "Ref") (EVar "omEmpty")))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (ELam ((PVar "e")) (EApp (EApp (EVar "rewriteLocalDictExpr") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EVar "rewriteBinopExpr") (EVar "mctx")) (EVar "pe")) (EVar "e"))))) (EApp (EApp (EApp (EApp (EVar "grantPass") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "pe")) (EVar "mid")) (EVar "prog")))))))
+(DData Private "PassEvidence" () ((variant "PassEvidence" (ConPos (TyCon "EvIndex") (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "EvVal")))))) ())
+(DTypeSig false "passIndex" (TyFun (TyCon "PassEvidence") (TyCon "EvIndex")))
+(DFunDef false "passIndex" ((PCon "PassEvidence" (PVar "idx") PWild)) (EVar "idx"))
+(DTypeSig false "passMethodOf" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route"))))))
+(DFunDef false "passMethodOf" ((PCon "PassEvidence" (PVar "idx") (PVar "minted")) (PVar "ev")) (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (ELit (LString "method occurrence"))) (EVar "ev")) (arm (PCon "Ok" (PVar "v")) () (EApp (EVar "passMethodFacts") (EVar "v"))) (arm (PCon "Err" (PVar "message")) () (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EApp (EVar "evOrdinal") (EVar "ev")))) (EFieldAccess (EVar "minted") "value")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "passMethodFacts") (EVar "v"))) (arm (PCon "None") () (EApp (EVar "panic") (EVar "message")))))))
+(DTypeSig false "passMethodFacts" (TyFun (TyCon "EvVal") (TyTuple (TyCon "String") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "passMethodFacts" ((PCon "EvMethod" (PVar "iface") PWild (PVar "tag") (PVar "impls") (PVar "meths"))) (ETuple (EVar "iface") (EVar "tag") (EBinOp "++" (EVar "impls") (EVar "meths"))))
+(DFunDef false "passMethodFacts" (PWild) (EApp (EVar "panic") (ELit (LString "evidence table: a method occurrence answered by another kind of entry"))))
+(DTypeSig false "grantPass" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "grantPass" ((PVar "gctx") (PVar "pe") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EVar "st") "gsPassingModule") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsPassingModule")) (EVar "mid"))) (DoLet false false (PVar "result") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "grantDecl") (EVar "gctx")) (EVar "pe")) (EVar "mid"))) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsPassingModule")) (EVar "saved"))) (DoExpr (EVar "result"))))
+(DTypeSig false "grantDecl" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl"))))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") (PVar "mid") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EApp (EVar "topGrantIds") (EVar "gctx")) (EVar "mid")) (EVar "n"))) (EVar "n")) (EVar "pats"))) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "body"))) (EVar "site")) (EVar "bid")))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") (PVar "mid") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid")) () (EApp (EApp (EApp (EApp (EVar "grantLetBind") (EVar "gctx")) (EVar "pe")) (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EApp (EVar "topGrantIds") (EVar "gctx")) (EVar "mid")) (EVar "n"))) (EVar "n"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EVar "site")) (EVar "bid"))))))) (EVar "binds"))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PAs "d" (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "grantIfaceMethod") (EVar "gctx")) (EVar "pe")) (EApp (EApp (EVar "ifaceWordOf") (EVar "ifaceOrigin")) (EVar "name")))) (EVar "methods"))))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "implOrigin" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "grantImplMethod") (EVar "gctx")) (EVar "pe")) (EApp (EApp (EVar "ifaceWordOf") (EVar "implOrigin")) (EVar "iface")))) (EVar "methods"))))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
+(DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") (PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EVar "grantDecl") (EVar "gctx")) (EVar "pe")) (EVar "mid")) (EVar "d"))))
+(DFunDef false "grantDecl" ((PVar "gctx") PWild PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "grantIfaceMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))))
+(DFunDef false "grantIfaceMethod" ((PVar "gctx") (PVar "pe") (PVar "word") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PVar "def") (PVar "mloc"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "word")) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e"))))))) (EVar "def"))) (EVar "mloc"))) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EApp (EApp (EApp (EVar "insertGrantArrows") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EVar "listLen") (EFieldAccess (EVar "mg") "mgNames"))) (EVar "ty"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "grantMethodParams") (EVar "gctx")) (EVar "mg")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e")))) (DoExpr (EApp (EApp (EVar "MethodDefault") (EVar "ps2")) (EVar "e2")))))))) (EVar "def"))) (EVar "mloc")))))
+(DTypeSig false "grantImplMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))))
+(DFunDef false "grantImplMethod" ((PVar "gctx") (PVar "pe") (PVar "word") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "word")) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e")))) (arm (PCon "Some" (PVar "mg")) () (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "grantMethodParams") (EVar "gctx")) (EVar "mg")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e")))) (DoExpr (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps2")) (EVar "e2")))))))
 (DTypeSig false "grantMethodParams" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "MethodGrant") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))
 (DFunDef false "grantMethodParams" ((PVar "gctx") (PVar "mg") (PVar "n") (PVar "ps") (PVar "body")) (EBlock (DoLet false false (PVar "grants") (EApp (EApp (EVar "grantParamPats") (EFieldAccess (EVar "mg") "mgNames")) (EVar "n"))) (DoLet false false (PVar "given") (EApp (EVar "listLen") (EVar "ps"))) (DoExpr (EIf (EBinOp ">=" (EVar "given") (EFieldAccess (EVar "mg") "mgArity")) (ETuple (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "take") (EFieldAccess (EVar "mg") "mgArity")) (EVar "ps")) (EVar "grants")) (EApp (EApp (EVar "drop") (EFieldAccess (EVar "mg") "mgArity")) (EVar "ps"))) (EVar "body")) (EBlock (DoLet false false (PVar "missing") (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EApp (EVar "freshGrantName") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (ELit LUnit)))) (EApp (EApp (EVar "rangeFromCount") (EVar "given")) (EBinOp "-" (EFieldAccess (EVar "mg") "mgArity") (EVar "given"))))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "ps") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EVar "missing"))) (EVar "grants")) (EApp (EApp (EVar "applyExprs") (EVar "body")) (EApp (EApp (EMethodRef "map") (EVar "EVar")) (EVar "missing"))))))))))
 (DTypeSig false "insertGrantArrows" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyCon "Ty")))))
@@ -72561,8 +72499,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "insertGrantArrows" (PWild (PVar "g") (PVar "t")) (EApp (EApp (EVar "grantArrows") (EVar "g")) (EVar "t")))
 (DTypeSig false "grantArrows" (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyCon "Ty"))))
 (DFunDef false "grantArrows" ((PVar "g") (PVar "t")) (EIf (EBinOp "<=" (EVar "g") (ELit (LInt 0))) (EVar "t") (EIf (EVar "otherwise") (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "TyApp") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "List"))) (EVar "None"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "String"))) (EVar "None")))) (EApp (EApp (EVar "grantArrows") (EBinOp "-" (EVar "g") (ELit (LInt 1)))) (EVar "t"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "grantLetBind" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
-(DFunDef false "grantLetBind" ((PVar "gctx") (PVar "params") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (EApp (EApp (EVar "FunClause") (EBinOp "++" (EVar "params") (EVar "ps"))) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "body"))))))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
+(DTypeSig false "grantLetBind" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))))
+(DFunDef false "grantLetBind" ((PVar "gctx") (PVar "pe") (PVar "params") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (EApp (EApp (EVar "FunClause") (EBinOp "++" (EVar "params") (EVar "ps"))) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "body"))))))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "topGrantIds" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "topGrantIds" ((PVar "gctx") (PVar "mid") (PVar "n")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "grantTopKey") (EVar "mid")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsTopIds") "value"))))
 (DTypeSig false "localGrantIds" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))
@@ -72571,24 +72509,24 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "grantParamName" ((PVar "n") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$auth_")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))
 (DTypeSig false "grantParamPats" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "grantParamPats" ((PVar "ids") (PVar "n")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EApp (EApp (EVar "PVar") (EApp (EApp (EVar "grantParamName") (EVar "n")) (EVar "i"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "rangeFromCount") (ELit (LInt 0))) (EApp (EVar "listLen") (EVar "ids")))))
-(DTypeSig false "grantExpr" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "grantExpr" ((PVar "gctx") (PVar "e")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "grantExprInner") (EVar "gctx")) (EVar "e"))) (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EVar "st") "gsValueBounds") "value") (arm (PCon "Tip") () (EVar "inner")) (arm PWild () (EMatch (EApp (EApp (EVar "fileValueKey") (EFieldAccess (EFieldAccess (EVar "st") "gsPassingModule") "value")) (EVar "e")) (arm (PCon "Some" (PVar "key")) () (EBlock (DoLet false false (PVar "bounds") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "st") "gsValueBounds") "value")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "result") (PTuple (PVar "ty") (PVar "chain"))) (EApp (EApp (EApp (EApp (EVar "fileBoundValue") (EVar "gctx")) (EVar "chain")) (EVar "ty")) (EVar "result")))) (EVar "inner")) (EVar "bounds"))))) (arm (PCon "None") () (EVar "inner"))))))))
-(DTypeSig false "grantExprInner" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "pats")) (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "body"))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PAs "e" (PCon "EApp" PWild PWild))) (EMatch (EApp (EApp (EVar "grantSpine") (EVar "e")) (EListLit)) (arm (PTuple (PCon "EDictAt" (PVar "n") (PVar "ev")) (PVar "args")) () (EMatch (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev")) (arm (PCon "Some" (PVar "occ")) () (EMatch (EFieldAccess (EVar "occ") "goTrailing") (arm (PCon "Some" (PVar "arity")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EVar "EVar") (EVar "n"))) (EVar "arity")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "args")))) (arm (PCon "None") () (EApp (EApp (EVar "mapChildren") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "e"))))) (arm (PCon "None") () (EApp (EApp (EVar "mapChildren") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "e"))))) (arm (PTuple (PCon "EMethodAt" (PVar "n") (PVar "seed") (PVar "ev")) (PVar "args")) () (EMatch (EApp (EApp (EApp (EVar "methodGrantUse") (EVar "gctx")) (EVar "n")) (EVar "ev")) (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "arity")) (EVar "grants")) (EApp (EApp (EMethodRef "map") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "args")))) (arm (PCon "LeadingGrants" PWild (PVar "grants")) () (EApp (EApp (EVar "applyExprs") (EApp (EApp (EVar "applyExprs") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "grants"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "args")))) (arm (PCon "NoGrants") () (EApp (EApp (EVar "mapChildren") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "e"))))) (arm PWild () (EApp (EApp (EVar "mapChildren") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "e")))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EApp (EApp (EApp (EVar "grantUse") (EVar "gctx")) (EVar "n")) (EVar "ev")))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "EMethodAt" (PVar "n") (PVar "seed") (PVar "ev"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantUse") (EVar "gctx")) (EVar "n")) (EVar "ev")) (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "arity")) (EVar "grants")) (EListLit))) (arm (PCon "LeadingGrants" PWild (PVar "grants")) () (EApp (EApp (EVar "applyExprs") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "grants"))) (arm (PCon "NoGrants") () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev")))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "ELet" (PVar "m") (PVar "r") (PCon "PVar" (PVar "x") (PVar "xloc") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EApp (EApp (EApp (EVar "grantLocalRhs") (EVar "gctx")) (EVar "x")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e1")))) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e2"))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "x") (PVar "clauses") (PVar "site") (PVar "bid")) () (EApp (EApp (EApp (EVar "grantLetBind") (EVar "gctx")) (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EVar "localGrantIds") (EVar "gctx")) (EVar "x"))) (EVar "x"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "x")) (EVar "clauses")) (EVar "site")) (EVar "bid"))))))) (EVar "binds"))) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "body"))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EApp (EVar "grantStmt") (EVar "gctx"))) (EVar "stmts"))))
-(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EApp (EVar "grantExpr") (EVar "gctx"))) (EVar "e")))
-(DTypeSig false "grantStmt" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "DoStmt") (TyCon "DoStmt"))))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoLet" (PVar "m") (PVar "r") (PCon "PVar" (PVar "x") (PVar "xloc") (PVar "bid")) (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EApp (EApp (EApp (EVar "grantLocalRhs") (EVar "gctx")) (EVar "x")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e")))) (EVar "site")))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e"))))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e"))))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e"))) (EVar "site")))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e"))))
-(DFunDef false "grantStmt" ((PVar "gctx") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "e"))))
+(DTypeSig false "grantExpr" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "grantExpr" ((PVar "gctx") (PVar "pe") (PVar "e")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "grantExprInner") (EVar "gctx")) (EVar "pe")) (EVar "e"))) (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EVar "st") "gsValueBounds") "value") (arm (PCon "Tip") () (EVar "inner")) (arm PWild () (EMatch (EApp (EApp (EVar "fileValueKey") (EFieldAccess (EFieldAccess (EVar "st") "gsPassingModule") "value")) (EVar "e")) (arm (PCon "Some" (PVar "key")) () (EBlock (DoLet false false (PVar "bounds") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "st") "gsValueBounds") "value")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "result") (PTuple (PVar "ty") (PVar "chain"))) (EApp (EApp (EApp (EApp (EVar "fileBoundValue") (EVar "gctx")) (EVar "chain")) (EVar "ty")) (EVar "result")))) (EVar "inner")) (EVar "bounds"))))) (arm (PCon "None") () (EVar "inner"))))))))
+(DTypeSig false "grantExprInner" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "pats")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PAs "e" (PCon "EApp" PWild PWild))) (EMatch (EApp (EApp (EVar "grantSpine") (EVar "e")) (EListLit)) (arm (PTuple (PCon "EDictAt" (PVar "n") (PVar "ev")) (PVar "args")) () (EMatch (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev")) (arm (PCon "Some" (PVar "occ")) () (EMatch (EFieldAccess (EVar "occ") "goTrailing") (arm (PCon "Some" (PVar "arity")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EVar "EVar") (EVar "n"))) (EVar "arity")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "args")))) (arm (PCon "None") () (EApp (EApp (EVar "mapChildren") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "e"))))) (arm (PCon "None") () (EApp (EApp (EVar "mapChildren") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "e"))))) (arm (PTuple (PCon "EMethodAt" (PVar "n") (PVar "seed") (PVar "ev")) (PVar "args")) () (EMatch (EApp (EApp (EApp (EApp (EVar "methodGrantUse") (EVar "gctx")) (EVar "pe")) (EVar "n")) (EVar "ev")) (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "arity")) (EVar "grants")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "args")))) (arm (PCon "LeadingGrants" PWild (PVar "grants")) () (EApp (EApp (EVar "applyExprs") (EApp (EApp (EVar "applyExprs") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "grants"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "args")))) (arm (PCon "NoGrants") () (EApp (EApp (EVar "mapChildren") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "e"))))) (arm PWild () (EApp (EApp (EVar "mapChildren") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "e")))))
+(DFunDef false "grantExprInner" ((PVar "gctx") PWild (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EApp (EApp (EApp (EVar "grantUse") (EVar "gctx")) (EVar "n")) (EVar "ev")))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PCon "EMethodAt" (PVar "n") (PVar "seed") (PVar "ev"))) (EMatch (EApp (EApp (EApp (EApp (EVar "methodGrantUse") (EVar "gctx")) (EVar "pe")) (EVar "n")) (EVar "ev")) (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "arity")) (EVar "grants")) (EListLit))) (arm (PCon "LeadingGrants" PWild (PVar "grants")) () (EApp (EApp (EVar "applyExprs") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev"))) (EVar "grants"))) (arm (PCon "NoGrants") () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EVar "seed")) (EVar "ev")))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PCon "ELet" (PVar "m") (PVar "r") (PCon "PVar" (PVar "x") (PVar "xloc") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EApp (EApp (EApp (EVar "grantLocalRhs") (EVar "gctx")) (EVar "x")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e1")))) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e2"))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "x") (PVar "clauses") (PVar "site") (PVar "bid")) () (EApp (EApp (EApp (EApp (EVar "grantLetBind") (EVar "gctx")) (EVar "pe")) (EApp (EApp (EVar "grantParamPats") (EApp (EApp (EVar "localGrantIds") (EVar "gctx")) (EVar "x"))) (EVar "x"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "x")) (EVar "clauses")) (EVar "site")) (EVar "bid"))))))) (EVar "binds"))) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "grantStmt") (EVar "gctx")) (EVar "pe"))) (EVar "stmts"))))
+(DFunDef false "grantExprInner" ((PVar "gctx") (PVar "pe") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe"))) (EVar "e")))
+(DTypeSig false "grantStmt" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "DoStmt") (TyCon "DoStmt")))))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoLet" (PVar "m") (PVar "r") (PCon "PVar" (PVar "x") (PVar "xloc") (PVar "bid")) (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "xloc")) (EVar "bid"))) (EApp (EApp (EApp (EVar "grantLocalRhs") (EVar "gctx")) (EVar "x")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e")))) (EVar "site")))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e"))))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e"))))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e"))) (EVar "site")))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e"))))
+(DFunDef false "grantStmt" ((PVar "gctx") (PVar "pe") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "e"))))
 (DTypeSig false "grantLocalRhs" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "grantLocalRhs" ((PVar "gctx") (PVar "x") (PVar "e")) (EMatch (EApp (EApp (EVar "localGrantIds") (EVar "gctx")) (EVar "x")) (arm (PList) () (EVar "e")) (arm (PVar "ids") () (EApp (EApp (EVar "prependLocalDicts") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EApp (EVar "grantParamName") (EVar "x")) (EVar "i")))) (EApp (EApp (EVar "rangeFromCount") (ELit (LInt 0))) (EApp (EVar "listLen") (EVar "ids"))))) (EVar "e")))))
 (DTypeSig false "grantSpine" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
@@ -72597,8 +72535,10 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "grantSpine" ((PVar "e") (PVar "args")) (ETuple (EVar "e") (EVar "args")))
 (DTypeSig false "grantUse" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Expr")))))
 (DFunDef false "grantUse" ((PVar "gctx") (PVar "n") (PVar "ev")) (EBlock (DoLet false false (PVar "head") (EIf (EApp (EApp (EVar "isGrantOnlyEv") (EVar "gctx")) (EVar "ev")) (EApp (EVar "EVar") (EVar "n")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")))) (DoExpr (EMatch (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev")) (arm (PCon "None") () (EVar "head")) (arm (PCon "Some" (PVar "occ")) () (EMatch (EFieldAccess (EVar "occ") "goTrailing") (arm (PCon "Some" (PVar "arity")) () (EApp (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (EApp (EVar "EVar") (EVar "n"))) (EVar "arity")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ"))) (EListLit))) (arm (PCon "None") () (EApp (EApp (EVar "applyExprs") (EVar "head")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ"))))))))))
-(DTypeSig false "methodGrantUse" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "MethodGrantUse")))))
-(DFunDef false "methodGrantUse" ((PVar "gctx") (PVar "n") (PVar "ev")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EVar "methodCellOf") (EVar "gctx")) (EVar "ev"))) (DoLet false false (PVar "recorded") (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev"))) (DoLet false false (PVar "use") (EMatch (EFieldAccess (EFieldAccess (EVar "cell") "ecTag") "value") (arm (PCon "RLocal" (PVar "sym") PWild) () (EMatch (EApp (EVar "standaloneOcc") (EVar "recorded")) (arm (PCon "Some" (PTuple (PVar "arity") (PVar "occ"))) () (EApp (EApp (EVar "LeadingGrants") (EVar "arity")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "n") (EVar "sym"))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsTakers") "value")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "grant pass: '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is routed to a standalone binding that takes authority grants, but inference did not type this use as that binding")))) (EVar "NoGrants"))))) (arm PWild () (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EFieldAccess (EFieldAccess (EVar "cell") "ecIface") "value")) (EVar "n")) (arm (PCon "None") () (EVar "NoGrants")) (arm (PCon "Some" (PVar "mg")) () (EMatch (EVar "recorded") (arm (PCon "Some" (PVar "occ")) () (EIf (EFieldAccess (EVar "occ") "goStandalone") (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "bottomGrant"))) (EFieldAccess (EVar "mg") "mgNames"))) (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EApp (EApp (EVar "methodTerms") (EVar "gctx")) (EVar "n")) (EVar "mg")) (EVar "occ"))))) (arm (PCon "None") () (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "bottomGrant"))) (EFieldAccess (EVar "mg") "mgNames")))))))))) (DoLet false false PWild (EMatch (EVar "use") (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cell") "ecArity")) (EApp (EVar "Some") (EBinOp "+" (EVar "arity") (EApp (EVar "listLen") (EVar "grants")))))) (arm (PCon "LeadingGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cell") "ecArity")) (EApp (EVar "Some") (EBinOp "+" (EVar "arity") (EApp (EVar "listLen") (EVar "grants")))))) (arm (PCon "NoGrants") () (ELit LUnit)))) (DoExpr (EVar "use"))))
+(DTypeSig false "methodGrantUse" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "MethodGrantUse"))))))
+(DFunDef false "methodGrantUse" ((PVar "gctx") (PVar "pe") (PVar "n") (PVar "ev")) (EBlock (DoLet false false (PTuple (PVar "iface") (PVar "tag") PWild) (EApp (EApp (EVar "passMethodOf") (EVar "pe")) (EVar "ev"))) (DoLet false false (PVar "recorded") (EApp (EApp (EVar "grantOccOf") (EVar "gctx")) (EVar "ev"))) (DoLet false false (PVar "use") (EMatch (EVar "tag") (arm (PCon "RLocal" (PVar "sym") PWild) () (EMatch (EApp (EVar "standaloneOcc") (EVar "recorded")) (arm (PCon "Some" (PTuple (PVar "arity") (PVar "occ"))) () (EApp (EApp (EVar "LeadingGrants") (EVar "arity")) (EApp (EApp (EVar "grantTerms") (EVar "gctx")) (EVar "occ")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "n") (EVar "sym"))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsTakers") "value")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "grant pass: '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is routed to a standalone binding that takes authority grants, but inference did not type this use as that binding")))) (EVar "NoGrants"))))) (arm PWild () (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "iface")) (EVar "n")) (arm (PCon "None") () (EVar "NoGrants")) (arm (PCon "Some" (PVar "mg")) () (EMatch (EVar "recorded") (arm (PCon "Some" (PVar "occ")) () (EIf (EFieldAccess (EVar "occ") "goStandalone") (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "bottomGrant"))) (EFieldAccess (EVar "mg") "mgNames"))) (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EApp (EApp (EVar "methodTerms") (EVar "gctx")) (EVar "n")) (EVar "mg")) (EVar "occ"))))) (arm (PCon "None") () (EApp (EApp (EVar "MethodGrants") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "bottomGrant"))) (EFieldAccess (EVar "mg") "mgNames")))))))))) (DoLet false false PWild (EMatch (EVar "use") (arm (PCon "MethodGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EVar "setCellArity") (EVar "gctx")) (EVar "ev")) (EBinOp "+" (EVar "arity") (EApp (EVar "listLen") (EVar "grants"))))) (arm (PCon "LeadingGrants" (PVar "arity") (PVar "grants")) () (EApp (EApp (EApp (EVar "setCellArity") (EVar "gctx")) (EVar "ev")) (EBinOp "+" (EVar "arity") (EApp (EVar "listLen") (EVar "grants"))))) (arm (PCon "NoGrants") () (ELit LUnit)))) (DoExpr (EVar "use"))))
+(DTypeSig false "setCellArity" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvId") (TyFun (TyCon "Int") (TyCon "Unit")))))
+(DFunDef false "setCellArity" ((PVar "gctx") (PVar "ev") (PVar "arity")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EVar "methodCellOf") (EVar "gctx")) (EVar "ev"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cell") "ecArity")) (EApp (EVar "Some") (EVar "arity"))))))
 (DTypeSig false "standaloneOcc" (TyFun (TyApp (TyCon "Option") (TyCon "GrantOcc")) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "GrantOcc")))))
 (DFunDef false "standaloneOcc" ((PCon "Some" (PVar "occ"))) (EMatch (ETuple (EFieldAccess (EVar "occ") "goStandalone") (EFieldAccess (EVar "occ") "goTrailing")) (arm (PTuple (PCon "True") (PCon "Some" (PVar "arity"))) () (EApp (EVar "Some") (ETuple (EVar "arity") (EVar "occ")))) (arm PWild () (EVar "None"))))
 (DFunDef false "standaloneOcc" ((PCon "None")) (EVar "None"))
@@ -72652,8 +72592,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "fileBoundValue" ((PVar "gctx") (PVar "chain") (PVar "ty") (PVar "e")) (EIf (EApp (EVar "hasFileBoundValue") (EVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EBlock (DoLet false false (PVar "fn") (EApp (EApp (EVar "freshGrantName") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (ELit LUnit))) (DoLet false false (PVar "arg") (EApp (EApp (EVar "freshGrantName") (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "fn")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (EVar "arg")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EApp (EVar "fileBoundExpr") (EVar "gctx")) (EVar "chain")) (EVar "row")) (EApp (EApp (EApp (EApp (EVar "fileBoundValue") (EVar "gctx")) (EVar "chain")) (EVar "result")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "fn"))) (EApp (EVar "EVar") (EVar "arg")))))))))) (arm (PCon "TQual" (PVar "inner") PWild) () (EApp (EApp (EApp (EApp (EVar "fileBoundValue") (EVar "gctx")) (EVar "chain")) (EVar "inner")) (EVar "e"))) (arm PWild () (EVar "e"))) (EVar "e")))
 (DTypeSig false "recordFileBound" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Expr") (TyFun (TyCon "EffRow") (TyCon "Unit")))))
 (DFunDef false "recordFileBound" ((PVar "mctx") (PVar "body") (PVar "row")) (EBlock (DoLet false false (PTuple (PVar "atoms") (PVar "tails")) (EApp (EVar "rowFlat") (EVar "row"))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "tails")) (EApp (EApp (EVar "anyList") (EVar "narrowFileAtom")) (EVar "atoms"))) (EMatch (EApp (EVar "fileBodyLoc") (EVar "body")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "loc")) () (EBlock (DoLet false false (PVar "st") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "grants")) (DoLet false false (PVar "key") (EApp (EApp (EVar "fileBoundSite") (EApp (EApp (EVar "scopeFileBoundModule") (EVar "mctx")) (ELit LUnit))) (EVar "loc"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "st") "gsBounds")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (ETuple (EVar "row") (EApp (EApp (EVar "grantChainAt") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "captureScope") (EVar "mctx")) (ELit LUnit)))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "st") "gsBounds") "value"))))) (EFieldAccess (EFieldAccess (EVar "st") "gsBounds") "value"))))))) (ELit LUnit)))))
-(DTypeSig false "grantBody" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "grantBody" ((PVar "gctx") (PVar "body")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "body"))) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsBounds") "value") (arm (PCon "Tip") () (EVar "inner")) (arm (PVar "boundsBySite") () (EBlock (DoLet false false (PVar "bounds") (EMatch (EApp (EVar "fileBodyLoc") (EVar "body")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "fileBoundSite") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsPassingModule") "value")) (EVar "loc"))) (EVar "boundsBySite")))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "result") (PTuple (PVar "row") (PVar "chain"))) (EApp (EApp (EApp (EApp (EVar "fileBoundExpr") (EVar "gctx")) (EVar "chain")) (EVar "row")) (EVar "result")))) (EVar "inner")) (EVar "bounds")))))))))
+(DTypeSig false "grantBody" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "grantBody" ((PVar "gctx") (PVar "pe") (PVar "body")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsBounds") "value") (arm (PCon "Tip") () (EVar "inner")) (arm (PVar "boundsBySite") () (EBlock (DoLet false false (PVar "bounds") (EMatch (EApp (EVar "fileBodyLoc") (EVar "body")) (arm (PCon "Some" (PVar "loc")) () (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "fileBoundSite") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsPassingModule") "value")) (EVar "loc"))) (EVar "boundsBySite")))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "result") (PTuple (PVar "row") (PVar "chain"))) (EApp (EApp (EApp (EApp (EVar "fileBoundExpr") (EVar "gctx")) (EVar "chain")) (EVar "row")) (EVar "result")))) (EVar "inner")) (EVar "bounds")))))))))
 (DTypeSig false "narrowFileAtom" (TyFun (TyCon "Atom") (TyCon "Bool")))
 (DFunDef false "narrowFileAtom" ((PVar "atom")) (EMatch (EApp (EVar "atomLabelOf") (EVar "atom")) (arm (PCon "EffLabel" (PVar "label") (PCon "OriginBuiltin")) () (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "label") (ELit (LString "FileRead"))) (EBinOp "==" (EVar "label") (ELit (LString "FileWrite")))) (EApp (EVar "not") (EApp (EVar "authIsTop") (EApp (EVar "atomAuth") (EVar "atom")))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "recordClauseFileBound" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
@@ -72674,11 +72614,11 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "grantParamFor" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "grantParamFor" ((PVar "gctx") (PList) PWild) (EVar "None"))
 (DFunDef false "grantParamFor" ((PVar "gctx") (PCons (PVar "b") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PTuple (PVar "name") (PVar "ids")) (EMatch (EVar "b") (arm (PCon "TopGrantBinder" (PVar "mid") (PVar "n")) () (ETuple (EVar "n") (EApp (EApp (EApp (EVar "topGrantIds") (EVar "gctx")) (EVar "mid")) (EVar "n")))) (arm (PCon "LocalGrantBinder" (PVar "n")) () (ETuple (EVar "n") (EApp (EApp (EVar "localGrantIds") (EVar "gctx")) (EVar "n")))) (arm (PCon "BodyGrantBinder" (PVar "n") (PVar "bound")) () (ETuple (EVar "n") (EVar "bound"))))) (DoExpr (EMatch (EApp (EApp (EVar "indexOfId") (EVar "i")) (EVar "ids")) (arm (PCon "Some" (PVar "k")) () (EApp (EVar "Some") (EApp (EApp (EVar "grantParamName") (EVar "name")) (EVar "k")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "grantParamFor") (EVar "gctx")) (EVar "rest")) (EVar "i")))))))
-(DTypeSig false "rewriteBinopExpr" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "idx") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "ev"))) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EVar "idx")) (EVar "ev")) (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "ev"))) (arm (PCon "RScalar" (PVar "tag")) () (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "ev"))) (EApp (EApp (EVar "tyConBuiltin") (EVar "tag")) (EVar "None")))) (arm (PVar "route") () (EApp (EApp (EApp (EApp (EApp (EVar "binopMethodApp") (EVar "mctx")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "route")))))
-(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "idx") (PCon "ENumLit" (PVar "n") (PVar "ev") PWild)) (EMatch (EApp (EApp (EVar "evSiteLitIn") (EVar "idx")) (EVar "ev")) (arm (PTuple (PCon "Some" (PVar "f")) PWild) () (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PTuple (PCon "None") (PVar "dref")) () (EMatch (EVar "dref") (arm (PCon "RNone") () (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") ((GBool (EApp (EApp (EVar "fixedWidthLiteralFits") (EVar "route")) (EVar "n")))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") ((GBool (EApp (EApp (EVar "u64LiteralFits") (EVar "route")) (EVar "n")))) (EApp (EVar "ELit") (EApp (EApp (EVar "LU64") (EBinOp "/" (EVar "n") (ELit (LInt 4294967296)))) (EBinOp "%" (EVar "n") (ELit (LInt 4294967296)))))) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EApp (EVar "isI64Head") (EApp (EVar "literalRouteHead") (EVar "word"))))) (EBlock (DoLet false false (PVar "halves") (EApp (EVar "int64Halves") (EVar "n"))) (DoExpr (EApp (EVar "ELit") (EApp (EApp (EVar "LI64") (EApp (EVar "fst") (EVar "halves"))) (EApp (EVar "snd") (EVar "halves"))))))) (arm (PVar "route") () (EBlock (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (ELit (LString "fromInt"))) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit (LString "fromInt")))) (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))))))))))
-(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "idx") (PCon "EUnOp" (PVar "op") (PVar "e") (PVar "ev"))) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EVar "idx")) (EVar "ev")) (arm (PCon "RNone") () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "ev"))) (arm (PCon "RScalar" PWild) () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "ev"))) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isI32Head") (EApp (EVar "literalRouteHead") (EVar "word")))) (EApp (EVar "isSome") (EApp (EVar "negatedI32Lit") (EVar "e")))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EVar "negatedI32Lit") (EVar "e")))))) (arm (PVar "route") () (EApp (EApp (EApp (EApp (EVar "unopMethodApp") (EVar "mctx")) (EVar "op")) (EVar "e")) (EVar "route")))))
-(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "idx") (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") PWild)) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EVar "idx")) (EVar "ev")) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EApp (EVar "isI64Head") (EApp (EVar "literalRouteHead") (EVar "word"))))) (EApp (EVar "ELit") (EApp (EApp (EVar "LI64") (EVar "hi")) (EVar "lo")))) (arm PWild () (EApp (EVar "ELit") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))))
+(DTypeSig false "rewriteBinopExpr" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "pe") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "ev"))) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev")) (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "ev"))) (arm (PCon "RScalar" (PVar "tag")) () (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "ev"))) (EApp (EApp (EVar "tyConBuiltin") (EVar "tag")) (EVar "None")))) (arm (PVar "route") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "binopMethodApp") (EVar "mctx")) (EVar "pe")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "route")))))
+(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "pe") (PCon "ENumLit" (PVar "n") (PVar "ev") PWild)) (EMatch (EApp (EApp (EVar "evSiteLitIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev")) (arm (PTuple (PCon "Some" (PVar "f")) PWild) () (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PTuple (PCon "None") (PVar "dref")) () (EMatch (EVar "dref") (arm (PCon "RNone") () (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") ((GBool (EApp (EApp (EVar "fixedWidthLiteralFits") (EVar "route")) (EVar "n")))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") ((GBool (EApp (EApp (EVar "u64LiteralFits") (EVar "route")) (EVar "n")))) (EApp (EVar "ELit") (EApp (EApp (EVar "LU64") (EBinOp "/" (EVar "n") (ELit (LInt 4294967296)))) (EBinOp "%" (EVar "n") (ELit (LInt 4294967296)))))) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EApp (EVar "isI64Head") (EApp (EVar "literalRouteHead") (EVar "word"))))) (EBlock (DoLet false false (PVar "halves") (EApp (EVar "int64Halves") (EVar "n"))) (DoExpr (EApp (EVar "ELit") (EApp (EApp (EVar "LI64") (EApp (EVar "fst") (EVar "halves"))) (EApp (EVar "snd") (EVar "halves"))))))) (arm (PVar "route") () (EBlock (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (ELit (LString "fromInt"))) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit (LString "fromInt")))) (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))))))))))
+(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "pe") (PCon "EUnOp" (PVar "op") (PVar "e") (PVar "ev"))) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev")) (arm (PCon "RNone") () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "ev"))) (arm (PCon "RScalar" PWild) () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "ev"))) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isI32Head") (EApp (EVar "literalRouteHead") (EVar "word")))) (EApp (EVar "isSome") (EApp (EVar "negatedI32Lit") (EVar "e")))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EVar "negatedI32Lit") (EVar "e")))))) (arm (PVar "route") () (EApp (EApp (EApp (EApp (EApp (EVar "unopMethodApp") (EVar "mctx")) (EVar "pe")) (EVar "op")) (EVar "e")) (EVar "route")))))
+(DFunDef false "rewriteBinopExpr" ((PVar "mctx") (PVar "pe") (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") PWild)) (EMatch (EApp (EApp (EVar "evSiteRouteIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev")) (arm (PCon "RKey" (PVar "word") PWild PWild) ((GBool (EApp (EVar "isI64Head") (EApp (EVar "literalRouteHead") (EVar "word"))))) (EApp (EVar "ELit") (EApp (EApp (EVar "LI64") (EVar "hi")) (EVar "lo")))) (arm PWild () (EApp (EVar "ELit") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))))
 (DFunDef false "rewriteBinopExpr" ((PVar "mctx") PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "negatedI32Lit" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "negatedI32Lit" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "negatedI32Lit") (EVar "e")))
@@ -72698,18 +72638,18 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "binopRouteSplit" (TyFun (TyCon "Route") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "binopRouteSplit" ((PCon "RKey" (PVar "tag") (PVar "reqs") (PVar "sups"))) (ETuple (EApp (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EVar "sups")) (EVar "reqs")))
 (DFunDef false "binopRouteSplit" ((PVar "r")) (ETuple (EVar "r") (EListLit)))
-(DTypeSig false "binopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr")))))))
-(DFunDef false "binopMethodApp" ((PVar "mctx") (PVar "op") (PVar "l") (PVar "r") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "eq"))) (EApp (EVar "binopDispatchMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoLet false false (PVar "call") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 2))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "l"))) (EVar "r"))) (DoExpr (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "call")) (EVar "call")))))
+(DTypeSig false "binopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr"))))))))
+(DFunDef false "binopMethodApp" ((PVar "mctx") (PVar "pe") (PVar "op") (PVar "l") (PVar "r") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "eq"))) (EApp (EVar "binopDispatchMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoLet false false (PVar "call") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 2))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "l"))) (EVar "r"))) (DoExpr (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "call")) (EVar "call")))))
 (DTypeSig false "binopDispatchMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "binopDispatchMethod" ((PVar "op")) (EMatch (EApp (EVar "arithDispatchMethod") (EVar "op")) (arm (PCon "Some" (PVar "method")) () (EApp (EVar "Some") (EVar "method"))) (arm (PCon "None") () (EApp (EVar "binopMethod") (EVar "op")))))
-(DTypeSig false "unopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr"))))))
-(DFunDef false "unopMethodApp" ((PVar "mctx") (PVar "op") (PVar "e") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "negate"))) (EApp (EVar "unopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "e")))))
-(DTypeSig false "dictPassDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))))
+(DTypeSig false "unopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr")))))))
+(DFunDef false "unopMethodApp" ((PVar "mctx") (PVar "pe") (PVar "op") (PVar "e") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "negate"))) (EApp (EVar "unopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "e")))))
+(DTypeSig false "dictPassDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))))
 (DFunDef false "dictPassDecl" ((PVar "mctx") PWild (PVar "names") PWild (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body") (PVar "site") (PVar "bid"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EApp (EApp (EVar "dictArityOf") (EVar "mctx")) (EVar "n"))) (EVar "pats"))) (EVar "body")) (EVar "site")) (EVar "bid")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "pats")) (EVar "body")) (EVar "site")) (EVar "bid")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "dictPassDecl" ((PVar "mctx") PWild (PVar "names") PWild (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "dictPassLetBind") (EVar "mctx")) (EVar "names"))) (EVar "binds"))))
-(DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "idx") PWild PWild (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "implOrigin" None) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EApp (EApp (EApp (EVar "implDictPassMethods") (EVar "mctx")) (EVar "idx")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "implOrigin"))))) (EApp (EVar "listLen") (EVar "reqs"))) (EVar "methods"))))))
+(DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "pe") PWild PWild (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "implOrigin" None) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EApp (EApp (EApp (EVar "implDictPassMethods") (EVar "mctx")) (EVar "pe")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "implOrigin"))))) (EApp (EVar "listLen") (EVar "reqs"))) (EVar "methods"))))))
 (DFunDef false "dictPassDecl" ((PVar "mctx") PWild PWild PWild (PAs "d" (PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "ifaceDictPassMethod") (EVar "typarams"))) (EVar "methods"))))))
-(DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "idx") (PVar "names") (PVar "ret") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "idx")) (EVar "names")) (EVar "ret")) (EVar "d"))))
+(DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "pe") (PVar "names") (PVar "ret") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "pe")) (EVar "names")) (EVar "ret")) (EVar "d"))))
 (DFunDef false "dictPassDecl" ((PVar "mctx") PWild PWild PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "dictPassLetBind" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "dictPassLetBind" ((PVar "mctx") (PVar "names") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prependDictClause") (EVar "n")) (EApp (EApp (EVar "dictArityOf") (EVar "mctx")) (EVar "n")))) (EVar "clauses"))) (EVar "site")) (EVar "bid")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EVar "site")) (EVar "bid")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -72722,14 +72662,14 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "ifaceDictPassDefault" ((PVar "n") (PVar "ty") (PVar "pats") (PVar "body") (PVar "mloc") (PVar "k")) (EIf (EBinOp ">" (EVar "k") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EVar "k")) (EVar "pats"))) (EVar "body")))) (EVar "mloc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EVar "body")))) (EVar "mloc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "methodDictArityOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "methodDictArityOf" ((PVar "mctx") (PVar "key")) (EApp (EVar "listLen") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "lookupMethodPredicateSlots") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodPredicateSlotsRef") "value")))))
-(DTypeSig false "implDictPassMethods" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ImplMethod"))))))))
-(DFunDef false "implDictPassMethods" ((PVar "mctx") (PVar "idx") (PVar "iface") (PVar "nReq") (PVar "methods")) (EBlock (DoLet false false (PVar "users") (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "clauseImplDictUser") (EVar "mctx")) (EVar "idx")) (EVar "iface")) (EVar "nReq"))) (EVar "methods")))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "prependImplDictIfUser") (EVar "mctx")) (EVar "iface")) (EVar "nReq")) (EVar "users"))) (EVar "methods")))))
-(DTypeSig false "clauseImplDictUser" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Int") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "clauseImplDictUser" ((PVar "mctx") (PVar "idx") (PVar "iface") (PVar "nReq") (PCon "ImplMethod" (PVar "n") PWild (PVar "body"))) (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EVar "usesImplDict") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "idx")) (EVar "n")) (EApp (EApp (EApp (EVar "implMethodDictArity") (EVar "mctx")) (EVar "iface")) (EVar "n"))) (EVar "nReq")) (EVar "body")) (EListLit (EVar "n")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "implDictPassMethods" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ImplMethod"))))))))
+(DFunDef false "implDictPassMethods" ((PVar "mctx") (PVar "pe") (PVar "iface") (PVar "nReq") (PVar "methods")) (EBlock (DoLet false false (PVar "users") (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "clauseImplDictUser") (EVar "mctx")) (EVar "pe")) (EVar "iface")) (EVar "nReq"))) (EVar "methods")))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "prependImplDictIfUser") (EVar "mctx")) (EVar "iface")) (EVar "nReq")) (EVar "users"))) (EVar "methods")))))
+(DTypeSig false "clauseImplDictUser" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Int") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "clauseImplDictUser" ((PVar "mctx") (PVar "pe") (PVar "iface") (PVar "nReq") (PCon "ImplMethod" (PVar "n") PWild (PVar "body"))) (EIf (EApp (EApp (EApp (EApp (EApp (EVar "usesImplDict") (EVar "pe")) (EVar "n")) (EApp (EApp (EApp (EVar "implMethodDictArity") (EVar "mctx")) (EVar "iface")) (EVar "n"))) (EVar "nReq")) (EVar "body")) (EListLit (EVar "n")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "prependImplDictIfUser" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod")))))))
 (DFunDef false "prependImplDictIfUser" ((PVar "mctx") (PVar "iface") (PVar "nReq") (PVar "users") (PCon "ImplMethod" (PVar "n") (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EApp (EVar "implMethodDictArity") (EVar "mctx")) (EVar "iface")) (EVar "n"))) (DoLet false false (PVar "implPats") (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "users")) (EApp (EApp (EApp (EVar "dictParamsFrom") (EVar "n")) (EVar "k")) (EVar "nReq")) (EListLit))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "k") (ELit (LInt 0))) (EApp (EVar "isEmptyL") (EVar "implPats"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "pats")) (EVar "body")) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EVar "k")) (EVar "implPats")) (EVar "pats"))) (EVar "body"))))))
-(DTypeSig false "usesImplDict" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyCon "Bool"))))))))
-(DFunDef false "usesImplDict" ((PVar "gctx") (PVar "idx") (PVar "mname") (PVar "methodArity") (PVar "nReq") (PVar "body")) (EApp (EApp (EVar "anyMember") (EApp (EApp (EApp (EVar "bodyRDictNames") (EVar "gctx")) (EVar "idx")) (EVar "body"))) (EApp (EApp (EApp (EVar "implDictNames") (EVar "mname")) (EVar "methodArity")) (EVar "nReq"))))
+(DTypeSig false "usesImplDict" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyCon "Bool")))))))
+(DFunDef false "usesImplDict" ((PVar "pe") (PVar "mname") (PVar "methodArity") (PVar "nReq") (PVar "body")) (EApp (EApp (EVar "anyMember") (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "body"))) (EApp (EApp (EApp (EVar "implDictNames") (EVar "mname")) (EVar "methodArity")) (EVar "nReq"))))
 (DTypeSig false "implDictNames" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "implDictNames" ((PVar "mname") (PVar "methodArity") (PVar "nReq")) (EApp (EApp (EMethodRef "map") (EApp (EVar "dictParamName") (EVar "mname"))) (EApp (EApp (EVar "rangeFromCount") (EVar "methodArity")) (EVar "nReq"))))
 (DTypeSig false "implMethodDictArity" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyCon "Int")))))
@@ -72739,10 +72679,11 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "methodDictArityAtOrigin" ((PVar "mctx") PWild (PVar "key")) (EApp (EApp (EVar "methodDictArityOf") (EVar "mctx")) (EVar "key")))
 (DTypeSig false "rangeFromCount" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "rangeFromCount" ((PVar "start") (PVar "count")) (EIf (EBinOp "<=" (EDictApp "count") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EVar "start") (EApp (EApp (EVar "rangeFromCount") (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EBinOp "-" (EDictApp "count") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "bodyRDictNames" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "bodyRDictNames" ((PVar "gctx") (PVar "idx") (PVar "e")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "siteRDictName")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e"))) (EApp (EApp (EDictApp "flatMap") (EVar "siteRDictNamesL")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))))
-(DTypeSig false "siteRDictName" (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "siteRDictName" ((PVar "r")) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "RDict" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "RDictFwd" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "RProj" (PVar "inner") PWild) () (EApp (EVar "routeRDictName") (EVar "inner"))) (arm PWild () (EListLit))))
+(DTypeSig false "siteRDictName" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "siteRDictName" ((PCon "RDict" (PVar "d"))) (EListLit (EVar "d")))
+(DFunDef false "siteRDictName" ((PCon "RDictFwd" (PVar "d"))) (EListLit (EVar "d")))
+(DFunDef false "siteRDictName" ((PCon "RProj" (PVar "inner") PWild)) (EApp (EVar "routeRDictName") (EVar "inner")))
+(DFunDef false "siteRDictName" (PWild) (EListLit))
 (DTypeSig false "siteRDictNamesL" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "siteRDictNamesL" ((PVar "rs")) (EApp (EApp (EDictApp "flatMap") (EVar "routeRDictName")) (EVar "rs")))
 (DTypeSig false "routeRDictName" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
@@ -72751,95 +72692,51 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "routeRDictName" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "routeRDictName")) (EVar "reqs")) (EApp (EApp (EDictApp "flatMap") (EVar "routeRDictName")) (EVar "sups"))))
 (DFunDef false "routeRDictName" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "routeRDictName") (EVar "r")))
 (DFunDef false "routeRDictName" (PWild) (EListLit))
-(DTypeSig false "collectMethodSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EMethodAt" PWild PWild (PVar "ev"))) (EListLit (EFieldAccess (EApp (EApp (EVar "methodCellOf") (EVar "gctx")) (EVar "ev")) "ecTag")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "f")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "x"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ELam" PWild (PVar "b"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "b")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e1")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e2"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "letBindSites") (EVar "gctx"))) (EVar "binds")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "body"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EMatch" (PVar "e") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "armSites") (EVar "gctx"))) (EVar "arms"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "c")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "t"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EBinOp" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "l")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "r"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EUnOp" PWild (PVar "e") PWild)) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EInfix" PWild (PVar "l") (PVar "r"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "l")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "r"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EFieldAccess" (PVar "e") PWild PWild)) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ETuple" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "collectMethodSites") (EVar "gctx"))) (EVar "es")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EListLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "collectMethodSites") (EVar "gctx"))) (EVar "es")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "collectMethodSites") (EVar "gctx"))) (EVar "es")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "a")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "b"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "a")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "b"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "a"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "b"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "i"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "doStmtSites") (EVar "gctx"))) (EVar "stmts")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldAssignSites") (EVar "gctx"))) (EVar "fs")))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "ERecordUpdate" (PVar "e") (PVar "fs") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldAssignSites") (EVar "gctx"))) (EVar "fs"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") (PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldAssignSites") (EVar "gctx"))) (EVar "fs"))))
-(DFunDef false "collectMethodSites" ((PVar "gctx") PWild) (EListLit))
-(DTypeSig false "letBindSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "letBindSites" ((PVar "gctx") (PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "funClauseSites") (EVar "gctx"))) (EVar "clauses")))
-(DTypeSig false "funClauseSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "funClauseSites" ((PVar "gctx") (PCon "FunClause" PWild (PVar "body"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "body")))
-(DTypeSig false "armSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "armSites" ((PVar "gctx") (PCon "Arm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "guardSites") (EVar "gctx"))) (EVar "guards")) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "body"))))
-(DTypeSig false "guardSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "guardSites" ((PVar "gctx") (PCon "GBool" (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "guardSites" ((PVar "gctx") (PCon "GBind" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DTypeSig false "doStmtSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "doStmtSites" ((PVar "gctx") (PCon "DoExpr" (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "doStmtSites" ((PVar "gctx") (PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "doStmtSites" ((PVar "gctx") (PCon "DoBind" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "doStmtSites" ((PVar "gctx") (PCon "DoAssign" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DFunDef false "doStmtSites" ((PVar "gctx") (PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DTypeSig false "fieldAssignSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "FieldAssign") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))
-(DFunDef false "fieldAssignSites" ((PVar "gctx") (PCon "FieldAssign" PWild (PVar "e"))) (EApp (EApp (EVar "collectMethodSites") (EVar "gctx")) (EVar "e")))
-(DTypeSig false "collectDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EDictAt" PWild (PVar "ev"))) (EListLit (EApp (EApp (EVar "evDictRoutesIn") (EVar "idx")) (EVar "ev"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") PWild (PCon "EMethodAt" PWild PWild (PVar "ev"))) (EApp (EVar "methodCellDicts") (EApp (EApp (EVar "methodCellOf") (EVar "gctx")) (EVar "ev"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "f")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "x"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ELam" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "b")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e1")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e2"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "letBindDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "binds")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "body"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EMatch" (PVar "e") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "armDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "arms"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "c")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "t"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EBinOp" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "l")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "r"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EUnOp" PWild (PVar "e") PWild)) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EInfix" PWild (PVar "l") (PVar "r"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "l")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "r"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EFieldAccess" (PVar "e") PWild PWild)) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ETuple" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "es")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EListLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "es")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "es")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "a")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "b"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "a")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "b"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "a"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "b"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "i"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "doStmtDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "stmts")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "fieldAssignDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "fs")))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "ERecordUpdate" (PVar "e") (PVar "fs") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "fieldAssignDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "fs"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") (PVar "idx") (PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "fieldAssignDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "fs"))))
-(DFunDef false "collectDictSites" ((PVar "gctx") PWild PWild) (EListLit))
-(DTypeSig false "letBindDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "letBindDictSites" ((PVar "gctx") (PVar "idx") (PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "funClauseDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "clauses")))
-(DTypeSig false "funClauseDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "funClauseDictSites" ((PVar "gctx") (PVar "idx") (PCon "FunClause" PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "body")))
-(DTypeSig false "armDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "armDictSites" ((PVar "gctx") (PVar "idx") (PCon "Arm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "guardDictSites") (EVar "gctx")) (EVar "idx"))) (EVar "guards")) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "body"))))
-(DTypeSig false "guardDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "guardDictSites" ((PVar "gctx") (PVar "idx") (PCon "GBool" (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "guardDictSites" ((PVar "gctx") (PVar "idx") (PCon "GBind" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DTypeSig false "doStmtDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "doStmtDictSites" ((PVar "gctx") (PVar "idx") (PCon "DoExpr" (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "doStmtDictSites" ((PVar "gctx") (PVar "idx") (PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "doStmtDictSites" ((PVar "gctx") (PVar "idx") (PCon "DoBind" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "doStmtDictSites" ((PVar "gctx") (PVar "idx") (PCon "DoAssign" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DFunDef false "doStmtDictSites" ((PVar "gctx") (PVar "idx") (PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
-(DTypeSig false "fieldAssignDictSites" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "FieldAssign") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "fieldAssignDictSites" ((PVar "gctx") (PVar "idx") (PCon "FieldAssign" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "collectDictSites") (EVar "gctx")) (EVar "idx")) (EVar "e")))
+(DTypeSig false "collectDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EDictAt" PWild (PVar "ev"))) (EApp (EVar "siteRDictNamesL") (EApp (EApp (EVar "evDictRoutesIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EMethodAt" PWild PWild (PVar "ev"))) (EBlock (DoLet false false (PTuple PWild (PVar "tag") (PVar "dicts")) (EApp (EApp (EVar "passMethodOf") (EVar "pe")) (EVar "ev"))) (DoExpr (EBinOp "++" (EApp (EVar "siteRDictName") (EVar "tag")) (EApp (EVar "siteRDictNamesL") (EVar "dicts"))))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "f")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "x"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELam" PWild (PVar "b"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "b")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e1")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e2"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "letBindDictSites") (EVar "pe"))) (EVar "binds")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "body"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EMatch" (PVar "e") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "armDictSites") (EVar "pe"))) (EVar "arms"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "c")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "t"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EBinOp" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "l")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "r"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EUnOp" PWild (PVar "e") PWild)) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EInfix" PWild (PVar "l") (PVar "r"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "l")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "r"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EFieldAccess" (PVar "e") PWild PWild)) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ETuple" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "collectDictSites") (EVar "pe"))) (EVar "es")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EListLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "collectDictSites") (EVar "pe"))) (EVar "es")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "collectDictSites") (EVar "pe"))) (EVar "es")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "a")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "b"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "a")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "b"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "a"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "b"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "i"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "doStmtDictSites") (EVar "pe"))) (EVar "stmts")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERecordUpdate" (PVar "e") (PVar "fs") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs"))))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs"))))
+(DFunDef false "collectDictSites" (PWild PWild) (EListLit))
+(DTypeSig false "letBindDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "letBindDictSites" ((PVar "pe") (PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "funClauseDictSites") (EVar "pe"))) (EVar "clauses")))
+(DTypeSig false "funClauseDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "funClauseDictSites" ((PVar "pe") (PCon "FunClause" PWild (PVar "body"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "body")))
+(DTypeSig false "armDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "armDictSites" ((PVar "pe") (PCon "Arm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "guardDictSites") (EVar "pe"))) (EVar "guards")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "body"))))
+(DTypeSig false "guardDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "guardDictSites" ((PVar "pe") (PCon "GBool" (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "guardDictSites" ((PVar "pe") (PCon "GBind" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DTypeSig false "doStmtDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "doStmtDictSites" ((PVar "pe") (PCon "DoExpr" (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "doStmtDictSites" ((PVar "pe") (PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "doStmtDictSites" ((PVar "pe") (PCon "DoBind" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "doStmtDictSites" ((PVar "pe") (PCon "DoAssign" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "doStmtDictSites" ((PVar "pe") (PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DTypeSig false "fieldAssignDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "FieldAssign") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "fieldAssignDictSites" ((PVar "pe") (PCon "FieldAssign" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
 (DTypeSig false "dictArityOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "dictArityOf" ((PVar "mctx") (PVar "n")) (EApp (EVar "listLen") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "lookupPredicateSlots") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "funPredicateSlotsIdxRef") "value")))))
 (DTypeSig false "dictParams" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Pat")))))
