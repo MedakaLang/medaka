@@ -26,8 +26,9 @@ import types.prelude_elab.{
 import driver.build_cmd.{
   readPreludeInterface, PreludeInputs(..), FileVerdict(..)
 }
+import types.interface_frame.{sha256Hex}
 import types.interface_sexp.{
-  PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface, sha256Hex,
+  PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface,
   decodeInterface, formatVersion
 }
 import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}

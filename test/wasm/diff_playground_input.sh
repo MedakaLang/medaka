@@ -68,6 +68,24 @@ cp "$ROOT/test/engine_fixtures/record_field_order_unscanned_ctor.mdk" "$WORK/inp
 cp "$ROOT/test/engine_value_pins/engine/record_field_order_unscanned_ctor.pin" "$WORK/expected"
 if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-record-order.wat" 2>"$WORK/modules-record-order.emit.err"; then check_wat modules-record-order "$WORK/modules-record-order.wat"; else bad "Record-order modules emitter failed"; cat "$WORK/modules-record-order.emit.err"; fi
 if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-record-order.wat" 2>"$WORK/playground-record-order.emit.err"; then check_wat playground-record-order "$WORK/playground-record-order.wat"; else bad "Record-order playground compiler failed"; cat "$WORK/playground-record-order.emit.err"; fi
+# An update nested in another update's field keeps the outer base: both stash their
+# base in a scratch local, and the inner one must not overwrite the outer's (the
+# compiler's own `noteInterners` has this shape, so the playground compiler trapped).
+cat > "$WORK/input.mdk" <<'EOF'
+data L = L { a : Int, b : Int }
+
+data I = I { lin : L, cat : Int }
+
+upd : I -> I
+upd i = I { i | lin = L { i.lin | b = 7 } }
+
+main =
+  let r = upd (I { lin = L { a = 1, b = 2 }, cat = 3 })
+  println "\{r.lin.a} \{r.lin.b} \{r.cat}"
+EOF
+printf '%s\n' '1 7 3' > "$WORK/expected"
+if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-nested-update.wat" 2>"$WORK/modules-nested-update.emit.err"; then check_wat modules-nested-update "$WORK/modules-nested-update.wat"; else bad "Nested-update modules emitter failed"; cat "$WORK/modules-nested-update.emit.err"; fi
+if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-nested-update.wat" 2>"$WORK/playground-nested-update.emit.err"; then check_wat playground-nested-update "$WORK/playground-nested-update.wat"; else bad "Nested-update playground compiler failed"; cat "$WORK/playground-nested-update.emit.err"; fi
 cat > "$WORK/input.mdk" <<'EOF'
 main = 42
 EOF

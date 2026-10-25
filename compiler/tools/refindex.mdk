@@ -97,10 +97,11 @@ import frontend.parser.{
 import driver.loader.{
   loadProgramFilesLocatedCached,
   moduleIdOfPath,
-  importModId,
 }
+import frontend.visibility.{useModId}
 import support.util.{zipL, startsWith, endsWith, splitOnChar}
 import support.path.{joinPath}
+import support.ordmap.{omEmpty}
 import list.{sort}
 import support.char.{isUpper}
 import array.{get as arrayGet}
@@ -1538,7 +1539,7 @@ buildRefIndex : (String -> Option String) ->
   String ->
   <IO> RefIndex
 buildRefIndex read entry roots runtimeSrc coreSrc =
-  let parseCache = Ref []
+  let parseCache = Ref omEmpty
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
   -- lint-disable-next-line rule-prefer-assign-op
   match loadProgramFilesLocatedCached parseCache read entry roots
@@ -1686,7 +1687,7 @@ midPathsOf root =
 directImportIds : List Decl -> List String
 directImportIds [] = []
 directImportIds ((DUse _ path _) :: rest) =
-  let m = importModId path
+  let m = useModId path
   if m == "core" then directImportIds rest else m :: directImportIds rest
 directImportIds ((DAttrib _ inner) :: rest) = directImportIds (inner :: rest)
 directImportIds (_ :: rest) = directImportIds rest

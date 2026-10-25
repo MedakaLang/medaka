@@ -9447,7 +9447,10 @@ emitVariantUpdateRef prog env d con base fields =
 
 -- the shared copy-with-overrides: stash the base into a scratch local, then build a
 -- struct.new whose tag is the ctor ordinal and whose fields are, per ordinal, the
--- override expr (if present) or a struct.get of the stashed base.
+-- override expr (if present) or a struct.get of the stashed base.  The base local
+-- stays live across the override exprs, so they are emitted one depth deeper: an
+-- update nested in an override (`{ r | f = { r.f | g = v } }`) stashes its own base
+-- in `$__rub<d+1>` instead of overwriting this one.
 emitUpdateCopy : Prog ->
   List String ->
   Int ->
@@ -9478,7 +9481,7 @@ oneUpdateField : Prog ->
   Int ->
   List String
 oneUpdateField prog env d ctor bL fields idx = match findUpdateExpr idx fields
-  Some ex => emitRefExpr prog env d ex
+  Some ex => emitRefExpr prog env (d + 1) ex
   None => [
     "local.get " ++ bL,
     "ref.cast (ref $" ++ ctorStructName ctor ++ ")",
@@ -10816,19 +10819,20 @@ maxIndexAt (CList es) d = foldMaxI (map (x => maxIndexAt x d) es)
 maxIndexAt (CArray es) d = foldMaxI (map (x => maxIndexAt x d) es)
 maxIndexAt (CRecord _ fields) d =
   foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields)
--- CRecordUpdate/CVariantUpdate stash the base in $__rub<d> at their own emit site.
+-- CRecordUpdate/CVariantUpdate stash the base in $__rub<d> at their own emit site
+-- and emit their override exprs at d+1 (emitUpdateCopy).
 maxIndexAt (CRecordUpdate _ b fields) d =
   maxI
     d
     (maxI
       (maxIndexAt b d)
-      (foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields)))
+      (foldMaxI (map (x => maxIndexAt (cFieldExpr x) (d + 1)) fields)))
 maxIndexAt (CVariantUpdate _ b fields) d =
   maxI
     d
     (maxI
       (maxIndexAt b d)
-      (foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields)))
+      (foldMaxI (map (x => maxIndexAt (cFieldExpr x) (d + 1)) fields)))
 maxIndexAt (CFieldAccess e1 _ _ _) d = maxIndexAt e1 d
 -- These four nodes each allocate depth-`d` scratch locals ($__rl*/$__ra*/$__ix*/
 -- $__sl* at suffix `d`) at their OWN emit site, so they must contribute `d` even

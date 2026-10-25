@@ -18,13 +18,14 @@ import frontend.desugar_cache.{desugaredPrelude}
 import string as S
 import support.sexp_value.{SexpError(..)}
 import types.framed_test_support.{testKeyAt, withDigestOf}
-import types.interface_sexp as Framing
-import types.interface_sexp.{InterfaceFault(..)}
+import types.interface_frame as Framing
+import types.interface_frame.{InterfaceFault(..)}
 import types.prelude_elab.{
   PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile, elabKeyOf,
   seedPreludeElab, preludeElabHit, formatVersion, binderSpan, relocDecls,
-  readElabKey, BinderRun(..)
+  readElabKey, readElabFileGated, readElabKeyGated, BinderRun(..)
 }
+import types.interface_frame.{noGate}
 import types.prelude_interface.{InterfaceKey(..), keysMatch}
 import types.publish.{CheckedProgram(..), TcReport(..)}
 import types.runtime_types.{BinderRow(..)}
@@ -66,6 +67,7 @@ verdict (Err f) = faultText f
 faultText : InterfaceFault -> String
 faultText (WrongFormat v) = "format \{v}"
 faultText (Malformed e) = "malformed \{e.sePath}"
+faultText (StaleKey c) = "stale \{c}"
 
 -- The file with its header's digest rewritten to match [body] after the first
 -- line, so only the body is wrong.
@@ -77,6 +79,7 @@ why : Result InterfaceFault a -> String
 why (Ok _) = "ok"
 why (Err (WrongFormat v)) = "format \{v}"
 why (Err (Malformed e)) = "\{e.sePath}: \{e.seWhat}"
+why (Err (StaleKey c)) = "stale \{c}"
 
 -- The highest ordinal of module `""` among [rows].
 topRow : List EvEntry -> Int
@@ -181,6 +184,38 @@ test "every refusal is an Err of the right class" = match coreElab ()
           "malformed"
           (S.take 9 (verdict (readElabFile (withBody text "()\n"))))),
     ]
+
+-- The header's key goes to the gate before the digest is hashed and before any
+-- body is read, so a stale file with a garbage body names the key.
+test "a stale key is named before the digest or the body is read" =
+  match coreElab ()
+    None => fail "could not elaborate core"
+    Some pe =>
+      let text = encodeElabFile testKey pe
+      let headerLine = S.take (optionOr 0 (S.indexOf "\n" text)) text
+      let garbage = "\{headerLine}\n(((\n"
+      expectAll [
+        labelFail
+          "garbage under an accepted key reaches the digest"
+          (expectEqual
+            "malformed header/digest"
+            (verdict (readElabFileGated noGate garbage))),
+        labelFail
+          "garbage under a stale key is stale"
+          (expectEqual
+            "stale sources"
+            (verdict (readElabFileGated (_ => Some "sources") garbage))),
+        labelFail
+          "an intact file under a stale key"
+          (expectEqual
+            "stale compiler"
+            (verdict (readElabFileGated (_ => Some "compiler") text))),
+        labelFail
+          "the header-only reader gates the key too"
+          (expectEqual
+            "stale compiler"
+            (verdict (readElabKeyGated (_ => Some "compiler") text))),
+      ]
 
 test "counters that do not describe the rows are refused, each naming its class" =
   match coreElab ()

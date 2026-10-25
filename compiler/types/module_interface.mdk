@@ -1,0 +1,409 @@
+-- One module's checked diagnostics-arm contribution as a value, the key it is
+-- valid under, and the one process cache of them.
+--
+-- A `ModuleInterface` is what a diagnostics drive needs from a module before the
+-- entry to continue as if it had checked it: the module's frozen diagnostics row,
+-- its own export bindings, and the rows its check added to the graph record.  It is
+-- admissible by `prelude_interface.mdk`'s rule: no `Decl`, no `Ref`, no live
+-- `Scheme`.  Every scheme, slot and record a later module reads is copied over
+-- fresh cells when it is recorded and again each time it is applied, so no drive
+-- shares a cell with another; the diagnostics row is frozen once and only rendered.
+--
+-- What a module's check adds, and how `applyModuleInterface` replays it:
+--   * the lists a module prepends to (the constructor universe, the predicate slots,
+--     the declared prefixes, the scheme obligations, the evidence entries and the
+--     sticky diagnostics): the recorded prefix, in front of the current list.  A
+--     module's check re-orders the bare slot rows it does not own without changing
+--     any first-match lookup, so the replayed order answers every reader alike;
+--   * the dispatch-index universe, which a module appends to: the recorded suffix;
+--   * the function-name universe, the existential and pattern-authority ids, the
+--     binder rows and the grant tables: the recorded new keys, inserted;
+--   * the constructor and record populations: the module's own rows, inserted by
+--     identity (`spInsert`), then its floor-only spellings.
+-- Nothing else a module writes is read by a later module on the diagnostics arm: a
+-- module records only after its goals are drained, and its given environment,
+-- scopes and evidence cells are read only inside it.  No id is relocated: binder
+-- and evidence ordinals are process-global, and a drive that serves starts its type
+-- and effect variables above every id a served interface was recorded with
+-- (`Lineage`).  The evidence cells a served module minted are not carried, so the
+-- served drive's evidence table lacks their entries; no diagnostics-arm reader reads
+-- that table.
+--
+-- The cache holds one interface per module id, the newest recorded, with no count
+-- cap.  Each recorded interface carries a process serial, and an importer's key
+-- carries the serial of each import (`moduleInterfaceIdentity`), so an importer
+-- whose import was re-recorded misses without any digest.
+import frontend.ast.{TabKey, DataVis, Variant, EvTable, Ident}
+import list.{drop, take, mapAccumL}
+import map as M
+import map.{Map(..)}
+import support.ordmap.{
+  OrdMap, omEmpty, omInsert, omLookup, omHasKey, omRestrict
+}
+import support.util.{joinNl, lenKey, listLen, isNonEmptyL}
+import types.prelude_interface.{
+  freezeScheme, thawScheme, zonkSlot, zonkMethodSlot, zonkRecord, mapSlots
+}
+import types.publish.{
+  ModDiags, PubScheme(..), TcDiag, emptyZonk, zonkScheme, zonkVecObl
+}
+import types.registry.{SpellingPop, spInsert, spMap, spRows, spFloor}
+import types.repr.{IfaceRef, VecObl}
+import types.runtime_types.{BinderRow, BinderTypeTable, addBinderRow}
+import types.tc_types.{
+  GraphCtx(..), CrossRun(..), GraphRun(..), GrantState(..), ModuleCtx(..),
+  ModuleCells(..), ExportBinding(..), PredicateSlot, MethodPredicateSlot,
+  CDeclaredPrefix, RecordInfo, MethodGrant
+}
+
+-- ── the key ─────────────────────────────────────────────────────────────────
+
+-- What an interface is valid under: the module id, the source key its driver passes
+-- (the module id, its path and the exact source the loader parsed), the identity of
+-- each direct import, and the drive's graph key (its configuration, the prelude
+-- generation and chain key, and every module's instance heads and constrained
+-- signature names, which a module reads whether or not it imports their definer).
+-- An import that was checked and not recorded has a serial no interface carries.
+public export data ModuleKey = ModuleKey {
+  mkModule : String,
+  mkSource : String,
+  mkImports : List (String, String),
+  mkGraph : String,
+}
+
+-- The one rendering of a key, which the cache compares.  Every field is
+-- length-prefixed, so two keys render alike only when they are equal.
+export
+moduleKeyText : ModuleKey -> String
+moduleKeyText k =
+  joinNl
+    ([lenKey k.mkModule, lenKey k.mkSource, lenKey k.mkGraph]
+      ++ map (imp => "\{lenKey (fst imp)}\{lenKey (snd imp)}") k.mkImports)
+
+-- ── the interface value ─────────────────────────────────────────────────────
+
+-- An export binding over fresh cells.  Its scheme and its standalone alternative are
+-- copied with one zonk state, so a variable the two share stays one variable.
+public export data FrozenExport = FrozenExport {
+  feScheme : PubScheme,
+  feStandalone : Option PubScheme,
+  feExtern : Bool,
+}
+
+public export data ModuleInterface = ModuleInterface {
+  miKey : ModuleKey,
+  miKeyText : String,
+  miSerial : Int,
+  miRow : ModDiags,
+  miExports : List (String, FrozenExport),
+  miFunNames : List String,
+  miDispatchIdx : List ((IfaceRef, String), Int),
+  miDataCtors : List (TabKey, (DataVis, List String, List Variant)),
+  miCtorPop : SpellingPop PubScheme,
+  miRecordPop : SpellingPop RecordInfo,
+  miFunSlots : List (String, List PredicateSlot),
+  miFunSlotsQual : List ((String, String), List PredicateSlot),
+  miDeclared : List (String, CDeclaredPrefix),
+  miDeclaredQual : List ((String, String), CDeclaredPrefix),
+  miMethodSlots : List (String, List MethodPredicateSlot),
+  miMethodSlotsQual : List ((String, String), List MethodPredicateSlot),
+  miSchemeOblsQual : List ((String, String), List VecObl),
+  miExistentials : List Int,
+  miPatternAuth : List Int,
+  miAnyExistentials : Bool,
+  miEvTable : EvTable,
+  miBinders : List BinderRow,
+  miTopIds : List (String, List Int),
+  miMethodGrants : List (String, MethodGrant),
+  miTakers : List String,
+  miSticky : List (String, TcDiag),
+}
+
+-- The rows of a graph record a module's check adds to, read at one point: the
+-- view before the module and the view after it are what an interface records the
+-- difference of.
+export data ModuleRows = ModuleRows {
+  mrFunNames : OrdMap Unit,
+  mrDispatchIdx : List ((IfaceRef, String), Int),
+  mrDataCtors : List (TabKey, (DataVis, List String, List Variant)),
+  mrFunSlots : List (String, List PredicateSlot),
+  mrFunSlotsQual : List ((String, String), List PredicateSlot),
+  mrDeclared : List (String, CDeclaredPrefix),
+  mrDeclaredQual : List ((String, String), CDeclaredPrefix),
+  mrMethodSlots : List (String, List MethodPredicateSlot),
+  mrMethodSlotsQual : List ((String, String), List MethodPredicateSlot),
+  mrSchemeOblsQual : List ((String, String), List VecObl),
+  mrExistentials : Map Int Unit,
+  mrPatternAuth : Map Int Unit,
+  mrAnyExistentials : Bool,
+  mrEvTable : EvTable,
+  mrBinders : BinderTypeTable,
+  mrTopIds : OrdMap (List Int),
+  mrMethodGrants : OrdMap MethodGrant,
+  mrTakers : OrdMap Unit,
+  mrSticky : List (String, TcDiag),
+}
+
+export
+captureModuleRows : GraphCtx -> ModuleRows
+captureModuleRows g =
+  let c = g.crossRun
+  let r = g.graphRun
+  ModuleRows {
+    mrFunNames = c.universeFunNamesRef.value,
+    mrDispatchIdx = c.universeMethodDispatchIdxByIdRef.value,
+    mrDataCtors = c.universeDataCtors.value,
+    mrFunSlots = c.crossModuleFunPredicateSlotsRef.value,
+    mrFunSlotsQual = c.crossModuleFunPredicateSlotsQualRef.value,
+    mrDeclared = c.crossModuleFunConstraintDeclaredRef.value,
+    mrDeclaredQual = c.crossModuleFunConstraintDeclaredQualRef.value,
+    mrMethodSlots = c.crossModuleMethodPredicateSlotsRef.value,
+    mrMethodSlotsQual = c.crossModuleMethodPredicateSlotsQualRef.value,
+    mrSchemeOblsQual = c.crossModuleSchemeOblsQualRef.value,
+    mrExistentials = r.ctorExistentialsRef.value,
+    mrPatternAuth = r.patternAuthIdsRef.value,
+    mrAnyExistentials = r.anyExistentialsRef.value,
+    mrEvTable = r.evTable.value,
+    mrBinders = r.binderRows.value,
+    mrTopIds = r.grants.gsTopIds.value,
+    mrMethodGrants = r.grants.gsMethods.value,
+    mrTakers = r.grants.gsTakers.value,
+    mrSticky = g.typeErrorsStickyDiags.value,
+  }
+
+-- ── freeze and apply ────────────────────────────────────────────────────────
+
+-- The rows [after] holds in front of [before]'s.
+newPrefix : List a -> List a -> List a
+newPrefix after before = take (listLen after - listLen before) after
+
+zonkObls : List (k, List VecObl) -> List (k, List VecObl)
+zonkObls rows =
+  map (row => (fst row, snd (mapAccumL zonkVecObl emptyZonk (snd row)))) rows
+
+freezeExport : ExportBinding -> FrozenExport
+freezeExport xb =
+  let (z, s) = zonkScheme emptyZonk xb.xbScheme
+  FrozenExport {
+    feScheme = PubScheme { psScheme = s, psContext = [] },
+    feStandalone =
+      map
+        (alt => PubScheme { psScheme = snd (zonkScheme z alt), psContext = [] })
+        xb.xbStandalone,
+    feExtern = xb.xbExtern,
+  }
+
+thawExport : FrozenExport -> ExportBinding
+thawExport fe =
+  let (z, s) = zonkScheme emptyZonk fe.feScheme.psScheme
+  ExportBinding {
+    xbScheme = s,
+    xbStandalone = map (alt => snd (zonkScheme z alt.psScheme)) fe.feStandalone,
+    xbExtern = fe.feExtern,
+  }
+
+-- The interface of a module just checked and drained: [row] is its frozen
+-- diagnostics row, [exports] its own export bindings, [before] the view taken before
+-- its check and [mctx] its record after the drain.
+export
+freezeModuleInterface : ModuleKey ->
+  Int ->
+  ModDiags ->
+  List (String, ExportBinding) ->
+  ModuleRows ->
+  ModuleCtx ->
+  ModuleInterface
+freezeModuleInterface key serial row exports before mctx =
+  let after = captureModuleRows mctx.mcGraph
+  let (ctorPop, recordPop) = mctx.mcCells.ownPopsRef.value
+  let existentials =
+    M.keys (M.difference after.mrExistentials before.mrExistentials)
+  ModuleInterface {
+    miKey = key,
+    miKeyText = moduleKeyText key,
+    miSerial = serial,
+    miRow = row,
+    miExports = map (b => (fst b, freezeExport (snd b))) exports,
+    miFunNames = M.keys (M.difference after.mrFunNames before.mrFunNames),
+    miDispatchIdx = drop (listLen before.mrDispatchIdx) after.mrDispatchIdx,
+    miDataCtors = newPrefix after.mrDataCtors before.mrDataCtors,
+    miCtorPop = spMap freezeScheme ctorPop,
+    miRecordPop = spMap zonkRecord recordPop,
+    miFunSlots =
+      mapSlots zonkSlot (newPrefix after.mrFunSlots before.mrFunSlots),
+    miFunSlotsQual =
+      mapSlots zonkSlot (newPrefix after.mrFunSlotsQual before.mrFunSlotsQual),
+    miDeclared = newPrefix after.mrDeclared before.mrDeclared,
+    miDeclaredQual = newPrefix after.mrDeclaredQual before.mrDeclaredQual,
+    miMethodSlots =
+      mapSlots
+        zonkMethodSlot
+        (newPrefix after.mrMethodSlots before.mrMethodSlots),
+    miMethodSlotsQual =
+      mapSlots
+        zonkMethodSlot
+        (newPrefix after.mrMethodSlotsQual before.mrMethodSlotsQual),
+    miSchemeOblsQual =
+      zonkObls (newPrefix after.mrSchemeOblsQual before.mrSchemeOblsQual),
+    miExistentials = existentials,
+    miPatternAuth =
+      M.keys (M.difference after.mrPatternAuth before.mrPatternAuth),
+    -- Set by this module when it registered an existential constructor, or when it
+    -- turned the flag on.
+    miAnyExistentials =
+      isNonEmptyL existentials
+        || after.mrAnyExistentials && not before.mrAnyExistentials,
+    miEvTable = newPrefix after.mrEvTable before.mrEvTable,
+    miBinders =
+      map snd (M.entries (M.difference after.mrBinders before.mrBinders)),
+    miTopIds = M.entries (M.difference after.mrTopIds before.mrTopIds),
+    miMethodGrants =
+      M.entries (M.difference after.mrMethodGrants before.mrMethodGrants),
+    miTakers = M.keys (M.difference after.mrTakers before.mrTakers),
+    miSticky = newPrefix after.mrSticky before.mrSticky,
+  }
+
+-- [own]'s rows inserted into [pop] by identity, each spelling's rows in their own
+-- order, then [own]'s floor entries for the spellings that hold no row of [own].
+mergePop : SpellingPop a -> SpellingPop a -> SpellingPop a
+mergePop own pop =
+  let rows = spRows own
+  let withRows =
+    fold
+      (acc e => fold (acc2 row => insertRow (fst e) row acc2) acc (snd e))
+      pop
+      (M.entries rows)
+  fold
+    (acc e =>
+      if omHasKey (fst e) rows then
+        acc
+      else
+        spInsert None (fst e) "" (snd e) acc)
+    withRows
+    (M.entries (spFloor own))
+
+insertRow : String -> (Ident, String, a) -> SpellingPop a -> SpellingPop a
+insertRow spelling (ident, owner, payload) pop =
+  spInsert (Some ident) spelling owner payload pop
+
+insertIds : List Int -> Map Int Unit -> Map Int Unit
+insertIds ids m = fold (acc i => M.set i () acc) m ids
+
+-- Replays [mi]'s rows into [g], the record the serving drive continues from, and
+-- returns the module's diagnostics row and its own export bindings over fresh cells.
+export
+applyModuleInterface : GraphCtx ->
+  ModuleInterface ->
+  (ModDiags, List (String, ExportBinding))
+applyModuleInterface g mi =
+  let c = g.crossRun
+  let r = g.graphRun
+  let gs = r.grants
+  c.universeFunNamesRef :=
+    fold (acc n => omInsert n () acc) c.universeFunNamesRef.value mi.miFunNames
+  c.universeMethodDispatchIdxByIdRef :=
+    c.universeMethodDispatchIdxByIdRef.value ++ mi.miDispatchIdx
+  c.universeDataCtors := mi.miDataCtors ++ c.universeDataCtors.value
+  c.universeCtorPop :=
+    mergePop (spMap thawScheme mi.miCtorPop) c.universeCtorPop.value
+  c.universeRecordPop :=
+    mergePop (spMap zonkRecord mi.miRecordPop) c.universeRecordPop.value
+  c.crossModuleFunPredicateSlotsRef :=
+    mapSlots zonkSlot mi.miFunSlots ++ c.crossModuleFunPredicateSlotsRef.value
+  c.crossModuleFunPredicateSlotsQualRef :=
+    mapSlots zonkSlot mi.miFunSlotsQual
+      ++ c.crossModuleFunPredicateSlotsQualRef.value
+  c.crossModuleFunConstraintDeclaredRef :=
+    mi.miDeclared ++ c.crossModuleFunConstraintDeclaredRef.value
+  c.crossModuleFunConstraintDeclaredQualRef :=
+    mi.miDeclaredQual ++ c.crossModuleFunConstraintDeclaredQualRef.value
+  c.crossModuleMethodPredicateSlotsRef :=
+    mapSlots zonkMethodSlot mi.miMethodSlots
+      ++ c.crossModuleMethodPredicateSlotsRef.value
+  c.crossModuleMethodPredicateSlotsQualRef :=
+    mapSlots zonkMethodSlot mi.miMethodSlotsQual
+      ++ c.crossModuleMethodPredicateSlotsQualRef.value
+  c.crossModuleSchemeOblsQualRef :=
+    zonkObls mi.miSchemeOblsQual ++ c.crossModuleSchemeOblsQualRef.value
+  r.ctorExistentialsRef :=
+    insertIds mi.miExistentials r.ctorExistentialsRef.value
+  r.patternAuthIdsRef := insertIds mi.miPatternAuth r.patternAuthIdsRef.value
+  r.anyExistentialsRef := r.anyExistentialsRef.value || mi.miAnyExistentials
+  r.evTable := mi.miEvTable ++ r.evTable.value
+  r.binderRows :=
+    fold (acc row => addBinderRow row acc) r.binderRows.value mi.miBinders
+  gs.gsTopIds :=
+    fold (acc e => omInsert (fst e) (snd e) acc) gs.gsTopIds.value mi.miTopIds
+  gs.gsMethods :=
+    fold
+      (acc e => omInsert (fst e) (snd e) acc)
+      gs.gsMethods.value
+      mi.miMethodGrants
+  gs.gsTakers := fold (acc n => omInsert n () acc) gs.gsTakers.value mi.miTakers
+  g.typeErrorsSticky := g.typeErrorsSticky.value || isNonEmptyL mi.miSticky
+  g.typeErrorsStickyDiags := mi.miSticky ++ g.typeErrorsStickyDiags.value
+  (mi.miRow, map (b => (fst b, thawExport (snd b))) mi.miExports)
+
+-- ── the process cache ───────────────────────────────────────────────────────
+
+-- [mcSerial] is the last serial handed out.
+data ModuleCache = ModuleCache {
+  mcEntries : OrdMap ModuleInterface,
+  mcSerial : Int,
+}
+
+moduleCacheRef : Ref ModuleCache
+moduleCacheRef = Ref ModuleCache { mcEntries = omEmpty, mcSerial = 0 }
+
+-- A serial no earlier call returned: the serial of an interface about to be recorded,
+-- or the identity of a module checked and not recorded, which no key recorded before
+-- can name.
+export
+freshModuleSerial : Unit -> Int
+freshModuleSerial _ =
+  let cache = moduleCacheRef.value
+  let next = cache.mcSerial + 1
+  moduleCacheRef := { cache | mcSerial = next }
+  next
+
+-- What an importer's key carries for this module: its serial, in decimal.
+export
+moduleInterfaceIdentity : ModuleInterface -> String
+moduleInterfaceIdentity mi = intToString mi.miSerial
+
+export
+moduleCacheHit : ModuleKey -> Option ModuleInterface
+moduleCacheHit key = match omLookup key.mkModule moduleCacheRef.value.mcEntries
+  Some mi => if mi.miKeyText == moduleKeyText key then Some mi else None
+  None => None
+
+-- Keeps [mi] as its module's interface, replacing the one recorded before.
+export
+recordModuleInterface : ModuleInterface -> Unit
+recordModuleInterface mi =
+  moduleCacheRef := withInterface moduleCacheRef.value mi
+
+-- Drops the interfaces of every module outside [mids], so the cache is bounded by
+-- the graph last analyzed rather than by every module id ever loaded.
+export
+retainModuleInterfaces : List String -> Unit
+retainModuleInterfaces mids =
+  let cache = moduleCacheRef.value
+  moduleCacheRef := { cache | mcEntries = omRestrict mids cache.mcEntries }
+
+-- Adds interfaces read from elsewhere.  The serials handed out afterwards start
+-- above theirs.
+export
+seedModuleInterfaces : List ModuleInterface -> Unit
+seedModuleInterfaces mis =
+  moduleCacheRef := fold withInterface moduleCacheRef.value mis
+
+withInterface : ModuleCache -> ModuleInterface -> ModuleCache
+withInterface cache mi = ModuleCache {
+  mcEntries = omInsert mi.miKey.mkModule mi cache.mcEntries,
+  mcSerial = max cache.mcSerial mi.miSerial,
+}
+
+export
+currentModuleInterfaces : Unit -> List ModuleInterface
+currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)

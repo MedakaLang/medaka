@@ -47,7 +47,8 @@ import driver.diagnostics.{
   graphIdSame,
   stdlibExportsReader,
 }
-import driver.loader.{findProjectRootOrSelf, parseCachedLocated}
+import driver.loader.{findProjectRootOrSelf, parseCachedLocated, retainParsed}
+import support.ordmap.{OrdMap, omEmpty}
 import driver.profile_select.{carryProjectProfile, manifestPathOf}
 import frontend.parser.{
   ParseError,
@@ -1742,8 +1743,8 @@ projectCache = Ref []
 -- Shared by the diagnostics path AND the project-aware hover/completion path so
 -- both reuse the same parsed deps.  Source-keyed (pure parse ⇒ equal source ⇒ equal
 -- decls), bounded inside loadProgramFilesLocatedCached.
-projectParseCache : Ref (List (String, List Decl))
-projectParseCache = Ref []
+projectParseCache : Ref (OrdMap (List Decl))
+projectParseCache = Ref omEmpty
 
 -- file:// URI ↔ filesystem path.  LSP clients send `file://<abs-path>`; the
 -- loader works in plain paths.  pathOfUri strips the scheme; uriOfPath re-adds
@@ -1936,13 +1937,16 @@ publishForSelected runtimeSrc coreSrc uri text docs =
     Ok decls =>
       if anyImport decls then
         publishProjectDiagnostics runtimeSrc coreSrc uri text docs
-      else match publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
-        Some report =>
-          if report.trPartial.paModule == "__user__" then
-            Some (KeptOne text (reportEnv report))
-          else
-            None
-        None => None
+      else
+        -- a one-module graph: the parse memo keeps this buffer's parse alone
+        retainParsed projectParseCache [text]
+        match publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
+          Some report =>
+            if report.trPartial.paModule == "__user__" then
+              Some (KeptOne text (reportEnv report))
+            else
+              None
+          None => None
 
 -- Extract a textDocument/{didOpen,didChange} uri + text and publish.
 -- didOpen:   params.textDocument.{uri,text}

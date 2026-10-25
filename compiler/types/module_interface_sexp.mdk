@@ -1,0 +1,490 @@
+-- A module's interface as a file: `ModuleInterface` written as an `SExp` per
+-- section and read back, framed by `types.interface_frame`.
+--
+-- The header carries the whole `ModuleKey`, field by field, so a reader knows
+-- what the file was written for before it looks at a section:
+--   (medaka-module <version> (module <id>) (source <text>)
+--     (imports ((<module> <identity>) ...)) (graph <text>) (sections <n>)
+--     (digest <hex>))
+-- The key is opaque here: it is written as it is given and read back as it was
+-- written.  A section is one interface valid under the joins it lists (the
+-- join is a section tag, not a key field), one line per section:
+--   (section (joins (<join> ...)) <interface>)   a join is a list of `atom`
+--   (module-interface <field> x24)               `ModuleInterface`, field
+--                                                order, less its key
+-- Every number in an interface is a plain integer: binder and evidence
+-- ordinals and the serial are process-global values this codec neither
+-- relocates nor interprets.  The scheme-level nodes are `types.interface_sexp`'s;
+-- the others are written here:
+--   (moddiags <id> (<binding> ...) (<tcdiag> ...) (<tcdiag> ...))
+--   (tcdiag <code> <severity> <loc-opt> <message> <opt> <fix-opt>)
+--   (loc <file> <int> <int> <int> <int>)      a fix is a `(<loc> <text>)` pair
+--   (export <pub> <pub-opt> <bool>)           `FrozenExport`
+--   (grant <arity> (<name> ...))              `MethodGrant`
+--   (<evidence row> ...)                      `EvTable`, `frontend.ast_codec`
+--   (<id> <name> <type> (<type>?) <bool>)     `BinderRow`; an id of module
+--                                             `""` is its bare ordinal
+-- A file whose key the reader's gate calls stale is refused before its digest
+-- is checked and before any section is decoded.  A reader returns `Err`, never
+-- a partial value, for a stale key, a lying digest, a torn text, a version
+-- other than `moduleFormatVersion`, an unknown tag or a truncated list.
+import frontend.ast.{BinderId(..), EvTable, Loc(..)}
+import frontend.ast_codec.{decodeEvEntries, evEntriesSExp, sexpBinderId}
+import support.sexp_value.{
+  SExp(..), SexpError(..), atomBool, atomInt, expectAtom, parseSExp, renderSExp
+}
+import types.effect_rows.{Atom}
+import types.interface_frame.{
+  InterfaceFault(..), framedFile, openFramed, verifyDigest
+}
+import types.interface_sexp.{
+  Reader, at, atomSExp, decJoins, decPairAtoms, pairAtoms, boolNode,
+  bindingOfSExp, bindingSExp, cDeclaredPrefixOfSExp, cDeclaredPrefixSExp,
+  dataVisOfSExp, dataVisSExp, ifaceRefOfSExp, ifaceRefSExp, intNode, listOfSExp,
+  listSExp, methodPredicateSlotOfSExp, methodPredicateSlotSExp, misfit, nested,
+  optionOfSExp, optionSExp, pairOfSExp, pairSExp, predicateSlotOfSExp,
+  predicateSlotSExp, pubSchemeOfSExp, pubSchemeSExp, recordInfoOfSExp,
+  recordInfoSExp, refuse, spellingPopOfSExp, spellingPopSExp, tabKeyOfSExp,
+  tabKeySExp, tagged, tripleOfSExp, tripleSExp, variantOfSExp, variantSExp,
+  vecOblOfSExp, vecOblSExp
+}
+import types.module_interface.{
+  FrozenExport(..), ModuleInterface(..), ModuleKey(..), moduleKeyText
+}
+import types.publish.{ModDiags, TcDiag(..)}
+import types.runtime_types.{
+  BinderRow(..), RuntimeType, runtimeTypeFromName, runtimeTypeName
+}
+import types.tc_types.{MethodGrant(..)}
+
+-- ── the value ───────────────────────────────────────────────────────────────
+
+-- One interface of a file, with the IO joins it is valid under.
+public export data ModuleSection = ModuleSection {
+  msJoins : List (List Atom),
+  msInterface : ModuleInterface,
+}
+
+export
+moduleFormatVersion : Int
+moduleFormatVersion = 1
+
+fileTag : String
+fileTag = "medaka-module"
+
+-- ── writing ─────────────────────────────────────────────────────────────────
+
+moduleHeaderFields : ModuleKey -> List SExp
+moduleHeaderFields k = [
+  tagged "module" [SAtom k.mkModule],
+  tagged "source" [SAtom k.mkSource],
+  tagged "imports" [listSExp (pairSExp SAtom SAtom) k.mkImports],
+  tagged "graph" [SAtom k.mkGraph],
+]
+
+locNode : Loc -> SExp
+locNode (Loc file a b c d) =
+  tagged "loc" [SAtom file, intNode a, intNode b, intNode c, intNode d]
+
+diagNode : TcDiag -> SExp
+diagNode (TcDiag code severity loc message help fix) = tagged "tcdiag" [
+  SAtom code,
+  intNode severity,
+  optionSExp locNode loc,
+  SAtom message,
+  optionSExp SAtom help,
+  optionSExp (pairSExp locNode SAtom) fix,
+]
+
+modDiagsNode : ModDiags -> SExp
+modDiagsNode (mid, (schemes, errs, warns)) = tagged "moddiags" [
+  SAtom mid,
+  listSExp (b => bindingSExp (fst b) (snd b)) schemes,
+  listSExp diagNode errs,
+  listSExp diagNode warns,
+]
+
+exportNode : FrozenExport -> SExp
+exportNode fe = tagged "export" [
+  pubSchemeSExp fe.feScheme,
+  optionSExp pubSchemeSExp fe.feStandalone,
+  boolNode fe.feExtern,
+]
+
+grantNode : MethodGrant -> SExp
+grantNode g = tagged "grant" [intNode g.mgArity, listSExp SAtom g.mgNames]
+
+binderNode : BinderRow -> SExp
+binderNode row = SList [
+  sexpBinderId row.brId,
+  SAtom row.brName,
+  SAtom (runtimeTypeName row.brType),
+  optionList (map (t => SAtom (runtimeTypeName t)) row.brReturns),
+  boolNode row.brSigned,
+]
+
+-- A binder's return type is a list of at most one element, not `optionSExp`'s
+-- `none`/`some` pair: `decBinder` reads it back with the list reader.
+optionList : Option SExp -> SExp
+optionList None = SList []
+optionList (Some x) = SList [x]
+
+-- A constructor call over every field, so a field added to the record is a
+-- build error here until it has an arm.
+interfaceNode : ModuleInterface -> SExp
+interfaceNode (ModuleInterface _ _ serial row exports funNames dispatchIdx dataCtors ctorPop recordPop funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual schemeObls existentials patternAuth anyEx evTable binders topIds grants takers sticky) = tagged
+  "module-interface"
+  [
+    intNode serial,
+    modDiagsNode row,
+    listSExp (pairSExp SAtom exportNode) exports,
+    listSExp SAtom funNames,
+    listSExp (pairSExp (pairSExp ifaceRefSExp SAtom) intNode) dispatchIdx,
+    listSExp
+      (pairSExp
+        tabKeySExp
+        (tripleSExp dataVisSExp (listSExp SAtom) (listSExp variantSExp)))
+      dataCtors,
+    spellingPopSExp pubSchemeSExp ctorPop,
+    spellingPopSExp recordInfoSExp recordPop,
+    listSExp (pairSExp SAtom (listSExp predicateSlotSExp)) funSlots,
+    listSExp (pairSExp pairAtoms (listSExp predicateSlotSExp)) funSlotsQual,
+    listSExp (pairSExp SAtom cDeclaredPrefixSExp) declared,
+    listSExp (pairSExp pairAtoms cDeclaredPrefixSExp) declaredQual,
+    listSExp (pairSExp SAtom (listSExp methodPredicateSlotSExp)) methodSlots,
+    listSExp
+      (pairSExp pairAtoms (listSExp methodPredicateSlotSExp))
+      methodSlotsQual,
+    listSExp (pairSExp pairAtoms (listSExp vecOblSExp)) schemeObls,
+    listSExp intNode existentials,
+    listSExp intNode patternAuth,
+    boolNode anyEx,
+    evEntriesSExp evTable,
+    listSExp binderNode binders,
+    listSExp (pairSExp SAtom (listSExp intNode)) topIds,
+    listSExp (pairSExp SAtom grantNode) grants,
+    listSExp SAtom takers,
+    listSExp (pairSExp SAtom diagNode) sticky,
+  ]
+
+sectionLine : ModuleSection -> String
+sectionLine s =
+  renderSExp
+      (tagged "section" [
+        tagged "joins" [listSExp (listSExp atomSExp) s.msJoins],
+        interfaceNode s.msInterface,
+      ])
+    ++ "\n"
+
+-- The file for [sections] under [key].  Panics when a section's interface was
+-- recorded under another key: the header is the only place the key is written.
+export
+encodeModuleSections : ModuleKey -> List ModuleSection -> String
+encodeModuleSections key sections
+  | any (s => s.msInterface.miKeyText /= moduleKeyText key) sections =
+    panic "module_interface_sexp: a section was recorded under another key"
+  | otherwise =
+    framedFile
+      fileTag
+      moduleFormatVersion
+      (moduleHeaderFields key
+        ++ [tagged "sections" [intNode (length sections)]])
+      (stringJoin "" (map sectionLine sections))
+
+-- The file for one interface valid under every join.
+export
+encodeModuleInterface : ModuleInterface -> String
+encodeModuleInterface mi = encodeModuleSections mi.miKey [
+  ModuleSection { msJoins = [], msInterface = mi },
+]
+
+-- ── reading ─────────────────────────────────────────────────────────────────
+
+decLoc : Reader Loc
+decLoc path (SList [SAtom "loc", f, a, b, c, d]) = do
+  file <- expectAtom (at path "loc" 1) f
+  a1 <- atomInt (at path "loc" 2) a
+  b1 <- atomInt (at path "loc" 3) b
+  c1 <- atomInt (at path "loc" 4) c
+  d1 <- atomInt (at path "loc" 5) d
+  Ok (Loc file a1 b1 c1 d1)
+decLoc path node = misfit path [("loc", 5)] node
+
+decDiag : Reader TcDiag
+decDiag path (SList [SAtom "tcdiag", c, s, l, m, h, f]) = do
+  code <- expectAtom (at path "tcdiag" 1) c
+  severity <- atomInt (at path "tcdiag" 2) s
+  loc <- optionOfSExp decLoc (at path "tcdiag" 3) l
+  message <- expectAtom (at path "tcdiag" 4) m
+  help <- optionOfSExp expectAtom (at path "tcdiag" 5) h
+  fix <- optionOfSExp (pairOfSExp decLoc expectAtom) (at path "tcdiag" 6) f
+  Ok (TcDiag code severity loc message help fix)
+decDiag path node = misfit path [("tcdiag", 6)] node
+
+decModDiags : Reader ModDiags
+decModDiags path (SList [SAtom "moddiags", m, ss, es, ws]) = do
+  mid <- expectAtom (at path "moddiags" 1) m
+  schemes <- listOfSExp (nested bindingOfSExp) (at path "moddiags" 2) ss
+  errs <- listOfSExp decDiag (at path "moddiags" 3) es
+  warns <- listOfSExp decDiag (at path "moddiags" 4) ws
+  Ok (mid, (schemes, errs, warns))
+decModDiags path node = misfit path [("moddiags", 4)] node
+
+decExport : Reader FrozenExport
+decExport path (SList [SAtom "export", s, alt, ext]) = do
+  scheme <- nested pubSchemeOfSExp (at path "export" 1) s
+  standalone <- optionOfSExp (nested pubSchemeOfSExp) (at path "export" 2) alt
+  isExtern <- atomBool (at path "export" 3) ext
+  Ok FrozenExport {
+    feScheme = scheme,
+    feStandalone = standalone,
+    feExtern = isExtern,
+  }
+decExport path node = misfit path [("export", 3)] node
+
+decGrant : Reader MethodGrant
+decGrant path (SList [SAtom "grant", a, ns]) = do
+  arity <- atomInt (at path "grant" 1) a
+  names <- listOfSExp expectAtom (at path "grant" 2) ns
+  Ok MethodGrant { mgArity = arity, mgNames = names }
+decGrant path node = misfit path [("grant", 2)] node
+
+decBinderId : Reader BinderId
+decBinderId path (SAtom n) = map (BinderId "") (atomInt path (SAtom n))
+decBinderId path (SList [SAtom m, n]) = map (BinderId m) (atomInt path n)
+decBinderId path node = refuse path node "expected a binder id"
+
+decRuntimeType : Reader RuntimeType
+decRuntimeType path node = do
+  name <- expectAtom path node
+  match runtimeTypeFromName name
+    Some t => Ok t
+    None => refuse path node "unknown runtime type"
+
+decBinder : Reader BinderRow
+decBinder path (SList [i, n, t, r, s]) = do
+  bid <- decBinderId (at path "binder" 1) i
+  name <- expectAtom (at path "binder" 2) n
+  ty <- decRuntimeType (at path "binder" 3) t
+  returns <- listOfSExp decRuntimeType (at path "binder" 4) r
+  signed <- atomBool (at path "binder" 5) s
+  returned <- match returns
+    [] => Ok None
+    [x] => Ok (Some x)
+    _ => refuse (at path "binder" 4) r "expected at most one type"
+  Ok BinderRow {
+    brId = bid,
+    brName = name,
+    brType = ty,
+    brReturns = returned,
+    brSigned = signed,
+  }
+decBinder path node = refuse path node "expected a binder row of five fields"
+
+decEvTable : Reader EvTable
+decEvTable path node =
+  mapErr
+    (e => { e | sePath = "\{path}/\{e.sePath}" })
+    (decodeEvEntries (renderSExp node))
+
+decInterface : ModuleKey -> Reader ModuleInterface
+decInterface key path (SList [SAtom "module-interface", n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15, n16, n17, n18, n19, n20, n21, n22, n23, n24]) =
+  do
+    let p = at path "module-interface"
+    serial <- atomInt (p 1) n1
+    row <- decModDiags (p 2) n2
+    exports <- listOfSExp (pairOfSExp expectAtom decExport) (p 3) n3
+    funNames <- listOfSExp expectAtom (p 4) n4
+    dispatchIdx <- listOfSExp
+      (pairOfSExp (pairOfSExp (nested ifaceRefOfSExp) expectAtom) atomInt)
+      (p 5)
+      n5
+    dataCtors <- listOfSExp
+      (pairOfSExp
+        (nested tabKeyOfSExp)
+        (tripleOfSExp
+          (nested dataVisOfSExp)
+          (listOfSExp expectAtom)
+          (listOfSExp (nested variantOfSExp))))
+      (p 6)
+      n6
+    ctorPop <- spellingPopOfSExp (nested pubSchemeOfSExp) (p 7) n7
+    recordPop <- spellingPopOfSExp (nested recordInfoOfSExp) (p 8) n8
+    funSlots <- listOfSExp
+      (pairOfSExp expectAtom (listOfSExp (nested predicateSlotOfSExp)))
+      (p 9)
+      n9
+    funSlotsQual <- listOfSExp
+      (pairOfSExp decPairAtoms (listOfSExp (nested predicateSlotOfSExp)))
+      (p 10)
+      n10
+    declared <- listOfSExp
+      (pairOfSExp expectAtom (nested cDeclaredPrefixOfSExp))
+      (p 11)
+      n11
+    declaredQual <- listOfSExp
+      (pairOfSExp decPairAtoms (nested cDeclaredPrefixOfSExp))
+      (p 12)
+      n12
+    methodSlots <- listOfSExp
+      (pairOfSExp expectAtom (listOfSExp (nested methodPredicateSlotOfSExp)))
+      (p 13)
+      n13
+    methodSlotsQual <- listOfSExp
+      (pairOfSExp decPairAtoms (listOfSExp (nested methodPredicateSlotOfSExp)))
+      (p 14)
+      n14
+    schemeObls <- listOfSExp
+      (pairOfSExp decPairAtoms (listOfSExp (nested vecOblOfSExp)))
+      (p 15)
+      n15
+    existentials <- listOfSExp atomInt (p 16) n16
+    patternAuth <- listOfSExp atomInt (p 17) n17
+    anyEx <- atomBool (p 18) n18
+    evTable <- decEvTable (p 19) n19
+    binders <- listOfSExp decBinder (p 20) n20
+    topIds <- listOfSExp (pairOfSExp expectAtom (listOfSExp atomInt)) (p 21) n21
+    grants <- listOfSExp (pairOfSExp expectAtom decGrant) (p 22) n22
+    takers <- listOfSExp expectAtom (p 23) n23
+    sticky <- listOfSExp (pairOfSExp expectAtom decDiag) (p 24) n24
+    Ok ModuleInterface {
+      miKey = key,
+      miKeyText = moduleKeyText key,
+      miSerial = serial,
+      miRow = row,
+      miExports = exports,
+      miFunNames = funNames,
+      miDispatchIdx = dispatchIdx,
+      miDataCtors = dataCtors,
+      miCtorPop = ctorPop,
+      miRecordPop = recordPop,
+      miFunSlots = funSlots,
+      miFunSlotsQual = funSlotsQual,
+      miDeclared = declared,
+      miDeclaredQual = declaredQual,
+      miMethodSlots = methodSlots,
+      miMethodSlotsQual = methodSlotsQual,
+      miSchemeOblsQual = schemeObls,
+      miExistentials = existentials,
+      miPatternAuth = patternAuth,
+      miAnyExistentials = anyEx,
+      miEvTable = evTable,
+      miBinders = binders,
+      miTopIds = topIds,
+      miMethodGrants = grants,
+      miTakers = takers,
+      miSticky = sticky,
+    }
+decInterface _ path node = misfit path [("module-interface", 24)] node
+
+decSection : ModuleKey -> Reader ModuleSection
+decSection key path (SList [SAtom "section", js, i]) = do
+  joins <- decJoins (at path "section" 1) js
+  value <- decInterface key (at path "section" 2) i
+  Ok ModuleSection { msJoins = joins, msInterface = value }
+decSection _ path node = misfit path [("section", 2)] node
+
+-- The key of the header's fields, and the section count after it.
+readHeaderFields : List SExp -> Result SexpError (ModuleKey, Int)
+readHeaderFields [SList [SAtom "module", m], SList [SAtom "source", s], SList [SAtom "imports", imps], SList [SAtom "graph", g], SList [SAtom "sections", n]] =
+  do
+    modId <- expectAtom "header/module" m
+    source <- expectAtom "header/source" s
+    imports <- listOfSExp decPairAtoms "header/imports" imps
+    graph <- expectAtom "header/graph" g
+    count <- atomInt "header/sections" n
+    Ok (
+      ModuleKey {
+        mkModule = modId,
+        mkSource = source,
+        mkImports = imports,
+        mkGraph = graph,
+      },
+      count,
+    )
+readHeaderFields _ = Err SexpError {
+  seOffset = 0,
+  sePath = "header",
+  seWhat = "expected the module, source, imports, graph and sections fields",
+}
+
+-- The component a key differs from [expected] in, if it does.
+export
+keyDifference : ModuleKey -> ModuleKey -> Option String
+keyDifference expected k
+  | k.mkModule /= expected.mkModule = Some "module"
+  | k.mkSource /= expected.mkSource = Some "source"
+  | k.mkImports /= expected.mkImports = Some "imports"
+  | k.mkGraph /= expected.mkGraph = Some "graph"
+  | otherwise = None
+
+-- The key a file's header claims, read off that line alone: the version and the
+-- header's shape are checked, the digest and the sections are not.
+export
+readModuleKey : String -> Result InterfaceFault ModuleKey
+readModuleKey text = do
+  (fields, _, _) <- openFramed fileTag moduleFormatVersion 5 text
+  (key, _) <- mapErr Malformed (readHeaderFields fields)
+  Ok key
+
+-- The file's key and sections, once [gate] has found the header's key fresh.
+-- The order is the version, the header, the gate, the digest, then the
+-- sections, so a stale key never has its body decoded.
+export
+decodeModuleSections : (ModuleKey -> Option String) ->
+  String ->
+  Result InterfaceFault (ModuleKey, List ModuleSection)
+decodeModuleSections gate text = do
+  (fields, digest, covered) <- openFramed fileTag moduleFormatVersion 5 text
+  (key, count) <- mapErr Malformed (readHeaderFields fields)
+  _ <- stale (gate key)
+  _ <- verifyDigest digest covered
+  top <- mapErr Malformed (parseSExp ("(" ++ covered ++ ")"))
+  sections <- mapErr Malformed (listOfSExp (decSection key) "file" top)
+  if length sections /= count then
+    Err
+      (Malformed SexpError {
+        seOffset = 0,
+        sePath = "header/sections.1",
+        seWhat =
+          "header counts \{count} section(s), the file holds \{length sections}",
+      })
+  else
+    Ok (key, sections)
+
+-- `interface_frame.gated` over a `ModuleKey`: that gate is typed on `InterfaceKey`,
+-- and this one has already run, so it takes the component it found.
+stale : Option String -> Result InterfaceFault Unit
+stale None = Ok ()
+stale (Some component) = Err (StaleKey component)
+
+-- The one interface of a file, once [gate] has found its key fresh.
+export
+decodeModuleInterfaceGated : (ModuleKey -> Option String) ->
+  String ->
+  Result InterfaceFault ModuleInterface
+decodeModuleInterfaceGated gate text = do
+  (_, sections) <- decodeModuleSections gate text
+  match sections
+    [s] => Ok s.msInterface
+    _ =>
+      Err
+        (Malformed SexpError {
+          seOffset = 0,
+          sePath = "header/sections.1",
+          seWhat = "expected one section, the file holds \{length sections}",
+        })
+
+-- The interface a file holds, whatever key it was written under.
+export
+decodeModuleInterface : String -> Result InterfaceFault ModuleInterface
+decodeModuleInterface = decodeModuleInterfaceGated (_ => None)
+
+-- The interface a file holds for [expected]: a header key that differs is
+-- `StaleKey` of the component, before the digest or any section is read.
+export
+decodeModuleInterfaceFor : ModuleKey ->
+  String ->
+  Result InterfaceFault ModuleInterface
+decodeModuleInterfaceFor expected =
+  decodeModuleInterfaceGated (keyDifference expected)

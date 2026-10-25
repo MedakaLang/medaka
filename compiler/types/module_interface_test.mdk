@@ -1,0 +1,275 @@
+-- The module interface cache: what a recorded interface replays, when a key hits,
+-- and the cases a served drive must not differ from a checked one in.  Drives run
+-- through `keyedDrive` with source keys, as the keyed callers do;
+-- each test uses module ids and chain keys of its own, because the cache is keyed
+-- by module id and lives for the process.
+import test.{
+  expectEach, expectEqual, expectFalse, expectGreaterThan, expectSatisfies,
+  expectTrue, fail
+}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse, parseLocated}
+import list.{filter}
+import support.ordmap.{omHasKey}
+import types.module_interface.{
+  ModuleInterface(..), FrozenExport(..), ModuleKey(..), applyModuleInterface,
+  currentModuleInterfaces
+}
+import types.module_interface_test_support.{
+  bareDrive, chainDrive, entrySrc, keyedDrive, leafSrc, render, renderRow
+}
+import types.publish.{ModDiags, PubScheme(..), ppPubScheme}
+import types.repr.{ppSchemeCon, Scheme(..)}
+import types.tc_types.{
+  DriveOutputs(..), ExportBinding(..), GraphCtx(..), CrossRun(..)
+}
+import types.typecheck.{defaultDriveInputs, checkModules}
+import support.util.{joinNl}
+
+-- ── fixtures ────────────────────────────────────────────────────────────────
+
+export
+interfaceOf : String -> Option ModuleInterface
+interfaceOf mid =
+  let found =
+    filter (mi => mi.miKey.mkModule == mid) (currentModuleInterfaces ())
+  match found
+    [mi] => Some mi
+    _ => None
+
+-- ── freeze and apply ────────────────────────────────────────────────────────
+
+renderFrozen : FrozenExport -> String
+renderFrozen fe = ppPubScheme fe.feScheme
+
+export
+renderBinding : (String, ExportBinding) -> String
+renderBinding (name, b) = "\{name} : \{ppSchemeCon [] b.xbScheme}"
+
+export
+renderFrozenBinding : (String, FrozenExport) -> String
+renderFrozenBinding (name, fe) = "\{name} : \{renderFrozen fe}"
+
+-- A graph record whose drive checked one unrelated module, so it holds none of the
+-- fixture leaf's names.
+export
+freshGraph : String -> Int -> GraphCtx
+freshGraph mid seed =
+  snd (bareDrive seed "fresh-\{mid}" [(mid, "export unrelated = 1")])
+
+hasNames : GraphCtx -> List String -> Bool
+hasNames g names =
+  all (n => omHasKey n g.crossRun.universeFunNamesRef.value) names
+
+test "applying a frozen interface twice yields the recorded row and the same bindings" =
+  let _ = chainDrive "rt" 4601 "rt-k" leafSrc (entrySrc "rt_mid")
+  match interfaceOf "rt_leaf"
+    None => fail "the leaf recorded no interface"
+    Some mi =>
+      let g1 = freshGraph "rtfresh1" 4602
+      let g2 = freshGraph "rtfresh2" 4603
+      let before = hasNames g1 mi.miFunNames
+      let (row1, exports1) = applyModuleInterface g1 mi
+      let (row2, exports2) = applyModuleInterface g2 mi
+      expectEach [
+        (
+          "the interface names functions",
+          expectGreaterThan 0 (length mi.miFunNames),
+        ),
+        ("the fresh record holds none of them", expectFalse before),
+        (
+          "the row is the recorded one",
+          expectEqual (renderRow mi.miRow) (renderRow row1),
+        ),
+        (
+          "a second application yields the same row",
+          expectEqual (renderRow row1) (renderRow row2),
+        ),
+        (
+          "the bindings are the frozen exports",
+          expectEqual
+            (map renderFrozenBinding mi.miExports)
+            (map renderBinding exports1),
+        ),
+        (
+          "a second application yields the same bindings",
+          expectEqual (map renderBinding exports1) (map renderBinding exports2),
+        ),
+        (
+          "the function names are registered in the record",
+          expectTrue (hasNames g1 mi.miFunNames),
+        ),
+      ]
+
+-- ── hit equals miss ─────────────────────────────────────────────────────────
+
+test "a hit prints what the miss printed" =
+  let (cold, coldServed, _) =
+    chainDrive "hm" 4611 "hm-k" leafSrc (entrySrc "hm_mid")
+  let (warm, warmServed, _) =
+    chainDrive "hm" 4611 "hm-k" leafSrc (entrySrc "hm_mid")
+  expectEach [
+    ("the first drive serves nothing", expectEqual 0 coldServed),
+    (
+      "the second serves the leaf and the middle module",
+      expectEqual 2 warmServed,
+    ),
+    ("both print the same report", expectEqual cold warm),
+    (
+      "the report is not empty",
+      expectSatisfies "lists schemes" (r => length r > 3) cold,
+    ),
+  ]
+
+-- ── the graph key ───────────────────────────────────────────────────────────
+
+otherSrc : String -> String
+otherSrc extra = joinNl [
+  "export interface Speak a where",
+  "  speak : a -> String",
+  extra,
+]
+
+boolSpeakImpl : String
+boolSpeakImpl = """impl Speak Bool where
+  speak _ = "b"
+"""
+
+-- Modules sib_leaf and sib_other; the entry imports only the leaf.
+sibDrive : String -> String -> Int
+sibDrive chainKey otherText =
+  let entryText = joinNl ["import sib_leaf.{Box(..), wrap}", "entry = wrap 1"]
+  let ((_, outputs), _) = bareDrive 4621 chainKey [
+    ("sib_leaf", leafSrc),
+    ("sib_other", otherText),
+    ("sib_entry", entryText),
+  ]
+  outputs.doServedModules
+
+test "an impl in a module the importer does not import invalidates the leaf's interface" =
+  let plain = otherSrc ""
+  let _ = sibDrive "sib-k" plain
+  let afterBody = sibDrive "sib-k" (plain ++ "extra = 42\n")
+  let _ = sibDrive "sib-k2" plain
+  let afterImpl = sibDrive "sib-k2" (plain ++ boolSpeakImpl)
+  expectEach [
+    ("a body edit elsewhere serves the leaf", expectEqual 1 afterBody),
+    ("an impl elsewhere serves nothing", expectEqual 0 afterImpl),
+  ]
+
+-- ── the counter high-water ──────────────────────────────────────────────────
+
+-- A leaf with many generic bindings, so its variable ids are well above a small
+-- module's.
+manySrc : String
+manySrc = joinNl (map (n => "export f\{n} x = (x, x)") [1..12])
+
+-- The quantified type-variable ids of a scheme.
+quantified : PubScheme -> List Int
+quantified p = match p.psScheme
+  Forall ids _ _ _ _ _ => ids
+
+rowIds : String -> List ModDiags -> List Int
+rowIds mid rows =
+  flatMap
+    (r => match r
+      (m, (schemes, _, _)) =>
+        if m == mid then flatMap (s => quantified (snd s)) schemes else [])
+    rows
+
+hwDrive : String -> String -> (List Int, List Int, Int)
+hwDrive chainKey midText =
+  let ((report, outputs), _) = bareDrive 4631 chainKey [
+    ("hw_leaf", manySrc),
+    ("hw_mid", midText),
+    ("hw_entry", entrySrc "hw_mid"),
+  ]
+  (
+    rowIds "hw_leaf" report.trDiagnostics,
+    rowIds "hw_mid" report.trDiagnostics,
+    outputs.doServedModules,
+  )
+
+test "a serving drive after an elaboration mints no id below an earlier drive's high-water" =
+  let midText = joinNl ["import hw_leaf.{f1}", "export g x = f1 x"]
+  let (leafIds, _, _) = hwDrive "hw-k" midText
+  let _ =
+    length
+      (checkModules defaultDriveInputs [] [] [
+        ("hw_pre", desugar (parseLocated "pre = 1")),
+      ])
+  let (servedIds, midIds, served) =
+    hwDrive "hw-k" (joinNl [midText, "export g2 x = f1 x"])
+  expectEach [
+    ("the leaf was served", expectEqual 1 served),
+    ("the served leaf keeps its ids", expectEqual leafIds servedIds),
+    ("the leaf has ids", expectGreaterThan 0 (length leafIds)),
+    (
+      "the middle module's ids are all above the leaf's",
+      expectGreaterThan (maximum leafIds) (minimum midIds),
+    ),
+  ]
+
+-- ── a module that cannot record ─────────────────────────────────────────────
+
+-- The live-root fixture of `test/dict_fixtures`: `lr_lib`'s unannotated numeric
+-- binding stays open until a later module grounds it, here with a type the user
+-- module never imported.  [libText] is the library module's source.
+liveDrive : String -> String -> String -> String -> String -> (List String, Int)
+liveDrive runtime core chainKey libText userText =
+  let entryText = joinNl ["import lr_user.{u}", "entry = u"]
+  let ((report, outputs), _) = keyedDrive 4641 chainKey (desugar
+    (parse runtime)) (desugar (parse core)) [
+    ("lr_lib", libText),
+    ("lr_user", userText),
+    ("lr_entry", entryText),
+  ]
+  (render report, outputs.doServedModules)
+
+openLib : String
+openLib = joinNl [
+  "double n = n + n",
+  "inc n = n + 1",
+  "export e20 = double >> inc",
+]
+
+groundedLib : String
+groundedLib = joinNl [
+  "double : Int -> Int",
+  "double n = n + n",
+  "inc : Int -> Int",
+  "inc n = n + 1",
+  "export e20 = double >> inc",
+]
+
+userSrc : String
+userSrc = joinNl ["import lr_lib.{e20}", "export u = e20 (200 : U8)"]
+
+test "a module whose live root is open records nothing; it and its importers are re-checked" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok runtime, Ok core) =>
+      let (openFirst, openFirstServed) =
+        liveDrive runtime core "lr-open" openLib userSrc
+      let (openSecond, openSecondServed) =
+        liveDrive runtime core "lr-open" openLib userSrc
+      let (_, groundedFirstServed) =
+        liveDrive runtime core "lr-ground" groundedLib userSrc
+      let (_, groundedSecondServed) =
+        liveDrive runtime core "lr-ground" groundedLib userSrc
+      expectEach [
+        ("open: the first drive serves nothing", expectEqual 0 openFirstServed),
+        (
+          "open: the second drive serves nothing",
+          expectEqual 0 openSecondServed,
+        ),
+        ("open: the report is unchanged", expectEqual openFirst openSecond),
+        (
+          "grounded control: first serves nothing",
+          expectEqual 0 groundedFirstServed,
+        ),
+        (
+          "grounded control: second serves the library and the user module",
+          expectEqual 2 groundedSecondServed,
+        ),
+      ]
+    _ => fail "could not read the prelude pair"

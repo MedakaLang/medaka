@@ -1,5 +1,5 @@
 # META
-source_lines=940
+source_lines=951
 stages=DESUGAR,MARK
 # SOURCE
 -- A module's export surface, built from its declarations and the surfaces of
@@ -131,6 +131,17 @@ useModId (UseName ns) =
 useModId (UseGroup ns _) = joinDot ns
 useModId (UseWild ns) = joinDot ns
 useModId (UseAlias ns _) = joinDot ns
+
+-- The module ids [prog] imports, `DAttrib`-wrapped imports included.
+export
+useModuleIds : List Decl -> List String
+useModuleIds prog = flatMap declUseIds prog
+
+export
+declUseIds : Decl -> List String
+declUseIds (DUse _ path _) = [useModId path]
+declUseIds (DAttrib _ d) = declUseIds d
+declUseIds _ = []
 
 -- The public interface of a resolved module
 -- (exp_fields is dropped — consumers only read field OWNERS).
@@ -998,6 +1009,12 @@ overPubUse coreExp known f path =
 (DFunDef false "useModId" ((PCon "UseGroup" (PVar "ns") PWild)) (EApp (EVar "joinDot") (EVar "ns")))
 (DFunDef false "useModId" ((PCon "UseWild" (PVar "ns"))) (EApp (EVar "joinDot") (EVar "ns")))
 (DFunDef false "useModId" ((PCon "UseAlias" (PVar "ns") PWild)) (EApp (EVar "joinDot") (EVar "ns")))
+(DTypeSig true "useModuleIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "useModuleIds" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "declUseIds")) (EVar "prog")))
+(DTypeSig true "declUseIds" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declUseIds" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "useModId") (EVar "path"))))
+(DFunDef false "declUseIds" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declUseIds") (EVar "d")))
+(DFunDef false "declUseIds" (PWild) (EListLit))
 (DData Public "ModuleExports" () ((variant "ModuleExports" (ConNamed (field "modId" (TyCon "String")) (field "expValues" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypes" (TyApp (TyCon "List") (TyCon "String"))) (field "expAbstractData" (TyApp (TyCon "List") (TyCon "String"))) (field "expCtors" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expFieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expInterfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "expIfaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expIfaceOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expTypeOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expCtorOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expValueOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (field "expEffects" (TyApp (TyCon "List") (TyCon "String"))) (field "expEffectOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expNewtypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expAbstractCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "nameSet" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctorTypes" (TyApp (TyCon "OrdMap") (TyCon "String")))))) ())
 (DTypeSig true "filterInSet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "filterInSet" (PWild (PList)) (EListLit))
@@ -1180,6 +1197,12 @@ overPubUse coreExp known f path =
 (DFunDef false "useModId" ((PCon "UseGroup" (PVar "ns") PWild)) (EApp (EVar "joinDot") (EVar "ns")))
 (DFunDef false "useModId" ((PCon "UseWild" (PVar "ns"))) (EApp (EVar "joinDot") (EVar "ns")))
 (DFunDef false "useModId" ((PCon "UseAlias" (PVar "ns") PWild)) (EApp (EVar "joinDot") (EVar "ns")))
+(DTypeSig true "useModuleIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "useModuleIds" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "declUseIds")) (EVar "prog")))
+(DTypeSig true "declUseIds" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declUseIds" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "useModId") (EVar "path"))))
+(DFunDef false "declUseIds" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declUseIds") (EVar "d")))
+(DFunDef false "declUseIds" (PWild) (EListLit))
 (DData Public "ModuleExports" () ((variant "ModuleExports" (ConNamed (field "modId" (TyCon "String")) (field "expValues" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypes" (TyApp (TyCon "List") (TyCon "String"))) (field "expAbstractData" (TyApp (TyCon "List") (TyCon "String"))) (field "expCtors" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expFieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expInterfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "expIfaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expIfaceOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expTypeOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expCtorOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expValueOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (field "expEffects" (TyApp (TyCon "List") (TyCon "String"))) (field "expEffectOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expNewtypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expAbstractCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "nameSet" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctorTypes" (TyApp (TyCon "OrdMap") (TyCon "String")))))) ())
 (DTypeSig true "filterInSet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "filterInSet" (PWild (PList)) (EListLit))

@@ -1,0 +1,5 @@
+import le_leaf.{leafValue}
+
+export
+midValue : Int
+midValue = leafValue + 1

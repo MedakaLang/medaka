@@ -85,6 +85,7 @@ import types.tc_types.{
   ModuleCtx(..),
   TraceSink(..),
 }
+import types.module_interface_test_support.{noValueMain}
 import types.publish.{TcReport(..), CheckedProgram(..)}
 import types.typecheck.{
   defaultDriveInputs,
@@ -99,8 +100,8 @@ import types.typecheck.{
   cellStoreMisses,
   checkModules,
   checkModulesChainReportFor,
+  checkModulesChainReportForGraph,
   checkModulesDiagsChain,
-  checkModulesDiagsChainGraph,
   checkModulesEntryFullReportK,
   checkModulesEntryReport,
   checkModulesPartialLast,
@@ -119,13 +120,9 @@ import types.typecheck.{
   finishMethodReturnTrace,
   finishNumericPredicateTrace,
   isLiveSpan,
-  markModules,
   matchWarningsNow,
   methodReturnResolutionMutationProbe,
   methodReturnMemoCurrentViews,
-  methodReturnMemoFenceMutationProbe,
-  methodReturnMemoRetentionStats,
-  methodReturnMemoTeardownStats,
   methodReturnTemplatePresenceProbe,
   scopeFrameStats,
   scopeTraceContext,
@@ -556,7 +553,7 @@ numericImportedObserved reverseOrder =
       [shape, numeric, forge, entry]
   let sink = beginNumericPredicateTrace ()
   let (results, gctx) =
-    checkModulesDiagsChainGraph
+    chainDiagsGraph
       (traced sink)
       None
       ""
@@ -1020,7 +1017,7 @@ arithmeticImportedObserved reverseOrder =
       [shape, numeric, forge, entry]
   let sink = beginNumericPredicateTrace ()
   let (results, gctx) =
-    checkModulesDiagsChainGraph
+    chainDiagsGraph
       (traced sink)
       None
       ""
@@ -2361,6 +2358,7 @@ test "ordinary return traces are fresh while cache hits replay no events" =
 data ReturnMemoRequestView = ReturnMemoRequestView {
   rmrvModules : List (String, List (String, String), List (String, String)),
   rmrvReturns : List MethodReturnMemoView,
+  rmrvServed : Int,
 } deriving (Eq, Debug)
 
 returnMemoModuleView : ModDiags ->
@@ -2416,9 +2414,10 @@ returnMemoObservedGraph : String ->
   String ->
   (ReturnMemoRequestView, GraphCtx)
 returnMemoObservedGraph prefixSource entrySource stepKey =
-  let (results, gctx) =
-    checkModulesDiagsChainGraph
+  let ((report, outputs), gctx) =
+    checkModulesChainReportForGraph
       defaultDriveInputs
+      noValueMain
       (Some (1091, 1093))
       "method-return-request-fence"
       [Some stepKey, None]
@@ -2430,9 +2429,10 @@ returnMemoObservedGraph prefixSource entrySource stepKey =
       ]
   (
     ReturnMemoRequestView {
-      rmrvModules = map returnMemoModuleView results,
+      rmrvModules = map returnMemoModuleView report.trDiagnostics,
       rmrvReturns =
         filter returnMemoRelevant (methodReturnMemoCurrentViews gctx),
+      rmrvServed = outputs.doServedModules,
     },
     gctx,
   )
@@ -2454,7 +2454,7 @@ returnMemoMethod method view =
     entry :: _ => Some entry
     [] => None
 
-test "ordinary return memo fence preserves outcomes and evidence across requests" =
+test "a served prefix reports as the checked one across requests" =
   let pSource = returnMemoPrefix False
   let changedSource = returnMemoPrefix True
   let cold = returnMemoObserved pSource returnMemoEntry pSource
@@ -2469,11 +2469,7 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
       returnMemoConflictPrefix
   let afterConflict = returnMemoObserved pSource returnMemoEntry pSource
   let changed = returnMemoObserved changedSource returnMemoEntry changedSource
-  let (backToP, backToPGraph) =
-    returnMemoObservedGraph pSource returnMemoEntry pSource
-  let mutations = methodReturnMemoFenceMutationProbe backToPGraph
-  let retained = methodReturnMemoRetentionStats ()
-  let teardown = methodReturnMemoTeardownStats ()
+  let backToP = returnMemoObserved pSource returnMemoEntry pSource
   let forcedStale = returnMemoObserved changedSource returnMemoEntry pSource
   let coldInstance = returnMemoMethod "cachedChoose" cold
   let changedInstance = returnMemoMethod "cachedChoose" changed
@@ -2533,10 +2529,18 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
     _ => fail "expected a return memo for the given method 'hidden'"
   expectEach [
     ("cold has no errors", expectEqual 0 (returnMemoErrorCount cold)),
-    ("cold == hit", expectEqual cold hit),
-    ("cold == afterFailed", expectEqual cold afterFailed),
-    ("cold == afterConflict", expectEqual cold afterConflict),
-    ("cold == backToP", expectEqual cold backToP),
+    ("cold checked the prefix", expectEqual 0 cold.rmrvServed),
+    ("hit served the prefix", expectEqual 1 hit.rmrvServed),
+    ("cold == hit", expectEqual cold.rmrvModules hit.rmrvModules),
+    (
+      "cold == afterFailed",
+      expectEqual cold.rmrvModules afterFailed.rmrvModules,
+    ),
+    (
+      "cold == afterConflict",
+      expectEqual cold.rmrvModules afterConflict.rmrvModules,
+    ),
+    ("cold == backToP", expectEqual cold.rmrvModules backToP.rmrvModules),
     (
       "a failing entry produces at least one error",
       expectGreaterThan 0 (returnMemoErrorCount failed),
@@ -2567,12 +2571,6 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
       "the given memo carries the expected arguments and no prerequisites",
       givenMemo,
     ),
-    (
-      "mutation probe reports (True, True, True)",
-      expectEqual (True, True, True) mutations,
-    ),
-    ("retention stats are (0, 2, 1)", expectEqual (0, 2, 1) retained),
-    ("teardown stats are (0, 0, 0)", expectEqual (0, 0, 0) teardown),
   ]
 
 data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
@@ -2933,7 +2931,7 @@ runModulesObserved : List (String, String) -> ModuleTraceView
 runModulesObserved sources =
   let sink = beginAssumptionTrace ()
   let (results, gctx) =
-    checkModulesDiagsChainGraph
+    chainDiagsGraph
       (traced sink)
       None
       ""
@@ -2962,6 +2960,29 @@ runObserved moduleId source =
     rvFrameCapacity = capacity,
   }
 
+-- `checkModulesChainReportForGraph`'s per-module rows beside the graph record its
+-- drive ends in.
+chainDiagsGraph : DriveInputs ->
+  Option (Int, Int) ->
+  String ->
+  List (Option String) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (List ModDiags, GraphCtx)
+chainDiagsGraph inputs preludeKey chainKey stepKeys runtimeDecls coreDecls modules =
+  let ((report, _), gctx) =
+    checkModulesChainReportForGraph
+      inputs
+      noValueMain
+      preludeKey
+      chainKey
+      stepKeys
+      runtimeDecls
+      coreDecls
+      modules
+  (report.trDiagnostics, gctx)
+
 modErrorCount : List ModDiags -> Int
 modErrorCount [] = 0
 modErrorCount ((_, (_, errors, _)) :: rest) =
@@ -2971,7 +2992,7 @@ runCachedObserved : String -> RequestView
 runCachedObserved entrySource =
   let sink = beginAssumptionTrace ()
   let (results, gctx) =
-    checkModulesDiagsChainGraph
+    chainDiagsGraph
       (traced sink)
       (Some (731, 733))
       "typecheck-scope-cache"
@@ -3129,7 +3150,7 @@ test "fresh repeat and failed/conflicting intervening requests retain ownership"
         && afterConflict.rvFrameCount <= afterConflict.rvFrameCapacity,
     ]
 
-test "module-chain cache hits restore bounded scopes across failing suffixes" =
+test "served prefixes keep bounded scopes across failing entries" =
   let cold = runCachedObserved "entry = 0\n"
   let hit = runCachedObserved "entry = 0\n"
   let failed = runCachedObserved failedSource
@@ -3138,9 +3159,10 @@ test "module-chain cache hits restore bounded scopes across failing suffixes" =
   let afterConflict = runCachedObserved "entry = 0\n"
   let afterConflictHit = runCachedObserved "entry = 0\n"
   let runs = [cold, hit, afterFailed, afterConflict, afterConflictHit]
-  -- Four frames on every run, all the drive's own: a core miss continues from the
-  -- frozen prelude interface as a hit does, so core's frame is never left in the
-  -- run either way.
+  -- Every frame is the drive's own: a core miss continues from the frozen prelude
+  -- interface as a hit does, so core's frame is never left in the run either way.
+  -- A drive that checks the prefix leaves four frames and one that serves it two,
+  -- since a served module brings no scope frame.
   expectEach [
     (
       "cold traces the prefix's scalar assumption",
@@ -3164,8 +3186,8 @@ test "module-chain cache hits restore bounded scopes across failing suffixes" =
       expectEqual [] afterConflictHit.rvTrace,
     ),
     (
-      "every run leaves the same frame count",
-      expectEqual (map (_ => 4) runs) (map (view => view.rvFrameCount) runs),
+      "a checked prefix leaves four frames and a served one two",
+      expectEqual [4, 2, 2, 4, 2] (map (view => view.rvFrameCount) runs),
     ),
     (
       "both failing entries report errors",
@@ -4548,8 +4570,8 @@ test "an <IO> extern in a pure function is refused on every profile" =
     ),
   ]
 
--- The keyed drive resumes from the module-chain memo, so `lib`'s result under
--- one profile must not be replayed under another.
+-- The keyed drive serves `lib` from its interface, so `lib`'s result under one
+-- profile must not be served under another.
 ioJoinKeyedCheck : Option String -> List (String, Int, String, String)
 ioJoinKeyedCheck name =
   let lib = "export\nlistDir : Unit -> <IO> Unit\nlistDir _ = runIt \"ls\"\n"
@@ -5899,43 +5921,6 @@ test "the cell stores report an unminted site and an id from an earlier graph" =
       )
       (cellStoreMisses gctx (EvId "span_probe" 0)),
   ]
-
--- Two modules whose return-position method occurrences the mark pre-pass mints.
-preMarkedModules : List (String, List Decl)
-preMarkedModules = [
-  (
-    "pre_a",
-    desugar
-      (parseLocated
-        (joinNl [
-          "interface Def a where", "  def : a", "impl Def Int where",
-          "  def = 7", "seven : Int", "seven = def"
-        ])),
-  ),
-  (
-    "pre_b",
-    desugar
-      (parseLocated
-        (joinNl [
-          "interface Zero a where", "  zero : a", "impl Zero Int where",
-          "  zero = 0", "nought : Int", "nought = zero"
-        ])),
-  ),
-]
-
--- The profiler's order: the mark pre-pass on its own, then the typecheck of the
--- marked trees, whose inputs carry the marked run.
-test "checkModules completes over modules markModules marked first" =
-  let (core2, mods2, marked) = markModules [] preMarkedModules
-  expectEqual
-    ["pre_a", "pre_b"]
-    (map
-      fst
-      (checkModules
-        { defaultDriveInputs | diMarked = Some marked }
-        []
-        core2
-        mods2))
 
 -- A prelude with a data declaration and an exhaustive match of it.
 seedCoreDecls : Unit -> List Decl

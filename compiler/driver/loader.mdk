@@ -11,6 +11,7 @@
 --   * Cycles ARE detected (an in-progress stack) and reported as an Err.
 
 import support.stage_count.{stageBump}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omFromPairs}
 import frontend.ast.{
   Decl(..),
   UsePath(..),
@@ -25,9 +26,9 @@ import frontend.parser.{
   parseErrorCol,
   parseErrorMessage,
 }
+import frontend.visibility.{useModId}
 import support.util.{
   contains,
-  dropAssoc,
   listLen,
   reverseL,
   initList,
@@ -414,18 +415,12 @@ resolveDepFile deps modId = match splitOnChar "." modId
 
 -- "core" is the implicit prelude — its names are already in scope, so an
 -- `import core.{…}` is a no-op the loader must skip (else it duplicates).
-export
-importModId : UsePath -> String
-importModId (UseName ns) =
-  if listLen ns > 1 then joinDot (initList ns) else lastOr "" ns
-importModId (UseGroup ns _) = joinDot ns
-importModId (UseWild ns) = joinDot ns
-importModId (UseAlias ns _) = joinDot ns
-
+-- Only top-level imports load a module: an attributed one is inert here and in
+-- resolve, so this walk does not look through `DAttrib`.
 directImports : List Decl -> List String
 directImports [] = []
 directImports ((DUse _ path _) :: rest) =
-  let m = importModId path
+  let m = useModId path
   if m == "core" then directImports rest else m :: directImports rest
 directImports (_ :: rest) = directImports rest
 
@@ -437,7 +432,7 @@ directImports (_ :: rest) = directImports rest
 -- `Option Loc`
 -- through every loader signature, the CLI/diagnostics call site re-scans the
 -- ENTRY file's own (already-parsed, already-located) decls for the `DUse`
--- whose `importModId` is the failed module id and borrows its span.  Correct
+-- whose `useModId` is the failed module id and borrows its span.  Correct
 -- for the common case (the entry directly imports the bad module); a bad
 -- import nested in a transitive dependency degrades to no location, same as
 -- before this change.
@@ -461,7 +456,7 @@ export
 findImportLoc : String -> List Decl -> Option Loc
 findImportLoc _ [] = None
 findImportLoc mid ((DUse _ path loc) :: rest) =
-  if importModId path == mid then Some loc else findImportLoc mid rest
+  if useModId path == mid then Some loc else findImportLoc mid rest
 findImportLoc mid ((DAttrib _ d) :: rest) = findImportLoc mid (d :: rest)
 findImportLoc mid (_ :: rest) = findImportLoc mid rest
 
@@ -665,24 +660,36 @@ parsedModule parseFn owningRoot path src =
 -- which keys a module's memoized check on the content the loader actually
 -- parsed, and by `readDiagSrc`, which renders from it — re-reading the file
 -- after the load could race an edit and key or render the wrong content.
--- Bounded MRU so a long session does not grow it.
-loadedSourcesLimit : Int
-loadedSourcesLimit = 64
-
-loadedSourcesRef : Ref (List (String, String))
-loadedSourcesRef = Ref []
+-- Keyed by path, so it holds one source per file; a load that returns narrows it
+-- to that graph (`settleLoad`), so it is bounded by the graph and no graph size
+-- evicts a module mid-load.
+loadedSourcesRef : Ref (OrdMap String)
+loadedSourcesRef = Ref omEmpty
 
 noteLoadedSource : String -> String -> Unit
 noteLoadedSource path src =
-  loadedSourcesRef :=
-    takeFirst
-      loadedSourcesLimit
-      ((path, src) :: dropAssoc path !loadedSourcesRef)
+  loadedSourcesRef := omInsert path src !loadedSourcesRef
 
 -- The source the loader last parsed for `path` (None if it never did).
 export
 loadedSourceOf : String -> Option String
-loadedSourceOf path = lookupAssoc path !loadedSourcesRef
+loadedSourceOf path = omLookup path !loadedSourcesRef
+
+-- The load returned `acc`: keep only the source records of its modules, so what
+-- an earlier load left behind is released while a later read of this graph still
+-- finds every module.  A failed load settles nothing, because its caller keeps
+-- rendering the last good graph.  Returns the sources kept.
+settleLoad : List (String, String, List Decl) -> List String
+settleLoad acc =
+  let kept = loadedPairs acc
+  loadedSourcesRef := omFromPairs kept omEmpty
+  map snd kept
+
+loadedPairs : List (String, String, List Decl) -> List (String, String)
+loadedPairs [] = []
+loadedPairs ((_, path, _) :: rest) = match loadedSourceOf path
+  Some src => (path, src) :: loadedPairs rest
+  None => loadedPairs rest
 
 -- ── canonical module-id rewrite (F1b loader module identity) ─────────────────
 --
@@ -927,10 +934,10 @@ canonicalPathId deps roots path =
       let c = moduleIdOfPath [cr] cPath
       if canonRoundTrips deps roots c cPath then c else fallback
 
--- rewrite a UsePath so its `importModId` yields the canonical id `c`, preserving
+-- rewrite a UsePath so its `useModId` yields the canonical id `c`, preserving
 -- the imported member list / wildcard / alias / single name.  (For UseName the
 -- imported NAME is the last segment; the module path is the prefix — so appending
--- the original last segment onto `splitDot c` makes `importModId` recover `c`.)
+-- the original last segment onto `splitDot c` makes `useModId` recover `c`.)
 rewriteUsePath : String -> UsePath -> UsePath
 rewriteUsePath c (UseName ns) = UseName (splitDot c ++ [lastOr "" ns])
 rewriteUsePath c (UseGroup _ ms) = UseGroup (splitDot c) ms
@@ -941,7 +948,7 @@ rewriteUsePath c (UseAlias _ a) = UseAlias (splitDot c) a
 -- its canonical modId (core + already-canonical imports stay byte-identical).
 rewriteDecl : List (String, String) -> List String -> Decl -> <IO> Decl
 rewriteDecl deps roots (DUse exported path loc) =
-  let m = importModId path
+  let m = useModId path
   if m == "core" then
     DUse exported path loc
   else
@@ -1403,6 +1410,15 @@ visitModsF parseFn read deps roots stack visited acc importer (d :: ds) =
     Err e => Err e
     Ok (v2, a2) => visitModsF parseFn read deps roots stack v2 a2 importer ds
 
+-- A walk's result as the loaders return it: the modules, with the source records
+-- narrowed to them.
+finishLoad : Result LoadError (List String, List (String, String, List Decl)) ->
+  Result LoadError (List (String, String, List Decl))
+finishLoad (Ok (_, acc)) =
+  let _ = settleLoad acc
+  Ok acc
+finishLoad (Err e) = Err e
+
 -- Load a root file + transitive deps, dependency-first, with an unsaved-buffer
 -- override and FILE PATHS in the result, returning `(mod_id, file_path, prog)`
 -- triples.
@@ -1416,8 +1432,7 @@ loadProgramFilesE : (String -> Option String) ->
 loadProgramFilesE read entry roots =
   let _ = stageBump "load.plain"
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
-  map
-    ((_, acc) => acc)
+  finishLoad
     (visitModF
       parseResult
       read
@@ -1442,8 +1457,7 @@ loadProgramFilesLocatedE : (String -> Option String) ->
 loadProgramFilesLocatedE read entry roots =
   let _ = stageBump "load.located"
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
-  map
-    ((_, acc) => acc)
+  finishLoad
     (visitModF
       parseLocatedResult
       read
@@ -1468,53 +1482,58 @@ loadProgramFilesLocatedE read entry roots =
 --
 -- Keying on source content (not path) is correct AND robust: `parseLocated` is a
 -- pure function of its input, so equal source ⇒ equal located decls (same ELoc
--- line/col).  An edited buffer has new source ⇒ a miss ⇒ a fresh parse, and its
--- old entry is harmless dead weight (the cache is bounded below).  Bounding keeps
--- the assoc list small over a long session of edits: keep the most-recent N (one
--- per file in a typical graph + a little slack), dropping the oldest on overflow.
-
-parseCacheLimit : Int
-parseCacheLimit = 24
+-- line/col).  An edited buffer has new source ⇒ a miss ⇒ a fresh parse.  A load
+-- that returns narrows the memo to that graph's sources (`retainParsed`), so it
+-- is bounded by the graph and never evicts a module mid-load.
 
 -- memoizing parseLocated: consult the cache by source, else parse + insert.
--- Most-recently-used moves to the front; the list is truncated to the limit so a
--- long editing session does not grow it unboundedly.
 -- Only SUCCESSES are cached: a failure is cheap (the parse stopped early) and
 -- caching it would widen the session-lived cache's type to a Result, which every
--- LSP caller's `Ref (List (String, List Decl))` signature would have to follow for
+-- LSP caller's `Ref (OrdMap (List Decl))` signature would have to follow for
 -- no gain.
 export
-parseCachedLocated : Ref (List (String, List Decl)) ->
+parseCachedLocated : Ref (OrdMap (List Decl)) ->
   String ->
   Result ParseError (List Decl)
-parseCachedLocated cacheRef src = match lookupAssoc src !cacheRef
+parseCachedLocated cacheRef src = match omLookup src !cacheRef
   Some decls => Ok decls
   None => match parseLocatedResult src
     Err e => Err e
     Ok decls =>
-      cacheRef :=
-        takeFirst parseCacheLimit ((src, decls) :: dropKey src !cacheRef)
+      cacheRef := omInsert src decls !cacheRef
       Ok decls
 
--- drop any existing entry with this key (so a re-parse refreshes its position).
-dropKey : String -> List (String, List Decl) -> List (String, List Decl)
-dropKey _ [] = []
-dropKey k ((k2, v) :: rest)
-  | k == k2 = dropKey k rest
-  | otherwise = (k2, v) :: dropKey k rest
+-- Narrow a parse memo to the entries whose source is in `srcs`: a caller that
+-- parsed through the memo without loading a graph (a buffer with no imports)
+-- names the sources it still needs.
+export
+retainParsed : Ref (OrdMap (List Decl)) -> List String -> Unit
+retainParsed cacheRef srcs =
+  let old = !cacheRef
+  cacheRef := omFromPairs (retainedEntries old srcs) omEmpty
 
-takeFirst : Int -> List a -> List a
-takeFirst _ [] = []
-takeFirst n (x :: xs)
-  | n <= 0 = []
-  | otherwise = x :: takeFirst (n - 1) xs
+retainedEntries : OrdMap (List Decl) -> List String -> List (String, List Decl)
+retainedEntries _ [] = []
+retainedEntries old (src :: rest) = match omLookup src old
+  Some decls => (src, decls) :: retainedEntries old rest
+  None => retainedEntries old rest
 
 -- Like loadProgramFilesLocatedE but parses each module through the source-keyed
 -- memo `parseCacheRef`.  Behaviourally identical (same located decls per module);
 -- only the cost differs (unchanged deps skip re-parsing).  The LSP threads a
 -- session-lived cache so reuse spans didChange events.
+-- `finishLoad` for a walk that parsed through the memo: the memo narrows to the
+-- sources the returned modules were parsed from.
+finishCachedLoad : Ref (OrdMap (List Decl)) ->
+  Result LoadError (List String, List (String, String, List Decl)) ->
+  Result LoadError (List (String, String, List Decl))
+finishCachedLoad parseCacheRef (Ok (_, acc)) =
+  retainParsed parseCacheRef (settleLoad acc)
+  Ok acc
+finishCachedLoad _ (Err e) = Err e
+
 export
-loadProgramFilesLocatedCached : Ref (List (String, List Decl)) ->
+loadProgramFilesLocatedCached : Ref (OrdMap (List Decl)) ->
   (String -> Option String) ->
   String ->
   List String ->
@@ -1525,7 +1544,7 @@ loadProgramFilesLocatedCached parseCacheRef read entry roots =
     (loadProgramFilesLocatedCachedE parseCacheRef read entry roots)
 
 export
-loadProgramFilesLocatedCachedE : Ref (List (String, List Decl)) ->
+loadProgramFilesLocatedCachedE : Ref (OrdMap (List Decl)) ->
   (String -> Option String) ->
   String ->
   List String ->
@@ -1533,8 +1552,8 @@ loadProgramFilesLocatedCachedE : Ref (List (String, List Decl)) ->
 loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
   let _ = stageBump "load.cached"
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
-  map
-    ((_, acc) => acc)
+  finishCachedLoad
+    parseCacheRef
     (visitModF
       (s => parseCachedLocated parseCacheRef s)
       read
