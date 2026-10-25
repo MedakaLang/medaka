@@ -9,7 +9,7 @@ import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 import support.util.{
   anyList, dedup, filterList, isNonEmptyL, isSome, joinNl, listLen, zipL
 }
-import types.chain_key.{chainGraphKey}
+import types.chain_key.{chainGraphKey, interfaceRows}
 import types.invocation_basis.{readInvocationView}
 import types.module_interface.{
   ModuleKey(..),
@@ -45,14 +45,16 @@ public export data ServeOps = ServeOps {
 export type DiagsPayload = (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView)
 
 -- The serve policy's state: whether the drive serves trees, the source keys of the
--- modules still to come, the graph key, the identity of each module so far, the
--- modules checked and not recorded, and the counts `ModuleServe` reports.
+-- modules still to come, the graph key, the interface rows of the modules so far,
+-- the identity of each module so far, the modules checked and not recorded, and the
+-- counts `ModuleServe` reports.
 export data ServeState = ServeState {
   ssOps : ServeOps,
   ssTrees : Bool,
   ssCapture : OrdMap Unit,
   ssKeys : List (Option String),
   ssGraph : String,
+  ssIfaces : List String,
   ssIdents : OrdMap String,
   ssUnrecorded : OrdMap Unit,
   ssRows : Int,
@@ -62,8 +64,9 @@ export data ServeState = ServeState {
 
 -- The policy's start for a drive over [modules] whose chain key and source keys are
 -- [keyed]: the graph key is the drive's configuration, the chain key, and every
--- module's instance heads, interface declarations and constrained signature names,
--- which a module reads whether or not it imports their definer (`chainGraphKey`).
+-- module's instance heads and constrained signature names, which a module reads
+-- whether or not it imports their definer (`chainGraphKey`).  A module's key adds
+-- the interface declarations of the modules before it (`graphPart`).
 export
 serveStateOf : ServeOps ->
   OrdMap Unit ->
@@ -81,6 +84,7 @@ serveStateOf ops capture gctx modules (chain, steps) = ServeState {
       "\{gctx.config.value.tcKey}\n\{chain}\n\{chainGraphKey modules}"
     else
       "",
+  ssIfaces = [],
   ssIdents = omEmpty,
   ssUnrecorded = omEmpty,
   ssRows = 0,
@@ -121,7 +125,11 @@ serveStep : ServeState ->
   ModuleCtx ->
   ServeStep DiagsPayload
 serveStep st mid prog prev =
-  let next = { st | ssKeys = drop 1 st.ssKeys, ssRows = st.ssRows + 1 }
+  let next = { st |
+    ssKeys = drop 1 st.ssKeys,
+    ssIfaces = st.ssIfaces ++ interfaceRows mid prog,
+    ssRows = st.ssRows + 1,
+  }
   match st.ssKeys
     (Some source) :: _ =>
       let key = ModuleKey {
@@ -161,13 +169,16 @@ serveStep st mid prog prev =
               recordScoped next key before mctx own done mark)
     _ => ServeCheck (_ _ done => (done, diagsServe (unrecordedState next mid)))
 
--- The key's graph part for the module [prev] precedes.
+-- The key's graph part for the module [prev] precedes: the graph key and the
+-- interface declarations of the modules before it, whose method names it reads by
+-- bare name whether or not it imports their declarer.
 graphPart : ServeState -> ModuleCtx -> String
-graphPart st prev
-  | st.ssTrees =
-    joinNl
-      ("\{st.ssGraph}\ntrees" :: sort prev.mcGraph.promotionHarvestRef.value)
-  | otherwise = st.ssGraph
+graphPart st prev =
+  let graph = joinNl (st.ssGraph :: st.ssIfaces)
+  if st.ssTrees then
+    joinNl ("\{graph}\ntrees" :: sort prev.mcGraph.promotionHarvestRef.value)
+  else
+    graph
 
 -- A tree drive serves only an interface that carries trees.
 servable : ServeState -> Option ModuleInterface -> Option ModuleInterface
