@@ -9,12 +9,14 @@
 import frontend.ast.{
   Decl(..), Ty(..), Require(..), ImplMethod(..), ifaceMethodName
 }
+import list.{sort}
 import support.util.{joinWith}
 import types.route_key.{implRouteKeyWord}
 
+-- The rows are sorted, so two load orders of one graph give one key.
 export
 chainGraphKey : List (String, List Decl) -> String
-chainGraphKey modules = joinWith "\n" (flatMap moduleRows modules)
+chainGraphKey modules = joinWith "\n" (sort (flatMap moduleRows modules))
 
 moduleRows : (String, List Decl) -> List String
 moduleRows (mid, decls) = flatMap (declRow mid) decls
