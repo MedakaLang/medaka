@@ -759,15 +759,19 @@ import types.runtime_types.{
 import types.runtime_ops.{arithmeticTag}
 import types.runtime_grants as RuntimeGrants
 import types.program_facts.{ProgramFacts, factsOfElab}
-import types.serve_policy.{ServeOps(..), serveStateOf, diagsServe}
+import types.serve_policy.{ServeOps(..), serveStateOf, diagsServe, treeServe}
 import types.module_interface.{
   ModuleKey(..),
   ModuleInterface,
   ModuleRows,
   applyModuleInterface,
   captureModuleRows,
+  cellEntriesFrom,
+  servedEntriesFrom,
+  setServedArity,
   freezeModuleInterface,
   freshModuleSerial,
+  grantTopKey,
   moduleCacheHit,
   moduleInterfaceIdentity,
   recordModuleInterface,
@@ -10440,28 +10444,6 @@ notAnOpSite ev =
   panic
     "site cell \{evIdModule ev}#\{intToString (evOrdinal ev)} is not an operator site"
 
--- Every minted site cell as a published entry, under the id its node carries.
-siteCellEntries : GraphCtx -> Unit -> EvTable
-siteCellEntries gctx _ =
-  let arr = gctx.graphRun.siteCells.value
-  siteCellEntriesFrom arr (arrayLength arr - 1) []
-
-siteCellEntriesFrom : Array (Option (EvId, SiteCell)) ->
-  Int ->
-  EvTable ->
-  EvTable
-siteCellEntriesFrom arr i acc
-  | i < 0 = acc
-  | otherwise = match arrayGetUnsafe i arr
-    None => siteCellEntriesFrom arr (i - 1) acc
-    Some (ev, c) =>
-      siteCellEntriesFrom arr (i - 1) (EvEntry ev (siteCellValue c) :: acc)
-
-siteCellValue : SiteCell -> EvVal
-siteCellValue (OpSite r) = EvOne r.value
-siteCellValue (LitSite f r) = EvLit f.value r.value
-siteCellValue (HeadSite h) = EvHead h.value
-
 -- The cells minted for [ev].  A miss is a bug in this file (every `EMethodAt` is
 -- minted through `mintMethodCell`), so it panics rather than answering unrouted.
 methodCellOf : GraphCtx -> EvId -> EvCell
@@ -10496,43 +10478,12 @@ missText : Result String a -> String
 missText (Ok _) = ""
 missText (Err message) = message
 
--- Every minted method cell as a published entry, read back out of the cells the
--- stampers wrote — the per-node half of the table `drivenEvidence` returns.
-methodCellEntries : GraphCtx -> Unit -> EvTable
-methodCellEntries gctx _ =
-  let arr = gctx.graphRun.evCells.value
-  methodCellEntriesFrom arr (arrayLength arr - 1) []
-
-methodCellEntriesFrom : Array (Option EvCell) -> Int -> EvTable -> EvTable
-methodCellEntriesFrom arr i acc
-  | i < 0 = acc
-  | otherwise = match arrayGetUnsafe i arr
-    None => methodCellEntriesFrom arr (i - 1) acc
-    Some c =>
-      let arity = match c.ecArity.value
-        Some n => n
-        None =>
-          panic
-            "method cell published before its selected scheme supplied an arity"
-      methodCellEntriesFrom
-        arr
-        (i - 1)
-        (EvEntry
-            c.ecId
-            (EvMethod
-              c.ecIface.value
-              arity
-              c.ecTag.value
-              c.ecImpl.value
-              c.ecMeth.value)
-          :: acc)
-
 -- The whole evidence table of this graph: one entry per method occurrence and per
--- minted site, plus the per-goal entries the drain recorded.
+-- minted site, plus the per-goal entries the drain recorded and the entries of the
+-- modules a tree drive served (`applyModuleTrees`).
 drivenEvidence : GraphCtx -> Unit -> EvTable
 drivenEvidence gctx _ =
-  methodCellEntries gctx ()
-    ++ siteCellEntries gctx ()
+  cellEntriesFrom gctx.graphRun gctx.graphRun.evBase
     ++ gctx.graphRun.evTable.value
 
 -- Scope storage is graph-owned; this accessor keeps the request store explicit
@@ -10586,8 +10537,12 @@ graphLineageRun lineage =
   localAbs.lasQuantified := omEmpty
   -- Grant-marked occurrences survive.  The sourceless variables do not: the
   -- inference that follows registers them under ids the restarted counter mints
-  -- again.
+  -- again.  Nor do the file bounds, keyed by site: a check of the module adds its
+  -- own, whose variables are this drive's, and a bound an earlier check left would
+  -- be read against them.  A served module's come back with its trees.
   grants.gsSourceless := Tip
+  grants.gsBounds := omEmpty
+  grants.gsValueBounds := omEmpty
   GraphRun { fresh |
     localAbs = localAbs,
     grants = grants,
@@ -16140,6 +16095,7 @@ freshLocalAbsState _ = LocalAbsState {
   lasBinders = Ref omEmpty,
   lasRecOccs = Ref omEmpty,
   lasNext = Ref ("", 0),
+  lasMinted = Ref [],
   lasQuantified = Ref omEmpty,
 }
 
@@ -16147,8 +16103,10 @@ freshLocalAbsName : GraphCtx -> String -> String
 freshLocalAbsName gctx x =
   let st = gctx.graphRun.localAbs
   let (mid, k) = st.lasNext.value
+  let name = "\{x}$\{mid}$\{intToString k}$lb"
   st.lasNext := (mid, k + 1)
-  "\{x}$\{mid}$\{intToString k}$lb"
+  st.lasMinted := name :: st.lasMinted.value
+  name
 
 isLocalAbsName : String -> Bool
 isLocalAbsName n = endsWith "$lb" n
@@ -16897,9 +16855,6 @@ grantChainAt gctx (sid@(ScopeId i)) =
   match IdMap.get i gctx.graphRun.grants.gsBodies.value
     Some body => body :: own
     None => own
-
-grantTopKey : String -> String -> String
-grantTopKey mid n = "\{mid}|\{n}"
 
 -- A generalized top-level group: each member whose scheme quantifies
 -- authorities takes them as parameters, and each use of such a member inside
@@ -34738,7 +34693,8 @@ grantUse gctx n ev =
 -- the occurrence as the standalone; a grant-taking standalone reached without that
 -- record has no grants to pass, and is a compile-time failure.  The occurrence's
 -- published arity counts the grants, as the backends read it; the published table
--- is read out of the cells after the pass, so that count is written to the cell.
+-- is read out of the cells after the pass, so that count is written to the
+-- occurrence's cell (`setOccurrenceArity`).
 methodGrantUse : GraphCtx -> PassEvidence -> String -> EvId -> MethodGrantUse
 methodGrantUse gctx pe n ev =
   let (iface, tag, _) = passMethodOf pe ev
@@ -34764,15 +34720,21 @@ methodGrantUse gctx pe n ev =
             MethodGrants mg.mgArity (methodTerms gctx n mg occ)
         None => MethodGrants mg.mgArity (map (_ => bottomGrant) mg.mgNames)
   let _ = match use
-    MethodGrants arity grants => setCellArity gctx ev (arity + listLen grants)
-    LeadingGrants arity grants => setCellArity gctx ev (arity + listLen grants)
+    MethodGrants arity grants =>
+      setOccurrenceArity gctx pe ev (arity + listLen grants)
+    LeadingGrants arity grants =>
+      setOccurrenceArity gctx pe ev (arity + listLen grants)
     NoGrants => ()
   use
 
-setCellArity : GraphCtx -> EvId -> Int -> Unit
-setCellArity gctx ev arity =
-  let cell = methodCellOf gctx ev
-  cell.ecArity := Some arity
+-- An occurrence in a module the drive served has no cell in this lineage: its
+-- entry in the index takes the count (`setServedArity`).
+setOccurrenceArity : GraphCtx -> PassEvidence -> EvId -> Int -> Unit
+setOccurrenceArity gctx pe ev arity
+  | evOrdinal ev < gctx.graphRun.evBase = setServedArity (passIndex pe) ev arity
+  | otherwise =
+    let cell = methodCellOf gctx ev
+    cell.ecArity := Some arity
 
 -- A use recorded as the standalone binding a method occurrence shadows, with its
 -- value arity.
@@ -54236,14 +54198,14 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
 -- comes back (see `GraphOut`).  Every whole-graph entry point below is a projection
 -- of this function.
 --
--- [keyed] is a keyed diagnostics drive's chain key (`chainFullKey`) and one source
--- key per module, `None` for every other drive.  Under it the fold serves each
--- unchanged module before the entry from its recorded interface and records the
--- modules it checks (`diagsServe`); the tree arm takes `None`, because an interface
--- carries neither marked trees nor dict-passed output.  Whether a drive is keyed is
--- its caller's choice: a one-shot process passes no source keys, so it neither serves
--- nor records, and a session (the LSP, the playground) keeps the interfaces between
--- requests.
+-- [keyed] is a keyed drive's chain key (`chainFullKey`) and one source key per
+-- module, `None` for every other drive.  Under it the fold serves each unchanged
+-- module before the entry from its recorded interface and records the modules it
+-- checks (`diagsServe`); a tree drive also serves and records each module's marked
+-- trees, which `dictPass` then passes with the rest of the graph (`treeServe`).
+-- Whether a drive is keyed is its caller's choice: a one-shot process passes no
+-- source keys, so it neither serves nor records, and a session (the LSP, the
+-- playground, `medaka test`) keeps the interfaces between drives.
 --
 -- `preludeKey` is the desugar-cache generation pair for the prelude interface (see
 -- `checkCoreMemoized`); the tree arm ignores it and reads the drive's own
@@ -54291,7 +54253,10 @@ driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecl
   let serve =
     map
       (k =>
-        diagsServe (serveStateOf serveOps capture coreCtx.mcGraph modules k))
+        let st = serveStateOf serveOps capture coreCtx.mcGraph modules k
+        match sel
+          GOutDiags => diagsServe st
+          GOutTrees => treeServe st)
       keyed
   if isSome serve then raiseToHighWater coreCtx.mcGraph
   -- #154 PR-C: the worker reads BOTH accData (buildOracle `prog ++ accData`) and
@@ -55285,8 +55250,8 @@ elaborateModulesWithReportGraph : DriveInputs ->
   List (String, List Decl) ->
   ((ElabResult, TcReport, DriveOutputs), GraphCtx)
 elaborateModulesWithReportGraph inputs valueMain executes runtimeDecls coreDecls0 modulesIn =
-  let g =
-    driveGraphK
+  elabDriveResult
+    (driveGraphK
       inputs
       GOutTrees
       valueMain
@@ -55295,27 +55260,57 @@ elaborateModulesWithReportGraph inputs valueMain executes runtimeDecls coreDecls
       None
       runtimeDecls
       coreDecls0
-      modulesIn
+      modulesIn)
+
+-- `elaborateModulesWithReport` keyed as `checkModulesChainReportFor` is: under the
+-- prelude generation pair and [chainKey], with one source key per module in
+-- [stepKeys], each module before the entry that is unchanged since it was recorded
+-- is served from its recorded trees, and each module the drive checks records them.
+export
+elaborateModulesChainReport : DriveInputs ->
+  Bool ->
+  (Int, Int) ->
+  String ->
+  List (Option String) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (ElabResult, TcReport, DriveOutputs)
+elaborateModulesChainReport inputs valueMain (rk, ck) chainKey stepKeys runtimeDecls coreDecls0 modulesIn =
+  fst
+    (elabDriveResult
+      (driveGraphK
+        inputs
+        GOutTrees
+        valueMain
+        None
+        None
+        (Some (chainFullKey rk ck chainKey, stepKeys))
+        runtimeDecls
+        coreDecls0
+        modulesIn))
+
+elabDriveResult : GraphDrive -> ((ElabResult, TcReport, DriveOutputs), GraphCtx)
+elabDriveResult g = (
   (
     (
-      (
-        g.gdCore,
-        g.gdModules,
-        map dropModSchemes g.gdPerMod,
-        g.gdResidual,
-        g.gdEvTable,
-        g.gdDispositions,
-        ElabFacts {
-          efManifests = g.gdOutputs.doManifests,
-          efBinders = g.gdBinders,
-          efEntryOutcome = g.gdOutputs.doEntryOutcome,
-        },
-      ),
-      g.gdReport,
-      g.gdOutputs,
+      g.gdCore,
+      g.gdModules,
+      map dropModSchemes g.gdPerMod,
+      g.gdResidual,
+      g.gdEvTable,
+      g.gdDispositions,
+      ElabFacts {
+        efManifests = g.gdOutputs.doManifests,
+        efBinders = g.gdBinders,
+        efEntryOutcome = g.gdOutputs.doEntryOutcome,
+      },
     ),
-    g.gdGraph,
-  )
+    g.gdReport,
+    g.gdOutputs,
+  ),
+  g.gdGraph,
+)
 
 -- The report of `elaborateModules`' drive, for a test that reads it.
 export
@@ -55484,6 +55479,8 @@ dictPassModulesIfEnabled mctx dictNames corePassed core2 modules2 =
       core2
       modules2
       modules2
+  let r = mctx.mcGraph.graphRun
+  r.evTable := servedEntriesFrom idx r.evBase r.evTable.value
   (core2', modules2')
 -- Post-ARGSTAMP-UNIFY (Phase 4): ALWAYS run on every path (single elaboration mode).
 -- Emit:
@@ -57015,6 +57012,7 @@ beginModuleMarking mctx mid prog top seed =
     _ => dedup (ms.msBareDictNames ++ mctx.mcGraph.promotionHarvestRef.value)
   let aliases = aliasDictNames mctx.mcGraph known ms.msUnits [(mid, prog)]
   mctx.mcGraph.graphRun.localAbs.lasNext := (mid, 0)
+  mctx.mcGraph.graphRun.localAbs.lasMinted := []
   mctx.mcCells.markingRef := Some ModuleMarking {
     mmCtx = moduleMarkCtx mctx.mcGraph ms mid prog seed.msImportedValues,
     mmTop = top,

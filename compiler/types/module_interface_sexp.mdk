@@ -11,7 +11,8 @@
 -- join is a section tag, not a key field), one line per section:
 --   (section (joins (<join> ...)) <interface>)   a join is a list of `atom`
 --   (module-interface <field> x24)               `ModuleInterface`, field
---                                                order, less its key
+--                                                order, less its key and
+--                                                its trees, which no file holds
 -- Every number in an interface is a plain integer: binder and evidence
 -- ordinals and the serial are process-global values this codec neither
 -- relocates nor interprets.  The scheme-level nodes are `types.interface_sexp`'s;
@@ -132,7 +133,7 @@ optionList (Some x) = SList [x]
 -- A constructor call over every field, so a field added to the record is a
 -- build error here until it has an arm.
 interfaceNode : ModuleInterface -> SExp
-interfaceNode (ModuleInterface _ _ serial row exports funNames dispatchIdx dataCtors ctorPop recordPop funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual schemeObls existentials patternAuth anyEx evTable binders topIds grants takers sticky view) = tagged
+interfaceNode (ModuleInterface _ _ serial row exports funNames dispatchIdx dataCtors ctorPop recordPop funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual schemeObls existentials patternAuth anyEx evTable binders topIds grants takers sticky view _) = tagged
   "module-interface"
   [
     intNode serial,
@@ -377,6 +378,7 @@ decInterface key path (SList [SAtom "module-interface", n1, n2, n3, n4, n5, n6, 
       miTakers = takers,
       miSticky = sticky,
       miInvocationView = view,
+      miTrees = None,
     }
 decInterface _ path node = misfit path [("module-interface", 25)] node
 

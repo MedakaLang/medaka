@@ -84,11 +84,13 @@ import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
   driveInputsFor,
   elaborateModules,
-  elaborateModulesWithReport,
+  elaborateModulesChainReport,
   TcDiag(..),
   tcDiagGoalKey,
 }
-import types.tc_types.{DriveInputs(..), DriveOutputs}
+import types.tc_types.{DriveInputs(..), DriveOutputs, ElabResult}
+import types.publish.{TcReport}
+import types.module_interface.{retainModuleInterfaces}
 import types.target_profile.{selectedProfile}
 import driver.main_autoprint.{valueMainCandidate}
 import types.private_mangle.{mangleCtorCollisionsPair}
@@ -221,9 +223,10 @@ import tools.test_runner.{
 import driver.diagnostics.{
   analyzeLocated,
   projectDiagsFromTc,
-  projectDiagsLoaded,
   noStdlibExports,
   chainKeyOf,
+  graphIdOf,
+  GraphId(..),
   desugaredModPairs,
   mkDiag,
   Severity(..),
@@ -787,7 +790,7 @@ data DoctestTrees =
 -- doctest-bearing module to the other driver's gate.
 data Prepared =
   | PreparedPair TestPair
-  | PreparedInject (List (String, String, List Decl)) (List Decl)
+  | PreparedInject String (List (String, String, List Decl)) (List Decl)
 
 -- Load + elaborate, once, for an import-bearing target: the gate text (None when
 -- the module type-checks, or is exempt) beside the trees the three phases share.
@@ -806,15 +809,14 @@ data Prepared =
 --                 that elaboration's own per-module diagnostics (element 3 of
 --                 `elaborateModules`' tuple) through `projectDiagsFromTc`.
 --   doctests      the phases need the injected tree and the gate must not read
---                 it, so the two cannot be one pass, and the gate is the check
---                 driver over the graph already loaded (`projectDiagsLoaded`,
---                 keyed into the prelude interface `check` reads).
+--                 it, so the two cannot be one pass.  The gate is the same
+--                 elaboration of the graph as written, and the phases' injected
+--                 elaboration comes after it.
 --
--- The two drivers must agree on the IMPL UNIVERSE, or which arm a module
--- takes decides whether it type-checks — and adding a doctest would move it
--- between them.  `graphModuleWorker` passes `accAll ++ prog`
--- on both output selections (types/typecheck.mdk), so the two arms cannot diverge
--- on it.  `hasDoctests` is the module's UNFILTERED
+-- Both elaborations are keyed under the target's chain (`keyedElab`): the first
+-- records the trees of every module before the entry, and the injected one, whose
+-- examples are spliced into the entry alone, serves them.  `hasDoctests` is the
+-- module's UNFILTERED
 -- doctest presence: the arm is chosen by what the module contains, so `--filter`
 -- cannot move it.
 --
@@ -866,17 +868,17 @@ elaborateFor : String ->
   Bool ->
   List Decl ->
   <IO> (Option String, Prepared)
-elaborateFor rsrc csrc _target _roots mods exempt False _ =
+elaborateFor rsrc csrc target roots mods exempt False _ =
   let runtimeDecls = desugaredPrelude rsrc
   let coreDecls = desugaredPrelude csrc
   let rawModules = desugaredModPairs mods
   let (elaborated, _, outputs) =
-    elaborateModulesWithReport
-      (testDriveInputs coreDecls)
+    keyedElab
+      rsrc
+      csrc
+      (chainKeyOf target roots)
+      mods
       (valueMainCandidate coreDecls rawModules)
-      None
-      runtimeDecls
-      coreDecls
       rawModules
   match elaborated
     (coreE, modulesE, perModule, _, _, _, _) => (
@@ -890,9 +892,33 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
           (factsOfElab elaborated)),
     )
 elaborateFor rsrc csrc target roots mods exempt True synthDecls = (
-  gateOfCheck exempt rsrc csrc target roots mods,
-  PreparedInject mods synthDecls,
+  gateOfVerbatim exempt rsrc csrc (chainKeyOf target roots) mods,
+  PreparedInject (chainKeyOf target roots) mods synthDecls,
 )
+
+-- The tree drive of [pairs], desugared from the loaded [mods], keyed under the
+-- prelude generation and [chainKey]: a module before the entry that an earlier
+-- drive of the same graph recorded is served (`elaborateModulesChainReport`).  The
+-- cache keeps the interfaces of this graph's modules and no others.
+keyedElab : String ->
+  String ->
+  String ->
+  List (String, String, List Decl) ->
+  Bool ->
+  List (String, List Decl) ->
+  (ElabResult, TcReport, DriveOutputs)
+keyedElab rsrc csrc chainKey mods valueMain pairs =
+  let coreDecls = desugaredPrelude csrc
+  let _ = retainModuleInterfaces (map ((mid, _, _) => mid) mods)
+  elaborateModulesChainReport
+    (testDriveInputs coreDecls)
+    valueMain
+    (preludeGeneration rsrc csrc)
+    chainKey
+    (graphIdOf mods).giSteps
+    (desugaredPrelude rsrc)
+    coreDecls
+    pairs
 
 -- Build the phases' trees.  The injected elaboration runs AFTER the gate, so it
 -- is still the last writer of the typechecker's whole-graph state — the position
@@ -901,8 +927,10 @@ forcePrepared : String -> String -> Prepared -> <IO> TestPair
 forcePrepared _ _ (PreparedPair pair) =
   injectedExampleDiags := omEmpty
   pair
-forcePrepared rsrc csrc (PreparedInject mods synthDecls) =
-  perfRow "test-elab" "injected" (_ => forceInjected rsrc csrc mods synthDecls)
+forcePrepared rsrc csrc (PreparedInject chainKey mods synthDecls) = perfRow
+  "test-elab"
+  "injected"
+  (_ => forceInjected rsrc csrc chainKey mods synthDecls)
 
 -- The doctest-injected elaboration's own errors on the examples, by doctest line
 -- (`exampleDiagLines`), written by the elaboration that built the trees the
@@ -934,17 +962,13 @@ exampleDiagLines perMod = match reverseL perMod
 
 forceInjected : String ->
   String ->
+  String ->
   List (String, String, List Decl) ->
   List Decl ->
   <IO> TestPair
-forceInjected rsrc csrc mods synthDecls =
+forceInjected rsrc csrc chainKey mods synthDecls =
   let injected = injectIntoLast synthDecls (desugaredModPairs mods)
-  let elab =
-    elaborateModules
-      (testDriveInputs (desugaredPrelude csrc))
-      (desugaredPrelude rsrc)
-      (desugaredPrelude csrc)
-      injected
+  let (elab, _, _) = keyedElab rsrc csrc chainKey mods False injected
   match elab
     (coreE, modulesE, perModule, _, _, _, _) =>
       injectedExampleDiags := exampleDiagLines perModule
@@ -955,28 +979,29 @@ forceInjected rsrc csrc mods synthDecls =
         (mangleCtorCollisionsPair (coreE, modulesE))
         (factsOfElab elab)
 
--- The doctest-bearing gate: `analyzeProject`'s verdict over the graph this
--- invocation already loaded, keyed into the same prelude interface `medaka check`
--- reads, so nothing here re-parses or re-loads.
-gateOfCheck : Bool ->
+-- The doctest-bearing gate: the no-doctest arm's, over the graph as written,
+-- which this invocation already loaded.  Its drive records what the injected
+-- elaboration serves.
+gateOfVerbatim : Bool ->
   String ->
   String ->
   String ->
-  List String ->
   List (String, String, List Decl) ->
   <IO> Option String
-gateOfCheck True _ _ _ _ _ = None
-gateOfCheck False rsrc csrc target roots mods =
-  renderGate
-    (projectDiagsLoaded
-      noStdlibExports
-      True
-      []
-      (desugaredPrelude rsrc)
-      (desugaredPrelude csrc)
-      (Some (preludeGeneration rsrc csrc))
-      (chainKeyOf target roots)
-      mods)
+gateOfVerbatim True _ _ _ _ = None
+gateOfVerbatim False rsrc csrc chainKey mods =
+  let runtimeDecls = desugaredPrelude rsrc
+  let coreDecls = desugaredPrelude csrc
+  let rawModules = desugaredModPairs mods
+  let ((_, _, perModule, _, _, _, _), _, outputs) =
+    keyedElab
+      rsrc
+      csrc
+      chainKey
+      mods
+      (valueMainCandidate coreDecls rawModules)
+      rawModules
+  gateOfPerModule False runtimeDecls coreDecls mods outputs perModule
 
 -- The phases' trees, or `unreadTrees` when no phase under `engines` reads
 -- them.  The gate is decided before this and does not depend on it.
