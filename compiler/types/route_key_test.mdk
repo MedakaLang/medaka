@@ -8,7 +8,9 @@
 import test.{expectEqual, expectAll}
 import types.route_key.{
   evDictRoutesIn,
+  evIndexEntries,
   evIndexOf,
+  evIndexSlotCount,
   evMethodRoutesIn,
   evSiteHeadIn,
   evSiteLitIn,
@@ -55,6 +57,41 @@ test "a table whose ordinals start late is sized by its span" =
       (missOf
         (evidenceLookup (Some idx) "dictionary application" (EvId "m" 999))),
   ]
+
+-- Two clusters of ordinals far apart, as a drive serving an old recording holds, are
+-- two runs: the index holds a slot per ordinal of each, none for the gap.
+test "a table of two distant clusters holds slots for its clusters, not its span" =
+  let idx = evIndexOf [
+    EvEntry (EvId "m" 90001) (EvMany [RNone, RNone]),
+    EvEntry (EvId "m" 1000) (EvMany []),
+    EvEntry (EvId "m" 90000) (EvMany [RNone]),
+    EvEntry (EvId "m" 1002) (EvMany [RNone]),
+  ]
+  expectAll [
+    expectEqual 5 (evIndexSlotCount idx),
+    expectEqual
+      [1000, 1002, 90000, 90001]
+      (map entryOrdinal (evIndexEntries idx)),
+    expectEqual 0 (length (evDictRoutesIn idx (EvId "m" 1000))),
+    expectEqual 1 (length (evDictRoutesIn idx (EvId "m" 1002))),
+    expectEqual 1 (length (evDictRoutesIn idx (EvId "m" 90000))),
+    expectEqual 2 (length (evDictRoutesIn idx (EvId "m" 90001))),
+    expectEqual
+      "evidence table: dictionary application m#50000 was never published"
+      (missOf
+        (evidenceLookup (Some idx) "dictionary application" (EvId "m" 50000))),
+    expectEqual
+      "evidence table: dictionary application m#90002 was never published"
+      (missOf
+        (evidenceLookup (Some idx) "dictionary application" (EvId "m" 90002))),
+    expectEqual
+      "evidence table: dictionary application m#999 is from an earlier graph"
+      (missOf
+        (evidenceLookup (Some idx) "dictionary application" (EvId "m" 999))),
+  ]
+
+entryOrdinal : EvEntry -> Int
+entryOrdinal (EvEntry (EvId _ i) _) = i
 
 -- The shape of a route, enough to tell the answers below apart (`Route` has no `Eq`).
 routeShape : Route -> String

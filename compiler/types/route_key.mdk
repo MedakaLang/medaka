@@ -60,7 +60,8 @@ import frontend.ast.{
   ifaceIdentity,
   authTermsSurface,
 }
-import support.util.{joinWith, escStr}
+import support.util.{joinWith, escStr, reverseL}
+import array.{sort}
 
 -- ── the evidence table (#2549 M2) ─────────────────────────────────────────
 -- `EDictAt` carries an `EvId`, not a route cell, so a reader answers "what did
@@ -75,10 +76,10 @@ import support.util.{joinWith, escStr}
 --
 -- A lookup that cannot be answered is an `Err` here, and a panic in the readers:
 --
---   no index            -> Err.  The caller holds `None`: no elaboration ran.
---   ordinal below span  -> Err: the id is from an earlier graph.
---   ordinal above span  -> Err.
---   in-span `None`      -> Err.
+--   no index                 -> Err.  The caller holds `None`: no elaboration ran.
+--   ordinal below every run  -> Err: the id is from an earlier graph.
+--   ordinal past its run     -> Err.
+--   in-run `None`            -> Err.
 --
 -- This holds because the typechecker publishes an entry for EVERY `EDictAt` it mints,
 -- including an application of zero dictionaries (`EvMany []`, the #739 arm of
@@ -95,24 +96,36 @@ import support.util.{joinWith, escStr}
 -- The index is an ARRAY over the id's ordinal, not a scan of the spine: the table
 -- has one entry per solver goal (838 on a four-file fixture), so a per-site linear
 -- scan would be the List-as-a-map quadratic `compiler/AGENTS.md` records thirteen
--- instances of.  Ordinals are graph-global (see `freshEvId`), so the ordinal less the
--- table's smallest one IS the index and carries uniqueness by itself; the array spans
--- the entries' ordinals, not every ordinal the process has minted.  The id's MODULE
--- half is compared on every hit as a tripwire, not as part of the key -- see `EvId`
--- in `frontend/ast.mdk` for why it cannot fire for today's consumer and must be
--- kept anyway.
+-- instances of.  Ordinals are graph-global (see `freshEvId`), so an ordinal less the
+-- first ordinal of the run holding it IS the slot and carries uniqueness by itself.
+-- The id's MODULE half is compared on every hit as a tripwire, not as part of the
+-- key -- see `EvId` in `frontend/ast.mdk` for why it cannot fire for today's
+-- consumer and must be kept anyway.
+--
+-- A table's ordinals need not be one run.  A drive that serves a module keeps that
+-- module's ordinals as recorded, perhaps many drives ago, and mints its own at or
+-- past the lineage's counter, so one array from the smallest to the largest would
+-- span every ordinal minted in between.  A table whose span is at most twice its
+-- entries is one run; any other is cut wherever two of its ordinals lie more than
+-- `runGap` apart, so its slots grow with its entries, not with its span.
 
--- The table indexed by ordinal less its smallest one: the lowest ordinal and the
--- slots from it.
-public export data EvIndex = EvIndex Int (Array (Option EvEntry))
+-- The table as runs of slots, each the ordinal of its first slot and the slots
+-- from it, in ascending order and disjoint.  There is always at least one run.
+export data EvIndex = EvIndex (Array EvRun)
+
+data EvRun = EvRun Int (Array (Option EvEntry))
+
+-- The widest gap between two ordinals of one run of a split table.
+runGap : Int
+runGap = 64
 
 -- The prelude's own segment, once a process holds the prelude's elaborated trees
 -- (`types/prelude_elab.mdk`): their rows indexed from ordinal 0 to the prelude's
 -- counter, built once.  Every drive of such a process mints its ids at or past
 -- that counter, so a table holding the prelude's rows beside a drive's is indexed
--- as the segment plus the drive's own span.  One dense array over both would
--- span every ordinal the process has minted, which grows with each drive of a
--- long-lived process.
+-- as the segment plus the drive's own runs.  A run over both would span every
+-- ordinal the process has minted, which grows with each drive of a long-lived
+-- process.
 preludeEvidenceRef : Ref (Option (Array (Option EvEntry)))
 preludeEvidenceRef = Ref None
 
@@ -121,7 +134,7 @@ export
 setPreludeEvidence : Int -> EvTable -> Unit
 setPreludeEvidence counter rows =
   let arr = arrayMake counter None
-  let _ = fillEvidence 0 arr rows
+  let _ = fillEvidence (EvIndex (arrayFromList [EvRun 0 arr])) rows
   preludeEvidenceRef := Some arr
 
 -- The index of [entries]; two entries under one ordinal panic (`fillEvidence`).
@@ -130,8 +143,8 @@ setPreludeEvidence counter rows =
 export
 evIndexOf : EvTable -> EvIndex
 evIndexOf entries = match !preludeEvidenceRef
-  None => denseIndexOf entries
-  Some seg => denseIndexOf (filter (aboveSegment seg) entries)
+  None => filledIndexOf entries
+  Some seg => filledIndexOf (filter (aboveSegment seg) entries)
 
 -- [entries] less those the prelude's segment answers; all of them with no segment.
 -- A reader that judges the table rather than trusting it (`evidenceFaults`) indexes
@@ -146,22 +159,122 @@ entriesAboveSegment entries = match !preludeEvidenceRef
         EvEntry (EvId _ i) _ => i >= arrayLength seg)
       entries
 
-denseIndexOf : EvTable -> EvIndex
-denseIndexOf entries =
+filledIndexOf : EvTable -> EvIndex
+filledIndexOf entries =
   let index = emptyIndexFor entries
-  match index
-    EvIndex lo arr =>
-      let _ = fillEvidence lo arr entries
-      index
+  let _ = fillEvidence index entries
+  index
 
--- An index with a slot for every ordinal from the smallest to the largest in
--- [entries] and nothing filled; the caller fills it and decides what a repeated
--- ordinal means.
+-- An index with a slot for every ordinal of [entries]' runs and nothing filled;
+-- the caller fills it (`claimSlot`) and decides what a repeated ordinal means.
 export
 emptyIndexFor : EvTable -> EvIndex
 emptyIndexFor entries =
   let lo = evMinOrdinal entries
-  EvIndex lo (arrayMake (evSlotCount entries lo - lo) None)
+  let hi = evSlotCount entries lo
+  if hi - lo <= 2 * length entries then
+    EvIndex (arrayFromList [emptyRun lo hi])
+  else
+    let ordinals = sort (arrayFromList (map entryOrdinal entries))
+    let first = arrayGetUnsafe 0 ordinals
+    EvIndex (arrayFromList (runsFrom ordinals 1 first first []))
+
+-- The runs of sorted [ordinals] from position [k] on: the open run from [lo] to
+-- [last], after the closed runs [acc], newest first.
+runsFrom : Array Int -> Int -> Int -> Int -> List EvRun -> List EvRun
+runsFrom ordinals k lo last acc =
+  if k >= arrayLength ordinals then
+    reverseL (emptyRun lo (last + 1) :: acc)
+  else
+    let i = arrayGetUnsafe k ordinals
+    if i - last > runGap then
+      runsFrom ordinals (k + 1) i i (emptyRun lo (last + 1) :: acc)
+    else
+      runsFrom ordinals (k + 1) lo i acc
+
+-- A run of empty slots for the ordinals from [lo] up to, not including, [hi].
+emptyRun : Int -> Int -> EvRun
+emptyRun lo hi = EvRun lo (arrayMake (hi - lo) None)
+
+entryOrdinal : EvEntry -> Int
+entryOrdinal (EvEntry (EvId _ i) _) = i
+
+-- The position of the last of [runs] starting at or below ordinal [i], searched
+-- in positions [a] up to [b]; one less than [a] when none there does.
+runAt : Array EvRun -> Int -> Int -> Int -> Int
+runAt runs i a b =
+  if a >= b then
+    a - 1
+  else
+    let mid = (a + b) / 2
+    match arrayGetUnsafe mid runs
+      EvRun lo _ =>
+        if lo <= i then runAt runs i (mid + 1) b else runAt runs i a mid
+
+-- The run of [idx] holding ordinal [i]'s slot; panics when none does.
+runFor : EvIndex -> String -> Int -> EvRun
+runFor (EvIndex runs) m i =
+  let k = runAt runs i 0 (arrayLength runs)
+  if k < 0 then
+    noSlot m i
+  else match arrayGetUnsafe k runs
+    run@(EvRun lo arr) => if i - lo < arrayLength arr then run else noSlot m i
+
+noSlot : String -> Int -> a
+noSlot m i =
+  panic "evidence table: \{m}#\{intToString i} has no slot in the index"
+
+-- Put [e] in its slot of [idx] when the slot is empty; False when another entry
+-- holds it.
+export
+claimSlot : EvIndex -> EvEntry -> Bool
+claimSlot idx (e@(EvEntry (EvId m i) _)) = match runFor idx m i
+  EvRun lo arr => match arrayGetUnsafe (i - lo) arr
+    None =>
+      let _ = arraySetUnsafe (i - lo) (Some e) arr
+      True
+    Some _ => False
+
+-- Put [e] in its slot of [idx], over whatever entry holds it.
+export
+replaceEntryIn : EvIndex -> EvEntry -> Unit
+replaceEntryIn idx (e@(EvEntry (EvId m i) _)) = match runFor idx m i
+  EvRun lo arr => arraySetUnsafe (i - lo) (Some e) arr
+
+-- The number of slots [idx] holds, filled or not.
+export
+evIndexSlotCount : EvIndex -> Int
+evIndexSlotCount (EvIndex runs) = slotsFrom runs 0 0
+
+slotsFrom : Array EvRun -> Int -> Int -> Int
+slotsFrom runs k acc =
+  if k >= arrayLength runs then
+    acc
+  else match arrayGetUnsafe k runs
+    EvRun _ arr => slotsFrom runs (k + 1) (acc + arrayLength arr)
+
+-- The entries [idx] holds, in ordinal order.
+export
+evIndexEntries : EvIndex -> List EvEntry
+evIndexEntries (EvIndex runs) = runEntries runs (arrayLength runs - 1) []
+
+-- The entries of [runs] up to position [k], before [acc].
+runEntries : Array EvRun -> Int -> List EvEntry -> List EvEntry
+runEntries runs k acc =
+  if k < 0 then
+    acc
+  else match arrayGetUnsafe k runs
+    EvRun _ arr =>
+      runEntries runs (k - 1) (slotEntries arr (arrayLength arr - 1) acc)
+
+-- The entries of [slots] up to position [k], before [acc].
+slotEntries : Array (Option EvEntry) -> Int -> List EvEntry -> List EvEntry
+slotEntries slots k acc =
+  if k < 0 then
+    acc
+  else match arrayGetUnsafe k slots
+    Some e => slotEntries slots (k - 1) (e :: acc)
+    None => slotEntries slots (k - 1) acc
 
 aboveSegment : Array (Option EvEntry) -> EvEntry -> Bool
 aboveSegment seg (EvEntry (EvId m i) _)
@@ -192,14 +305,13 @@ evMinFrom ((EvEntry (EvId _ i) _) :: rest) acc = evMinFrom rest (min i acc)
 -- replaces could not express that (one node, one cell), so it is a tripwire
 -- rather than a case with a policy: no program in the gate corpus, the 59-fixture
 -- module arm, or the compiler's own self-compile reaches it.
-fillEvidence : Int -> Array (Option EvEntry) -> EvTable -> Unit
-fillEvidence _ _ [] = ()
-fillEvidence lo arr ((e@(EvEntry (EvId m i) _)) :: rest) =
-  let _ = match arrayGetUnsafe (i - lo) arr
-    None => arraySetUnsafe (i - lo) (Some e) arr
-    Some _ =>
-      panic "evidence table: two goals published under \{m}#\{intToString i}"
-  fillEvidence lo arr rest
+fillEvidence : EvIndex -> EvTable -> Unit
+fillEvidence _ [] = ()
+fillEvidence idx ((e@(EvEntry (EvId m i) _)) :: rest) =
+  if claimSlot idx e then
+    fillEvidence idx rest
+  else
+    panic "evidence table: two goals published under \{m}#\{intToString i}"
 
 neverPublished : String -> String -> Int -> Result String a
 neverPublished what m i =
@@ -211,21 +323,22 @@ answerIn idx what ev = match evidenceLookup (Some idx) what ev
   Err message => panic message
 
 -- The lookup over [table], the shape a reader holds: `None` when no
--- elaboration has published one, else the lowest ordinal and the slots from it.
+-- elaboration has published one, else the index's runs.  An ordinal in a gap
+-- between two runs is past the earlier run's slots.
 export
 evidenceLookup : Option EvIndex -> String -> EvId -> Result String EvVal
 evidenceLookup None what (EvId m i) =
   Err
     "evidence table: no elaboration has published one (looking up \{what} \{m}#\{intToString i})"
-evidenceLookup (Some (EvIndex lo arr)) what (EvId m i) =
-  match !preludeEvidenceRef
-    Some seg if i >= 0 && i < arrayLength seg => slotAnswer seg what m i i
-    _ =>
-      if i < lo then
-        Err
-          "evidence table: \{what} \{m}#\{intToString i} is from an earlier graph"
-      else
-        slotAnswer arr what m i (i - lo)
+evidenceLookup (Some (EvIndex runs)) what (EvId m i) = match !preludeEvidenceRef
+  Some seg if i >= 0 && i < arrayLength seg => slotAnswer seg what m i i
+  _ =>
+    let k = runAt runs i 0 (arrayLength runs)
+    if k < 0 then
+      Err
+        "evidence table: \{what} \{m}#\{intToString i} is from an earlier graph"
+    else match arrayGetUnsafe k runs
+      EvRun lo arr => slotAnswer arr what m i (i - lo)
 
 slotAnswer : Array (Option EvEntry) ->
   String ->

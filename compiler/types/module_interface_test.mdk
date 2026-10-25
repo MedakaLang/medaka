@@ -4,8 +4,11 @@
 -- each test uses module ids and chain keys of its own, because the cache is keyed
 -- by module id and lives for the process.
 import test.{
-  expectEach, expectEqual, expectFalse, expectGreaterThan, expectNotEqual,
-  expectSatisfies, expectTrue, fail
+  expectAtMost, expectEach, expectEqual, expectFalse, expectGreaterThan,
+  expectNotEqual, expectSatisfies, expectTrue, fail
+}
+import types.route_key.{
+  EvIndex, entriesAboveSegment, evidenceLookup, evIndexOf, evIndexSlotCount
 }
 import frontend.ast.{Decl, EvEntry(..), EvId(..)}
 import frontend.ast_codec.{declsSExp, evEntriesSExp}
@@ -879,6 +882,84 @@ test "applying a frozen tree record twice yields the recorded trees and the same
             ]
           None => fail "the tree drive recorded no trees"
         None => fail "the tree drive recorded no interface"
+    None => fail "could not read the prelude pair"
+
+-- ── a serving drive's evidence index ────────────────────────────────────────
+
+-- A library with a constrained function, its importer, and the entry.
+indexTreeMods : List (String, String)
+indexTreeMods = [
+  (
+    "ix_lib",
+    joinNl ["export", "pad : Monoid a => a -> a", "pad x = append x empty"],
+  ),
+  (
+    "ix_user",
+    joinNl [
+      "import ix_lib.{pad}", "export", "shown : Int -> String",
+      "shown n = pad (display n)"
+    ],
+  ),
+  ("ix_entry", joinNl ["import ix_user.{shown}", "main = println (shown 4)"]),
+]
+
+-- One keyed tree drive over [mods], as `treeDrive` runs it: the slot count of the
+-- index of its published evidence, the number of entries the index holds, the
+-- miss of each it does not answer, and the number of modules the drive served.
+servedIndex : Int ->
+  String ->
+  List Decl ->
+  List Decl ->
+  List (String, String) ->
+  (Int, Int, List String, Int)
+servedIndex seed chainKey runtime core mods =
+  let (_, report, outputs) =
+    elaborateModulesChainReport
+      defaultDriveInputs
+      False
+      (seed, seed + 1)
+      chainKey
+      (treeSteps mods)
+      runtime
+      core
+      (map (m => (fst m, desugar (parseLocated (snd m)))) mods)
+  match report.trChecked
+    Some c =>
+      let idx = evIndexOf c.cpEvidence
+      let held = entriesAboveSegment c.cpEvidence
+      (
+        evIndexSlotCount idx,
+        length held,
+        flatMap (unansweredIn idx) held,
+        outputs.doServedModules,
+      )
+    None => (0, 0, ["no checked program"], outputs.doServedModules)
+
+unansweredIn : EvIndex -> EvEntry -> List String
+unansweredIn idx (EvEntry ev _) = match evidenceLookup (Some idx) "entry" ev
+  Ok _ => []
+  Err message => [message]
+
+-- A serving drive keeps the served modules' ordinals as recorded and mints its own
+-- past every earlier drive's, so its ordinals lie further apart with each drive.
+test "a serving drive after other serving drives indexes its evidence in slots for its entries" =
+  match preludePair ()
+    Some (runtime, core) =>
+      let drive = _ => servedIndex 4699 "ix-k" runtime core indexTreeMods
+      let _ = drive ()
+      let _ = drive ()
+      let (early, _, _, _) = drive ()
+      let _ = map drive [(), (), (), (), ()]
+      let (late, held, misses, served) = drive ()
+      expectEach [
+        ("the drive serves both libraries", expectEqual 2 served),
+        (
+          "the index is the size an earlier serving drive's was",
+          expectEqual early late,
+        ),
+        ("it holds at most two slots per entry", expectAtMost (2 * held) late),
+        ("every entry it holds answers", expectEqual [] misses),
+      ]
     None => fail "could not read the prelude pair"
 
 -- ── a diagnostics record is not a tree record ───────────────────────────────
