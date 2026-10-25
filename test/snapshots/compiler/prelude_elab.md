@@ -1,5 +1,5 @@
 # META
-source_lines=679
+source_lines=678
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's elaborated trees as a value, an on-disk file and a process
@@ -11,7 +11,7 @@ stages=DESUGAR,MARK
 -- `EvId` and `BinderId` carries the module `""`.  A drive that takes the value
 -- must start its id interners past the counters: `peEvCounter` is one past the
 -- highest evidence ordinal the elaboration minted, `peLocalCounter` one past
--- the highest `$k$lb` local-abstraction suffix its trees hold, `peBinderCount`
+-- the highest `$m$k$lb` local-abstraction suffix its trees hold, `peBinderCount`
 -- the number of binder rows and `peBinderBase` the first binder ordinal (binder
 -- ordinals are relocated by offset, never restored).
 --
@@ -119,7 +119,7 @@ isMarked : Array Bool -> EvEntry -> Bool
 isMarked marks (EvEntry (EvId _ i) _) =
   i >= 0 && i < arrayLength marks && arrayGetUnsafe i marks
 
--- One past the highest k of any `<name>$<k>$lb` atom.
+-- One past the highest k of any `<name>$<module>$<k>$lb` atom.
 localHighWater : SExp -> Int
 localHighWater (SAtom s) = localSuffix s
 localHighWater (SList items) =
@@ -675,12 +675,11 @@ withShippedRows (Some pe) evidence binders = (
   fold (acc row => addBinderRow row acc) binders pe.peBinders,
 )
 
--- The evidence and local-abstraction counters of the value this process holds,
--- if any: every drive of the process starts its interners past them.
+-- The evidence counter of the value this process holds, if any: every drive of
+-- the process starts its interners past it.
 export
-heldPreludeCounters : Unit -> Option (Int, Int)
-heldPreludeCounters _ =
-  map ((_, pe, _) => (pe.peEvCounter, pe.peLocalCounter)) !preludeElabCacheRef
+heldPreludeEvCounter : Unit -> Option Int
+heldPreludeEvCounter _ = map ((_, pe, _) => pe.peEvCounter) !preludeElabCacheRef
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "BinderId" true) (mem "Decl" true) (mem "DoStmt" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Section" true))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "evEntriesSExp" false) (mem "readBinderId" false) (mem "readBool" false) (mem "readDecls" false) (mem "readEvEntries" false) (mem "sexpBinderId" false) (mem "sexpBool" false))))
@@ -896,8 +895,8 @@ heldPreludeCounters _ =
 (DTypeSig true "withShippedRows" (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyFun (TyCon "EvTable") (TyFun (TyCon "BinderTypeTable") (TyTuple (TyCon "EvTable") (TyCon "BinderTypeTable"))))))
 (DFunDef false "withShippedRows" ((PCon "None") (PVar "evidence") (PVar "binders")) (ETuple (EVar "evidence") (EVar "binders")))
 (DFunDef false "withShippedRows" ((PCon "Some" (PVar "pe")) (PVar "evidence") (PVar "binders")) (ETuple (EBinOp "++" (EFieldAccess (EVar "pe") "peEvidence") (EVar "evidence")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "row")) (EApp (EApp (EVar "addBinderRow") (EVar "row")) (EVar "acc")))) (EVar "binders")) (EFieldAccess (EVar "pe") "peBinders"))))
-(DTypeSig true "heldPreludeCounters" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "heldPreludeCounters" (PWild) (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "pe") PWild)) (ETuple (EFieldAccess (EVar "pe") "peEvCounter") (EFieldAccess (EVar "pe") "peLocalCounter")))) (EUnOp "!" (EVar "preludeElabCacheRef"))))
+(DTypeSig true "heldPreludeEvCounter" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "heldPreludeEvCounter" (PWild) (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "pe") PWild)) (EFieldAccess (EVar "pe") "peEvCounter"))) (EUnOp "!" (EVar "preludeElabCacheRef"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "BinderId" true) (mem "Decl" true) (mem "DoStmt" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Section" true))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false) (mem "evEntriesSExp" false) (mem "readBinderId" false) (mem "readBool" false) (mem "readDecls" false) (mem "readEvEntries" false) (mem "sexpBinderId" false) (mem "sexpBool" false))))
@@ -1113,5 +1112,5 @@ heldPreludeCounters _ =
 (DTypeSig true "withShippedRows" (TyFun (TyApp (TyCon "Option") (TyCon "PreludeElab")) (TyFun (TyCon "EvTable") (TyFun (TyCon "BinderTypeTable") (TyTuple (TyCon "EvTable") (TyCon "BinderTypeTable"))))))
 (DFunDef false "withShippedRows" ((PCon "None") (PVar "evidence") (PVar "binders")) (ETuple (EVar "evidence") (EVar "binders")))
 (DFunDef false "withShippedRows" ((PCon "Some" (PVar "pe")) (PVar "evidence") (PVar "binders")) (ETuple (EBinOp "++" (EFieldAccess (EVar "pe") "peEvidence") (EVar "evidence")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "row")) (EApp (EApp (EVar "addBinderRow") (EVar "row")) (EVar "acc")))) (EVar "binders")) (EFieldAccess (EVar "pe") "peBinders"))))
-(DTypeSig true "heldPreludeCounters" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "heldPreludeCounters" (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "pe") PWild)) (ETuple (EFieldAccess (EVar "pe") "peEvCounter") (EFieldAccess (EVar "pe") "peLocalCounter")))) (EUnOp "!" (EVar "preludeElabCacheRef"))))
+(DTypeSig true "heldPreludeEvCounter" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "heldPreludeEvCounter" (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "pe") PWild)) (EFieldAccess (EVar "pe") "peEvCounter"))) (EUnOp "!" (EVar "preludeElabCacheRef"))))

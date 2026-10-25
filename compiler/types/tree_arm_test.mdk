@@ -75,7 +75,7 @@ output c = match c.cpTrees
   Some (core, mods) => evalModulesOutputFacts (factsOfChecked c) core mods
   None => "(no trees)"
 
--- The suffix of every `<name>$<k>$lb` atom in [decls].  Deliberately not
+-- The suffix of every `<name>$<module>$<k>$lb` atom in [decls].  Deliberately not
 -- `prelude_elab`'s own `localSuffix`: this is the oracle the loader's counter is
 -- judged against.
 localSuffixes : List Decl -> List Int
@@ -180,9 +180,7 @@ test "drives continuing from the shipped trees agree with in-process ones" =
             "the user module has local abstractions"
             (expectTrue (length userLocals > 0)),
           labelFail
-            "no user local abstraction is below the prelude's counter"
-            (expectAtLeast
-              pe.peLocalCounter
-              (fold (acc n => min acc n) 1000000 userLocals)),
+            "user local abstractions count from 0, whatever the prelude's counter"
+            (expectEqual 0 (fold (acc n => min acc n) 1000000 userLocals)),
         ]
       _ => fail "a drive published no checked program"

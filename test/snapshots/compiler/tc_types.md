@@ -1,5 +1,5 @@
 # META
-source_lines=3456
+source_lines=3457
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -2326,8 +2326,9 @@ public export data LocalAbsState = LocalAbsState {
   lasBinders : Ref (OrdMap (Option LocalAbs)),
   -- binder -> occurrences inferred before the binder generalized
   lasRecOccs : Ref (OrdMap (List (EvId, ScopeId))),
-  -- monotone for the whole graph, so a binder name is never minted twice
-  lasCounter : Ref Int,
+  -- the module being marked and the next suffix it mints, reset at each module's
+  -- `beginModuleMarking`: a name is a function of its module and marking order
+  lasNext : Ref (String, Int),
   -- every type variable a generalized local's scheme quantifies: no longer a
   -- monomorphic variable, so no later numeric boundary may ground it (#3516)
   lasQuantified : Ref (OrdMap Unit),
@@ -3599,7 +3600,7 @@ public export data ModuleMarking = ModuleMarking {
 (DTypeSig true "siteFor" (TyFun (TyCon "ModuleCtx") (TyCon "SiteCtx")))
 (DFunDef false "siteFor" ((PVar "mctx")) (ERecordCreate "SiteCtx" ((fa "sxSite" (EVar "None")) (fa "sxInner" (EVar "None")) (fa "sxModule" (EVar "mctx")))))
 (DData Public "LocalAbs" () ((variant "LocalAbs" (ConNamed (field "laScope" (TyCon "ScopeId")) (field "laSlots" (TyApp (TyCon "List") (TyCon "PredicateSlot"))) (field "laParams" (TyApp (TyCon "List") (TyCon "String")))))) ())
-(DData Public "LocalAbsState" () ((variant "LocalAbsState" (ConNamed (field "lasBinders" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "LocalAbs"))))) (field "lasRecOccs" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "EvId") (TyCon "ScopeId")))))) (field "lasCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "lasQuantified" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
+(DData Public "LocalAbsState" () ((variant "LocalAbsState" (ConNamed (field "lasBinders" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "LocalAbs"))))) (field "lasRecOccs" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "EvId") (TyCon "ScopeId")))))) (field "lasNext" (TyApp (TyCon "Ref") (TyTuple (TyCon "String") (TyCon "Int")))) (field "lasQuantified" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
 (DData Public "GrantBinder" () ((variant "TopGrantBinder" (ConPos (TyCon "String") (TyCon "String"))) (variant "LocalGrantBinder" (ConPos (TyCon "String"))) (variant "BodyGrantBinder" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))) ())
 (DData Public "GrantOcc" () ((variant "GrantOcc" (ConNamed (field "goCallee" (TyCon "String")) (field "goCells" (TyApp (TyCon "List") (TyCon "Authority"))) (field "goRecIds" (TyApp (TyCon "List") (TyCon "Int"))) (field "goTrailing" (TyApp (TyCon "Option") (TyCon "Int"))) (field "goChain" (TyApp (TyCon "List") (TyCon "GrantBinder"))) (field "goStandalone" (TyCon "Bool"))))) ())
 (DData Public "MethodGrant" () ((variant "MethodGrant" (ConNamed (field "mgArity" (TyCon "Int")) (field "mgNames" (TyApp (TyCon "List") (TyCon "String")))))) ())
@@ -3804,7 +3805,7 @@ public export data ModuleMarking = ModuleMarking {
 (DTypeSig true "siteFor" (TyFun (TyCon "ModuleCtx") (TyCon "SiteCtx")))
 (DFunDef false "siteFor" ((PVar "mctx")) (ERecordCreate "SiteCtx" ((fa "sxSite" (EVar "None")) (fa "sxInner" (EVar "None")) (fa "sxModule" (EVar "mctx")))))
 (DData Public "LocalAbs" () ((variant "LocalAbs" (ConNamed (field "laScope" (TyCon "ScopeId")) (field "laSlots" (TyApp (TyCon "List") (TyCon "PredicateSlot"))) (field "laParams" (TyApp (TyCon "List") (TyCon "String")))))) ())
-(DData Public "LocalAbsState" () ((variant "LocalAbsState" (ConNamed (field "lasBinders" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "LocalAbs"))))) (field "lasRecOccs" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "EvId") (TyCon "ScopeId")))))) (field "lasCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "lasQuantified" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
+(DData Public "LocalAbsState" () ((variant "LocalAbsState" (ConNamed (field "lasBinders" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "LocalAbs"))))) (field "lasRecOccs" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "EvId") (TyCon "ScopeId")))))) (field "lasNext" (TyApp (TyCon "Ref") (TyTuple (TyCon "String") (TyCon "Int")))) (field "lasQuantified" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
 (DData Public "GrantBinder" () ((variant "TopGrantBinder" (ConPos (TyCon "String") (TyCon "String"))) (variant "LocalGrantBinder" (ConPos (TyCon "String"))) (variant "BodyGrantBinder" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))) ())
 (DData Public "GrantOcc" () ((variant "GrantOcc" (ConNamed (field "goCallee" (TyCon "String")) (field "goCells" (TyApp (TyCon "List") (TyCon "Authority"))) (field "goRecIds" (TyApp (TyCon "List") (TyCon "Int"))) (field "goTrailing" (TyApp (TyCon "Option") (TyCon "Int"))) (field "goChain" (TyApp (TyCon "List") (TyCon "GrantBinder"))) (field "goStandalone" (TyCon "Bool"))))) ())
 (DData Public "MethodGrant" () ((variant "MethodGrant" (ConNamed (field "mgArity" (TyCon "Int")) (field "mgNames" (TyApp (TyCon "List") (TyCon "String")))))) ())

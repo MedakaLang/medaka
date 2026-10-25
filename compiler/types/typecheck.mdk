@@ -760,7 +760,7 @@ import types.prelude_interface.{
 }
 import types.prelude_elab.{
   PreludeElab(..),
-  heldPreludeCounters,
+  heldPreludeEvCounter,
   preludeElabFor,
   withShippedRows,
 }
@@ -16419,21 +16419,21 @@ freshLocalAbsState : Unit -> LocalAbsState
 freshLocalAbsState _ = LocalAbsState {
   lasBinders = Ref omEmpty,
   lasRecOccs = Ref omEmpty,
-  lasCounter = Ref 0,
+  lasNext = Ref ("", 0),
   lasQuantified = Ref omEmpty,
 }
 
 freshLocalAbsName : GraphCtx -> String -> String
 freshLocalAbsName gctx x =
   let st = gctx.graphRun.localAbs
-  let k = st.lasCounter.value
-  st.lasCounter := k + 1
-  "\{x}$\{intToString k}$lb"
+  let (mid, k) = st.lasNext.value
+  st.lasNext := (mid, k + 1)
+  "\{x}$\{mid}$\{intToString k}$lb"
 
 isLocalAbsName : String -> Bool
 isLocalAbsName n = endsWith "$lb" n
 
--- The name a candidate local was written with (`f` for `f$3$lb`); `$` never occurs in
+-- The name a candidate local was written with (`f` for `f$m$3$lb`); `$` never occurs in
 -- a source identifier.
 localSourceName : String -> String
 localSourceName name
@@ -16442,7 +16442,7 @@ localSourceName name
     [] => name
   | otherwise = name
 
--- Diagnostic text with every renamed local binder (`f$3$lb`) shown as written.
+-- Diagnostic text with every renamed local binder (`f$m$3$lb`) shown as written.
 writtenNames : String -> String
 writtenNames text = match splitOnChar '$' text
   [only] => only
@@ -16451,7 +16451,7 @@ writtenNames text = match splitOnChar '$' text
 dropRenameSuffixes : List String -> String
 dropRenameSuffixes [] = ""
 dropRenameSuffixes [a] = a
-dropRenameSuffixes (a :: n :: lb :: more)
+dropRenameSuffixes (a :: _ :: n :: lb :: more)
   | allDigits n && startsWith "lb" lb =
     a ++ dropRenameSuffixes (stringSlice 2 (stringLength lb) lb :: more)
 dropRenameSuffixes (a :: rest) = "\{a}$\{dropRenameSuffixes rest}"
@@ -53566,13 +53566,13 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- `seedCheckRun`).
   --
   -- A process holding the prelude's elaborated trees (`types/prelude_elab.mdk`)
-  -- starts every lineage past the evidence ordinals and `$k$lb` suffixes those
-  -- trees carry, so no drive of it mints one again, whichever arm it takes.
-  let _ = match heldPreludeCounters ()
-    Some (k, l) =>
+  -- starts every lineage past the evidence ordinals those trees carry, so no drive
+  -- of it mints one again, whichever arm it takes.  Local binder names need no such
+  -- raise: they carry their module's id.
+  let _ = match heldPreludeEvCounter ()
+    Some k =>
       let lineage = interners.value.lineage
       lineage.lnEvCounter := max lineage.lnEvCounter.value k
-      lineage.lnLocalAbs.lasCounter := max lineage.lnLocalAbs.lasCounter.value l
     None => ()
   let gctx = mintGraphCtx inputs admitted
   let initial = initialModuleCtx gctx
@@ -57488,6 +57488,7 @@ beginModuleMarking mctx mid prog top seed =
     "" => constrainedSigNames prog
     _ => dedup (ms.msBareDictNames ++ mctx.mcGraph.promotionHarvestRef.value)
   let aliases = aliasDictNames mctx.mcGraph known ms.msUnits [(mid, prog)]
+  mctx.mcGraph.graphRun.localAbs.lasNext := (mid, 0)
   mctx.mcCells.markingRef := Some ModuleMarking {
     mmCtx = moduleMarkCtx mctx.mcGraph ms mid prog seed.msImportedValues,
     mmTop = top,

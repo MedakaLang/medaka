@@ -181,7 +181,7 @@ export
 scopeOwnerLabel : ScopeOwner -> String
 scopeOwnerLabel ModuleOwner = "module"
 scopeOwnerLabel (BindingOwner name) = "binding:" ++ name
--- A local binder's owner name is its renamed binder (`f$3$lb`); the label shows the
+-- A local binder's owner name is its renamed binder (`f$m$3$lb`); the label shows the
 -- name it was written with.
 scopeOwnerLabel (LocalBindingOwner name) = match splitOnChar '$' name
   written :: _ => "local:" ++ written
