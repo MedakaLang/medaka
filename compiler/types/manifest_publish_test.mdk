@@ -98,18 +98,19 @@ input protocol force mono wrappers = ManifestEntryInput {
 }
 
 publishedText : List ManifestEntryInput -> String
-publishedText inputs = match publishManifests [("Net", PPrefix None)] ops inputs
-  Err defects =>
-    joinWith
-      ";"
-      (map
-        (d => match d
-          ManifestDefect message => message)
-        defects)
-  Ok manifests =>
-    joinWith
-      ";"
-      (map (m => joinWith ", " (flatMap atomTexts m.atoms)) manifests)
+publishedText inputs =
+  match publishManifests [("Net", PPrefix None)] (_ => Some ops) inputs
+    Err defects =>
+      joinWith
+        ";"
+        (map
+          (d => match d
+            ManifestDefect message => message)
+          defects)
+    Ok manifests =>
+      joinWith
+        ";"
+        (map (m => joinWith ", " (flatMap atomTexts m.atoms)) manifests)
 
 atomTexts : FrozenAtom -> List String
 atomTexts atom = map (atom.label ++ _) (authorityTexts atom.authority)
@@ -232,10 +233,11 @@ test "freeze follows aliases, retains joins and products, and shares local varia
     input HostInvocation (row (AVar alias)) unit [],
     input HostInvocation (row (AJoin [AVar cell, AVar other])) unit [],
   ]
-  let ids = match publishManifests [("Net", PPrefix None)] ops inputs
-    Ok manifests =>
-      map (m => flatMap (a => variableIds a.authority) m.atoms) manifests
-    Err _ => []
+  let ids =
+    match publishManifests [("Net", PPrefix None)] (_ => Some ops) inputs
+      Ok manifests =>
+        map (m => flatMap (a => variableIds a.authority) m.atoms) manifests
+      Err _ => []
   let top = PProduct [("Host", PPrefix None), ("Method", PSet None)]
   let product =
     freezeAtoms
@@ -273,7 +275,7 @@ test "a frozen publication and its verdict survive cell mutation and unrelated q
   let row = EffRow [Atom (EffLabel "Net" OriginBuiltin) (AVar cell)] None
   match (publishManifests
     [("Net", PPrefix None)]
-    ops
+    (_ => Some ops)
     [input HostInvocation row unit []])
     Err _ => expectEqual "published" "error"
     Ok [manifest] =>
@@ -324,3 +326,45 @@ test "same-spelled label origins remain separate frozen atoms" =
           _ => "?",
       ))
       atoms)
+
+test "entry and executed wrapper resolve their own discriminating module views" =
+  let forOwner mid = Some ({ ops |
+    appliedFields =
+      _ => [
+        TFun
+          unit
+          (rowWith (if mid == "entry" then "Clock" else "Stdout") PUnit)
+          unit,
+      ],
+  })
+  let wrapper = (
+    EntryKey { moduleId = "core", binding = "println" },
+    Forall [] [] [] [] pure (con "Api"),
+  )
+  let summarize protocol =
+    match (publishManifests [] forOwner [
+      input protocol pure (con "Api") [wrapper],
+    ])
+      Ok [manifest] => map (a => a.label) manifest.atoms
+      _ => []
+  expectAll [
+    expectEqual ["Clock"] (summarize HostInvocation),
+    expectEqual ["Clock", "Stdout"] (summarize ExecutedMain),
+  ]
+
+test "missing wrapper owner is a publication defect only for executed protocol" =
+  let forOwner mid = if mid == "entry" then Some ops else None
+  let wrapper = (
+    EntryKey { moduleId = "core", binding = "println" },
+    Forall [] [] [] [] pure unit,
+  )
+  let verdict protocol =
+    match publishManifests [] forOwner [input protocol pure unit [wrapper]]
+      Ok _ => []
+      Err ds => map ((ManifestDefect message) => message) ds
+  expectAll [
+    expectEqual [] (verdict HostInvocation),
+    expectEqual
+      ["no checked invocation view for module 'core'"]
+      (verdict ExecutedMain),
+  ]

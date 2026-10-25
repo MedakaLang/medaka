@@ -2164,6 +2164,9 @@ public export data ReqStep =
 -- its variance and kind tables, its own declarations over everything it
 -- imports.  Written once per module, right after its data environment is
 -- built; a drive's caller reads it through `DriveOutputs` (`lastInvocationOps`).
+public export data PublishedInvocationView =
+  PublishedInvocationView (List PubScheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
+
 public export data InvocationView =
   InvocationView (List Scheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
 

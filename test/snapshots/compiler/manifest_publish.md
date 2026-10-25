@@ -1,5 +1,5 @@
 # META
-source_lines=104
+source_lines=131
 stages=DESUGAR,MARK
 # SOURCE
 -- This is the only bridge from checked authority cells to capability data.
@@ -11,7 +11,7 @@ import types.capability_manifest.{
   FrozenAtom(..),
   FrozenAuthority(..),
   FrozenVariable(..),
-  ManifestDefect,
+  ManifestDefect(..),
   validateManifest,
 }
 import types.effect_invocation.{InvocationOps, invocationSummary}
@@ -32,29 +32,56 @@ public export data ManifestEntryInput = ManifestEntryInput {
 
 export
 publishManifests : List (String, Param) ->
-  InvocationOps ->
+  (String -> Option InvocationOps) ->
   List ManifestEntryInput ->
   Result (List ManifestDefect) (List CapabilityManifest)
-publishManifests domains ops inputs =
-  let (_, manifests) =
-    mapAccumL
-      (state input =>
-        let atoms = invocationSummary ops input.scheme
-        let charged = match input.request.protocol
-          HostInvocation => atoms
-          ExecutedMain =>
-            fold
-              (acc wrapper =>
-                atomsUnion acc (invocationSummary ops (snd wrapper)))
-              atoms
-              input.wrappers
-        let (more, frozen) = freezeAtomsWith domains state charged
-        (more, CapabilityManifest { request = input.request, atoms = frozen }))
-      Tip
+publishManifests domains resolveOps inputs =
+  let defects =
+    flatMap
+      ((ManifestEntryInput request _ wrappers) =>
+        let owners =
+          request.entry
+            :: (match request.protocol
+              HostInvocation => []
+              ExecutedMain => map fst wrappers)
+        flatMap
+          (key => match resolveOps key.moduleId
+            Some _ => []
+            None => [
+              ManifestDefect
+                ("no checked invocation view for module '"
+                  ++ key.moduleId
+                  ++ "'"),
+            ])
+          owners)
       inputs
-  match flatMap validateManifest manifests
-    [] => Ok manifests
-    defects => Err defects
+  if not (isEmpty defects) then
+    Err defects
+  else
+    let summary key scheme = match resolveOps key.moduleId
+      Some ops => invocationSummary ops scheme
+      None => panic "validated invocation owner is missing"
+    let (_, manifests) =
+      mapAccumL
+        (state (ManifestEntryInput request scheme wrappers) =>
+          let atoms = summary request.entry scheme
+          let charged = match request.protocol
+            HostInvocation => atoms
+            ExecutedMain =>
+              fold
+                (acc (key, scheme) => atomsUnion acc (summary key scheme))
+                atoms
+                wrappers
+          let (more, frozen) = freezeAtomsWith domains state charged
+          (
+            more,
+            CapabilityManifest { request = request, atoms = frozen },
+          ))
+        Tip
+        inputs
+    match flatMap validateManifest manifests
+      [] => Ok manifests
+      invalid => Err invalid
 
 -- Compatibility callers freeze their atom batch with the same identity rules.
 export
@@ -107,7 +134,7 @@ freezeAuthority state (AVar cell) = match !cell
       }
       (M.set (authvarId cell) variable state, FrozenVar variable)
 # DESUGAR
-(DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" false) (mem "ManifestRequest" false) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true) (mem "ManifestDefect" false) (mem "validateManifest" false))))
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" false) (mem "ManifestRequest" false) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true) (mem "ManifestDefect" true) (mem "validateManifest" false))))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" false) (mem "invocationSummary" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authNorm" false) (mem "authvarId" false))))
@@ -118,8 +145,8 @@ freezeAuthority state (AVar cell) = match !cell
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DData Public "ManifestEntryInput" () ((variant "ManifestEntryInput" (ConNamed (field "request" (TyCon "ManifestRequest")) (field "scheme" (TyCon "Scheme")) (field "wrappers" (TyApp (TyCon "List") (TyTuple (TyCon "EntryKey") (TyCon "Scheme"))))))) ())
-(DTypeSig true "publishManifests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "InvocationOps") (TyFun (TyApp (TyCon "List") (TyCon "ManifestEntryInput")) (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "ManifestDefect"))) (TyApp (TyCon "List") (TyCon "CapabilityManifest")))))))
-(DFunDef false "publishManifests" ((PVar "domains") (PVar "ops") (PVar "inputs")) (EBlock (DoLet false false (PTuple PWild (PVar "manifests")) (EApp (EApp (EApp (EVar "mapAccumL") (ELam ((PVar "state") (PVar "input")) (EBlock (DoLet false false (PVar "atoms") (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EFieldAccess (EVar "input") "scheme"))) (DoLet false false (PVar "charged") (EMatch (EFieldAccess (EFieldAccess (EVar "input") "request") "protocol") (arm (PCon "HostInvocation") () (EVar "atoms")) (arm (PCon "ExecutedMain") () (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "wrapper")) (EApp (EApp (EVar "atomsUnion") (EVar "acc")) (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EApp (EVar "snd") (EVar "wrapper")))))) (EVar "atoms")) (EFieldAccess (EVar "input") "wrappers"))))) (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EApp (EVar "freezeAtomsWith") (EVar "domains")) (EVar "state")) (EVar "charged"))) (DoExpr (ETuple (EVar "more") (ERecordCreate "CapabilityManifest" ((fa "request" (EFieldAccess (EVar "input") "request")) (fa "atoms" (EVar "frozen"))))))))) (EVar "Tip")) (EVar "inputs"))) (DoExpr (EMatch (EApp (EApp (EVar "flatMap") (EVar "validateManifest")) (EVar "manifests")) (arm (PList) () (EApp (EVar "Ok") (EVar "manifests"))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
+(DTypeSig true "publishManifests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "InvocationOps"))) (TyFun (TyApp (TyCon "List") (TyCon "ManifestEntryInput")) (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "ManifestDefect"))) (TyApp (TyCon "List") (TyCon "CapabilityManifest")))))))
+(DFunDef false "publishManifests" ((PVar "domains") (PVar "resolveOps") (PVar "inputs")) (EBlock (DoLet false false (PVar "defects") (EApp (EApp (EVar "flatMap") (ELam ((PCon "ManifestEntryInput" (PVar "request") PWild (PVar "wrappers"))) (EBlock (DoLet false false (PVar "owners") (EBinOp "::" (EFieldAccess (EVar "request") "entry") (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EListLit)) (arm (PCon "ExecutedMain") () (EApp (EApp (EVar "map") (EVar "fst")) (EVar "wrappers")))))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "key")) (EMatch (EApp (EVar "resolveOps") (EFieldAccess (EVar "key") "moduleId")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EListLit (EApp (EVar "ManifestDefect") (EBinOp "++" (EBinOp "++" (ELit (LString "no checked invocation view for module '")) (EFieldAccess (EVar "key") "moduleId")) (ELit (LString "'"))))))))) (EVar "owners")))))) (EVar "inputs"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "isEmpty") (EVar "defects"))) (EApp (EVar "Err") (EVar "defects")) (EBlock (DoLet false true (PVar "summary") (ELam ((PVar "key")) (ELam ((PVar "scheme")) (EMatch (EApp (EVar "resolveOps") (EFieldAccess (EVar "key") "moduleId")) (arm (PCon "Some" (PVar "ops")) () (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EVar "scheme"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "validated invocation owner is missing")))))))) (DoLet false false (PTuple PWild (PVar "manifests")) (EApp (EApp (EApp (EVar "mapAccumL") (ELam ((PVar "state") (PCon "ManifestEntryInput" (PVar "request") (PVar "scheme") (PVar "wrappers"))) (EBlock (DoLet false false (PVar "atoms") (EApp (EApp (EVar "summary") (EFieldAccess (EVar "request") "entry")) (EVar "scheme"))) (DoLet false false (PVar "charged") (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EVar "atoms")) (arm (PCon "ExecutedMain") () (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "key") (PVar "scheme"))) (EApp (EApp (EVar "atomsUnion") (EVar "acc")) (EApp (EApp (EVar "summary") (EVar "key")) (EVar "scheme"))))) (EVar "atoms")) (EVar "wrappers"))))) (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EApp (EVar "freezeAtomsWith") (EVar "domains")) (EVar "state")) (EVar "charged"))) (DoExpr (ETuple (EVar "more") (ERecordCreate "CapabilityManifest" ((fa "request" (EVar "request")) (fa "atoms" (EVar "frozen"))))))))) (EVar "Tip")) (EVar "inputs"))) (DoExpr (EMatch (EApp (EApp (EVar "flatMap") (EVar "validateManifest")) (EVar "manifests")) (arm (PList) () (EApp (EVar "Ok") (EVar "manifests"))) (arm (PVar "invalid") () (EApp (EVar "Err") (EVar "invalid"))))))))))
 (DTypeSig true "freezeAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "FrozenAtom")))))
 (DFunDef false "freezeAtoms" ((PVar "domains") (PVar "atoms")) (EApp (EVar "snd") (EApp (EApp (EApp (EVar "freezeAtomsWith") (EVar "domains")) (EVar "Tip")) (EVar "atoms"))))
 (DTypeSig false "freezeAtomsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyTuple (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyApp (TyCon "List") (TyCon "FrozenAtom")))))))
@@ -130,7 +157,7 @@ freezeAuthority state (AVar cell) = match !cell
 (DFunDef false "freezeAuthority" ((PVar "state") (PCon "AProduct" (PVar "axes"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EApp (EVar "mapAccumL") (ELam ((PVar "s") (PTuple (PVar "name") (PVar "authority"))) (EBlock (DoLet false false (PTuple (PVar "next") (PVar "value")) (EApp (EApp (EVar "freezeAuthority") (EVar "s")) (EVar "authority"))) (DoExpr (ETuple (EVar "next") (ETuple (EVar "name") (EVar "value"))))))) (EVar "state")) (EVar "axes"))) (DoExpr (ETuple (EVar "more") (EApp (EVar "FrozenProduct") (EVar "frozen"))))))
 (DFunDef false "freezeAuthority" ((PVar "state") (PCon "AVar" (PVar "cell"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild PWild (PVar "target")) () (EApp (EApp (EVar "freezeAuthority") (EVar "state")) (EApp (EVar "authNorm") (EVar "target")))) (arm (PCon "AUnbound" PWild PWild (PVar "top") (PVar "pattern") (PVar "name")) () (EMatch (EApp (EApp (EVar "M.get") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "state")) (arm (PCon "Some" (PVar "variable")) () (ETuple (EVar "state") (EApp (EVar "FrozenVar") (EVar "variable")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "variable") (ERecordCreate "FrozenVariable" ((fa "localId" (EApp (EVar "M.size") (EVar "state"))) (fa "domainTop" (EVar "top")) (fa "patternOnly" (EVar "pattern")) (fa "sourceName" (EVar "name"))))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "M.set") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "variable")) (EVar "state")) (EApp (EVar "FrozenVar") (EVar "variable"))))))))))
 # MARK
-(DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" false) (mem "ManifestRequest" false) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true) (mem "ManifestDefect" false) (mem "validateManifest" false))))
+(DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" false) (mem "ManifestRequest" false) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true) (mem "ManifestDefect" true) (mem "validateManifest" false))))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" false) (mem "invocationSummary" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authNorm" false) (mem "authvarId" false))))
@@ -141,8 +168,8 @@ freezeAuthority state (AVar cell) = match !cell
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DData Public "ManifestEntryInput" () ((variant "ManifestEntryInput" (ConNamed (field "request" (TyCon "ManifestRequest")) (field "scheme" (TyCon "Scheme")) (field "wrappers" (TyApp (TyCon "List") (TyTuple (TyCon "EntryKey") (TyCon "Scheme"))))))) ())
-(DTypeSig true "publishManifests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "InvocationOps") (TyFun (TyApp (TyCon "List") (TyCon "ManifestEntryInput")) (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "ManifestDefect"))) (TyApp (TyCon "List") (TyCon "CapabilityManifest")))))))
-(DFunDef false "publishManifests" ((PVar "domains") (PVar "ops") (PVar "inputs")) (EBlock (DoLet false false (PTuple PWild (PVar "manifests")) (EApp (EApp (EApp (EVar "mapAccumL") (ELam ((PVar "state") (PVar "input")) (EBlock (DoLet false false (PVar "atoms") (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EFieldAccess (EVar "input") "scheme"))) (DoLet false false (PVar "charged") (EMatch (EFieldAccess (EFieldAccess (EVar "input") "request") "protocol") (arm (PCon "HostInvocation") () (EVar "atoms")) (arm (PCon "ExecutedMain") () (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "wrapper")) (EApp (EApp (EVar "atomsUnion") (EVar "acc")) (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EApp (EVar "snd") (EVar "wrapper")))))) (EVar "atoms")) (EFieldAccess (EVar "input") "wrappers"))))) (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EApp (EVar "freezeAtomsWith") (EVar "domains")) (EVar "state")) (EVar "charged"))) (DoExpr (ETuple (EVar "more") (ERecordCreate "CapabilityManifest" ((fa "request" (EFieldAccess (EVar "input") "request")) (fa "atoms" (EVar "frozen"))))))))) (EVar "Tip")) (EVar "inputs"))) (DoExpr (EMatch (EApp (EApp (EDictApp "flatMap") (EVar "validateManifest")) (EVar "manifests")) (arm (PList) () (EApp (EVar "Ok") (EVar "manifests"))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
+(DTypeSig true "publishManifests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "InvocationOps"))) (TyFun (TyApp (TyCon "List") (TyCon "ManifestEntryInput")) (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "ManifestDefect"))) (TyApp (TyCon "List") (TyCon "CapabilityManifest")))))))
+(DFunDef false "publishManifests" ((PVar "domains") (PVar "resolveOps") (PVar "inputs")) (EBlock (DoLet false false (PVar "defects") (EApp (EApp (EDictApp "flatMap") (ELam ((PCon "ManifestEntryInput" (PVar "request") PWild (PVar "wrappers"))) (EBlock (DoLet false false (PVar "owners") (EBinOp "::" (EFieldAccess (EVar "request") "entry") (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EListLit)) (arm (PCon "ExecutedMain") () (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "wrappers")))))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "key")) (EMatch (EApp (EVar "resolveOps") (EFieldAccess (EVar "key") "moduleId")) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EListLit (EApp (EVar "ManifestDefect") (EBinOp "++" (EBinOp "++" (ELit (LString "no checked invocation view for module '")) (EFieldAccess (EVar "key") "moduleId")) (ELit (LString "'"))))))))) (EVar "owners")))))) (EVar "inputs"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EVar "defects"))) (EApp (EVar "Err") (EVar "defects")) (EBlock (DoLet false true (PVar "summary") (ELam ((PVar "key")) (ELam ((PVar "scheme")) (EMatch (EApp (EVar "resolveOps") (EFieldAccess (EVar "key") "moduleId")) (arm (PCon "Some" (PVar "ops")) () (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EVar "scheme"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "validated invocation owner is missing")))))))) (DoLet false false (PTuple PWild (PVar "manifests")) (EApp (EApp (EApp (EVar "mapAccumL") (ELam ((PVar "state") (PCon "ManifestEntryInput" (PVar "request") (PVar "scheme") (PVar "wrappers"))) (EBlock (DoLet false false (PVar "atoms") (EApp (EApp (EVar "summary") (EFieldAccess (EVar "request") "entry")) (EVar "scheme"))) (DoLet false false (PVar "charged") (EMatch (EFieldAccess (EVar "request") "protocol") (arm (PCon "HostInvocation") () (EVar "atoms")) (arm (PCon "ExecutedMain") () (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "key") (PVar "scheme"))) (EApp (EApp (EVar "atomsUnion") (EVar "acc")) (EApp (EApp (EVar "summary") (EVar "key")) (EVar "scheme"))))) (EVar "atoms")) (EVar "wrappers"))))) (DoLet false false (PTuple (PVar "more") (PVar "frozen")) (EApp (EApp (EApp (EVar "freezeAtomsWith") (EVar "domains")) (EVar "state")) (EVar "charged"))) (DoExpr (ETuple (EVar "more") (ERecordCreate "CapabilityManifest" ((fa "request" (EVar "request")) (fa "atoms" (EVar "frozen"))))))))) (EVar "Tip")) (EVar "inputs"))) (DoExpr (EMatch (EApp (EApp (EDictApp "flatMap") (EVar "validateManifest")) (EVar "manifests")) (arm (PList) () (EApp (EVar "Ok") (EVar "manifests"))) (arm (PVar "invalid") () (EApp (EVar "Err") (EVar "invalid"))))))))))
 (DTypeSig true "freezeAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "FrozenAtom")))))
 (DFunDef false "freezeAtoms" ((PVar "domains") (PVar "atoms")) (EApp (EVar "snd") (EApp (EApp (EApp (EVar "freezeAtomsWith") (EVar "domains")) (EVar "Tip")) (EVar "atoms"))))
 (DTypeSig false "freezeAtomsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyTuple (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "FrozenVariable")) (TyApp (TyCon "List") (TyCon "FrozenAtom")))))))

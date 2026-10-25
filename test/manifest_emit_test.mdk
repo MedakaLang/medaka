@@ -1,3 +1,4 @@
+import test_process.{withScratchDir}
 {- | Gate for `medaka manifest` capability emission and its round trip through
    `medaka check-policy`, over test/check_policy_fixtures/. Replaces
    manifest_emit.sh.
@@ -225,3 +226,39 @@ test "manifest_emit: manifest refuses what check refuses" = expectEach [
   ("manifest-import-illtyped", refuse "policy_xmod_bad_main.mdk" "transform"),
   ("manifest-import-illtyped-located", importLocated "policy_xmod_bad_main.mdk"),
 ]
+
+test "manifest_emit: a user module called core retains its own checked Clock row" = withScratchDir
+  (dir => do
+    let path = dir ++ "/core.mdk"
+    let _ = writeFile path "not : <Clock> Unit\nnot = ()\nmain = ()\n"
+    let manifest = boundedInTree 90 medakaBin ["manifest", path, "--fn", "not"]
+    let policy = boundedInTree 90 medakaBin [
+      "check-policy", path, "--fn", "not", "--allow", "Log"
+    ]
+    expectEach [
+      (
+        "manifest",
+        match manifest
+          Err e => fail e
+          Ok (code, out, err) =>
+            if code /= 0 then
+              fail "manifest core.not exited \{code}: \{out}\{err}"
+            else
+              expectAll [
+                expectEqualText
+                  "[package.capabilities]\nClock = true"
+                  (trim out),
+                expectEqualText "" err,
+              ],
+      ),
+      (
+        "policy",
+        match policy
+          Err e => fail e
+          Ok (code, out, err) =>
+            if code /= 1 then
+              fail "check-policy core.not exited \{code}: \{out}\{err}"
+            else
+              expectTextContainsAll ["rejected", "Clock"] (out ++ err),
+      ),
+    ])

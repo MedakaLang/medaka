@@ -184,7 +184,6 @@ armNumGuard : GraphCtx -> NumGuard -> ArmedGuard
 armSites : GraphCtx -> Arm -> List (Ref Route)
 armUnreachable : ModuleCtx -> Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
 arrowArity : Mono -> Int
-arrowParts : Mono -> (List Mono, Mono)
 arrowsWithLastEffect : List Mono -> EffRow -> Mono -> Mono
 assignedFieldNames : List FieldAssign -> List String
 assumAnswerBinder : AssumAnswer -> EvidenceBinderId
@@ -239,7 +238,6 @@ authorityNamesWritten : GraphCtx -> Ty -> List (String, Option Loc)
 authorityParamAsRowMsg : String -> String -> String
 authorityParamAsTypeMsg : String -> String -> String
 authorityParamNames : List String -> List (Option KindAnn) -> List String
-authorityParamSubst : List Mono -> List Mono -> List (Int, Authority)
 authorityTermAsTypeMsg : List EffParamTy -> String
 authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 authorityUsesOf : ModuleCtx -> Ty -> List (String, Param)
@@ -413,7 +411,7 @@ censusSuperCloseVec : GraphCtx -> List VecObl -> List VecObl
 censusSuperStep : List String -> Int -> Super -> Option Int
 censusVecSuperStep : List String -> (List Int, List Mono) -> Super -> Option (List Int, List Mono)
 chainFullKey : Int -> Int -> String -> String
-chainGo : List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> Int -> List (Option String) -> List ChainStep -> ModuleCtx -> List (String, List Decl) -> (List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), Int, List ChainStep, ModuleCtx)
+chainGo : Map String Unit -> List (String, InvocationView) -> List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> Int -> List (Option String) -> List ChainStep -> ModuleCtx -> List (String, List Decl) -> (List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), Int, List ChainStep, ModuleCtx, List (String, InvocationView))
 chainMemoReplayedSteps : Unit -> Int
 changesFileRow : EffRow -> EffRow -> Bool
 changesPackedFileBound : Bool -> Mono -> Mono -> Bool
@@ -726,7 +724,6 @@ ctorRecordFromCompanion : GraphCtx -> HeadKey -> String -> Option RecordInfo
 ctorRecordOfType : ModuleCtx -> HeadKey -> String -> Option RecordInfo
 ctorSiblingWithholdingName : ModuleCtx -> Option HeadKey -> String -> String -> Option String
 ctorSiblingWithholds : ModuleCtx -> HeadKey -> String -> String -> Bool
-ctorsByHead : List Scheme -> Map String (List (List Mono, List Mono))
 ctorsOfHead : ModuleCtx -> HeadKey -> Option (List String)
 currentModuleMarks : GraphCtx -> Unit -> GraphMarks
 currentScopeStore : GraphCtx -> Unit -> ScopeStore
@@ -1391,10 +1388,10 @@ graphAliasEntry : String -> List ((String, String), a) -> (String, (String, Stri
 graphAliasRow : Decl -> List (TabKey, (List String, Ty))
 graphAmbigValues : GraphCtx -> String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
-graphCollect : GraphCtx -> GraphOut -> Bool -> String -> (List Decl, List (String, PubScheme), List TcDiag, List TcDiag) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag))) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)))
+graphCollect : GraphCtx -> GraphOut -> Bool -> String -> (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), List (String, InvocationView)) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), List (String, InvocationView))
 graphLineageRun : Option GraphRun -> Lineage -> GraphRun
 graphMarksNow : GraphCtx -> Unit -> GraphMarks
-graphModuleWorker : GraphOut -> ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag), ModuleCtx)
+graphModuleWorker : Map String Unit -> GraphOut -> ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView), ModuleCtx)
 graphPreamble : DriveInputs -> Map String (List (String, String)) -> GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), Map String (List VecObl), List Decl, MarkSets, ModuleCtx)
 graphPubDefiners : GraphCtx -> String -> List (String, (String, String))
 groundAdmittedGo : TcEnv -> String -> List IfaceRef -> List Mono -> Option Loc -> Unit
@@ -2440,7 +2437,6 @@ paramEtbl : List String -> List Kind -> List Mono -> SigVars
 paramMonoOf : List (String, Mono) -> String -> Mono
 paramOccPolarities : List (TabKey, List Polarity) -> String -> Polarity -> Ty -> List Polarity
 paramOccPolaritiesArgs : List (TabKey, List Polarity) -> String -> Polarity -> Option (List Polarity) -> Int -> List Ty -> List Polarity
-paramPolaritiesIn : List (TabKey, List Polarity) -> TabKey -> Option (List Polarity)
 paramPolaritiesOf : ModuleCtx -> TabKey -> Option (List Polarity)
 paramRenaming : Mono -> Mono -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
 paramRowAtomOccs : GraphCtx -> String -> Ty -> List (List Atom)
@@ -2675,7 +2671,6 @@ recordHasExistentials : GraphCtx -> Option RecordInfo -> Bool
 recordIfaceObligation : ModuleCtx -> BuiltinClass -> Mono -> Unit
 recordImplObligation : ModuleCtx -> String -> Mono -> List (String, Mono) -> Mono
 recordInstantiatedMethodLevelSlots : ModuleCtx -> List PredicateSlot -> Option Loc -> ScopeId -> Unit
-recordInvocationView : TcEnv -> Unit
 recordLetBindType : GraphCtx -> (LetBind, (String, BindingSummary)) -> Unit
 recordLiveRoots : ModuleCtx -> Unit -> Unit
 recordLocalBind : ModuleCtx -> String -> Option Loc -> BinderId -> Mono -> Unit
@@ -3101,8 +3096,6 @@ siteRouteCell : GraphCtx -> EvId -> Ref Route
 sitesFor : String -> Map String (List a) -> List a
 slotLabelsNaming : String -> List Kind -> List Ty -> List String
 slotOtherThan : Int -> List (String, Int, RecordInfo) -> Option (String, Int)
-slotVariance : Option Polarity -> Option Kind -> Variance
-slotVariances : Option (List Polarity) -> Option (List Kind) -> Option (List Variance)
 snapshotGraphCtx : GraphCtx -> GraphCtx
 solveExactReturn : SiteCtx -> MethodReturnRequest -> MethodReturnResolution
 solveExactReturnInstance : SiteCtx -> MethodReturnRequest -> Wanted -> List Mono -> MethodReturnResolution
@@ -3370,7 +3363,6 @@ valueSpanLoc : Expr -> Option Loc
 varHeadApps : String -> Ty -> List (List Ty)
 varHeadHere : String -> Ty -> List Ty -> List (List Ty)
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
-varianceOf : Polarity -> Variance
 variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
 variantNamed : String -> List Variant -> Bool
 variantPayload : Variant -> ConPayload

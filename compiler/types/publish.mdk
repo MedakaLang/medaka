@@ -124,7 +124,7 @@ publishedCore None contexts schemes = freezeRows (publishCore contexts schemes)
 -- owning module rather than the entry's same-spelled binding.
 export
 publishSelected : List (String, Param) ->
-  (Unit -> InvocationOps) ->
+  (String -> Option InvocationOps) ->
   List ManifestSelector ->
   List ModDiags ->
   List (String, PubScheme) ->
@@ -133,17 +133,15 @@ publishSelected : List (String, Param) ->
   Bool ->
   (List ManifestRequest, List CapabilityManifest, List TcDiag)
 publishSelected _ _ [] _ _ _ _ _ = ([], [], [])
-publishSelected domains makeOps selectors perMod core outcome executes valueMain =
-  let ops = makeOps ()
+publishSelected domains resolveOps selectors perMod core outcome executes valueMain =
   let entry = optionOr ("", ([], [], [])) (last perMod)
   let byModule =
-    IdMap.set
-      "core"
-      (IdMap.fromList (reverse core))
+    IdMap.union
       (IdMap.fromList
         (map
           (m => (fst m, IdMap.fromList (reverse (modSchemes (snd m)))))
           perMod))
+      (IdMap.singleton "core" (IdMap.fromList (reverse core)))
   let rows mid = optionOr Tip (IdMap.get mid byModule)
   let own = rows (fst entry)
   let resolve selector = match selector
@@ -229,7 +227,7 @@ publishSelected domains makeOps selectors perMod core outcome executes valueMain
                 None,
             ])
         selected
-  match publishManifests domains ops inputs
+  match publishManifests domains resolveOps inputs
     Ok manifests => (selected, manifests, missing)
     Err defects => (
       selected,

@@ -28,7 +28,7 @@ import driver.build_cmd.{
 }
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface, sha256Hex,
-  decodeInterface, formatVersion
+  decodeInterface, interfaceFormatVersion
 }
 import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}
 
@@ -257,15 +257,15 @@ staleFiles fresh = do
       "version"
       "format"
       (S.replace
-        "(medaka-interface \{formatVersion} "
+        "(medaka-interface \{interfaceFormatVersion} "
         "(medaka-interface 99 "
         fresh),
     StaleFile
       "previous format"
       "format"
       (S.replace
-        "(medaka-interface \{formatVersion} "
-        "(medaka-interface \{formatVersion - 1} "
+        "(medaka-interface \{interfaceFormatVersion} "
+        "(medaka-interface \{interfaceFormatVersion - 1} "
         fresh),
     StaleFile "digest" "file" (S.replace "(digest " "(digest 0" fresh),
   ]

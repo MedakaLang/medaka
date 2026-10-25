@@ -1,7 +1,8 @@
 # META
-source_lines=121
+source_lines=118
 stages=DESUGAR,MARK
 # SOURCE
+import types.invocation_basis.{frozenInvocationView}
 import types.value_main.{mainUseSite, mainUsedMsg}
 -- The checked main-shape facts published at the end of a typecheck drive.
 
@@ -10,7 +11,7 @@ import types.repr.{Mono(..), Scheme(..), normalize, IfaceRef(..)}
 import types.tc_types.{
   GraphCtx(..), ModuleCtx(..), DriveOutputs(..), InvocationView(..)
 }
-import types.publish.{EntryOutcome(..), TcDiag(..), zonkScheme, emptyZonk}
+import types.publish.{EntryOutcome(..), TcDiag(..)}
 
 -- The head node of a left-spine type application.
 mainHead : Mono -> Mono
@@ -92,10 +93,6 @@ driveOutputsNow mctx outcome = DriveOutputs {
   doEffvarNext = mctx.mcGraph.graphRun.effvarCounter.value,
 }
 
-frozenInvocationView : InvocationView -> InvocationView
-frozenInvocationView (InvocationView ctors pols kinds) =
-  InvocationView (map (c => snd (zonkScheme emptyZonk c)) ctors) pols kinds
-
 -- The interface of `println`'s one-predicate context (`Display a => …`).
 export
 printlnIface : List Decl -> Option IfaceRef
@@ -124,11 +121,12 @@ mainUseDiags (Some site) entry = match mainUseSite site entry
   Some at => [TcDiag "T-MAIN-USED" 1 (Some at) mainUsedMsg None None]
   None => []
 # DESUGAR
+(DUse false (UseGroup ("types" "invocation_basis") ((mem "frozenInvocationView" false))))
 (DUse false (UseGroup ("types" "value_main") ((mem "mainUseSite" false) (mem "mainUsedMsg" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvId" false) (mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Ty" true) (mem "Loc" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Scheme" true) (mem "normalize" false) (mem "IfaceRef" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "ModuleCtx" true) (mem "DriveOutputs" true) (mem "InvocationView" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "EntryOutcome" true) (mem "TcDiag" true) (mem "zonkScheme" false) (mem "emptyZonk" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "EntryOutcome" true) (mem "TcDiag" true))))
 (DTypeSig false "mainHead" (TyFun (TyCon "Mono") (TyCon "Mono")))
 (DFunDef false "mainHead" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") PWild) () (EApp (EVar "mainHead") (EVar "a"))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "mainHead") (EVar "a"))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig true "mainIsAsyncNow" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))
@@ -143,8 +141,6 @@ mainUseDiags (Some site) entry = match mainUseSite site entry
 (DFunDef false "entryOutcomeNow" ((PVar "mctx") (PVar "hasObligations") (PVar "autoPrint")) (ERecordCreate "EntryOutcome" ((fa "eoMainIsUnit" (EApp (EApp (EApp (EVar "mainIsUnitNow") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "hasObligations")) (ELit LUnit))) (fa "eoMainIsFloat" (EApp (EApp (EVar "mainIsFloatNow") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (fa "eoMainIsAsync" (EApp (EApp (EVar "mainIsAsyncNow") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (fa "eoMainAsyncPayloadIsUnit" (EApp (EApp (EVar "mainAsyncPayloadIsUnitNow") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (fa "eoAutoPrint" (EVar "autoPrint")))))
 (DTypeSig true "driveOutputsNow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EntryOutcome") (TyCon "DriveOutputs"))))
 (DFunDef false "driveOutputsNow" ((PVar "mctx") (PVar "outcome")) (ERecordCreate "DriveOutputs" ((fa "doManifestRequests" (EListLit)) (fa "doManifests" (EListLit)) (fa "doEntryOutcome" (EVar "outcome")) (fa "doHadTypeErrors" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky") "value")) (fa "doHadMatchWarnings" (EApp (EVar "not") (EApp (EVar "isEmpty") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value")))) (fa "doInvocationView" (EApp (EVar "frozenInvocationView") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "invocationViewRef") "value"))) (fa "doGrantsEnabled" (EApp (EVar "isSome") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "markSetsRef") "value"))) (fa "doEffectDomains" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "effectDomains") "value")) (fa "doStickyDiags" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags") "value")) (fa "doIfaceExports" (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value") "deMethods") "meIfaceExports")) (fa "doFfiAliases" (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value") "deData") "deAliases")) (fa "doOrdIndex" (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value") "deOrdIndex")) (fa "doEffvarNext" (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "effvarCounter") "value")))))
-(DTypeSig false "frozenInvocationView" (TyFun (TyCon "InvocationView") (TyCon "InvocationView")))
-(DFunDef false "frozenInvocationView" ((PCon "InvocationView" (PVar "ctors") (PVar "pols") (PVar "kinds"))) (EApp (EApp (EApp (EVar "InvocationView") (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EApp (EVar "snd") (EApp (EApp (EVar "zonkScheme") (EVar "emptyZonk")) (EVar "c"))))) (EVar "ctors"))) (EVar "pols")) (EVar "kinds")))
 (DTypeSig true "printlnIface" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "IfaceRef"))))
 (DFunDef false "printlnIface" ((PList)) (EVar "None"))
 (DFunDef false "printlnIface" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "printlnIface") (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -159,11 +155,12 @@ mainUseDiags (Some site) entry = match mainUseSite site entry
 (DFunDef false "mainUseDiags" ((PCon "None") PWild) (EListLit))
 (DFunDef false "mainUseDiags" ((PCon "Some" (PVar "site")) (PVar "entry")) (EMatch (EApp (EApp (EVar "mainUseSite") (EVar "site")) (EVar "entry")) (arm (PCon "Some" (PVar "at")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-MAIN-USED"))) (ELit (LInt 1))) (EApp (EVar "Some") (EVar "at"))) (EVar "mainUsedMsg")) (EVar "None")) (EVar "None")))) (arm (PCon "None") () (EListLit))))
 # MARK
+(DUse false (UseGroup ("types" "invocation_basis") ((mem "frozenInvocationView" false))))
 (DUse false (UseGroup ("types" "value_main") ((mem "mainUseSite" false) (mem "mainUsedMsg" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvId" false) (mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Ty" true) (mem "Loc" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Scheme" true) (mem "normalize" false) (mem "IfaceRef" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "ModuleCtx" true) (mem "DriveOutputs" true) (mem "InvocationView" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "EntryOutcome" true) (mem "TcDiag" true) (mem "zonkScheme" false) (mem "emptyZonk" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "EntryOutcome" true) (mem "TcDiag" true))))
 (DTypeSig false "mainHead" (TyFun (TyCon "Mono") (TyCon "Mono")))
 (DFunDef false "mainHead" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") PWild) () (EApp (EVar "mainHead") (EVar "a"))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "mainHead") (EVar "a"))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig true "mainIsAsyncNow" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))
@@ -178,8 +175,6 @@ mainUseDiags (Some site) entry = match mainUseSite site entry
 (DFunDef false "entryOutcomeNow" ((PVar "mctx") (PVar "hasObligations") (PVar "autoPrint")) (ERecordCreate "EntryOutcome" ((fa "eoMainIsUnit" (EApp (EApp (EApp (EVar "mainIsUnitNow") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "hasObligations")) (ELit LUnit))) (fa "eoMainIsFloat" (EApp (EApp (EVar "mainIsFloatNow") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (fa "eoMainIsAsync" (EApp (EApp (EVar "mainIsAsyncNow") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (fa "eoMainAsyncPayloadIsUnit" (EApp (EApp (EVar "mainAsyncPayloadIsUnitNow") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (fa "eoAutoPrint" (EVar "autoPrint")))))
 (DTypeSig true "driveOutputsNow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EntryOutcome") (TyCon "DriveOutputs"))))
 (DFunDef false "driveOutputsNow" ((PVar "mctx") (PVar "outcome")) (ERecordCreate "DriveOutputs" ((fa "doManifestRequests" (EListLit)) (fa "doManifests" (EListLit)) (fa "doEntryOutcome" (EVar "outcome")) (fa "doHadTypeErrors" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky") "value")) (fa "doHadMatchWarnings" (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value")))) (fa "doInvocationView" (EApp (EVar "frozenInvocationView") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "invocationViewRef") "value"))) (fa "doGrantsEnabled" (EApp (EVar "isSome") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "markSetsRef") "value"))) (fa "doEffectDomains" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "effectDomains") "value")) (fa "doStickyDiags" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags") "value")) (fa "doIfaceExports" (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value") "deMethods") "meIfaceExports")) (fa "doFfiAliases" (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value") "deData") "deAliases")) (fa "doOrdIndex" (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value") "deOrdIndex")) (fa "doEffvarNext" (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "effvarCounter") "value")))))
-(DTypeSig false "frozenInvocationView" (TyFun (TyCon "InvocationView") (TyCon "InvocationView")))
-(DFunDef false "frozenInvocationView" ((PCon "InvocationView" (PVar "ctors") (PVar "pols") (PVar "kinds"))) (EApp (EApp (EApp (EVar "InvocationView") (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EApp (EVar "snd") (EApp (EApp (EVar "zonkScheme") (EVar "emptyZonk")) (EVar "c"))))) (EVar "ctors"))) (EVar "pols")) (EVar "kinds")))
 (DTypeSig true "printlnIface" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "IfaceRef"))))
 (DFunDef false "printlnIface" ((PList)) (EVar "None"))
 (DFunDef false "printlnIface" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "printlnIface") (EBinOp "::" (EVar "d") (EVar "rest"))))
