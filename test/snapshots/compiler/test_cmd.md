@@ -1,5 +1,5 @@
 # META
-source_lines=4857
+source_lines=4882
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -88,11 +88,13 @@ import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
   driveInputsFor,
   elaborateModules,
-  elaborateModulesWithReport,
+  elaborateModulesChainReport,
   TcDiag(..),
   tcDiagGoalKey,
 }
-import types.tc_types.{DriveInputs(..), DriveOutputs}
+import types.tc_types.{DriveInputs(..), DriveOutputs, ElabResult}
+import types.publish.{TcReport}
+import types.module_interface.{retainModuleInterfaces}
 import types.target_profile.{selectedProfile}
 import driver.main_autoprint.{valueMainCandidate}
 import types.private_mangle.{mangleCtorCollisionsPair}
@@ -225,9 +227,10 @@ import tools.test_runner.{
 import driver.diagnostics.{
   analyzeLocated,
   projectDiagsFromTc,
-  projectDiagsLoaded,
   noStdlibExports,
   chainKeyOf,
+  graphIdOf,
+  GraphId(..),
   desugaredModPairs,
   mkDiag,
   Severity(..),
@@ -791,7 +794,7 @@ data DoctestTrees =
 -- doctest-bearing module to the other driver's gate.
 data Prepared =
   | PreparedPair TestPair
-  | PreparedInject (List (String, String, List Decl)) (List Decl)
+  | PreparedInject String (List (String, String, List Decl)) (List Decl)
 
 -- Load + elaborate, once, for an import-bearing target: the gate text (None when
 -- the module type-checks, or is exempt) beside the trees the three phases share.
@@ -810,15 +813,14 @@ data Prepared =
 --                 that elaboration's own per-module diagnostics (element 3 of
 --                 `elaborateModules`' tuple) through `projectDiagsFromTc`.
 --   doctests      the phases need the injected tree and the gate must not read
---                 it, so the two cannot be one pass, and the gate is the check
---                 driver over the graph already loaded (`projectDiagsLoaded`,
---                 keyed into the prelude interface `check` reads).
+--                 it, so the two cannot be one pass.  The gate is the same
+--                 elaboration of the graph as written, and the phases' injected
+--                 elaboration comes after it.
 --
--- The two drivers must agree on the IMPL UNIVERSE, or which arm a module
--- takes decides whether it type-checks — and adding a doctest would move it
--- between them.  `graphModuleWorker` passes `accAll ++ prog`
--- on both output selections (types/typecheck.mdk), so the two arms cannot diverge
--- on it.  `hasDoctests` is the module's UNFILTERED
+-- Both elaborations are keyed under the target's chain (`keyedElab`): the first
+-- records the trees of every module before the entry, and the injected one, whose
+-- examples are spliced into the entry alone, serves them.  `hasDoctests` is the
+-- module's UNFILTERED
 -- doctest presence: the arm is chosen by what the module contains, so `--filter`
 -- cannot move it.
 --
@@ -870,17 +872,17 @@ elaborateFor : String ->
   Bool ->
   List Decl ->
   <IO> (Option String, Prepared)
-elaborateFor rsrc csrc _target _roots mods exempt False _ =
+elaborateFor rsrc csrc target roots mods exempt False _ =
   let runtimeDecls = desugaredPrelude rsrc
   let coreDecls = desugaredPrelude csrc
   let rawModules = desugaredModPairs mods
   let (elaborated, _, outputs) =
-    elaborateModulesWithReport
-      (testDriveInputs coreDecls)
+    keyedElab
+      rsrc
+      csrc
+      (chainKeyOf target roots)
+      mods
       (valueMainCandidate coreDecls rawModules)
-      None
-      runtimeDecls
-      coreDecls
       rawModules
   match elaborated
     (coreE, modulesE, perModule, _, _, _, _) => (
@@ -894,9 +896,33 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
           (factsOfElab elaborated)),
     )
 elaborateFor rsrc csrc target roots mods exempt True synthDecls = (
-  gateOfCheck exempt rsrc csrc target roots mods,
-  PreparedInject mods synthDecls,
+  gateOfVerbatim exempt rsrc csrc (chainKeyOf target roots) mods,
+  PreparedInject (chainKeyOf target roots) mods synthDecls,
 )
+
+-- The tree drive of [pairs], desugared from the loaded [mods], keyed under the
+-- prelude generation and [chainKey]: a module before the entry that an earlier
+-- drive of the same graph recorded is served (`elaborateModulesChainReport`).  The
+-- cache keeps the interfaces of this graph's modules and no others.
+keyedElab : String ->
+  String ->
+  String ->
+  List (String, String, List Decl) ->
+  Bool ->
+  List (String, List Decl) ->
+  (ElabResult, TcReport, DriveOutputs)
+keyedElab rsrc csrc chainKey mods valueMain pairs =
+  let coreDecls = desugaredPrelude csrc
+  let _ = retainModuleInterfaces (map ((mid, _, _) => mid) mods)
+  elaborateModulesChainReport
+    (testDriveInputs coreDecls)
+    valueMain
+    (preludeGeneration rsrc csrc)
+    chainKey
+    (graphIdOf mods).giSteps
+    (desugaredPrelude rsrc)
+    coreDecls
+    pairs
 
 -- Build the phases' trees.  The injected elaboration runs AFTER the gate, so it
 -- is still the last writer of the typechecker's whole-graph state — the position
@@ -905,8 +931,10 @@ forcePrepared : String -> String -> Prepared -> <IO> TestPair
 forcePrepared _ _ (PreparedPair pair) =
   injectedExampleDiags := omEmpty
   pair
-forcePrepared rsrc csrc (PreparedInject mods synthDecls) =
-  perfRow "test-elab" "injected" (_ => forceInjected rsrc csrc mods synthDecls)
+forcePrepared rsrc csrc (PreparedInject chainKey mods synthDecls) = perfRow
+  "test-elab"
+  "injected"
+  (_ => forceInjected rsrc csrc chainKey mods synthDecls)
 
 -- The doctest-injected elaboration's own errors on the examples, by doctest line
 -- (`exampleDiagLines`), written by the elaboration that built the trees the
@@ -938,17 +966,13 @@ exampleDiagLines perMod = match reverseL perMod
 
 forceInjected : String ->
   String ->
+  String ->
   List (String, String, List Decl) ->
   List Decl ->
   <IO> TestPair
-forceInjected rsrc csrc mods synthDecls =
+forceInjected rsrc csrc chainKey mods synthDecls =
   let injected = injectIntoLast synthDecls (desugaredModPairs mods)
-  let elab =
-    elaborateModules
-      (testDriveInputs (desugaredPrelude csrc))
-      (desugaredPrelude rsrc)
-      (desugaredPrelude csrc)
-      injected
+  let (elab, _, _) = keyedElab rsrc csrc chainKey mods False injected
   match elab
     (coreE, modulesE, perModule, _, _, _, _) =>
       injectedExampleDiags := exampleDiagLines perModule
@@ -959,28 +983,29 @@ forceInjected rsrc csrc mods synthDecls =
         (mangleCtorCollisionsPair (coreE, modulesE))
         (factsOfElab elab)
 
--- The doctest-bearing gate: `analyzeProject`'s verdict over the graph this
--- invocation already loaded, keyed into the same prelude interface `medaka check`
--- reads, so nothing here re-parses or re-loads.
-gateOfCheck : Bool ->
+-- The doctest-bearing gate: the no-doctest arm's, over the graph as written,
+-- which this invocation already loaded.  Its drive records what the injected
+-- elaboration serves.
+gateOfVerbatim : Bool ->
   String ->
   String ->
   String ->
-  List String ->
   List (String, String, List Decl) ->
   <IO> Option String
-gateOfCheck True _ _ _ _ _ = None
-gateOfCheck False rsrc csrc target roots mods =
-  renderGate
-    (projectDiagsLoaded
-      noStdlibExports
-      True
-      []
-      (desugaredPrelude rsrc)
-      (desugaredPrelude csrc)
-      (Some (preludeGeneration rsrc csrc))
-      (chainKeyOf target roots)
-      mods)
+gateOfVerbatim True _ _ _ _ = None
+gateOfVerbatim False rsrc csrc chainKey mods =
+  let runtimeDecls = desugaredPrelude rsrc
+  let coreDecls = desugaredPrelude csrc
+  let rawModules = desugaredModPairs mods
+  let ((_, _, perModule, _, _, _, _), _, outputs) =
+    keyedElab
+      rsrc
+      csrc
+      chainKey
+      mods
+      (valueMainCandidate coreDecls rawModules)
+      rawModules
+  gateOfPerModule False runtimeDecls coreDecls mods outputs perModule
 
 -- The phases' trees, or `unreadTrees` when no phase under `engines` reads
 -- them.  The gate is decided before this and does not depend on it.
@@ -4866,8 +4891,10 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeSources" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "loadPreludeInterface" false) (mem "loadPreludeElab" false) (mem "treesLoaded" false) (mem "withHeldPrelude" false) (mem "FileVerdict" false) (mem "SideFile" true) (mem "PreludeInputs" true) (mem "staleLine" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesWithReport" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesChainReport" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" false) (mem "ElabResult" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcReport" false))))
+(DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
@@ -4889,7 +4916,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "GradedTest" false) (mem "gradeProps" false) (mem "gradeTests" false) (mem "gradedPropPassed" false) (mem "gradedTestPassed" false) (mem "gradedPropRaw" false) (mem "gradedTestRaw" false) (mem "gradedPropVerdict" false) (mem "gradedTestVerdict" false) (mem "knownRedCountProps" false) (mem "knownRedCountTests" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "gradedTestStatus" false) (mem "gradedTestRawStatus" false) (mem "gradedTestIssue" false) (mem "gradedTestPinDetail" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "exprLine" false) (mem "runOneTestEnv" false) (mem "hasTests" false) (mem "uncapableExternsEnv" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "projectDiagsFromTc" false) (mem "projectDiagsLoaded" false) (mem "noStdlibExports" false) (mem "chainKeyOf" false) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "projectDiagsFromTc" false) (mem "noStdlibExports" false) (mem "chainKeyOf" false) (mem "graphIdOf" false) (mem "GraphId" true) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
@@ -4959,24 +4986,26 @@ testFilesReport _ _ acc = acc
 (DData Private "TestPair" () ((variant "TestPair" (ConPos (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ProgramFacts"))) (variant "TestPairErr" (ConPos (TyCon "String")))) ())
 (DData Private "HelperValidation" () ((variant "HelperValidation" (ConPos (TyCon "TestPair") (TyApp (TyCon "List") (TyCon "PropHelper")) (TyApp (TyCon "OrdMap") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))) ())
 (DData Private "DoctestTrees" () ((variant "DtPair" (ConPos (TyCon "TestPair"))) (variant "DtSingle" (ConPos (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))) ())
-(DData Private "Prepared" () ((variant "PreparedPair" (ConPos (TyCon "TestPair"))) (variant "PreparedInject" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))) ())
+(DData Private "Prepared" () ((variant "PreparedPair" (ConPos (TyCon "TestPair"))) (variant "PreparedInject" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))) ())
 (DTypeSig false "prepareMulti" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Prepared"))))))))))))
 (DFunDef false "prepareMulti" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "exempt") (PVar "unread") (PVar "hasDoctests") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "loaded") (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-load"))) (EVar "target")) (ELam (PWild) (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots"))))) (DoExpr (EMatch (EVar "loaded") (arm (PCon "Err" (PVar "le")) () (ETuple (EApp (EApp (EApp (EVar "loadGate") (EVar "exempt")) (EVar "target")) (EVar "le")) (EApp (EVar "PreparedPair") (EApp (EVar "TestPairErr") (EApp (EVar "loadErrorMessage") (EVar "le")))))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "mods")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EVar "exempt") (EVar "unread")) (EApp (EVar "not") (EVar "hasDoctests"))) (ETuple (EVar "None") (EApp (EVar "PreparedPair") (EVar "unreadTrees"))) (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-gate"))) (EIf (EVar "hasDoctests") (ELit (LString "check")) (ELit (LString "elaborate")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateFor") (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "roots")) (EVar "mods")) (EVar "exempt")) (EVar "hasDoctests")) (EVar "synthDecls"))))))))))))
 (DTypeSig false "elaborateFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Prepared"))))))))))))
-(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "_target") (PVar "_roots") (PVar "mods") (PVar "exempt") (PCon "False") PWild) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoLet false false (PTuple (PVar "elaborated") PWild (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EApp (EVar "testDriveInputs") (EVar "coreDecls"))) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawModules"))) (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules"))) (DoExpr (EMatch (EVar "elaborated") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "outputs")) (EVar "perModule")) (EApp (EVar "PreparedPair") (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elaborated"))))))))))
-(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods") (PVar "exempt") (PCon "True") (PVar "synthDecls")) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfCheck") (EVar "exempt")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "roots")) (EVar "mods")) (EApp (EApp (EVar "PreparedInject") (EVar "mods")) (EVar "synthDecls"))))
+(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods") (PVar "exempt") (PCon "False") PWild) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoLet false false (PTuple (PVar "elaborated") PWild (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "keyedElab") (EVar "rsrc")) (EVar "csrc")) (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods")) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawModules"))) (EVar "rawModules"))) (DoExpr (EMatch (EVar "elaborated") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "outputs")) (EVar "perModule")) (EApp (EVar "PreparedPair") (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elaborated"))))))))))
+(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods") (PVar "exempt") (PCon "True") (PVar "synthDecls")) (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "gateOfVerbatim") (EVar "exempt")) (EVar "rsrc")) (EVar "csrc")) (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods")) (EApp (EApp (EApp (EVar "PreparedInject") (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods")) (EVar "synthDecls"))))
+(DTypeSig false "keyedElab" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "ElabResult") (TyCon "TcReport") (TyCon "DriveOutputs")))))))))
+(DFunDef false "keyedElab" ((PVar "rsrc") (PVar "csrc") (PVar "chainKey") (PVar "mods") (PVar "valueMain") (PVar "pairs")) (EBlock (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false PWild (EApp (EVar "retainModuleInterfaces") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "mid") PWild PWild)) (EVar "mid"))) (EVar "mods")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesChainReport") (EApp (EVar "testDriveInputs") (EVar "coreDecls"))) (EVar "valueMain")) (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc"))) (EVar "chainKey")) (EFieldAccess (EApp (EVar "graphIdOf") (EVar "mods")) "giSteps")) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EVar "coreDecls")) (EVar "pairs")))))
 (DTypeSig false "forcePrepared" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Prepared") (TyEffect ("IO") None (TyCon "TestPair"))))))
 (DFunDef false "forcePrepared" (PWild PWild (PCon "PreparedPair" (PVar "pair"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EVar "omEmpty"))) (DoExpr (EVar "pair"))))
-(DFunDef false "forcePrepared" ((PVar "rsrc") (PVar "csrc") (PCon "PreparedInject" (PVar "mods") (PVar "synthDecls"))) (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "injected"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "forceInjected") (EVar "rsrc")) (EVar "csrc")) (EVar "mods")) (EVar "synthDecls")))))
+(DFunDef false "forcePrepared" ((PVar "rsrc") (PVar "csrc") (PCon "PreparedInject" (PVar "chainKey") (PVar "mods") (PVar "synthDecls"))) (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "injected"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "forceInjected") (EVar "rsrc")) (EVar "csrc")) (EVar "chainKey")) (EVar "mods")) (EVar "synthDecls")))))
 (DTypeSig false "injectedExampleDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String"))))
 (DFunDef false "injectedExampleDiags" () (EApp (EVar "Ref") (EVar "omEmpty")))
 (DTypeSig false "exampleDiagLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "OrdMap") (TyCon "String"))))
 (DFunDef false "exampleDiagLines" ((PVar "perMod")) (EMatch (EApp (EVar "reverseL") (EVar "perMod")) (arm (PCons (PTuple PWild (PTuple (PVar "errs") PWild)) PWild) () (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "d")) (EMatch (EVar "d") (arm (PCon "TcDiag" PWild PWild (PCon "Some" (PCon "Loc" PWild (PVar "line") PWild PWild PWild)) (PVar "msg") PWild PWild) () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "line"))) (EVar "acc")) (EVar "acc") (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "line"))) (EVar "msg")) (EVar "acc")))) (arm PWild () (EVar "acc"))))) (EVar "omEmpty")) (EVar "errs"))) (arm (PList) () (EVar "omEmpty"))))
-(DTypeSig false "forceInjected" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "TestPair")))))))
-(DFunDef false "forceInjected" ((PVar "rsrc") (PVar "csrc") (PVar "mods") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "injected") (EApp (EApp (EVar "injectIntoLast") (EVar "synthDecls")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EVar "testDriveInputs") (EApp (EVar "desugaredPrelude") (EVar "csrc")))) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected"))) (DoExpr (EMatch (EVar "elab") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EApp (EVar "exampleDiagLines") (EVar "perModule")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elab"))))))))))
-(DTypeSig false "gateOfCheck" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
-(DFunDef false "gateOfCheck" ((PCon "True") PWild PWild PWild PWild PWild) (EVar "None"))
-(DFunDef false "gateOfCheck" ((PCon "False") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods")) (EApp (EVar "renderGate") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoaded") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc")))) (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods"))))
+(DTypeSig false "forceInjected" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "TestPair"))))))))
+(DFunDef false "forceInjected" ((PVar "rsrc") (PVar "csrc") (PVar "chainKey") (PVar "mods") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "injected") (EApp (EApp (EVar "injectIntoLast") (EVar "synthDecls")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoLet false false (PTuple (PVar "elab") PWild PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "keyedElab") (EVar "rsrc")) (EVar "csrc")) (EVar "chainKey")) (EVar "mods")) (EVar "False")) (EVar "injected"))) (DoExpr (EMatch (EVar "elab") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EApp (EVar "exampleDiagLines") (EVar "perModule")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elab"))))))))))
+(DTypeSig false "gateOfVerbatim" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))
+(DFunDef false "gateOfVerbatim" ((PCon "True") PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "gateOfVerbatim" ((PCon "False") (PVar "rsrc") (PVar "csrc") (PVar "chainKey") (PVar "mods")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoLet false false (PTuple (PTuple PWild PWild (PVar "perModule") PWild PWild PWild PWild) PWild (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "keyedElab") (EVar "rsrc")) (EVar "csrc")) (EVar "chainKey")) (EVar "mods")) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawModules"))) (EVar "rawModules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "False")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "outputs")) (EVar "perModule")))))
 (DTypeSig false "phaseTrees" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Prepared") (TyEffect ("IO") None (TyCon "TestPair"))))))))
 (DFunDef false "phaseTrees" ((PVar "engines") (PVar "userDecls") (PVar "rsrc") (PVar "csrc") (PVar "prepared")) (EIf (EApp (EApp (EVar "treesUnread") (EVar "engines")) (EVar "userDecls")) (EVar "unreadTrees") (EApp (EApp (EApp (EVar "forcePrepared") (EVar "rsrc")) (EVar "csrc")) (EVar "prepared"))))
 (DTypeSig true "treesUnread" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
@@ -5533,8 +5562,10 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeSources" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "loadPreludeInterface" false) (mem "loadPreludeElab" false) (mem "treesLoaded" false) (mem "withHeldPrelude" false) (mem "FileVerdict" false) (mem "SideFile" true) (mem "PreludeInputs" true) (mem "staleLine" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesWithReport" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "driveInputsFor" false) (mem "elaborateModules" false) (mem "elaborateModulesChainReport" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" false) (mem "ElabResult" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcReport" false))))
+(DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
@@ -5556,7 +5587,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "GradedTest" false) (mem "gradeProps" false) (mem "gradeTests" false) (mem "gradedPropPassed" false) (mem "gradedTestPassed" false) (mem "gradedPropRaw" false) (mem "gradedTestRaw" false) (mem "gradedPropVerdict" false) (mem "gradedTestVerdict" false) (mem "knownRedCountProps" false) (mem "knownRedCountTests" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "gradedTestStatus" false) (mem "gradedTestRawStatus" false) (mem "gradedTestIssue" false) (mem "gradedTestPinDetail" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "exprLine" false) (mem "runOneTestEnv" false) (mem "hasTests" false) (mem "uncapableExternsEnv" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "projectDiagsFromTc" false) (mem "projectDiagsLoaded" false) (mem "noStdlibExports" false) (mem "chainKeyOf" false) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLocated" false) (mem "projectDiagsFromTc" false) (mem "noStdlibExports" false) (mem "chainKeyOf" false) (mem "graphIdOf" false) (mem "GraphId" true) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
@@ -5626,24 +5657,26 @@ testFilesReport _ _ acc = acc
 (DData Private "TestPair" () ((variant "TestPair" (ConPos (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ProgramFacts"))) (variant "TestPairErr" (ConPos (TyCon "String")))) ())
 (DData Private "HelperValidation" () ((variant "HelperValidation" (ConPos (TyCon "TestPair") (TyApp (TyCon "List") (TyCon "PropHelper")) (TyApp (TyCon "OrdMap") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))) ())
 (DData Private "DoctestTrees" () ((variant "DtPair" (ConPos (TyCon "TestPair"))) (variant "DtSingle" (ConPos (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))) ())
-(DData Private "Prepared" () ((variant "PreparedPair" (ConPos (TyCon "TestPair"))) (variant "PreparedInject" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))) ())
+(DData Private "Prepared" () ((variant "PreparedPair" (ConPos (TyCon "TestPair"))) (variant "PreparedInject" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))) ())
 (DTypeSig false "prepareMulti" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Prepared"))))))))))))
 (DFunDef false "prepareMulti" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "exempt") (PVar "unread") (PVar "hasDoctests") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "loaded") (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-load"))) (EVar "target")) (ELam (PWild) (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots"))))) (DoExpr (EMatch (EVar "loaded") (arm (PCon "Err" (PVar "le")) () (ETuple (EApp (EApp (EApp (EVar "loadGate") (EVar "exempt")) (EVar "target")) (EVar "le")) (EApp (EVar "PreparedPair") (EApp (EVar "TestPairErr") (EApp (EVar "loadErrorMessage") (EVar "le")))))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "mods")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EVar "exempt") (EVar "unread")) (EApp (EVar "not") (EVar "hasDoctests"))) (ETuple (EVar "None") (EApp (EVar "PreparedPair") (EVar "unreadTrees"))) (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-gate"))) (EIf (EVar "hasDoctests") (ELit (LString "check")) (ELit (LString "elaborate")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateFor") (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "roots")) (EVar "mods")) (EVar "exempt")) (EVar "hasDoctests")) (EVar "synthDecls"))))))))))))
 (DTypeSig false "elaborateFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Prepared"))))))))))))
-(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "_target") (PVar "_roots") (PVar "mods") (PVar "exempt") (PCon "False") PWild) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoLet false false (PTuple (PVar "elaborated") PWild (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EApp (EVar "testDriveInputs") (EVar "coreDecls"))) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawModules"))) (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules"))) (DoExpr (EMatch (EVar "elaborated") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "outputs")) (EVar "perModule")) (EApp (EVar "PreparedPair") (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elaborated"))))))))))
-(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods") (PVar "exempt") (PCon "True") (PVar "synthDecls")) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfCheck") (EVar "exempt")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "roots")) (EVar "mods")) (EApp (EApp (EVar "PreparedInject") (EVar "mods")) (EVar "synthDecls"))))
+(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods") (PVar "exempt") (PCon "False") PWild) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoLet false false (PTuple (PVar "elaborated") PWild (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "keyedElab") (EVar "rsrc")) (EVar "csrc")) (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods")) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawModules"))) (EVar "rawModules"))) (DoExpr (EMatch (EVar "elaborated") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "outputs")) (EVar "perModule")) (EApp (EVar "PreparedPair") (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elaborated"))))))))))
+(DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods") (PVar "exempt") (PCon "True") (PVar "synthDecls")) (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "gateOfVerbatim") (EVar "exempt")) (EVar "rsrc")) (EVar "csrc")) (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods")) (EApp (EApp (EApp (EVar "PreparedInject") (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods")) (EVar "synthDecls"))))
+(DTypeSig false "keyedElab" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "ElabResult") (TyCon "TcReport") (TyCon "DriveOutputs")))))))))
+(DFunDef false "keyedElab" ((PVar "rsrc") (PVar "csrc") (PVar "chainKey") (PVar "mods") (PVar "valueMain") (PVar "pairs")) (EBlock (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false PWild (EApp (EVar "retainModuleInterfaces") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "mid") PWild PWild)) (EVar "mid"))) (EVar "mods")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesChainReport") (EApp (EVar "testDriveInputs") (EVar "coreDecls"))) (EVar "valueMain")) (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc"))) (EVar "chainKey")) (EFieldAccess (EApp (EVar "graphIdOf") (EVar "mods")) "giSteps")) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EVar "coreDecls")) (EVar "pairs")))))
 (DTypeSig false "forcePrepared" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Prepared") (TyEffect ("IO") None (TyCon "TestPair"))))))
 (DFunDef false "forcePrepared" (PWild PWild (PCon "PreparedPair" (PVar "pair"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EVar "omEmpty"))) (DoExpr (EVar "pair"))))
-(DFunDef false "forcePrepared" ((PVar "rsrc") (PVar "csrc") (PCon "PreparedInject" (PVar "mods") (PVar "synthDecls"))) (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "injected"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "forceInjected") (EVar "rsrc")) (EVar "csrc")) (EVar "mods")) (EVar "synthDecls")))))
+(DFunDef false "forcePrepared" ((PVar "rsrc") (PVar "csrc") (PCon "PreparedInject" (PVar "chainKey") (PVar "mods") (PVar "synthDecls"))) (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "injected"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "forceInjected") (EVar "rsrc")) (EVar "csrc")) (EVar "chainKey")) (EVar "mods")) (EVar "synthDecls")))))
 (DTypeSig false "injectedExampleDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String"))))
 (DFunDef false "injectedExampleDiags" () (EApp (EVar "Ref") (EVar "omEmpty")))
 (DTypeSig false "exampleDiagLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "OrdMap") (TyCon "String"))))
 (DFunDef false "exampleDiagLines" ((PVar "perMod")) (EMatch (EApp (EVar "reverseL") (EVar "perMod")) (arm (PCons (PTuple PWild (PTuple (PVar "errs") PWild)) PWild) () (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "d")) (EMatch (EVar "d") (arm (PCon "TcDiag" PWild PWild (PCon "Some" (PCon "Loc" PWild (PVar "line") PWild PWild PWild)) (PVar "msg") PWild PWild) () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "line"))) (EVar "acc")) (EVar "acc") (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "line"))) (EVar "msg")) (EVar "acc")))) (arm PWild () (EVar "acc"))))) (EVar "omEmpty")) (EVar "errs"))) (arm (PList) () (EVar "omEmpty"))))
-(DTypeSig false "forceInjected" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "TestPair")))))))
-(DFunDef false "forceInjected" ((PVar "rsrc") (PVar "csrc") (PVar "mods") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "injected") (EApp (EApp (EVar "injectIntoLast") (EVar "synthDecls")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EVar "testDriveInputs") (EApp (EVar "desugaredPrelude") (EVar "csrc")))) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected"))) (DoExpr (EMatch (EVar "elab") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EApp (EVar "exampleDiagLines") (EVar "perModule")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elab"))))))))))
-(DTypeSig false "gateOfCheck" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
-(DFunDef false "gateOfCheck" ((PCon "True") PWild PWild PWild PWild PWild) (EVar "None"))
-(DFunDef false "gateOfCheck" ((PCon "False") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods")) (EApp (EVar "renderGate") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoaded") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc")))) (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods"))))
+(DTypeSig false "forceInjected" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "TestPair"))))))))
+(DFunDef false "forceInjected" ((PVar "rsrc") (PVar "csrc") (PVar "chainKey") (PVar "mods") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "injected") (EApp (EApp (EVar "injectIntoLast") (EVar "synthDecls")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoLet false false (PTuple (PVar "elab") PWild PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "keyedElab") (EVar "rsrc")) (EVar "csrc")) (EVar "chainKey")) (EVar "mods")) (EVar "False")) (EVar "injected"))) (DoExpr (EMatch (EVar "elab") (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EApp (EVar "exampleDiagLines") (EVar "perModule")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (EApp (EVar "factsOfElab") (EVar "elab"))))))))))
+(DTypeSig false "gateOfVerbatim" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))
+(DFunDef false "gateOfVerbatim" ((PCon "True") PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "gateOfVerbatim" ((PCon "False") (PVar "rsrc") (PVar "csrc") (PVar "chainKey") (PVar "mods")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoLet false false (PTuple (PTuple PWild PWild (PVar "perModule") PWild PWild PWild PWild) PWild (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "keyedElab") (EVar "rsrc")) (EVar "csrc")) (EVar "chainKey")) (EVar "mods")) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawModules"))) (EVar "rawModules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "False")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "outputs")) (EVar "perModule")))))
 (DTypeSig false "phaseTrees" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Prepared") (TyEffect ("IO") None (TyCon "TestPair"))))))))
 (DFunDef false "phaseTrees" ((PVar "engines") (PVar "userDecls") (PVar "rsrc") (PVar "csrc") (PVar "prepared")) (EIf (EApp (EApp (EVar "treesUnread") (EVar "engines")) (EVar "userDecls")) (EVar "unreadTrees") (EApp (EApp (EApp (EVar "forcePrepared") (EVar "rsrc")) (EVar "csrc")) (EVar "prepared"))))
 (DTypeSig true "treesUnread" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
