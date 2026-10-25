@@ -184,6 +184,15 @@ after S1 rather than after Phase 2.
 **Exit criterion.** Nothing proven in one process is re-proven in the next for an
 unchanged input; the prelude is checked at build time only.
 
+**Exit, stated 2026-10-25 at `fba49724e`, with named exceptions** (epic #4206; PRs #4391,
+#4394, #4410, #4433, #4448, #4452): the prelude ships pre-checked and is not checked at
+run time, and a module whose key matches is served in process by the diagnostics arm and
+the tree arm. Nothing is served across a process. The `medaka test` native child checks
+its own graph, so four rows of `stage_counts.golden` stay named exceptions
+(`test_probe`, `test_doc_native`, `test_tonly_native`, `test_bytebuilder`); row C3b-2
+records why the store and the handoff were measured and not built. Reopening them is
+Phase 4's call, not a Phase 3 debt.
+
 **Amended 2026-10-21 (Phase 2 wrap): what Phase 2 changed about this phase.** The three
 rows above stand as the actions; the points below are their refinements, derived from the
 cell table, the memo code and the stage-6 measurements, and they are the inputs to the cut.
