@@ -35,7 +35,7 @@ import frontend.ast.{
 }
 import support.util.{reverseL}
 import types.route_key.{
-  EvIndex(..), evidenceLookup, entriesAboveSegment, emptyIndexFor
+  EvIndex, evidenceLookup, entriesAboveSegment, emptyIndexFor, claimSlot
 }
 
 -- The five answer kinds a published entry can have.
@@ -76,26 +76,19 @@ evidenceFaults : Option (List Decl, List (String, List Decl)) ->
 evidenceFaults trees table =
   let own = entriesAboveSegment table
   let index = emptyIndexFor own
-  match index
-    EvIndex lo arr =>
-      let dups = fillIndex lo arr own []
-      let sites = match trees
-        None => []
-        Some (core, mods) => modsFaults index mods (declsFaults index core [])
-      reverseL dups ++ reverseL sites
+  let dups = fillIndex index own []
+  let sites = match trees
+    None => []
+    Some (core, mods) => modsFaults index mods (declsFaults index core [])
+  reverseL dups ++ reverseL sites
 
-fillIndex : Int ->
-  Array (Option EvEntry) ->
-  EvTable ->
-  List EvidenceFault ->
-  List EvidenceFault
-fillIndex _ _ [] acc = acc
-fillIndex lo arr ((e@(EvEntry (EvId _ i) _)) :: rest) acc =
-  match arrayGetUnsafe (i - lo) arr
-    None =>
-      let _ = arraySetUnsafe (i - lo) (Some e) arr
-      fillIndex lo arr rest acc
-    Some _ => fillIndex lo arr rest (DuplicateOrdinal i :: acc)
+fillIndex : EvIndex -> EvTable -> List EvidenceFault -> List EvidenceFault
+fillIndex _ [] acc = acc
+fillIndex idx ((e@(EvEntry (EvId _ i) _)) :: rest) acc =
+  if claimSlot idx e then
+    fillIndex idx rest acc
+  else
+    fillIndex idx rest (DuplicateOrdinal i :: acc)
 
 -- The fault of one site, consed onto [acc]; none for a covered or unminted site.
 site : EvIndex -> EvId -> EvShape -> List EvidenceFault -> List EvidenceFault

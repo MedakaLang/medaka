@@ -7,7 +7,9 @@ import frontend.parser.{parse, parseLocated}
 import support.util.{joinNl}
 import types.publish.{ModDiags, TcDiag(..), TcReport(..), ppPubScheme}
 import types.tc_types.{DriveOutputs(..), GraphCtx}
-import types.typecheck.{defaultDriveInputs, checkModulesChainReportForGraph}
+import types.typecheck.{
+  defaultDriveInputs, checkModulesChainReportForGraph, chainArgs
+}
 
 -- The drive's `valueMain` argument for a graph whose entry is no value `main`.
 export
@@ -27,14 +29,15 @@ keyedDrive : Int ->
   ((TcReport, DriveOutputs), GraphCtx)
 keyedDrive seed chainKey runtime core mods =
   checkModulesChainReportForGraph
-    defaultDriveInputs
-    noValueMain
-    (Some (seed, seed + 1))
-    chainKey
-    (stepKeys mods)
-    runtime
-    core
-    (map (m => (fst m, desugar (parseLocated (snd m)))) mods)
+    (chainArgs
+      defaultDriveInputs
+      noValueMain
+      (Some (seed, seed + 1))
+      chainKey
+      (stepKeys mods)
+      runtime
+      core
+      (map (m => (fst m, desugar (parseLocated (snd m)))) mods))
 
 -- [keyedDrive] with no prelude declarations.
 export
@@ -45,10 +48,29 @@ bareDrive : Int ->
 bareDrive seed chainKey mods =
   keyedDrive seed chainKey [] (desugar (parse "")) mods
 
+-- Every module's source as its step key but the entry's.
+export
 stepKeys : List (String, String) -> List (Option String)
 stepKeys [] = []
 stepKeys [_] = [None]
 stepKeys (m :: rest) = Some (snd m) :: stepKeys rest
+
+-- The graph record a drive of one tiny module over a tiny prelude ends in: real
+-- cross-run and graph-run records, which typecheck does not export a mint for.
+export
+graphOf : Unit -> GraphCtx
+graphOf _ =
+  snd
+    (checkModulesChainReportForGraph
+      (chainArgs
+        defaultDriveInputs
+        noValueMain
+        None
+        ""
+        [None]
+        []
+        (desugar (parse "data Option a = None | Some a"))
+        [("m", desugar (parseLocated "export data Q = Q Int"))]))
 
 export
 leafSrc : String

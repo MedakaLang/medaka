@@ -29,18 +29,33 @@
 -- served drive's evidence table lacks their entries; no diagnostics-arm reader reads
 -- that table.
 --
+-- A tree drive needs more of a module than its interface: the trees the drive
+-- continues with, and the rows its graph-end passes read for them (`ModuleTrees`).
+-- The trees are the module's marked trees, taken before `dictPass`, which the
+-- serving drive runs again over the whole graph.  Two of its rows are
+-- exceptions to the admissibility rule above: the trees, a frozen `List Decl` that
+-- holds no cell, admitted as the prelude's shipped trees are
+-- (`types/prelude_elab.mdk`), and the file bounds, which keep the recording check's
+-- own variables because the grant pass resolves them against the authority cells
+-- that check's occurrences hold.  In process the trees' evidence ordinals stay below
+-- every ordinal the serving drive mints, so they are carried as recorded.
+--
 -- The cache holds one interface per module id, the newest recorded, with no count
 -- cap.  Each recorded interface carries a process serial, and an importer's key
 -- carries the serial of each import (`moduleInterfaceIdentity`), so an importer
 -- whose import was re-recorded misses without any digest.
-import frontend.ast.{TabKey, DataVis, Variant, EvTable, Ident}
+import frontend.ast.{
+  TabKey, DataVis, Variant, EvTable, Ident, Decl(..), EvEntry(..), EvVal(..),
+  EvId(..), IfaceMethod(..), declBinderNames
+}
 import list.{drop, take, mapAccumL}
 import map as M
 import map.{Map(..)}
 import support.ordmap.{
-  OrdMap, omEmpty, omInsert, omLookup, omHasKey, omRestrict
+  OrdMap, omEmpty, omInsert, omDelete, omLookup, omHasKey, omRestrict,
+  omFromPairs
 }
-import support.util.{joinNl, lenKey, listLen, isNonEmptyL}
+import support.util.{joinNl, lenKey, listLen, isNonEmptyL, dedup, lookupAssoc}
 import types.invocation_basis.{publishInvocationView}
 import types.prelude_interface.{
   freezeScheme, thawScheme, zonkSlot, zonkMethodSlot, zonkRecord, mapSlots
@@ -49,12 +64,15 @@ import types.publish.{
   ModDiags, PubScheme(..), TcDiag, emptyZonk, zonkScheme, zonkVecObl
 }
 import types.registry.{SpellingPop, spInsert, spMap, spRows, spFloor}
-import types.repr.{IfaceRef, VecObl}
+import types.effect_rows.{EffRow}
+import types.repr.{IfaceRef, Mono, VecObl}
+import types.route_key.{EvIndex, evidenceLookup, ifaceWordOf, replaceEntryIn}
 import types.runtime_types.{BinderRow, BinderTypeTable, addBinderRow}
 import types.tc_types.{
   GraphCtx(..), CrossRun(..), GraphRun(..), GrantState(..), ModuleCtx(..),
   ModuleCells(..), ExportBinding(..), PredicateSlot, MethodPredicateSlot,
-  CDeclaredPrefix, RecordInfo, MethodGrant, PublishedInvocationView
+  CDeclaredPrefix, RecordInfo, MethodGrant, PublishedInvocationView, EvCell(..),
+  SiteCell(..), LocalAbs(..), LocalAbsState(..), GrantBinder
 }
 
 -- ── the key ─────────────────────────────────────────────────────────────────
@@ -63,8 +81,10 @@ import types.tc_types.{
 -- (the module id, its path and the exact source the loader parsed), the identity of
 -- each direct import, and the drive's graph key (its configuration, the prelude
 -- generation and chain key, and every module's instance heads and constrained
--- signature names, which a module reads whether or not it imports their definer).
--- An import that was checked and not recorded has a serial no interface carries.
+-- signature names, which a module reads whether or not it imports their definer),
+-- followed by the interface declarations of the modules before it, whose method
+-- names it reads by bare name; a tree drive also adds the promotion harvest of those
+-- modules.  An import that was checked and not recorded has a serial no interface carries.
 public export data ModuleKey = ModuleKey {
   mkModule : String,
   mkSource : String,
@@ -119,6 +139,34 @@ public export data ModuleInterface = ModuleInterface {
   miTakers : List String,
   miSticky : List (String, TcDiag),
   miInvocationView : PublishedInvocationView,
+  miTrees : Option ModuleTrees,
+}
+
+-- A module's tree content, recorded by a tree drive (`None` on an interface a
+-- diagnostics drive recorded, which a tree drive does not serve):
+--   * its marked trees;
+--   * the entries of the method and site cells its check minted, as the check left
+--     them; the grant pass of the serving drive still counts a method's grants into
+--     the arity of its occurrences;
+--   * the rows the graph-end passes read for its trees: the grant ids of each of its
+--     top-level binders, the abstraction and grant ids of each local it named and the
+--     grants of each method its interfaces declare, keyed by names that carry the
+--     module's id and so recorded for every such name, with an empty list or `None`
+--     where it takes none; the file bounds of its sites, keyed by the module and the
+--     site; and the authority variables no caller supplies;
+--   * the names it promoted, which a later module is marked with, and its `main`.
+public export data ModuleTrees = ModuleTrees {
+  mtMarked : List Decl,
+  mtEvidence : EvTable,
+  mtTopIds : List (String, List Int),
+  mtLocalAbs : List (String, Option LocalAbs),
+  mtLocalIds : List (String, List Int),
+  mtMethodGrants : List (String, Option MethodGrant),
+  mtSourceless : List Int,
+  mtBounds : List (String, List (EffRow, List GrantBinder)),
+  mtValueBounds : List (String, List (Mono, List GrantBinder)),
+  mtPromoted : List String,
+  mtMain : Option PubScheme,
 }
 
 -- The rows of a graph record a module's check adds to, read at one point: the
@@ -144,6 +192,10 @@ export data ModuleRows = ModuleRows {
   mrMethodGrants : OrdMap MethodGrant,
   mrTakers : OrdMap Unit,
   mrSticky : List (String, TcDiag),
+  mrEvCounter : Int,
+  mrSourceless : Map Int Unit,
+  mrBounds : OrdMap (List (EffRow, List GrantBinder)),
+  mrValueBounds : OrdMap (List (Mono, List GrantBinder)),
 }
 
 export
@@ -171,6 +223,10 @@ captureModuleRows g =
     mrMethodGrants = r.grants.gsMethods.value,
     mrTakers = r.grants.gsTakers.value,
     mrSticky = g.typeErrorsStickyDiags.value,
+    mrEvCounter = r.evCounter.value,
+    mrSourceless = r.grants.gsSourceless.value,
+    mrBounds = r.grants.gsBounds.value,
+    mrValueBounds = r.grants.gsValueBounds.value,
   }
 
 -- ── freeze and apply ────────────────────────────────────────────────────────
@@ -206,7 +262,8 @@ thawExport fe =
 
 -- The interface of a module just checked and drained: [row] is its frozen
 -- diagnostics row, [exports] its own export bindings, [before] the view taken before
--- its check and [mctx] its record after the drain.
+-- its check, [mctx] its record after the drain and [trees] its tree content, which
+-- only a tree drive records.
 export
 freezeModuleInterface : ModuleKey ->
   Int ->
@@ -214,8 +271,9 @@ freezeModuleInterface : ModuleKey ->
   List (String, ExportBinding) ->
   ModuleRows ->
   ModuleCtx ->
+  Option ModuleTrees ->
   ModuleInterface
-freezeModuleInterface key serial row exports before mctx =
+freezeModuleInterface key serial row exports before mctx trees =
   let after = captureModuleRows mctx.mcGraph
   let (ctorPop, recordPop) = mctx.mcCells.ownPopsRef.value
   let existentials =
@@ -265,7 +323,218 @@ freezeModuleInterface key serial row exports before mctx =
     miSticky = newPrefix after.mrSticky before.mrSticky,
     miInvocationView =
       publishInvocationView mctx.mcCells.invocationViewRef.value,
+    miTrees = trees,
   }
+
+-- The tree content of module [mid], just checked and drained, from its marked trees
+-- [marked], its frozen schemes [published], the view [before] taken before its check
+-- and its record [mctx].
+export
+freezeModuleTrees : String ->
+  List Decl ->
+  List (String, PubScheme) ->
+  ModuleRows ->
+  ModuleCtx ->
+  ModuleTrees
+freezeModuleTrees mid marked published before mctx =
+  let r = mctx.mcGraph.graphRun
+  let gs = r.grants
+  let locals = r.localAbs.lasMinted.value
+  ModuleTrees {
+    mtMarked = marked,
+    mtEvidence = cellEntriesFrom r before.mrEvCounter,
+    mtTopIds =
+      idsUnder
+        (map (grantTopKey mid) (topBinderNames marked))
+        gs.gsTopIds.value,
+    mtLocalAbs =
+      map
+        (row => (fst row, map zonkLocalAbs (snd row)))
+        (M.entries (omRestrict locals r.localAbs.lasBinders.value)),
+    mtLocalIds = idsUnder locals gs.gsLocalIds.value,
+    mtMethodGrants =
+      map (k => (k, omLookup k gs.gsMethods.value)) (methodGrantKeys marked),
+    mtSourceless =
+      M.keys (M.difference gs.gsSourceless.value before.mrSourceless),
+    mtBounds = M.entries (M.difference gs.gsBounds.value before.mrBounds),
+    mtValueBounds =
+      M.entries (M.difference gs.gsValueBounds.value before.mrValueBounds),
+    mtPromoted = mctx.mcCells.promotedRef.value,
+    mtMain = lookupAssoc "main" published,
+  }
+
+-- Replays [t] into [g], the record the serving drive continues from, and returns
+-- the module's marked trees.  Each row keyed by name replaces what another check of
+-- the module id wrote under that name, and a name the recording holds no row for
+-- loses the row it has, so the rows are the ones these trees were checked with.
+export
+applyModuleTrees : GraphCtx -> ModuleTrees -> List Decl
+applyModuleTrees g t =
+  let r = g.graphRun
+  let gs = r.grants
+  let las = r.localAbs
+  r.evTable := t.mtEvidence ++ r.evTable.value
+  let _ = each (setGrantIds gs.gsTopIds) t.mtTopIds
+  let _ = each (row => forgetLocalRows las gs (fst row)) t.mtLocalIds
+  las.lasBinders :=
+    omFromPairs
+      (map (row => (fst row, map zonkLocalAbs (snd row))) t.mtLocalAbs)
+      las.lasBinders.value
+  let _ = each (setGrantIds gs.gsLocalIds) t.mtLocalIds
+  gs.gsMethods :=
+    fold
+      (acc row => match snd row
+        Some mg => omInsert (fst row) mg acc
+        None => omDelete (fst row) acc)
+      gs.gsMethods.value
+      t.mtMethodGrants
+  gs.gsSourceless := insertIds t.mtSourceless gs.gsSourceless.value
+  gs.gsBounds := omFromPairs t.mtBounds gs.gsBounds.value
+  gs.gsValueBounds := omFromPairs t.mtValueBounds gs.gsValueBounds.value
+  g.promotionHarvestRef := dedup (g.promotionHarvestRef.value ++ t.mtPromoted)
+  let _ = match t.mtMain
+    Some p => g.mainSchemeRef := Some (thawScheme p)
+    None => ()
+  t.mtMarked
+
+zonkLocalAbs : LocalAbs -> LocalAbs
+zonkLocalAbs la = { la | laSlots = map zonkSlot la.laSlots }
+
+-- The key a top-level binder's grant ids are recorded under.
+export
+grantTopKey : String -> String -> String
+grantTopKey mid n = "\{mid}|\{n}"
+
+-- Record [ids] as the grant ids under [key], or delete its row when [ids] is empty:
+-- no binder that takes no grant has a row.
+export
+setGrantIds : Ref (OrdMap (List Int)) -> (String, List Int) -> Unit
+setGrantIds table (key, []) = table := omDelete key table.value
+setGrantIds table (key, ids) = table := omInsert key ids table.value
+
+-- Delete every row recorded under the renamed local binder [name].
+export
+forgetLocalRows : LocalAbsState -> GrantState -> String -> Unit
+forgetLocalRows las gs name =
+  las.lasBinders := omDelete name las.lasBinders.value
+  las.lasRecOccs := omDelete name las.lasRecOccs.value
+  gs.gsLocalIds := omDelete name gs.gsLocalIds.value
+
+-- The key an interface method's grants are recorded under.
+export
+methodGrantKey : String -> String -> String
+methodGrantKey ifaceWord method = "\{ifaceWord}#\{method}"
+
+-- The keys of the methods the interfaces of [prog] declare.
+methodGrantKeys : List Decl -> List String
+methodGrantKeys prog = flatMap declMethodGrantKeys prog
+
+declMethodGrantKeys : Decl -> List String
+declMethodGrantKeys (DInterface { name, methods, ifaceOrigin, ... }) =
+  map
+    ((IfaceMethod m _ _ _) => methodGrantKey (ifaceWordOf ifaceOrigin name) m)
+    methods
+-- a declaration that declares no interface method
+declMethodGrantKeys _ = []
+
+-- Each of [keys] with the grant ids [table] holds under it, empty for none.
+idsUnder : List String -> OrdMap (List Int) -> List (String, List Int)
+idsUnder keys table = map (k => (k, optionOr [] (omLookup k table))) keys
+
+-- The names the top-level definitions of [prog] bind.
+topBinderNames : List Decl -> List String
+topBinderNames prog = dedup (flatMap declBinderNames prog)
+
+-- ── evidence cells ──────────────────────────────────────────────────────────
+
+-- Every method and site cell of [r] minted at ordinal [lo] or later, as published
+-- entries, method cells first: the per-node half of a drive's evidence table.
+export
+cellEntriesFrom : GraphRun -> Int -> EvTable
+cellEntriesFrom r lo =
+  let from = max 0 (lo - r.evBase)
+  let cells = r.evCells.value
+  let sites = r.siteCells.value
+  methodCellEntriesFrom cells from (arrayLength cells - 1) []
+    ++ siteCellEntriesFrom sites from (arrayLength sites - 1) []
+
+methodCellEntriesFrom : Array (Option EvCell) ->
+  Int ->
+  Int ->
+  EvTable ->
+  EvTable
+methodCellEntriesFrom arr lo i acc
+  | i < lo = acc
+  | otherwise = match arrayGetUnsafe i arr
+    None => methodCellEntriesFrom arr lo (i - 1) acc
+    Some c =>
+      let arity = match c.ecArity.value
+        Some n => n
+        None =>
+          panic
+            "method cell published before its selected scheme supplied an arity"
+      methodCellEntriesFrom
+        arr
+        lo
+        (i - 1)
+        (EvEntry
+            c.ecId
+            (EvMethod
+              c.ecIface.value
+              arity
+              c.ecTag.value
+              c.ecImpl.value
+              c.ecMeth.value)
+          :: acc)
+
+siteCellEntriesFrom : Array (Option (EvId, SiteCell)) ->
+  Int ->
+  Int ->
+  EvTable ->
+  EvTable
+siteCellEntriesFrom arr lo i acc
+  | i < lo = acc
+  | otherwise = match arrayGetUnsafe i arr
+    None => siteCellEntriesFrom arr lo (i - 1) acc
+    Some (ev, c) =>
+      siteCellEntriesFrom arr lo (i - 1) (EvEntry ev (siteCellValue c) :: acc)
+
+siteCellValue : SiteCell -> EvVal
+siteCellValue (OpSite r) = EvOne r.value
+siteCellValue (LitSite f r) = EvLit f.value r.value
+siteCellValue (HeadSite h) = EvHead h.value
+
+-- The grant pass counts a method's grants into the arity of each of its
+-- occurrences, which the published table carries.  An occurrence in a module the
+-- drive served has no cell in this lineage, so the count goes to its entry in the
+-- drive's index [idx], and the published table reads the served entries back out of
+-- the index after the pass (`servedEntriesFrom`).
+export
+setServedArity : EvIndex -> EvId -> Int -> Unit
+setServedArity idx ev arity =
+  match evidenceLookup (Some idx) "served method occurrence" ev
+    Ok (EvMethod iface _ tag impls meths) =>
+      replaceEntryIn idx (EvEntry ev (EvMethod iface arity tag impls meths))
+    Ok _ =>
+      panic
+        "evidence table: a method occurrence answered by another kind of entry"
+    Err message => panic message
+
+-- [rows] with each method entry below ordinal [base], the served ones, as [idx]
+-- holds it.
+export
+servedEntriesFrom : EvIndex -> Int -> EvTable -> EvTable
+servedEntriesFrom idx base rows = map (servedEntryIn idx base) rows
+
+servedEntryIn : EvIndex -> Int -> EvEntry -> EvEntry
+servedEntryIn idx base (e@(EvEntry ev (EvMethod _ _ _ _ _))) =
+  let (EvId _ i) = ev
+  if i < base then match evidenceLookup (Some idx) "served method occurrence" ev
+    Ok v => EvEntry ev v
+    Err message => panic message
+  else
+    e
+servedEntryIn _ _ e = e
 
 -- [own]'s rows inserted into [pop] by identity, each spelling's rows in their own
 -- order, then [own]'s floor entries for the spellings that hold no row of [own].

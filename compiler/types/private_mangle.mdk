@@ -102,6 +102,7 @@
 import types.extern_source.{sourceExternSymbol, externDisplayName}
 import frontend.ast.{
   letBindName,
+  declBinderNames,
   Decl(..),
   ExternDecl(..),
   Expr(..),
@@ -136,6 +137,7 @@ import frontend.ast.{
 }
 import frontend.visibility.{
   ModuleExports(..),
+  useModId,
   coreExports,
   buildExportsWith,
   pubIfaceMethodSets,
@@ -970,7 +972,7 @@ useCtorPathEntries : List (String, List (String, String, List String)) ->
   UsePath ->
   List (String, String)
 useCtorPathEntries ctorExportsPerUnit path =
-  let mid = useModIdU path
+  let mid = useModId path
   if mid == "core" then
     []
   else match lookupCtorExports mid ctorExportsPerUnit
@@ -1217,7 +1219,7 @@ externDeclaredName n binds
 
 externImportEntries : OrdMap (OrdMap String) -> Decl -> List (String, String)
 externImportEntries exports (DUse _ path _) =
-  match omLookup (useModIdU path) exports
+  match omLookup (useModId path) exports
     Some names => externPathEntries names path
     None => []
 externImportEntries exports (DAttrib _ decl) = externImportEntries exports decl
@@ -1281,7 +1283,7 @@ notIfaceMethodKey methods (n, _) = not (omHasKey n methods)
 
 -- names of the methods of every `interface` DECLARED in this unit.  Mirrors
 -- `frontend/marker.mdk`'s `interfaceMethodNames`, plus the `DAttrib` unwrap that
--- `declDefNames` here already does.
+-- `declBinderNames` here already does.
 unitIfaceMethodNames : List Decl -> List String
 unitIfaceMethodNames [] = []
 unitIfaceMethodNames ((DInterface { methods, ... }) :: rest) =
@@ -1381,7 +1383,7 @@ usePathEntries : List (String, List (String, String)) ->
   UsePath ->
   List (String, String)
 usePathEntries exportsPerUnit path =
-  let mid = useModIdU path
+  let mid = useModId path
   if mid == "core" then
     corePathEntries exportsPerUnit path
   else match lookupExports mid exportsPerUnit
@@ -1445,20 +1447,9 @@ originEntryPair = coreEntry
 aliasEntryPair : String -> (String, String) -> List (String, String)
 aliasEntryPair a (n, definer) = [(qualifiedLocal a n, mangledName definer n)]
 
-useModIdU : UsePath -> String
-useModIdU (UseName ns) =
-  if lenGt1 ns then joinDot (initList ns) else firstOrU "" ns
-useModIdU (UseGroup ns _) = joinDot ns
-useModIdU (UseWild ns) = joinDot ns
-useModIdU (UseAlias ns _) = joinDot ns
-
 lenGt1 : List a -> Bool
 lenGt1 (_ :: _ :: _) = True
 lenGt1 _ = False
-
-firstOrU : String -> List String -> String
-firstOrU d [] = d
-firstOrU _ (x :: _) = x
 
 lastOfPM : List String -> String
 lastOfPM [] = ""
@@ -1476,13 +1467,7 @@ lookupExports k ((m, ns) :: rest) =
 -- all top-level FUNCTION names defined in a unit (DFunDef + DLetGroup binders),
 -- wrapped through DAttrib.  Only function-shaped decls can collide as @mdk_<name>.
 unitDefNames : (String, List Decl) -> List String
-unitDefNames (_, decls) = flatMap declDefNames decls
-
-declDefNames : Decl -> List String
-declDefNames (DFunDef _ n _ _ _ _) = [n]
-declDefNames (DLetGroup _ binds) = map letBindName binds
-declDefNames (DAttrib _ d) = declDefNames d
-declDefNames _ = []
+unitDefNames (_, decls) = flatMap declBinderNames decls
 
 -- `<mid>__<name>` with the mid sanitized to a valid identifier (`/`, `.`, `-` →
 -- `_`).  The emitted symbol is `@mdk_<thisname>`, so only [A-Za-z0-9_] are safe.

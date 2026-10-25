@@ -419,6 +419,9 @@ test "arch_boundaries: types.interface_sexp closure matches its golden" =
 test "arch_boundaries: types.module_interface_sexp closure matches its golden" =
   closurePin "types.module_interface_sexp"
 
+test "arch_boundaries: types.serve_policy closure matches its golden" =
+  closurePin "types.serve_policy"
+
 test "arch_boundaries: types.prelude_elab closure matches its golden" =
   closurePin "types.prelude_elab"
 

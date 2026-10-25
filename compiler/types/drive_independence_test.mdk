@@ -11,8 +11,8 @@ import types.publish.{ppPubScheme, PartialAnalysis(..)}
 import types.tc_types.{GraphCtx(..), ModuleCtx(..)}
 import types.typecheck.{
   defaultDriveInputs, checkModulesPartialK, checkModulesChainReportForGraph,
-  checkModulesK, elaborateModulesWithReport, hadTypeErrors, matchWarningsNow,
-  checkModulesPartialLast
+  chainArgs, checkModulesK, elaborateModulesWithReport, hadTypeErrors,
+  matchWarningsNow, checkModulesPartialLast
 }
 
 preludeSrc : String
@@ -110,14 +110,15 @@ diagsGraph : Option (Int, Int) ->
 diagsGraph key ms =
   let ((r, _), gctx) =
     checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      key
-      ""
-      (map (_ => None) ms)
-      []
-      (prelude ())
-      (mods ms)
+      (chainArgs
+        defaultDriveInputs
+        False
+        key
+        ""
+        (map (_ => None) ms)
+        []
+        (prelude ())
+        (mods ms))
   (flatMap ((mid, (_, errs, _)) => map (_ => mid) errs) r.trDiagnostics, gctx)
 
 -- The published scheme of `mid.name` in a projection, rendered.

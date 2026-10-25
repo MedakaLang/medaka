@@ -984,6 +984,23 @@ public export data DriveInputs = DriveInputs {
   diPreludeKey : Option (Int, Int),
 }
 
+-- What one graph drive is handed besides its output selection: [daValueMain] is the
+-- caller's value-main candidate (`autoPrintWanted`), [daExecutes] names the `async`
+-- driver of a caller that runs or emits the trees, [daPreludeKey] is the
+-- desugar-cache generation pair of the prelude interface (`checkCoreMemoized`), and
+-- [daKeyed] is the full chain key with one source key per module before the entry,
+-- for a drive that serves and records module interfaces.
+public export data DriveArgs = DriveArgs {
+  daInputs : DriveInputs,
+  daValueMain : Bool,
+  daExecutes : Option String,
+  daPreludeKey : Option (Int, Int),
+  daKeyed : Option (String, List (Option String)),
+  daRuntime : List Decl,
+  daCore : List Decl,
+  daModules : List (String, List Decl),
+}
+
 -- What a drive hands back to its caller, as plain data frozen at the drive's end
 -- (after the drain and the sticky rollback): the answers a driver asks of the
 -- drive it ran.  No `Decl`, no closure and no live cell: `doInvocationView`'s
@@ -1706,7 +1723,7 @@ public export data GivenMatch =
 -- `compiler/types/typecheck.mdk` gets the answer from the published table (`evMethodRoutesIn`) — but the
 -- stampers still write through `Ref`s (every goal destination is an `EvDest` over
 -- one), so the cells live here, minted with the node (`mintMethodCell`) and read
--- back by `methodCellEntries` when the table is published.  It owns five cells:
+-- back by `cellEntriesFrom` when the table is published.  It owns five cells:
 -- the interface identity the occurrence resolved to, the selected denotation's
 -- pre-use arrow arity, the dispatch route, the selected impl's `requires` dicts,
 -- and the method's own `=>` dicts.
@@ -1736,7 +1753,7 @@ public export data EvCell = EvCell {
 
 -- The solver's working cell for one site node, keyed by the `EvId` the mark pass
 -- minted into it (`mintOpSite`).  The writers obtain the same `Ref` the node
--- carried before it carried an id; `siteCellEntries` reads each back into the
+-- carried before it carried an id; `cellEntriesFrom` reads each back into the
 -- published table, under the node's id, for the readers in `types/route_key.mdk`.
 public export data SiteCell =
   -- an operator or wide literal: its dispatch route
@@ -1801,6 +1818,9 @@ public export data GraphRun = GraphRun {
   -- raises it to `evCounter`, so a module drained at its own end has its holes
   -- reported once.
   evJudged : Ref Int,
+  -- The ordinal ranges [lo, hi) a recording module's own drain judged ahead of the
+  -- watermark above; the drain that reaches them skips them (`unjudgedRanges`).
+  evScopedJudged : Ref (List (Int, Int)),
   -- #2549 M2: the solved evidence, one entry per goal, appended by the graph-end
   -- drain as each module's stampers finish.  It is a SECOND RENDERING of the routes
   -- the stampers wrote into their cells, read back from those same cells, never an
@@ -2350,8 +2370,12 @@ public export data LocalAbsState = LocalAbsState {
   lasBinders : Ref (OrdMap (Option LocalAbs)),
   -- binder -> occurrences inferred before the binder generalized
   lasRecOccs : Ref (OrdMap (List (EvId, ScopeId))),
-  -- monotone for the whole graph, so a binder name is never minted twice
-  lasCounter : Ref Int,
+  -- the module being marked and the next suffix it mints, reset at each module's
+  -- `beginModuleMarking`: a name is a function of its module and marking order
+  lasNext : Ref (String, Int),
+  -- the names the module being marked has minted, newest first, reset with
+  -- `lasNext`: the keys of that module's rows here and in `gsLocalIds`
+  lasMinted : Ref (List String),
   -- every type variable a generalized local's scheme quantifies: no longer a
   -- monomorphic variable, so no later numeric boundary may ground it (#3516)
   lasQuantified : Ref (OrdMap Unit),
@@ -2435,6 +2459,23 @@ public export data GrantState = GrantState {
   gsValueBounds : Ref (OrdMap (List (Mono, List GrantBinder))),
   gsPassingModule : Ref String,
 }
+
+-- The binder-name and grant state belong to the lineage (`Lineage`), so a row
+-- outlives the drive that wrote it, and each table is kept by what its key is:
+--   * an evidence ordinal (`gsOccs`, `gsGrantOnly`) never repeats in a lineage, so
+--     the rows stay;
+--   * a variable id or scope ordinal the drive mints afresh (`lasQuantified`,
+--     `gsSourceless`, `gsBodies`) and a module's file-bound site (`gsBounds`,
+--     `gsValueBounds`) are cleared when the lineage starts (`graphLineageRun`); a
+--     served module's sourceless ids and bounds come back with its trees;
+--   * a name a module owns (`mid|name` in `gsTopIds`, a renamed local `x$mid$k$lb`
+--     in `lasBinders`, `lasRecOccs` and `gsLocalIds`, `mid::Iface#method` in
+--     `gsMethods`) is minted again by every check of that module id, so each check
+--     and each tree serve of the module replaces the row under every such key it
+--     decides, deleting the rows it has none for (`setGrantIds`, `forgetLocalRows`
+--     in `types/module_interface.mdk`).
+-- `gsTakers`, keyed by bare name, only arms a panic; the `gsLast*` cells and
+-- `gsPassingModule` are set before each read.
 
 -- How the constructors of one type disagree about a field: a constructor that
 -- does not declare it, two that declare it at different (0-based,

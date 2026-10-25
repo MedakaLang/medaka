@@ -98,7 +98,9 @@ import types.typecheck.{
   cellGoalInnerAliasing,
   beginNumericPredicateTrace,
   cellStoreMisses,
-  checkModules,
+  checkModulesChainReportForGraph,
+  chainArgs,
+  driveArgs,
   checkModulesChainReportFor,
   checkModulesChainReportForGraph,
   checkModulesDiagsChain,
@@ -133,7 +135,7 @@ import types.typecheck.{
   walkGoalSameProbe,
 }
 import types.target_profile.{selectProfile}
-import types.route_key.{EvIndex(..), evIndexOf}
+import types.route_key.{evIndexOf, evIndexSlotCount}
 import support.ordmap.{omEmpty, omFromNames, omKeys}
 import frontend.exhaust.{buildOracle}
 import support.util.{
@@ -265,11 +267,12 @@ numericBodySource collision body =
 numericCheckObserved : String -> (List String, List NumericTraceView)
 numericCheckObserved source =
   let sink = beginNumericPredicateTrace ()
-  let ((errors, _), gctx) = checkOneDiagsGraph (traced sink) [] (desugar
-    (parse numericPreludeSource)) (
-    "numeric_predicate",
-    desugar (parseLocated source),
-  )
+  let ((errors, _), gctx) =
+    checkOneDiagsGraph
+      (driveArgs (traced sink) False None [] (desugar
+        (parse numericPreludeSource)) [
+        ("numeric_predicate", desugar (parseLocated source)),
+      ])
   let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
   (map tcMsg errors, trace)
 
@@ -503,11 +506,12 @@ numericSchemeObserved : Option (Int, Int) ->
   (List String, List NumericTraceView)
 numericSchemeObserved key source =
   let sink = beginNumericPredicateTrace ()
-  let ((_, schemes), gctx) = checkOneSchemeFullKGraph (traced
-    sink) key [] (desugar (parse numericPreludeSource)) (
-    "numeric_scheme",
-    desugar (parseLocated source),
-  )
+  let ((_, schemes), gctx) =
+    checkOneSchemeFullKGraph
+      (driveArgs (traced sink) False key [] (desugar
+        (parse numericPreludeSource)) [
+        ("numeric_scheme", desugar (parseLocated source)),
+      ])
   let values =
     map
       (entry => ppScheme (snd entry).psScheme)
@@ -770,11 +774,12 @@ arithmeticSchemeObserved : Option (Int, Int) ->
   (List (String, Int, String), List (String, String, Int))
 arithmeticSchemeObserved key source =
   let sink = beginAssumptionTrace ()
-  let ((_, schemes), gctx) = checkOneSchemeFullKGraph (traced
-    sink) key [] (desugar (parse arithmeticPreludeSource)) (
-    "arithmetic_scheme",
-    desugar (parseLocated source),
-  )
+  let ((_, schemes), gctx) =
+    checkOneSchemeFullKGraph
+      (driveArgs (traced sink) False key [] (desugar
+        (parse arithmeticPreludeSource)) [
+        ("arithmetic_scheme", desugar (parseLocated source)),
+      ])
   let values =
     map
       (entry => (
@@ -861,11 +866,12 @@ arithmeticTraceObserved : String ->
   (List String, List NumericTraceView, List (String, String, Int))
 arithmeticTraceObserved source =
   let sink = { beginNumericPredicateTrace () | tsAssumptionEnabled = True }
-  let ((errors, _), gctx) = checkOneDiagsGraph (traced sink) [] (desugar
-    (parse arithmeticPreludeSource)) (
-    "arithmetic_trace",
-    desugar (parseLocated source),
-  )
+  let ((errors, _), gctx) =
+    checkOneDiagsGraph
+      (driveArgs (traced sink) False None [] (desugar
+        (parse arithmeticPreludeSource)) [
+        ("arithmetic_trace", desugar (parseLocated source)),
+      ])
   let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
   let assumptions =
     map
@@ -1181,11 +1187,12 @@ declaredNumMemberSchemeObserved : Option (Int, Int) ->
   (List (Int, String), List (String, String, Int))
 declaredNumMemberSchemeObserved key member source =
   let sink = beginAssumptionTrace ()
-  let ((_, schemes), gctx) = checkOneSchemeFullKGraph (traced
-    sink) key [] (desugar (parse numericPreludeSource)) (
-    "declared_numeric_scheme",
-    desugar (parseLocated source),
-  )
+  let ((_, schemes), gctx) =
+    checkOneSchemeFullKGraph
+      (driveArgs (traced sink) False key [] (desugar
+        (parse numericPreludeSource)) [
+        ("declared_numeric_scheme", desugar (parseLocated source)),
+      ])
   let values =
     map
       (entry => (
@@ -2416,17 +2423,18 @@ returnMemoObservedGraph : String ->
 returnMemoObservedGraph prefixSource entrySource stepKey =
   let ((report, outputs), gctx) =
     checkModulesChainReportForGraph
-      defaultDriveInputs
-      noValueMain
-      (Some (1091, 1093))
-      "method-return-request-fence"
-      [Some stepKey, None]
-      []
-      (desugar (parse numericPreludeSource))
-      [
-        ("return_memo_prefix", desugar (parseLocated prefixSource)),
-        ("return_memo_entry", desugar (parseLocated entrySource)),
-      ]
+      (chainArgs
+        defaultDriveInputs
+        noValueMain
+        (Some (1091, 1093))
+        "method-return-request-fence"
+        [Some stepKey, None]
+        []
+        (desugar (parse numericPreludeSource))
+        [
+          ("return_memo_prefix", desugar (parseLocated prefixSource)),
+          ("return_memo_entry", desugar (parseLocated entrySource)),
+        ])
   (
     ReturnMemoRequestView {
       rmrvModules = map returnMemoModuleView report.trDiagnostics,
@@ -2949,7 +2957,10 @@ runObserved : String -> String -> RequestView
 runObserved moduleId source =
   let sink = beginAssumptionTrace ()
   let ((errors, _), gctx) =
-    checkOneDiagsGraph (traced sink) [] [] (moduleId, desugar (parse source))
+    checkOneDiagsGraph
+      (driveArgs (traced sink) False None [] [] [
+        (moduleId, desugar (parse source)),
+      ])
   let entries = finishAssumptionTrace sink
   let views = traceViewsNow gctx entries
   let (count, capacity) = scopeFrameStats gctx
@@ -2973,14 +2984,15 @@ chainDiagsGraph : DriveInputs ->
 chainDiagsGraph inputs preludeKey chainKey stepKeys runtimeDecls coreDecls modules =
   let ((report, _), gctx) =
     checkModulesChainReportForGraph
-      inputs
-      noValueMain
-      preludeKey
-      chainKey
-      stepKeys
-      runtimeDecls
-      coreDecls
-      modules
+      (chainArgs
+        inputs
+        noValueMain
+        preludeKey
+        chainKey
+        stepKeys
+        runtimeDecls
+        coreDecls
+        modules)
   (report.trDiagnostics, gctx)
 
 modErrorCount : List ModDiags -> Int
@@ -4379,10 +4391,12 @@ cellInnerSource = joinNl [
 ]
 
 test "every goal that writes a method cell notes into that cell's summary" =
-  let (_, gctx) = elaborateModulesGraph defaultDriveInputs [] (desugar
-    (parse numericPreludeSource)) [
-    ("cell_inner", desugar (parseLocated cellInnerSource)),
-  ]
+  let (_, gctx) =
+    elaborateModulesGraph
+      (driveArgs defaultDriveInputs False None [] (desugar
+        (parse numericPreludeSource)) [
+        ("cell_inner", desugar (parseLocated cellInnerSource)),
+      ])
   let observed = cellGoalInnerAliasing gctx
   expectAll [
     expectEqual [] (filter (o => not (snd o)) observed),
@@ -5864,23 +5878,23 @@ elaborateSpans _ = fst (elaborateSpansGraph ())
 -- `elaborateSpans` beside the graph record of its drive.
 elaborateSpansGraph : Unit -> ((Int, Int), GraphCtx)
 elaborateSpansGraph _ =
-  let ((_, _, _, _, table, _, _), gctx) = elaborateModulesGraph
-    defaultDriveInputs
-    []
-    (desugar (parse numericPreludeSource))
-    [spanProgramModule]
-  match evIndexOf table
-    EvIndex _ arr => ((evCellsSpanProbe gctx, arrayLength arr), gctx)
+  let ((_, _, _, _, table, _, _), gctx) =
+    elaborateModulesGraph
+      (driveArgs defaultDriveInputs False None [] (desugar
+        (parse numericPreludeSource)) [
+        spanProgramModule,
+      ])
+  ((evCellsSpanProbe gctx, evIndexSlotCount (evIndexOf table)), gctx)
 
 -- The method-cell index's length after one unkeyed `checkOneDiags` drive.
 diagsSpan : Unit -> Int
 diagsSpan _ =
   let (_, gctx) =
     checkOneDiagsGraph
-      defaultDriveInputs
-      []
-      (desugar (parse numericPreludeSource))
-      spanProgramModule
+      (driveArgs defaultDriveInputs False None [] (desugar
+        (parse numericPreludeSource)) [
+        spanProgramModule,
+      ])
   evCellsSpanProbe gctx
 
 -- [drive]'s reading after the first and after the [n]th of [n] drives.

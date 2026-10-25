@@ -32,31 +32,18 @@ import types.tc_types.{
   PredicateSlot(..), MethodPredicateSlot(..), CDeclaredPrefix(..),
   RecordInfo(..)
 }
-import types.typecheck.{defaultDriveInputs, checkModulesChainReportForGraph}
+import types.typecheck.{
+  defaultDriveInputs, checkModulesChainReportForGraph, chainArgs
+}
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface
 }
 import types.interface_sexp_test.{prelude, fileKey}
+import types.module_interface_test_support.{graphOf}
 import frontend.desugar.{desugar, desugarIn}
 import frontend.parser.{parse, parseLocated}
 
 -- ── a small core pass result ────────────────────────────────────────────────
-
--- The graph record a drive of one tiny module over a tiny prelude ends in: real
--- cross-run and graph-run records, which typecheck does not export a mint for.
-graphOf : Unit -> GraphCtx
-graphOf _ =
-  let (_, gctx) =
-    checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      None
-      ""
-      [None]
-      []
-      (desugar (parse "data Option a = None | Some a"))
-      [("m", desugar (parseLocated "export data Q = Q Int"))]
-  gctx
 
 identityPub : PubScheme
 identityPub =
@@ -314,14 +301,9 @@ driveWith : Option (Int, Int) -> (List Decl, List Decl) -> GraphCtx
 driveWith key (runtimeDecls, coreDecls) =
   snd
     (checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      key
-      ""
-      []
-      runtimeDecls
-      coreDecls
-      [("m", desugarIn "m" (parseLocated "x = 1"))])
+      (chainArgs defaultDriveInputs False key "" [] runtimeDecls coreDecls [
+        ("m", desugarIn "m" (parseLocated "x = 1")),
+      ]))
 
 -- The cache's interfaces after a drive under a prelude key no earlier drive used,
 -- so the drive misses and freezes its own.

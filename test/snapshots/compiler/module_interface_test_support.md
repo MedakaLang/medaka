@@ -1,5 +1,5 @@
 # META
-source_lines=107
+source_lines=129
 stages=DESUGAR,MARK
 # SOURCE
 -- Helpers the tests of the module interface cache share (`module_interface_test`,
@@ -11,7 +11,9 @@ import frontend.parser.{parse, parseLocated}
 import support.util.{joinNl}
 import types.publish.{ModDiags, TcDiag(..), TcReport(..), ppPubScheme}
 import types.tc_types.{DriveOutputs(..), GraphCtx}
-import types.typecheck.{defaultDriveInputs, checkModulesChainReportForGraph}
+import types.typecheck.{
+  defaultDriveInputs, checkModulesChainReportForGraph, chainArgs
+}
 
 -- The drive's `valueMain` argument for a graph whose entry is no value `main`.
 export
@@ -31,14 +33,15 @@ keyedDrive : Int ->
   ((TcReport, DriveOutputs), GraphCtx)
 keyedDrive seed chainKey runtime core mods =
   checkModulesChainReportForGraph
-    defaultDriveInputs
-    noValueMain
-    (Some (seed, seed + 1))
-    chainKey
-    (stepKeys mods)
-    runtime
-    core
-    (map (m => (fst m, desugar (parseLocated (snd m)))) mods)
+    (chainArgs
+      defaultDriveInputs
+      noValueMain
+      (Some (seed, seed + 1))
+      chainKey
+      (stepKeys mods)
+      runtime
+      core
+      (map (m => (fst m, desugar (parseLocated (snd m)))) mods))
 
 -- [keyedDrive] with no prelude declarations.
 export
@@ -49,10 +52,29 @@ bareDrive : Int ->
 bareDrive seed chainKey mods =
   keyedDrive seed chainKey [] (desugar (parse "")) mods
 
+-- Every module's source as its step key but the entry's.
+export
 stepKeys : List (String, String) -> List (Option String)
 stepKeys [] = []
 stepKeys [_] = [None]
 stepKeys (m :: rest) = Some (snd m) :: stepKeys rest
+
+-- The graph record a drive of one tiny module over a tiny prelude ends in: real
+-- cross-run and graph-run records, which typecheck does not export a mint for.
+export
+graphOf : Unit -> GraphCtx
+graphOf _ =
+  snd
+    (checkModulesChainReportForGraph
+      (chainArgs
+        defaultDriveInputs
+        noValueMain
+        None
+        ""
+        [None]
+        []
+        (desugar (parse "data Option a = None | Some a"))
+        [("m", desugar (parseLocated "export data Q = Q Int"))]))
 
 export
 leafSrc : String
@@ -116,17 +138,19 @@ diagCode (TcDiag code _ _ _ _ _) = code
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ModDiags" false) (mem "TcDiag" true) (mem "TcReport" true) (mem "ppPubScheme" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" true) (mem "GraphCtx" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkModulesChainReportForGraph" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkModulesChainReportForGraph" false) (mem "chainArgs" false))))
 (DTypeSig true "noValueMain" (TyCon "Bool"))
 (DFunDef false "noValueMain" () (EVar "False"))
 (DTypeSig true "keyedDrive" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphCtx"))))))))
-(DFunDef false "keyedDrive" ((PVar "seed") (PVar "chainKey") (PVar "runtime") (PVar "core") (PVar "mods")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesChainReportForGraph") (EVar "defaultDriveInputs")) (EVar "noValueMain")) (EApp (EVar "Some") (ETuple (EVar "seed") (EBinOp "+" (EVar "seed") (ELit (LInt 1)))))) (EVar "chainKey")) (EApp (EVar "stepKeys") (EVar "mods"))) (EVar "runtime")) (EVar "core")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EApp (EVar "snd") (EVar "m"))))))) (EVar "mods"))))
+(DFunDef false "keyedDrive" ((PVar "seed") (PVar "chainKey") (PVar "runtime") (PVar "core") (PVar "mods")) (EApp (EVar "checkModulesChainReportForGraph") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chainArgs") (EVar "defaultDriveInputs")) (EVar "noValueMain")) (EApp (EVar "Some") (ETuple (EVar "seed") (EBinOp "+" (EVar "seed") (ELit (LInt 1)))))) (EVar "chainKey")) (EApp (EVar "stepKeys") (EVar "mods"))) (EVar "runtime")) (EVar "core")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EApp (EVar "snd") (EVar "m"))))))) (EVar "mods")))))
 (DTypeSig true "bareDrive" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphCtx"))))))
 (DFunDef false "bareDrive" ((PVar "seed") (PVar "chainKey") (PVar "mods")) (EApp (EApp (EApp (EApp (EApp (EVar "keyedDrive") (EVar "seed")) (EVar "chainKey")) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (ELit (LString ""))))) (EVar "mods")))
-(DTypeSig false "stepKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))))
+(DTypeSig true "stepKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "stepKeys" ((PList)) (EListLit))
 (DFunDef false "stepKeys" ((PList PWild)) (EListLit (EVar "None")))
 (DFunDef false "stepKeys" ((PCons (PVar "m") (PVar "rest"))) (EBinOp "::" (EApp (EVar "Some") (EApp (EVar "snd") (EVar "m"))) (EApp (EVar "stepKeys") (EVar "rest"))))
+(DTypeSig true "graphOf" (TyFun (TyCon "Unit") (TyCon "GraphCtx")))
+(DFunDef false "graphOf" (PWild) (EApp (EVar "snd") (EApp (EVar "checkModulesChainReportForGraph") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chainArgs") (EVar "defaultDriveInputs")) (EVar "noValueMain")) (EVar "None")) (ELit (LString ""))) (EListLit (EVar "None"))) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (ELit (LString "data Option a = None | Some a"))))) (EListLit (ETuple (ELit (LString "m")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (ELit (LString "export data Q = Q Int"))))))))))
 (DTypeSig true "leafSrc" (TyCon "String"))
 (DFunDef false "leafSrc" () (EApp (EVar "joinNl") (EListLit (ELit (LString "export data Box a = Box a | Empty")) (ELit (LString "export wrap x = Box x")) (ELit (LString "export unwrap : Box Int -> Int")) (ELit (LString "unwrap b = match b")) (ELit (LString "  Box n => n")) (ELit (LString "  Empty => 0")))))
 (DTypeSig true "midSrc" (TyFun (TyCon "String") (TyCon "String")))
@@ -148,17 +172,19 @@ diagCode (TcDiag code _ _ _ _ _) = code
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "ModDiags" false) (mem "TcDiag" true) (mem "TcReport" true) (mem "ppPubScheme" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveOutputs" true) (mem "GraphCtx" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkModulesChainReportForGraph" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "defaultDriveInputs" false) (mem "checkModulesChainReportForGraph" false) (mem "chainArgs" false))))
 (DTypeSig true "noValueMain" (TyCon "Bool"))
 (DFunDef false "noValueMain" () (EVar "False"))
 (DTypeSig true "keyedDrive" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphCtx"))))))))
-(DFunDef false "keyedDrive" ((PVar "seed") (PVar "chainKey") (PVar "runtime") (PVar "core") (PVar "mods")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesChainReportForGraph") (EVar "defaultDriveInputs")) (EVar "noValueMain")) (EApp (EVar "Some") (ETuple (EVar "seed") (EBinOp "+" (EVar "seed") (ELit (LInt 1)))))) (EVar "chainKey")) (EApp (EVar "stepKeys") (EVar "mods"))) (EVar "runtime")) (EVar "core")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EApp (EVar "snd") (EVar "m"))))))) (EVar "mods"))))
+(DFunDef false "keyedDrive" ((PVar "seed") (PVar "chainKey") (PVar "runtime") (PVar "core") (PVar "mods")) (EApp (EVar "checkModulesChainReportForGraph") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chainArgs") (EVar "defaultDriveInputs")) (EVar "noValueMain")) (EApp (EVar "Some") (ETuple (EVar "seed") (EBinOp "+" (EVar "seed") (ELit (LInt 1)))))) (EVar "chainKey")) (EApp (EVar "stepKeys") (EVar "mods"))) (EVar "runtime")) (EVar "core")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (EApp (EVar "snd") (EVar "m"))))))) (EVar "mods")))))
 (DTypeSig true "bareDrive" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphCtx"))))))
 (DFunDef false "bareDrive" ((PVar "seed") (PVar "chainKey") (PVar "mods")) (EApp (EApp (EApp (EApp (EApp (EVar "keyedDrive") (EVar "seed")) (EVar "chainKey")) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (ELit (LString ""))))) (EVar "mods")))
-(DTypeSig false "stepKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))))
+(DTypeSig true "stepKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "stepKeys" ((PList)) (EListLit))
 (DFunDef false "stepKeys" ((PList PWild)) (EListLit (EVar "None")))
 (DFunDef false "stepKeys" ((PCons (PVar "m") (PVar "rest"))) (EBinOp "::" (EApp (EVar "Some") (EApp (EVar "snd") (EVar "m"))) (EApp (EVar "stepKeys") (EVar "rest"))))
+(DTypeSig true "graphOf" (TyFun (TyCon "Unit") (TyCon "GraphCtx")))
+(DFunDef false "graphOf" (PWild) (EApp (EVar "snd") (EApp (EVar "checkModulesChainReportForGraph") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chainArgs") (EVar "defaultDriveInputs")) (EVar "noValueMain")) (EVar "None")) (ELit (LString ""))) (EListLit (EVar "None"))) (EListLit)) (EApp (EVar "desugar") (EApp (EVar "parse") (ELit (LString "data Option a = None | Some a"))))) (EListLit (ETuple (ELit (LString "m")) (EApp (EVar "desugar") (EApp (EVar "parseLocated") (ELit (LString "export data Q = Q Int"))))))))))
 (DTypeSig true "leafSrc" (TyCon "String"))
 (DFunDef false "leafSrc" () (EApp (EVar "joinNl") (EListLit (ELit (LString "export data Box a = Box a | Empty")) (ELit (LString "export wrap x = Box x")) (ELit (LString "export unwrap : Box Int -> Int")) (ELit (LString "unwrap b = match b")) (ELit (LString "  Box n => n")) (ELit (LString "  Empty => 0")))))
 (DTypeSig true "midSrc" (TyFun (TyCon "String") (TyCon "String")))

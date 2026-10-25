@@ -1,9 +1,14 @@
--- The part of the module-chain memo key that covers what a recorded step reads
--- from modules outside its own prefix: every instance head, which is visible to
--- the whole graph whether or not a module imports its definer, and every
--- constrained signature's bare name, which joins every module's dict-name set.
--- A step's own source key cannot see either when a later module declares them.
-import frontend.ast.{Decl(..), Ty(..), Require(..), ImplMethod(..)}
+-- The parts of the module-chain memo key that cover what a recorded step reads
+-- from modules outside its own prefix.  Every instance head is visible to the whole
+-- graph whether or not a module imports its definer, and every constrained
+-- signature's bare name joins every module's dict-name set (`chainGraphKey`).  An
+-- interface declaration's method names are read by bare name by every module
+-- checked after its declarer, whether or not it imports it, so a step's key carries
+-- the interface rows of the modules before it (`interfaceRows`).  A step's own
+-- source key cannot see any of them when another module declares them.
+import frontend.ast.{
+  Decl(..), Ty(..), Require(..), ImplMethod(..), ifaceMethodName
+}
 import support.util.{joinWith}
 import types.route_key.{implRouteKeyWord}
 
@@ -30,6 +35,18 @@ declRow mid (DImpl { iface, tys, reqs, methods, implOrigin }) =
   ]
 declRow mid (DAttrib _ d) = declRow mid d
 declRow mid d = map (n => "\{mid} dict \{n}") (constrainedSigName d)
+
+-- Module [mid]'s interface declarations, each with its method names.
+export
+interfaceRows : String -> List Decl -> List String
+interfaceRows mid decls = flatMap (interfaceRow mid) decls
+
+interfaceRow : String -> Decl -> List String
+interfaceRow mid (DInterface { name, methods }) = [
+  "\{mid} interface \{name} with \{joinWith "," (map ifaceMethodName methods)}",
+]
+interfaceRow mid (DAttrib _ d) = interfaceRow mid d
+interfaceRow _ _ = []
 
 -- A `=>`-constrained top-level signature's name, looking through attributes.
 export

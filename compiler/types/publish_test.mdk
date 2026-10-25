@@ -43,8 +43,8 @@ import types.typecheck.{
   defaultDriveInputs, checkOneSchemeFullK, checkModulesDiagsChain,
   checkModulesAllLines, elaborateModulesReport, checkModules,
   methodReturnMemoCurrentViews, tcCode, tcMsg, checkModulesChainReportFor,
-  checkModulesChainReportForGraph, checkOneReportK, checkModulesPartialK,
-  elaborateModulesWithReport, driveInputsFor, tcConfigOf
+  checkModulesChainReportForGraph, chainArgs, checkOneReportK,
+  checkModulesPartialK, elaborateModulesWithReport, driveInputsFor, tcConfigOf
 }
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
@@ -892,6 +892,10 @@ accPrefix useBool =
     "export useHidden : Hidden a b => b -> a",
     "useHidden witness = hidden ()",
     "export useNeed x = need x",
+    "export useLocal : Need a => a -> Int",
+    "useLocal x =",
+    "  let g y = need y",
+    "  g x",
   ]
 
 accEntry : String
@@ -924,17 +928,18 @@ accDriveServed : String ->
 accDriveServed chainKey prefixSource entrySource stepKey =
   let ((report, outputs), gctx) =
     checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      (Some (4053, 4055))
-      chainKey
-      [Some stepKey, None]
-      []
-      (desugar (parse numPrelude))
-      [
-        ("acc_prefix", desugar (parseLocated prefixSource)),
-        ("acc_entry", desugar (parseLocated entrySource)),
-      ]
+      (chainArgs
+        defaultDriveInputs
+        False
+        (Some (4053, 4055))
+        chainKey
+        [Some stepKey, None]
+        []
+        (desugar (parse numPrelude))
+        [
+          ("acc_prefix", desugar (parseLocated prefixSource)),
+          ("acc_entry", desugar (parseLocated entrySource)),
+        ])
   (report, methodReturnMemoCurrentViews gctx, outputs.doServedModules)
 
 -- Schemes WITH their context, diagnostics, the memo views, and the checked
@@ -1027,6 +1032,7 @@ accCheck (QKind name run) =
   let steps = run ()
   let after = accRender held
   let warm = accDrive "acc-p" pSrc2 accEntry pSrc2
+  let recold = accDrive "acc-recold-\{name}" pSrc2 accEntry pSrc2
   let hitRetained =
     if name == "keyed hit over a ground prefix" then
       expectGreaterThan 0 steps
@@ -1045,6 +1051,10 @@ accCheck (QKind name run) =
         expectEqual
           ["useNeed : Need a => a -> Int"]
           (filter (== "useNeed : Need a => a -> Int") cold),
+      ),
+      (
+        "a second cold P, after Q, names its local binders as the first did",
+        expectEqual cold (accRender recold),
       ),
       ("a hit really served P", hitRetained),
       ("held P publishes no Link", expectEqual 0 (accLinks held)),
