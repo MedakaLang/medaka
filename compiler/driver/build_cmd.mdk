@@ -35,7 +35,7 @@ import frontend.ast.{Decl}
 import types.tc_types.{DriveInputs(..)}
 import types.interface_sexp.{
   InterfaceSection, InterfaceFault(..), readInterface, readInterfaceKey,
-  cacheOfSections, formatVersion, sha256Hex
+  cacheOfSections, interfaceFormatVersion, sha256Hex
 }
 import types.prelude_interface.{
   InterfaceKey, interfaceKeyOf, keysMatch, seedPreludeInterface
@@ -356,7 +356,7 @@ export
 preludeInterfaceKey : String -> PreludeInputs -> InterfaceKey
 preludeInterfaceKey coreName inputs =
   interfaceKeyOf
-    formatVersion
+    interfaceFormatVersion
     [
       ("runtime.mdk", preludeSourceHash inputs.pnRuntimeSrc),
       (coreName, preludeSourceHash inputs.pnCoreSrc),

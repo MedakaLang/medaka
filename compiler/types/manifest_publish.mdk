@@ -7,7 +7,7 @@ import types.capability_manifest.{
   FrozenAtom(..),
   FrozenAuthority(..),
   FrozenVariable(..),
-  ManifestDefect,
+  ManifestDefect(..),
   validateManifest,
 }
 import types.effect_invocation.{InvocationOps, invocationSummary}
@@ -28,29 +28,56 @@ public export data ManifestEntryInput = ManifestEntryInput {
 
 export
 publishManifests : List (String, Param) ->
-  InvocationOps ->
+  (String -> Option InvocationOps) ->
   List ManifestEntryInput ->
   Result (List ManifestDefect) (List CapabilityManifest)
-publishManifests domains ops inputs =
-  let (_, manifests) =
-    mapAccumL
-      (state input =>
-        let atoms = invocationSummary ops input.scheme
-        let charged = match input.request.protocol
-          HostInvocation => atoms
-          ExecutedMain =>
-            fold
-              (acc wrapper =>
-                atomsUnion acc (invocationSummary ops (snd wrapper)))
-              atoms
-              input.wrappers
-        let (more, frozen) = freezeAtomsWith domains state charged
-        (more, CapabilityManifest { request = input.request, atoms = frozen }))
-      Tip
+publishManifests domains resolveOps inputs =
+  let defects =
+    flatMap
+      ((ManifestEntryInput request _ wrappers) =>
+        let owners =
+          request.entry
+            :: (match request.protocol
+              HostInvocation => []
+              ExecutedMain => map fst wrappers)
+        flatMap
+          (key => match resolveOps key.moduleId
+            Some _ => []
+            None => [
+              ManifestDefect
+                ("no checked invocation view for module '"
+                  ++ key.moduleId
+                  ++ "'"),
+            ])
+          owners)
       inputs
-  match flatMap validateManifest manifests
-    [] => Ok manifests
-    defects => Err defects
+  if not (isEmpty defects) then
+    Err defects
+  else
+    let summary key scheme = match resolveOps key.moduleId
+      Some ops => invocationSummary ops scheme
+      None => panic "validated invocation owner is missing"
+    let (_, manifests) =
+      mapAccumL
+        (state (ManifestEntryInput request scheme wrappers) =>
+          let atoms = summary request.entry scheme
+          let charged = match request.protocol
+            HostInvocation => atoms
+            ExecutedMain =>
+              fold
+                (acc (key, scheme) => atomsUnion acc (summary key scheme))
+                atoms
+                wrappers
+          let (more, frozen) = freezeAtomsWith domains state charged
+          (
+            more,
+            CapabilityManifest { request = request, atoms = frozen },
+          ))
+        Tip
+        inputs
+    match flatMap validateManifest manifests
+      [] => Ok manifests
+      invalid => Err invalid
 
 -- Compatibility callers freeze their atom batch with the same identity rules.
 export

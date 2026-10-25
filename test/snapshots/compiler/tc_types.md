@@ -1,5 +1,5 @@
 # META
-source_lines=3495
+source_lines=3498
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -2168,6 +2168,9 @@ public export data ReqStep =
 -- its variance and kind tables, its own declarations over everything it
 -- imports.  Written once per module, right after its data environment is
 -- built; a drive's caller reads it through `DriveOutputs` (`lastInvocationOps`).
+public export data PublishedInvocationView =
+  PublishedInvocationView (List PubScheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
+
 public export data InvocationView =
   InvocationView (List Scheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
 
@@ -3629,6 +3632,7 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "SolvedGoalEntry" () ((variant "SolvedGoalEntry" (ConNamed (field "sgeIface" (TyCon "IfaceRef")) (field "sgeGoals" (TyApp (TyCon "List") (TyCon "Mono"))) (field "sgeResiduals" (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))))))) ())
 (DData Public "RouteWalkEntry" () ((variant "RouteWalkEntry" (ConNamed (field "rweIface" (TyCon "IfaceRef")) (field "rweGoals" (TyApp (TyCon "List") (TyCon "Mono"))) (field "rweRow" (TyCon "ImplRow")) (field "rweEncl" (TyCon "String")) (field "rweScope" (TyCon "ScopeId")) (field "rweRoutes" (TyApp (TyCon "List") (TyCon "Route"))) (field "rweInner" (TyCon "Inner"))))) ())
 (DData Public "ReqStep" () ((variant "ReqOn" (ConPos (TyCon "ReqWalk"))) (variant "ReqCycle" (ConPos (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))) (variant "ReqDeep" (ConPos (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))))) ())
+(DData Public "PublishedInvocationView" () ((variant "PublishedInvocationView" (ConPos (TyApp (TyCon "List") (TyCon "PubScheme")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))) ())
 (DData Public "InvocationView" () ((variant "InvocationView" (ConPos (TyApp (TyCon "List") (TyCon "Scheme")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))) ())
 (DData Public "SigVars" () ((variant "SigVars" (ConNamed (field "svRows" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (field "svAuths" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Authvar")))))))) ())
 (DData Public "StandaloneOrigin" () ((variant "LocalStandalone" (ConPos)) (variant "ImportedStandalone" (ConPos))) ())
@@ -3840,6 +3844,7 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "SolvedGoalEntry" () ((variant "SolvedGoalEntry" (ConNamed (field "sgeIface" (TyCon "IfaceRef")) (field "sgeGoals" (TyApp (TyCon "List") (TyCon "Mono"))) (field "sgeResiduals" (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))))))) ())
 (DData Public "RouteWalkEntry" () ((variant "RouteWalkEntry" (ConNamed (field "rweIface" (TyCon "IfaceRef")) (field "rweGoals" (TyApp (TyCon "List") (TyCon "Mono"))) (field "rweRow" (TyCon "ImplRow")) (field "rweEncl" (TyCon "String")) (field "rweScope" (TyCon "ScopeId")) (field "rweRoutes" (TyApp (TyCon "List") (TyCon "Route"))) (field "rweInner" (TyCon "Inner"))))) ())
 (DData Public "ReqStep" () ((variant "ReqOn" (ConPos (TyCon "ReqWalk"))) (variant "ReqCycle" (ConPos (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))) (variant "ReqDeep" (ConPos (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))))) ())
+(DData Public "PublishedInvocationView" () ((variant "PublishedInvocationView" (ConPos (TyApp (TyCon "List") (TyCon "PubScheme")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))) ())
 (DData Public "InvocationView" () ((variant "InvocationView" (ConPos (TyApp (TyCon "List") (TyCon "Scheme")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))) ())
 (DData Public "SigVars" () ((variant "SigVars" (ConNamed (field "svRows" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (field "svAuths" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Authvar")))))))) ())
 (DData Public "StandaloneOrigin" () ((variant "LocalStandalone" (ConPos)) (variant "ImportedStandalone" (ConPos))) ())

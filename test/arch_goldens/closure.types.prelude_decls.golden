@@ -22,6 +22,7 @@ types.evidence
 types.evidence_complete
 types.evidence_coverage
 types.interface_sexp
+types.invocation_basis
 types.manifest_publish
 types.prelude_elab
 types.prelude_interface

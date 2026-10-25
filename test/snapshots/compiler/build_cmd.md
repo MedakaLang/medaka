@@ -39,7 +39,7 @@ import frontend.ast.{Decl}
 import types.tc_types.{DriveInputs(..)}
 import types.interface_sexp.{
   InterfaceSection, InterfaceFault(..), readInterface, readInterfaceKey,
-  cacheOfSections, formatVersion, sha256Hex
+  cacheOfSections, interfaceFormatVersion, sha256Hex
 }
 import types.prelude_interface.{
   InterfaceKey, interfaceKeyOf, keysMatch, seedPreludeInterface
@@ -360,7 +360,7 @@ export
 preludeInterfaceKey : String -> PreludeInputs -> InterfaceKey
 preludeInterfaceKey coreName inputs =
   interfaceKeyOf
-    formatVersion
+    interfaceFormatVersion
     [
       ("runtime.mdk", preludeSourceHash inputs.pnRuntimeSrc),
       (coreName, preludeSourceHash inputs.pnCoreSrc),
@@ -2717,7 +2717,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("frontend" "desugar") ((mem "reserveBinderOrdinals" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "readInterfaceKey" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
+(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "readInterfaceKey" false) (mem "cacheOfSections" false) (mem "interfaceFormatVersion" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "seedPreludeInterface" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "relocDecls" false) (mem "seedPreludeElab" false))))
 (DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "PreludeTree" true) (mem "acceptedDeclsBody" false) (mem "declsKeyOf" false) (mem "readDeclsFramed" false))))
@@ -2778,7 +2778,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "preludeSourceHash" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "preludeSourceHash" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "preludeSourceHashesRef"))) (arm (PCon "Some" (PVar "h")) () (EVar "h")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "h") (EApp (EVar "sha256Hex") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeSourceHashesRef")) (EApp (EApp (EVar "take") (ELit (LInt 4))) (EBinOp "::" (ETuple (EVar "src") (EVar "h")) (EUnOp "!" (EVar "preludeSourceHashesRef")))))) (DoExpr (EVar "h"))))))
 (DTypeSig true "preludeInterfaceKey" (TyFun (TyCon "String") (TyFun (TyCon "PreludeInputs") (TyCon "InterfaceKey"))))
-(DFunDef false "preludeInterfaceKey" ((PVar "coreName") (PVar "inputs")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "formatVersion")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnRuntimeSrc"))) (ETuple (EVar "coreName") (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnCoreSrc"))))) (EFieldAccess (EVar "inputs") "pnCompiler")))
+(DFunDef false "preludeInterfaceKey" ((PVar "coreName") (PVar "inputs")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "interfaceFormatVersion")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnRuntimeSrc"))) (ETuple (EVar "coreName") (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnCoreSrc"))))) (EFieldAccess (EVar "inputs") "pnCompiler")))
 (DTypeSig true "shippedInputs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PreludeInputs")))))
 (DFunDef false "shippedInputs" ((PVar "stdlibDir") (PVar "rsrc") (PVar "csrc")) (EApp (EApp (EApp (EApp (EVar "shippedInputsFor") (EApp (EVar "buildFingerprint") (ELit LUnit))) (EVar "stdlibDir")) (EVar "rsrc")) (EVar "csrc")))
 (DTypeSig true "shippedInputsFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PreludeInputs"))))))
@@ -3055,7 +3055,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("frontend" "desugar") ((mem "reserveBinderOrdinals" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true))))
-(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "readInterfaceKey" false) (mem "cacheOfSections" false) (mem "formatVersion" false) (mem "sha256Hex" false))))
+(DUse false (UseGroup ("types" "interface_sexp") ((mem "InterfaceSection" false) (mem "InterfaceFault" true) (mem "readInterface" false) (mem "readInterfaceKey" false) (mem "cacheOfSections" false) (mem "interfaceFormatVersion" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "InterfaceKey" false) (mem "interfaceKeyOf" false) (mem "keysMatch" false) (mem "seedPreludeInterface" false))))
 (DUse false (UseGroup ("types" "prelude_elab") ((mem "PreludeElab" false) (mem "elabKeyOf" false) (mem "readElabFile" false) (mem "readElabKey" false) (mem "relocDecls" false) (mem "seedPreludeElab" false))))
 (DUse false (UseGroup ("types" "prelude_decls") ((mem "PreludeDecls" true) (mem "PreludeTree" true) (mem "acceptedDeclsBody" false) (mem "declsKeyOf" false) (mem "readDeclsFramed" false))))
@@ -3116,7 +3116,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "preludeSourceHash" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "preludeSourceHash" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "preludeSourceHashesRef"))) (arm (PCon "Some" (PVar "h")) () (EVar "h")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "h") (EApp (EVar "sha256Hex") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeSourceHashesRef")) (EApp (EApp (EVar "take") (ELit (LInt 4))) (EBinOp "::" (ETuple (EVar "src") (EVar "h")) (EUnOp "!" (EVar "preludeSourceHashesRef")))))) (DoExpr (EVar "h"))))))
 (DTypeSig true "preludeInterfaceKey" (TyFun (TyCon "String") (TyFun (TyCon "PreludeInputs") (TyCon "InterfaceKey"))))
-(DFunDef false "preludeInterfaceKey" ((PVar "coreName") (PVar "inputs")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "formatVersion")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnRuntimeSrc"))) (ETuple (EVar "coreName") (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnCoreSrc"))))) (EFieldAccess (EVar "inputs") "pnCompiler")))
+(DFunDef false "preludeInterfaceKey" ((PVar "coreName") (PVar "inputs")) (EApp (EApp (EApp (EVar "interfaceKeyOf") (EVar "interfaceFormatVersion")) (EListLit (ETuple (ELit (LString "runtime.mdk")) (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnRuntimeSrc"))) (ETuple (EVar "coreName") (EApp (EVar "preludeSourceHash") (EFieldAccess (EVar "inputs") "pnCoreSrc"))))) (EFieldAccess (EVar "inputs") "pnCompiler")))
 (DTypeSig true "shippedInputs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PreludeInputs")))))
 (DFunDef false "shippedInputs" ((PVar "stdlibDir") (PVar "rsrc") (PVar "csrc")) (EApp (EApp (EApp (EApp (EVar "shippedInputsFor") (EApp (EVar "buildFingerprint") (ELit LUnit))) (EVar "stdlibDir")) (EVar "rsrc")) (EVar "csrc")))
 (DTypeSig true "shippedInputsFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PreludeInputs"))))))

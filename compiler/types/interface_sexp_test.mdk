@@ -1,3 +1,4 @@
+import types.interface_sexp.{invocationViewSExp, invocationViewOfSExp}
 -- Tests for the interface codec: every published row of every stdlib module,
 -- of a battery of synthetic signatures and of a residual-bearing module, and
 -- every field of the prelude's interface value, survives encode, render, parse
@@ -37,8 +38,8 @@ import types.interface_sexp.{
   methodPredicateSlotSExp, methodPredicateSlotOfSExp, cDeclaredPrefixSExp,
   cDeclaredPrefixOfSExp, builtinClassesSExp, builtinClassesOfSExp,
   spellingPopSExp, spellingPopOfSExp, atomSExp, PreludeInterfaceFile(..),
-  InterfaceSection(..), formatVersion, sectionsOfCache, cacheOfSections,
-  encodeInterface, decodeInterface, readInterface, sha256Hex
+  InterfaceSection(..), interfaceFormatVersion, sectionsOfCache,
+  cacheOfSections, encodeInterface, decodeInterface, readInterface, sha256Hex
 }
 import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
@@ -880,6 +881,12 @@ fieldLaws pi = [
     (ordMapOfSExp unitOfSExp)
     omKeys
     pi.piStandaloneNames,
+  field
+    "piInvocationView"
+    invocationViewSExp
+    (nested invocationViewOfSExp)
+    (v => [renderSExp (invocationViewSExp v)])
+    pi.piInvocationView,
 ]
 
 -- A field that holds no component although the prelude's value fills it, so
@@ -901,7 +908,7 @@ test "every field of the prelude's interface round-trips" =
     Ok pi =>
       let laws = fieldLaws pi
       expectAll [
-        labelFail "fields" (expectEqual 19 (length laws)),
+        labelFail "fields" (expectEqual 20 (length laws)),
         labelFail
           "fields the prelude fills"
           (expectEqual [] (filterMap emptyButFilled laws)),
@@ -1544,7 +1551,7 @@ ioSet = atomBuiltin "IO" (PSet (Some ["a b", "c"]))
 export
 fileKey : InterfaceKey
 fileKey = InterfaceKey {
-  ikFormat = formatVersion,
+  ikFormat = interfaceFormatVersion,
   ikSources = [("core.mdk", "ab12"), ("a b.mdk", "cd34")],
   ikCompiler = "medaka 0 (sha x)",
 }
@@ -1627,10 +1634,10 @@ test "a malformed file is refused" = match preludeInterface
         expectEqual
           (Some (
             "header/medaka-interface.1",
-            "3: format version 3, this compiler reads 2",
+            "4: format version 4, this compiler reads 3",
           ))
           (failureOf
-            "(medaka-interface 3 (sources ()) (compiler c) (sections 0))\n"),
+            "(medaka-interface 4 (sources ()) (compiler c) (sections 0))\n"),
       ),
       (
         "truncated in the header",
@@ -1701,7 +1708,7 @@ test "a malformed file is refused" = match preludeInterface
       (
         "too few fields",
         expectEqual
-          (Some ("file/0/section.2", "interface: expected 19 field(s)"))
+          (Some ("file/0/section.2", "interface: expected 20 field(s)"))
           (failureOf (withSection "x")),
       ),
     ]
@@ -1739,3 +1746,35 @@ test "the prelude's file round-trips with its key, joins and every row" =
               (cacheView cache)
               (cacheView (cacheOfSections back.ifSections))),
         ]
+
+test "a missing or malformed owning declaration basis refuses the interface" =
+  match preludeInterface
+    Err e => fail e
+    Ok pi =>
+      let good = encodeInterface (fileOf [([[]], pi)])
+      let alter basis = match parseSExp ("(" ++ good ++ ")")
+        Ok (SList [header, SList [section, joins, SList (tag :: fields)]]) =>
+          stringJoin
+            "\n"
+            (map renderSExp [
+              header,
+              SList [section, joins, SList (tag :: take 19 fields ++ basis)],
+            ])
+        _ => good
+      expectEach [
+        (
+          "missing basis",
+          expectEqual
+            (Some ("file/0/section.2", "interface: expected 20 field(s)"))
+            (failureOf (alter [])),
+        ),
+        (
+          "malformed basis",
+          expectEqual
+            (Some (
+              "file/0/section.2/interface.20",
+              "invocation-view: expected 3 field(s)",
+            ))
+            (failureOf (alter [SAtom "invocation-view"])),
+        ),
+      ]

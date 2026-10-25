@@ -1,3 +1,4 @@
+import types.invocation_basis.{frozenInvocationView}
 import types.value_main.{mainUseSite, mainUsedMsg}
 -- The checked main-shape facts published at the end of a typecheck drive.
 
@@ -6,7 +7,7 @@ import types.repr.{Mono(..), Scheme(..), normalize, IfaceRef(..)}
 import types.tc_types.{
   GraphCtx(..), ModuleCtx(..), DriveOutputs(..), InvocationView(..)
 }
-import types.publish.{EntryOutcome(..), TcDiag(..), zonkScheme, emptyZonk}
+import types.publish.{EntryOutcome(..), TcDiag(..)}
 
 -- The head node of a left-spine type application.
 mainHead : Mono -> Mono
@@ -87,10 +88,6 @@ driveOutputsNow mctx outcome = DriveOutputs {
   doOrdIndex = mctx.mcGraph.declEnvsRef.value.deOrdIndex,
   doEffvarNext = mctx.mcGraph.graphRun.effvarCounter.value,
 }
-
-frozenInvocationView : InvocationView -> InvocationView
-frozenInvocationView (InvocationView ctors pols kinds) =
-  InvocationView (map (c => snd (zonkScheme emptyZonk c)) ctors) pols kinds
 
 -- The interface of `println`'s one-predicate context (`Display a => …`).
 export

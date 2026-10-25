@@ -1,3 +1,4 @@
+import list.{take, drop}
 -- Unit tests for the published shapes' zonk, freeze, validator and graph report
 -- over hand-built values; a scheme's context surviving a later drive and a
 -- shadowing binding's context (#2054); published schemes holding no Link; and
@@ -353,7 +354,7 @@ test "checked scheme indexes preserve the first published row in own and core sc
   let (_, manifests, diags) =
     publishSelected
       []
-      (_ => ops)
+      (_ => Some ops)
       [
         EntryOverPrelude "same" HostInvocation,
         ExactEntry
@@ -397,7 +398,7 @@ test "frozen selected manifests survive source cell mutation and P U P publicati
   let select rows =
     publishSelected
       [("Net", PPrefix None)]
-      (_ => ops)
+      (_ => Some ops)
       [EntryOverPrelude "p" HostInvocation]
       [("entry", (rows, [], []))]
       []
@@ -1818,5 +1819,228 @@ test "equal configurations digest to equal memo keys" =
       expectNotEqual
         (tcConfigOf [] (driveInputsFor None True [])).tcKey
         (key []),
+    ),
+  ]
+
+boxOwner : String -> String -> List Decl
+boxOwner visibility label =
+  desugar
+    (parseLocated
+      "\{visibility} data Box = Box (Unit -> <\{label}> Unit)\nexport make : Box\nmake = Box (_ => ())\n")
+
+boxImporter : List Decl
+boxImporter = desugar (parseLocated "import dep.{Box, make}\nmain = make")
+
+ownerSelectors : List ManifestSelector
+ownerSelectors = [
+  ExactEntry EntryKey { moduleId = "dep", binding = "make" } HostInvocation,
+  ExactEntry EntryKey { moduleId = "entry", binding = "main" } HostInvocation,
+]
+
+ownerLabels : DriveOutputs -> List (String, List String)
+ownerLabels outputs =
+  map
+    (m => (
+      (m : CapabilityManifest).request.entry.moduleId,
+      map (a => a.label) m.atoms,
+    ))
+    outputs.doManifests
+
+test "exact owner retains private callback fields across both graph selections" =
+  let run trees selectors mods =
+    let inputs = { defaultDriveInputs | diManifestRequests = selectors }
+    if trees then
+      let (_, report, outputs) =
+        elaborateModulesWithReport inputs False None [] [] mods
+      (isSome report.trChecked, ownerLabels outputs)
+    else
+      let (report, outputs) =
+        checkModulesChainReportFor inputs False None "" [] [] [] mods
+      (isSome report.trChecked, ownerLabels outputs)
+  let abstract = [("dep", boxOwner "export" "Clock"), ("entry", boxImporter)]
+  let publicMods =
+    [("dep", boxOwner "public export" "Clock"), ("entry", boxImporter)]
+  expectEach [
+    (
+      "alone",
+      expectEqual
+        (True, [("dep", ["Clock"])])
+        (run True (take 1 ownerSelectors) (take 1 abstract)),
+    ),
+    (
+      "trees abstract",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", [])])
+        (run True ownerSelectors abstract),
+    ),
+    (
+      "diags abstract",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", [])])
+        (run False ownerSelectors abstract),
+    ),
+    (
+      "trees public",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", ["Clock"])])
+        (run True ownerSelectors publicMods),
+    ),
+    (
+      "diags public",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", ["Clock"])])
+        (run False ownerSelectors publicMods),
+    ),
+  ]
+
+test "same-spelled constructors use their exact module views" =
+  let inputs = { defaultDriveInputs |
+    diManifestRequests = [
+      ExactEntry EntryKey { moduleId = "a", binding = "make" } HostInvocation,
+      ExactEntry EntryKey { moduleId = "b", binding = "make" } HostInvocation,
+    ],
+  }
+  let (_, report, outputs) = elaborateModulesWithReport
+    inputs
+    False
+    None
+    []
+    []
+    [
+      ("a", boxOwner "export" "Clock"),
+      ("b", boxOwner "export" "Net \"b/*\""),
+      ("entry", desugar (parseLocated "main = ()")),
+    ]
+  expectEach [
+    ("checked", expectTrue (isSome report.trChecked)),
+    (
+      "owners",
+      expectEqual [("a", ["Clock"]), ("b", ["Net"])] (ownerLabels outputs),
+    ),
+  ]
+
+test "request-independent prefix views replay A B A and invalidate by source and profile" =
+  let run selectors visibility inputs key suffix =
+    let (report, outputs) =
+      checkModulesChainReportFor
+        { inputs | diManifestRequests = selectors }
+        False
+        (Some (9950, 9951))
+        "owner-cache"
+        [Some key, None]
+        []
+        []
+        [("dep", boxOwner visibility "Clock"), ("entry", suffix)]
+    (isSome report.trChecked, ownerLabels outputs, chainMemoReplayedSteps ())
+  let a = drop 1 ownerSelectors
+  let b = ownerSelectors
+  let cold = run a "export" defaultDriveInputs "abstract" boxImporter
+  let warm = run b "export" defaultDriveInputs "abstract" boxImporter
+  let again = run a "export" defaultDriveInputs "abstract" boxImporter
+  let changedSuffix =
+    run
+      b
+      "export"
+      defaultDriveInputs
+      "abstract"
+      (desugar (parseLocated "import dep.{Box, make}\nmain = make\nextra = ()"))
+  let changedSource =
+    run b "public export" defaultDriveInputs "public" boxImporter
+  let changedSourceWarm =
+    run b "public export" defaultDriveInputs "public" boxImporter
+  let profile = { defaultDriveInputs | diProfileName = "changed-owner-profile" }
+  let changedProfile = run b "public export" profile "public" boxImporter
+  let profileWarm = run b "public export" profile "public" boxImporter
+  expectEach [
+    ("cold A", expectEqual (True, [("entry", [])], 0) cold),
+    ("warm B", expectEqual (True, [("dep", ["Clock"]), ("entry", [])], 1) warm),
+    ("A again", expectEqual (True, [("entry", [])], 1) again),
+    ("changed suffix", expectEqual warm changedSuffix),
+    (
+      "visibility cold",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", ["Clock"])], 0)
+        changedSource,
+    ),
+    (
+      "visibility warm",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", ["Clock"])], 1)
+        changedSourceWarm,
+    ),
+    ("profile cold", expectEqual changedSource changedProfile),
+    ("profile warm", expectEqual changedSourceWarm profileWarm),
+  ]
+
+test "core declaration basis preserves its abstract constructor ownership on cold and warm paths" =
+  let core = boxOwner "export" "Clock"
+  let importer = desugar (parseLocated "main = make")
+  let inputs = { defaultDriveInputs |
+    diManifestRequests = [
+      ExactEntry
+        EntryKey { moduleId = "core", binding = "make" }
+        HostInvocation,
+      ExactEntry
+        EntryKey { moduleId = "entry", binding = "main" }
+        HostInvocation,
+    ],
+  }
+  let (_, treeReport, trees) =
+    elaborateModulesWithReport inputs False None [] core [("entry", importer)]
+  let run _ =
+    checkModulesChainReportFor
+      inputs
+      False
+      (Some (9952, 9953))
+      "core-owner"
+      [None]
+      []
+      core
+      [("entry", importer)]
+  let (coldReport, cold) = run ()
+  let (warmReport, warm) = run ()
+  expectEach [
+    (
+      "checked",
+      expectEqual
+        [True, True, True]
+        (map (r => isSome r.trChecked) [treeReport, coldReport, warmReport]),
+    ),
+    (
+      "cold tree",
+      expectEqual [("core", ["Clock"]), ("entry", [])] (ownerLabels trees),
+    ),
+    (
+      "cold diagnostics",
+      expectEqual [("core", ["Clock"]), ("entry", [])] (ownerLabels cold),
+    ),
+    (
+      "warm diagnostics",
+      expectEqual [("core", ["Clock"]), ("entry", [])] (ownerLabels warm),
+    ),
+  ]
+
+test "missing selected owner view withholds checked manifests" =
+  let (_, manifests, diags) =
+    publishSelected
+      []
+      (_ => None)
+      [
+        ExactEntry
+          EntryKey { moduleId = "dep", binding = "make" }
+          HostInvocation,
+      ]
+      [("dep", ([("make", pub (plainScheme int))], [], []))]
+      []
+      noEntryOutcome
+      None
+      False
+  expectEach [
+    ("no fallback", expectEqual 0 (length manifests)),
+    (
+      "defect",
+      expectEqual
+        ["no checked invocation view for module 'dep'"]
+        (map tcMsg diags),
     ),
   ]

@@ -1,3 +1,9 @@
+import types.invocation_basis.{
+  recordInvocationView, frozenInvocationView, readInvocationView,
+  requestedWrapperViewModules, invocationResolver, slotVariances, ctorsByHead,
+  authorityParamSubst, paramPolaritiesIn, frozenInvocationOps,
+  completionInvocationViews
+}
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
 -- and dict-passing elaboration.  Architecture doc, including the component model this
 -- file is being decomposed towards: `compiler/TYPECHECK-TARGET-ARCHITECTURE.md`.
@@ -12098,35 +12104,6 @@ paramPolaritiesOf : ModuleCtx -> TabKey -> Option (List Polarity)
 paramPolaritiesOf mctx key =
   paramPolaritiesIn mctx.mcCells.dataParamPolarityRef.value key
 
--- The same read against an EXPLICIT table — the form `inferParamPolarities`
--- uses, so the graph-wide seed builder (`declEnvPolarityChain`) and the per-run
--- reader apply the SAME write-channel seed.  Two copies of the seed is exactly
--- the drift this split exists to prevent.
-paramPolaritiesIn : List (TabKey, List Polarity) ->
-  TabKey ->
-  Option (List Polarity)
-paramPolaritiesIn tab key
-  | tabKeyEq key (tyTabKey OriginBuiltin "Ref") = Some [PInv]
-  | tabKeyEq key (tyTabKey OriginBuiltin "Array") = Some [PInv]
-  | otherwise = lookupTab key tab
-
-recordInvocationView : TcEnv -> Unit
-recordInvocationView env =
-  let universe =
-    flatMap
-      (cands =>
-        map
-          (c => match c
-            (_, _, sch) => sch)
-          cands)
-      (IdMap.values
-        (spRows env.teDyn.dcModule.mcGraph.crossRun.universeCtorPop.value))
-  env.teDyn.dcModule.mcCells.invocationViewRef :=
-    InvocationView
-      (IdMap.values env.teCtors ++ universe)
-      env.teDyn.dcModule.mcCells.dataParamPolarityRef.value
-      env.teDyn.dcModule.mcCells.dataParamKindsRef.value
-
 -- The summary's operations over the view of the entry the drive [o] checked.  The
 -- field instantiation runs in a graph record of its own, whose effect-variable
 -- counter continues from the drive's (`doEffvarNext`).
@@ -12134,7 +12111,7 @@ export
 lastInvocationOps : DriveOutputs -> InvocationOps
 lastInvocationOps o = match o.doInvocationView
   InvocationView ctors pols kinds =>
-    let byHead = ctorsByHead ctors
+    let byHead = ctorsByHead invocationHeadKey ctors
     let gctx = initialGraphCtx builtinCtors (freshGraphRun ())
     gctx.graphRun.effvarCounter := o.doEffvarNext
     InvocationOps {
@@ -12157,48 +12134,6 @@ invocationHeadKey h = match headTyconMono h
   Some hk => headKeyTag hk
   None => "?"
 
--- A slot's variance, read as invariant where its parameter is an effect row
--- or an authority: an index is invariant (EFFECTS-SEMANTICS §6.4), whatever
--- the variance table computed for it.
-slotVariances : Option (List Polarity) ->
-  Option (List Kind) ->
-  Option (List Variance)
-slotVariances None None = None
-slotVariances pols kinds =
-  let ps = optionOr [] pols
-  let ks = optionOr [] kinds
-  Some
-    (map
-      (i => slotVariance (nthOpt i ps) (nthOpt i ks))
-      (rangeFromCount 0 (maxI (listLen ps) (listLen ks))))
-
-slotVariance : Option Polarity -> Option Kind -> Variance
-slotVariance _ (Some KRow) = VInv
-slotVariance _ (Some (KAuth _ _)) = VInv
-slotVariance (Some p) _ = varianceOf p
-slotVariance None _ = VInv
-
-varianceOf : Polarity -> Variance
-varianceOf PCo = VCo
-varianceOf PContra = VContra
-varianceOf PInv = VInv
--- never published (`publishedPolarity`); read as the phantom it means
-varianceOf PPhantom = VCo
-
--- Every constructor under its result head: the head's arguments as the
--- constructor declares them, and its field types.
-ctorsByHead : List Scheme -> OrdMap (List (List Mono, List Mono))
-ctorsByHead schemes =
-  fold
-    (acc sch => match sch
-      Forall _ _ _ _ _ mono =>
-        let (fieldTys, result) = arrowParts mono
-        let (h, params) = spineParts result
-        let key = invocationHeadKey h
-        omInsert key ((params, fieldTys) :: optionOr [] (omLookup key acc)) acc)
-    omEmpty
-    schemes
-
 -- A constructor's fields at an application's authority arguments: each
 -- declared authority parameter is replaced by the argument in its slot.  A
 -- type or row argument is left as the declaration's variable; the summary
@@ -12207,21 +12142,6 @@ instantiateFields : GraphCtx -> List Mono -> (List Mono, List Mono) -> List Mono
 instantiateFields gctx args (params, fieldTys) =
   let asub = authorityParamSubst params args
   map (substMono gctx [] [] asub) fieldTys
-
-authorityParamSubst : List Mono -> List Mono -> List (Int, Authority)
-authorityParamSubst (p :: ps) (a :: rest) = match (normalize p, normalize a)
-  (TAuth q, TAuth actual) => match authNorm q
-    AVar cell => (authvarId cell, actual) :: authorityParamSubst ps rest
-    _ => authorityParamSubst ps rest
-  _ => authorityParamSubst ps rest
-authorityParamSubst _ _ = []
-
-arrowParts : Mono -> (List Mono, Mono)
-arrowParts m = match normalize m
-  TFun dom _ res =>
-    let (rest, result) = arrowParts res
-    (dom :: rest, result)
-  other => ([], other)
 
 -- #2110: the ATOM-GUARANTEE read, sibling of `paramPolaritiesOf`.  No builtin
 -- rows: `Ref`/`Array` have no KRow parameter, so they guarantee no atoms and a
@@ -53344,6 +53264,7 @@ checkCoreMemoized prev marked key runtimeDecls coreDecls runtimeSeed =
           (externSigsToMap runtimeDecls omEmpty)
           (publishCore (coreOwnContexts coreCtx) coreSchemes.mbSchemes)
           (omMapValues (_ => ()) coreSchemes.mbStandaloneSchemes)
+          coreCtx.mcCells.invocationViewRef.value
       let _ = match key
         Some k => seedPreludeInterface k [([join], pi)]
         None => ()
@@ -53376,7 +53297,9 @@ continueFromInterface gctx run pi =
     builtinExternNamesRef =
       Ref (IdMap.union pi.piExternNames gctx.builtinExternNamesRef.value),
   }
-  (bindings, corePub, initialModuleCtx restored)
+  let mctx = initialModuleCtx restored
+  mctx.mcCells.invocationViewRef := readInvocationView pi.piInvocationView
+  (bindings, corePub, mctx)
 
 preludePreambleMemoRef : Ref (Option (((Int, Int), String), PreludePreamble))
 preludePreambleMemoRef = Ref None
@@ -54088,15 +54011,16 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
 -- that tree as far as `graphCollect` and `graphCollect` drops it there, rather than
 -- consing it: that selection returns `gdModules = []`, so accumulating the tree would
 -- hold every module's marked forms live for the whole drive.
-graphModuleWorker : GraphOut ->
+graphModuleWorker : OrdMap Unit ->
+  GraphOut ->
   ModuleCtx ->
   String ->
   ModuleSeed ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag), ModuleCtx)
-graphModuleWorker sel prev mid seed accData accAll prog =
+  (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView), ModuleCtx)
+graphModuleWorker capture sel prev mid seed accData accAll prog =
   let implDecls = accAll ++ prog
   let (schemes, marked, errs, warns, mctx) =
     checkModuleFullDiags prev.mcGraph mid seed accData implDecls prog
@@ -54112,7 +54036,12 @@ graphModuleWorker sel prev mid seed accData accAll prog =
             ++ mctx.mcCells.promotedRef.value)
       ()
     GOutDiags => ()
-  (schemes, (marked, published, errs, warns), mctx)
+  let view =
+    if omHasKey mid capture then
+      Some mctx.mcCells.invocationViewRef.value
+    else
+      None
+  (schemes, (marked, published, errs, warns, view), mctx)
 
 -- collect: keeps the worker's marked tree and its `(schemes, errs, warns)` payload
 -- per module in load order, and on the DIAGS selection's TERMINAL module records
@@ -54149,10 +54078,10 @@ graphCollect : GraphCtx ->
   GraphOut ->
   Bool ->
   String ->
-  (List Decl, List (String, PubScheme), List TcDiag, List TcDiag) ->
-  (List (String, List Decl), List ModDiags) ->
-  (List (String, List Decl), List ModDiags)
-graphCollect gctx sel isLast mid (marked, schemes, errs, warns) (markedRest, diagsRest) =
+  (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView) ->
+  (List (String, List Decl), List ModDiags, List (String, InvocationView)) ->
+  (List (String, List Decl), List ModDiags, List (String, InvocationView))
+graphCollect gctx sel isLast mid (marked, schemes, errs, warns, view) (markedRest, diagsRest, views) =
   let _ = match sel
     GOutDiags => setMainSchemeIfEntry gctx isLast schemes
     GOutTrees => ()
@@ -54162,7 +54091,11 @@ graphCollect gctx sel isLast mid (marked, schemes, errs, warns) (markedRest, dia
   let markedOut = match sel
     GOutDiags => markedRest
     GOutTrees => (mid, marked) :: markedRest
-  (markedOut, (mid, (schemes, errs, warns)) :: diagsRest)
+  (
+    markedOut,
+    (mid, (schemes, errs, warns)) :: diagsRest,
+    option views (v => (mid, v) :: views) view,
+  )
 
 -- the `(errs, warns)` projection of one full per-module entry, for the exported
 -- drivers whose contract is the narrower pair.
@@ -54482,8 +54415,24 @@ checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKe
   interners := internersOf resumeModule.mcGraph
   let n = listLen kept
   -- A restored step's rows were frozen when it was recorded, so nothing is open.
-  let (finalResults, open, newSteps, lastCtx) =
+  let capture =
+    requestedWrapperViewModules
+      inputs.diManifestRequests
+      (manifestDriverFor inputs None)
+  let coreView = coreCtx.mcCells.invocationViewRef.value
+  let prefixViews =
+    flatMap
+      (st =>
+        let mid = st.csModule.mcCells.currentModuleRef.value
+        if omHasKey mid capture then
+          [(mid, st.csModule.mcCells.invocationViewRef.value)]
+        else
+          [])
+      kept
+  let (finalResults, open, newSteps, lastCtx, views) =
     chainGo
+      capture
+      prefixViews
       (runtimeSeed ++ coreSchemes.mbSchemes)
       (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
       depEnv
@@ -54534,7 +54483,11 @@ checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKe
   let (requests, manifests, manifestDiags) =
     publishSelected
       lastCtx.mcGraph.effectDomains.value
-      (_ => lastInvocationOps (driveOutputsNow lastCtx outcome))
+      (invocationResolver
+        (frozenInvocationOps
+          lastInvocationOps
+          (driveOutputsNow lastCtx outcome))
+        (completionInvocationViews lastCtx coreView views))
       inputs.diManifestRequests
       perMod
       corePub
@@ -54577,7 +54530,9 @@ checkModulesChainReportForGraph inputs valueMain (Some (rk, ck)) chainKey stepKe
 -- tail call: a frame waiting on the rest would keep its module's record reachable
 -- until the graph end.  [prev] is the record current before the next module; the last
 -- module's record comes back as the fourth component.
-chainGo : List (String, Scheme) ->
+chainGo : OrdMap Unit ->
+  List (String, InvocationView) ->
+  List (String, Scheme) ->
   List (String, ExportBinding) ->
   List (String, List (String, ExportBinding)) ->
   List Decl ->
@@ -54588,30 +54543,38 @@ chainGo : List (String, Scheme) ->
   List ChainStep ->
   ModuleCtx ->
   List (String, List Decl) ->
-  (List ModDiags, Int, List ChainStep, ModuleCtx)
-chainGo _ _ _ _ _ results open _ steps prev [] = (results, open, steps, prev)
-chainGo baseSeed coreV depEnv accData accAll results open _ steps prev [(mid, prog)] =
+  (List ModDiags, Int, List ChainStep, ModuleCtx, List (String, InvocationView))
+chainGo _ views _ _ _ _ _ results open _ steps prev [] =
+  (results, open, steps, prev, views)
+chainGo capture views baseSeed coreV depEnv accData accAll results open _ steps prev [(mid, prog)] =
   let seed =
     moduleImportSeed
       prev
       baseSeed
       (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
-  let (_, (_, published, errs, warns), next) =
-    graphModuleWorker GOutDiags prev mid seed accData accAll prog
+  let (_, (_, published, errs, warns, view), next) =
+    graphModuleWorker capture GOutDiags prev mid seed accData accAll prog
   let _ = setMainSchemeIfEntry next.mcGraph True published
-  ((mid, (published, errs, warns)) :: results, open + 1, steps, next)
-chainGo baseSeed coreV depEnv accData accAll results open keys steps prev ((mid, prog) :: rest) =
+  (
+    (mid, (published, errs, warns)) :: results,
+    open + 1,
+    steps,
+    next,
+    option views (v => (mid, v) :: views) view,
+  )
+chainGo capture views baseSeed coreV depEnv accData accAll results open keys steps prev ((mid, prog) :: rest) =
   let seed =
     moduleImportSeed
       prev
       baseSeed
       (importSeed prev.mcGraph coreV (admittedIn prev.mcGraph mid) prog depEnv)
-  let (schemes, (_, published, errs, warns), next) =
-    graphModuleWorker GOutDiags prev mid seed accData accAll prog
+  let (schemes, (_, published, errs, warns, view), next) =
+    graphModuleWorker capture GOutDiags prev mid seed accData accAll prog
   let pubV = publicModuleExports prog schemes ++ reexportSeed coreV prog depEnv
   let depEnv2 = (mid, pubV) :: depEnv
   let accData2 = accData ++ publicDataDecls prog
   let accAll2 = accAll ++ prog
+  let views2 = option views (v => (mid, v) :: views) view
   let results2 = (mid, (published, errs, warns)) :: results
   let open2 = open + 1
   let (key, keys2) = match keys
@@ -54626,6 +54589,8 @@ chainGo baseSeed coreV depEnv accData accAll results open keys steps prev ((mid,
       -- records no step and this is a tail call.  A frame waiting on the rest would
       -- keep its own `accAll2`/`accData2` copies reachable from the stack.
       chainGo
+        capture
+        views2
         baseSeed
         coreV
         depEnv2
@@ -54655,6 +54620,9 @@ chainGo baseSeed coreV depEnv accData accAll results open keys steps prev ((mid,
       -- The step's module record is carried into the step's own snapshot, so the memo
       -- keeps no drive's graph record alive.
       let snap = snapshotGraphCtx next.mcGraph
+      let saved = carryModuleCtx snap next
+      saved.mcCells.invocationViewRef :=
+        frozenInvocationView next.mcCells.invocationViewRef.value
       let step = ChainStep {
         csKey = k,
         csDepEnv = depEnv2,
@@ -54662,9 +54630,11 @@ chainGo baseSeed coreV depEnv accData accAll results open keys steps prev ((mid,
         csAccAll = accAll2,
         csResults = results3,
         csCtx = snap,
-        csModule = carryModuleCtx snap next,
+        csModule = saved,
       }
       chainGo
+        capture
+        views2
         baseSeed
         coreV
         depEnv2
@@ -54856,13 +54826,18 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
   -- accAll (checkModuleFullImpl implDecls), and
   -- both are order-observable (oracle first-wins, implDecls scan order), so both
   -- concats are RETAINED — this is not the perf-gate path, which is `cmCheckWorker`'s.
-  let ((modules2, perModRaw), lastCtx) =
+  let capture =
+    requestedWrapperViewModules
+      inputs.diManifestRequests
+      (manifestDriverFor inputs executes)
+  let coreView = coreCtx.mcCells.invocationViewRef.value
+  let ((modules2, perModRaw, views), lastCtx) =
     foldModules
       True
       True
-      (graphModuleWorker sel)
+      (graphModuleWorker capture sel)
       (graphCollect coreCtx.mcGraph sel)
-      ([], [])
+      ([], [], [])
       (runtimeSeed ++ coreSchemes.mbSchemes)
       (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
       []
@@ -54906,7 +54881,11 @@ driveGraphK inputs sel valueMain executes preludeKey runtimeDecls coreDecls0 mod
   let (requests, manifests, manifestDiags) =
     publishSelected
       lastCtx.mcGraph.effectDomains.value
-      (_ => lastInvocationOps (driveOutputsNow lastCtx outcome))
+      (invocationResolver
+        (frozenInvocationOps
+          lastInvocationOps
+          (driveOutputsNow lastCtx outcome))
+        (completionInvocationViews lastCtx coreView views))
       inputs.diManifestRequests
       perMod
       corePub

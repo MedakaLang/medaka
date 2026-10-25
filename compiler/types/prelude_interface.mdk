@@ -1,3 +1,4 @@
+import types.invocation_basis.{publishInvocationView}
 -- The prelude interface as a value, and the one process cache that holds it.
 --
 -- A `PreludeInterface` is what a drive needs from the prelude's core pass to
@@ -32,7 +33,7 @@ import types.repr.{Mono, Scheme, IfaceRef, VecObl}
 import types.tc_types.{
   GraphCtx(..), CrossRun(..), GraphRun(..), BuiltinClasses, PredicateSlot(..),
   PredicateSlotArgs(..), MethodPredicateSlot(..), CDeclaredPrefix,
-  RecordInfo(..), ModuleBindings(..)
+  RecordInfo(..), ModuleBindings(..), InvocationView, PublishedInvocationView
 }
 
 -- ── the interface value ─────────────────────────────────────────────────────
@@ -57,6 +58,7 @@ public export data PreludeInterface = PreludeInterface {
   piEffvarNext : Int,
   piCore : List (String, PubScheme),
   piStandaloneNames : OrdMap Unit,
+  piInvocationView : PublishedInvocationView,
 }
 
 -- The four `GraphRun` values a cache hit restores.
@@ -115,8 +117,9 @@ freezeInterface : CrossRun ->
   OrdMap (Ty, List (String, Int)) ->
   List (String, PubScheme) ->
   OrdMap Unit ->
+  InvocationView ->
   PreludeInterface
-freezeInterface cross run externs core standalone = PreludeInterface {
+freezeInterface cross run externs core standalone invocation = PreludeInterface {
   piFunNames = cross.universeFunNamesRef.value,
   piMethodDispatchIdx = cross.universeMethodDispatchIdxByIdRef.value,
   piDataCtors = cross.universeDataCtors.value,
@@ -141,6 +144,7 @@ freezeInterface cross run externs core standalone = PreludeInterface {
   piEffvarNext = run.effvarCounter.value,
   piCore = freezeRows core,
   piStandaloneNames = standalone,
+  piInvocationView = publishInvocationView invocation,
 }
 
 -- The first published row per standalone name, as the drive's own
