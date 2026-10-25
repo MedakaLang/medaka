@@ -1,5 +1,5 @@
 # META
-source_lines=434
+source_lines=440
 stages=DESUGAR,MARK
 # SOURCE
 import string.{split}
@@ -67,8 +67,14 @@ executedMainInputs : DriveInputs ->
   DriveInputs
 executedMainInputs inputs driver modules = { inputs |
   diExecutedMainDriver = Some driver,
-  diManifestRequests =
-    ExactEntry (mainEntryKey modules) ExecutedMain :: inputs.diManifestRequests,
+  diManifestRequests = match entryPair modules
+    Some (_, decls) =>
+      if isSome (findMainParams decls) then
+        ExactEntry (mainEntryKey modules) ExecutedMain
+          :: inputs.diManifestRequests
+      else
+        inputs.diManifestRequests
+    None => inputs.diManifestRequests,
 }
 
 export
@@ -447,7 +453,7 @@ asyncPinImport driver =
 (DTypeSig true "mainEntryKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EntryKey")))
 (DFunDef false "mainEntryKey" ((PVar "modules")) (ERecordCreate "EntryKey" ((fa "moduleId" (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "Some" (PTuple (PVar "mid") PWild)) () (EVar "mid")) (arm (PCon "None") () (ELit (LString ""))))) (fa "binding" (ELit (LString "main"))))))
 (DTypeSig true "executedMainInputs" (TyFun (TyCon "DriveInputs") (TyFun (TyCon "EntryKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "DriveInputs")))))
-(DFunDef false "executedMainInputs" ((PVar "inputs") (PVar "driver") (PVar "modules")) (ERecordUpdate (EVar "inputs") ((fa "diExecutedMainDriver" (EApp (EVar "Some") (EVar "driver"))) (fa "diManifestRequests" (EBinOp "::" (EApp (EApp (EVar "ExactEntry") (EApp (EVar "mainEntryKey") (EVar "modules"))) (EVar "ExecutedMain")) (EFieldAccess (EVar "inputs") "diManifestRequests"))))))
+(DFunDef false "executedMainInputs" ((PVar "inputs") (PVar "driver") (PVar "modules")) (ERecordUpdate (EVar "inputs") ((fa "diExecutedMainDriver" (EApp (EVar "Some") (EVar "driver"))) (fa "diManifestRequests" (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EIf (EApp (EVar "isSome") (EApp (EVar "findMainParams") (EVar "decls"))) (EBinOp "::" (EApp (EApp (EVar "ExactEntry") (EApp (EVar "mainEntryKey") (EVar "modules"))) (EVar "ExecutedMain")) (EFieldAccess (EVar "inputs") "diManifestRequests")) (EFieldAccess (EVar "inputs") "diManifestRequests"))) (arm (PCon "None") () (EFieldAccess (EVar "inputs") "diManifestRequests")))))))
 (DTypeSig true "executedMainRequirement" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ManifestRequirement")))
 (DFunDef false "executedMainRequirement" ((PVar "modules")) (EApp (EApp (EVar "CheckedEntry") (EApp (EVar "mainEntryKey") (EVar "modules"))) (EVar "ExecutedMain")))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
@@ -553,7 +559,7 @@ asyncPinImport driver =
 (DTypeSig true "mainEntryKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EntryKey")))
 (DFunDef false "mainEntryKey" ((PVar "modules")) (ERecordCreate "EntryKey" ((fa "moduleId" (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "Some" (PTuple (PVar "mid") PWild)) () (EVar "mid")) (arm (PCon "None") () (ELit (LString ""))))) (fa "binding" (ELit (LString "main"))))))
 (DTypeSig true "executedMainInputs" (TyFun (TyCon "DriveInputs") (TyFun (TyCon "EntryKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "DriveInputs")))))
-(DFunDef false "executedMainInputs" ((PVar "inputs") (PVar "driver") (PVar "modules")) (ERecordUpdate (EVar "inputs") ((fa "diExecutedMainDriver" (EApp (EVar "Some") (EVar "driver"))) (fa "diManifestRequests" (EBinOp "::" (EApp (EApp (EVar "ExactEntry") (EApp (EVar "mainEntryKey") (EVar "modules"))) (EVar "ExecutedMain")) (EFieldAccess (EVar "inputs") "diManifestRequests"))))))
+(DFunDef false "executedMainInputs" ((PVar "inputs") (PVar "driver") (PVar "modules")) (ERecordUpdate (EVar "inputs") ((fa "diExecutedMainDriver" (EApp (EVar "Some") (EVar "driver"))) (fa "diManifestRequests" (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EIf (EApp (EVar "isSome") (EApp (EVar "findMainParams") (EVar "decls"))) (EBinOp "::" (EApp (EApp (EVar "ExactEntry") (EApp (EVar "mainEntryKey") (EVar "modules"))) (EVar "ExecutedMain")) (EFieldAccess (EVar "inputs") "diManifestRequests")) (EFieldAccess (EVar "inputs") "diManifestRequests"))) (arm (PCon "None") () (EFieldAccess (EVar "inputs") "diManifestRequests")))))))
 (DTypeSig true "executedMainRequirement" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "ManifestRequirement")))
 (DFunDef false "executedMainRequirement" ((PVar "modules")) (EApp (EApp (EVar "CheckedEntry") (EApp (EVar "mainEntryKey") (EVar "modules"))) (EVar "ExecutedMain")))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))

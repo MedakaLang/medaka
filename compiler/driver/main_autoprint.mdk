@@ -63,8 +63,14 @@ executedMainInputs : DriveInputs ->
   DriveInputs
 executedMainInputs inputs driver modules = { inputs |
   diExecutedMainDriver = Some driver,
-  diManifestRequests =
-    ExactEntry (mainEntryKey modules) ExecutedMain :: inputs.diManifestRequests,
+  diManifestRequests = match entryPair modules
+    Some (_, decls) =>
+      if isSome (findMainParams decls) then
+        ExactEntry (mainEntryKey modules) ExecutedMain
+          :: inputs.diManifestRequests
+      else
+        inputs.diManifestRequests
+    None => inputs.diManifestRequests,
 }
 
 export
