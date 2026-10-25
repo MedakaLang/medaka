@@ -1,5 +1,5 @@
 # META
-source_lines=2766
+source_lines=2775
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -833,6 +833,15 @@ recFieldBindings (RecPatField _ _ _ (Some p)) = patBindings p
 export
 letBindName : LetBind -> String
 letBindName (LetBind n _ _ _) = n
+
+-- The names a top-level declaration binds as a value with a body (a function
+-- clause or a let group), looking through attributes.
+export
+declBinderNames : Decl -> List String
+declBinderNames (DFunDef _ n _ _ _ _) = [n]
+declBinderNames (DLetGroup _ binds) = map letBindName binds
+declBinderNames (DAttrib _ d) = declBinderNames d
+declBinderNames _ = []
 
 export
 variantName : Variant -> String
@@ -2863,6 +2872,11 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))
 (DTypeSig true "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
 (DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig true "declBinderNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declBinderNames" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "declBinderNames" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")))
+(DFunDef false "declBinderNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBinderNames") (EVar "d")))
+(DFunDef false "declBinderNames" (PWild) (EListLit))
 (DTypeSig true "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig true "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
@@ -3338,6 +3352,11 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))
 (DTypeSig true "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
 (DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig true "declBinderNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declBinderNames" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "declBinderNames" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")))
+(DFunDef false "declBinderNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBinderNames") (EVar "d")))
+(DFunDef false "declBinderNames" (PWild) (EListLit))
 (DTypeSig true "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig true "fieldName" (TyFun (TyCon "Field") (TyCon "String")))

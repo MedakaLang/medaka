@@ -830,6 +830,15 @@ export
 letBindName : LetBind -> String
 letBindName (LetBind n _ _ _) = n
 
+-- The names a top-level declaration binds as a value with a body (a function
+-- clause or a let group), looking through attributes.
+export
+declBinderNames : Decl -> List String
+declBinderNames (DFunDef _ n _ _ _ _) = [n]
+declBinderNames (DLetGroup _ binds) = map letBindName binds
+declBinderNames (DAttrib _ d) = declBinderNames d
+declBinderNames _ = []
+
 export
 variantName : Variant -> String
 variantName (Variant n _) = n

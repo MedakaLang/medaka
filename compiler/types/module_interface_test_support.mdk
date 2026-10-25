@@ -48,10 +48,29 @@ bareDrive : Int ->
 bareDrive seed chainKey mods =
   keyedDrive seed chainKey [] (desugar (parse "")) mods
 
+-- Every module's source as its step key but the entry's.
+export
 stepKeys : List (String, String) -> List (Option String)
 stepKeys [] = []
 stepKeys [_] = [None]
 stepKeys (m :: rest) = Some (snd m) :: stepKeys rest
+
+-- The graph record a drive of one tiny module over a tiny prelude ends in: real
+-- cross-run and graph-run records, which typecheck does not export a mint for.
+export
+graphOf : Unit -> GraphCtx
+graphOf _ =
+  snd
+    (checkModulesChainReportForGraph
+      (chainArgs
+        defaultDriveInputs
+        noValueMain
+        None
+        ""
+        [None]
+        []
+        (desugar (parse "data Option a = None | Some a"))
+        [("m", desugar (parseLocated "export data Q = Q Int"))]))
 
 export
 leafSrc : String

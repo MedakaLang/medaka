@@ -113,7 +113,6 @@ ctorOccurrenceContested : Env -> String -> Bool
 ctorOwnedBy : (String, List String) -> List (String, String)
 ctorOwnerKey : String -> String
 dbName : ResError -> String
-declBindNames : Decl -> List String
 declDeclaresCtorIn : Map String Unit -> Decl -> Bool
 declKey : (String, String) -> String
 declLoc : Decl -> Option Loc

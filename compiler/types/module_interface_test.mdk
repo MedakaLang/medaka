@@ -24,7 +24,7 @@ import types.module_interface.{
 }
 import types.module_interface_test_support.{
   bareDrive, chainDrive, entrySrc, keyedDrive, leafSrc, midSrc, render,
-  renderRow
+  renderRow, stepKeys
 }
 import types.publish.{
   CheckedProgram(..), ModDiags, PubScheme(..), ppPubScheme, TcReport(..)
@@ -586,7 +586,7 @@ treeDrive seed chainKey runtime core mods =
       False
       (seed, seed + 1)
       chainKey
-      (treeSteps mods)
+      (stepKeys mods)
       runtime
       core
       (map (m => (fst m, desugar (parseLocated (snd m)))) mods)
@@ -609,12 +609,6 @@ treeDrive seed chainKey runtime core mods =
         )
       None => (["no trees"], "", outputs.doServedModules)
     None => (["no checked program"], "", outputs.doServedModules)
-
--- Every module's source as its step key but the entry's.
-treeSteps : List (String, String) -> List (Option String)
-treeSteps [] = []
-treeSteps [_] = [None]
-treeSteps (m :: rest) = Some (snd m) :: treeSteps rest
 
 ownEntries : List String -> List EvEntry -> List EvEntry
 ownEntries mids entries =
@@ -919,7 +913,7 @@ servedIndex seed chainKey runtime core mods =
       False
       (seed, seed + 1)
       chainKey
-      (treeSteps mods)
+      (stepKeys mods)
       runtime
       core
       (map (m => (fst m, desugar (parseLocated (snd m)))) mods)
@@ -980,7 +974,7 @@ treeServedCount seed chainKey =
       False
       (seed, seed + 1)
       chainKey
-      (treeSteps diagsChain)
+      (stepKeys diagsChain)
       []
       (desugar (parse ""))
       (map (m => (fst m, desugar (parseLocated (snd m)))) diagsChain)

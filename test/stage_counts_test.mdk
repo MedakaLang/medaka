@@ -378,6 +378,9 @@ driveProbes dir = [
   -- #2732 the parent's gate drive, which the child's strict refusal cannot
   -- replace
   probeRows "test_doc_native" ["test", fixture "doc.mdk"],
+  -- a stdlib module's doctest drive: the injected elaboration serves the modules
+  -- the gate's drive recorded
+  probeRows "test_bytebuilder" ["test", underRoot "stdlib/bytebuilder.mdk"],
 ]
 
 test "stage_counts: per-verb stage counts match stage_counts.golden" = withScratchDir
