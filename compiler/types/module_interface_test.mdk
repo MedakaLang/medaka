@@ -4,8 +4,8 @@
 -- each test uses module ids and chain keys of its own, because the cache is keyed
 -- by module id and lives for the process.
 import test.{
-  expectEach, expectEqual, expectFalse, expectGreaterThan, expectSatisfies,
-  expectTrue, fail
+  expectEach, expectEqual, expectFalse, expectGreaterThan, expectNotEqual,
+  expectSatisfies, expectTrue, fail
 }
 import frontend.ast.{Decl, EvEntry(..), EvId(..)}
 import frontend.ast_codec.{declsSExp, evEntriesSExp}
@@ -14,13 +14,14 @@ import types.program_facts.{factsOfChecked}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import list.{filter, drop, take, sort, indexed}
-import support.ordmap.{OrdMap, omEmpty, omFromPairs, omHasKey, omLookup}
+import support.ordmap.{OrdMap, omEmpty, omFromPairs, omHasKey, omKeys, omLookup}
 import types.module_interface.{
   ModuleInterface(..), FrozenExport(..), ModuleKey(..), applyModuleInterface,
-  currentModuleInterfaces, retainModuleInterfaces
+  applyModuleTrees, currentModuleInterfaces, retainModuleInterfaces
 }
 import types.module_interface_test_support.{
-  bareDrive, chainDrive, entrySrc, keyedDrive, leafSrc, render, renderRow
+  bareDrive, chainDrive, entrySrc, keyedDrive, leafSrc, midSrc, render,
+  renderRow
 }
 import types.publish.{
   CheckedProgram(..), ModDiags, PubScheme(..), ppPubScheme, TcReport(..)
@@ -760,3 +761,101 @@ test "a served module's grant-taking method occurrences publish the cold drive's
         ),
       ]
     None => fail "could not read the prelude pair"
+
+-- ── a frozen tree record is a fixpoint of applying it ───────────────────────
+
+-- The rows applying a tree record to [g] leaves behind that the trees' readers
+-- consult.
+treeRows : GraphCtx -> List String
+treeRows g = [
+  renderSExp (evEntriesSExp g.graphRun.evTable.value),
+  joinNl
+    (map
+      (k =>
+        "\{k}=\{debug (optionOr [] (omLookup k g.graphRun.grants.gsTopIds.value))}")
+      (omKeys g.graphRun.grants.gsTopIds.value)),
+  joinNl (sort g.promotionHarvestRef.value),
+]
+
+test "applying a frozen tree record twice yields the recorded trees and the same rows" =
+  match preludePair ()
+    Some (runtime, core) =>
+      let _ = treeDrive 4695 "ap-k" runtime core servedTreeMods
+      match interfaceOf "st_lib"
+        Some mi => match mi.miTrees
+          Some t =>
+            let g1 = freshGraph "apfresh1" 4696
+            let g2 = freshGraph "apfresh2" 4697
+            let before = treeRows g1
+            let marked1 = applyModuleTrees g1 t
+            let marked2 = applyModuleTrees g2 t
+            expectEach [
+              (
+                "the record holds cell entries",
+                expectGreaterThan 0 (length t.mtEvidence),
+              ),
+              (
+                "applying changes the fresh record's rows",
+                expectNotEqual before (treeRows g1),
+              ),
+              (
+                "the trees are the recorded ones",
+                expectEqual
+                  (renderSExp (declsSExp t.mtMarked))
+                  (renderSExp (declsSExp marked1)),
+              ),
+              (
+                "a second application yields the same trees",
+                expectEqual
+                  (renderSExp (declsSExp marked1))
+                  (renderSExp (declsSExp marked2)),
+              ),
+              (
+                "a second application yields the same rows",
+                expectEqual (treeRows g1) (treeRows g2),
+              ),
+            ]
+          None => fail "the tree drive recorded no trees"
+        None => fail "the tree drive recorded no interface"
+    None => fail "could not read the prelude pair"
+
+-- ── a diagnostics record is not a tree record ───────────────────────────────
+
+diagsChain : List (String, String)
+diagsChain = [
+  ("dm_leaf", leafSrc),
+  ("dm_mid", midSrc "dm_leaf"),
+  ("dm_entry", entrySrc "dm_mid"),
+]
+
+-- The number of modules a keyed tree drive over [diagsChain] served.
+treeServedCount : Int -> String -> Int
+treeServedCount seed chainKey =
+  let (_, _, outputs) =
+    elaborateModulesChainReport
+      defaultDriveInputs
+      False
+      (seed, seed + 1)
+      chainKey
+      (treeSteps diagsChain)
+      []
+      (desugar (parse ""))
+      (map (m => (fst m, desugar (parseLocated (snd m)))) diagsChain)
+  outputs.doServedModules
+
+test "an interface a diagnostics drive recorded is a miss for a tree drive and a hit for a diagnostics drive" =
+  let (_, firstServed, _) =
+    chainDrive "dm" 4701 "dm-k" leafSrc (entrySrc "dm_mid")
+  let (_, secondServed, _) =
+    chainDrive "dm" 4701 "dm-k" leafSrc (entrySrc "dm_mid")
+  let miss = treeServedCount 4701 "dm-k"
+  let hit = treeServedCount 4701 "dm-k"
+  expectEach [
+    ("the first diagnostics drive serves nothing", expectEqual 0 firstServed),
+    (
+      "a second diagnostics drive serves the leaf and the middle",
+      expectEqual 2 secondServed,
+    ),
+    ("a tree drive over the same graph serves nothing", expectEqual 0 miss),
+    ("a second tree drive serves what the first recorded", expectEqual 2 hit),
+  ]

@@ -37,7 +37,7 @@ import types.publish.{
 }
 import types.tc_types.{GraphCtx(..)}
 import types.typecheck.{
-  checkModulesChainReportFor, checkModulesChainReportForGraph,
+  checkModulesChainReportFor, checkModulesChainReportForGraph, chainArgs,
   defaultDriveInputs
 }
 
@@ -297,14 +297,15 @@ graphOf : Unit -> GraphCtx
 graphOf _ =
   snd
     (checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      None
-      ""
-      [None]
-      []
-      (desugar (parse "data Option a = None | Some a"))
-      [("m", desugar (parseLocated "x = 1"))])
+      (chainArgs
+        defaultDriveInputs
+        False
+        None
+        ""
+        [None]
+        []
+        (desugar (parse "data Option a = None | Some a"))
+        [("m", desugar (parseLocated "x = 1"))]))
 
 -- Thawed into a fresh graph run and frozen again.  The published rows are
 -- re-frozen from the live schemes, paired with the contexts the thaw returned.

@@ -43,8 +43,8 @@ import types.typecheck.{
   defaultDriveInputs, checkOneSchemeFullK, checkModulesDiagsChain,
   checkModulesAllLines, elaborateModulesReport, checkModules,
   methodReturnMemoCurrentViews, tcCode, tcMsg, checkModulesChainReportFor,
-  checkModulesChainReportForGraph, checkOneReportK, checkModulesPartialK,
-  elaborateModulesWithReport, driveInputsFor, tcConfigOf
+  checkModulesChainReportForGraph, chainArgs, checkOneReportK,
+  checkModulesPartialK, elaborateModulesWithReport, driveInputsFor, tcConfigOf
 }
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
@@ -928,17 +928,18 @@ accDriveServed : String ->
 accDriveServed chainKey prefixSource entrySource stepKey =
   let ((report, outputs), gctx) =
     checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      (Some (4053, 4055))
-      chainKey
-      [Some stepKey, None]
-      []
-      (desugar (parse numPrelude))
-      [
-        ("acc_prefix", desugar (parseLocated prefixSource)),
-        ("acc_entry", desugar (parseLocated entrySource)),
-      ]
+      (chainArgs
+        defaultDriveInputs
+        False
+        (Some (4053, 4055))
+        chainKey
+        [Some stepKey, None]
+        []
+        (desugar (parse numPrelude))
+        [
+          ("acc_prefix", desugar (parseLocated prefixSource)),
+          ("acc_entry", desugar (parseLocated entrySource)),
+        ])
   (report, methodReturnMemoCurrentViews gctx, outputs.doServedModules)
 
 -- Schemes WITH their context, diagnostics, the memo views, and the checked
