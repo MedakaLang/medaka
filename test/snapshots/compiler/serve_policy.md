@@ -1,5 +1,5 @@
 # META
-source_lines=364
+source_lines=365
 stages=DESUGAR,MARK
 # SOURCE
 -- Which modules of a keyed drive are served, checked, recorded, and the per-drive
@@ -69,10 +69,10 @@ export data ServeState = ServeState {
 
 -- The policy's start for a drive over [modules] whose chain key and source keys are
 -- [keyed]: the graph key is the drive's configuration, the chain key's prelude
--- generation (not its entry or roots), and every
--- module's instance heads and constrained signature names, which a module reads
--- whether or not it imports their definer (`chainGraphKey`).  A module's key adds
--- the interface declarations of the modules before it (`graphPart`).
+-- generation (not its entry or roots), and every module's instance heads and
+-- constrained signature names, which a module reads whether or not it imports
+-- their definer (`chainGraphKey`).  A module's key adds the interface declarations
+-- of the modules before it (`graphPart`).
 export
 serveStateOf : ServeOps ->
   OrdMap Unit ->
@@ -98,8 +98,9 @@ serveStateOf ops capture gctx modules (chain, steps) = ServeState {
   ssServed = 0,
 }
 
--- The chain key's first line, the prelude generation.  The entry and roots after it
--- are read only once the whole graph is checked, so a served module's key omits them.
+-- The chain key's first line, the prelude generation.  The entry is read only once the
+-- whole graph is checked, and the roots only choose the file an import resolves to,
+-- which a module's source key and its imports' identities already carry.
 generationLine : String -> String
 generationLine chain = match lines chain
   first :: _ => first

@@ -1,5 +1,5 @@
 # META
-source_lines=682
+source_lines=683
 stages=DESUGAR,MARK
 # SOURCE
 -- One module's checked diagnostics-arm contribution as a value, the key it is
@@ -84,8 +84,9 @@ import types.tc_types.{
 -- What an interface is valid under: the module id, the source key its driver passes
 -- (the module id, its path and the exact source the loader parsed), the identity of
 -- each direct import, and the drive's graph key (its configuration, the prelude
--- generation and chain key, and every module's instance heads and constrained
--- signature names, which a module reads whether or not it imports their definer),
+-- generation but not the entry or roots, and every module's instance heads and
+-- constrained signature names, which a module reads whether or not it imports their
+-- definer),
 -- followed by the interface declarations of the modules before it, whose method
 -- names it reads by bare name; a tree drive also adds the promotion harvest of those
 -- modules.  An import that was checked and not recorded has a serial no interface carries.

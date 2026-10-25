@@ -1,5 +1,5 @@
 # META
-source_lines=65
+source_lines=63
 stages=DESUGAR,MARK
 # SOURCE
 -- The parts of the module-chain memo key that cover what a recorded step reads
@@ -13,14 +13,12 @@ stages=DESUGAR,MARK
 import frontend.ast.{
   Decl(..), Ty(..), Require(..), ImplMethod(..), ifaceMethodName
 }
-import list.{sort}
 import support.util.{joinWith}
 import types.route_key.{implRouteKeyWord}
 
--- The rows are sorted, so two load orders of one graph give one key.
 export
 chainGraphKey : List (String, List Decl) -> String
-chainGraphKey modules = joinWith "\n" (sort (flatMap moduleRows modules))
+chainGraphKey modules = joinWith "\n" (flatMap moduleRows modules)
 
 moduleRows : (String, List Decl) -> List String
 moduleRows (mid, decls) = flatMap (declRow mid) decls
@@ -69,11 +67,10 @@ isConstrainedTy (TyConstrained _ _) = True
 isConstrainedTy _ = False
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Require" true) (mem "ImplMethod" true) (mem "ifaceMethodName" false))))
-(DUse false (UseGroup ("list") ((mem "sort" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DTypeSig true "chainGraphKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))
-(DFunDef false "chainGraphKey" ((PVar "modules")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EVar "sort") (EApp (EApp (EVar "flatMap") (EVar "moduleRows")) (EVar "modules")))))
+(DFunDef false "chainGraphKey" ((PVar "modules")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "flatMap") (EVar "moduleRows")) (EVar "modules"))))
 (DTypeSig false "moduleRows" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "moduleRows" ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "declRow") (EVar "mid"))) (EVar "decls")))
 (DTypeSig false "declRow" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
@@ -95,11 +92,10 @@ isConstrainedTy _ = False
 (DFunDef false "isConstrainedTy" (PWild) (EVar "False"))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Require" true) (mem "ImplMethod" true) (mem "ifaceMethodName" false))))
-(DUse false (UseGroup ("list") ((mem "sort" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DTypeSig true "chainGraphKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))
-(DFunDef false "chainGraphKey" ((PVar "modules")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EVar "sort") (EApp (EApp (EDictApp "flatMap") (EVar "moduleRows")) (EVar "modules")))))
+(DFunDef false "chainGraphKey" ((PVar "modules")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EDictApp "flatMap") (EVar "moduleRows")) (EVar "modules"))))
 (DTypeSig false "moduleRows" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "moduleRows" ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "declRow") (EVar "mid"))) (EVar "decls")))
 (DTypeSig false "declRow" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))

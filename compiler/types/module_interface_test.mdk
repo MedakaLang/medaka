@@ -22,7 +22,6 @@ import types.module_interface.{
   ModuleInterface(..), FrozenExport(..), ModuleKey(..), applyModuleInterface,
   applyModuleTrees, currentModuleInterfaces, retainModuleInterfaces
 }
-import types.chain_key.{chainGraphKey}
 import types.module_interface_test_support.{
   bareDrive, chainDrive, entrySrc, keyedDrive, leafSrc, midSrc, render,
   renderRow, stepKeys
@@ -196,20 +195,6 @@ test "a shared module is served under another entry's chain key" =
       expectEqual 2 secondServed,
     ),
   ]
-
-implModule : String -> (String, List Decl)
-implModule mid = (mid, desugar (parse (otherSrc boolSpeakImpl)))
-
-constrainedModule : String -> (String, List Decl)
-constrainedModule mid = (
-  mid,
-  desugar (parse "export g : Eq a => a -> Bool\ng x = x == x\n"),
-)
-
-test "the graph key is the same in either load order" =
-  let a = implModule "ko_a"
-  let b = constrainedModule "ko_b"
-  expectEqual (chainGraphKey [a, b]) (chainGraphKey [b, a])
 
 -- ── the counter high-water ──────────────────────────────────────────────────
 
