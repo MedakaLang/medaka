@@ -1,5 +1,5 @@
 # META
-source_lines=3678
+source_lines=3635
 stages=DESUGAR,MARK
 # SOURCE
 import driver.main_autoprint.{executedMainInputs}
@@ -2262,10 +2262,10 @@ stepKeysFor NoSteps _ = []
 -- driver already produced: fold in each module's guard-exhaustiveness, `deriving`
 -- and prelude-standalone-shadow diagnostics and bucket the lot by file path.
 -- `frontEnd` reaches it with whatever the verb's drive returned (for `run`,
--- `check-policy` and `build`, the elaboration), so the graph is rendered from ONE
--- typecheck rather than from a second, check-only one; `projectDiagsFromTc`
--- below reaches it the same way for `medaka test`.  Both drivers' diagnostics
--- must bucket, filter and order identically, which is why there is one fold.
+-- `check-policy`, `build` and `medaka test`'s gate, the elaboration), so the
+-- graph is rendered from ONE typecheck rather than from a second, check-only one.
+-- Both drivers' diagnostics must bucket, filter and order identically, which is
+-- why there is one fold.
 -- `modPairs` is passed in rather than re-derived: the keyed drive's source keys
 -- need it, so the graph is desugared once.  [served] is the chain key of a caller
 -- whose analyze serves each module's raw-tree diagnostics from `passCacheRef`
@@ -2334,8 +2334,8 @@ foldServeKey RecordSteps (Some (rk, ck)) chainKey =
 foldServeKey _ _ _ = None
 
 -- Resolve a graph the caller has already loaded, bucketing each module's errors
--- by its file.  The shared prefix of `projectDiagsLoaded` and
--- `projectDiagsFromTc`, which differ only in where the typecheck half comes
+-- by its file.  The shared prefix of `projectDiagsLoaded` and `frontEnd`'s
+-- `DriveUnblocked` arm, which differ only in where the typecheck half comes
 -- from.  They resolve identically so their verdicts agree on a channel that has
 -- nothing to do with typing.
 resolvedBuckets : (List String -> <e> List (String, List String)) ->
@@ -2378,51 +2378,8 @@ desugaredTriples ((mid, path, _) :: ms) ((_, decls) :: ps) =
   (mid, path, decls) :: desugaredTriples ms ps
 desugaredTriples _ _ = []
 
--- `analyzeProject` minus the load and minus the typecheck: resolve the graph the
--- caller already loaded, then bucket the per-module typecheck diagnostics the
--- caller already has.  `medaka test`'s no-doctest arm elaborates the graph ONCE
--- and routes element 3 of the `elaborateModules` tuple — the same
--- `List (String, (List TcDiag, List TcDiag))` `typecheckDiagsFold` consumes on the
--- check path, via `dropModSchemes` —
--- through here, so that gate and `check`'s are resolved, bucketed and rendered
--- by one implementation.  They accept the same programs only while the two
--- workers pass the same impl universe; see `elaborateFor` in tools/test_cmd.mdk.
---
--- No stale-read machinery: the caller loads with a disk-only read, so there is
--- no unsaved-buffer source for `analyzeProject`'s `staleRef` to collect.
-export
-projectDiagsFromTc : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  List Decl ->
-  List Decl ->
-  List (String, String, List Decl) ->
-  DriveOutputs ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  <e> List (String, List Diag)
-projectDiagsFromTc exportsFor allowInternal trustedMods runtimeP coreP mods outputs tcByMid =
-  let modPairs = desugaredModPairs mods
-  typecheckDiagsFold
-    outputs
-    None
-    runtimeP
-    coreP
-    mods
-    modPairs
-    tcByMid
-    (resolvedBuckets
-      exportsFor
-      allowInternal
-      trustedMods
-      None
-      ""
-      runtimeP
-      coreP
-      mods
-      modPairs)
-
--- The desugared `(modId, decls)` pairs `projectDiagsFromTc` will bucket against,
--- for a caller that must hand the SAME trees to a graph driver.  Shares
+-- The desugared `(modId, decls)` pairs a graph's analyze buckets against, for a
+-- caller that must hand the SAME trees to a graph driver.  Shares
 -- `desugarModule`'s path-and-source-keyed memo with the check path.
 export
 desugaredModPairs : List (String, String, List Decl) -> List (String, List Decl)
@@ -3969,8 +3926,6 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "desugaredTriples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "desugaredTriples" ((PCons (PTuple (PVar "mid") (PVar "path") PWild) (PVar "ms")) (PCons (PTuple PWild (PVar "decls")) (PVar "ps"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "path") (EVar "decls")) (EApp (EApp (EVar "desugaredTriples") (EVar "ms")) (EVar "ps"))))
 (DFunDef false "desugaredTriples" (PWild PWild) (EListLit))
-(DTypeSig true "projectDiagsFromTc" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
-(DFunDef false "projectDiagsFromTc" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "outputs") (PVar "tcByMid")) (EBlock (DoLet false false (PVar "modPairs") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EVar "None")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EVar "tcByMid")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "None")) (ELit (LString ""))) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))))
 (DTypeSig true "desugaredModPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "desugaredModPairs" ((PVar "mods")) (EApp (EVar "desugarGraph") (EVar "mods")))
 (DTypeSig false "rawPairOf" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -4484,8 +4439,6 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig false "desugaredTriples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "desugaredTriples" ((PCons (PTuple (PVar "mid") (PVar "path") PWild) (PVar "ms")) (PCons (PTuple PWild (PVar "decls")) (PVar "ps"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "path") (EVar "decls")) (EApp (EApp (EVar "desugaredTriples") (EVar "ms")) (EVar "ps"))))
 (DFunDef false "desugaredTriples" (PWild PWild) (EListLit))
-(DTypeSig true "projectDiagsFromTc" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "DriveOutputs") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
-(DFunDef false "projectDiagsFromTc" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "outputs") (PVar "tcByMid")) (EBlock (DoLet false false (PVar "modPairs") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EVar "None")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EVar "tcByMid")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "None")) (ELit (LString ""))) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))))
 (DTypeSig true "desugaredModPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "desugaredModPairs" ((PVar "mods")) (EApp (EVar "desugarGraph") (EVar "mods")))
 (DTypeSig false "rawPairOf" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
