@@ -926,20 +926,34 @@ accDriveServed : String ->
   String ->
   (TcReport, List MethodReturnMemoView, Int)
 accDriveServed chainKey prefixSource entrySource stepKey =
+  accDriveSteps chainKey prefixSource entrySource [Some stepKey, None]
+
+-- `accDrive` with no source keys: nothing is served and nothing recorded, so it is
+-- the cold arm of a comparison whatever the cache holds.
+accDriveCold : String ->
+  String ->
+  String ->
+  (TcReport, List MethodReturnMemoView)
+accDriveCold chainKey prefixSource entrySource =
+  let (report, views, _) =
+    accDriveSteps chainKey prefixSource entrySource [None, None]
+  (report, views)
+
+accDriveSteps : String ->
+  String ->
+  String ->
+  List (Option String) ->
+  (TcReport, List MethodReturnMemoView, Int)
+accDriveSteps chainKey prefixSource entrySource steps =
   let ((report, outputs), gctx) =
     checkModulesChainReportForGraph
-      (chainArgs
-        defaultDriveInputs
-        False
-        (Some (4053, 4055))
-        chainKey
-        [Some stepKey, None]
-        []
-        (desugar (parse numPrelude))
-        [
-          ("acc_prefix", desugar (parseLocated prefixSource)),
-          ("acc_entry", desugar (parseLocated entrySource)),
-        ])
+      (chainArgs defaultDriveInputs False (Some (
+        4053,
+        4055,
+      )) chainKey steps [] (desugar (parse numPrelude)) [
+        ("acc_prefix", desugar (parseLocated prefixSource)),
+        ("acc_entry", desugar (parseLocated entrySource)),
+      ])
   (report, methodReturnMemoCurrentViews gctx, outputs.doServedModules)
 
 -- Schemes WITH their context, diagnostics, the memo views, and the checked
@@ -1025,14 +1039,14 @@ accQs = [
 accCheck : QKind -> (String, Expectation)
 accCheck (QKind name run) =
   let pSrc2 = accPrefix False
-  let coldDrive = accDrive "acc-cold-\{name}" pSrc2 accEntry pSrc2
+  let coldDrive = accDriveCold "acc-cold-\{name}" pSrc2 accEntry
   let cold = accRender coldDrive
   let held = accDrive "acc-p" pSrc2 accEntry pSrc2
   let heldBefore = accRender held
   let steps = run ()
   let after = accRender held
   let warm = accDrive "acc-p" pSrc2 accEntry pSrc2
-  let recold = accDrive "acc-recold-\{name}" pSrc2 accEntry pSrc2
+  let recold = accDriveCold "acc-recold-\{name}" pSrc2 accEntry
   let hitRetained =
     if name == "keyed hit over a ground prefix" then
       expectGreaterThan 0 steps
@@ -1210,7 +1224,11 @@ markEntry : String
 markEntry = "import a.{useA}\nimport b.{bval}\nentry = bval\n"
 
 markDrive : String -> Bool -> List String
-markDrive key constrained =
+markDrive key constrained = markDriveWith True key constrained
+
+-- [markDrive] with source keys when [keyed]; unkeyed it is a cold drive.
+markDriveWith : Bool -> String -> Bool -> List String
+markDriveWith keyed key constrained =
   let bSrc = markB constrained
   let (report, _) =
     checkModulesChainReportFor
@@ -1218,7 +1236,10 @@ markDrive key constrained =
       False
       (Some (4266, 4267))
       key
-      [Some instIface, Some markA, Some bSrc, None]
+      (if keyed then
+        [Some instIface, Some markA, Some bSrc, None]
+      else
+        [None, None, None, None])
       []
       (desugar (parse ""))
       [
@@ -1232,10 +1253,10 @@ markDrive key constrained =
 test "a later module's constrained signature name: warm evidence equals cold" =
   let _ = markDrive "mark-k" True
   let warmRemoved = markDrive "mark-k" False
-  let coldRemoved = markDrive "mark-cold" False
+  let coldRemoved = markDriveWith False "mark-cold" False
   let _ = markDrive "mark-k2" False
   let warmAdded = markDrive "mark-k2" True
-  let coldAdded = markDrive "mark-cold2" True
+  let coldAdded = markDriveWith False "mark-cold2" True
   expectEach [
     ("removed", expectEqual coldRemoved warmRemoved),
     ("added", expectEqual coldAdded warmAdded),

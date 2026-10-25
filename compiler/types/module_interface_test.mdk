@@ -22,6 +22,7 @@ import types.module_interface.{
   ModuleInterface(..), FrozenExport(..), ModuleKey(..), applyModuleInterface,
   applyModuleTrees, currentModuleInterfaces, retainModuleInterfaces
 }
+import types.chain_key.{chainGraphKey}
 import types.module_interface_test_support.{
   bareDrive, chainDrive, entrySrc, keyedDrive, leafSrc, midSrc, render,
   renderRow, stepKeys
@@ -180,6 +181,35 @@ test "an impl in a module the importer does not import invalidates the leaf's in
     ("a body edit elsewhere serves the leaf", expectEqual 1 afterBody),
     ("an impl elsewhere serves nothing", expectEqual 0 afterImpl),
   ]
+
+-- ── the key leaves out the entry ───────────────────────────────────────────
+
+test "a shared module is served under another entry's chain key" =
+  let (_, firstServed, _) =
+    chainDrive "ke" 4671 "ke-entry-a" leafSrc (entrySrc "ke_mid")
+  let (_, secondServed, _) =
+    chainDrive "ke" 4671 "ke-entry-b" leafSrc (entrySrc "ke_mid")
+  expectEach [
+    ("the first drive serves nothing", expectEqual 0 firstServed),
+    (
+      "the second serves the leaf and the middle module",
+      expectEqual 2 secondServed,
+    ),
+  ]
+
+implModule : String -> (String, List Decl)
+implModule mid = (mid, desugar (parse (otherSrc boolSpeakImpl)))
+
+constrainedModule : String -> (String, List Decl)
+constrainedModule mid = (
+  mid,
+  desugar (parse "export g : Eq a => a -> Bool\ng x = x == x\n"),
+)
+
+test "the graph key is the same in either load order" =
+  let a = implModule "ko_a"
+  let b = constrainedModule "ko_b"
+  expectEqual (chainGraphKey [a, b]) (chainGraphKey [b, a])
 
 -- ── the counter high-water ──────────────────────────────────────────────────
 
