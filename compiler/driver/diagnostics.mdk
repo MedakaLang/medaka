@@ -2277,6 +2277,7 @@ typecheckDiagsFold : DriveOutputs ->
   List (String, List Diag)
 typecheckDiagsFold outputs served runtimeP coreP mods modPairs tcByMid buckets =
   let preludeDecls = runtimeP ++ coreP
+  let desugaredPool = omFromPairs (reverseL modPairs) omEmpty
   let passes = RawPasses {
     rpCoreExports = coreExports coreP,
     rpPool = omFromPairs (map rawPairOf mods) omEmpty,
@@ -2286,17 +2287,20 @@ typecheckDiagsFold outputs served runtimeP coreP mods modPairs tcByMid buckets =
     -- this into a different (cross-module standalone) rule.
     rpShadowPool = preludeStandaloneSet preludeDecls,
     -- #2738's operand: every module whose decls this compile has, keyed the way a
-    -- `DUse`'s `usePathModuleId` spells it, with the prelude under the same
+    -- `DUse`'s `useModId` spells it, with the prelude under the same
     -- `"core"` key `meIfaceExports` (`DeclEnvs.deMethods`) uses.  The detector
     -- reads a DEPENDENCY's decls (the displaced function's own signature lives
     -- there, not here), which is exactly the operand the flat path cannot have.
     rpShadowGraph = ("core", preludeDecls) :: modPairs,
     rpOutputs = outputs,
-    rpModPairs = modPairs,
+    rpDesugared = desugaredPool,
   }
   foldModuleTc
     passes
-    (option None (k => foldGraphPart k outputs mods modPairs) served)
+    (option
+      None
+      (k => foldGraphPart k outputs mods (listLen modPairs) desugaredPool)
+      served)
     omEmpty
     omEmpty
     mods
@@ -2306,7 +2310,8 @@ typecheckDiagsFold outputs served runtimeP coreP mods modPairs tcByMid buckets =
 -- What every module's raw-tree passes share: the prelude's exports and decls, the
 -- graph's raw decls by module id (the constructor declarations a module's imports
 -- bind are found there), the prelude-standalone set, the desugared graph the
--- import-shadow detector reads, and the drive's outputs.
+-- import-shadow detector reads, the desugared decls by module id, and the drive's
+-- outputs.
 data RawPasses = RawPasses {
   rpCoreExports : ModuleExports,
   rpPool : OrdMap (List Decl),
@@ -2314,7 +2319,7 @@ data RawPasses = RawPasses {
   rpShadowPool : OrdMap Unit,
   rpShadowGraph : List (String, List Decl),
   rpOutputs : DriveOutputs,
-  rpModPairs : List (String, List Decl),
+  rpDesugared : OrdMap (List Decl),
 }
 
 -- The chain key under which a caller's analyze serves the bucketing fold's
@@ -2520,14 +2525,6 @@ resolveBlockedMods buckets blocked ((mid, path, prog) :: rest) =
     (if blocks then omInsert mid () blocked else blocked)
     rest
 
--- (mid, desugaredDecls) lookup, sibling of `lookupTcDiags`: the already-desugared
--- decls of a module (the caller's `modPairs`), instead of re-desugaring or reading raw.
-lookupDesugaredMod : String -> List (String, List Decl) -> List Decl
-lookupDesugaredMod _ [] = []
-lookupDesugaredMod mid ((m, d) :: rest)
-  | m == mid = d
-  | otherwise = lookupDesugaredMod mid rest
-
 -- For each (mid, path, rawProg): its raw-tree diagnostics (`rawTreeDiags`, or the
 -- served ones), then its harvested (errs, warns) as Diags (preserving each type
 -- error's Option Loc) unless resolve rejected it, bucketed by path.  [known] is
@@ -2571,7 +2568,7 @@ rawTreeDiags : RawPasses ->
   (String, String, List Decl) ->
   (List Diag, ModuleExports)
 rawTreeDiags passes known (mid, _, prog) =
-  let desugared = lookupDesugaredMod mid passes.rpModPairs
+  let desugared = optionOr [] (omLookup mid passes.rpDesugared)
   -- The clause-exhaustiveness oracle is the module's own decls, the decls
   -- declaring a constructor its imports bind, and the prelude: never every
   -- loaded module, where an unrelated module's same-spelled constructor
@@ -2745,13 +2742,14 @@ servedPass kind (Some g) ids (mid, path, prog) compute =
 -- import-shadow detector takes an interface's method signature from the first
 -- loaded module declaring an interface of that bare name, imported or not.  `None`
 -- when a module declaring an interface has no source record: nothing is served.
+-- [count] is the number of modules and [pool] their desugared decls by id.
 foldGraphPart : String ->
   DriveOutputs ->
   List (String, String, List Decl) ->
-  List (String, List Decl) ->
+  Int ->
+  OrdMap (List Decl) ->
   Option String
-foldGraphPart chainFull outputs mods modPairs =
-  let pool = omFromPairs (reverseL modPairs) omEmpty
+foldGraphPart chainFull outputs mods count pool =
   let declarers =
     filterList
       ((mid, _, _) =>
@@ -2767,7 +2765,7 @@ foldGraphPart chainFull outputs mods modPairs =
       (joinNl
         ([
             lenKey chainFull,
-            lenKey (intToString (listLen modPairs)),
+            lenKey (intToString count),
             lenKey (ifaceIndexText outputs.doIfaceExports),
           ]
           ++ map (optionOr "") rows))

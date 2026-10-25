@@ -984,6 +984,23 @@ public export data DriveInputs = DriveInputs {
   diPreludeKey : Option (Int, Int),
 }
 
+-- What one graph drive is handed besides its output selection: [daValueMain] is the
+-- caller's value-main candidate (`autoPrintWanted`), [daExecutes] names the `async`
+-- driver of a caller that runs or emits the trees, [daPreludeKey] is the
+-- desugar-cache generation pair of the prelude interface (`checkCoreMemoized`), and
+-- [daKeyed] is the full chain key with one source key per module before the entry,
+-- for a drive that serves and records module interfaces.
+public export data DriveArgs = DriveArgs {
+  daInputs : DriveInputs,
+  daValueMain : Bool,
+  daExecutes : Option String,
+  daPreludeKey : Option (Int, Int),
+  daKeyed : Option (String, List (Option String)),
+  daRuntime : List Decl,
+  daCore : List Decl,
+  daModules : List (String, List Decl),
+}
+
 -- What a drive hands back to its caller, as plain data frozen at the drive's end
 -- (after the drain and the sticky rollback): the answers a driver asks of the
 -- drive it ran.  No `Decl`, no closure and no live cell: `doInvocationView`'s

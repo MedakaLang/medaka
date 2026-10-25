@@ -32,7 +32,9 @@ import types.tc_types.{
   PredicateSlot(..), MethodPredicateSlot(..), CDeclaredPrefix(..),
   RecordInfo(..)
 }
-import types.typecheck.{defaultDriveInputs, checkModulesChainReportForGraph}
+import types.typecheck.{
+  defaultDriveInputs, checkModulesChainReportForGraph, chainArgs
+}
 import types.interface_sexp.{
   PreludeInterfaceFile(..), InterfaceSection(..), encodeInterface
 }
@@ -48,14 +50,15 @@ graphOf : Unit -> GraphCtx
 graphOf _ =
   let (_, gctx) =
     checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      None
-      ""
-      [None]
-      []
-      (desugar (parse "data Option a = None | Some a"))
-      [("m", desugar (parseLocated "export data Q = Q Int"))]
+      (chainArgs
+        defaultDriveInputs
+        False
+        None
+        ""
+        [None]
+        []
+        (desugar (parse "data Option a = None | Some a"))
+        [("m", desugar (parseLocated "export data Q = Q Int"))])
   gctx
 
 identityPub : PubScheme
@@ -314,14 +317,9 @@ driveWith : Option (Int, Int) -> (List Decl, List Decl) -> GraphCtx
 driveWith key (runtimeDecls, coreDecls) =
   snd
     (checkModulesChainReportForGraph
-      defaultDriveInputs
-      False
-      key
-      ""
-      []
-      runtimeDecls
-      coreDecls
-      [("m", desugarIn "m" (parseLocated "x = 1"))])
+      (chainArgs defaultDriveInputs False key "" [] runtimeDecls coreDecls [
+        ("m", desugarIn "m" (parseLocated "x = 1")),
+      ]))
 
 -- The cache's interfaces after a drive under a prelude key no earlier drive used,
 -- so the drive misses and freezes its own.

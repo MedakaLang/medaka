@@ -7,7 +7,9 @@ import frontend.parser.{parse, parseLocated}
 import support.util.{joinNl}
 import types.publish.{ModDiags, TcDiag(..), TcReport(..), ppPubScheme}
 import types.tc_types.{DriveOutputs(..), GraphCtx}
-import types.typecheck.{defaultDriveInputs, checkModulesChainReportForGraph}
+import types.typecheck.{
+  defaultDriveInputs, checkModulesChainReportForGraph, chainArgs
+}
 
 -- The drive's `valueMain` argument for a graph whose entry is no value `main`.
 export
@@ -27,14 +29,15 @@ keyedDrive : Int ->
   ((TcReport, DriveOutputs), GraphCtx)
 keyedDrive seed chainKey runtime core mods =
   checkModulesChainReportForGraph
-    defaultDriveInputs
-    noValueMain
-    (Some (seed, seed + 1))
-    chainKey
-    (stepKeys mods)
-    runtime
-    core
-    (map (m => (fst m, desugar (parseLocated (snd m)))) mods)
+    (chainArgs
+      defaultDriveInputs
+      noValueMain
+      (Some (seed, seed + 1))
+      chainKey
+      (stepKeys mods)
+      runtime
+      core
+      (map (m => (fst m, desugar (parseLocated (snd m)))) mods))
 
 -- [keyedDrive] with no prelude declarations.
 export

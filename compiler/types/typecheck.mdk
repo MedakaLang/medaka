@@ -363,6 +363,7 @@ import types.tc_types.{
   TcConfig(..),
   TraceSink(..),
   DriveInputs(..),
+  DriveArgs(..),
   DriveOutputs(..),
   withPublishedManifests,
   manifestDriverFor,
@@ -576,7 +577,7 @@ import types.registry.{
 }
 import frontend.desugar.{mapProg, mapChildren, mapExpr, exprSpanLoc, joinLocs}
 import frontend.marker.{localBoundNames}
-import frontend.visibility.{useModuleIds}
+import frontend.visibility.{useModuleIds, useModId}
 import types.value_main.{inMainBinding}
 import frontend.resolve.{
   firstExprLoc,
@@ -30685,7 +30686,7 @@ moduleAliasKeys : GraphCtx ->
   Loc ->
   List (String, String, String, Ident, Loc)
 moduleAliasKeys gctx (path@(UseAlias _ a)) loc =
-  aliasMethodKeysFor gctx a (usePathModuleId path) loc
+  aliasMethodKeysFor gctx a (useModId path) loc
 moduleAliasKeys gctx _ _ = []
 
 memberAliasKeys : GraphCtx ->
@@ -30693,7 +30694,7 @@ memberAliasKeys : GraphCtx ->
   Loc ->
   List (String, String, String, Ident, Loc)
 memberAliasKeys gctx (path@(UseGroup _ ms)) loc =
-  flatMap (memberAliasMethodKeys gctx (usePathModuleId path) loc) ms
+  flatMap (memberAliasMethodKeys gctx (useModId path) loc) ms
 memberAliasKeys gctx _ _ = []
 
 -- `import m.{mth as loc}`: the local `loc` is a spelling of `m`'s method `mth`, keyed
@@ -30987,7 +30988,7 @@ usePathWitnesses : GraphCtx ->
   (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) ->
   Bool
 usePathWitnesses gctx path wide n (ident, (iface, _, _, _)) =
-  let dep = usePathModuleId path
+  let dep = useModId path
   dep /= "core"
     && usePathAdmitsDecl path wide n iface
     && depExportsMethodIdent gctx dep n ident
@@ -31261,7 +31262,7 @@ anyUsePathBindsCtor gctx (_ :: rest) n owner ident =
 --     the same question with the same answer.
 usePathWitnessesCtor : GraphCtx -> UsePath -> String -> String -> Ident -> Bool
 usePathWitnessesCtor gctx path n owner ident =
-  let dep = usePathModuleId path
+  let dep = useModId path
   dep /= "core"
     && usePathBindsCtor path n owner
     && depExportsCtorIdent gctx dep n ident
@@ -31675,7 +31676,7 @@ intercalateComma (x :: rest) = "'\{x}', \{intercalateComma rest}"
 -- {every earlier module in full} ∪ {this module}, members and order.  `accAll` is
 -- seeded with the WHOLE `coreDecls` and grown `accAll ++ prog` (not `publicDataDecls
 -- prog`; only `accData` is public-filtered) and every Module-arm driver runs
--- `wantAll = True`, so the prefix is the full set.  `CE` at this ordinal is that set in
+-- `AccumulateBoth`, so the prefix is the full set.  `CE` at this ordinal is that set in
 -- ordinal order.
 --
 -- ⚠️ AN EARLIER CUT OF THIS COMMENT CLAIMED A DELIBERATE WIDENING HERE — *"`accAll`/
@@ -31834,12 +31835,12 @@ importLocFor reach prog owner =
 
 importLocOf : String -> Decl -> Option Loc
 importLocOf owner (DUse _ path loc)
-  | usePathModuleId path == owner = Some loc
+  | useModId path == owner = Some loc
 importLocOf _ _ = None
 
 importLocReaching : OrdMap (OrdMap Unit) -> String -> Decl -> Option Loc
 importLocReaching reach owner (DUse _ path loc)
-  | omHasKey owner (optionOr omEmpty (omLookup (usePathModuleId path) reach)) =
+  | omHasKey owner (optionOr omEmpty (omLookup (useModId path) reach)) =
     Some loc
 importLocReaching _ _ _ = None
 
@@ -49765,7 +49766,7 @@ importedIfaceRows _ [] = []
 importedIfaceRows idx ((DAttrib _ d) :: rest) =
   importedIfaceRows idx [d] ++ importedIfaceRows idx rest
 importedIfaceRows idx ((DUse _ path _) :: rest) =
-  (match omLookup (usePathModuleId path) idx
+  (match omLookup (useModId path) idx
       None => []
       Some src => selectIfaceRows path src)
     ++ importedIfaceRows idx rest
@@ -49833,7 +49834,7 @@ importShadowsOfDecl : List (String, List Decl) ->
 importShadowsOfDecl graph rows nameable universe (DAttrib _ d) =
   importShadowsOfDecl graph rows nameable universe d
 importShadowsOfDecl graph rows nameable universe (DUse _ path _) = match path
-  UseGroup _ ms => match lookupAssoc (usePathModuleId path) graph
+  UseGroup _ ms => match lookupAssoc (useModId path) graph
     None => []
     Some depDecls =>
       flatMap (importMemberShadow graph rows nameable universe depDecls) ms
@@ -49973,11 +49974,9 @@ reexportedOrigins decls name = flatMap (d => reexportedOriginsOf d name) decls
 reexportedOriginsOf : Decl -> String -> List (String, String)
 reexportedOriginsOf (DAttrib _ d) name = reexportedOriginsOf d name
 reexportedOriginsOf (DUse True path _) name = match importedBindings path
-  None => [(usePathModuleId path, name)]
+  None => [(useModId path, name)]
   Some bs =>
-    map
-      (b => (usePathModuleId path, fst b))
-      (filterList (b => snd b == name) bs)
+    map (b => (useModId path, fst b)) (filterList (b => snd b == name) bs)
 reexportedOriginsOf _ _ = []
 
 declaresStandalone : String -> List Decl -> Bool
@@ -50954,7 +50953,7 @@ importedSchemeOblEntries (_ :: rest) qual = importedSchemeOblEntries rest qual
 -- translation.
 importTableMid : UsePath -> String
 importTableMid path =
-  let mid = usePathModuleId path
+  let mid = useModId path
   if mid == "core" then "" else mid
 
 schemeOblEntriesFor : String ->
@@ -51092,7 +51091,7 @@ synthesizedAdmissions _ [] = []
 synthesizedAdmissions mm ((DAttrib _ d) :: rest) =
   synthesizedAdmissions mm (d :: rest)
 synthesizedAdmissions mm ((DUse _ path _) :: rest) =
-  let mid = usePathModuleId path
+  let mid = useModId path
   let here = match lookupAssoc mid mm
     None => []
     Some methods => match path
@@ -51133,7 +51132,7 @@ reexportedMethodNames acc decls = flatMap (reexportedMethodsOf acc) decls
 reexportedMethodsOf : List (String, List String) -> Decl -> List String
 reexportedMethodsOf acc (DAttrib _ d) = reexportedMethodsOf acc d
 reexportedMethodsOf acc (DUse True path _) =
-  match lookupAssoc (usePathModuleId path) acc
+  match lookupAssoc (useModId path) acc
     None => []
     Some srcMethods => match importedBindings path
       -- `export import src.*` re-exports every one of src's methods
@@ -51206,7 +51205,7 @@ reexportedMethodIdentsOf : OrdMap (List (String, Ident)) ->
   List (String, Ident)
 reexportedMethodIdentsOf acc (DAttrib _ d) = reexportedMethodIdentsOf acc d
 reexportedMethodIdentsOf acc (DUse True path _) =
-  match omLookup (usePathModuleId path) acc
+  match omLookup (useModId path) acc
     None => []
     Some src => match importedBindings path
       -- `export import src.*` re-exports every one of src's methods, under their own names
@@ -51259,7 +51258,7 @@ reexportedIfaceMethodsOf : OrdMap (List (String, List String)) ->
   List (String, List String)
 reexportedIfaceMethodsOf acc (DAttrib _ d) = reexportedIfaceMethodsOf acc d
 reexportedIfaceMethodsOf acc (DUse True path _) =
-  match omLookup (usePathModuleId path) acc
+  match omLookup (useModId path) acc
     None => []
     Some src => selectIfaceRows path src
 reexportedIfaceMethodsOf _ _ = []
@@ -51424,7 +51423,7 @@ reexportedCtorIdentsOf : OrdMap (List (String, String, Ident)) ->
   List (String, String, Ident)
 reexportedCtorIdentsOf acc (DAttrib _ d) = reexportedCtorIdentsOf acc d
 reexportedCtorIdentsOf acc (DUse True path _) =
-  match omLookup (usePathModuleId path) acc
+  match omLookup (useModId path) acc
     None => []
     Some src => match path
       -- `export import src.*` re-exports every one of src's constructors
@@ -51461,7 +51460,7 @@ deAliasMethodImports : List (String, List String) -> Decl -> List Decl
 deAliasMethodImports mm (DAttrib attrs d) =
   map (DAttrib attrs) (deAliasMethodImports mm d)
 deAliasMethodImports mm (d@(DUse pub path loc)) =
-  match lookupAssoc (usePathModuleId path) mm
+  match lookupAssoc (useModId path) mm
     None => [d]
     Some methods => match path
       UseAlias quals _ => match methodMembersOf methods loc
@@ -51589,7 +51588,7 @@ aliasDictNamesOfDecl : GraphCtx ->
 aliasDictNamesOfDecl gctx bare unitDecls (DAttrib _ d) =
   aliasDictNamesOfDecl gctx bare unitDecls d
 aliasDictNamesOfDecl gctx bare unitDecls (DUse _ path _) =
-  aliasDictNamesOfPath gctx bare unitDecls (usePathModuleId path) path
+  aliasDictNamesOfPath gctx bare unitDecls (useModId path) path
 aliasDictNamesOfDecl gctx _ _ _ = []
 
 aliasDictNamesOfPath : GraphCtx ->
@@ -51663,7 +51662,7 @@ graphAliasEntry a qual (localName, (defMid, origin)) =
 
 -- build THIS module's import-scoped seed: walk its DUse decls, and for each one
 -- pick the imported names out of the named dependency's public schemes (held in
--- depEnv, keyed by the dotted module id that usePathModuleId yields == the loader's
+-- depEnv, keyed by the dotted module id that useModId yields == the loader's
 -- mid).  `core` DUse decls are skipped — core is always seeded via baseSeed.
 -- ── #1675: reject an import that admits a name with more than one denotation ──────
 -- The hub `export import lib.pa.{g}` + `export import lib.pb.{g}` exports ONE spelling
@@ -51728,7 +51727,7 @@ reportAmbiguousImportsIn mctx occ ((DAttrib _ d) :: rest) =
   let _ = reportAmbiguousImportsIn mctx occ [d]
   reportAmbiguousImportsIn mctx occ rest
 reportAmbiguousImportsIn mctx occ ((DUse _ path loc) :: rest) =
-  let _ = reportAmbiguousImport mctx occ (usePathModuleId path) path loc
+  let _ = reportAmbiguousImport mctx occ (useModId path) path loc
   reportAmbiguousImportsIn mctx occ rest
 reportAmbiguousImportsIn mctx occ (_ :: rest) =
   reportAmbiguousImportsIn mctx occ rest
@@ -51872,7 +51871,7 @@ importSeed gctx _ _ [] _ = []
 importSeed gctx coreV admitted ((DAttrib _ d) :: rest) depEnv =
   importSeed gctx coreV admitted (d :: rest) depEnv
 importSeed gctx coreV admitted ((DUse _ path _) :: rest) depEnv =
-  let depId = usePathModuleId path
+  let depId = useModId path
   if depId == "core" then
     map (suppliedBy None) (coreAliasSchemes path coreV)
       ++ importSeed gctx coreV admitted rest depEnv
@@ -51978,7 +51977,7 @@ coreRenameScheme coreV m = match useMemberAlias m
 -- only (importedBindings = Some bindings); a wildcard `import mod.*` (None) is skipped —
 -- it can't enumerate names here, so those names fall back to the bare arity table at the
 -- call site.  `core` is skipped (core fns route via the prelude dict machinery, never the
--- cross-module qual tables).  depId == usePathModuleId == the loader mid == the qual
+-- cross-module qual tables).  depId == useModId == the loader mid == the qual
 -- tables' definer key for a DIRECT import; a re-exported fn's depId is the intermediate
 -- (≠ definer), so its qual lookup misses and it too falls back to bare (correct).
 --
@@ -52044,7 +52043,7 @@ coreRenameScheme coreV m = match useMemberAlias m
 -- FIRST, and `test/eval_typed_modules_fixtures/ctor_scope_load_order/` is the measured
 -- counterexample (stubbing `declOwnedBy` to `True` regresses it to `7.0`, an answer
 -- pristine `main` gets right).  `declOwnedBy` compares the decl's own identity against
--- `OriginModule <this import's module id>`; `usePathModuleId` yields exactly the loader
+-- `OriginModule <this import's module id>`; `useModId` yields exactly the loader
 -- mid that `stampDeclOrigins` stamped with (see `aliasDictNamesOfPath`'s note, which
 -- states the same equality for the qual tables).
 --
@@ -52169,12 +52168,9 @@ importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
 importOverlayDecls wildHalf cur rows (DAttrib _ d) =
   importOverlayDecls wildHalf cur rows d
 importOverlayDecls wildHalf cur rows (DUse _ (p@(UseGroup _ ms)) _) =
-  if wildHalf then
-    []
-  else
-    flatMap (memberOverlayDecl cur rows (usePathModuleId p)) ms
+  if wildHalf then [] else flatMap (memberOverlayDecl cur rows (useModId p)) ms
 importOverlayDecls wildHalf cur rows (DUse _ (p@(UseWild _)) _) =
-  if wildHalf then wildOverlayDecls cur rows (usePathModuleId p) else []
+  if wildHalf then wildOverlayDecls cur rows (useModId p) else []
 importOverlayDecls _ _ _ _ = []
 
 -- The exhaustiveness oracle's import rows beyond `importedCtorTypeDeclsFirstWins`:
@@ -52200,10 +52196,10 @@ oracleImportDeclsOf : GraphCtx -> Int -> List DeclEnvModule -> Decl -> List Decl
 oracleImportDeclsOf gctx cur rows (DAttrib _ d) =
   oracleImportDeclsOf gctx cur rows d
 oracleImportDeclsOf gctx cur rows (DUse _ (p@(UseAlias _ _)) _) =
-  let dep = usePathModuleId p
+  let dep = useModId p
   wildOverlayDecls cur rows dep ++ reexportedCtorDecls gctx cur rows dep
 oracleImportDeclsOf gctx cur rows (DUse _ (p@(UseWild _)) _) =
-  reexportedCtorDecls gctx cur rows (usePathModuleId p)
+  reexportedCtorDecls gctx cur rows (useModId p)
 oracleImportDeclsOf gctx _ _ _ = []
 
 -- The decls declaring the constructors `dep` re-exports from other modules, found
@@ -52546,7 +52542,7 @@ useAdmittedRows gctx wild (_ :: rest) = useAdmittedRows gctx wild rest
 -- of these rows relies on that — see `declaredConstraintFor`).
 useDefinerRows : GraphCtx -> Bool -> UsePath -> List (String, (String, String))
 useDefinerRows gctx wild path =
-  let depId = usePathModuleId path
+  let depId = useModId path
   if depId == "core" then
     []
   else match importedBindings path
@@ -52601,7 +52597,7 @@ memberDefinerRow depId pubs (origin, local) =
 -- used as a set or a map"; a memo that reintroduced the scan would be the fourteenth).
 --
 -- KEY SCOPING.  The key is the loader's module id — the SAME `demId` `deOrdIndex` is
--- keyed by and the same one `usePathModuleId` produces at every reader.  Two positions in
+-- keyed by and the same one `useModId` produces at every reader.  Two positions in
 -- the module graph cannot collide on it, because a module id names a `deModules` row and
 -- `declEnvModulesFrom` builds exactly one row per loader module; and it cannot collide
 -- ACROSS graphs, because the table is a field of the envelope rather than a program-global
@@ -52773,7 +52769,7 @@ reexportDefiners _ [] = []
 reexportDefiners before ((DAttrib _ d) :: rest) =
   reexportDefiners before [d] ++ reexportDefiners before rest
 reexportDefiners before ((DUse True path _) :: rest) =
-  let depId = usePathModuleId path
+  let depId = useModId path
   if depId == "core" then
     reexportDefiners before rest
   else
@@ -52851,7 +52847,7 @@ reexportSeed _ [] _ = []
 reexportSeed coreV ((DAttrib _ d) :: rest) depEnv =
   reexportSeed coreV [d] depEnv ++ reexportSeed coreV rest depEnv
 reexportSeed coreV ((DUse True path _) :: rest) depEnv =
-  let depId = usePathModuleId path
+  let depId = useModId path
   let src = if depId == "core" then Some coreV else lookupAssoc depId depEnv
   match src
     None => reexportSeed coreV rest depEnv
@@ -52888,7 +52884,7 @@ reexportSeed coreV (_ :: rest) depEnv = reexportSeed coreV rest depEnv
 -- foldModules owns ONLY the loop and performs NO mintGraphCtx: the reset
 -- boundary stays in each driver's preamble (a reset leaking in here would hand the
 -- `check*` drivers a reset they must not have).
--- #154 PR-C: `wantData`/`wantAll` are per-worker "needs" signals gating the two
+-- #154 PR-C: `Accumulate` is the per-worker "needs" signal gating the two
 -- accumulator concats.  The old unconditional `accData ++ publicDataDecls prog` /
 -- `accAll ++ prog` copied a GROWING left operand every iteration → O(modules^2)
 -- allocation across the graph (the residual PR-A left).  Each worker declares which
@@ -52896,11 +52892,13 @@ reexportSeed coreV (_ :: rest) depEnv = reexportSeed coreV rest depEnv
 -- — no copy), so a path that consumes neither (the perf-gate `checkModules` path,
 -- where `checkBodyImpl` binds `accData` as `Module _ _ _` and never reads it, and
 -- `accAll` is `cmCheckWorker`'s ignored `_accAll`) does O(|prog|) per module = O(N)
--- total.  Byte-identity: when `wantX` is False the worker provably ignores that
--- accumulator, so the value threaded is unobserved; when True the concat is IDENTICAL
--- to the old append (same operand order), so the elab/diag witnesses are unchanged.
-foldModules : Bool ->
-  Bool ->
+-- total.  Byte-identity: under `AccumulateNone` the worker provably ignores both
+-- accumulators, so the value threaded is unobserved; under `AccumulateBoth` the
+-- concat is IDENTICAL to the old append (same operand order), so the elab/diag
+-- witnesses are unchanged.  No worker reads one accumulator without the other.
+data Accumulate = AccumulateNone | AccumulateBoth
+
+foldModules : Accumulate ->
   (ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, e, ModuleCtx)) ->
   Option (ModuleServe e) ->
   (Bool -> String -> e -> acc -> acc) ->
@@ -52913,11 +52911,10 @@ foldModules : Bool ->
   ModuleCtx ->
   List (String, List Decl) ->
   (acc, Option (ModuleServe e), ModuleCtx)
-foldModules wantData wantAll worker serve collect base baseSeed coreV depEnv accData accAll prev modules =
+foldModules acc worker serve collect base baseSeed coreV depEnv accData accAll prev modules =
   let (done, served, last) =
     workModules
-      wantData
-      wantAll
+      acc
       worker
       serve
       baseSeed
@@ -52934,8 +52931,7 @@ foldModules wantData wantAll worker serve collect base baseSeed coreV depEnv acc
 -- accumulators, the record and the serve policy, and returns each module's payload,
 -- newest first.  The recursive call is a tail call: a frame waiting on the rest would
 -- keep its module's record reachable until the graph end.
-workModules : Bool ->
-  Bool ->
+workModules : Accumulate ->
   (ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, e, ModuleCtx)) ->
   Option (ModuleServe e) ->
   List (String, Scheme) ->
@@ -52947,12 +52943,12 @@ workModules : Bool ->
   ModuleCtx ->
   List (String, List Decl) ->
   (List (String, e), Option (ModuleServe e), ModuleCtx)
-workModules _ _ _ serve _ _ _ _ _ done prev [] = (done, serve, prev)
-workModules _wantData _wantAll worker serve baseSeed coreV depEnv accData accAll done prev [(mid, prog)] =
+workModules _ _ serve _ _ _ _ _ done prev [] = (done, serve, prev)
+workModules _ worker serve baseSeed coreV depEnv accData accAll done prev [(mid, prog)] =
   let seed = moduleSeedFor prev baseSeed coreV mid prog depEnv
   let (_, extra, next) = worker prev mid seed accData accAll prog
   ((mid, extra) :: done, serve, next)
-workModules wantData wantAll worker serve baseSeed coreV depEnv accData accAll done prev ((mid, prog) :: rest) =
+workModules acc worker serve baseSeed coreV depEnv accData accAll done prev ((mid, prog) :: rest) =
   let step = map (policy => policy.msStep mid prog prev) serve
   let (own, done2, serve2, next) = match step
     Some (ServeHit own extra policy) =>
@@ -52967,15 +52963,18 @@ workModules wantData wantAll worker serve baseSeed coreV depEnv accData accAll d
           (own, done3, Some policy, next)
         _ => (own, (mid, extra) :: done, serve, next)
   workModules
-    wantData
-    wantAll
+    acc
     worker
     serve2
     baseSeed
     coreV
     ((mid, own ++ reexportSeed coreV prog depEnv) :: depEnv)
-    (if wantData then accData ++ publicDataDecls prog else accData)
-    (if wantAll then accAll ++ prog else accAll)
+    (match acc
+      AccumulateBoth => accData ++ publicDataDecls prog
+      AccumulateNone => accData)
+    (match acc
+      AccumulateBoth => accAll ++ prog
+      AccumulateNone => accAll)
     done2
     next
     rest
@@ -53381,7 +53380,7 @@ checkModulesPreambleK inputs preludeKey runtimeDecls coreDecls modules =
 -- 🚨 THIS IS NOT ATTRIBUTION-ONLY, AND THE FIRST DRAFT OF THIS COMMENT SAID IT WAS.
 -- The `""` key made `crossModuleSchemeOblsQualRef` and its three sibling qual tables
 -- unreadable on this driver — their readers derive `src` from a real import path
--- (`usePathModuleId`), so they missed universally — which means an INFERRED
+-- (`useModId`), so they missed universally — which means an INFERRED
 -- cross-module obligation was SILENTLY DROPPED from the importer's scheme.  MEASURED,
 -- two arms, same fixture and `MEDAKA_ROOT`, only the probe differing:
 --
@@ -53546,14 +53545,13 @@ cmFold runtimeSeed coreSchemes coreCtx modules =
   -- #154 PR-C: cmCheckWorker reads NEITHER accData (checkModuleFull → Module path, where
   -- checkBodyImpl binds it `_` and never reads it) NOR accAll (its `_accAll` param), so
   -- both concats are pure waste here — the residual O(modules^2) the PR-A review found.
-  -- wantData=wantAll=False threads them unchanged (no copy) and the `[] []` initials keep
+  -- AccumulateNone threads them unchanged (no copy) and the `[] []` initials keep
   -- the dead values empty → the whole perf-gate `checkModules` path is O(N).  #2705: this
   -- driver marks but does not solve — see `cmCheckWorker` — so it queues nothing and
   -- drains nothing.
   let (rows, _, lastCtx) =
     foldModules
-      False
-      False
+      AccumulateNone
       cmCheckWorker
       None
       (_last mid schemes rest => (mid, schemes) :: rest)
@@ -53995,19 +53993,20 @@ checkModulesChainReportFor : DriveInputs ->
 checkModulesChainReportFor inputs valueMain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   fst
     (checkModulesChainReportForGraph
-      inputs
-      valueMain
-      preludeKey
-      chainKey
-      stepKeys
-      runtimeDecls
-      coreDecls0
-      modules0)
+      (chainArgs
+        inputs
+        valueMain
+        preludeKey
+        chainKey
+        stepKeys
+        runtimeDecls
+        coreDecls0
+        modules0))
 
--- `checkModulesChainReportFor` beside the graph record its drive ends in, for a test
--- that observes that record after the drive.
+-- The arguments of a drive keyed under the prelude generation pair [preludeKey] and
+-- [chainKey], with one source key per module in [stepKeys]; unkeyed under `None`.
 export
-checkModulesChainReportForGraph : DriveInputs ->
+chainArgs : DriveInputs ->
   Bool ->
   Option (Int, Int) ->
   String ->
@@ -54015,19 +54014,42 @@ checkModulesChainReportForGraph : DriveInputs ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
+  DriveArgs
+chainArgs inputs valueMain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+  let base =
+    driveArgs inputs valueMain preludeKey runtimeDecls coreDecls0 modules0
+  { base |
+    daKeyed =
+      map ((rk, ck) => (chainFullKey rk ck chainKey, stepKeys)) preludeKey,
+  }
+
+-- The arguments of an unkeyed drive that executes nothing.
+export
+driveArgs : DriveInputs ->
+  Bool ->
+  Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  DriveArgs
+driveArgs inputs valueMain preludeKey runtimeDecls coreDecls0 modules0 =
+  DriveArgs
+    inputs
+    valueMain
+    None
+    preludeKey
+    None
+    runtimeDecls
+    coreDecls0
+    modules0
+
+-- `checkModulesChainReportFor` beside the graph record its drive ends in, for a test
+-- that observes that record after the drive.
+export
+checkModulesChainReportForGraph : DriveArgs ->
   ((TcReport, DriveOutputs), GraphCtx)
-checkModulesChainReportForGraph inputs valueMain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
-  let g =
-    driveGraphK
-      inputs
-      GOutDiags
-      valueMain
-      None
-      preludeKey
-      (map ((rk, ck) => (chainFullKey rk ck chainKey, stepKeys)) preludeKey)
-      runtimeDecls
-      coreDecls0
-      modules0
+checkModulesChainReportForGraph args =
+  let g = driveGraphK GOutDiags args
   ((g.gdReport, g.gdOutputs), g.gdGraph)
 
 -- ── serving modules from their interfaces ───────────────────────────────────
@@ -54213,17 +54235,8 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
 -- which an interface does not hold.  `valueMain` is the caller's
 -- value-main candidate and `executes` names the `async` driver of a caller that
 -- runs the trees, `None` for one that does not (`autoPrintWanted`).
-driveGraphK : DriveInputs ->
-  GraphOut ->
-  Bool ->
-  Option String ->
-  Option (Int, Int) ->
-  Option (String, List (Option String)) ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  GraphDrive
-driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecls0 modulesIn =
+driveGraphK : GraphOut -> DriveArgs -> GraphDrive
+driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDecls coreDecls0 modulesIn) =
   -- IMPORT ALIASING of an interface/impl METHOD — a method is global-by-name, so an
   -- alias of one is a second SPELLING, not a second binding.  A member alias and a
   -- module alias both keep their spelling through inference and are resolved at the
@@ -54266,8 +54279,7 @@ driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecl
   let coreView = coreCtx.mcCells.invocationViewRef.value
   let ((modules2, perModRaw, views), served, lastCtx) =
     foldModules
-      True
-      True
+      AccumulateBoth
       (graphModuleWorker capture sel)
       serve
       (graphCollect coreCtx.mcGraph sel)
@@ -54756,22 +54768,12 @@ checkModulesEntryFullReportK : DriveInputs ->
 checkModulesEntryFullReportK inputs valueMain preludeKey runtimeDecls coreDecls0 modules0 =
   fst
     (checkModulesEntryFullReportKGraph
-      inputs
-      valueMain
-      preludeKey
-      runtimeDecls
-      coreDecls0
-      modules0)
+      (driveArgs inputs valueMain preludeKey runtimeDecls coreDecls0 modules0))
 
 -- `checkModulesEntryFullReportK` beside the graph record its drive ends in.
-checkModulesEntryFullReportKGraph : DriveInputs ->
-  Bool ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
+checkModulesEntryFullReportKGraph : DriveArgs ->
   ((TcReport, DriveOutputs), GraphCtx)
-checkModulesEntryFullReportKGraph inputs valueMain preludeKey runtimeDecls coreDecls0 modules0 =
+checkModulesEntryFullReportKGraph (DriveArgs inputs valueMain _ preludeKey _ runtimeDecls coreDecls0 modules0) =
   -- The single-file front door loads stdlib/core.mdk twice: once as its prelude and
   -- once as the singleton `__user__` module.  Resolve already owns the syntactic
   -- self-test that prevents double-seeding core.  Apply that same authority before
@@ -54789,15 +54791,14 @@ checkModulesEntryFullReportKGraph inputs valueMain preludeKey runtimeDecls coreD
       _ => (preludeKey, coreDecls0, modules0)
   let g =
     driveGraphK
-      inputs
       GOutDiags
-      valueMain
-      None
-      effectivePreludeKey
-      None
-      runtimeDecls
-      effectiveCoreDecls0
-      effectiveModules0
+      (driveArgs
+        inputs
+        valueMain
+        effectivePreludeKey
+        runtimeDecls
+        effectiveCoreDecls0
+        effectiveModules0)
   ((g.gdReport, g.gdOutputs), g.gdGraph)
 
 -- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
@@ -54923,20 +54924,17 @@ checkOneSchemeFullK : DriveInputs ->
   (String, List Decl) ->
   (List (String, PubScheme), List (String, PubScheme))
 checkOneSchemeFullK inputs preludeKey runtimeDecls coreDecls prog =
-  fst (checkOneSchemeFullKGraph inputs preludeKey runtimeDecls coreDecls prog)
+  fst
+    (checkOneSchemeFullKGraph
+      (driveArgs inputs False preludeKey runtimeDecls coreDecls [prog]))
 
 -- `checkOneSchemeFullK` beside the graph record its drive ends in, for a test that
 -- observes that record after the drive.
 export
-checkOneSchemeFullKGraph : DriveInputs ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
-  (String, List Decl) ->
+checkOneSchemeFullKGraph : DriveArgs ->
   ((List (String, PubScheme), List (String, PubScheme)), GraphCtx)
-checkOneSchemeFullKGraph inputs preludeKey runtimeDecls coreDecls prog =
-  let (report, gctx) =
-    checkOneReportKGraph inputs False preludeKey runtimeDecls coreDecls prog
+checkOneSchemeFullKGraph args =
+  let (report, gctx) = checkOneReportKGraph args
   let (coreSchemes, schemes, _, _) = entrySplit report
   ((coreSchemes, schemes), gctx)
 
@@ -54955,14 +54953,9 @@ checkOneDiags inputs runtimeDecls coreDecls prog =
 -- `checkOneDiags` beside the graph record its drive ends in, for a test that observes
 -- that record after the drive.
 export
-checkOneDiagsGraph : DriveInputs ->
-  List Decl ->
-  List Decl ->
-  (String, List Decl) ->
-  ((List TcDiag, List TcDiag), GraphCtx)
-checkOneDiagsGraph inputs runtimeDecls coreDecls prog =
-  let (report, gctx) =
-    checkOneReportKGraph inputs False None runtimeDecls coreDecls prog
+checkOneDiagsGraph : DriveArgs -> ((List TcDiag, List TcDiag), GraphCtx)
+checkOneDiagsGraph args =
+  let (report, gctx) = checkOneReportKGraph args
   let (_, _, errs, warns) = entrySplit report
   ((errs, warns), gctx)
 
@@ -54995,29 +54988,12 @@ checkOneReportK : DriveInputs ->
 checkOneReportK inputs valueMain preludeKey runtimeDecls coreDecls prog =
   fst
     (checkOneReportKGraph
-      inputs
-      valueMain
-      preludeKey
-      runtimeDecls
-      coreDecls
-      prog)
+      (driveArgs inputs valueMain preludeKey runtimeDecls coreDecls [prog]))
 
 -- `checkOneReportK` beside the graph record its drive ends in.
-checkOneReportKGraph : DriveInputs ->
-  Bool ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
-  (String, List Decl) ->
-  (TcReport, GraphCtx)
-checkOneReportKGraph inputs valueMain preludeKey runtimeDecls coreDecls (rootId, prog) =
-  let ((report, _), gctx) = checkModulesEntryFullReportKGraph
-    inputs
-    valueMain
-    preludeKey
-    runtimeDecls
-    coreDecls
-    [(rootId, prog)]
+checkOneReportKGraph : DriveArgs -> (TcReport, GraphCtx)
+checkOneReportKGraph args =
+  let ((report, _), gctx) = checkModulesEntryFullReportKGraph args
   (report, gctx)
 
 -- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers, matching
@@ -55181,20 +55157,9 @@ elaborateModules inputs runtimeDecls coreDecls0 modulesIn =
 -- `elaborateModules` beside the graph record its drive ends in, for a test that
 -- observes that record after the drive.
 export
-elaborateModulesGraph : DriveInputs ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  (ElabResult, GraphCtx)
-elaborateModulesGraph inputs runtimeDecls coreDecls0 modulesIn =
-  let ((result, _, _), gctx) =
-    elaborateModulesWithReportGraph
-      inputs
-      False
-      None
-      runtimeDecls
-      coreDecls0
-      modulesIn
+elaborateModulesGraph : DriveArgs -> (ElabResult, GraphCtx)
+elaborateModulesGraph args =
+  let ((result, _, _), gctx) = elabDriveResult (driveGraphK GOutTrees args)
   (result, gctx)
 
 -- `elaborateModules` together with the prelude's schemes and the entry module's own
@@ -55233,34 +55198,18 @@ elaborateModulesWithReport : DriveInputs ->
   (ElabResult, TcReport, DriveOutputs)
 elaborateModulesWithReport inputs valueMain executes runtimeDecls coreDecls0 modulesIn =
   fst
-    (elaborateModulesWithReportGraph
-      inputs
-      valueMain
-      executes
-      runtimeDecls
-      coreDecls0
-      modulesIn)
-
--- `elaborateModulesWithReport` beside the graph record its drive ends in.
-elaborateModulesWithReportGraph : DriveInputs ->
-  Bool ->
-  Option String ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  ((ElabResult, TcReport, DriveOutputs), GraphCtx)
-elaborateModulesWithReportGraph inputs valueMain executes runtimeDecls coreDecls0 modulesIn =
-  elabDriveResult
-    (driveGraphK
-      inputs
-      GOutTrees
-      valueMain
-      executes
-      None
-      None
-      runtimeDecls
-      coreDecls0
-      modulesIn)
+    (elabDriveResult
+      (driveGraphK
+        GOutTrees
+        (DriveArgs
+          inputs
+          valueMain
+          executes
+          None
+          None
+          runtimeDecls
+          coreDecls0
+          modulesIn)))
 
 -- `elaborateModulesWithReport` keyed as `checkModulesChainReportFor` is: under the
 -- prelude generation pair and [chainKey], with one source key per module in
@@ -55280,15 +55229,16 @@ elaborateModulesChainReport inputs valueMain (rk, ck) chainKey stepKeys runtimeD
   fst
     (elabDriveResult
       (driveGraphK
-        inputs
         GOutTrees
-        valueMain
-        None
-        None
-        (Some (chainFullKey rk ck chainKey, stepKeys))
-        runtimeDecls
-        coreDecls0
-        modulesIn))
+        (DriveArgs
+          inputs
+          valueMain
+          None
+          None
+          (Some (chainFullKey rk ck chainKey, stepKeys))
+          runtimeDecls
+          coreDecls0
+          modulesIn)))
 
 elabDriveResult : GraphDrive -> ((ElabResult, TcReport, DriveOutputs), GraphCtx)
 elabDriveResult g = (
@@ -55815,7 +55765,7 @@ reexportSchemeOblEntries [] _ = []
 reexportSchemeOblEntries ((DAttrib _ d) :: rest) qual =
   reexportSchemeOblEntries [d] qual ++ reexportSchemeOblEntries rest qual
 reexportSchemeOblEntries ((DUse True path _) :: rest) qual =
-  schemeOblEntriesFor (usePathModuleId path) path qual
+  schemeOblEntriesFor (useModId path) path qual
     ++ reexportSchemeOblEntries rest qual
 reexportSchemeOblEntries (_ :: rest) qual = reexportSchemeOblEntries rest qual
 
@@ -55954,16 +55904,8 @@ importerEdgeIndex ((mid, prog) :: rest) acc
     importerEdgeIndex rest (omInsert mid (flatMap useModuleId prog) acc)
 
 useModuleId : Decl -> List String
-useModuleId (DUse _ path _) = [usePathModuleId path]
+useModuleId (DUse _ path _) = [useModId path]
 useModuleId _ = []
-
-usePathModuleId : UsePath -> String
-usePathModuleId (UseName ns)
-  | listLen ns > 1 = joinDot (initList ns)
-  | otherwise = lastComponent ns
-usePathModuleId (UseGroup ns _) = joinDot ns
-usePathModuleId (UseWild ns) = joinDot ns
-usePathModuleId (UseAlias ns _) = joinDot ns
 
 lastComponent : List String -> String
 lastComponent [] = ""
@@ -56251,7 +56193,7 @@ coreShadowMapFor gctx coreProg shadowMap
 -- So the emit path must reconstruct what the mangle erased: admit a mangled shadow
 -- symbol only where `M` actually spells its BARE name.  Two admitting cases, and the
 -- test is over IMPORT FORMS rather than over the symbol's origin module, so a name
--- reaching `M` through a re-export chain (whose `usePathModuleId` is the re-exporter,
+-- reaching `M` through a re-export chain (whose `useModId` is the re-exporter,
 -- not the definer) is admitted exactly as it is today:
 --   * `M` DEFINES the symbol itself — the definer shadow (P0-18), unchanged.
 --   * some import form in `M` binds the LOCAL name `bare`: a member list naming it, or
@@ -56308,7 +56250,7 @@ declBareLocals gctx (_ :: rest) acc = declBareLocals gctx rest acc
 -- `depExportsStandalone` below.
 formBareLocals : GraphCtx -> UsePath -> BareLocals -> BareLocals
 formBareLocals gctx path acc =
-  let depId = usePathModuleId path
+  let depId = useModId path
   match importedBindings path
     None =>
       if depExportsUnknown gctx depId then
