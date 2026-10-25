@@ -1,3 +1,8 @@
+import backend.core_validate.{validateForEmission, coreDefectMessage}
+import backend.emit_target.{Backend(..)}
+import driver.main_autoprint.{executedMainInputs, executedMainRequirement}
+import types.capability_manifest.{EntryKey(..)}
+import types.capability_manifest.{ManifestRequirement(..)}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
 import types.extern_source.{externSourceHeadRows}
 -- lint-disable-file rule-duplicate-body
@@ -612,32 +617,10 @@ doEmit outputs emit rsrc csrc tsrc entry paths mods warnTriples =
 -- The entry's path and source, where a refusal lands.
 data WrittenEntry = WrittenEntry { wePath : String, weSource : String }
 
--- ACCEPTED TRADEOFF (Val, 2026-09-01, #2442 review round F1): because `analyze`
--- deliberately never reaches `runEmit` below, it CANNOT detect a codegen-only
--- failure — an unsupported wasm construct that only trips `E-PANIC`/`unreachable`
--- inside the emitter, never surfaced as a source diagnostic by anything above this
--- point. That's the whole point of `analyze`: skipping codegen is what saves the
--- ~596ms a clean one-liner otherwise spends in `runEmit` (see the `analyze` doc
--- comment above `main`). Before `analyze` existed in its current form, every
--- keystroke ran `compile` and reached codegen, so such a gap surfaced as a
--- synthetic "compiler trap: unreachable" JS-level catch — not a real, located
--- source diagnostic either. After: `analyze` reports the program clean, and the
--- user only learns of the emitter gap on Run (when `compile` finally reaches
--- `runEmit`). Val's ruling: ship as-is — the old always-reached-codegen message
--- was arguably a worse, misleading pseudo-diagnostic for what is a compiler
--- limitation, not the user's bug. This is a deliberate, accepted tradeoff, not a
--- bug to fix here.
---
--- The ONE divergence point between `compile` and `analyze`.  Every diagnostic
--- from the frontend has already been produced here.  Both modes then run the
--- program's one elaboration (`analyzeProgramReport`, the drive `elaborateModules`
--- runs, with the entry's schemes and invocation table kept) and judge the entry
--- against the selected profile on it, as `check --target` does; a refusal is
--- the verdict in either mode.  Compile then emits from that same elaboration;
--- analyze prints its own marker and the same warnings JSON — no
--- lowerProgramEmitWith, no reach, no emitProgram.  See doEmit's obituary for the
--- discarded elaboration that once preceded this one: there is exactly one per
--- run, on either path.
+-- A success marker is the host's admission boundary, so both modes validate
+-- carriage from the same elaboration and target verdict before either marker.
+-- Analyze skips rendering: emitter-only gaps surface on Run, rather than as
+-- editor diagnostics.
 finishClean : Bool ->
   WrittenEntry ->
   List (String, String) ->
@@ -647,31 +630,41 @@ finishClean : Bool ->
   List (String, List Decl) ->
   <IO> Unit
 finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
+  let executionDriver =
+    EntryKey { moduleId = "async", binding = "runAsyncMain" }
   let (analysis, report, outputs) =
     analyzeProgramReport
-      (driveInputsFor !selectedProfile False [])
+      (executedMainInputs
+        (driveInputsFor !selectedProfile False [])
+        executionDriver
+        modules)
       True
-      (Some "runAsyncMain")
+      (Some executionDriver.binding)
       runtimeDecls
       coreDecls
       modules
   match targetRefusalOf written paths analysis
     [] =>
-      if emit then
-        let elab = analysis.eaElab
-        let (coreE, modulesE, _, _, _, _, _) = elab
-        let executed =
-          executedTrees
-            outputs.doEntryOutcome
-            "runAsyncMain"
-            (coreDecls, modules)
-            (coreE, modulesE)
-        match executed
-          Ok executed =>
-            runEmit outputs paths warnTriples runtimeDecls elab executed
-          Err msg => failWith msg
-      else
-        emitAnalyzeMarker warnTriples
+      let elab = analysis.eaElab
+      let (coreE, modulesE, _, _, _, _, _) = elab
+      let executed =
+        executedTrees
+          outputs.doEntryOutcome
+          executionDriver
+          (coreDecls, modules)
+          (coreE, modulesE)
+      match executed
+        Ok executed =>
+          runEmit
+            emit
+            (executedMainRequirement modules)
+            outputs
+            paths
+            warnTriples
+            runtimeDecls
+            elab
+            executed
+        Err msg => failWith msg
     ds =>
       -- Folded into the warnings' report, as `check --json --target` folds
       -- them; a file with no row of its own gets one.
@@ -718,14 +711,16 @@ nonEmptyDiags : List Diag -> Bool
 nonEmptyDiags [] = False
 nonEmptyDiags _ = True
 
-runEmit : DriveOutputs ->
+runEmit : Bool ->
+  ManifestRequirement ->
+  DriveOutputs ->
   List (String, String) ->
   List (String, String, List Diag) ->
   List Decl ->
   ElabResult ->
   (List Decl, List (String, List Decl)) ->
   <IO> Unit
-runEmit outputs paths warnTriples runtimeDecls elab executed =
+runEmit emit requirement outputs paths warnTriples runtimeDecls elab executed =
   let (_, _, _, _, evTable, _, _) = elab
   -- #2809: the program is elaborated as written (`finishClean`), then its
   -- elaborated trees are mangled.
@@ -752,6 +747,7 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
       (externSourceHeadRows (optionOr [] facts.pfExternSources))
   let input =
     makeWasmEmitInput
+      requirement
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
   -- Mirrors wasm_emit_modules_main.emitTail: bind the lowered
@@ -764,9 +760,21 @@ runEmit outputs paths warnTriples runtimeDecls elab executed =
       (runtimeDomain (externDecls runtimeDecls))
       (inputCtorFloatFieldsW input)
       lowered
-  let wat = emitProgram input plan reached
-  let _ = emitWatMarker warnTriples
-  putStr wat
+  if emit then
+    let wat = emitProgram input plan reached
+    let _ = emitWatMarker warnTriples
+    putStr wat
+  else
+    let validation =
+      validateForEmission
+        WasmBackend
+        (runtimeDomain (externDecls runtimeDecls))
+        requirement
+        plan
+        reached
+    match validation.defects
+      [] => emitAnalyzeMarker warnTriples
+      defects => failWith (stringConcat (map coreDefectMessage defects))
 
 -- ── diagnostics emit helpers ──────────────────────────────────────────────────
 -- Print the marker then the one-line JSON, then exit 0 (NO trap).

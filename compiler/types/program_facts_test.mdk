@@ -30,9 +30,75 @@ import types.typecheck.{checkedFfiExternTypeNamesModules}
 import types.extern_source.{ExternSource(..), ExternProvenance(..)}
 import types.runtime_abi_types.{CallableShape(..)}
 import support.util.{joinNl}
+import types.capability_manifest.{
+  EntryKey(..),
+  ManifestSelector(..),
+  InvocationProtocol(..),
+  CapabilityManifest,
+}
+import types.tc_types.{DriveInputs(..), DriveOutputs(..)}
+import driver.main_autoprint.{factsForExecutedTrees, asyncWrapModules}
+
+manifestIdentities : List CapabilityManifest ->
+  List (String, String, List String)
+manifestIdentities = map (m => (
+  (m : CapabilityManifest).request.entry.moduleId,
+  (m : CapabilityManifest).request.entry.binding,
+  map (a => a.label) m.atoms,
+))
+
+test "checked elaborated source and evidence facts preserve frozen manifest identities" =
+  let inputs = { defaultDriveInputs |
+    diManifestRequests = [
+      ExactEntry
+        EntryKey { moduleId = "entry", binding = "declared" }
+        HostInvocation,
+      ExactEntry
+        EntryKey { moduleId = "entry", binding = "main" }
+        HostInvocation,
+    ],
+  }
+  let (elab, report, outputs) = elaborateModulesWithReport
+    inputs
+    False
+    None
+    []
+    []
+    [
+      (
+        "entry",
+        desugar
+          (parseLocated
+            """
+declared : Unit -> <Clock> Unit
+declared _ = ()
+main = ()
+"""),
+      ),
+    ]
+  let (_, _, _, _, table, _, _) = elab
+  let checked = option emptyFacts factsOfChecked report.trChecked
+  let sourceFacts =
+    factsOfElabSources checkedFfiExternTypeNamesModules outputs elab table
+  let expected = [("entry", "declared", ["Clock"]), ("entry", "main", [])]
+  expectAll [
+    expectEqual expected (manifestIdentities outputs.doManifests),
+    expectEqual expected (manifestIdentities checked.pfManifests),
+    expectEqual expected (manifestIdentities (factsOfElab elab).pfManifests),
+    expectEqual expected (manifestIdentities sourceFacts.pfManifests),
+    expectEqual
+      expected
+      (manifestIdentities (factsOfElabWith [] elab).pfManifests),
+    expectEqual
+      expected
+      (withFacts sourceFacts (_ =>
+        manifestIdentities (factsNow ()).pfManifests)),
+    expectEqual [] (manifestIdentities emptyFacts.pfManifests),
+  ]
 
 routeFacts : ProgramFacts
 routeFacts = ProgramFacts {
+  pfManifests = [],
   pfEvidence = evIndexOf [EvEntry (EvId "m" 1) (EvOne (RScalar "Int"))],
   pfDispositions = Some emptyDispositionTable,
   pfBinders = None,
@@ -116,13 +182,20 @@ entryOutcomePrelude =
 
 outcomeFacts : (ProgramFacts, ProgramFacts)
 outcomeFacts =
-  let (elab, report, _) = elaborateModulesWithReport
-    defaultDriveInputs
-    True
-    (Some "runMain")
-    []
-    entryOutcomePrelude
-    [("entry", desugar (parseLocated "main = 1"))]
+  let (elab, report, _) =
+    elaborateModulesWithReport
+      { defaultDriveInputs |
+        diManifestRequests = [
+          ExactEntry
+            EntryKey { moduleId = "entry", binding = "main" }
+            ExecutedMain,
+        ],
+      }
+      True
+      (Some "runMain")
+      []
+      entryOutcomePrelude
+      [("entry", desugar (parseLocated "main = 1"))]
   let (_, _, _, _, table, _, _) = elab
   let checked = match report.trChecked
     Some program => factsOfChecked program
@@ -145,6 +218,31 @@ test "checked and elaborated facts preserve the selected entry outcome" =
   expectAll [
     entryOutcomeExpectation checked,
     entryOutcomeExpectation elaborated,
+  ]
+
+test "physical wrapper adjustment preserves the original frozen invocation" =
+  let (checked, _) = outcomeFacts
+  let wrapped =
+    asyncWrapModules
+      EntryKey { moduleId = "async", binding = "runAsyncMain" }
+      [("entry", desugar (parseLocated "main = 1"))]
+  let adjusted = factsForExecutedTrees checked wrapped
+  expectAll [
+    expectEqual
+      [("entry", "main", [])]
+      (manifestIdentities adjusted.pfManifests),
+    expectEqual
+      (manifestIdentities checked.pfManifests)
+      (manifestIdentities adjusted.pfManifests),
+    expectEqual
+      (Some (True, False, False))
+      (map
+        (outcome => (
+          outcome.eoMainIsUnit,
+          outcome.eoMainIsFloat,
+          isSome outcome.eoAutoPrint,
+        ))
+        adjusted.pfEntryOutcome),
   ]
 
 test "source-aware checked facts retain module ownership and checked alias heads" =

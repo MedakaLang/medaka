@@ -377,11 +377,32 @@ test "arch_boundaries: frontend.ast closure matches its golden" =
 test "arch_boundaries: frontend.visibility closure matches its golden" =
   closurePin "frontend.visibility"
 
+test "arch_boundaries: types.effect_param_decode closure matches its golden" =
+  closurePin "types.effect_param_decode"
+
+test "arch_boundaries: types.capability_manifest closure matches its golden" =
+  closurePin "types.capability_manifest"
+
+test "arch_boundaries: types.manifest_publish closure matches its golden" =
+  closurePin "types.manifest_publish"
+
+test "arch_boundaries: types.capability_policy closure matches its golden" =
+  closurePin "types.capability_policy"
+
 test "arch_boundaries: types.repr closure matches its golden" =
   closurePin "types.repr"
 
 test "arch_boundaries: types.tc_types closure matches its golden" =
   closurePin "types.tc_types"
+
+test "arch_boundaries: types.publish closure matches its golden" =
+  closurePin "types.publish"
+
+test "arch_boundaries: types.program_facts closure matches its golden" =
+  closurePin "types.program_facts"
+
+test "arch_boundaries: types.entry_outcome closure matches its golden" =
+  closurePin "types.entry_outcome"
 
 test "arch_boundaries: types.prelude_interface closure matches its golden" =
   closurePin "types.prelude_interface"
@@ -744,7 +765,8 @@ ownerVocab = [
 
 targetVocab : List String
 targetVocab = [
-  "TcEnv", "GroupCtx", "ModuleCtx", "GraphCtx", "TcConfig", "interner", "delete"
+  "TcEnv", "GroupCtx", "ModuleCtx", "GraphCtx", "TcConfig", "DriveInputs",
+  "interner", "delete"
 ]
 
 fillsVocab : List String

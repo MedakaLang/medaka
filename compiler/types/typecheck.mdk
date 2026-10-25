@@ -1,3 +1,9 @@
+import types.invocation_basis.{
+  recordInvocationView, frozenInvocationView, readInvocationView,
+  requestedWrapperViewModules, invocationResolver, slotVariances, ctorsByHead,
+  authorityParamSubst, paramPolaritiesIn, frozenInvocationOps,
+  completionInvocationViews
+}
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
 -- and dict-passing elaboration.  Architecture doc, including the component model this
 -- file is being decomposed towards: `compiler/TYPECHECK-TARGET-ARCHITECTURE.md`.
@@ -217,12 +223,14 @@ import types.superclass.{
   superClosure,
   superIfaceRef,
 }
+import types.effect_param_decode.{
+  atomOfLabel, dtopIn, writtenParam, writtenAxis, effectParamProblems,
+  effectParamMsg, atomicLabelParamText, repeatedNames
+}
 import types.effect_domain.{
   canonParam,
   subTopOf,
   lookupAxis,
-  productPrimaryLift,
-  productOver,
   productNorm,
   isSubTop,
   domainKey,
@@ -356,6 +364,8 @@ import types.tc_types.{
   TraceSink(..),
   DriveInputs(..),
   DriveOutputs(..),
+  withPublishedManifests,
+  manifestDriverFor,
   Windowed(..),
   CSlot(..),
   PredicateSlotArgs(..),
@@ -537,9 +547,18 @@ import types.publish.{
   freezeNewest,
   EntryOutcome(..),
   graphReportWithOutcome,
+  publishSelected,
+  publishCore,
+  publishWithContexts,
+  publishedCore,
+  publishedEntrySchemes,
   ppPubScheme,
 }
 import types.entry_outcome.{
+  mainUseDiags,
+  printlnIface,
+  mainBodySpan,
+  driveOutputsNow,
   entryOutcomeNow,
   mainIsAsyncNow,
   mainAsyncPayloadIsUnitNow,
@@ -558,7 +577,7 @@ import types.registry.{
 import frontend.desugar.{mapProg, mapChildren, mapExpr, exprSpanLoc, joinLocs}
 import frontend.marker.{localBoundNames}
 import frontend.visibility.{useModuleIds}
-import types.value_main.{inMainBinding, mainUseSite, mainUsedMsg}
+import types.value_main.{inMainBinding}
 import frontend.resolve.{
   firstExprLoc,
   programIsCore,
@@ -957,10 +976,6 @@ populateGo gctx ((DEffect _ name domain axes origin _) :: rest) =
   populateGo gctx rest
 populateGo gctx (_ :: rest) = populateGo gctx rest
 
-lookupDomain : String -> List (String, Param) -> Param
-lookupDomain _ [] = PUnit
-lookupDomain l ((k, p) :: rest) = if l == k then p else lookupDomain l rest
-
 -- ── RefinementDomain interface (design §2.1): dtop/dsub/djoin/dmeet/drender ──
 -- Stage 1: only ⊤ params (PUnit / PPrefix None) ever occur; the STRUCTURE is
 -- what Stage 2's Prefix analysis plugs into.  A label's domain is fixed by its
@@ -969,23 +984,6 @@ lookupDomain l ((k, p) :: rest) = if l == k then p else lookupDomain l rest
 -- labels with no Prefix entry are atomic ⇒ PUnit.
 dtopFor : GraphCtx -> EffLabel -> Param
 dtopFor gctx label = dtopIn gctx.effectDomains.value label
-
--- `dtopFor` over the effect domains [domains] a drive left (`doEffectDomains`).
-dtopIn : List (String, Param) -> EffLabel -> Param
-dtopIn domains label = match lookupDomain (labelKey label) domains
-  PPrefix None => PPrefix None
-  PPath None => PPath None
-  PSet None => PSet None
-  p@(PProduct _) => p
-  _ => PUnit
-
--- lift one of the language's own labels to its ⊤-param atom, under the effect
--- domains [domains] (`doEffectDomains` of the drive that registered them; `[]`
--- before any drive)
-export
-atomOfLabel : List (String, Param) -> String -> Atom
-atomOfLabel domains l =
-  atomWith (builtinLabel l) (dtopIn domains (builtinLabel l))
 
 ioLabel : EffLabel
 ioLabel = builtinLabel "IO"
@@ -1089,69 +1087,11 @@ writtenAxisTerm sv written (name, top) = match lookupAssoc name written
     (_, v) => (name, AConst (canonParam v))
   None => (name, authTop top)
 
-writtenParam : Param -> EffParamTy -> Param
-writtenParam top EPTop = top
-writtenParam (PPrefix None) (EPLit s) = canonParam (PPrefix (Some s))
-writtenParam (PPath None) (EPLit s) = canonParam (PPath (Some s))
-writtenParam (PSet None) (EPLit s) = PSet (Some [s])
-writtenParam (PSet None) (EPSet xs) = PSet (Some (sortUniqS xs))
-writtenParam (PProduct schema) (EPLit s) = productPrimaryLift schema s
-writtenParam (PProduct schema) (EPProduct axes) =
-  productOver schema (map writtenAxis axes)
-writtenParam top _ = top
-
--- An axis as the schema check reads it: a named argument stands for any
--- value of its axis, and its binder is checked where it is bound.
-checkedAxis : List (String, Param) -> (String, EffParamTy) -> (String, Param)
-checkedAxis schema (name, EPName _) = match lookupAxis name schema
-  Some top => (name, subTopOf top)
-  None => (name, PUnit)
-checkedAxis _ a = writtenAxis a
-
-writtenAxis : (String, EffParamTy) -> (String, Param)
-writtenAxis (name, EPLit s) = (name, PPrefix (Some s))
-writtenAxis (name, EPSet xs) = (name, PSet (Some (sortUniqS xs)))
-writtenAxis (name, _) = (name, PUnit)
-
--- A Set-domain written param is carried in the `Option String` carrier as a
--- brace-delimited, comma-separated literal `{a,b,c}` (the parser's `effParamFor`
--- TLBrace clause builds exactly this).  Decode it back to the element list.
--- (Keeps the carrier type `Option String`, so no AST `TyEffect` ripple.)
-export
-decodeSetParam : String -> List String
-decodeSetParam s =
-  let n = stringLength s
-  if n >= 2 && stringSlice 0 1 s == "{" && stringSlice (n - 1) n s == "}" then
-    sortUniqS (filterList (/= "") (splitOnComma (stringSlice 1 (n - 1) s)))
-  else
-    sortUniqS (filterList (/= "") (splitOnComma s))
-
--- split a string on ',' (Set-element separator; authority tokens contain none)
-splitOnComma : String -> List String
-splitOnComma s = splitOnCommaGo s 0 0 []
-
-splitOnCommaGo : String -> Int -> Int -> List String -> List String
-splitOnCommaGo s start i acc =
-  let n = stringLength s
-  if i >= n then
-    reverseL (stringSlice start n s :: acc)
-  else if stringSlice i (i + 1) s == "," then
-    splitOnCommaGo s (i + 1) (i + 1) (stringSlice start i s :: acc)
-  else
-    splitOnCommaGo s start (i + 1) acc
-
 atomsOfWritten : GraphCtx -> List EffAtomTy -> List Atom
 atomsOfWritten gctx ls = atomsOfWrittenIn gctx emptySigVars ls
 
 atomsOfWrittenIn : GraphCtx -> SigVars -> List EffAtomTy -> List Atom
 atomsOfWrittenIn gctx sv ls = atomsNorm (map (atomOfWrittenIn gctx sv) ls)
-
--- A written Prefix element is any non-empty string.  A trailing `*` makes it a
--- pattern; without one it is an exact element and admits only itself, so no
--- delimiter is needed to keep a sibling host or path out.  The empty string is
--- the prefix of everything and would silently mean the whole domain.
-prefixPatternOk : String -> Bool
-prefixPatternOk s = stringLength s > 0
 
 -- ── global inference state ────────────────────────────────────────────────
 
@@ -2153,16 +2093,6 @@ ioJoinClause gctx atoms =
     "; `IO` on `\{gctx.config.value.tcIoJoinProfile}` is <\{renderAtoms join}>"
   else
     ""
-
--- v2 Stage 2a: diagnostic for a rejected written effect param.
-effectParamMsg : String -> String -> String
-effectParamMsg label why = "invalid effect parameter on <\{label}>: \{why}"
-
--- The refusal for an empty Prefix element, parameterized by the noun (`pattern`
--- for a top-level Prefix param, `<axis> pattern` for a product axis).
-prefixPatternErrMsg : String -> String
-prefixPatternErrMsg noun =
-  "\{noun} is empty; name the element, or write the bare label for the whole domain"
 
 -- validate every written effect param in a program's type annotations against
 -- the registry: a Prefix label's pattern must pass prefixPatternOk; an atomic
@@ -3635,75 +3565,6 @@ checkOneEffectParam mctx l top p =
     ()
     (effectParamProblems l top p)
 
--- The problems a written parameter has as an element of the domain whose top
--- is [top], each a message; empty when it is an element.  One rule for every
--- consumer: the typechecker reports them at the atom, and `check-policy`
--- refuses an `--allow` entry that has any, so a policy is read exactly as a
--- source atom is.
-export
-effectParamProblems : String -> Param -> EffParamTy -> List String
-effectParamProblems l PUnit (EPName _) = [atomicLabelParamText l]
-effectParamProblems _ _ (EPName _) = []
-effectParamProblems _ _ EPTop = []
-effectParamProblems l (PPrefix None) (EPLit pat) = prefixLiteralProblems l pat
-effectParamProblems l (PPath None) (EPLit pat) = prefixLiteralProblems l pat
-effectParamProblems _ (PSet None) (EPLit _) = []
--- A bare literal on a Product label lifts into the first axis as the
--- domain does (`productPrimaryLift`): a prefix pattern for a Prefix axis, a
--- one-element set for a Set axis.
-effectParamProblems l (PProduct schema) (EPLit pat) =
-  primaryLiteralProblems schema pat
-    ++ productAxesProblems schema (productPrimaryLift schema pat)
-effectParamProblems l _ (EPLit _) = [atomicLabelParamText l]
--- A set's size is a bound's business (`writtenSetProblem`), checked with the
--- other elements its label writes.
-effectParamProblems _ (PSet None) (EPSet _) = []
-effectParamProblems l (PPrefix None) (EPSet _) =
-  ["label `\{l}` takes a prefix pattern, not a set"]
-effectParamProblems l (PPath None) (EPSet _) =
-  ["label `\{l}` takes a prefix pattern, not a set"]
-effectParamProblems l (PProduct _) (EPSet _) = [
-  "label `\{l}` takes named axes such as `Host=... Method=...`, not a bare set",
-]
-effectParamProblems l _ (EPSet _) = [atomicLabelParamText l]
-effectParamProblems _ (PProduct schema) (EPProduct axes) =
-  map repeatedAxisText (repeatedNames (map fst axes) [])
-    ++ productAxesProblems schema (PProduct (map (checkedAxis schema) axes))
-effectParamProblems l PUnit (EPProduct _) = [atomicLabelParamText l]
-effectParamProblems l _ (EPProduct _) =
-  ["label `\{l}` is not a product domain and takes no axes"]
-
--- A written parameter as an element of [label]'s declared domain, or the
--- first problem that keeps it from being one (`effectParamMsg`'s wording).
--- Never the domain's top for a malformed parameter: a consumer reading an
--- allowance would otherwise widen it.
-export
-decodeWrittenParam : List (String, Param) ->
-  EffLabel ->
-  EffParamTy ->
-  Result String Param
-decodeWrittenParam domains label p =
-  let top = dtopIn domains label
-  match effectParamProblems (effLabelName label) top p
-    [] => Ok (writtenParam top p)
-    m :: _ => Err (effectParamMsg (effLabelName label) m)
-
--- An FFI parameter names a LIBRARY, not a host or path.  `<FFI "libcurl">`
--- read as a prefix is what the author meant, and `prefixConcrete` strips a
--- trailing `*`, so `dsub` cannot tell the two spellings apart.  FFI keeps its
--- own empty-string message, which names a library.
-prefixLiteralProblems : String -> String -> List String
-prefixLiteralProblems l pat =
-  if l == "FFI" then
-    if stringLength pat > 0 then
-      []
-    else
-      ["the library pattern is empty; name the library, `<FFI \"curl\">`"]
-  else if prefixPatternOk pat then
-    []
-  else
-    [prefixPatternErrMsg "pattern"]
-
 -- A binder an effect atom names must have a type the domain can abstract
 -- (a `String`, in this increment), and every label naming it must draw
 -- from one domain: an authority has exactly one domain.
@@ -3758,57 +3619,6 @@ binderTypeMsg n ty =
 binderDomainMsg : String -> String
 binderDomainMsg n =
   "authority `\{n}` is used at labels from different domains, and one authority has one domain; name a second binder for the other label"
-
-atomicLabelParamText : String -> String
-atomicLabelParamText l =
-  "label `\{l}` is atomic and takes no parameter; declare it `effect \{l} Prefix` to parameterize it"
-
--- A bare literal is checked as the first axis's value BEFORE it is lifted:
--- the lift canonicalises it, and an empty pattern canonicalises to the top.
-primaryLiteralProblems : List (String, Param) -> String -> List String
-primaryLiteralProblems ((name, PPrefix _) :: _) pat =
-  if prefixPatternOk pat then [] else [prefixPatternErrMsg "\{name} pattern"]
-primaryLiteralProblems _ _ = []
-
--- A written product's axes against the label's declared schema: every axis
--- must be declared, a Prefix axis takes a non-empty pattern or exact element, a Set
--- axis a set.
-productAxesProblems : List (String, Param) -> Param -> List String
-productAxesProblems schema (PProduct axes) =
-  flatMap (a => axisProblems schema (fst a) (snd a)) axes
-productAxesProblems _ _ = []
-
--- One element of a Product has one value on each axis; two values are two
--- elements, written as two.
-repeatedAxisText : String -> String
-repeatedAxisText name =
-  "axis `\{name}` is written twice; write each value as its own element"
-
--- The names that occur more than once, each once, in first-occurrence order.
-repeatedNames : List String -> List String -> List String
-repeatedNames [] _ = []
-repeatedNames (n :: rest) seen
-  | contains n seen = repeatedNames rest seen
-  | contains n rest = n :: repeatedNames rest (n :: seen)
-  | otherwise = repeatedNames rest seen
-
-axisProblems : List (String, Param) -> String -> Param -> List String
-axisProblems schema name p = match lookupAxis name schema
-  None => [
-    "unknown product axis `\{name}`; declared axes: \{joinWith ", " (map fst schema)}",
-  ]
-  Some (PPrefix _) => match p
-    PPrefix (Some pat) =>
-      if prefixPatternOk pat then
-        []
-      else
-        [prefixPatternErrMsg "\{name} pattern"]
-    PPrefix None => []
-    _ => ["axis `\{name}` takes a prefix pattern, not a set"]
-  Some (PSet _) => match p
-    PSet _ => []
-    _ => ["axis `\{name}` takes a set, not a pattern"]
-  Some _ => []
 
 -- replace a row's bound tail effvar with its fresh instance from [esub], so each
 -- call site of a polymorphic HOF gets its own effect variable
@@ -9896,6 +9706,8 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 export
 defaultDriveInputs : DriveInputs
 defaultDriveInputs = DriveInputs {
+  diExecutedMainDriver = None,
+  diManifestRequests = [],
   diStdlibOwned = omEmpty,
   diFlatEntryIsStdlib = False,
   diTrace = None,
@@ -12242,35 +12054,6 @@ paramPolaritiesOf : ModuleCtx -> TabKey -> Option (List Polarity)
 paramPolaritiesOf mctx key =
   paramPolaritiesIn mctx.mcCells.dataParamPolarityRef.value key
 
--- The same read against an EXPLICIT table — the form `inferParamPolarities`
--- uses, so the graph-wide seed builder (`declEnvPolarityChain`) and the per-run
--- reader apply the SAME write-channel seed.  Two copies of the seed is exactly
--- the drift this split exists to prevent.
-paramPolaritiesIn : List (TabKey, List Polarity) ->
-  TabKey ->
-  Option (List Polarity)
-paramPolaritiesIn tab key
-  | tabKeyEq key (tyTabKey OriginBuiltin "Ref") = Some [PInv]
-  | tabKeyEq key (tyTabKey OriginBuiltin "Array") = Some [PInv]
-  | otherwise = lookupTab key tab
-
-recordInvocationView : TcEnv -> Unit
-recordInvocationView env =
-  let universe =
-    flatMap
-      (cands =>
-        map
-          (c => match c
-            (_, _, sch) => sch)
-          cands)
-      (IdMap.values
-        (spRows env.teDyn.dcModule.mcGraph.crossRun.universeCtorPop.value))
-  env.teDyn.dcModule.mcCells.invocationViewRef :=
-    InvocationView
-      (IdMap.values env.teCtors ++ universe)
-      env.teDyn.dcModule.mcCells.dataParamPolarityRef.value
-      env.teDyn.dcModule.mcCells.dataParamKindsRef.value
-
 -- The summary's operations over the view of the entry the drive [o] checked.  The
 -- field instantiation runs in a graph record of its own, whose effect-variable
 -- counter continues from the drive's (`doEffvarNext`).
@@ -12278,7 +12061,7 @@ export
 lastInvocationOps : DriveOutputs -> InvocationOps
 lastInvocationOps o = match o.doInvocationView
   InvocationView ctors pols kinds =>
-    let byHead = ctorsByHead ctors
+    let byHead = ctorsByHead invocationHeadKey ctors
     let gctx = initialGraphCtx builtinCtors (freshGraphRun ())
     gctx.graphRun.effvarCounter := o.doEffvarNext
     InvocationOps {
@@ -12301,48 +12084,6 @@ invocationHeadKey h = match headTyconMono h
   Some hk => headKeyTag hk
   None => "?"
 
--- A slot's variance, read as invariant where its parameter is an effect row
--- or an authority: an index is invariant (EFFECTS-SEMANTICS §6.4), whatever
--- the variance table computed for it.
-slotVariances : Option (List Polarity) ->
-  Option (List Kind) ->
-  Option (List Variance)
-slotVariances None None = None
-slotVariances pols kinds =
-  let ps = optionOr [] pols
-  let ks = optionOr [] kinds
-  Some
-    (map
-      (i => slotVariance (nthOpt i ps) (nthOpt i ks))
-      (rangeFromCount 0 (maxI (listLen ps) (listLen ks))))
-
-slotVariance : Option Polarity -> Option Kind -> Variance
-slotVariance _ (Some KRow) = VInv
-slotVariance _ (Some (KAuth _ _)) = VInv
-slotVariance (Some p) _ = varianceOf p
-slotVariance None _ = VInv
-
-varianceOf : Polarity -> Variance
-varianceOf PCo = VCo
-varianceOf PContra = VContra
-varianceOf PInv = VInv
--- never published (`publishedPolarity`); read as the phantom it means
-varianceOf PPhantom = VCo
-
--- Every constructor under its result head: the head's arguments as the
--- constructor declares them, and its field types.
-ctorsByHead : List Scheme -> OrdMap (List (List Mono, List Mono))
-ctorsByHead schemes =
-  fold
-    (acc sch => match sch
-      Forall _ _ _ _ _ mono =>
-        let (fieldTys, result) = arrowParts mono
-        let (h, params) = spineParts result
-        let key = invocationHeadKey h
-        omInsert key ((params, fieldTys) :: optionOr [] (omLookup key acc)) acc)
-    omEmpty
-    schemes
-
 -- A constructor's fields at an application's authority arguments: each
 -- declared authority parameter is replaced by the argument in its slot.  A
 -- type or row argument is left as the declaration's variable; the summary
@@ -12351,21 +12092,6 @@ instantiateFields : GraphCtx -> List Mono -> (List Mono, List Mono) -> List Mono
 instantiateFields gctx args (params, fieldTys) =
   let asub = authorityParamSubst params args
   map (substMono gctx [] [] asub) fieldTys
-
-authorityParamSubst : List Mono -> List Mono -> List (Int, Authority)
-authorityParamSubst (p :: ps) (a :: rest) = match (normalize p, normalize a)
-  (TAuth q, TAuth actual) => match authNorm q
-    AVar cell => (authvarId cell, actual) :: authorityParamSubst ps rest
-    _ => authorityParamSubst ps rest
-  _ => authorityParamSubst ps rest
-authorityParamSubst _ _ = []
-
-arrowParts : Mono -> (List Mono, Mono)
-arrowParts m = match normalize m
-  TFun dom _ res =>
-    let (rest, result) = arrowParts res
-    (dom :: rest, result)
-  other => ([], other)
 
 -- #2110: the ATOM-GUARANTEE read, sibling of `paramPolaritiesOf`.  No builtin
 -- rows: `Ref`/`Array` have no KRow parameter, so they guarantee no atoms and a
@@ -13297,26 +13023,7 @@ ownContext mctx n =
 -- [mctx] still holds that module's tables, and the next module's check
 -- mints its own record.
 publishOwn : ModuleCtx -> List (String, Scheme) -> List (String, PubScheme)
-publishOwn mctx = map (b => (
-  fst b,
-  PubScheme {
-    psScheme = snd b,
-    psContext = ownContext mctx (fst b),
-  },
-))
-
--- The prelude's schemes, each with the context [contexts] holds for it (the
--- snapshot `coreOwnContexts` took after the core pass).
-publishCore : OrdMap (List VecObl) ->
-  List (String, Scheme) ->
-  List (String, PubScheme)
-publishCore contexts = map (b => (
-  fst b,
-  PubScheme {
-    psScheme = snd b,
-    psContext = optionOr [] (omLookup (fst b) contexts),
-  },
-))
+publishOwn mctx = publishWithContexts (ownContext mctx)
 
 -- Core's own obligations, keyed by bare name (#837: the binding-id half of each
 -- key is dropped, as every cross-module reader looks a prelude name up by name).
@@ -53414,6 +53121,7 @@ checkCoreMemoized prev key runtimeDecls coreDecls runtimeSeed =
           (externSigsToMap runtimeDecls omEmpty)
           (publishCore (coreOwnContexts coreCtx) coreSchemes.mbSchemes)
           (omMapValues (_ => ()) coreSchemes.mbStandaloneSchemes)
+          coreCtx.mcCells.invocationViewRef.value
       let _ = match key
         Some k => seedPreludeInterface k [([join], pi)]
         None => ()
@@ -53443,7 +53151,9 @@ continueFromInterface gctx run pi =
     builtinExternNamesRef =
       Ref (IdMap.union pi.piExternNames gctx.builtinExternNamesRef.value),
   }
-  (bindings, corePub, initialModuleCtx restored)
+  let mctx = initialModuleCtx restored
+  mctx.mcCells.invocationViewRef := readInvocationView pi.piInvocationView
+  (bindings, corePub, mctx)
 
 preludePreambleMemoRef : Ref (Option (((Int, Int), String), PreludePreamble))
 preludePreambleMemoRef = Ref None
@@ -53891,7 +53601,7 @@ checkModulesPartialLast inputs preludeKey runtimeDecls coreDecls0 modules0 =
   (
     partialAnalysis
       rows
-      (publishedCore coreClosed coreContexts coreSchemes)
+      (publishedCore coreClosed coreContexts coreSchemes.mbSchemes)
       (captureEntryTables lastCtx coreContexts modules),
     lastCtx,
   )
@@ -54140,19 +53850,18 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
 -- `mainSchemeRef` its SET-OR-CLEAR write — is inside the payload, and the entry-report
 -- projection needs the same triple to keep the terminal module's OWN schemes/warns.
 -- Costs nothing: `checkModuleFullDiags` already computed them, and the marked tree is
--- the same list value the module was marked in, not a copy.  The diags arm puts no
--- tree in the payload: that selection returns `gdModules = []`, and the fold holds
--- every payload until the graph end, so a tree there would hold every module's
--- marked forms live for the whole drive.
-graphModuleWorker : GraphOut ->
+-- the same list value the module was marked in, not a copy. The diagnostics
+-- payload omits trees because the fold retains payloads until graph completion.
+graphModuleWorker : OrdMap Unit ->
+  GraphOut ->
   ModuleCtx ->
   String ->
   ModuleSeed ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag), ModuleCtx)
-graphModuleWorker sel prev mid seed accData accAll prog =
+  (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView), ModuleCtx)
+graphModuleWorker capture sel prev mid seed accData accAll prog =
   let implDecls = accAll ++ prog
   let (schemes, marked, errs, warns, mctx) =
     checkModuleFullDiags prev.mcGraph mid seed accData implDecls prog
@@ -54168,7 +53877,12 @@ graphModuleWorker sel prev mid seed accData accAll prog =
             ++ mctx.mcCells.promotedRef.value)
       marked
     GOutDiags => []
-  (schemes, (tree, published, errs, warns), mctx)
+  let view =
+    if omHasKey mid capture then
+      Some mctx.mcCells.invocationViewRef.value
+    else
+      None
+  (schemes, (tree, published, errs, warns, view), mctx)
 
 -- collect: keeps the worker's marked tree and its `(schemes, errs, warns)` payload
 -- per module in load order, and on the DIAGS selection's TERMINAL module records
@@ -54205,10 +53919,10 @@ graphCollect : GraphCtx ->
   GraphOut ->
   Bool ->
   String ->
-  (List Decl, List (String, PubScheme), List TcDiag, List TcDiag) ->
-  (List (String, List Decl), List ModDiags) ->
-  (List (String, List Decl), List ModDiags)
-graphCollect gctx sel isLast mid (marked, schemes, errs, warns) (markedRest, diagsRest) =
+  (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView) ->
+  (List (String, List Decl), List ModDiags, List (String, InvocationView)) ->
+  (List (String, List Decl), List ModDiags, List (String, InvocationView))
+graphCollect gctx sel isLast mid (marked, schemes, errs, warns, view) (markedRest, diagsRest, views) =
   let _ = match sel
     GOutDiags => setMainSchemeIfEntry gctx isLast schemes
     GOutTrees => ()
@@ -54217,7 +53931,11 @@ graphCollect gctx sel isLast mid (marked, schemes, errs, warns) (markedRest, dia
   let markedOut = match sel
     GOutDiags => markedRest
     GOutTrees => (mid, marked) :: markedRest
-  (markedOut, (mid, (schemes, errs, warns)) :: diagsRest)
+  (
+    markedOut,
+    (mid, (schemes, errs, warns)) :: diagsRest,
+    option views (v => (mid, v) :: views) view,
+  )
 
 -- the `(errs, warns)` projection of one full per-module entry, for the exported
 -- drivers whose contract is the narrower pair.
@@ -54545,26 +54263,6 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
     -- test/run_check_agreement_fixtures/p0_17_missing_impl_method.mdk.
     restRows
 
-driveOutputsNow : ModuleCtx -> EntryOutcome -> Int -> DriveOutputs
-driveOutputsNow mctx outcome served = DriveOutputs {
-  doEntryOutcome = outcome,
-  doHadTypeErrors = typeErrorsArmed mctx.mcGraph (),
-  doHadMatchWarnings = matchWarningsNow mctx,
-  doInvocationView = frozenInvocationView mctx.mcCells.invocationViewRef.value,
-  doGrantsEnabled = grantsEnabled mctx.mcGraph (),
-  doEffectDomains = mctx.mcGraph.effectDomains.value,
-  doStickyDiags = mctx.mcGraph.typeErrorsStickyDiags.value,
-  doIfaceExports = ifaceExportsIndex mctx.mcGraph (),
-  doFfiAliases = mctx.mcGraph.declEnvsRef.value.deData.deAliases,
-  doOrdIndex = mctx.mcGraph.declEnvsRef.value.deOrdIndex,
-  doEffvarNext = mctx.mcGraph.graphRun.effvarCounter.value,
-  doServedModules = served,
-}
-
-frozenInvocationView : InvocationView -> InvocationView
-frozenInvocationView (InvocationView ctors pols kinds) =
-  InvocationView (map (c => snd (zonkScheme emptyZonk c)) ctors) pols kinds
-
 -- Drive the whole module graph ONCE: stamp type-constructor identity, run the
 -- shared preamble, check every module dependency-first through one worker, drain
 -- at graph end, and attach the whole-graph coherence verdict.  `sel` chooses what
@@ -54619,23 +54317,29 @@ driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecl
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, coreTree, ms, coreCtx) =
     graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules
+  let capture =
+    requestedWrapperViewModules
+      inputs.diManifestRequests
+      (manifestDriverFor inputs executes)
   let serve =
     map
-      (k => diagsServe (serveStateOf serveOps coreCtx.mcGraph modules k))
+      (k =>
+        diagsServe (serveStateOf serveOps capture coreCtx.mcGraph modules k))
       keyed
   if isSome serve then raiseToHighWater coreCtx.mcGraph
   -- #154 PR-C: the worker reads BOTH accData (buildOracle `prog ++ accData`) and
   -- accAll (checkModuleFullImpl implDecls), and
   -- both are order-observable (oracle first-wins, implDecls scan order), so both
   -- concats are RETAINED — this is not the perf-gate path, which is `cmCheckWorker`'s.
-  let ((modules2, perModRaw), served, lastCtx) =
+  let coreView = coreCtx.mcCells.invocationViewRef.value
+  let ((modules2, perModRaw, views), served, lastCtx) =
     foldModules
       True
       True
-      (graphModuleWorker sel)
+      (graphModuleWorker capture sel)
       serve
       (graphCollect coreCtx.mcGraph sel)
-      ([], [])
+      ([], [], [])
       (runtimeSeed ++ coreSchemes.mbSchemes)
       (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
       []
@@ -54685,7 +54389,21 @@ driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecl
           perModRaw))
   -- Before the tree arm's `dictPass`, which writes the record's slot tables.
   let entryTables = captureEntryTables lastCtx coreContexts modules
-  let corePub = publishedCore coreClosed coreContexts coreSchemes
+  let corePub = publishedCore coreClosed coreContexts coreSchemes.mbSchemes
+  let (requests, manifests, manifestDiags) =
+    publishSelected
+      lastCtx.mcGraph.effectDomains.value
+      (invocationResolver
+        (frozenInvocationOps
+          lastInvocationOps
+          (driveOutputsNow lastCtx outcome))
+        (completionInvocationViews lastCtx coreView views))
+      inputs.diManifestRequests
+      perMod
+      corePub
+      outcome
+      (manifestDriverFor inputs executes)
+      valueMain
   -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
   -- above is already complete at this point, on both arms alike.
   let dispositions =
@@ -54707,6 +54425,8 @@ driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecl
       gdReport =
         graphReportWithOutcome
           outcome
+          manifests
+          manifestDiags
           perMod
           corePub
           []
@@ -54716,7 +54436,10 @@ driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecl
           None
           entryTables,
       gdGraph = lastCtx.mcGraph,
-      gdOutputs = driveOutputsNow lastCtx outcome servedCount,
+      gdOutputs = withPublishedManifests
+        requests
+        manifests
+        { driveOutputsNow lastCtx outcome | doServedModules = servedCount },
     }
     GOutTrees =>
       -- The set `dictPass` prepends dict params for: the bare set plus every
@@ -54769,6 +54492,8 @@ driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecl
         gdReport =
           graphReportWithOutcome
             outcome
+            manifests
+            manifestDiags
             perMod
             corePub
             residual
@@ -54778,18 +54503,11 @@ driveGraphK inputs sel valueMain executes preludeKey keyed runtimeDecls coreDecl
             (Some (coreD, modulesOut))
             entryTables,
         gdGraph = lastCtx.mcGraph,
-        gdOutputs = driveOutputsNow lastCtx outcome servedCount,
+        gdOutputs = withPublishedManifests
+          requests
+          manifests
+          { driveOutputsNow lastCtx outcome | doServedModules = servedCount },
       }
-
--- The prelude's published rows: the core pass's own when that pass closed core
--- (the diags arm), else frozen now with [contexts].
-publishedCore : Option (List (String, PubScheme)) ->
-  OrdMap (List VecObl) ->
-  ModuleBindings ->
-  List (String, PubScheme)
-publishedCore (Some rows) _ _ = rows
-publishedCore None contexts coreSchemes =
-  freezeRows (publishCore contexts coreSchemes.mbSchemes)
 
 -- The whole-graph coherence verdict, attached to the entry module's diagnostics —
 -- the tail `driveGraphK` ends with.  The narrower
@@ -54895,14 +54613,6 @@ driveErrs : List DrainFinding -> List ModDiags -> List TcDiag
 driveErrs findings perMod =
   map (f => f.dfDiag) findings ++ flatMap modDiagErrs perMod
 
--- Another binding's use of `main` is typed against the printing wrap's `main`
--- where run, build and test elaborate the wrapped program, so it is rejected.
-mainUseDiags : Option Loc -> List Decl -> List TcDiag
-mainUseDiags None _ = []
-mainUseDiags (Some site) entry = match mainUseSite site entry
-  Some at => [TcDiag "T-MAIN-USED" 1 (Some at) mainUsedMsg None None]
-  None => []
-
 -- The printing use of `main` is a closed boundary, as a test body is (see
 -- `settleClosedBody`): it instantiates `main`'s scheme with its context, poses
 -- `iface` at the instance, and publishes no polymorphic result.  So a numeric
@@ -55004,29 +54714,10 @@ autoPrintEvidence mctx mid scope iface tau =
   g.evTable := EvEntry ev (EvMany routes) :: g.evTable.value
   ev
 
--- The interface of `println`'s one-predicate context (`Display a => …`).
-printlnIface : List Decl -> Option IfaceRef
-printlnIface [] = None
-printlnIface ((DAttrib _ d) :: rest) = printlnIface (d :: rest)
-printlnIface ((DTypeSig _ "println" (TyConstrained [c] _) _) :: _) =
-  Some IfaceRef { irName = c.constraintHead, irOrigin = c.constraintOrigin }
-printlnIface (_ :: rest) = printlnIface rest
-
--- The span of `main`'s body, or of the binding when the body carries none.
-mainBodySpan : List Decl -> Option Loc
-mainBodySpan [] = None
-mainBodySpan ((DAttrib _ d) :: rest) = mainBodySpan (d :: rest)
-mainBodySpan ((DFunDef _ "main" [] body site _) :: _) = match body
-  ELoc l _ => Some l
-  _ => Some site
-mainBodySpan (_ :: rest) = mainBodySpan rest
-
 -- the entry module is last in dependency-first order
 export
 entryOwnSchemes : List (String, List (String, a)) -> List (String, a)
-entryOwnSchemes [] = []
-entryOwnSchemes [(_, ss)] = ss
-entryOwnSchemes (_ :: rest) = entryOwnSchemes rest
+entryOwnSchemes = publishedEntrySchemes
 
 -- ── multi-module `check` CLI report (DRIVER-COLLAPSE Phase 4, OPTION A) ─────
 -- The unified `medaka check` path for IMPORT-BEARING files: the caller loads the
@@ -55648,6 +55339,7 @@ elaborateModulesWithReportGraph inputs valueMain executes runtimeDecls coreDecls
         g.gdEvTable,
         g.gdDispositions,
         ElabFacts {
+          efManifests = g.gdOutputs.doManifests,
           efBinders = g.gdBinders,
           efEntryOutcome = g.gdOutputs.doEntryOutcome,
         },

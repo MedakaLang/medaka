@@ -5,7 +5,7 @@
 -- module id and lives for the process.
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectGreaterThan,
-  expectSatisfies, fail, labelFail
+  expectSatisfies, expectTrue, fail, labelFail
 }
 import frontend.ast.{Loc(..)}
 import frontend.ast.{BinderId(..)}
@@ -17,7 +17,8 @@ import support.util.{joinNl}
 import types.framed_test_support.{withDigestOf}
 import types.interface_frame.{InterfaceFault(..)}
 import types.module_interface_test.{
-  freshGraph, interfaceOf, renderBinding, renderFrozenBinding
+  freshGraph, interfaceOf, renderBinding, renderFrozenBinding, ownerDrive,
+  ownerSelectors, ownerAtoms
 }
 import types.module_interface_test_support.{
   bareDrive, chainDrive, entrySrc, leafSrc, render, renderRow
@@ -296,10 +297,10 @@ test "a reader refuses every file that is not whole and true" =
         (
           "a wrong format version",
           expectEqual
-            "format 2"
+            "format 1"
             (verdict
               (decodeModuleInterface
-                (S.replace "(medaka-module 1" "(medaka-module 2" good))),
+                (S.replace "(medaka-module 2" "(medaka-module 1" good))),
         ),
         (
           "an unknown section tag",
@@ -330,7 +331,7 @@ test "a reader refuses every file that is not whole and true" =
         (
           "a truncated list",
           expectEqual
-            "malformed file/0/section.2: module-interface: expected 24 field(s)"
+            "malformed file/0/section.2: module-interface: expected 25 field(s)"
             (verdict (decodeModuleInterface (truncatedList good))),
         ),
         (
@@ -370,3 +371,55 @@ test "a stale key is named before the body is read" = match recorded ()
           (map moduleKeyText (fromResult (readModuleKey garbage))),
       ),
     ]
+
+test "decoded module owner basis answers a new request without a dependency worker" =
+  let (_, cold) = ownerDrive []
+  match interfaceOf "basis_dep"
+    None => fail "owner interface missing"
+    Some mi => match decodeModuleInterface (encodeModuleInterface mi)
+      Err e => fail "decode: \{verdict (Err e)}"
+      Ok decoded =>
+        let _ = freshGraph "decoded-unrelated" 4684
+        seedModuleInterfaces [decoded]
+        let (report, warm) = ownerDrive ownerSelectors
+        expectEach [
+          ("cold count", expectEqual 0 cold.doServedModules),
+          ("decoded count", expectEqual 1 warm.doServedModules),
+          (
+            "checked",
+            expectTrue (isSome report.trChecked),
+          ),
+          (
+            "exact owner and importer",
+            expectEqual
+              [("basis_dep", ["Clock"]), ("basis_entry", [])]
+              (ownerAtoms warm),
+          ),
+        ]
+
+test "a module basis is mandatory and uses the shared view grammar" =
+  match recorded ()
+    None => fail "no interface recorded"
+    Some (_, good) =>
+      let alter basis = match parseSExp ("(" ++ good ++ ")")
+        Ok (SList [header, SList [section, joins, SList (tag :: fields)]]) =>
+          withDigestOf
+            good
+            (renderSExp
+                (SList [section, joins, SList (tag :: take 24 fields ++ basis)])
+              ++ "\n")
+        _ => good
+      expectEach [
+        (
+          "missing basis",
+          expectEqual
+            "malformed file/0/section.2: module-interface: expected 25 field(s)"
+            (verdict (decodeModuleInterface (alter []))),
+        ),
+        (
+          "malformed basis",
+          expectEqual
+            "malformed file/0/section.2/module-interface.25/invocation-view: invocation-view: expected 3 field(s)"
+            (verdict (decodeModuleInterface (alter [SAtom "invocation-view"]))),
+        ),
+      ]

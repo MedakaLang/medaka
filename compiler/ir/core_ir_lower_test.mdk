@@ -15,6 +15,66 @@ import types.annotate.{annotateProgram}
 import types.program_facts.{ProgramFacts(..), emptyFacts}
 import types.publish.{EntryOutcome(..)}
 import support.util.{joinNl}
+import types.capability_manifest.{
+  EntryKey(..),
+  ManifestRequest(..),
+  InvocationProtocol(..),
+  CapabilityManifest(..),
+  FrozenAtom(..),
+  FrozenAuthority(..),
+}
+import types.effect_domain.{Param(..)}
+import ir.core_ir.{withBinderRows}
+import ir.core_ir_sexp.{cprogramToSexp}
+import ir.core_ir_sexp_parse.{parseCProgram}
+import ir.dce.{dceFilter}
+import backend.wasm_names.{uniqueBinders}
+import backend.wasm_reach.{wasmReachFilter}
+
+clockManifest : CapabilityManifest
+clockManifest = CapabilityManifest {
+  request = ManifestRequest {
+    entry = EntryKey { moduleId = "source", binding = "dead" },
+    protocol = HostInvocation,
+  },
+  atoms = [
+    FrozenAtom {
+      label = "Clock",
+      origin = OriginBuiltin,
+      domainTop = PUnit,
+      authority = FrozenConst PUnit,
+    },
+  ],
+}
+
+test "lowering DCE reach uniquing binder updates and sexp preserve a complete manifest" =
+  let facts = { emptyFacts | pfManifests = [clockManifest] }
+  let decls =
+    annotateProgram
+      (dceFilter
+        (desugar
+          (parse """
+dead : Unit -> <Clock> Unit
+dead _ = ()
+main = ()
+""")))
+  let lowered = lowerProgramEmitWith facts decls
+  let reached = wasmReachFilter lowered
+  let unique = uniqueBinders reached
+  let restored = parseCProgram (cprogramToSexp unique)
+  let view (CProgram _ _ _ _ _ f) =
+    map
+      (m => (
+        (m : CapabilityManifest).request.entry.moduleId,
+        (m : CapabilityManifest).request.entry.binding,
+        map (a => a.label) m.atoms,
+      ))
+      f.factManifests
+  let expected = [("source", "dead", ["Clock"])]
+  expectAll
+    (map
+      (p => expectEqual expected (view p))
+      [lowered, reached, unique, withBinderRows [] unique, restored])
 
 marked : String -> List String
 marked source = noInlineFnNames (desugar (parse source))

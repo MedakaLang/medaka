@@ -41,6 +41,7 @@ import support.ordmap.{
   OrdMap, omEmpty, omInsert, omLookup, omHasKey, omRestrict
 }
 import support.util.{joinNl, lenKey, listLen, isNonEmptyL}
+import types.invocation_basis.{publishInvocationView}
 import types.prelude_interface.{
   freezeScheme, thawScheme, zonkSlot, zonkMethodSlot, zonkRecord, mapSlots
 }
@@ -53,7 +54,7 @@ import types.runtime_types.{BinderRow, BinderTypeTable, addBinderRow}
 import types.tc_types.{
   GraphCtx(..), CrossRun(..), GraphRun(..), GrantState(..), ModuleCtx(..),
   ModuleCells(..), ExportBinding(..), PredicateSlot, MethodPredicateSlot,
-  CDeclaredPrefix, RecordInfo, MethodGrant
+  CDeclaredPrefix, RecordInfo, MethodGrant, PublishedInvocationView
 }
 
 -- ── the key ─────────────────────────────────────────────────────────────────
@@ -117,6 +118,7 @@ public export data ModuleInterface = ModuleInterface {
   miMethodGrants : List (String, MethodGrant),
   miTakers : List String,
   miSticky : List (String, TcDiag),
+  miInvocationView : PublishedInvocationView,
 }
 
 -- The rows of a graph record a module's check adds to, read at one point: the
@@ -261,6 +263,8 @@ freezeModuleInterface key serial row exports before mctx =
       M.entries (M.difference after.mrMethodGrants before.mrMethodGrants),
     miTakers = M.keys (M.difference after.mrTakers before.mrTakers),
     miSticky = newPrefix after.mrSticky before.mrSticky,
+    miInvocationView =
+      publishInvocationView mctx.mcCells.invocationViewRef.value,
   }
 
 -- [own]'s rows inserted into [pop] by identity, each spelling's rows in their own

@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
 -- Sibling test module for `compiler/backend/extern_catalog.mdk` ([P-TEST-SIBLING]).
@@ -291,7 +292,8 @@ test "(c) eval: the catalog binds exactly the externs the interpreter's tables b
 emitWat : String -> (String, List String)
 emitWat src =
   let decls = grantWholeDomain (desugar (parse src))
-  let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
+  let input =
+    makeWasmEmitInput RawUnchecked PreludeFreeRuntime (ctorFieldTypeNames decls)
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (plan, prepared) =
     prepareWasmPlan PreludeFreeRuntime (inputCtorFloatFieldsW input) cp

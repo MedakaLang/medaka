@@ -10,6 +10,7 @@ import support.util.{
   anyList, dedup, filterList, isNonEmptyL, isSome, listLen, zipL
 }
 import types.chain_key.{chainGraphKey}
+import types.invocation_basis.{readInvocationView}
 import types.module_interface.{
   ModuleKey(..),
   ModuleInterface,
@@ -25,8 +26,8 @@ import types.module_interface.{
 import types.publish.{ModDiags, PubScheme, TcDiag, freezeRows}
 import types.repr.{Mono}
 import types.tc_types.{
-  ExportBinding, GraphCtx(..), GraphRun(..), LiveGoal(..), ModuleCtx(..),
-  ModuleServe(..), ServeStep(..)
+  ExportBinding, GraphCtx(..), GraphRun(..), InvocationView, LiveGoal(..),
+  ModuleCtx(..), ModuleServe(..), ServeStep(..)
 }
 import frontend.ast.{Decl}
 
@@ -39,13 +40,14 @@ public export data ServeOps = ServeOps {
 }
 
 -- A diagnostics drive's per-module payload (`graphModuleWorker`).
-export type DiagsPayload = (List Decl, List (String, PubScheme), List TcDiag, List TcDiag)
+export type DiagsPayload = (List Decl, List (String, PubScheme), List TcDiag, List TcDiag, Option InvocationView)
 
 -- The serve policy's state: the source keys of the modules still to come, the graph
 -- key, the identity of each module so far, the modules checked and not recorded, and
 -- the counts `ModuleServe` reports.
 export data ServeState = ServeState {
   ssOps : ServeOps,
+  ssCapture : OrdMap Unit,
   ssKeys : List (Option String),
   ssGraph : String,
   ssIdents : OrdMap String,
@@ -61,12 +63,14 @@ export data ServeState = ServeState {
 -- which a module reads whether or not it imports their definer (`chainGraphKey`).
 export
 serveStateOf : ServeOps ->
+  OrdMap Unit ->
   GraphCtx ->
   List (String, List Decl) ->
   (String, List (Option String)) ->
   ServeState
-serveStateOf ops gctx modules (chain, steps) = ServeState {
+serveStateOf ops capture gctx modules (chain, steps) = ServeState {
   ssOps = ops,
+  ssCapture = capture,
   ssKeys = steps,
   ssGraph =
     if anyList isSome steps then
@@ -123,7 +127,16 @@ diagsServeStep st mid prog prev =
             applyModuleInterface prev.mcGraph mi
           ServeHit
             own
-            ([], schemes, errs, warns)
+            (
+              [],
+              schemes,
+              errs,
+              warns,
+              if omHasKey mid st.ssCapture then
+                Some (readInvocationView mi.miInvocationView)
+              else
+                None,
+            )
             (diagsServe (servedState next mid mi))
         None =>
           let before = captureModuleRows prev.mcGraph
@@ -245,7 +258,7 @@ recordChecked st key before mctx own done =
   let drained = withModDiags (st.ssOps.soDrain mctx) done
   match drained
     [] => (drained, diagsServe st)
-    (mid, (marked, schemes, errs, warns)) :: older =>
+    (mid, (marked, schemes, errs, warns, _)) :: older =>
       let published = freezeRows schemes
       let mi =
         freezeModuleInterface
@@ -257,7 +270,20 @@ recordChecked st key before mctx own done =
           mctx
       recordModuleInterface mi
       (
-        (mid, (marked, published, errs, warns)) :: older,
+        (
+            mid,
+            (
+              marked,
+              published,
+              errs,
+              warns,
+              if omHasKey mid st.ssCapture then
+                Some (readInvocationView mi.miInvocationView)
+              else
+                None,
+            ),
+          )
+          :: older,
         diagsServe { st |
           ssIdents = omInsert mid (moduleInterfaceIdentity mi) st.ssIdents,
           ssFrozen =
@@ -273,8 +299,8 @@ withModDiags : (List ModDiags -> List ModDiags) ->
 withModDiags f done = map withMarked (zipL done (f (map payloadRow done)))
 
 payloadRow : (String, DiagsPayload) -> ModDiags
-payloadRow (mid, (_, schemes, errs, warns)) = (mid, (schemes, errs, warns))
+payloadRow (mid, (_, schemes, errs, warns, _)) = (mid, (schemes, errs, warns))
 
 withMarked : ((String, DiagsPayload), ModDiags) -> (String, DiagsPayload)
-withMarked ((mid, (marked, _, _, _)), (_, (schemes, errs, warns))) =
-  (mid, (marked, schemes, errs, warns))
+withMarked ((mid, (marked, _, _, _, view)), (_, (schemes, errs, warns))) =
+  (mid, (marked, schemes, errs, warns, view))

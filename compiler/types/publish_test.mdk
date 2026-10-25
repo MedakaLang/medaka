@@ -1,3 +1,5 @@
+import types.module_interface_test.{ownerAtoms}
+import list.{take, drop}
 -- Unit tests for the published shapes' zonk, freeze, validator and graph report
 -- over hand-built values; a scheme's context surviving a later drive and a
 -- shadowing binding's context (#2054); published schemes holding no Link; and
@@ -47,6 +49,560 @@ import types.typecheck.{
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
 import test_process.{withScratchDir}
+import types.capability_manifest.{
+  EntryKey(..),
+  ManifestRequest(..),
+  ManifestSelector(..),
+  InvocationProtocol(..),
+  CapabilityManifest,
+  ManifestLookup(..),
+  FrozenAuthority(..),
+  FrozenAtom,
+  lookupManifest,
+}
+import types.tc_types.{DriveInputs(..), ElabFacts(..)}
+import types.effect_domain.{drender}
+import types.target_profile.{lookupProfile}
+import types.publish.{publishSelected}
+import types.effect_invocation.{InvocationOps(..)}
+import types.effect_rows.{Atom(..), EffLabel(..)}
+
+manifestRequest : String -> String -> InvocationProtocol -> ManifestRequest
+manifestRequest mid name protocol = ManifestRequest {
+  entry = EntryKey { moduleId = mid, binding = name },
+  protocol = protocol,
+}
+
+manifestAtoms : CapabilityManifest -> List (String, String)
+manifestAtoms m =
+  map
+    (atom => (
+      atom.label,
+      match atom.authority
+        FrozenConst value => drender value
+        FrozenVar variable => "variable:" ++ optionOr "" variable.sourceName
+        _ => "compound",
+    ))
+    m.atoms
+
+lookupManifestView : ManifestRequest ->
+  DriveOutputs ->
+  (String, List (String, String))
+lookupManifestView request outputs =
+  match lookupManifest request outputs.doManifestRequests outputs.doManifests
+    NotRequested => ("not requested", [])
+    RequestedMissing _ => ("missing", [])
+    Published manifest =>
+      (manifest.request.entry.moduleId, manifestAtoms manifest)
+
+requestSource : String
+requestSource =
+  """
+a : Unit -> <Net "a/*"> Unit
+a _ = ()
+b : Unit -> <FileRead "b/*"> Unit
+b _ = ()
+main = ()
+"""
+
+requestInputs : DriveInputs
+requestInputs = { defaultDriveInputs |
+  diManifestRequests = [
+    ExactEntry EntryKey { moduleId = "entry", binding = "a" } HostInvocation,
+    ExactEntry EntryKey { moduleId = "entry", binding = "b" } HostInvocation,
+  ],
+}
+
+test "one checked result publishes two upfront requests and serves A B A locally" =
+  let (_, report, outputs) = elaborateModulesWithReport
+    requestInputs
+    False
+    None
+    []
+    []
+    [("entry", desugar (parseLocated requestSource))]
+  let a = manifestRequest "entry" "a" HostInvocation
+  let b = manifestRequest "entry" "b" HostInvocation
+  let before = lookupManifestView a outputs
+  let middle = lookupManifestView b outputs
+  let after = lookupManifestView a outputs
+  expectEach [
+    ("checked", expectTrue (isSome report.trChecked)),
+    ("A", expectEqual ("entry", [("Net", " \"a/*\"")]) before),
+    ("B", expectEqual ("entry", [("FileRead", " \"b/*\"")]) middle),
+    ("A again", expectEqual before after),
+    (
+      "unrequested pure main",
+      expectEqual
+        ("not requested", [])
+        (lookupManifestView
+          (manifestRequest "entry" "main" HostInvocation)
+          outputs),
+    ),
+    (
+      "report carries the same frozen contents",
+      expectEqual
+        (map manifestAtoms outputs.doManifests)
+        (option [] (c => map manifestAtoms c.cpManifests) report.trChecked),
+    ),
+  ]
+
+test "requested pure and missing differ and missing withholds checked publication" =
+  let run name =
+    checkModulesChainReportFor
+      { defaultDriveInputs |
+        diManifestRequests =
+          [ExactEntry EntryKey { moduleId = "", binding = name } HostInvocation],
+      }
+      False
+      None
+      ""
+      []
+      []
+      []
+      [("", desugar (parseLocated "main = ()"))]
+  let (pureReport, pureOutputs) = run "main"
+  let (missingReport, missingOutputs) = run "nosuch"
+  expectEach [
+    (
+      "pure",
+      expectEqual
+        ("", [])
+        (lookupManifestView
+          (manifestRequest "" "main" HostInvocation)
+          pureOutputs),
+    ),
+    ("pure checked", expectTrue (isSome pureReport.trChecked)),
+    (
+      "missing",
+      expectEqual
+        ("missing", [])
+        (lookupManifestView
+          (manifestRequest "" "nosuch" HostInvocation)
+          missingOutputs),
+    ),
+    ("missing unchecked", expectFalse (isSome missingReport.trChecked)),
+    (
+      "diagnostic",
+      expectEqual
+        ["no 'nosuch' entry found"]
+        (map (p => tcMsg (snd p)) missingReport.trResidual),
+    ),
+  ]
+
+test "entry-over-prelude and exact module identities use checked own rows" =
+  let selectors = [
+    EntryOverPrelude "pick" HostInvocation,
+    EntryOverPrelude "onlyCore" HostInvocation,
+    ExactEntry EntryKey { moduleId = "dep", binding = "pick" } HostInvocation,
+    ExactEntry EntryKey { moduleId = "core", binding = "pick" } HostInvocation,
+  ]
+  let inputs = { defaultDriveInputs | diManifestRequests = selectors }
+  let (_, report, outputs) = elaborateModulesWithReport
+    inputs
+    False
+    None
+    []
+    (desugar
+      (parseLocated
+        """
+pick : Unit -> <Clock> Unit
+pick _ = ()
+onlyCore : Unit -> <Clock> Unit
+onlyCore _ = ()
+"""))
+    [
+      (
+        "dep",
+        desugar
+          (parseLocated
+            """
+export pick : Unit -> <Net "dep/*"> Unit
+pick _ = ()
+"""),
+      ),
+      ("entry", desugar (parseLocated """
+pick _ = ()
+main = ()
+""")),
+    ]
+  expectEach [
+    ("checked", expectTrue (isSome report.trChecked)),
+    (
+      "prelude fallback",
+      expectEqual
+        ("core", [("Clock", "")])
+        (lookupManifestView
+          (manifestRequest "core" "onlyCore" HostInvocation)
+          outputs),
+    ),
+    (
+      "own wins",
+      expectEqual
+        ("entry", [])
+        (lookupManifestView
+          (manifestRequest "entry" "pick" HostInvocation)
+          outputs),
+    ),
+    (
+      "same spelling in dependency",
+      expectEqual
+        ("dep", [("Net", " \"dep/*\"")])
+        (lookupManifestView
+          (manifestRequest "dep" "pick" HostInvocation)
+          outputs),
+    ),
+    (
+      "same spelling in core",
+      expectEqual
+        ("core", [("Clock", "")])
+        (lookupManifestView
+          (manifestRequest "core" "pick" HostInvocation)
+          outputs),
+    ),
+  ]
+
+test "changed requests publish after warm prefix replay and profile changes" =
+  let modules = [
+    ("dep", desugar (parseLocated "export value = ()")),
+    ("entry", desugar (parseLocated requestSource)),
+  ]
+  let run inputs =
+    checkModulesChainReportFor
+      inputs
+      False
+      (Some (9910, 9911))
+      "manifest-publication"
+      [Some "dep", None]
+      []
+      []
+      modules
+  let (_, cold) = run requestInputs
+  let (_, warm) = run { requestInputs |
+    diManifestRequests = [
+      ExactEntry
+        EntryKey { moduleId = "entry", binding = "main" }
+        HostInvocation,
+    ],
+  }
+  let replayed = warm.doServedModules
+  let browser =
+    driveInputsFor
+      (match lookupProfile "wasmgc/browser-worker"
+        Ok p => Some p
+        Err _ => None)
+      False
+      []
+  let (_, switched) =
+    run { browser | diManifestRequests = requestInputs.diManifestRequests }
+  let switchedReplayed = switched.doServedModules
+  let (_, back) = run requestInputs
+  expectEach [
+    (
+      "cold A",
+      expectEqual
+        ("entry", [("Net", " \"a/*\"")])
+        (lookupManifestView (manifestRequest "entry" "a" HostInvocation) cold),
+    ),
+    ("warm prefix", expectEqual 1 replayed),
+    (
+      "changed request",
+      expectEqual
+        ("entry", [])
+        (lookupManifestView
+          (manifestRequest "entry" "main" HostInvocation)
+          warm),
+    ),
+    (
+      "old request absent",
+      expectEqual
+        ("not requested", [])
+        (lookupManifestView (manifestRequest "entry" "a" HostInvocation) warm),
+    ),
+    ("profile invalidates", expectEqual 0 switchedReplayed),
+    (
+      "profile keeps manifest",
+      expectEqual
+        (map manifestAtoms cold.doManifests)
+        (map manifestAtoms switched.doManifests),
+    ),
+    ("profile back cold", expectEqual 0 back.doServedModules),
+    (
+      "profile back manifests",
+      expectEqual
+        (map manifestAtoms cold.doManifests)
+        (map manifestAtoms back.doManifests),
+    ),
+  ]
+
+test "checked scheme indexes preserve the first published row in own and core scopes" =
+  let first = pub (plainScheme int)
+  let later =
+    pub
+      (Forall
+        []
+        []
+        []
+        []
+        (EffRow [Atom (EffLabel "Clock" OriginBuiltin) (AConst PUnit)] None)
+        int)
+  let rows = [("same", first), ("same", later)]
+  let ops = InvocationOps {
+    headVariances = _ => None,
+    appliedFields = _ => [],
+    headKey = _ => "?",
+  }
+  let (_, manifests, diags) =
+    publishSelected
+      []
+      (_ => Some ops)
+      [
+        EntryOverPrelude "same" HostInvocation,
+        ExactEntry
+          EntryKey { moduleId = "core", binding = "same" }
+          HostInvocation,
+      ]
+      [("entry", (rows, [], []))]
+      rows
+      noEntryOutcome
+      None
+      False
+  expectEach [
+    (
+      "first checked rows stay pure",
+      expectEqual [[], []] (map manifestAtoms manifests),
+    ),
+    (
+      "both source identities are retained",
+      expectEqual
+        ["entry", "core"]
+        (map (m => (m : CapabilityManifest).request.entry.moduleId) manifests),
+    ),
+    ("valid selection", expectEqual [] (map tcMsg diags)),
+  ]
+
+test "frozen selected manifests survive source cell mutation and P U P publication" =
+  let cell = Ref (AUnbound 5500 0 (PPrefix None) True (Some "path"))
+  let s =
+    Forall
+      []
+      []
+      [5500]
+      []
+      (EffRow [Atom (EffLabel "Net" OriginBuiltin) (AVar cell)] None)
+      int
+  let ops = InvocationOps {
+    headVariances = _ => None,
+    appliedFields = _ => [],
+    headKey = _ => "?",
+  }
+  let select rows =
+    publishSelected
+      [("Net", PPrefix None)]
+      (_ => Some ops)
+      [EntryOverPrelude "p" HostInvocation]
+      [("entry", (rows, [], []))]
+      []
+      noEntryOutcome
+      None
+      False
+  let (_, frozen, _) = select [("p", pub s)]
+  let before = map manifestAtoms frozen
+  let _ =
+    cell := ALink 5500 (PPrefix None) (AConst (PPrefix (Some "changed/*")))
+  let (_, unrelated, _) = select [("p", pub (plainScheme int))]
+  let (_, republished, _) = select [("p", pub s)]
+  expectEach [
+    ("P", expectEqual [[("Net", "variable:path")]] before),
+    ("U", expectEqual [[]] (map manifestAtoms unrelated)),
+    ("P remains frozen", expectEqual before (map manifestAtoms frozen)),
+    (
+      "new P observes mutation",
+      expectEqual [[("Net", " \"changed/*\"")]] (map manifestAtoms republished),
+    ),
+  ]
+
+test "executed Async main charges its checked driver on tree and keyed paths" =
+  let modules = [
+    (
+      "async",
+      desugar
+        (parseLocated
+          """
+public export data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
+export runAsyncMain : Async e Unit -> <Net "driver/*" | e> Unit
+runAsyncMain _ = ()
+"""),
+    ),
+    (
+      "entry",
+      desugar
+        (parseLocated
+          """
+import async.{Async(..)}
+runAsyncMain _ = ()
+main : Async <Clock> Unit
+main = Done ()
+"""),
+    ),
+  ]
+  let inputs = { defaultDriveInputs |
+    diManifestRequests = [
+      ExactEntry
+        EntryKey { moduleId = "entry", binding = "main" }
+        HostInvocation,
+      ExactEntry EntryKey { moduleId = "entry", binding = "main" } ExecutedMain,
+    ],
+    diExecutedMainDriver =
+      Some EntryKey { moduleId = "async", binding = "runAsyncMain" },
+  }
+  let (_, treeReport, tree) =
+    elaborateModulesWithReport
+      inputs
+      True
+      (Some "runAsyncMain")
+      []
+      entryOutcomePrelude
+      modules
+  let (keyedReport, keyed) =
+    checkModulesChainReportFor
+      inputs
+      True
+      (Some (9920, 9921))
+      "async-manifest"
+      [Some "async-driver", None]
+      []
+      entryOutcomePrelude
+      modules
+  let (missingReport, _) =
+    checkModulesChainReportFor
+      { inputs | diExecutedMainDriver = None }
+      True
+      (Some (9920, 9921))
+      "async-manifest"
+      [Some "async-driver", None]
+      []
+      entryOutcomePrelude
+      modules
+  let host = manifestRequest "entry" "main" HostInvocation
+  let executed = manifestRequest "entry" "main" ExecutedMain
+  expectEach [
+    ("tree checked", expectTrue (isSome treeReport.trChecked)),
+    ("keyed checked", expectTrue (isSome keyedReport.trChecked)),
+    (
+      "host charges deferred Clock",
+      expectEqual ("entry", [("Clock", "")]) (lookupManifestView host tree),
+    ),
+    (
+      "executed adds fixed driver row",
+      expectEqual
+        ("entry", [("Clock", ""), ("Net", " \"driver/*\"")])
+        (lookupManifestView executed tree),
+    ),
+    (
+      "keyed uses upfront checked driver",
+      expectEqual
+        (lookupManifestView executed tree)
+        (lookupManifestView executed keyed),
+    ),
+    (
+      "missing driver withholds publication",
+      expectFalse (isSome missingReport.trChecked),
+    ),
+    (
+      "missing driver diagnostic",
+      expectEqual
+        ["no checked Async driver selected for executed main"]
+        (map (p => tcMsg (snd p)) missingReport.trResidual),
+    ),
+  ]
+
+floatMainCase : String -> Bool -> Expectation
+floatMainCase mid shadow =
+  let core =
+    desugar
+      (parseLocated
+        """
+interface Display a where
+  display : a -> String
+impl Display Float where
+  display _ = "float"
+println : Display a => a -> <Stdout> Unit
+println x = let _ = display x in ()
+""")
+  let inputs = { defaultDriveInputs |
+    diManifestRequests = [
+      ExactEntry EntryKey { moduleId = mid, binding = "main" } HostInvocation,
+      ExactEntry EntryKey { moduleId = mid, binding = "main" } ExecutedMain,
+      if shadow then
+        ExactEntry
+          EntryKey { moduleId = mid, binding = "println" }
+          HostInvocation
+      else
+        EntryOverPrelude "println" HostInvocation,
+    ],
+  }
+  let (elab, report, outputs) = elaborateModulesWithReport inputs True (Some
+    "runMain") [] core [
+    (
+      mid,
+      desugar
+        (parseLocated
+          ("""
+main : Float
+main = 6.0
+"""
+            ++ (if shadow then "println _ = ()\n" else ""))),
+    ),
+  ]
+  let (_, _, _, _, _, _, facts) = elab
+  expectEach [
+    ("checked", expectTrue (isSome report.trChecked)),
+    (
+      "host is pure",
+      expectEqual
+        (mid, [])
+        (lookupManifestView (manifestRequest mid "main" HostInvocation) outputs),
+    ),
+    (
+      "execution prints",
+      expectEqual
+        (mid, [("Stdout", "")])
+        (lookupManifestView (manifestRequest mid "main" ExecutedMain) outputs),
+    ),
+    (
+      "println selection uses its checked owner",
+      expectEqual
+        (
+          if shadow then mid else "core",
+          if shadow then [] else [("Stdout", "")],
+        )
+        (lookupManifestView
+          (manifestRequest
+            (if shadow then mid else "core")
+            "println"
+            HostInvocation)
+          outputs),
+    ),
+    (
+      "elaboration preserves both protocols",
+      expectEqual
+        (map manifestAtoms outputs.doManifests)
+        (map manifestAtoms facts.efManifests),
+    ),
+  ]
+
+test "executed signed Float mains keep shipped printing across core collisions and shadows" =
+  expectEach
+    (flatMap
+      (mid =>
+        map
+          (shadow => (
+            mid ++ (if shadow then " with println" else " without println"),
+            floatMainCase mid shadow,
+          ))
+          [False, True])
+      ["entry", "core"])
 
 int : Mono
 int = TCon "Int" OriginBuiltin
@@ -1314,5 +1870,219 @@ test "equal configurations digest to equal memo keys" =
       expectNotEqual
         (tcConfigOf [] (driveInputsFor None True [])).tcKey
         (key []),
+    ),
+  ]
+
+boxOwner : String -> String -> List Decl
+boxOwner visibility label =
+  desugar
+    (parseLocated
+      "\{visibility} data Box = Box (Unit -> <\{label}> Unit)\nexport make : Box\nmake = Box (_ => ())\n")
+
+boxImporter : List Decl
+boxImporter = desugar (parseLocated "import dep.{Box, make}\nmain = make")
+
+ownerSelectors : List ManifestSelector
+ownerSelectors = [
+  ExactEntry EntryKey { moduleId = "dep", binding = "make" } HostInvocation,
+  ExactEntry EntryKey { moduleId = "entry", binding = "main" } HostInvocation,
+]
+
+test "exact owner retains private callback fields across both graph selections" =
+  let run trees selectors mods =
+    let inputs = { defaultDriveInputs | diManifestRequests = selectors }
+    if trees then
+      let (_, report, outputs) =
+        elaborateModulesWithReport inputs False None [] [] mods
+      (isSome report.trChecked, ownerAtoms outputs)
+    else
+      let (report, outputs) =
+        checkModulesChainReportFor inputs False None "" [] [] [] mods
+      (isSome report.trChecked, ownerAtoms outputs)
+  let abstract = [("dep", boxOwner "export" "Clock"), ("entry", boxImporter)]
+  let publicMods =
+    [("dep", boxOwner "public export" "Clock"), ("entry", boxImporter)]
+  expectEach [
+    (
+      "alone",
+      expectEqual
+        (True, [("dep", ["Clock"])])
+        (run True (take 1 ownerSelectors) (take 1 abstract)),
+    ),
+    (
+      "trees abstract",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", [])])
+        (run True ownerSelectors abstract),
+    ),
+    (
+      "diags abstract",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", [])])
+        (run False ownerSelectors abstract),
+    ),
+    (
+      "trees public",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", ["Clock"])])
+        (run True ownerSelectors publicMods),
+    ),
+    (
+      "diags public",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", ["Clock"])])
+        (run False ownerSelectors publicMods),
+    ),
+  ]
+
+test "same-spelled constructors use their exact module views" =
+  let inputs = { defaultDriveInputs |
+    diManifestRequests = [
+      ExactEntry EntryKey { moduleId = "a", binding = "make" } HostInvocation,
+      ExactEntry EntryKey { moduleId = "b", binding = "make" } HostInvocation,
+    ],
+  }
+  let (_, report, outputs) = elaborateModulesWithReport
+    inputs
+    False
+    None
+    []
+    []
+    [
+      ("a", boxOwner "export" "Clock"),
+      ("b", boxOwner "export" "Net \"b/*\""),
+      ("entry", desugar (parseLocated "main = ()")),
+    ]
+  expectEach [
+    ("checked", expectTrue (isSome report.trChecked)),
+    (
+      "owners",
+      expectEqual [("a", ["Clock"]), ("b", ["Net"])] (ownerAtoms outputs),
+    ),
+  ]
+
+test "request-independent prefix views replay A B A and invalidate by source and profile" =
+  let run selectors visibility inputs key suffix =
+    let (report, outputs) =
+      checkModulesChainReportFor
+        { inputs | diManifestRequests = selectors }
+        False
+        (Some (9950, 9951))
+        "owner-cache"
+        [Some key, None]
+        []
+        []
+        [("dep", boxOwner visibility "Clock"), ("entry", suffix)]
+    (isSome report.trChecked, ownerAtoms outputs, outputs.doServedModules)
+  let a = drop 1 ownerSelectors
+  let b = ownerSelectors
+  let cold = run a "export" defaultDriveInputs "abstract" boxImporter
+  let warm = run b "export" defaultDriveInputs "abstract" boxImporter
+  let again = run a "export" defaultDriveInputs "abstract" boxImporter
+  let changedSuffix =
+    run
+      b
+      "export"
+      defaultDriveInputs
+      "abstract"
+      (desugar (parseLocated "import dep.{Box, make}\nmain = make\nextra = ()"))
+  let changedSource =
+    run b "public export" defaultDriveInputs "public" boxImporter
+  let changedSourceWarm =
+    run b "public export" defaultDriveInputs "public" boxImporter
+  let profile = { defaultDriveInputs | diProfileName = "changed-owner-profile" }
+  let changedProfile = run b "public export" profile "public" boxImporter
+  let profileWarm = run b "public export" profile "public" boxImporter
+  expectEach [
+    ("cold A", expectEqual (True, [("entry", [])], 0) cold),
+    ("warm B", expectEqual (True, [("dep", ["Clock"]), ("entry", [])], 1) warm),
+    ("A again", expectEqual (True, [("entry", [])], 1) again),
+    ("changed suffix", expectEqual warm changedSuffix),
+    (
+      "visibility cold",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", ["Clock"])], 0)
+        changedSource,
+    ),
+    (
+      "visibility warm",
+      expectEqual
+        (True, [("dep", ["Clock"]), ("entry", ["Clock"])], 1)
+        changedSourceWarm,
+    ),
+    ("profile cold", expectEqual changedSource changedProfile),
+    ("profile warm", expectEqual changedSourceWarm profileWarm),
+  ]
+
+test "core declaration basis preserves its abstract constructor ownership on cold and warm paths" =
+  let core = boxOwner "export" "Clock"
+  let importer = desugar (parseLocated "main = make")
+  let inputs = { defaultDriveInputs |
+    diManifestRequests = [
+      ExactEntry
+        EntryKey { moduleId = "core", binding = "make" }
+        HostInvocation,
+      ExactEntry
+        EntryKey { moduleId = "entry", binding = "main" }
+        HostInvocation,
+    ],
+  }
+  let (_, treeReport, trees) =
+    elaborateModulesWithReport inputs False None [] core [("entry", importer)]
+  let run _ =
+    checkModulesChainReportFor
+      inputs
+      False
+      (Some (9952, 9953))
+      "core-owner"
+      [None]
+      []
+      core
+      [("entry", importer)]
+  let (coldReport, cold) = run ()
+  let (warmReport, warm) = run ()
+  expectEach [
+    (
+      "checked",
+      expectEqual
+        [True, True, True]
+        (map (r => isSome r.trChecked) [treeReport, coldReport, warmReport]),
+    ),
+    (
+      "cold tree",
+      expectEqual [("core", ["Clock"]), ("entry", [])] (ownerAtoms trees),
+    ),
+    (
+      "cold diagnostics",
+      expectEqual [("core", ["Clock"]), ("entry", [])] (ownerAtoms cold),
+    ),
+    (
+      "warm diagnostics",
+      expectEqual [("core", ["Clock"]), ("entry", [])] (ownerAtoms warm),
+    ),
+  ]
+
+test "missing selected owner view withholds checked manifests" =
+  let (_, manifests, diags) =
+    publishSelected
+      []
+      (_ => None)
+      [
+        ExactEntry
+          EntryKey { moduleId = "dep", binding = "make" }
+          HostInvocation,
+      ]
+      [("dep", ([("make", pub (plainScheme int))], [], []))]
+      []
+      noEntryOutcome
+      None
+      False
+  expectEach [
+    ("no fallback", expectEqual 0 (length manifests)),
+    (
+      "defect",
+      expectEqual
+        ["no checked invocation view for module 'dep'"]
+        (map tcMsg diags),
     ),
   ]

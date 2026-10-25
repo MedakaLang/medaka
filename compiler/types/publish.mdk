@@ -22,7 +22,21 @@ import types.runtime_types.{BinderTypeTable}
 import types.evidence_coverage.{EvidenceFault, evidenceFaults}
 import map as IdMap
 import map.{Map(..)}
-import list.{nub, reverse, mapAccumL}
+import list.{nub, reverse, mapAccumL, last}
+import support.ordmap.{OrdMap, omLookup}
+import types.capability_manifest.{
+  EntryKey(..),
+  ManifestRequest(..),
+  ManifestSelector(..),
+  InvocationProtocol(..),
+  CapabilityManifest,
+  ManifestDefect(..),
+}
+import types.effect_domain.{Param}
+import types.effect_invocation.{InvocationOps}
+import types.manifest_publish.{
+  InvocationOwner(..), ManifestEntryInput(..), publishManifests
+}
 
 -- ── structured typecheck diagnostic (TcDiag) ───────────────────────────────
 -- ONE structured record per accumulated diagnostic (errors AND match warnings):
@@ -76,6 +90,166 @@ ppPubScheme p = ppSchemeCon p.psContext p.psScheme
 export
 pubSchemes : List (String, PubScheme) -> List (String, Scheme)
 pubSchemes = map (b => (fst b, (snd b).psScheme))
+
+export
+publishedEntrySchemes : List (String, List (String, a)) -> List (String, a)
+publishedEntrySchemes modules = option [] snd (last modules)
+
+export
+publishCore : OrdMap (List VecObl) ->
+  List (String, Scheme) ->
+  List (String, PubScheme)
+publishCore contexts =
+  publishWithContexts (name => optionOr [] (omLookup name contexts))
+
+export
+publishWithContexts : (String -> List VecObl) ->
+  List (String, Scheme) ->
+  List (String, PubScheme)
+publishWithContexts context = map (b => (
+  fst b,
+  PubScheme {
+    psScheme = snd b,
+    psContext = context (fst b),
+  },
+))
+
+export
+publishedCore : Option (List (String, PubScheme)) ->
+  OrdMap (List VecObl) ->
+  List (String, Scheme) ->
+  List (String, PubScheme)
+publishedCore (Some rows) _ _ = rows
+publishedCore None contexts schemes = freezeRows (publishCore contexts schemes)
+
+-- Resolve against checked source rows before erasure; wrappers always name their
+-- owning module rather than the entry's same-spelled binding.
+export
+publishSelected : List (String, Param) ->
+  (InvocationOwner -> Option InvocationOps) ->
+  List ManifestSelector ->
+  List ModDiags ->
+  List (String, PubScheme) ->
+  EntryOutcome ->
+  Option EntryKey ->
+  Bool ->
+  (List ManifestRequest, List CapabilityManifest, List TcDiag)
+publishSelected _ _ [] _ _ _ _ _ = ([], [], [])
+publishSelected domains resolveOps selectors perMod core outcome executes valueMain =
+  let entry = optionOr ("", ([], [], [])) (last perMod)
+  let byModule =
+    IdMap.fromList
+      (map (m => (fst m, IdMap.fromList (reverse (modSchemes (snd m))))) perMod)
+  let coreRows = IdMap.fromList (reverse core)
+  let rows owner = match owner
+    SourceModule mid => optionOr Tip (IdMap.get mid byModule)
+    ShippedPrelude => coreRows
+  let ownerOf key =
+    if key.moduleId == "core"
+      && not (IdMap.has key.binding (rows (SourceModule "core"))) then
+      ShippedPrelude
+    else
+      SourceModule key.moduleId
+  let own = rows (SourceModule (fst entry))
+  let resolve selector = match selector
+    ExactEntry key protocol =>
+      (ManifestRequest { entry = key, protocol = protocol }, ownerOf key)
+    EntryOverPrelude name protocol =>
+      let isOwn = IdMap.has name own
+      (
+        ManifestRequest {
+          entry = EntryKey {
+            moduleId = if isOwn then fst entry else "core",
+            binding = name,
+          },
+          protocol = protocol,
+        },
+        if isOwn then SourceModule (fst entry) else ShippedPrelude,
+      )
+  let resolved = map resolve selectors
+  let selected = map fst resolved
+  let wrapper owner name =
+    map (p => (owner, p.psScheme)) (IdMap.get name (rows owner))
+  let wrappers request = match request.protocol
+    HostInvocation => []
+    ExecutedMain =>
+      if request.entry.moduleId /= fst entry
+        || request.entry.binding /= "main"
+        || not valueMain
+        || outcome.eoMainIsUnit then
+        []
+      else if outcome.eoMainIsAsync then
+        option
+          []
+          (key => option [] (w => [w]) (wrapper (ownerOf key) key.binding))
+          executes
+      else
+        option [] (w => [w]) (wrapper ShippedPrelude "println")
+  let inputs =
+    flatMap
+      ((request, owner) =>
+        option
+          []
+          (p => [
+            ManifestEntryInput {
+              request = request,
+              owner = owner,
+              scheme = p.psScheme,
+              wrappers = wrappers request,
+            },
+          ])
+          (IdMap.get request.entry.binding (rows owner)))
+      resolved
+  let missingDrivers =
+    flatMap
+      (request => match request.protocol
+        HostInvocation => []
+        ExecutedMain =>
+          if request.entry.moduleId == fst entry
+            && request.entry.binding == "main"
+            && valueMain
+            && outcome.eoMainIsAsync
+            && isEmpty (wrappers request) then
+            [
+              TcDiag
+                "T-MANIFEST-WRAPPER"
+                1
+                None
+                "no checked Async driver selected for executed main"
+                None
+                None,
+            ]
+          else
+            [])
+      selected
+  let missing =
+    missingDrivers
+      ++ flatMap
+        ((request, owner) =>
+          if IdMap.has request.entry.binding (rows owner) then
+            []
+          else
+            [
+              TcDiag
+                "T-MANIFEST-ENTRY"
+                1
+                None
+                ("no '" ++ request.entry.binding ++ "' entry found")
+                None
+                None,
+            ])
+        resolved
+  match publishManifests domains resolveOps inputs
+    Ok manifests => (selected, manifests, missing)
+    Err defects => (
+      selected,
+      [],
+      missing
+        ++ map
+          ((ManifestDefect message) =>
+            TcDiag "T-MANIFEST-INVALID" 1 None message None None)
+          defects,
+    )
 
 -- The three variable kinds count ids separately.
 public export data VarKind = TyVarK | EffVarK | AuthVarK deriving (Eq, Debug)
@@ -139,6 +313,7 @@ public export data CheckedProgram = CheckedProgram {
   cpEntryOutcome : EntryOutcome,
   cpTrees : Option (List Decl, List (String, List Decl)),
   cpWeak : List LiveCell,
+  cpManifests : List CapabilityManifest,
 }
 
 public export data EntryOutcome = EntryOutcome {
@@ -369,6 +544,8 @@ graphReport : List ModDiags ->
 graphReport perMod core residual evidence dispositions binders trees tables =
   graphReportWithOutcome
     noEntryOutcome
+    []
+    []
     perMod
     core
     residual
@@ -380,6 +557,8 @@ graphReport perMod core residual evidence dispositions binders trees tables =
 
 export
 graphReportWithOutcome : EntryOutcome ->
+  List CapabilityManifest ->
+  List TcDiag ->
   List ModDiags ->
   List (String, PubScheme) ->
   List (String, TcDiag) ->
@@ -389,11 +568,14 @@ graphReportWithOutcome : EntryOutcome ->
   Option (List Decl, List (String, List Decl)) ->
   EntryTables ->
   TcReport
-graphReportWithOutcome outcome perMod core residual evidence dispositions binders trees tables =
+graphReportWithOutcome outcome manifests manifestDiags perMod core residual evidence dispositions binders trees tables =
   let schemes = map (m => (fst m, modSchemes (snd m))) perMod
   let cells = graphCells (core :: map snd schemes)
   let judged =
-    if isEmpty residual && noModErrors perMod && all isWeak cells then
+    if isEmpty residual
+      && isEmpty manifestDiags
+      && noModErrors perMod
+      && all isWeak cells then
       let table = evidence ()
       Some (table, evidenceFaults trees table)
     else
@@ -408,12 +590,13 @@ graphReportWithOutcome outcome perMod core residual evidence dispositions binder
       cpEntryOutcome = outcome,
       cpTrees = trees,
       cpWeak = cells,
+      cpManifests = manifests,
     }
     _ => None
   TcReport {
     trPartial = partialAnalysis schemes core tables,
     trDiagnostics = perMod,
-    trResidual = residual,
+    trResidual = residual ++ map (d => (tables.etModule, d)) manifestDiags,
     trChecked = checked,
     trEvidenceFaults = match judged
       Some (_, faults) => faults

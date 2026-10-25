@@ -1,3 +1,4 @@
+import types.capability_manifest.{ManifestRequirement(..)}
 import backend.emit_plan.{prepareWasmPlan}
 import backend.wasm_emit.{inputCtorFloatFieldsW}
 -- WasmGC backend driver — peer of `entries/llvm_emit_main.mdk` (the single-file,
@@ -48,7 +49,11 @@ withTarget targetPath = match readFile targetPath
     -- the SAME decl list that is lowered, so the head table and the lowered
     -- program's impl entries are projections of one program.
     let annotated = annotateProgram decls
-    let input = makeWasmEmitInput PreludeFreeRuntime (ctorFieldTypeNames decls)
+    let input =
+      makeWasmEmitInput
+        RawUnchecked
+        PreludeFreeRuntime
+        (ctorFieldTypeNames decls)
     -- No typechecker ran, so the lowering stamps every binder `RTValue`; the
     -- signatures the source declares restate what they type.
     let cp =
