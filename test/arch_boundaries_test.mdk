@@ -1084,6 +1084,7 @@ typecheckFamily = [
   "types.tc_decls_variance",
   "types.tc_decls_types",
   "types.tc_decls",
+  "types.tc_foreign",
 ]
 
 -- The lines of module [m], empty when it is not loaded.

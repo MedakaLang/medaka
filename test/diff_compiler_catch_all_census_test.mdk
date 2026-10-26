@@ -50,6 +50,7 @@ loadAll = do
   tcDeclsVariance <- readFile (underRoot "compiler/types/tc_decls_variance.mdk")
   tcDeclsTypes <- readFile (underRoot "compiler/types/tc_decls_types.mdk")
   tcDecls <- readFile (underRoot "compiler/types/tc_decls.mdk")
+  tcForeign <- readFile (underRoot "compiler/types/tc_foreign.mdk")
   rp <- readFile (underRoot "compiler/types/repr.mdk")
   ck <- readFile (underRoot "compiler/types/chain_key.mdk")
   ec <- readFile (underRoot "compiler/types/evidence_coverage.mdk")
@@ -57,7 +58,7 @@ loadAll = do
   declLedger <- readFile (underRoot "test/decl_runner.ledger")
   Ok (
     astText,
-    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiagText}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDeclsVariance}\n\{tcDeclsTypes}\n\{tcDecls}\n\{rp}\n\{ck}\n\{ec}",
+    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiagText}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDeclsVariance}\n\{tcDeclsTypes}\n\{tcDecls}\n\{tcForeign}\n\{rp}\n\{ck}\n\{ec}",
     siteLedger,
     declLedger,
   )
