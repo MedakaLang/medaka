@@ -615,6 +615,11 @@ class = "shout"
 count = 9
 
 [[entry]]
+file = "compiler/types/tc_decls.mdk"
+class = "history"
+count = 2
+
+[[entry]]
 file = "compiler/types/tc_decls_types.mdk"
 class = "history"
 count = 1
@@ -687,7 +692,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 64
+count = 63
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -702,7 +707,7 @@ count = 2
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 316
+count = 287
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -717,7 +722,7 @@ count = 1
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 290
+count = 255
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"
