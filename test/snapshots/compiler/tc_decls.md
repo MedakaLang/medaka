@@ -322,7 +322,7 @@ buildDeclEnvs gctx acc coreRow modRows =
 
 -- The kind entries of row [m] that a reader at ordinal [cur] may see — the exact
 -- peer of `declEnvRowVisible` one projection over, and composed from the same two
--- predicates rather than from an open-coded `<=` (see `declEnvVisibleTo`'s 
+-- predicates rather than from an open-coded `<=` (see `declEnvVisibleTo`'s
 -- note: an open-coded comparison here would be invisible to any future re-scoping
 -- of the name axis, exactly as it would have been to A-3.6's had it landed here).
 -- The own-row arm is unfiltered because a module's own kinds are: `registerData`'s
