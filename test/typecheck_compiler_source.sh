@@ -959,7 +959,27 @@ cat "$predicate_slot_src" "$ROOT"/compiler/types/tc_*.mdk > "$tc_union_src"
 # The predicate-slot pins read typecheck.mdk, the declaration layer and the solver layer together: rows of the
 # former single file that moved to tc_decls or a tc_solve_* module stay pinned by the same text.
 predicate_slot_rows_src="$RESULTS/predicate_slot_rows.mdk"
-cat "$predicate_slot_src" "$ROOT/compiler/types/tc_decls.mdk" "$ROOT/compiler/types/tc_solve_givens.mdk" "$ROOT/compiler/types/tc_solve_entail.mdk" "$ROOT/compiler/types/tc_solve.mdk" > "$predicate_slot_rows_src"
+predicate_slot_row_files="$predicate_slot_src $ROOT/compiler/types/tc_decls.mdk $ROOT/compiler/types/tc_solve_givens.mdk $ROOT/compiler/types/tc_solve_entail.mdk $ROOT/compiler/types/tc_solve.mdk $ROOT/compiler/types/tc_solve_check.mdk"
+cat $predicate_slot_row_files > "$predicate_slot_rows_src"
+tc_solve_givens_src="$ROOT/compiler/types/tc_solve_givens.mdk"
+tc_solve_entail_src="$ROOT/compiler/types/tc_solve_entail.mdk"
+# slice_rows START END: the rows from `START :` to `END :` in the module that holds START. When END is
+# in another module (the rows between them were split across the layer), the slice ends at the next
+# top-level signature after START, so the pin reads START's own row.
+slice_rows() {
+  for slice_f in $predicate_slot_row_files; do
+    slice_s=$(grep -n "^$1 :" "$slice_f" | head -1 | cut -d: -f1)
+    [ -n "$slice_s" ] || continue
+    slice_e=$(grep -n "^$2 :" "$slice_f" | head -1 | cut -d: -f1)
+    if [ -n "$slice_e" ] && [ "$slice_e" -gt "$slice_s" ]; then
+      sed -n "${slice_s},${slice_e}p" "$slice_f"
+    else
+      slice_n=$(awk -v s="$slice_s" 'NR > s && /^[a-z_][A-Za-z0-9_'"'"']* :/ { print NR; exit }' "$slice_f")
+      sed -n "${slice_s},${slice_n:-$}p" "$slice_f"
+    fi
+    return
+  done
+}
 predicate_slot_required='registerReqSlots : ModuleCtx ->
   List (String, Mono) ->
   Int ->
@@ -1081,7 +1101,7 @@ done || exit 1
 # surviving argument even if the visibility call itself had been removed.
 # The scan reads the use scope's ancestor chain once (`visibleChain`) and tests
 # each given's binder scope against it, so both halves are pinned.
-any_given_scope_body=$(sed -n '/^anyGivenMatches :/,/^isSemanticGivenAnswer :/p' "$predicate_slot_src" \
+any_given_scope_body=$(slice_rows anyGivenMatches registerActiveDictVars \
   | sed '/^[[:space:]]*--/d' | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')
 for any_given_scope_guard in \
   'anyGivenOnChain request (Scopes.visibleChain (currentScopeStore gctx ()) scope) givens' \
@@ -1228,7 +1248,7 @@ fi
 
 # Ordinary and numeric returns share the matcher, so a match in the ordinary arm
 # cannot establish that the numeric arm still consumes its exact predicate.
-numeric_return_inst_body="$(sed -n '/^entailInst .*EKNumReturn/,/^entailInst .*EKNestedTop/p' "$predicate_slot_src")"
+numeric_return_inst_body="$(sed -n '/^entailInst .*EKNumReturn/,/^entailInst .*EKNestedTop/p' "$tc_solve_entail_src")"
 numeric_return_inst_required='  let goals = predicate.predicateArguments
   match ieSelectRowByIface sx env predicate.predicateInterface goals
       let route = RKey (rowRouteKey row) []
@@ -1246,7 +1266,7 @@ require_typecheck_arm() {
   reader_start="$1"
   reader_end="$2"
   reader_arm="$3"
-  reader_body="$(sed -n "/^$reader_start :/,/^$reader_end :/p" "$predicate_slot_src")"
+  reader_body="$(slice_rows "$reader_start" "$reader_end")"
   if ! printf '%s\n' "$reader_body" | grep -Fq "$reader_arm"; then
     echo "FAIL: typechecker reader $reader_start is missing: $reader_arm"
     exit 1
@@ -1259,7 +1279,7 @@ require_typecheck_arm_flat() {
   reader_start="$1"
   reader_end="$2"
   reader_arm="$3"
-  reader_body="$(sed -n "/^$reader_start :/,/^$reader_end :/p" "$predicate_slot_src" | tr '\n' ' ' | tr -s ' ')"
+  reader_body="$(slice_rows "$reader_start" "$reader_end" | tr '\n' ' ' | tr -s ' ')"
   if ! printf '%s\n' "$reader_body" | grep -Fq "$reader_arm"; then
     echo "FAIL: typechecker reader $reader_start is missing: $reader_arm"
     exit 1
@@ -1296,7 +1316,7 @@ if ! grep -Fq '  SolverOutcome(..),' "$predicate_slot_rows_src"; then
   exit 1
 fi
 
-ordinary_return_solver_body="$(sed -n '/^solveExactReturnOnce :/,/^exactReturnDefers :/p' "$predicate_slot_src")"
+ordinary_return_solver_body="$(slice_rows solveExactReturnOnce exactReturnDefers)"
 ordinary_return_solver_required='solveExactReturnOnce sx request = match request.mrrResolution.value
     request.mrrResolution := Some resolution
         mrrOutcome = Solved (assumAnswerEvidence answer)
@@ -1361,7 +1381,7 @@ require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpE
 require_typecheck_arm oblPredOf vecOblOfPred 'OpExactReturn request => match methodReturnArgs gctx request'
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpExactReturn request => match normalize request.mrrOccurrence'
 
-ordinary_return_check_body="$(sed -n '/^checkCallObligationsU mctx deferNonGround univ (o :: rest) =/,/^solveExactReturnOnce :/p' "$predicate_slot_src")"
+ordinary_return_check_body="$(sed -n '/^checkCallObligationsU mctx deferNonGround univ (o :: rest) =/,/^consumeExactReturnOutcome :/p' "$ROOT/compiler/types/tc_solve_check.mdk")"
 # The complete arm (`methodReturnWanted` is `Some`) is compared whitespace-flattened,
 # so the call's line breaks are not part of the contract; its whole body must be the
 # consumption of the one solver outcome.
@@ -1388,7 +1408,7 @@ if ! printf '%s\n' "$ordinary_return_legacy_check" | grep -Fq 'checkOneCallOblig
   exit 1
 fi
 
-ordinary_return_stamp_body="$(sed -n '/^resolveExactReturnSite :/,/^resolveNumLitSite :/p' "$predicate_slot_src")"
+ordinary_return_stamp_body="$(slice_rows resolveExactReturnSite resolveNumLitSite)"
 ordinary_return_stamp_required='      let resolution = solveExactReturnOnce sx request
         exactReturnRoutes sx name encl scope (omHasKey name rpNames) resolution
 exactReturnRoutes sx name encl scope isReturnPosition resolution = match (
@@ -1606,8 +1626,8 @@ done || exit 1
 # body's dict: every hit is gated on the binder's scope being visible from the site
 # (`firstDictForEncl`'s `givenVisibleFrom`), which is what also lets a test or prop
 # body -- no enclosing declaration name -- read a local binding's own givens.
-lexical_dict_block="$(sed -n '/^activeDictVarForEncl :/,/^firstDictForEncl :/p' "$predicate_slot_src")"
-first_dict_block="$(sed -n '/^firstDictForEncl :/,/^$/p' "$predicate_slot_src")"
+lexical_dict_block="$(slice_rows activeDictVarForEncl firstDictForEncl)"
+first_dict_block="$(sed -n '/^firstDictForEncl :/,/^$/p' "$tc_solve_givens_src")"
 printf '%s\n' "$first_dict_block" | grep -Fq 'Scopes.givenVisibleFrom' || {
   echo "FAIL: firstDictForEncl must gate every hit on lexical scope visibility"
   exit 1
@@ -1635,7 +1655,7 @@ printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
   fi
 done || exit 1
 operator_scope_guard='| eid == id && Scopes.givenVisibleFrom (currentScopeStore gctx ()) useScope (Scopes.binderScope binder) = Some binder'
-operator_scope_body=$(sed -n '/^firstDictForEncl :/,/^activeDictVarOfEncl :/p' "$predicate_slot_src" \
+operator_scope_body=$(slice_rows firstDictForEncl activeDictVarOfEncl \
   | sed '/^[[:space:]]*--/d' | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')
 if ! printf '%s\n' "$operator_scope_body" | grep -Fq "$operator_scope_guard"; then
   echo "FAIL: operator route dropped its nominal evidence owner: $operator_scope_guard"
@@ -1646,7 +1666,7 @@ if grep -Fq 'argImplDictRoutesFor :' "$tc_union_src"; then
   exit 1
 fi
 
-op_dict_block="$(sed -n '/^opDictVarOf :/,/^resolveOpSite :/p' "$predicate_slot_src")"
+op_dict_block="$(slice_rows opDictVarOf resolveOpSite)"
 printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = map LegacyScalar (activeDictVarOf mctx.mcGraph m useScope)' || {
   echo "FAIL: direct opDictVarOf in-impl residual must retain legacy classification and captured scope"
   exit 1

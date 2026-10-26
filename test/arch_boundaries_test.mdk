@@ -1097,6 +1097,7 @@ typecheckFamily = [
   "types.tc_solve_givens",
   "types.tc_solve_entail",
   "types.tc_solve",
+  "types.tc_solve_check",
 ]
 
 -- The lines of module [m], empty when it is not loaded.
