@@ -74,33 +74,12 @@ import types.effect_domain.{Param(..)}
 import types.effect_rows.{EffLabel(..), effLabelName}
 import types.effect_infer.{AlphaBinder(..)}
 import types.tc_types.{
-  CeRow(..),
-  ClassEnv(..),
-  DeclEnvAcc(..),
-  DeclEnvModule(..),
-  DeclEnvs(..),
-  EnvBinding(..),
-  GraphCtx(..),
-  ImplAcc(..),
-  ImplEnv(..),
-  ImplRow(..),
-  ImplUniverse(..),
-  InstRef(..),
-  KeyEntry(..),
-  Kind(..),
-  MethodEnv(..),
-  MethodPredicateSlot(..),
-  MethodRow(..),
-  MethodSchemeRow(..),
-  ModuleCtx(..),
-  RecordInfo(..),
-  StandaloneOrigin(..),
-  TcEnv(..),
-  ValueScheme(..),
-  AliasDecl,
-  CDeclared,
-  dynFor,
-  MethodEntry,
+  CeRow(..), ClassEnv(..), DeclEnvAcc(..), DeclEnvModule(..), DeclEnvs(..),
+  EnvBinding(..), GraphCtx(..), ImplAcc(..), ImplEnv(..), ImplRow(..),
+  ImplUniverse(..), InstRef(..), KeyEntry(..), Kind(..), MethodEnv(..),
+  MethodPredicateSlot(..), MethodRow(..), MethodSchemeRow(..), ModuleCtx(..),
+  RecordInfo(..), StandaloneOrigin(..), TcEnv(..), ValueScheme(..), AliasDecl,
+  CDeclared, dynFor, MethodEntry
 }
 import types.registry.{
   regInsertK, Registry, RegKey, regKeyOfTab, regKeyRender, regLookupK
@@ -885,7 +864,6 @@ declEnvReachSeed : String -> OrdMap Unit
 declEnvReachSeed mid =
   omInsert mid () (omInsert "" () (omInsert "core" () omEmpty))
 
-export
 declEnvReachFrom : OrdMap (List String) ->
   List String ->
   OrdMap Unit ->
@@ -3277,7 +3255,6 @@ ordinaryEnvBinding scheme = EnvBinding {
   ebStandalone = None,
 }
 
-export
 ordinaryValueScheme : Scheme -> ValueScheme
 ordinaryValueScheme scheme =
   ValueScheme { vsScheme = scheme, vsDeclared = None }
@@ -3917,7 +3894,6 @@ export
 declTopFnNames : List Decl -> List String
 declTopFnNames decls = map fst (funDefs decls)
 
-export
 useModuleId : Decl -> List String
 useModuleId (DUse _ path _) = [useModId path]
 useModuleId _ = []

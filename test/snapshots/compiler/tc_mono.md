@@ -1,5 +1,5 @@
 # META
-source_lines=2247
+source_lines=2237
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -72,18 +72,9 @@ import types.effect_rows.{
   rowFlat,
 }
 import types.tc_types.{
-  AbsorptionEvent(..),
-  GoalPayload(..),
-  GraphCtx(..),
-  HeadVarRoot(..),
-  MethodReturnRequest(..),
-  MStep(..),
-  Obligation(..),
-  Predicate(..),
-  RecordInfo(..),
-  SiteKind(..),
-  Windowed(..),
-  HeadVarRoot,
+  AbsorptionEvent(..), GoalPayload(..), GraphCtx(..), HeadVarRoot(..),
+  MethodReturnRequest(..), MStep(..), Obligation(..), Predicate(..),
+  RecordInfo(..), SiteKind(..), Windowed(..)
 }
 import map as IdMap
 import map.{Map(..)}
@@ -2201,7 +2192,6 @@ findTvName id ((n, mono) :: rest) = match normalize mono
   TVar cell => if tyvarId cell == id then Some n else findTvName id rest
   _ => findTvName id rest
 
-export
 monoSpineHeadIsCon : Mono -> Bool
 monoSpineHeadIsCon m = match peelQual m
   TApp a _ => monoSpineHeadIsCon a
@@ -2254,7 +2244,7 @@ implDeclWithReqs _ = []
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "normalizeLink" false) (mem "ppGo" false) (mem "tupleHeadTagTc" false) (mem "tupleSpine" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authIsTop" false) (mem "authJoinAll" false) (mem "authNorm" false) (mem "authSub" false) (mem "authvarId" false) (mem "authVars" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomsNorm" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "pureRow" false) (mem "rowFlat" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "GoalPayload" true) (mem "GraphCtx" true) (mem "HeadVarRoot" true) (mem "MethodReturnRequest" true) (mem "MStep" true) (mem "Obligation" true) (mem "Predicate" true) (mem "RecordInfo" true) (mem "SiteKind" true) (mem "Windowed" true) (mem "HeadVarRoot" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "GoalPayload" true) (mem "GraphCtx" true) (mem "HeadVarRoot" true) (mem "MethodReturnRequest" true) (mem "MStep" true) (mem "Obligation" true) (mem "Predicate" true) (mem "RecordInfo" true) (mem "SiteKind" true) (mem "Windowed" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "OrdMap" false))))
@@ -2835,7 +2825,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "findTvName" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "findTvName" (PWild (PList)) (EVar "None"))
 (DFunDef false "findTvName" ((PVar "id") (PCons (PTuple (PVar "n") (PVar "mono")) (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "mono")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EApp (EVar "Some") (EVar "n")) (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "rest")))))
-(DTypeSig true "monoSpineHeadIsCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
+(DTypeSig false "monoSpineHeadIsCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoSpineHeadIsCon" ((PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TApp" (PVar "a") PWild) () (EApp (EVar "monoSpineHeadIsCon") (EVar "a"))) (arm (PCon "TCon" PWild PWild) () (EVar "True")) (arm (PCon "TRigid" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig true "distinctIdentsIn2" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))) (TyCon "Bool")))
 (DFunDef false "distinctIdentsIn2" ((PList (PTuple (PVar "i1") PWild) (PTuple (PVar "i2") PWild))) (EBinOp "/=" (EVar "i1") (EVar "i2")))
@@ -2859,7 +2849,7 @@ implDeclWithReqs _ = []
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "normalizeLink" false) (mem "ppGo" false) (mem "tupleHeadTagTc" false) (mem "tupleSpine" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authIsTop" false) (mem "authJoinAll" false) (mem "authNorm" false) (mem "authSub" false) (mem "authvarId" false) (mem "authVars" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomsNorm" false) (mem "effrowNorm" false) (mem "effvarId" false) (mem "findAtom" false) (mem "pureRow" false) (mem "rowFlat" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "GoalPayload" true) (mem "GraphCtx" true) (mem "HeadVarRoot" true) (mem "MethodReturnRequest" true) (mem "MStep" true) (mem "Obligation" true) (mem "Predicate" true) (mem "RecordInfo" true) (mem "SiteKind" true) (mem "Windowed" true) (mem "HeadVarRoot" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "GoalPayload" true) (mem "GraphCtx" true) (mem "HeadVarRoot" true) (mem "MethodReturnRequest" true) (mem "MStep" true) (mem "Obligation" true) (mem "Predicate" true) (mem "RecordInfo" true) (mem "SiteKind" true) (mem "Windowed" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "OrdMap" false))))
@@ -3440,7 +3430,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "findTvName" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "findTvName" (PWild (PList)) (EVar "None"))
 (DFunDef false "findTvName" ((PVar "id") (PCons (PTuple (PVar "n") (PVar "mono")) (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "mono")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EApp (EVar "Some") (EVar "n")) (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "findTvName") (EVar "id")) (EVar "rest")))))
-(DTypeSig true "monoSpineHeadIsCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
+(DTypeSig false "monoSpineHeadIsCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoSpineHeadIsCon" ((PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TApp" (PVar "a") PWild) () (EApp (EVar "monoSpineHeadIsCon") (EVar "a"))) (arm (PCon "TCon" PWild PWild) () (EVar "True")) (arm (PCon "TRigid" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig true "distinctIdentsIn2" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))) (TyCon "Bool")))
 (DFunDef false "distinctIdentsIn2" ((PList (PTuple (PVar "i1") PWild) (PTuple (PVar "i2") PWild))) (EBinOp "/=" (EVar "i1") (EVar "i2")))

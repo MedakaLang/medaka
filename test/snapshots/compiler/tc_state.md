@@ -1,5 +1,5 @@
 # META
-source_lines=1179
+source_lines=1155
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts` and the
@@ -24,38 +24,14 @@ import frontend.ast.{Decl(..), Loc(..), TyConOrigin(..), defaultReceiverDict}
 import types.repr.{IfaceRef(..), Scheme(..)}
 import types.effect_solver as EffectSolver
 import types.tc_types.{
-  AssumptionTraceEntry(..),
-  BuiltinClasses(..),
-  CheckRunSeed(..),
-  ClassEnv(..),
-  CrossRun(..),
-  DataEnv(..),
-  DeclEnvs(..),
-  DeclEnvSeedAcc(..),
-  DriveInputs(..),
-  DynCtx(..),
-  EvidenceObservationEntry(..),
-  GrantState(..),
-  GraphCtx(..),
-  GraphRun(..),
-  ImplEnv(..),
-  ImplUniverse(..),
-  Interners(..),
-  InvocationView(..),
-  Lineage(..),
-  LocalAbsState(..),
-  MethodEnv(..),
-  ModuleCells(..),
-  ModuleCtx(..),
-  NumericPredicateTraceEntry(..),
-  ShadowDicts(..),
-  SigVars(..),
-  TcConfig(..),
-  TcEnv(..),
-  TraceSink(..),
-  Windowed(..),
-  StampCtx,
-  UObligation,
+  AssumptionTraceEntry(..), BuiltinClasses(..), CheckRunSeed(..), ClassEnv(..),
+  CrossRun(..), DataEnv(..), DeclEnvs(..), DeclEnvSeedAcc(..), DriveInputs(..),
+  DynCtx(..), EvidenceObservationEntry(..), GrantState(..), GraphCtx(..),
+  GraphRun(..), ImplEnv(..), ImplUniverse(..), Interners(..),
+  InvocationView(..), Lineage(..), LocalAbsState(..), MethodEnv(..),
+  ModuleCells(..), ModuleCtx(..), NumericPredicateTraceEntry(..),
+  ShadowDicts(..), SigVars(..), TcConfig(..), TcEnv(..), TraceSink(..),
+  Windowed(..), StampCtx, UObligation
 }
 import map.{Map(..)}
 import list.{take}

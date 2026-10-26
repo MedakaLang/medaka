@@ -5,7 +5,6 @@ import types.invocation_basis.{
   invocationResolver,
   slotVariances,
   ctorsByHead,
-  authorityParamSubst,
   paramPolaritiesIn,
   frozenInvocationOps,
   completionInvocationViews,
@@ -57,13 +56,14 @@ import types.invocation_basis.{
 -- `compiler/entries/selfproc_tc_probe.mdk`.
 
 import frontend.ast.{
-  variantName, letBindName, implMethodName,
+  variantName,
+  letBindName,
+  implMethodName,
   noBinderId,
   unminted,
   isUnminted,
   BinderId(..),
   qualifierSource,
-  kindAnnSource,
   patternMark,
   Lit(..),
   negateLiteral,
@@ -76,8 +76,6 @@ import frontend.ast.{
   taggedFixedRange,
   intMinLiteralMsg,
   intMinLiteralHelp,
-  -- A-3.2b residual (#1512): named ONLY by `aliasFixtureAttribCore`, the doctest
-  -- fixture that pins `dataEnvFromDeclsGo`'s deliberate `DAttrib` asymmetry.
   Attr(..),
   Ty(..),
   mapTyFull,
@@ -93,16 +91,7 @@ import frontend.ast.{
   Ident(..),
   identOriginFold,
   mkIdent,
-  -- #1111 Stage A-2 unit A-2.10: the ONE type-head comparison every "same
-  -- type?" test below is written against.  Its doc-comment derives why an
-  -- absent origin makes no claim here while `ifaceIdMatches`/`tabKeyEq` refuse
-  -- absence outright — do not copy either shape to the other site.
   sameTyConHead,
-  -- #2188: `ifaceSortKey`'s renderer only — the CANONICAL ORDER of an admitted set is
-  -- §8 I4's `(originModule, name)` pair, and this is the one place that pair is
-  -- rendered.  ⚠️ Used to SORT, never to COMPARE FOR IDENTITY: absence renders `""`
-  -- here, so `ifaceSortKey` pairs it with the bare name and `sortInsertIfaceRef` never
-  -- treats two equal keys as the same declaration.
   ifaceIdentity,
   tyConBuiltin,
   firstTyLoc,
@@ -147,15 +136,7 @@ import frontend.ast.{
   useMemberLocal,
   useMemberAlias,
   qualifiedLocal,
-  -- RE-HOMED here from `types/registry.mdk` (oracle-identity family leaf L1):
-  -- `frontend/exhaust.mdk`'s constructor oracle keys on `TabKey`, and
-  -- `frontend` may not import `types`.  Same six symbols, same bodies; only
-  -- the module they are imported from changed.  The RENDERER stays in
-  -- `types/registry.mdk` and is still imported from there.
   TabKey(..),
-  -- #1647: the LOOKUP comparison, imported for `sameIfaceDecl` — the interface
-  -- method-signature lookup asks the same "which row does this key select?"
-  -- question `lookupTab` does, one key at a time rather than over a table.
   tabKeyEq,
   tabKeyName,
   lookupTab,
@@ -183,20 +164,14 @@ import types.repr.{
   Tyvar(..),
   VecObl(..),
   lookupAssocI,
-  ppConName,
   ppEach,
   ppEachShared,
-  ppEffArgFmt,
-  ppEffInsideTy,
-  ppEffvarName,
-  ppGo,
   ppMono,
   ppMonosShared,
   ppPredArgsShared,
   ppTy,
   ppTyAtom,
   spineParts,
-  tupleHeadTagTc,
   tupleTagArity,
 }
 import types.superclass.{
@@ -780,12 +755,9 @@ import types.tc_mono.{
   expectedParamTypes,
   findTvarInMono,
   findTvarInMonos,
-  findTvName,
-  firstIdConflict,
   firstOrZero,
   foldrFun,
   funArity,
-  headIdConflict,
   headMonoNode,
   headsUnifier,
   headTyconMono,
@@ -825,7 +797,6 @@ import types.tc_mono.{
   monoScheme,
   monoSizes,
   monoSpineDepth,
-  monoSpineHeadIsCon,
   monosTvarIds,
   monoTyvarId,
   monoTyvarIds,
@@ -949,7 +920,6 @@ import types.tc_env.{
   buildImplEnvGo,
   buildImplUniverse,
   ceLookupAt,
-  ceLookupGraph,
   ceMethodTyAt,
   ceRequiredAt,
   ceRowDoneKey,
@@ -975,7 +945,6 @@ import types.tc_env.{
   declEnvModule,
   declEnvModulesFrom,
   declEnvOrdIndex,
-  declEnvReachFrom,
   declEnvReachIndex,
   declEnvRowVisible,
   declEnvsOrdOf,
@@ -1047,7 +1016,6 @@ import types.tc_env.{
   instRefSeq,
   keyEntryIface,
   kindAnnSlots,
-  kindName,
   kindPublicDataDecl,
   lastComponent,
   legacyMethodSchemes,
@@ -1086,7 +1054,6 @@ import types.tc_env.{
   namesToSet,
   oblIfaceKey,
   ordinaryEnvBinding,
-  ordinaryValueScheme,
   ordOfIndex,
   originMethodName,
   ownMethodIdent,
@@ -1105,7 +1072,6 @@ import types.tc_env.{
   standaloneValueFor,
   superLookup,
   tyTabKey,
-  useModuleId,
   usePathAdmitsDecl,
   variantNamed,
   withCtors,
@@ -1230,7 +1196,6 @@ import types.tc_diag.{
   pushTypeErrorOncePerSite,
   qualifiedIfaceLabel,
   qualifierBinderTypeMsg,
-  quotedNames,
   recordTypeError,
   renderCallArgs,
   renderFlatRow,

@@ -1,5 +1,5 @@
 # META
-source_lines=1865
+source_lines=1854
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag: the emission API over `TcDiag` (`recordTypeError`, the `pushTypeError*` family, dedup
@@ -70,19 +70,9 @@ import types.repr.{
   tupleHeadTagTc,
 }
 import types.tc_types.{
-  DeclaringBinder(..),
-  GraphCtx(..),
-  GraphRun(..),
-  MethodBodyKind(..),
-  ModuleCtx(..),
-  Predicate(..),
-  UObligation(..),
-  Windowed(..),
-  DeclaringBinder,
-  KeyEntry,
-  Kind,
-  MethodBodyKind,
-  RecordInfo,
+  DeclaringBinder(..), GraphCtx(..), GraphRun(..), MethodBodyKind(..),
+  ModuleCtx(..), Predicate(..), UObligation(..), Windowed(..), KeyEntry, Kind,
+  RecordInfo
 }
 import map as IdMap
 export import types.publish.{TcDiag(..), tcCode, tcLoc, tcMsg}
@@ -108,7 +98,6 @@ import types.registry.{HeadKey(..)}
 import types.tc_env.{kindName}
 import types.effect_rows.{Atom(..), Effvar(..), renderAtoms}
 import types.effect_authority.{Authority(..), authIsTop}
-import types.publish.{TcDiag(..)}
 import types.solver_contract.{Wanted(..)}
 import types.disposition.{MethodDisposition(..)}
 
@@ -1872,7 +1861,7 @@ prependDiagOpt code sev help (Some msg) ds =
 (DUse false (UseGroup ("types" "tc_state") ((mem "wPush" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "Ident" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "authTermsSurface" false) (mem "identOriginFold" false) (mem "kindAnnSource" false) (mem "orElseLoc" false) (mem "qualifierSource" false) (mem "tabKeyName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "normalize" false) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "MethodBodyKind" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "UObligation" true) (mem "Windowed" true) (mem "DeclaringBinder" false) (mem "KeyEntry" false) (mem "Kind" false) (mem "MethodBodyKind" false) (mem "RecordInfo" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "MethodBodyKind" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "UObligation" true) (mem "Windowed" true) (mem "KeyEntry" false) (mem "Kind" false) (mem "RecordInfo" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse true (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "tcCode" false) (mem "tcLoc" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
@@ -1881,7 +1870,6 @@ prependDiagOpt code sev help (Some msg) ds =
 (DUse false (UseGroup ("types" "tc_env") ((mem "kindName" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "Effvar" true) (mem "renderAtoms" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authIsTop" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "Wanted" true))))
 (DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DTypeSig true "effectInclusionMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
@@ -2372,7 +2360,7 @@ prependDiagOpt code sev help (Some msg) ds =
 (DUse false (UseGroup ("types" "tc_state") ((mem "wPush" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "Ident" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "authTermsSurface" false) (mem "identOriginFold" false) (mem "kindAnnSource" false) (mem "orElseLoc" false) (mem "qualifierSource" false) (mem "tabKeyName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "normalize" false) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "MethodBodyKind" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "UObligation" true) (mem "Windowed" true) (mem "DeclaringBinder" false) (mem "KeyEntry" false) (mem "Kind" false) (mem "MethodBodyKind" false) (mem "RecordInfo" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "MethodBodyKind" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "UObligation" true) (mem "Windowed" true) (mem "KeyEntry" false) (mem "Kind" false) (mem "RecordInfo" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse true (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "tcCode" false) (mem "tcLoc" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
@@ -2381,7 +2369,6 @@ prependDiagOpt code sev help (Some msg) ds =
 (DUse false (UseGroup ("types" "tc_env") ((mem "kindName" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "Effvar" true) (mem "renderAtoms" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authIsTop" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "Wanted" true))))
 (DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DTypeSig true "effectInclusionMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))

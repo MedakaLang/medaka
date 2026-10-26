@@ -1,5 +1,5 @@
 # META
-source_lines=4760
+source_lines=4736
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -78,33 +78,12 @@ import types.effect_domain.{Param(..)}
 import types.effect_rows.{EffLabel(..), effLabelName}
 import types.effect_infer.{AlphaBinder(..)}
 import types.tc_types.{
-  CeRow(..),
-  ClassEnv(..),
-  DeclEnvAcc(..),
-  DeclEnvModule(..),
-  DeclEnvs(..),
-  EnvBinding(..),
-  GraphCtx(..),
-  ImplAcc(..),
-  ImplEnv(..),
-  ImplRow(..),
-  ImplUniverse(..),
-  InstRef(..),
-  KeyEntry(..),
-  Kind(..),
-  MethodEnv(..),
-  MethodPredicateSlot(..),
-  MethodRow(..),
-  MethodSchemeRow(..),
-  ModuleCtx(..),
-  RecordInfo(..),
-  StandaloneOrigin(..),
-  TcEnv(..),
-  ValueScheme(..),
-  AliasDecl,
-  CDeclared,
-  dynFor,
-  MethodEntry,
+  CeRow(..), ClassEnv(..), DeclEnvAcc(..), DeclEnvModule(..), DeclEnvs(..),
+  EnvBinding(..), GraphCtx(..), ImplAcc(..), ImplEnv(..), ImplRow(..),
+  ImplUniverse(..), InstRef(..), KeyEntry(..), Kind(..), MethodEnv(..),
+  MethodPredicateSlot(..), MethodRow(..), MethodSchemeRow(..), ModuleCtx(..),
+  RecordInfo(..), StandaloneOrigin(..), TcEnv(..), ValueScheme(..), AliasDecl,
+  CDeclared, dynFor, MethodEntry
 }
 import types.registry.{
   regInsertK, Registry, RegKey, regKeyOfTab, regKeyRender, regLookupK
@@ -889,7 +868,6 @@ declEnvReachSeed : String -> OrdMap Unit
 declEnvReachSeed mid =
   omInsert mid () (omInsert "" () (omInsert "core" () omEmpty))
 
-export
 declEnvReachFrom : OrdMap (List String) ->
   List String ->
   OrdMap Unit ->
@@ -3281,7 +3259,6 @@ ordinaryEnvBinding scheme = EnvBinding {
   ebStandalone = None,
 }
 
-export
 ordinaryValueScheme : Scheme -> ValueScheme
 ordinaryValueScheme scheme =
   ValueScheme { vsScheme = scheme, vsDeclared = None }
@@ -3921,7 +3898,6 @@ export
 declTopFnNames : List Decl -> List String
 declTopFnNames decls = map fst (funDefs decls)
 
-export
 useModuleId : Decl -> List String
 useModuleId (DUse _ path _) = [useModId path]
 useModuleId _ = []
@@ -4875,7 +4851,7 @@ methodRowSameNameView rows =
 (DFunDef false "declEnvReachGo" ((PVar "edges") (PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declEnvReachGo") (EVar "edges")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EApp (EApp (EApp (EVar "declEnvReachFrom") (EVar "edges")) (EListLit (EFieldAccess (EVar "m") "demId"))) (EApp (EVar "declEnvReachSeed") (EFieldAccess (EVar "m") "demId")))) (EVar "acc"))))
 (DTypeSig false "declEnvReachSeed" (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "declEnvReachSeed" ((PVar "mid")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (ELit LUnit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit LUnit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "core"))) (ELit LUnit)) (EVar "omEmpty")))))
-(DTypeSig true "declEnvReachFrom" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DTypeSig false "declEnvReachFrom" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "declEnvReachFrom" (PWild (PList) (PVar "seen")) (EVar "seen"))
 (DFunDef false "declEnvReachFrom" ((PVar "edges") (PCons (PVar "mid") (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "seen"))))) (EApp (EApp (EVar "declEnvDirectImports") (EVar "edges")) (EVar "mid")))) (DoExpr (EApp (EApp (EApp (EVar "declEnvReachFrom") (EVar "edges")) (EBinOp "++" (EVar "fresh") (EVar "rest"))) (EApp (EApp (EVar "declEnvMarkReached") (EVar "fresh")) (EVar "seen"))))))
 (DTypeSig false "declEnvMarkReached" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
@@ -5349,7 +5325,7 @@ methodRowSameNameView rows =
 (DFunDef false "kindPublicDataDecl" (PWild) (EVar "False"))
 (DTypeSig true "ordinaryEnvBinding" (TyFun (TyCon "Scheme") (TyCon "EnvBinding")))
 (DFunDef false "ordinaryEnvBinding" ((PVar "scheme")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EApp (EVar "ordinaryValueScheme") (EVar "scheme"))) (fa "ebMethodRow" (EVar "None")) (fa "ebStandalone" (EVar "None")))))
-(DTypeSig true "ordinaryValueScheme" (TyFun (TyCon "Scheme") (TyCon "ValueScheme")))
+(DTypeSig false "ordinaryValueScheme" (TyFun (TyCon "Scheme") (TyCon "ValueScheme")))
 (DFunDef false "ordinaryValueScheme" ((PVar "scheme")) (ERecordCreate "ValueScheme" ((fa "vsScheme" (EVar "scheme")) (fa "vsDeclared" (EVar "None")))))
 (DTypeSig true "methodEnvBinding" (TyFun (TyCon "MethodSchemeRow") (TyCon "EnvBinding")))
 (DFunDef false "methodEnvBinding" ((PVar "row")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EApp (EVar "ordinaryValueScheme") (EFieldAccess (EVar "row") "msrScheme"))) (fa "ebMethodRow" (EApp (EVar "Some") (EVar "row"))) (fa "ebStandalone" (EVar "None")))))
@@ -5459,7 +5435,7 @@ methodRowSameNameView rows =
 (DFunDef false "emptyMethodModulePredicateSlot" ((PVar "mid") (PVar "iface") (PVar "typarams") (PCon "IfaceMethod" (PVar "name") (PVar "ty") PWild PWild)) (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "methodLevelConstraintVarNames") (EVar "typarams")) (EVar "ty"))) (EListLit (ETuple (ETuple (EVar "mid") (EApp (EApp (EVar "methodSlotKey") (EVar "iface")) (EVar "name"))) (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "declTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declTopFnNames" ((PVar "decls")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "decls"))))
-(DTypeSig true "useModuleId" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "useModuleId" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "useModuleId" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "useModId") (EVar "path"))))
 (DFunDef false "useModuleId" (PWild) (EListLit))
 (DTypeSig true "lastComponent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -5696,7 +5672,7 @@ methodRowSameNameView rows =
 (DFunDef false "declEnvReachGo" ((PVar "edges") (PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declEnvReachGo") (EVar "edges")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EApp (EApp (EApp (EVar "declEnvReachFrom") (EVar "edges")) (EListLit (EFieldAccess (EVar "m") "demId"))) (EApp (EVar "declEnvReachSeed") (EFieldAccess (EVar "m") "demId")))) (EVar "acc"))))
 (DTypeSig false "declEnvReachSeed" (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "declEnvReachSeed" ((PVar "mid")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (ELit LUnit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit LUnit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "core"))) (ELit LUnit)) (EVar "omEmpty")))))
-(DTypeSig true "declEnvReachFrom" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DTypeSig false "declEnvReachFrom" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "declEnvReachFrom" (PWild (PList) (PVar "seen")) (EVar "seen"))
 (DFunDef false "declEnvReachFrom" ((PVar "edges") (PCons (PVar "mid") (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "seen"))))) (EApp (EApp (EVar "declEnvDirectImports") (EVar "edges")) (EVar "mid")))) (DoExpr (EApp (EApp (EApp (EVar "declEnvReachFrom") (EVar "edges")) (EBinOp "++" (EVar "fresh") (EVar "rest"))) (EApp (EApp (EVar "declEnvMarkReached") (EVar "fresh")) (EVar "seen"))))))
 (DTypeSig false "declEnvMarkReached" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
@@ -6170,7 +6146,7 @@ methodRowSameNameView rows =
 (DFunDef false "kindPublicDataDecl" (PWild) (EVar "False"))
 (DTypeSig true "ordinaryEnvBinding" (TyFun (TyCon "Scheme") (TyCon "EnvBinding")))
 (DFunDef false "ordinaryEnvBinding" ((PVar "scheme")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EApp (EVar "ordinaryValueScheme") (EVar "scheme"))) (fa "ebMethodRow" (EVar "None")) (fa "ebStandalone" (EVar "None")))))
-(DTypeSig true "ordinaryValueScheme" (TyFun (TyCon "Scheme") (TyCon "ValueScheme")))
+(DTypeSig false "ordinaryValueScheme" (TyFun (TyCon "Scheme") (TyCon "ValueScheme")))
 (DFunDef false "ordinaryValueScheme" ((PVar "scheme")) (ERecordCreate "ValueScheme" ((fa "vsScheme" (EVar "scheme")) (fa "vsDeclared" (EVar "None")))))
 (DTypeSig true "methodEnvBinding" (TyFun (TyCon "MethodSchemeRow") (TyCon "EnvBinding")))
 (DFunDef false "methodEnvBinding" ((PVar "row")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EApp (EVar "ordinaryValueScheme") (EFieldAccess (EVar "row") "msrScheme"))) (fa "ebMethodRow" (EApp (EVar "Some") (EVar "row"))) (fa "ebStandalone" (EVar "None")))))
@@ -6280,7 +6256,7 @@ methodRowSameNameView rows =
 (DFunDef false "emptyMethodModulePredicateSlot" ((PVar "mid") (PVar "iface") (PVar "typarams") (PCon "IfaceMethod" (PVar "name") (PVar "ty") PWild PWild)) (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "methodLevelConstraintVarNames") (EVar "typarams")) (EVar "ty"))) (EListLit (ETuple (ETuple (EVar "mid") (EApp (EApp (EVar "methodSlotKey") (EVar "iface")) (EVar "name"))) (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "declTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declTopFnNames" ((PVar "decls")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "decls"))))
-(DTypeSig true "useModuleId" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "useModuleId" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "useModuleId" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "useModId") (EVar "path"))))
 (DFunDef false "useModuleId" (PWild) (EListLit))
 (DTypeSig true "lastComponent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))

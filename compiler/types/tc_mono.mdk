@@ -68,18 +68,9 @@ import types.effect_rows.{
   rowFlat,
 }
 import types.tc_types.{
-  AbsorptionEvent(..),
-  GoalPayload(..),
-  GraphCtx(..),
-  HeadVarRoot(..),
-  MethodReturnRequest(..),
-  MStep(..),
-  Obligation(..),
-  Predicate(..),
-  RecordInfo(..),
-  SiteKind(..),
-  Windowed(..),
-  HeadVarRoot,
+  AbsorptionEvent(..), GoalPayload(..), GraphCtx(..), HeadVarRoot(..),
+  MethodReturnRequest(..), MStep(..), Obligation(..), Predicate(..),
+  RecordInfo(..), SiteKind(..), Windowed(..)
 }
 import map as IdMap
 import map.{Map(..)}
@@ -2197,7 +2188,6 @@ findTvName id ((n, mono) :: rest) = match normalize mono
   TVar cell => if tyvarId cell == id then Some n else findTvName id rest
   _ => findTvName id rest
 
-export
 monoSpineHeadIsCon : Mono -> Bool
 monoSpineHeadIsCon m = match peelQual m
   TApp a _ => monoSpineHeadIsCon a
