@@ -23,12 +23,8 @@
 -- `tc_module`.
 
 import types.tc_types.{
-  AbsorptionEvent(..),
   Kind(..),
-  Predicate(..),
   SigVars(..),
-  UObligation(..),
-  Windowed(..),
   GraphCtx,
   ModuleCtx,
 }
@@ -187,7 +183,6 @@ import types.effect_param_decode.{
   writtenAxis,
   writtenParam,
 }
-import types.solver_contract.{Wanted(..)}
 import types.registry.{regKeyOfTab}
 
 seedEffectDomains : GraphCtx -> Unit -> Unit

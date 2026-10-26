@@ -56,6 +56,8 @@ import types.invocation_basis.{
 -- `compiler/entries/selfproc_tc_probe.mdk`.
 
 import frontend.ast.{
+  Ns(..),
+  DataVis(..),
   letBindName,
   implMethodName,
   noBinderId,
@@ -78,7 +80,6 @@ import frontend.ast.{
   effAtomSurface,
   EffParamTy(..),
   TyConOrigin(..),
-  Ns(..),
   Ident(..),
   identOriginFold,
   mkIdent,
@@ -112,7 +113,6 @@ import frontend.ast.{
   Require(..),
   Super(..),
   ImplMethod(..),
-  DataVis(..),
   Decl(..),
   ExternDecl(..),
   PropParam(..),
@@ -173,6 +173,7 @@ import types.effect_domain.{
   Param(..),
 }
 import types.effect_authority.{
+  GrantShape(..),
   Authority(..),
   Authvar(..),
   authvarId,
@@ -185,7 +186,6 @@ import types.effect_authority.{
   authTop,
   authDomainTop,
   authHasVars,
-  GrantShape(..),
   authGrantShape,
 }
 import types.effect_rows.{
@@ -233,6 +233,12 @@ import types.effect_values.{
 }
 import types.effect_invocation.{InvocationOps(..)}
 import types.tc_types.{
+  StandaloneOrigin(..),
+  ServeStep(..),
+  OblProjection(..),
+  NumBoundaryDisposition(..),
+  GoalPayload(..),
+  CDeclaredPrefix(..),
   ObligationSite(..),
   RecordInfo(..),
   Kind(..),
@@ -243,7 +249,6 @@ import types.tc_types.{
   PendingEntry(..),
   GoalKind(..),
   EvDest(..),
-  GoalPayload(..),
   Obligation(..),
   DynCtx(..),
   GroupCtx(..),
@@ -267,7 +272,6 @@ import types.tc_types.{
   DriveOutputs(..),
   withPublishedManifests,
   manifestDriverFor,
-  Windowed(..),
   CSlot(..),
   PredicateSlotArgs(..),
   PredicateRequest(..),
@@ -281,12 +285,10 @@ import types.tc_types.{
   MethodReturnRequest(..),
   NumAnchorTestObservation(..),
   MethodRowTestObservation(..),
-  CDeclaredPrefix(..),
   CDeclared(..),
   ShadowDicts(..),
   Predicate(..),
   Provenance(..),
-  OblProjection(..),
   UObligation(..),
   AbsorptionEvent(..),
   PendingDictApp(..),
@@ -310,19 +312,16 @@ import types.tc_types.{
   EvCell(..),
   SiteCell(..),
   GraphRun(..),
-  Interners(..),
   PendingBinder(..),
   GivenScope(..),
   CheckRunSeed(..),
   ModuleCtx(..),
-  ModuleCells(..),
   ReqWalk(..),
   WalkMemo(..),
   SolvedGoalEntry(..),
   RouteWalkEntry(..),
   ReqStep(..),
   InvocationView(..),
-  StandaloneOrigin(..),
   ValueScheme(..),
   EnvBinding(..),
   TcEnv(..),
@@ -339,7 +338,6 @@ import types.tc_types.{
   SelectedValueOccurrence(..),
   ExistentialScope(..),
   RecordSubst(..),
-  NumBoundaryDisposition(..),
   NumBoundary(..),
   NumGuard(..),
   ArmedGuard(..),
@@ -376,7 +374,6 @@ import types.tc_types.{
   PreludePreamble(..),
   GraphOut(..),
   ModuleServe(..),
-  ServeStep(..),
   GraphDrive(..),
   ElabResult,
   ElabFacts(..),
@@ -403,17 +400,17 @@ import types.evidence.{
   SuperEvidence(..),
 }
 import types.scopes.{
-  DefaultBodyIdentity(..),
   ScopeOwner(..),
+  DefaultBodyIdentity(..),
 }
 import types.scopes as Scopes
 import types.solver_contract.{
+  SolverFailure(..),
   ClassPredicate(..),
   GoalOrigin(..),
   Instantiation(..),
   InstantiationArgument(..),
   SolverBlocker(..),
-  SolverFailure(..),
   SolverOutcome(..),
   Wanted(..),
 }
@@ -553,13 +550,11 @@ import types.registry.{
   regKeyNTab,
   regKeyRender,
   -- the registry types the impl and class tables are built from.
-  Registry,
   regEmpty,
   mregLookupK,
   -- the cross-run constructor and record populations (`CrossRun`).
   SpellingPop,
   spEmpty,
-  spInsert,
   spRows,
   spFloor,
   spCandsOf,
@@ -605,9 +600,9 @@ import types.evidence_complete.{
   rowHoleWith,
 }
 import types.runtime_types.{
+  RuntimeType(..),
   BinderRow(..),
   addBinderRow,
-  RuntimeType(..),
   runtimeTypeOf,
 }
 import types.runtime_ops.{arithmeticTag}

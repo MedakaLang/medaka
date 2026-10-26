@@ -13,10 +13,7 @@
 -- `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
 
 import types.tc_types.{
-  AbsorptionEvent(..),
   SigVars(..),
-  UObligation(..),
-  Windowed(..),
   GraphCtx,
   ModuleCtx,
 }
@@ -50,7 +47,6 @@ import types.ffi_bindings.{
   ffiShadowMsg,
 }
 import support.ordmap.{omHasKey, omInsert, omLookup, omSize, OrdMap}
-import types.effect_domain.{Param(..)}
 import support.util.{
   allList,
   anyList,
@@ -64,6 +60,7 @@ import support.util.{
   zipL,
 }
 import types.repr.{lookupAssocI, ppTy}
+import types.effect_domain.{Param(..)}
 
 -- [start, start+1, .. start+count-1]
 export
