@@ -40,6 +40,7 @@ FIXDIR="$ROOT/test/wasm/fixtures_typed"
 RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
 WASM_SRC="$ROOT/compiler/backend/wasm_emit.mdk"
+WASM_REPR_SRC="$ROOT/compiler/backend/wasm_repr.mdk"
 TYPED_ENTRY="$ROOT/compiler/entries/wasm_emit_typed_main.mdk"
 # whitespace-flattened copies: the formatter wraps wide lines, so pins match these
 WASM_FLAT="$(tr -s '[:space:]' ' ' < "$WASM_SRC")"
@@ -62,6 +63,11 @@ PLAN_FLAT="$(tr -s '[:space:]' ' ' < "$PLAN_SRC")"
 has_plan_pin() {
   grep -F -q -- "$1" "$PLAN_SRC" || printf '%s' "$PLAN_FLAT" | grep -F -q -- "$1"
 }
+
+if grep -E '^import([[:space:]]|\.)' "$WASM_REPR_SRC" >/dev/null; then
+  echo "FAIL wasm repr closure: wasm_repr.mdk must remain core-prelude-only"
+  exit 1
+fi
 
 retired_scanner='emitScalarProgram|emitScalarInit|emitScalarValInit|emitScalarMain|emitScalarFnBind|emitScalarTail|emitScalarAppTail|emitScalarExpr|emitBinI32|emitUnI32|emitIfI32|emitLetI32|emitBlockI32|emitAppI32|emitVarI32|paramDeclI32|localDeclI32|emitIfRef|emitLetWith'
 if grep -E "^($retired_scanner)[[:space:]]*[:= ]" "$WASM_SRC" >/dev/null; then
