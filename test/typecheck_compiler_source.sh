@@ -323,6 +323,7 @@ compiler/types/interface_sexp.mdk
 compiler/types/prelude_elab_test.mdk
 compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
+compiler/types/tc_diag.mdk
 compiler/types/tc_env.mdk
 compiler/types/tc_mono.mdk
 compiler/types/tc_state.mdk
@@ -1011,6 +1012,13 @@ require_signature_flat() {
     exit 1
   fi
 }
+tc_scope_src_flat="$(tr '\n' ' ' < "$ROOT/compiler/types/tc_scope.mdk" | tr -s ' ')"
+require_signature_scope() {
+  if ! printf '%s\n' "$tc_scope_src_flat" | grep -Fq " $1"; then
+    echo "FAIL: typechecker signature is missing or changed: $1"
+    exit 1
+  fi
+}
 require_signature_flat 'registerReqSlots : ModuleCtx -> ScopeId -> List (String, Mono) -> Int -> List Require -> Unit'
 require_signature_flat 'recordCallObligations : ModuleCtx -> List CSlot -> List Mono -> List (List Mono) -> Unit'
 require_signature_flat 'dedupPredicateSlotEntry : (String, List PredicateSlot) -> (String, List PredicateSlot)'
@@ -1028,8 +1036,8 @@ require_signature_flat 'scopePredicateSlots : List ((String, String), List Predi
 require_signature_flat 'scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) -> OrdMap Unit -> List (String, List MethodPredicateSlot)'
 require_signature_flat 'attributeMethodModulePredicateSlots : String -> List Decl -> List (String, List MethodPredicateSlot) -> List ((String, String), List MethodPredicateSlot)'
 require_signature_flat 'methodSchemeRows : ModuleCtx -> List (String, List Kind) -> IfaceRef -> List String -> List IfaceMethod -> List MethodSchemeRow'
-require_signature_flat 'pickSchemesByDecl : ModuleCtx -> List String -> List (String, Scheme) -> Registry MethodSchemeRow -> OrdMap Scheme -> List (String, EnvBinding)'
-require_signature_flat 'admittedSchemeFor : ModuleCtx -> String -> Registry MethodSchemeRow -> Option Scheme'
+require_signature_scope 'pickSchemesByDecl : ModuleCtx -> List String -> List (String, Scheme) -> Registry MethodSchemeRow -> OrdMap Scheme -> List (String, EnvBinding)'
+require_signature_scope 'admittedSchemeFor : ModuleCtx -> String -> Registry MethodSchemeRow -> Option Scheme'
 
 predicate_slot_types_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
 data PredicateRequest = PredicateRequest {

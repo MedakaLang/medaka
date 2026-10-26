@@ -143,7 +143,6 @@ sortInsertIfaceRef x (y :: ys)
   | otherwise = y :: sortInsertIfaceRef x ys
 
 -- This module's own interface declaring [n], as an identity.
-export
 ownMethodIdent : List Decl -> String -> Option Ident
 ownMethodIdent [] _ = None
 ownMethodIdent ((DAttrib _ d) :: rest) n = match ownMethodIdent [d] n
@@ -165,7 +164,6 @@ ownMethodIdent (_ :: rest) n = ownMethodIdent rest n
 -- docs/spec/DICT-SEMANTICS.md § "8. Identity, arity, and cross-module elaboration"
 -- (I8) for why widening this filter is safe while deciding a declaration by spelling
 -- is not.
-export
 usePathAdmitsDecl : UsePath -> Bool -> String -> IfaceRef -> Bool
 usePathAdmitsDecl path wide n iface =
   usePathBindsName path n || wide && usePathBindsName path iface.irName
@@ -182,7 +180,6 @@ usePathBindsName path n = match importedBindings path
 
 -- Monomorphic and short-circuiting on purpose (`compiler/AGENTS.md`): this runs only for
 -- a COLLIDED method name, but when it runs it walks one module's exported-method list.
-export
 exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
 exportsIdentFor _ _ [] = False
 exportsIdentFor n ident ((en, ei) :: rest)
