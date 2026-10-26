@@ -1401,7 +1401,7 @@ if printf '%s\n' "$ordinary_return_stamp_body" | grep -Eq '(^|[^A-Za-z])entail[[
   echo "FAIL: ordinary return route adapter retains an independent entailment or selector"
   exit 1
 fi
-if grep -Fq 'EKExactReturn' "$predicate_slot_pair_src"; then
+if grep -Fq 'EKExactReturn' "$tc_union_src"; then
   echo "FAIL: retired EKExactReturn entailment arm remains"
   exit 1
 fi
@@ -1443,7 +1443,7 @@ printf '%s\n' "$numeric_operator_types_required" | while IFS= read -r required; 
   fi
 done || exit 1
 
-if grep -Fq 'recordArithSite :' "$predicate_slot_pair_src"; then
+if grep -Fq 'recordArithSite :' "$tc_union_src"; then
   echo "FAIL: retired parallel arithmetic site recorder remains"
   exit 1
 fi
@@ -1639,7 +1639,7 @@ if ! printf '%s\n' "$operator_scope_body" | grep -Fq "$operator_scope_guard"; th
   echo "FAIL: operator route dropped its nominal evidence owner: $operator_scope_guard"
   exit 1
 fi
-if grep -Fq 'argImplDictRoutesFor :' "$predicate_slot_pair_src"; then
+if grep -Fq 'argImplDictRoutesFor :' "$tc_union_src"; then
   echo "FAIL: owner-erasing argImplDictRoutesFor wrapper remains"
   exit 1
 fi

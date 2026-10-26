@@ -895,7 +895,7 @@ ffiCheckLabelsGo mctx ((DExtern d) :: rest) =
       (ffiIsBuiltinExternName mctx.mcGraph d.edName)
       d
       (ffiDeclaredRow mctx d.edTy)
-  let _ = each (pushFfiDiag mctx) diags
+  each (pushFfiDiag mctx) diags
   ffiCheckLabelsGo mctx rest
 ffiCheckLabelsGo mctx (_ :: rest) = ffiCheckLabelsGo mctx rest
 
@@ -1063,7 +1063,7 @@ externDecls (_ :: rest) = externDecls rest
 (DFunDef false "ffiCheckExternsLabelled" ((PVar "mctx") (PCon "True") (PVar "ds")) (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EApp (EVar "externDecls") (EVar "ds"))))
 (DTypeSig false "ffiCheckLabelsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PList)) (ELit LUnit))
-(DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EVar "ffiDeclarationDiags") (EApp (EApp (EVar "ffiIsBuiltinExternName") (EFieldAccess (EVar "mctx") "mcGraph")) (EFieldAccess (EVar "d") "edName"))) (EVar "d")) (EApp (EApp (EVar "ffiDeclaredRow") (EVar "mctx")) (EFieldAccess (EVar "d") "edTy")))) (DoLet false false PWild (EApp (EApp (EVar "each") (EApp (EVar "pushFfiDiag") (EVar "mctx"))) (EVar "diags"))) (DoExpr (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))))
+(DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EVar "ffiDeclarationDiags") (EApp (EApp (EVar "ffiIsBuiltinExternName") (EFieldAccess (EVar "mctx") "mcGraph")) (EFieldAccess (EVar "d") "edName"))) (EVar "d")) (EApp (EApp (EVar "ffiDeclaredRow") (EVar "mctx")) (EFieldAccess (EVar "d") "edTy")))) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "pushFfiDiag") (EVar "mctx"))) (EVar "diags"))) (DoExpr (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))))
 (DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))
 (DTypeSig false "pushFfiDiag" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "FfiDiag") (TyCon "Unit"))))
 (DFunDef false "pushFfiDiag" ((PVar "mctx") (PCon "FfiDiag" (PVar "code") (PVar "loc") (PVar "msg"))) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "code")) (EVar "loc")) (EVar "msg")))
@@ -1224,7 +1224,7 @@ externDecls (_ :: rest) = externDecls rest
 (DFunDef false "ffiCheckExternsLabelled" ((PVar "mctx") (PCon "True") (PVar "ds")) (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EApp (EVar "externDecls") (EVar "ds"))))
 (DTypeSig false "ffiCheckLabelsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PList)) (ELit LUnit))
-(DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EVar "ffiDeclarationDiags") (EApp (EApp (EVar "ffiIsBuiltinExternName") (EFieldAccess (EVar "mctx") "mcGraph")) (EFieldAccess (EVar "d") "edName"))) (EVar "d")) (EApp (EApp (EVar "ffiDeclaredRow") (EVar "mctx")) (EFieldAccess (EVar "d") "edTy")))) (DoLet false false PWild (EApp (EApp (EVar "each") (EApp (EVar "pushFfiDiag") (EVar "mctx"))) (EVar "diags"))) (DoExpr (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))))
+(DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EVar "ffiDeclarationDiags") (EApp (EApp (EVar "ffiIsBuiltinExternName") (EFieldAccess (EVar "mctx") "mcGraph")) (EFieldAccess (EVar "d") "edName"))) (EVar "d")) (EApp (EApp (EVar "ffiDeclaredRow") (EVar "mctx")) (EFieldAccess (EVar "d") "edTy")))) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "pushFfiDiag") (EVar "mctx"))) (EVar "diags"))) (DoExpr (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))))
 (DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))
 (DTypeSig false "pushFfiDiag" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "FfiDiag") (TyCon "Unit"))))
 (DFunDef false "pushFfiDiag" ((PVar "mctx") (PCon "FfiDiag" (PVar "code") (PVar "loc") (PVar "msg"))) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "code")) (EVar "loc")) (EVar "msg")))

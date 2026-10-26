@@ -1,5 +1,5 @@
 # META
-source_lines=37768
+source_lines=37663
 stages=DESUGAR,MARK
 # SOURCE
 import types.invocation_basis.{
@@ -1234,17 +1234,6 @@ import types.tc_foreign.{
   ffiExternTypeRowsWith,
   ffiStampMode,
 }
-
--- ── effect-label DOMAIN registry ───────────────────────────────────────────
--- Maps a label's identity key (`labelKey`) to the ⊤-param of its declared
--- domain.  A `PPrefix None` entry means "Prefix-domain (carries a pattern)";
--- a `PPath None` entry is a Prefix domain whose runtime confines by canonical
--- path, so its order compares canonical paths (`FileRead`, `FileWrite`: the
--- labels of the file externs that take a grant); absence ⇒ atomic (Unit).
--- Seeded with the builtin labels and extended per program from `effect Net
--- Prefix` decls, each under its declaration's own identity, so two modules'
--- same-spelled labels own separate schemas.  An assoc-list Ref (the label set
--- is tiny).
 
 -- ── v2 Stage 3: the `IO` widening union alias (design §3.2) ─────────────────
 -- `IO` is the coarse security alias: in a BOUND/annotation row it stands for
@@ -2513,96 +2502,23 @@ recoveredShadowSym name tagRef =
   let s = routeLocalSym !tagRef
   if s == name then "" else s
 
--- ── A-3.2b (#1512) slices 2+3: THE DATA-UNIVERSE SEED, READ OUT OF K ─────────
--- `CrossRun.universeDataParamKinds` and `CrossRun.universeFieldOwners` are
--- RETIRED.  Both were the same machine: a cell grown one module at a time by
--- `appendDataUniverse` and copied into a per-run working ref by
--- `loadDataUniverse` at the top of every module's `checkBodyImpl` Module arm.
--- Neither carried a module id or an ordinal, so neither could answer "as seen by
--- WHOM" — the question §2 K exists to make askable.  The seed now comes from the
--- whole-graph envelope, projected at the reading module's own ordinal through the
--- SAME two predicates the overlay pool reads (`declEnvVisibleAt` /
--- `declEnvVisibleTo`).  ⚠️ This clause used to end "so A-3.6 keeps its one-body
--- deletion"; A-3.6 (#1558) SPLIT the predicate rather than deleting it, and this
--- seed — a NAME/data-scoping table — kept its ordinal filter unchanged.
---
--- 🚨 THE SEED EXCLUDES THE READER'S OWN ROW, AND THAT IS NOT AN ORDINAL
--- STATEMENT.  A module registers its own decls directly, immediately after this
--- seed, via `registerAllData … prog0` — which is also what the retired
--- accumulator did (`appendDataUniverse` runs at the END of a module's arm, so the
--- universe a module LOADS holds every EARLIER module and never itself).  Seeding
--- the own row a second time would not merely duplicate work: `addFieldOwners`
--- does not dedupe, so a doubled owner key would sit in the raw multimap; the one
--- reader, `fieldOwnerNames`, `sortUniqS`es it, so the exclusion is a work-and-shape
--- invariant of the seed that the `deSeedChainProbe` doctests assert, not a
--- correctness one.
---
--- 🚨 IT IS A CHAIN, NOT A PER-READ FOLD, AND THAT IS A MEASURED REQUIREMENT.  The
--- first cut of this unit folded the visible rows AT EVERY READ: O(universe) work
--- and allocation once per module, i.e. the "rebuild the whole thing once per
--- element" shape `compiler/AGENTS.md` opens with.  CI caught it —
--- `diff_compiler_perf_scaling`'s `modules` shape put `typecheck` TIME at
--- 0.299s/0.675s/1.872s over N=100/200/400 where the row's own note says the stage
--- has been UNDER the 200 ms floor since #154 PR-C, and the shape's climbing rule
--- (`r2 > r1 * 1.15 && r2 > 2.45`) failed it.  The ALLOC arm called the same run
--- `ok` at 2.24/2.42, which is exactly the second rule in `compiler/AGENTS.md`: a
--- quadratic that allocates little is invisible to the allocation arm.
---
--- So the seeds are built ONCE, in `buildDeclEnvs`, as a PREFIX CHAIN: reader k's
--- seed is reader (k-1)'s seed with row (k-1)'s public projection folded in, which
--- shares structure and costs O(whole graph) for the entire run.  The read is one
--- `omLookup` and allocates nothing.
---
--- 🚨 A-3.6 DID NOT EDIT HERE, AND THE INSTRUCTION THIS NOTE USED TO CARRY WAS A
--- LIVE REGRESSION.  It read: *"When A-3.6 makes `declEnvVisibleAt ≡ True`, every
--- reader must see the WHOLE chain instead of its own prefix: hand every row the
--- FINAL accumulator in `declEnvSeedChain` below."*  `test/registry_keying_ratchet.sh`
--- still says the same thing in its `declEnvsRef` and `deKindsBefore` rows.  **Do
--- not do it**, for two independent reasons:
---
---   1. THE FINAL ACCUMULATOR INCLUDES THE READER'S OWN ROW, and the own-row
---      exclusion is structural and mandatory — the 🚨 note above says so, and the
---      SAME ratchet row says so two sentences before instructing the edit that
---      destroys it.  A module re-registers its own decls immediately after this
---      seed via `registerAllData … prog0`, so seeding them here too doubles an
---      owner key in the raw multimap (`fieldOwnerNames` dedupes it on read, so
---      this is a shape invariant, not an answer change).  That is PINNED:
---      see the four `deSeedChainProbe` doctests below `deKindRow1`, which were
---      added by A-3.6 bite C-1 specifically as a tripwire on this edit and which
---      were confirmed to be the only assertions in this file that fire on it.
---   2. THE PREMISE IS FALSE ANYWAY.  A-3.6 (#1558) did not make
---      `declEnvVisibleAt ≡ True`; it split the predicate and flipped only the
---      instance axis (`ieCandidacyVisibleAt`).  These two seeds are name/data
---      scoping and keep the prefix rule.  Widening the field-owner half was in
---      fact the specific thing the owner ruling declined, because
---      `declEnvVisibleTo`'s MEASURED paragraph shows it NARROWS acceptance.
---
--- What the chain is, unchanged: it ENCODES `declEnvVisibleAt`'s prefix shape —
--- that is the whole source of the structure sharing — while each step still routes
--- its PROJECTION through `declEnvRowKindEntries`/`declEnvRowVisible`, hence through
--- `declEnvVisibleTo`'s two conjuncts.
+-- one entry per occurrence of a registered interface method: (iface, typarams,
+-- declared method Ty, the occurrence's instantiated mono).  Resolved post-inference.
+-- B.10.2c: the 5th element is the enclosing construct's span (`mcLoc`) snapshotted
+-- at the RECORD site (during inference, when the construct is live), so the post-HM
+-- obligation check (checkImplObligations) can pair a `No impl of …` reject with
+-- the offending expression's range — captured at record time
+-- rather than reading the stale global at the post-HM raise.
 
--- ── #1597: FIELD-OWNER REACHABILITY ──────────────────────────────────────────
--- 🚨 WHY THIS IS A SECOND, NARROWER PREDICATE AND NOT A WIDENING OF
--- `declEnvVisibleAt`.  That predicate is shared by FOUR name-scoping tables plus a
--- decl-time existence query, and its own 🚨 note forbids widening its readers as a
--- side effect of anything: *"Widening any of this predicate's readers is a separate
--- unit with its own fixtures; it is not a side effect of anything."*  #1597 is the
--- opposite direction anyway — the ordinal prefix is too WIDE for the field-owner
--- reader, not too narrow.  So the prefix stays exactly as it is, the population stays
--- exactly as it is, and the FIELD-OWNER READER alone gets one extra conjunct.  No
--- other reader of `declEnvVisibleAt` sees any of this.
---
--- THE PREDICATE: an earlier module's record votes in `resolveFieldByOwners`'
--- ambiguity test only if that module is in the reading module's transitive `DUse`
--- closure.  "Earlier in the topological order" is not "reachable" — that conflation
--- is the whole of #1597, where a module importing NOTHING was rejected because an
--- unrelated module sorted first.
---
--- ⚠️ IT IS AN OVER-APPROXIMATION ON PURPOSE, IN THE SAFE DIRECTION.  The closure
--- walks every `DUse` edge regardless of publicity, selectivity or re-export, so it
--- only ever removes a module the reader has NO import path to at all.  A module the
--- reader can reach but may not legally name still votes, exactly as today.
+-- PERF: the obligation list's length, in O(1).  That list grows with every
+-- constrained occurrence in the program and is NEVER trimmed, yet each top-level
+-- group brackets its inference with a length-before / length-after pair to recover
+-- the obligations IT added (they are consed on the front, so `wWindow` recovers
+-- them).  Measuring that length by walking the list was O(N) over an O(N) list once
+-- per group — O(N²), and the single hottest symbol in the typecheck stage on a large
+-- file.  #841 ports this channel onto `Windowed` (see `implObls` below): `wPush`,
+-- the per-module `ModuleCtx` mint, and `wRestore` (checkMethodBodyAgainst's error
+-- rollback) are its only mutators, so the list and its length can no longer drift.
 
 -- The one and only way to add an obligation.  #991: this channel now stores the SAME
 -- `UObligation` record the call channel does, with a real `Provenance` and an
@@ -17129,7 +17045,7 @@ implCompletenessMsgsOfMap _ _ _ = []
 
 -- ── #1111 Stage A-2 unit A-2.11 (#1319 unit 1): the CONSTRUCTOR-namespace peer ──
 --
--- Everything from here to `ctorExportsInto` is the constructor twin of the METHOD
+-- Everything from here to `ctorExportsInto` (in `tc_decls`) is the constructor twin of the METHOD
 -- method machinery (`MethodEnv` … `exportsIdentFor`).  It is a
 -- deliberate near-copy and it is NAMED SCAFFOLDING, not an oversight:
 --
@@ -17145,7 +17061,7 @@ implCompletenessMsgsOfMap _ _ _ = []
 --
 -- ⚠️ MIRROR DISCIPLINE IS LIVE between the two families until #1288 lands: a fix to the
 -- scope ladder, the witness, or the export index on ONE side is silently absent from the
--- other.  They are adjacent in this file on purpose.
+-- other.  They are kept together on purpose (this file and `tc_decls`).
 --
 -- ── WHAT THIS FIXES, AND WHAT IT DELIBERATELY DOES NOT ──────────────────────
 -- The ctor floor (`universeCtorPop`'s `spFloor`) is keyed by the BARE constructor name and is
@@ -20965,7 +20881,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- #2074 / F1 (epic #2070): the USER-EXTERN DECLARATION guards, all gated on
   -- the same `ffiStampMode` ownership Bool — a stdlib-owned program's externs ARE
   -- the vocabulary and none of these rules owns them.  They run AFTER
-  -- `rejectCyclicAliases` above so `expandAliasHeadTy` cannot recurse forever on a
+  -- `rejectCyclicAliases` (`tc_decls`) so `expandAliasHeadTy` cannot recurse forever on a
   -- cyclic alias.  Order between them is not significant: diagnostics
   -- accumulate ([T-ERRORS-ACCUM]) and a signature can honestly fail more than one.
   --
@@ -26823,27 +26739,6 @@ directExternSigs (_ :: rest) = directExternSigs rest
 
 declExternNames : List Decl -> List String
 declExternNames decls = map fst (directExternSigs decls)
-
--- ── #2157: the OBLIGATION half of the same anchor ───────────────────────────────
---
--- #259 (above) fixed WHICH SCHEME a numeric literal instantiates — by interface
--- identity, out of the prelude `Num` declaration.  It did not fix which INTERFACE the
--- literal's impl-coverage obligation is recorded against: `inferNumLitMethod` routed
--- that through `recordImplObligation`, whose `methodEntryHere x` is a
--- bare method-NAME lookup with no interface-identity input at all.  A user module
--- declaring `interface Buildable c where fromInt : Int -> c` registers a SECOND row
--- under the key `"fromInt"`, last-write-wins, and every numeric literal in that module
--- then demanded `Buildable` instead of `Num` — `No impl of Buildable for Int` on
--- `println (1 + 2)`, on a program with no shadow of any kind (#2157).
---
--- ⚠️ The defect's true scope is the whole MODULE, not the same-named method's own impl
--- body: the table is per-module and the literal path reads it at every literal, so the
--- misfire needs only the `interface` DECLARATION, no `impl` and no occurrence of the
--- user's own method.  See `test/shadow_fixtures/x9_*` / `x10_*`.
---
--- The selected row is the only source for the numeric occurrence's scheme,
--- declared type, interface identity, and method-level slots.  A second declaration
--- walk could pair those fields from different duplicate declarations.
 
 -- DRIVER-COLLAPSE Phase 2: skip when [mname] is ALREADY registered in THIS pass.
 -- The ids must be the SAME quantified ids the call-site instantiation maps through

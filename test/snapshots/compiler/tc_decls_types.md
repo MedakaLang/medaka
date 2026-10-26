@@ -1,5 +1,5 @@
 # META
-source_lines=2304
+source_lines=2312
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_types: the written-type layer of declaration analysis: AST types to `Mono`
@@ -192,6 +192,14 @@ import types.effect_param_decode.{
 }
 import types.registry.{regKeyOfTab}
 
+-- The effect-label domain registry maps a label's identity key (`labelKey`) to the
+-- top param of its declared domain.  A `PPrefix None` entry means "Prefix domain
+-- (carries a pattern)"; a `PPath None` entry is a Prefix domain whose runtime confines
+-- by canonical path, so its order compares canonical paths (`FileRead`, `FileWrite`:
+-- the labels of the file externs that take a grant); absence means atomic (Unit).
+-- Seeded with the builtin labels and extended per program from `effect Net Prefix`
+-- decls, each under its declaration's own identity, so two modules' same-spelled
+-- labels own separate schemas.  An assoc-list Ref (the label set is tiny).
 seedEffectDomains : GraphCtx -> Unit -> Unit
 seedEffectDomains gctx _ =
   let builtins = [
@@ -2218,7 +2226,7 @@ expandAliasHeadTy mctx ty =
   expandAliasHeadTyWith mctx.mcCells.aliasTableRef.value ty
 
 -- The explicit-table form is the carrier seam for post-typecheck consumers.  The
--- live declaration checks above call `expandAliasHeadTy`, whose table is the
+-- live declaration checks in `tc_foreign` call `expandAliasHeadTy`, whose table is the
 -- current module's `ModuleCells.mcCells.aliasTableRef`; the emitter-side FFI index calls this
 -- same function body with stage K's module-scoped alias projection.  Keeping the
 -- table as an argument here means lowering does not grow a second alias expander
@@ -2243,7 +2251,7 @@ expandAliasHeadTyWith _ t = t
 
 -- substitute interface-typaram NAMES → impl type PATTERNS inside a declared Ty.
 --
--- #1110.  The `TyCon` arm preserves the matched node and clears only the span:
+-- The `TyCon` arm preserves the matched node and clears only the span:
 -- rebuilding it from its name alone would silently destroy the `tyConOrigin`
 -- identity resolve already acquired, and re-stamping here is not an option
 -- because this function does not know an identity and would be guessing one.

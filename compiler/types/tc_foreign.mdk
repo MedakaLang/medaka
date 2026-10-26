@@ -891,7 +891,7 @@ ffiCheckLabelsGo mctx ((DExtern d) :: rest) =
       (ffiIsBuiltinExternName mctx.mcGraph d.edName)
       d
       (ffiDeclaredRow mctx d.edTy)
-  let _ = each (pushFfiDiag mctx) diags
+  each (pushFfiDiag mctx) diags
   ffiCheckLabelsGo mctx rest
 ffiCheckLabelsGo mctx (_ :: rest) = ffiCheckLabelsGo mctx rest
 
