@@ -326,6 +326,7 @@ compiler/types/scopes_test.mdk
 compiler/types/tc_diag_text.mdk
 compiler/types/tc_env.mdk
 compiler/types/tc_mono.mdk
+compiler/types/tc_solve_givens.mdk
 compiler/types/tc_state.mdk
 compiler/types/typecheck.mdk"
 tyconun_actual=$(ratchet_producer_files 'tyConUnresolved')
@@ -954,10 +955,10 @@ tc_state_src="$ROOT/compiler/types/tc_state.mdk"
 # Absence anchors read every declaration of the former single file: typecheck.mdk plus the tc_*.mdk layer modules.
 tc_union_src="$RESULTS/tc_union.mdk"
 cat "$predicate_slot_src" "$ROOT"/compiler/types/tc_*.mdk > "$tc_union_src"
-# The predicate-slot pins read typecheck.mdk and the declaration layer together: rows of the former single file
-# that moved to tc_decls stay pinned by the same text.
-predicate_slot_pair_src="$RESULTS/predicate_slot_pair.mdk"
-cat "$predicate_slot_src" "$ROOT/compiler/types/tc_decls.mdk" > "$predicate_slot_pair_src"
+# The predicate-slot pins read typecheck.mdk, the declaration layer and the solver layer together: rows of the
+# former single file that moved to tc_decls or a tc_solve_* module stay pinned by the same text.
+predicate_slot_rows_src="$RESULTS/predicate_slot_rows.mdk"
+cat "$predicate_slot_src" "$ROOT/compiler/types/tc_decls.mdk" "$ROOT/compiler/types/tc_solve_givens.mdk" > "$predicate_slot_rows_src"
 predicate_slot_required='registerReqSlots : ModuleCtx ->
   List (String, Mono) ->
   Int ->
@@ -999,7 +1000,7 @@ realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
 recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route'
 
 printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
-  if ! grep -Fq "$required" "$predicate_slot_pair_src"; then
+  if ! grep -Fq "$required" "$predicate_slot_rows_src"; then
     echo "FAIL: #1318 predicate-slot producer authority is missing required source: $required"
     exit 1
   fi
@@ -1009,7 +1010,7 @@ done || exit 1
 # source with line breaks and runs of blanks collapsed; a first-line prefix would stop
 # constraining the signature after its first parameter. Each pin starts with a blank
 # so it matches at a line start only.
-predicate_slot_src_flat="$(tr '\n' ' ' < "$predicate_slot_pair_src" | tr -s ' ')"
+predicate_slot_src_flat="$(tr '\n' ' ' < "$predicate_slot_rows_src" | tr -s ' ')"
 require_signature_flat() {
   if ! printf '%s\n' "$predicate_slot_src_flat" | grep -Fq " $1"; then
     echo "FAIL: typechecker signature is missing or changed: $1"
@@ -1100,7 +1101,7 @@ seedNumLitFromIntAnchor : ModuleCtx -> List MethodSchemeRow -> Unit
   let visibleMethodRows = ifaceMethodSchemeRows mctx implDecls'
 
 printf '%s\n' "$method_row_required" | while IFS= read -r required; do
-  if ! grep -Fq "$required" "$predicate_slot_pair_src"; then
+  if ! grep -Fq "$required" "$predicate_slot_rows_src"; then
     echo "FAIL: #2549 method-row preparation is missing required source: $required"
     exit 1
   fi
@@ -1126,12 +1127,12 @@ printf '%s\n' "$method_row_types_required" | while IFS= read -r required; do
   fi
 done || exit 1
 
-method_row_current_count="$(grep -Fc 'ifaceMethodSchemeRows mctx prog' "$predicate_slot_pair_src")"
+method_row_current_count="$(grep -Fc 'ifaceMethodSchemeRows mctx prog' "$predicate_slot_rows_src")"
 if [ "$method_row_current_count" -ne 1 ]; then
   echo "FAIL: expected exactly one current-module ifaceMethodSchemeRows construction, got $method_row_current_count"
   exit 1
 fi
-method_row_module_count="$(grep -Fc 'ifaceMethodSchemeRows mctx implDecls' "$predicate_slot_pair_src")"
+method_row_module_count="$(grep -Fc 'ifaceMethodSchemeRows mctx implDecls' "$predicate_slot_rows_src")"
 if [ "$method_row_module_count" -ne 1 ]; then
   echo "FAIL: expected exactly one visible-module ifaceMethodSchemeRows construction, got $method_row_module_count"
   exit 1
@@ -1169,7 +1170,7 @@ done || exit 1
 numeric_predicate_required='  ClassPredicate(..),'
 
 printf '%s\n' "$numeric_predicate_required" | while IFS= read -r required; do
-  if ! grep -Fq "$required" "$predicate_slot_pair_src"; then
+  if ! grep -Fq "$required" "$predicate_slot_rows_src"; then
     echo "FAIL: numeric return predicate migration is missing required source: $required"
     exit 1
   fi
@@ -1196,7 +1197,7 @@ done || exit 1
 
 # Expression pins are compared whitespace-flattened, so fmt's line wrapping is not
 # part of the contract.
-predicate_slot_flat="$(tr '\n' ' ' < "$predicate_slot_pair_src" | tr -s ' ')"
+predicate_slot_flat="$(tr '\n' ' ' < "$predicate_slot_rows_src" | tr -s ' ')"
 # Full signatures of the route producers; fmt wraps them, so they are matched flattened.
 route_producer_sigs='methodPredicateRoutes : SiteCtx -> String -> ScopeId -> List PredicateSlot -> List Route
 recRoutes : SiteCtx -> String -> ScopeId -> Mono -> List PredicateSlot -> List Route
@@ -1289,7 +1290,7 @@ printf '%s\n' "$ordinary_return_resolution_required" | while IFS= read -r requir
   fi
 done || exit 1
 
-if ! grep -Fq '  SolverOutcome(..),' "$predicate_slot_pair_src"; then
+if ! grep -Fq '  SolverOutcome(..),' "$predicate_slot_rows_src"; then
   echo "FAIL: ordinary return production code does not import SolverOutcome"
   exit 1
 fi
@@ -1427,7 +1428,7 @@ entailAssumVar mctx request m encl _ useScope (EKPredicateOp _ _ _) =
 entailInst sx name m encl useScope _ (EKPredicateOp _ _ predicate) =
   (stampPredicateOpRouteVal sx encl useScope name m predicate, [])'
 printf '%s\n' "$numeric_operator_required" | while IFS= read -r required; do
-  if ! grep -Fq "$required" "$predicate_slot_pair_src"; then
+  if ! grep -Fq "$required" "$predicate_slot_rows_src"; then
     echo "FAIL: exact numeric operator predicate transport is missing: $required"
     exit 1
   fi
@@ -1517,7 +1518,7 @@ require_signature_flat 'inferImplBodies : TcEnv -> List String -> ClassEnv -> In
 ce_method_required='inferUserImplBodies : TcEnv -> List Decl -> ClassEnv -> Int -> List Decl -> Unit
 match ceMethodTyAt iface mname cur ce'
 printf '%s\n' "$ce_method_required" | while IFS= read -r required; do
-  if ! grep -Fq "$required" "$predicate_slot_pair_src"; then
+  if ! grep -Fq "$required" "$predicate_slot_rows_src"; then
     echo "FAIL: impl-body ClassEnv lookup is missing required source: $required"
     exit 1
   fi
@@ -1627,7 +1628,7 @@ operator_owner_required='argImplDictRoutesForEncl sx encl useScope dictName tag 
 entailInst sx name m encl useScope tag (EKOp isBinop _) =
 (stampOpRouteVal sx isBinop encl useScope name m tag, [])'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
-  if ! grep -Fq "$required" "$predicate_slot_pair_src"; then
+  if ! grep -Fq "$required" "$predicate_slot_rows_src"; then
     echo "FAIL: operator route dropped its evidence owner: $required"
     exit 1
   fi
@@ -1657,7 +1658,7 @@ printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = map LegacyScalar (activeDi
 # `firstPredForEnclAt`'s; merging the two tables into `gGiven` merged the two scans, so
 # the drop from six to five is the split authority going away, not a consumer losing the
 # relation.
-predicate_relation_uses=$(grep -F 'predicateRequestMatchesSlot request' "$predicate_slot_pair_src" \
+predicate_relation_uses=$(grep -F 'predicateRequestMatchesSlot request' "$predicate_slot_rows_src" \
   | grep -cvE '^[[:space:]]*--')
 if [ "$predicate_relation_uses" -ne 5 ]; then
   echo "FAIL: #1318 shared request/slot relation must serve all four identity consumers plus its definition (got $predicate_relation_uses)"
