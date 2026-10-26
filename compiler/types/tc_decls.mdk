@@ -7,9 +7,10 @@
 -- `instantiateSigTracked`, `astTypeFreshTbl`). The conversion itself and the kind, authority,
 -- effect-domain and effect-parameter checks are `tc_decls_types`.
 --
--- Spec: DICT section 1; EFFECTS section 4.1 (the signature binders), section 6.2 (kind annotations
--- bind parameters at declaration heads); DICT section 8 I4 (the alias normal form keeps resolved
--- identity); language-design Data Types.
+-- Spec: DICT section 1; EFFECTS section 4.1 (the signature binders), section 6.1 (kinds), section 6.2
+-- (kind annotations bind parameters at declaration heads), section 6.4 (kind consistency and indices
+-- of a declared head); DICT section 8 I4 (the alias normal form keeps resolved identity);
+-- language-design Data Types.
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
