@@ -56,6 +56,7 @@ discardedValueMsg : String -> String
 doBindArgHint : String -> String
 doBindArgMsg : String -> String
 doRequiresMonadMsg : String
+dropRenameSuffixes : List String -> String
 effVarLaunderMsg : String -> String -> List Atom -> String
 effectArrowOnDataHeadMsg : String -> String -> KindAnn -> String
 effectEscapeMsg : String -> List Atom -> List String -> List Atom -> String
@@ -75,6 +76,7 @@ fieldNotInAllCtorsMsg : String -> String -> String -> String
 fieldPositionDiffersMsg : String -> String -> (String, Int) -> (String, Int) -> String
 fieldTypeDiffersMsg : String -> String -> String -> Mono -> String -> Mono -> String
 findSigTvMap : String -> List (String, Ty, List (String, Mono)) -> Option (List (String, Mono))
+findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (String, Option (Loc, String))
 firstMid : List String -> String
 headL : List String -> String
 i64RangeText : String
@@ -99,12 +101,14 @@ joinMismatchMsg : String -> String -> String
 kindName : Kind -> String
 letRecNonFunctionMsg : String -> String
 locGoalKey : Option Loc -> String
+locKey : Option Loc -> String
 methodBodyLaunderMsg : MethodBodyKind -> String -> String -> List Atom -> String
 methodBodySubject : MethodBodyKind -> String -> String -> String
 missingConstraintMsg : String -> String -> String -> String
 missingConstraintVecMsg : String -> String -> List String -> String
 missingFieldMsg : String -> String -> String
 missingImplMethodMsg : String -> List Ty -> String -> String
+msgAtKey : String -> Option Loc -> String
 nameNotAuthorityMsg : String -> String
 narrowsImplHeadMsg : String -> List String -> String -> String
 noImplAdvice : String -> String -> String
@@ -126,6 +130,7 @@ patternDomainMsg : String -> String -> String
 patternIndexMsg : Authority -> String
 phantomExportMsg : String -> String -> String -> String
 pinsTyvarMsg : String -> Ty -> List String -> String
+prependDiagOpt : String -> Int -> Option String -> Option String -> List TcDiag -> List TcDiag
 qualifiedIfaceLabel : IfaceRef -> String
 qualifierBinderTypeMsg : String -> String -> String
 quotedNames : List String -> String
@@ -172,3 +177,5 @@ unreachableArmWarning : String
 updateMultiCtorMsg : String -> String -> String -> List String -> List String -> String
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
 wideAnnotateHelp : String -> Bool -> String
+writtenDiag : TcDiag -> TcDiag
+writtenNames : String -> String

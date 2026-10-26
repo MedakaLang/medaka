@@ -1,17 +1,12 @@
 alreadyReportedAt : ModuleCtx -> String -> Option Loc -> Bool
 boundaryOwnsOpen : ModuleCtx -> Map String Unit -> Int -> Bool
-dropRenameSuffixes : List String -> String
 erredDuring : ModuleCtx -> (Unit -> a) -> (Bool, a)
-findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (String, Option (Loc, String))
 firstTupleCallHint : ModuleCtx -> List Mono -> Option (String, Option (Loc, String))
 headIsStdlibOwned : GraphCtx -> Mono -> Bool
-locKey : Option Loc -> String
-msgAtKey : String -> Option Loc -> String
 noImplFoundMsgHinted : ModuleCtx -> String -> List Mono -> (String, Option String)
 noImplHint : ModuleCtx -> String -> List Mono -> Option String
 noImplHintFor : ModuleCtx -> String -> String -> Option String
 noteTypeErrorDetected : ModuleCtx -> Unit -> Unit
-prependDiagOpt : String -> Int -> Option String -> Option String -> List TcDiag -> List TcDiag
 pushAmbiguityAt : ModuleCtx -> Bool -> Option Loc -> String -> Unit
 pushBoundaryAmbiguity : ModuleCtx -> Map String Unit -> List Mono -> Option Loc -> String -> Unit
 pushNoImplError : ModuleCtx -> String -> Option Loc -> List Mono -> Unit
@@ -26,5 +21,3 @@ recordUnlessSeen : ModuleCtx -> Bool -> TcDiag -> Unit
 replaceAmbiguityAt : ModuleCtx -> String -> TcDiag -> Unit
 tupleCallHintFor : ModuleCtx -> Mono -> Option (String, Option (Loc, String))
 typeErrorsArmed : GraphCtx -> Unit -> Bool
-writtenDiag : TcDiag -> TcDiag
-writtenNames : String -> String

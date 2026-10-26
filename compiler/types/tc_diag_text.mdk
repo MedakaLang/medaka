@@ -1,10 +1,12 @@
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
--- builder whose operands are values (`Mono`, `Scheme`, `Ty`, atoms, kinds, `IfaceRef`, `Loc`, AST
--- nodes, names) and whose closure is `tc_types`, `tc_mono`, `repr`, the AST and the effect leaves;
--- no row takes a context record, an environment or a cell (D3).
+-- builder, diagnostic key (`locKey`, `msgAtKey`, `locGoalKey`) and rewrite of diagnostic text
+-- (`writtenDiag`, `prependDiagOpt`) whose operands are values (`Mono`, `Ty`, atoms, kinds,
+-- `IfaceRef`, `Loc`, AST nodes, names) and whose closure is `tc_types`, `tc_mono`, `repr`, the
+-- AST and the effect leaves; no row takes a context record, an environment or a cell (D3).
 --
--- Spec: ERROR-QUALITY.md; A5. Precedent: GHC.Tc.Errors.Ppr (a leaf; Types, Ppr and emitters are
--- three modules there); rustc keeps message structs apart from `DiagCtxt`.
+-- Spec: ERROR-QUALITY.md; A5. Precedent: GHC.Tc.Errors.Ppr (report-ghc.md:71, a leaf that
+-- imports only Tc.Errors, Tc.Types and TcType); Medaka has text builders without a message data
+-- type, so a diagnostic's code is still passed at each emit site.
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
@@ -27,11 +29,9 @@ import types.tc_mono.{
 }
 import frontend.ast.{
   authTermsSurface,
-  Decl(..),
   EffAtomTy(..),
   EffParamTy(..),
   Expr(..),
-  Ident(..),
   KindAnn(..),
   kindAnnSource,
   Lit(..),
@@ -44,6 +44,7 @@ import frontend.ast.{
   TyConOrigin(..),
 }
 import types.repr.{
+  normalize,
   IfaceRef(..),
   Mono(..),
   ppAuthority,
@@ -62,16 +63,10 @@ import types.repr.{
 }
 import types.tc_types.{
   DeclaringBinder(..),
-  GraphCtx(..),
-  GraphRun(..),
   KeyEntry,
   Kind(..),
   MethodBodyKind(..),
-  ModuleCtx(..),
-  Predicate(..),
   RecordInfo,
-  UObligation(..),
-  Windowed(..),
 }
 import types.publish.{TcDiag(..)}
 import support.util.{
@@ -85,14 +80,11 @@ import support.util.{
   listLen,
   reverseL,
   sortUniqS,
+  splitOnChar,
+  startsWith,
 }
-import types.registry.{HeadKey(..)}
-import types.effect_rows.{
-  Atom(..), EffLabel(..), effLabelName, Effvar(..), renderAtoms
-}
+import types.effect_rows.{Atom(..), effLabelName, Effvar(..), renderAtoms}
 import types.effect_authority.{authIsTop, Authority(..)}
-import types.solver_contract.{Wanted(..)}
-import types.disposition.{MethodDisposition(..)}
 
 -- The directed judgment `required <= allowed` failed against an allowed row the
 -- body cannot solve: a signature's own row variable, or a row the caller
@@ -1326,7 +1318,6 @@ locGoalKey None = ""
 locGoalKey (Some (Loc file sl sc el ec)) =
   "\{file}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
 
-export
 allDigits : String -> Bool
 allDigits n = stringLength n > 0 && allDigitsFrom n 0
 
@@ -1406,3 +1397,57 @@ derivableIface iface =
 export
 quotedNames : List String -> String
 quotedNames names = joinWith ", " (map (n => "`" ++ n ++ "`") names)
+
+export
+locKey : Option Loc -> String
+locKey None = ""
+locKey (Some (Loc file line col _ _)) =
+  "\{file}:\{intToString line}:\{intToString col}"
+
+-- Membership key for "this message at this span".  A located diagnostic is a
+-- duplicate only of the same text at the same span, so two sites with identical
+-- text each report; an unlocated one folds on text alone.
+export
+msgAtKey : String -> Option Loc -> String
+msgAtKey msg at = "\{msg}\t@@\t\{locKey at}"
+
+-- Diagnostic text with every renamed local binder (`f$m$3$lb`) shown as written.
+writtenNames : String -> String
+writtenNames text = match splitOnChar '$' text
+  [only] => only
+  parts => dropRenameSuffixes parts
+
+dropRenameSuffixes : List String -> String
+dropRenameSuffixes [] = ""
+dropRenameSuffixes [a] = a
+dropRenameSuffixes (a :: _ :: n :: lb :: more)
+  | allDigits n && startsWith "lb" lb =
+    a ++ dropRenameSuffixes (stringSlice 2 (stringLength lb) lb :: more)
+dropRenameSuffixes (a :: rest) = "\{a}$\{dropRenameSuffixes rest}"
+
+-- A diagnostic as the user reads it: binder names as written.
+export
+writtenDiag : TcDiag -> TcDiag
+writtenDiag (TcDiag code sev loc msg help fix) =
+  TcDiag code sev loc (writtenNames msg) (map writtenNames help) fix
+
+export
+findTupleCand : String ->
+  List (Mono, String, Option (Loc, String)) ->
+  Option (String, Option (Loc, String))
+findTupleCand _ [] = None
+findTupleCand key ((res, help, fix) :: rest)
+  | ppMono (normalize res) == key = Some (help, fix)
+  | otherwise = findTupleCand key rest
+
+-- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
+export
+prependDiagOpt : String ->
+  Int ->
+  Option String ->
+  Option String ->
+  List TcDiag ->
+  List TcDiag
+prependDiagOpt _ _ _ None ds = ds
+prependDiagOpt code sev help (Some msg) ds =
+  writtenDiag (TcDiag code sev None msg help None) :: ds

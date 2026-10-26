@@ -1021,14 +1021,15 @@ import types.tc_env.{
   withCtors,
 }
 import types.tc_diag.{
-  boundaryOwnsOpen, erredDuring, locKey, prependDiagOpt, pushAmbiguityAt,
-  pushBoundaryAmbiguity, pushNoImplError, pushTypeError, pushTypeErrorAt,
-  pushTypeErrorHelpFixAt, pushTypeErrorOnce, pushTypeErrorOnceAt,
-  pushTypeErrorOncePerSite, recordTypeError, typeErrorsArmed, writtenDiag
+  boundaryOwnsOpen, erredDuring, pushAmbiguityAt, pushBoundaryAmbiguity,
+  pushNoImplError, pushTypeError, pushTypeErrorAt, pushTypeErrorHelpFixAt,
+  pushTypeErrorOnce, pushTypeErrorOnceAt, pushTypeErrorOncePerSite,
+  recordTypeError, typeErrorsArmed
 }
 import types.tc_diag_text.{
-  abstractFieldMsg, aliasArityMsg, aliasesHeadRowMsg, ambiguousFieldDeclsMsg,
-  ambiguousFieldMsg, ambiguousImplMsg, ambiguousOverlapMsg, ambiguousShadowHelp,
+  locKey, prependDiagOpt, writtenDiag, abstractFieldMsg, aliasArityMsg,
+  aliasesHeadRowMsg, ambiguousFieldDeclsMsg, ambiguousFieldMsg,
+  ambiguousImplMsg, ambiguousOverlapMsg, ambiguousShadowHelp,
   annotTooGeneralMsg, appSpineName, argAtomsMsgFor, argOnlyEffVarMsg,
   authorityAsTypeMsg, authorityAtomicLabelMsg, authorityParamAsRowMsg,
   authorityParamAsTypeMsg, authorityTermAsTypeMsg, backticked, bangOnBoolHelp,

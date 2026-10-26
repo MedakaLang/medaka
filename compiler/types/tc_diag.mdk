@@ -1,6 +1,6 @@
--- tc_diag: the emission API over `TcDiag` (`recordTypeError`, the `pushTypeError*` family, dedup
--- keys, ambiguity replacement), the detection counter, `writtenDiag`, and the context-needing
--- builders beside their emitters (`noImplHint`).
+-- tc_diag: the emission API over `TcDiag` (`recordTypeError`, the `pushTypeError*` family,
+-- ambiguity replacement), the detection counter, and the context-needing builders beside their
+-- emitters (`noImplHint`).
 --
 -- Spec: DIAGNOSTIC-CODES-DESIGN.md; ERROR-QUALITY.md; A5.
 --
@@ -14,42 +14,30 @@
 import types.tc_mono.{headTyconMono, headTyconNameMono, monoUnboundIds}
 import types.tc_state.{wPush}
 import frontend.ast.{
-  Decl(..),
-  EffAtomTy(..),
-  EffParamTy(..),
-  Expr(..),
   Ident(..),
   identOriginFold,
-  KindAnn(..),
-  Lit(..),
   Loc(..),
   orElseLoc,
   TabKey(..),
-  Ty(..),
-  TyConOrigin(..),
 }
-import types.repr.{IfaceRef(..), Mono(..), normalize, ppMono}
+import types.repr.{Mono(..), normalize, ppMono}
 import types.tc_types.{
-  DeclaringBinder(..),
   GraphCtx(..),
-  GraphRun(..),
-  MethodBodyKind(..),
   ModuleCtx(..),
-  Predicate(..),
-  UObligation(..),
-  Windowed(..),
 }
 import map as IdMap
 export import types.publish.{tcCode, TcDiag(..), tcLoc, tcMsg}
 import support.ordmap.{omHasKey, omInsert, omLookup, OrdMap}
 import support.util.{anyList, filterList, isSome, splitOnChar, startsWith}
 import types.registry.{HeadKey(..)}
-import types.effect_rows.{Atom(..), Effvar(..)}
-import types.effect_authority.{Authority(..)}
-import types.solver_contract.{Wanted(..)}
-import types.disposition.{MethodDisposition(..)}
 import types.tc_diag_text.{
-  allDigits, derivableIface, noImplAdvice, noImplFoundMsg
+  derivableIface,
+  findTupleCand,
+  locKey,
+  msgAtKey,
+  noImplAdvice,
+  noImplFoundMsg,
+  writtenDiag,
 }
 
 -- The same question asked during a drive, of the live sticky flag.
@@ -167,12 +155,6 @@ pushTypeErrorAt mctx code loc msg =
       omInsert key () mctx.mcCells.typeErrorKeySetRef.value
     recordTypeError mctx (TcDiag code 1 at msg None None)
 
-export
-locKey : Option Loc -> String
-locKey None = ""
-locKey (Some (Loc file line col _ _)) =
-  "\{file}:\{intToString line}:\{intToString col}"
-
 -- #11 soundness: REPORT an obligation error only if the SAME message isn't already
 -- accumulated.  A single missing impl can be detected by both checkImplObligations
 -- (the original deferred obligation, once it grounds) and checkCallObligations (the
@@ -200,12 +182,6 @@ pushTypeErrorOnce mctx code msg = pushTypeErrorOnceAt mctx code None msg
 recordUnlessSeen : ModuleCtx -> Bool -> TcDiag -> Unit
 recordUnlessSeen mctx seen d =
   if seen then noteTypeErrorDetected mctx () else recordTypeError mctx d
-
--- Membership key for "this message at this span".  A located diagnostic is a
--- duplicate only of the same text at the same span, so two sites with identical
--- text each report; an unlocated one folds on text alone.
-msgAtKey : String -> Option Loc -> String
-msgAtKey msg at = "\{msg}\t@@\t\{locKey at}"
 
 alreadyReportedAt : ModuleCtx -> String -> Option Loc -> Bool
 alreadyReportedAt mctx msg None =
@@ -332,40 +308,12 @@ pushTypeErrorHelpFixAt mctx code loc msg help fix =
     (omHasKey msg mctx.mcCells.typeErrorMsgSetRef.value)
     (TcDiag code 1 (orElseLoc loc mctx.mcLoc) msg (Some help) fix)
 
--- Diagnostic text with every renamed local binder (`f$m$3$lb`) shown as written.
-writtenNames : String -> String
-writtenNames text = match splitOnChar '$' text
-  [only] => only
-  parts => dropRenameSuffixes parts
-
-dropRenameSuffixes : List String -> String
-dropRenameSuffixes [] = ""
-dropRenameSuffixes [a] = a
-dropRenameSuffixes (a :: _ :: n :: lb :: more)
-  | allDigits n && startsWith "lb" lb =
-    a ++ dropRenameSuffixes (stringSlice 2 (stringLength lb) lb :: more)
-dropRenameSuffixes (a :: rest) = "\{a}$\{dropRenameSuffixes rest}"
-
--- A diagnostic as the user reads it: binder names as written.
-export
-writtenDiag : TcDiag -> TcDiag
-writtenDiag (TcDiag code sev loc msg help fix) =
-  TcDiag code sev loc (writtenNames msg) (map writtenNames help) fix
-
 -- surface-site lookup: does [m] (a type appearing in a no-impl / mismatch error)
 -- equal a recorded tuple-call residual?  Compared by normalized rendering — the
 -- residual IS the very type that flows into the error, so they render identically.
 tupleCallHintFor : ModuleCtx -> Mono -> Option (String, Option (Loc, String))
 tupleCallHintFor mctx m =
   findTupleCand (ppMono (normalize m)) mctx.mcCells.tupleCallCandidates.value
-
-findTupleCand : String ->
-  List (Mono, String, Option (Loc, String)) ->
-  Option (String, Option (Loc, String))
-findTupleCand _ [] = None
-findTupleCand key ((res, help, fix) :: rest)
-  | ppMono (normalize res) == key = Some (help, fix)
-  | otherwise = findTupleCand key rest
 
 -- first tuple-call hint matching any of the offending types in an error.
 export
@@ -472,15 +420,3 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
     match mhint
       Some hint => pushTypeErrorHelpFixAt mctx "T-NO-IMPL" loc msg hint None
       None => pushTypeErrorOnceAt mctx "T-NO-IMPL" loc msg
-
--- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
-export
-prependDiagOpt : String ->
-  Int ->
-  Option String ->
-  Option String ->
-  List TcDiag ->
-  List TcDiag
-prependDiagOpt _ _ _ None ds = ds
-prependDiagOpt code sev help (Some msg) ds =
-  writtenDiag (TcDiag code sev None msg help None) :: ds

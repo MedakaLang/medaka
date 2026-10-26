@@ -410,17 +410,18 @@ test "arch_boundaries: types.tc_diag closure matches its golden" =
 test "arch_boundaries: types.tc_diag_text closure matches its golden" =
   closurePin "types.tc_diag_text"
 
--- The modules above `tc_diag_text` in the typecheck family. A golden can be
--- re-blessed; this set cannot.
+-- Every module of the typecheck family that sits above `tc_diag_text`: all of them
+-- except the modules the leaf may import (`tc_types`, `tc_mono`) and the leaf itself.
+-- Derived from `typecheckFamily`, so a row added there is covered when it lands. A
+-- golden can be re-blessed; this set cannot.
 aboveDiagText : List String
-aboveDiagText = [
-  "types.tc_state",
-  "types.tc_env",
-  "types.tc_diag",
-  "types.tc_scope",
-  "types.tc_unify",
-  "types.tc_decls_variance",
-]
+aboveDiagText =
+  filter
+    (m =>
+      m /= "types.tc_mono"
+        && m /= "types.tc_types"
+        && m /= "types.tc_diag_text")
+    typecheckFamily
 
 test "arch_boundaries: types.tc_diag_text closure holds no module above it" =
   let closure = closureOf (buildGraph loadModules) "types.tc_diag_text"
@@ -459,9 +460,6 @@ allowedRefs = [
   "Ref Int",
 ]
 
-isIdentChar : Char -> Bool
-isIdentChar c = isAlphaNum c || c == '_' || c == '\''
-
 -- Identifier tokens of [s]: maximal runs of identifier characters.
 sigTokens : String -> List String
 sigTokens s = filter (/= "") (map fromChars (identRuns (toList (toChars s))))
@@ -470,7 +468,7 @@ identRuns : List Char -> List (List Char)
 identRuns [] = [[]]
 identRuns (c :: rest) =
   let tl = identRuns rest
-  if isIdentChar c then match tl
+  if identChar c then match tl
     [] => [[c]]
     t :: ts => (c :: t) :: ts
   else
@@ -483,21 +481,16 @@ topSigs [] = []
 topSigs (l :: rest) = match sigHead l
   None => topSigs rest
   Some (name, sig0) =>
-    let cont = takeWhile isContinuation rest
+    let cont = takeWhile startsWithSpace rest
     (name, join " " (map trim (sig0 :: cont)))
-      :: topSigs (dropWhile isContinuation rest)
-
-isContinuation : String -> Bool
-isContinuation l = match toList (toChars l)
-  c :: _ => isSpace c
-  [] => False
+      :: topSigs (dropWhile startsWithSpace rest)
 
 sigHead : String -> Option (String, String)
 sigHead l = match indexOf " : " l
   None => None
   Some i =>
     let name = fromChars (take i (toList (toChars l)))
-    if name /= "" && all isIdentChar (toList (toChars name)) then
+    if name /= "" && all identChar (toList (toChars name)) then
       Some (name, fromChars (drop (i + 3) (toList (toChars l))))
     else
       None
@@ -517,15 +510,6 @@ arrowGo depth cur (c :: rest) =
   let d = if c == '(' then depth + 1 else if c == ')' then depth - 1 else depth
   arrowGo d (c :: cur) rest
 
--- The result type of a signature, its leading effect row removed.
-sigResult : String -> String
-sigResult sig =
-  let r = trim (optionOr "" (last (splitAtArrows sig)))
-  if startsWith "<" r then
-    trim (drop 1 (dropWhile (/= '>') (toList (toChars r))) |> fromChars)
-  else
-    r
-
 -- The tokens of every segment of [sig] before its result.
 sigParamTokens : String -> List String
 sigParamTokens sig = flatMap sigTokens (dropLast (splitAtArrows sig))
@@ -544,10 +528,23 @@ hasDisallowedRef sig =
 diagTextSigs : List (String, String)
 diagTextSigs = topSigs (linesFor "types.tc_diag_text" loadModules)
 
-test "arch_boundaries: tc_diag_text signatures name no context type" =
+-- A leaf code line holding a context type token, wherever it sits: an import item, a
+-- `type` alias, an annotation, a signature or a body.
+test "arch_boundaries: tc_diag_text names no context type anywhere" =
   expectEqual
     []
-    (filter (nameSig => hasContextToken (sigTokens (snd nameSig))) diagTextSigs)
+    (filter
+      (l => isCodeLine l && hasContextToken (sigTokens l))
+      (linesFor "types.tc_diag_text" loadModules))
+
+-- Every column-zero row of the leaf is signed, so no row reaches a cell through an
+-- unannotated parameter.
+test "arch_boundaries: every tc_diag_text row has a signature" =
+  expectEqual
+    []
+    (filter
+      (n => not (elem n (map fst diagTextSigs)))
+      (nub (filterMap definedName (linesFor "types.tc_diag_text" loadModules))))
 
 test "arch_boundaries: tc_diag_text signatures carry only the allowed Ref cells" =
   expectEqual
@@ -564,33 +561,15 @@ test "arch_boundaries: tc_diag_text assigns no cell" =
       (l => isCodeLine l && indexOf ":=" l /= None)
       (linesFor "types.tc_diag_text" loadModules))
 
--- The signature-pure rows of `tc_diag`, kept beside their emitters.
-diagPureRows : List String
-diagPureRows = [
-  "locKey",
-  "msgAtKey",
-  "writtenNames",
-  "dropRenameSuffixes",
-  "writtenDiag",
-  "prependDiagOpt",
-  "findTupleCand",
-]
-
-isTextResult : String -> Bool
-isTextResult r = elem r ["String", "Option String", "Option (Loc, String)"]
-
--- A `tc_diag` row producing text takes a context-typed parameter, or is on the
--- allow-list above; the complement of the `tc_diag_text` pin.
-test "arch_boundaries: tc_diag text rows take a context type or are allow-listed" =
-  let rows = topSigs (linesFor "types.tc_diag" loadModules)
-  let offenders =
-    filter
-      (nameSig =>
-        isTextResult (sigResult (snd nameSig))
-          && not (hasContextToken (sigParamTokens (snd nameSig)))
-          && not (elem (fst nameSig) diagPureRows))
-      rows
-  expectEqual [] (map fst offenders)
+-- Every `tc_diag` row is signed and takes a context-typed parameter; a row without one
+-- is context-free text and belongs in `tc_diag_text`. The complement of the leaf pins.
+test "arch_boundaries: every tc_diag row takes a context type" =
+  let sigs = topSigs (linesFor "types.tc_diag" loadModules)
+  let rows = nub (filterMap definedName (linesFor "types.tc_diag" loadModules))
+  let takesContext n = match lookup n sigs
+    None => False
+    Some sig => hasContextToken (sigParamTokens sig)
+  expectEqual [] (filter (n => not (takesContext n)) rows)
 
 test "arch_boundaries: types.tc_scope closure matches its golden" =
   closurePin "types.tc_scope"

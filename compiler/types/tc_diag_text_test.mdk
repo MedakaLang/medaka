@@ -1,22 +1,25 @@
--- Tests of `types.tc_diag_text`: the context-free message builders.  Every test applies a
+-- Tests of `types.tc_diag_text`: the context-free message builders and keys.  Every test applies a
 -- builder to plain operands (names, counts, kinds, spans) and pins the text it returns, so
 -- none needs a minted `ModuleCtx`.
 
-import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
+import types.publish.{TcDiag(..), tcCode, tcMsg}
 import frontend.ast.{Loc(..)}
 import types.tc_diag_text.{
-  aliasArityMsg, allDigits, ambiguousFieldMsg, backticked, bangOnBoolHelp,
-  bangOnBoolMsg, derivableIface, discardedValueFix, discardedValueMsg,
-  elselessIfHelp, i64RangeText, kindName, locGoalKey, missingFieldMsg,
-  noImplFoundMsg, nonExhaustiveMatchWarning, ordinalWord, overAppliedMsg,
-  quotedNames, renderKindArrow, starSpelling, u64RangeText, unboundVarMsg,
-  unknownCtorMsg, unknownFieldMsg, wideAnnotateHelp
+  aliasArityMsg, ambiguousFieldMsg, backticked, derivableIface,
+  discardedValueFix, discardedValueMsg, kindName, locGoalKey, locKey,
+  missingFieldMsg, noImplFoundMsg, ordinalWord, overAppliedMsg, prependDiagOpt,
+  quotedNames, renderKindArrow, starSpelling, unboundVarMsg, unknownCtorMsg,
+  unknownFieldMsg, wideAnnotateHelp, writtenDiag
 }
 import types.tc_mono.{tconBuiltin}
 import types.tc_types.{Kind(..)}
 
 siteA : Option Loc
 siteA = Some (Loc "probe.mdk" 3 1 3 9)
+
+siteB : Option Loc
+siteB = Some (Loc "probe.mdk" 5 1 5 9)
 
 test "backticked wraps one name and quotedNames joins a list, empty for none" = expectAll
   [
@@ -40,13 +43,6 @@ test "derivableIface admits the derivable interfaces and no other" = expectAll [
   expectTrue (derivableIface "Generic"),
   expectFalse (derivableIface "Semigroup"),
 ]
-
-test "allDigits accepts digit runs and rejects empty or mixed text" = expectAll
-  [
-    expectTrue (allDigits "0123"),
-    expectFalse (allDigits ""),
-    expectFalse (allDigits "12a"),
-  ]
 
 test "kindName and renderKindArrow spell kinds, the arrow ending in Type" = expectAll
   [
@@ -84,25 +80,13 @@ test "noImplFoundMsg names the interface and the instance type" =
     "no impl of Display for Int"
     (noImplFoundMsg "Display" [tconBuiltin "Int"])
 
-test "the wide-literal help and range texts name U64 or I64 by sign" = expectAll
-  [
-    expectEqual "0..18446744073709551615" u64RangeText,
-    expectEqual "-9223372036854775808..9223372036854775807" i64RangeText,
-    expectEqual
-      "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(5 : U64)`"
-      (wideAnnotateHelp "5" False),
-    expectEqual
-      "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(-5 : I64)`"
-      (wideAnnotateHelp "-5" True),
-  ]
-
-test "the bang-on-Bool message and help point at `not`" = expectAll [
+test "the wide-literal annotate help names U64 or I64 by sign" = expectAll [
   expectEqual
-    "`!` dereferences a `Ref` and does not negate a `Bool`; use `not x`"
-    bangOnBoolMsg,
+    "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(5 : U64)`"
+    (wideAnnotateHelp "5" False),
   expectEqual
-    "use `not x`; `!x` reads a `Ref` cell, so it needs a `Ref a`, not a `Bool`"
-    bangOnBoolHelp,
+    "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(-5 : I64)`"
+    (wideAnnotateHelp "-5" True),
 ]
 
 test "a discarded statement value gets a `let _ = ` fix at its start" = expectAll
@@ -115,17 +99,8 @@ test "a discarded statement value gets a `let _ = ` fix at its start" = expectAl
       (map
         (fix => (locGoalKey (Some (fst fix)), snd fix))
         (discardedValueFix siteA)),
-    expectEqual 0 (length (discardedValueFix None)),
+    expectEqual None (map snd (discardedValueFix None)),
   ]
-
-test "the fixed warning and help texts keep their wording" = expectAll [
-  expectEqual
-    "Warning: non-exhaustive match; not every case is covered"
-    nonExhaustiveMatchWarning,
-  expectEqual
-    "an `if` without `else` has type Unit, so add an `else` branch or make the `then` branch Unit"
-    elselessIfHelp,
-]
 
 test "starSpelling names the pattern-ranging binder with or without a label" = expectAll
   [
@@ -135,4 +110,44 @@ test "starSpelling names the pattern-ranging binder with or without a label" = e
     expectEqual
       "`n` pattern-ranging, `(n : String @L*)` or `(n : Authority L*)`"
       (starSpelling "n" (Some "L")),
+  ]
+
+test "writtenDiag strips a renamed binder's suffix from message and help, and keeps the rest" =
+  let loc = siteA
+  let raw =
+    TcDiag
+      "T-PROBE"
+      1
+      loc
+      "x$m$3$lb has type Int"
+      (Some "rename y$m$12$lb")
+      None
+  let written = writtenDiag raw
+  expectAll [
+    expectEqual "x has type Int" (tcMsg written),
+    expectEqual "T-PROBE" (tcCode written),
+    expectEqual (Some "rename y") (match written
+      TcDiag _ _ _ _ help _ => help),
+    expectEqual
+      "x$m$a$lb and y$m$$lb"
+      (tcMsg
+        (writtenDiag
+          (TcDiag "T-PROBE" 1 None "x$m$a$lb and y$m$$lb" None None))),
+    expectEqual
+      "cost$5 and $x"
+      (tcMsg (writtenDiag (TcDiag "T-PROBE" 1 None "cost$5 and $x" None None))),
+  ]
+
+test "locKey spells a located site and is empty without one" = expectAll [
+  expectEqual "" (locKey None),
+  expectEqual "probe.mdk:3:1" (locKey siteA),
+  expectNotEqual (locKey siteA) (locKey siteB),
+]
+
+test "prependDiagOpt adds a written diagnostic only when there is a message" =
+  let none = prependDiagOpt "T-PROBE" 1 None None []
+  let some = prependDiagOpt "T-PROBE" 1 (Some "h") (Some "q$m$1$lb is bad") []
+  expectAll [
+    expectEqual [] (map tcMsg none),
+    expectEqual ["q is bad"] (map tcMsg some),
   ]

@@ -1,14 +1,16 @@
 # META
-source_lines=1408
+source_lines=1453
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
--- builder whose operands are values (`Mono`, `Scheme`, `Ty`, atoms, kinds, `IfaceRef`, `Loc`, AST
--- nodes, names) and whose closure is `tc_types`, `tc_mono`, `repr`, the AST and the effect leaves;
--- no row takes a context record, an environment or a cell (D3).
+-- builder, diagnostic key (`locKey`, `msgAtKey`, `locGoalKey`) and rewrite of diagnostic text
+-- (`writtenDiag`, `prependDiagOpt`) whose operands are values (`Mono`, `Ty`, atoms, kinds,
+-- `IfaceRef`, `Loc`, AST nodes, names) and whose closure is `tc_types`, `tc_mono`, `repr`, the
+-- AST and the effect leaves; no row takes a context record, an environment or a cell (D3).
 --
--- Spec: ERROR-QUALITY.md; A5. Precedent: GHC.Tc.Errors.Ppr (a leaf; Types, Ppr and emitters are
--- three modules there); rustc keeps message structs apart from `DiagCtxt`.
+-- Spec: ERROR-QUALITY.md; A5. Precedent: GHC.Tc.Errors.Ppr (report-ghc.md:71, a leaf that
+-- imports only Tc.Errors, Tc.Types and TcType); Medaka has text builders without a message data
+-- type, so a diagnostic's code is still passed at each emit site.
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
@@ -31,11 +33,9 @@ import types.tc_mono.{
 }
 import frontend.ast.{
   authTermsSurface,
-  Decl(..),
   EffAtomTy(..),
   EffParamTy(..),
   Expr(..),
-  Ident(..),
   KindAnn(..),
   kindAnnSource,
   Lit(..),
@@ -48,6 +48,7 @@ import frontend.ast.{
   TyConOrigin(..),
 }
 import types.repr.{
+  normalize,
   IfaceRef(..),
   Mono(..),
   ppAuthority,
@@ -66,16 +67,10 @@ import types.repr.{
 }
 import types.tc_types.{
   DeclaringBinder(..),
-  GraphCtx(..),
-  GraphRun(..),
   KeyEntry,
   Kind(..),
   MethodBodyKind(..),
-  ModuleCtx(..),
-  Predicate(..),
   RecordInfo,
-  UObligation(..),
-  Windowed(..),
 }
 import types.publish.{TcDiag(..)}
 import support.util.{
@@ -89,14 +84,11 @@ import support.util.{
   listLen,
   reverseL,
   sortUniqS,
+  splitOnChar,
+  startsWith,
 }
-import types.registry.{HeadKey(..)}
-import types.effect_rows.{
-  Atom(..), EffLabel(..), effLabelName, Effvar(..), renderAtoms
-}
+import types.effect_rows.{Atom(..), effLabelName, Effvar(..), renderAtoms}
 import types.effect_authority.{authIsTop, Authority(..)}
-import types.solver_contract.{Wanted(..)}
-import types.disposition.{MethodDisposition(..)}
 
 -- The directed judgment `required <= allowed` failed against an allowed row the
 -- body cannot solve: a signature's own row variable, or a row the caller
@@ -1330,7 +1322,6 @@ locGoalKey None = ""
 locGoalKey (Some (Loc file sl sc el ec)) =
   "\{file}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
 
-export
 allDigits : String -> Bool
 allDigits n = stringLength n > 0 && allDigitsFrom n 0
 
@@ -1410,18 +1401,69 @@ derivableIface iface =
 export
 quotedNames : List String -> String
 quotedNames names = joinWith ", " (map (n => "`" ++ n ++ "`") names)
+
+export
+locKey : Option Loc -> String
+locKey None = ""
+locKey (Some (Loc file line col _ _)) =
+  "\{file}:\{intToString line}:\{intToString col}"
+
+-- Membership key for "this message at this span".  A located diagnostic is a
+-- duplicate only of the same text at the same span, so two sites with identical
+-- text each report; an unlocated one folds on text alone.
+export
+msgAtKey : String -> Option Loc -> String
+msgAtKey msg at = "\{msg}\t@@\t\{locKey at}"
+
+-- Diagnostic text with every renamed local binder (`f$m$3$lb`) shown as written.
+writtenNames : String -> String
+writtenNames text = match splitOnChar '$' text
+  [only] => only
+  parts => dropRenameSuffixes parts
+
+dropRenameSuffixes : List String -> String
+dropRenameSuffixes [] = ""
+dropRenameSuffixes [a] = a
+dropRenameSuffixes (a :: _ :: n :: lb :: more)
+  | allDigits n && startsWith "lb" lb =
+    a ++ dropRenameSuffixes (stringSlice 2 (stringLength lb) lb :: more)
+dropRenameSuffixes (a :: rest) = "\{a}$\{dropRenameSuffixes rest}"
+
+-- A diagnostic as the user reads it: binder names as written.
+export
+writtenDiag : TcDiag -> TcDiag
+writtenDiag (TcDiag code sev loc msg help fix) =
+  TcDiag code sev loc (writtenNames msg) (map writtenNames help) fix
+
+export
+findTupleCand : String ->
+  List (Mono, String, Option (Loc, String)) ->
+  Option (String, Option (Loc, String))
+findTupleCand _ [] = None
+findTupleCand key ((res, help, fix) :: rest)
+  | ppMono (normalize res) == key = Some (help, fix)
+  | otherwise = findTupleCand key rest
+
+-- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
+export
+prependDiagOpt : String ->
+  Int ->
+  Option String ->
+  Option String ->
+  List TcDiag ->
+  List TcDiag
+prependDiagOpt _ _ _ None ds = ds
+prependDiagOpt code sev help (Some msg) ds =
+  writtenDiag (TcDiag code sev None msg help None) :: ds
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_mono") ((mem "cohPpPair" false) (mem "dedupI" false) (mem "findTvName" false) (mem "firstIdConflict" false) (mem "headIdConflict" false) (mem "headTyconNameMono" false) (mem "isPreludeOrigin" false) (mem "recordOwnerModule" false) (mem "recordResultMono" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "Ident" true) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
-(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "KeyEntry" false) (mem "Kind" true) (mem "MethodBodyKind" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "RecordInfo" false) (mem "UObligation" true) (mem "Windowed" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
+(DUse false (UseGroup ("types" "repr") ((mem "normalize" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "KeyEntry" false) (mem "Kind" true) (mem "MethodBodyKind" true) (mem "RecordInfo" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "escStr" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false) (mem "sortUniqS" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "effLabelName" false) (mem "Effvar" true) (mem "renderAtoms" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "escStr" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "effLabelName" false) (mem "Effvar" true) (mem "renderAtoms" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authIsTop" false) (mem "Authority" true))))
-(DUse false (UseGroup ("types" "solver_contract") ((mem "Wanted" true))))
-(DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DTypeSig true "effectInclusionMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "effectInclusionMsg" ((PVar "name") (PVar "escaping") (PList (PVar "required") (PVar "allowed"))) (EIf (EApp (EVar "isNonEmptyL") (EVar "escaping")) (EBlock (DoLet false false (PVar "labels") (EApp (EVar "renderAtoms") (EVar "escaping"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` performs <"))) (EApp (EVar "display") (EVar "labels"))) (ELit (LString "> on a caller-chosen row "))) (EApp (EVar "display") (EApp (EVar "rowText") (EVar "allowed")))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EApp (EVar "declareRemedy") (EVar "labels")) (EVar "allowed")))) (ELit (LString ", or perform it through an argument"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` runs the caller-chosen row "))) (EApp (EVar "display") (EApp (EVar "rowText") (EVar "required")))) (ELit (LString " where only "))) (EApp (EVar "display") (EApp (EVar "rowText") (EVar "allowed")))) (ELit (LString " is allowed; declare it on the arrow that runs it, `-> "))) (EApp (EVar "display") (EApp (EVar "rowText") (EVar "required")))) (ELit (LString " ...`")))))
 (DFunDef false "effectInclusionMsg" ((PVar "name") PWild (PVar "rows")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot prove effect row inclusion in `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`: "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "rows")))) (ELit (LString ""))))
@@ -1798,7 +1840,7 @@ quotedNames names = joinWith ", " (map (n => "`" ++ n ++ "`") names)
 (DTypeSig true "locGoalKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locGoalKey" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "locGoalKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ""))))
-(DTypeSig true "allDigits" (TyFun (TyCon "String") (TyCon "Bool")))
+(DTypeSig false "allDigits" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "allDigits" ((PVar "n")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (ELit (LInt 0)))))
 (DTypeSig false "allDigitsFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "allDigitsFrom" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "n"))) (EVar "True") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -1831,18 +1873,35 @@ quotedNames names = joinWith ", " (map (n => "`" ++ n ++ "`") names)
 (DFunDef false "derivableIface" ((PVar "iface")) (EApp (EApp (EVar "contains") (EVar "iface")) (EListLit (ELit (LString "Eq")) (ELit (LString "Ord")) (ELit (LString "Debug")) (ELit (LString "Display")) (ELit (LString "Generic")))))
 (DTypeSig true "quotedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "quotedNames" ((PVar "names")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EVar "n")) (ELit (LString "`"))))) (EVar "names"))))
+(DTypeSig true "locKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
+(DFunDef false "locKey" ((PCon "None")) (ELit (LString "")))
+(DFunDef false "locKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ""))))
+(DTypeSig true "msgAtKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))
+(DFunDef false "msgAtKey" ((PVar "msg") (PVar "at")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "\t@@\t"))) (EApp (EVar "display") (EApp (EVar "locKey") (EVar "at")))) (ELit (LString ""))))
+(DTypeSig false "writtenNames" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "writtenNames" ((PVar "text")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "text")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PVar "parts") () (EApp (EVar "dropRenameSuffixes") (EVar "parts")))))
+(DTypeSig false "dropRenameSuffixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "dropRenameSuffixes" ((PList)) (ELit (LString "")))
+(DFunDef false "dropRenameSuffixes" ((PList (PVar "a"))) (EVar "a"))
+(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PCons PWild (PCons (PVar "n") (PCons (PVar "lb") (PVar "more")))))) (EIf (EBinOp "&&" (EApp (EVar "allDigits") (EVar "n")) (EApp (EApp (EVar "startsWith") (ELit (LString "lb"))) (EVar "lb"))) (EBinOp "++" (EVar "a") (EApp (EVar "dropRenameSuffixes") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "lb"))) (EVar "lb")) (EVar "more")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "$"))) (EApp (EVar "display") (EApp (EVar "dropRenameSuffixes") (EVar "rest")))) (ELit (LString ""))))
+(DTypeSig true "writtenDiag" (TyFun (TyCon "TcDiag") (TyCon "TcDiag")))
+(DFunDef false "writtenDiag" ((PCon "TcDiag" (PVar "code") (PVar "sev") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "loc")) (EApp (EVar "writtenNames") (EVar "msg"))) (EApp (EApp (EVar "map") (EVar "writtenNames")) (EVar "help"))) (EVar "fix")))
+(DTypeSig true "findTupleCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
+(DFunDef false "findTupleCand" (PWild (PList)) (EVar "None"))
+(DFunDef false "findTupleCand" ((PVar "key") (PCons (PTuple (PVar "res") (PVar "help") (PVar "fix")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "res"))) (EVar "key")) (EApp (EVar "Some") (ETuple (EVar "help") (EVar "fix"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "findTupleCand") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
+(DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
+(DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EVar "ds")))
 # MARK
 (DUse false (UseGroup ("types" "tc_mono") ((mem "cohPpPair" false) (mem "dedupI" false) (mem "findTvName" false) (mem "firstIdConflict" false) (mem "headIdConflict" false) (mem "headTyconNameMono" false) (mem "isPreludeOrigin" false) (mem "recordOwnerModule" false) (mem "recordResultMono" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "Ident" true) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
-(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "KeyEntry" false) (mem "Kind" true) (mem "MethodBodyKind" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "RecordInfo" false) (mem "UObligation" true) (mem "Windowed" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
+(DUse false (UseGroup ("types" "repr") ((mem "normalize" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "KeyEntry" false) (mem "Kind" true) (mem "MethodBodyKind" true) (mem "RecordInfo" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "escStr" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false) (mem "sortUniqS" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "effLabelName" false) (mem "Effvar" true) (mem "renderAtoms" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "escStr" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "effLabelName" false) (mem "Effvar" true) (mem "renderAtoms" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authIsTop" false) (mem "Authority" true))))
-(DUse false (UseGroup ("types" "solver_contract") ((mem "Wanted" true))))
-(DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DTypeSig true "effectInclusionMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "effectInclusionMsg" ((PVar "name") (PVar "escaping") (PList (PVar "required") (PVar "allowed"))) (EIf (EApp (EVar "isNonEmptyL") (EVar "escaping")) (EBlock (DoLet false false (PVar "labels") (EApp (EVar "renderAtoms") (EVar "escaping"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` performs <"))) (EApp (EMethodRef "display") (EVar "labels"))) (ELit (LString "> on a caller-chosen row "))) (EApp (EMethodRef "display") (EApp (EVar "rowText") (EVar "allowed")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "declareRemedy") (EVar "labels")) (EVar "allowed")))) (ELit (LString ", or perform it through an argument"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` runs the caller-chosen row "))) (EApp (EMethodRef "display") (EApp (EVar "rowText") (EVar "required")))) (ELit (LString " where only "))) (EApp (EMethodRef "display") (EApp (EVar "rowText") (EVar "allowed")))) (ELit (LString " is allowed; declare it on the arrow that runs it, `-> "))) (EApp (EMethodRef "display") (EApp (EVar "rowText") (EVar "required")))) (ELit (LString " ...`")))))
 (DFunDef false "effectInclusionMsg" ((PVar "name") PWild (PVar "rows")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot prove effect row inclusion in `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "rows")))) (ELit (LString ""))))
@@ -2219,7 +2278,7 @@ quotedNames names = joinWith ", " (map (n => "`" ++ n ++ "`") names)
 (DTypeSig true "locGoalKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locGoalKey" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "locGoalKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ""))))
-(DTypeSig true "allDigits" (TyFun (TyCon "String") (TyCon "Bool")))
+(DTypeSig false "allDigits" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "allDigits" ((PVar "n")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (ELit (LInt 0)))))
 (DTypeSig false "allDigitsFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "allDigitsFrom" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "n"))) (EVar "True") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2252,3 +2311,23 @@ quotedNames names = joinWith ", " (map (n => "`" ++ n ++ "`") names)
 (DFunDef false "derivableIface" ((PVar "iface")) (EApp (EApp (EVar "contains") (EVar "iface")) (EListLit (ELit (LString "Eq")) (ELit (LString "Ord")) (ELit (LString "Debug")) (ELit (LString "Display")) (ELit (LString "Generic")))))
 (DTypeSig true "quotedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "quotedNames" ((PVar "names")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EVar "n")) (ELit (LString "`"))))) (EVar "names"))))
+(DTypeSig true "locKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
+(DFunDef false "locKey" ((PCon "None")) (ELit (LString "")))
+(DFunDef false "locKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ""))))
+(DTypeSig true "msgAtKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))
+(DFunDef false "msgAtKey" ((PVar "msg") (PVar "at")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "\t@@\t"))) (EApp (EMethodRef "display") (EApp (EVar "locKey") (EVar "at")))) (ELit (LString ""))))
+(DTypeSig false "writtenNames" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "writtenNames" ((PVar "text")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "text")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PVar "parts") () (EApp (EVar "dropRenameSuffixes") (EVar "parts")))))
+(DTypeSig false "dropRenameSuffixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "dropRenameSuffixes" ((PList)) (ELit (LString "")))
+(DFunDef false "dropRenameSuffixes" ((PList (PVar "a"))) (EVar "a"))
+(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PCons PWild (PCons (PVar "n") (PCons (PVar "lb") (PVar "more")))))) (EIf (EBinOp "&&" (EApp (EVar "allDigits") (EVar "n")) (EApp (EApp (EVar "startsWith") (ELit (LString "lb"))) (EVar "lb"))) (EBinOp "++" (EVar "a") (EApp (EVar "dropRenameSuffixes") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "lb"))) (EVar "lb")) (EVar "more")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "$"))) (EApp (EMethodRef "display") (EApp (EVar "dropRenameSuffixes") (EVar "rest")))) (ELit (LString ""))))
+(DTypeSig true "writtenDiag" (TyFun (TyCon "TcDiag") (TyCon "TcDiag")))
+(DFunDef false "writtenDiag" ((PCon "TcDiag" (PVar "code") (PVar "sev") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "loc")) (EApp (EVar "writtenNames") (EVar "msg"))) (EApp (EApp (EMethodRef "map") (EVar "writtenNames")) (EVar "help"))) (EVar "fix")))
+(DTypeSig true "findTupleCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
+(DFunDef false "findTupleCand" (PWild (PList)) (EVar "None"))
+(DFunDef false "findTupleCand" ((PVar "key") (PCons (PTuple (PVar "res") (PVar "help") (PVar "fix")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "res"))) (EVar "key")) (EApp (EVar "Some") (ETuple (EVar "help") (EVar "fix"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "findTupleCand") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
+(DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
+(DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EVar "ds")))

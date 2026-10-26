@@ -1,10 +1,10 @@
 # META
-source_lines=486
+source_lines=422
 stages=DESUGAR,MARK
 # SOURCE
--- tc_diag: the emission API over `TcDiag` (`recordTypeError`, the `pushTypeError*` family, dedup
--- keys, ambiguity replacement), the detection counter, `writtenDiag`, and the context-needing
--- builders beside their emitters (`noImplHint`).
+-- tc_diag: the emission API over `TcDiag` (`recordTypeError`, the `pushTypeError*` family,
+-- ambiguity replacement), the detection counter, and the context-needing builders beside their
+-- emitters (`noImplHint`).
 --
 -- Spec: DIAGNOSTIC-CODES-DESIGN.md; ERROR-QUALITY.md; A5.
 --
@@ -18,42 +18,30 @@ stages=DESUGAR,MARK
 import types.tc_mono.{headTyconMono, headTyconNameMono, monoUnboundIds}
 import types.tc_state.{wPush}
 import frontend.ast.{
-  Decl(..),
-  EffAtomTy(..),
-  EffParamTy(..),
-  Expr(..),
   Ident(..),
   identOriginFold,
-  KindAnn(..),
-  Lit(..),
   Loc(..),
   orElseLoc,
   TabKey(..),
-  Ty(..),
-  TyConOrigin(..),
 }
-import types.repr.{IfaceRef(..), Mono(..), normalize, ppMono}
+import types.repr.{Mono(..), normalize, ppMono}
 import types.tc_types.{
-  DeclaringBinder(..),
   GraphCtx(..),
-  GraphRun(..),
-  MethodBodyKind(..),
   ModuleCtx(..),
-  Predicate(..),
-  UObligation(..),
-  Windowed(..),
 }
 import map as IdMap
 export import types.publish.{tcCode, TcDiag(..), tcLoc, tcMsg}
 import support.ordmap.{omHasKey, omInsert, omLookup, OrdMap}
 import support.util.{anyList, filterList, isSome, splitOnChar, startsWith}
 import types.registry.{HeadKey(..)}
-import types.effect_rows.{Atom(..), Effvar(..)}
-import types.effect_authority.{Authority(..)}
-import types.solver_contract.{Wanted(..)}
-import types.disposition.{MethodDisposition(..)}
 import types.tc_diag_text.{
-  allDigits, derivableIface, noImplAdvice, noImplFoundMsg
+  derivableIface,
+  findTupleCand,
+  locKey,
+  msgAtKey,
+  noImplAdvice,
+  noImplFoundMsg,
+  writtenDiag,
 }
 
 -- The same question asked during a drive, of the live sticky flag.
@@ -171,12 +159,6 @@ pushTypeErrorAt mctx code loc msg =
       omInsert key () mctx.mcCells.typeErrorKeySetRef.value
     recordTypeError mctx (TcDiag code 1 at msg None None)
 
-export
-locKey : Option Loc -> String
-locKey None = ""
-locKey (Some (Loc file line col _ _)) =
-  "\{file}:\{intToString line}:\{intToString col}"
-
 -- #11 soundness: REPORT an obligation error only if the SAME message isn't already
 -- accumulated.  A single missing impl can be detected by both checkImplObligations
 -- (the original deferred obligation, once it grounds) and checkCallObligations (the
@@ -204,12 +186,6 @@ pushTypeErrorOnce mctx code msg = pushTypeErrorOnceAt mctx code None msg
 recordUnlessSeen : ModuleCtx -> Bool -> TcDiag -> Unit
 recordUnlessSeen mctx seen d =
   if seen then noteTypeErrorDetected mctx () else recordTypeError mctx d
-
--- Membership key for "this message at this span".  A located diagnostic is a
--- duplicate only of the same text at the same span, so two sites with identical
--- text each report; an unlocated one folds on text alone.
-msgAtKey : String -> Option Loc -> String
-msgAtKey msg at = "\{msg}\t@@\t\{locKey at}"
 
 alreadyReportedAt : ModuleCtx -> String -> Option Loc -> Bool
 alreadyReportedAt mctx msg None =
@@ -336,40 +312,12 @@ pushTypeErrorHelpFixAt mctx code loc msg help fix =
     (omHasKey msg mctx.mcCells.typeErrorMsgSetRef.value)
     (TcDiag code 1 (orElseLoc loc mctx.mcLoc) msg (Some help) fix)
 
--- Diagnostic text with every renamed local binder (`f$m$3$lb`) shown as written.
-writtenNames : String -> String
-writtenNames text = match splitOnChar '$' text
-  [only] => only
-  parts => dropRenameSuffixes parts
-
-dropRenameSuffixes : List String -> String
-dropRenameSuffixes [] = ""
-dropRenameSuffixes [a] = a
-dropRenameSuffixes (a :: _ :: n :: lb :: more)
-  | allDigits n && startsWith "lb" lb =
-    a ++ dropRenameSuffixes (stringSlice 2 (stringLength lb) lb :: more)
-dropRenameSuffixes (a :: rest) = "\{a}$\{dropRenameSuffixes rest}"
-
--- A diagnostic as the user reads it: binder names as written.
-export
-writtenDiag : TcDiag -> TcDiag
-writtenDiag (TcDiag code sev loc msg help fix) =
-  TcDiag code sev loc (writtenNames msg) (map writtenNames help) fix
-
 -- surface-site lookup: does [m] (a type appearing in a no-impl / mismatch error)
 -- equal a recorded tuple-call residual?  Compared by normalized rendering — the
 -- residual IS the very type that flows into the error, so they render identically.
 tupleCallHintFor : ModuleCtx -> Mono -> Option (String, Option (Loc, String))
 tupleCallHintFor mctx m =
   findTupleCand (ppMono (normalize m)) mctx.mcCells.tupleCallCandidates.value
-
-findTupleCand : String ->
-  List (Mono, String, Option (Loc, String)) ->
-  Option (String, Option (Loc, String))
-findTupleCand _ [] = None
-findTupleCand key ((res, help, fix) :: rest)
-  | ppMono (normalize res) == key = Some (help, fix)
-  | otherwise = findTupleCand key rest
 
 -- first tuple-call hint matching any of the offending types in an error.
 export
@@ -476,34 +424,18 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
     match mhint
       Some hint => pushTypeErrorHelpFixAt mctx "T-NO-IMPL" loc msg hint None
       None => pushTypeErrorOnceAt mctx "T-NO-IMPL" loc msg
-
--- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
-export
-prependDiagOpt : String ->
-  Int ->
-  Option String ->
-  Option String ->
-  List TcDiag ->
-  List TcDiag
-prependDiagOpt _ _ _ None ds = ds
-prependDiagOpt code sev help (Some msg) ds =
-  writtenDiag (TcDiag code sev None msg help None) :: ds
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_mono") ((mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "monoUnboundIds" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "wPush" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "Ident" true) (mem "identOriginFold" false) (mem "KindAnn" true) (mem "Lit" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true))))
-(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "normalize" false) (mem "ppMono" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "MethodBodyKind" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "UObligation" true) (mem "Windowed" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ident" true) (mem "identOriginFold" false) (mem "Loc" true) (mem "orElseLoc" false) (mem "TabKey" true))))
+(DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false) (mem "ppMono" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "ModuleCtx" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse true (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "TcDiag" true) (mem "tcLoc" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "isSome" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "Effvar" true))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true))))
-(DUse false (UseGroup ("types" "solver_contract") ((mem "Wanted" true))))
-(DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
-(DUse false (UseGroup ("types" "tc_diag_text") ((mem "allDigits" false) (mem "derivableIface" false) (mem "noImplAdvice" false) (mem "noImplFoundMsg" false))))
+(DUse false (UseGroup ("types" "tc_diag_text") ((mem "derivableIface" false) (mem "findTupleCand" false) (mem "locKey" false) (mem "msgAtKey" false) (mem "noImplAdvice" false) (mem "noImplFoundMsg" false) (mem "writtenDiag" false))))
 (DTypeSig true "typeErrorsArmed" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))
 (DFunDef false "typeErrorsArmed" ((PVar "gctx") PWild) (EFieldAccess (EFieldAccess (EVar "gctx") "typeErrorsSticky") "value"))
 (DTypeSig true "recordTypeError" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "TcDiag") (TyCon "Unit"))))
@@ -516,15 +448,10 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "pushTypeError" ((PVar "mctx") (PVar "code") (PVar "msg")) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EFieldAccess (EVar "mctx") "mcLoc")) (EVar "msg")) (EVar "None")) (EVar "None"))))
 (DTypeSig true "pushTypeErrorAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
 (DFunDef false "pushTypeErrorAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "at") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (DoLet false false (PVar "key") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "code"))) (ELit (LString "\t"))) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentFn") "value"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "locKey") (EVar "at")))) (ELit (LString "\t"))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "at")) (EApp (EApp (EVar "omHasKey") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorKeySetRef") "value"))) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorKeySetRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorKeySetRef") "value")))) (DoExpr (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None")))))))))
-(DTypeSig true "locKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
-(DFunDef false "locKey" ((PCon "None")) (ELit (LString "")))
-(DFunDef false "locKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ""))))
 (DTypeSig true "pushTypeErrorOnce" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "pushTypeErrorOnce" ((PVar "mctx") (PVar "code") (PVar "msg")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "code")) (EVar "None")) (EVar "msg")))
 (DTypeSig false "recordUnlessSeen" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Bool") (TyFun (TyCon "TcDiag") (TyCon "Unit")))))
 (DFunDef false "recordUnlessSeen" ((PVar "mctx") (PVar "seen") (PVar "d")) (EIf (EVar "seen") (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EVar "d"))))
-(DTypeSig false "msgAtKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))
-(DFunDef false "msgAtKey" ((PVar "msg") (PVar "at")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "\t@@\t"))) (EApp (EVar "display") (EApp (EVar "locKey") (EVar "at")))) (ELit (LString ""))))
 (DTypeSig false "alreadyReportedAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))))
 (DFunDef false "alreadyReportedAt" ((PVar "mctx") (PVar "msg") (PCon "None")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")))
 (DFunDef false "alreadyReportedAt" ((PVar "mctx") (PVar "msg") (PVar "at")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "msgAtKey") (EVar "msg")) (EVar "at"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")))
@@ -540,20 +467,8 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "pushBoundaryAmbiguity" ((PVar "mctx") (PVar "rigidIds") (PVar "args") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "reported") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguityVarsRef")) (DoLet false false (PVar "ids") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "boundaryOwnsOpen") (EVar "mctx")) (EVar "rigidIds"))) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EVar "reported") "value")))) (EVar "ids")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "reported")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "i")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "i")) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EVar "reported") "value")) (EVar "ids")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushAmbiguityAt") (EVar "mctx")) (EVar "False")) (EVar "loc")) (EVar "msg"))))))))
 (DTypeSig true "pushTypeErrorHelpFixAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))) (TyCon "Unit"))))))))
 (DFunDef false "pushTypeErrorHelpFixAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EApp (EApp (EApp (EVar "recordUnlessSeen") (EVar "mctx")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix"))))
-(DTypeSig false "writtenNames" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "writtenNames" ((PVar "text")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "text")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PVar "parts") () (EApp (EVar "dropRenameSuffixes") (EVar "parts")))))
-(DTypeSig false "dropRenameSuffixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "dropRenameSuffixes" ((PList)) (ELit (LString "")))
-(DFunDef false "dropRenameSuffixes" ((PList (PVar "a"))) (EVar "a"))
-(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PCons PWild (PCons (PVar "n") (PCons (PVar "lb") (PVar "more")))))) (EIf (EBinOp "&&" (EApp (EVar "allDigits") (EVar "n")) (EApp (EApp (EVar "startsWith") (ELit (LString "lb"))) (EVar "lb"))) (EBinOp "++" (EVar "a") (EApp (EVar "dropRenameSuffixes") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "lb"))) (EVar "lb")) (EVar "more")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "$"))) (EApp (EVar "display") (EApp (EVar "dropRenameSuffixes") (EVar "rest")))) (ELit (LString ""))))
-(DTypeSig true "writtenDiag" (TyFun (TyCon "TcDiag") (TyCon "TcDiag")))
-(DFunDef false "writtenDiag" ((PCon "TcDiag" (PVar "code") (PVar "sev") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "loc")) (EApp (EVar "writtenNames") (EVar "msg"))) (EApp (EApp (EVar "map") (EVar "writtenNames")) (EVar "help"))) (EVar "fix")))
 (DTypeSig false "tupleCallHintFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
 (DFunDef false "tupleCallHintFor" ((PVar "mctx") (PVar "m")) (EApp (EApp (EVar "findTupleCand") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "tupleCallCandidates") "value")))
-(DTypeSig false "findTupleCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
-(DFunDef false "findTupleCand" (PWild (PList)) (EVar "None"))
-(DFunDef false "findTupleCand" ((PVar "key") (PCons (PTuple (PVar "res") (PVar "help") (PVar "fix")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "res"))) (EVar "key")) (EApp (EVar "Some") (ETuple (EVar "help") (EVar "fix"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "findTupleCand") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "firstTupleCallHint" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
 (DFunDef false "firstTupleCallHint" ((PVar "mctx") (PList)) (EVar "None"))
 (DFunDef false "firstTupleCallHint" ((PVar "mctx") (PCons (PVar "m") (PVar "rest"))) (EMatch (EApp (EApp (EVar "tupleCallHintFor") (EVar "mctx")) (EVar "m")) (arm (PCon "Some" (PVar "hf")) () (EApp (EVar "Some") (EVar "hf"))) (arm (PCon "None") () (EApp (EApp (EVar "firstTupleCallHint") (EVar "mctx")) (EVar "rest")))))
@@ -570,25 +485,18 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "noImplFoundMsgHinted" ((PVar "mctx") (PVar "iface") (PVar "args")) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EVar "noImplFoundMsg") (EVar "iface")) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "noImplHint") (EVar "mctx")) (EVar "iface")) (EVar "args")) (arm (PCon "Some" (PVar "hint")) () (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString "; "))) (EApp (EVar "display") (EVar "hint"))) (ELit (LString ""))) (EApp (EVar "Some") (EVar "hint")))) (arm (PCon "None") () (ETuple (EVar "base") (EVar "None")))))))
 (DTypeSig true "pushNoImplError" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit"))))))
 (DFunDef false "pushNoImplError" ((PVar "mctx") (PVar "iface") (PVar "loc") (PVar "args")) (EMatch (EApp (EApp (EVar "firstTupleCallHint") (EVar "mctx")) (EVar "args")) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (EVar "mctx")) (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "noImplFoundMsg") (EVar "iface")) (EVar "args")))) (ELit (LString "; "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "msg") (PVar "mhint")) (EApp (EApp (EApp (EVar "noImplFoundMsgHinted") (EVar "mctx")) (EVar "iface")) (EVar "args"))) (DoExpr (EMatch (EVar "mhint") (arm (PCon "Some" (PVar "hint")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (EVar "mctx")) (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EVar "msg")) (EVar "hint")) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EVar "msg")))))))))
-(DTypeSig true "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
-(DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
-(DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EVar "ds")))
 # MARK
 (DUse false (UseGroup ("types" "tc_mono") ((mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "monoUnboundIds" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "wPush" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "Ident" true) (mem "identOriginFold" false) (mem "KindAnn" true) (mem "Lit" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true))))
-(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "normalize" false) (mem "ppMono" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "MethodBodyKind" true) (mem "ModuleCtx" true) (mem "Predicate" true) (mem "UObligation" true) (mem "Windowed" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ident" true) (mem "identOriginFold" false) (mem "Loc" true) (mem "orElseLoc" false) (mem "TabKey" true))))
+(DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false) (mem "ppMono" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "GraphCtx" true) (mem "ModuleCtx" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse true (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "TcDiag" true) (mem "tcLoc" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "isSome" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "Effvar" true))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true))))
-(DUse false (UseGroup ("types" "solver_contract") ((mem "Wanted" true))))
-(DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
-(DUse false (UseGroup ("types" "tc_diag_text") ((mem "allDigits" false) (mem "derivableIface" false) (mem "noImplAdvice" false) (mem "noImplFoundMsg" false))))
+(DUse false (UseGroup ("types" "tc_diag_text") ((mem "derivableIface" false) (mem "findTupleCand" false) (mem "locKey" false) (mem "msgAtKey" false) (mem "noImplAdvice" false) (mem "noImplFoundMsg" false) (mem "writtenDiag" false))))
 (DTypeSig true "typeErrorsArmed" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Bool"))))
 (DFunDef false "typeErrorsArmed" ((PVar "gctx") PWild) (EFieldAccess (EFieldAccess (EVar "gctx") "typeErrorsSticky") "value"))
 (DTypeSig true "recordTypeError" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "TcDiag") (TyCon "Unit"))))
@@ -601,15 +509,10 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "pushTypeError" ((PVar "mctx") (PVar "code") (PVar "msg")) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EFieldAccess (EVar "mctx") "mcLoc")) (EVar "msg")) (EVar "None")) (EVar "None"))))
 (DTypeSig true "pushTypeErrorAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
 (DFunDef false "pushTypeErrorAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "at") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (DoLet false false (PVar "key") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "code"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentFn") "value"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "locKey") (EVar "at")))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isSome") (EVar "at")) (EApp (EApp (EVar "omHasKey") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorKeySetRef") "value"))) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorKeySetRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorKeySetRef") "value")))) (DoExpr (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None")))))))))
-(DTypeSig true "locKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
-(DFunDef false "locKey" ((PCon "None")) (ELit (LString "")))
-(DFunDef false "locKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ""))))
 (DTypeSig true "pushTypeErrorOnce" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "pushTypeErrorOnce" ((PVar "mctx") (PVar "code") (PVar "msg")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "code")) (EVar "None")) (EVar "msg")))
 (DTypeSig false "recordUnlessSeen" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Bool") (TyFun (TyCon "TcDiag") (TyCon "Unit")))))
 (DFunDef false "recordUnlessSeen" ((PVar "mctx") (PVar "seen") (PVar "d")) (EIf (EVar "seen") (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EVar "d"))))
-(DTypeSig false "msgAtKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))
-(DFunDef false "msgAtKey" ((PVar "msg") (PVar "at")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "\t@@\t"))) (EApp (EMethodRef "display") (EApp (EVar "locKey") (EVar "at")))) (ELit (LString ""))))
 (DTypeSig false "alreadyReportedAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))))
 (DFunDef false "alreadyReportedAt" ((PVar "mctx") (PVar "msg") (PCon "None")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")))
 (DFunDef false "alreadyReportedAt" ((PVar "mctx") (PVar "msg") (PVar "at")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "msgAtKey") (EVar "msg")) (EVar "at"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")))
@@ -625,20 +528,8 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "pushBoundaryAmbiguity" ((PVar "mctx") (PVar "rigidIds") (PVar "args") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "reported") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguityVarsRef")) (DoLet false false (PVar "ids") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "boundaryOwnsOpen") (EVar "mctx")) (EVar "rigidIds"))) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EVar "reported") "value")))) (EVar "ids")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "reported")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "i")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "i")) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EVar "reported") "value")) (EVar "ids")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushAmbiguityAt") (EVar "mctx")) (EVar "False")) (EVar "loc")) (EVar "msg"))))))))
 (DTypeSig true "pushTypeErrorHelpFixAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))) (TyCon "Unit"))))))))
 (DFunDef false "pushTypeErrorHelpFixAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EApp (EApp (EApp (EVar "recordUnlessSeen") (EVar "mctx")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix"))))
-(DTypeSig false "writtenNames" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "writtenNames" ((PVar "text")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "text")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PVar "parts") () (EApp (EVar "dropRenameSuffixes") (EVar "parts")))))
-(DTypeSig false "dropRenameSuffixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "dropRenameSuffixes" ((PList)) (ELit (LString "")))
-(DFunDef false "dropRenameSuffixes" ((PList (PVar "a"))) (EVar "a"))
-(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PCons PWild (PCons (PVar "n") (PCons (PVar "lb") (PVar "more")))))) (EIf (EBinOp "&&" (EApp (EVar "allDigits") (EVar "n")) (EApp (EApp (EVar "startsWith") (ELit (LString "lb"))) (EVar "lb"))) (EBinOp "++" (EVar "a") (EApp (EVar "dropRenameSuffixes") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "lb"))) (EVar "lb")) (EVar "more")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "$"))) (EApp (EMethodRef "display") (EApp (EVar "dropRenameSuffixes") (EVar "rest")))) (ELit (LString ""))))
-(DTypeSig true "writtenDiag" (TyFun (TyCon "TcDiag") (TyCon "TcDiag")))
-(DFunDef false "writtenDiag" ((PCon "TcDiag" (PVar "code") (PVar "sev") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "loc")) (EApp (EVar "writtenNames") (EVar "msg"))) (EApp (EApp (EMethodRef "map") (EVar "writtenNames")) (EVar "help"))) (EVar "fix")))
 (DTypeSig false "tupleCallHintFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
 (DFunDef false "tupleCallHintFor" ((PVar "mctx") (PVar "m")) (EApp (EApp (EVar "findTupleCand") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "m")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "tupleCallCandidates") "value")))
-(DTypeSig false "findTupleCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
-(DFunDef false "findTupleCand" (PWild (PList)) (EVar "None"))
-(DFunDef false "findTupleCand" ((PVar "key") (PCons (PTuple (PVar "res") (PVar "help") (PVar "fix")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "res"))) (EVar "key")) (EApp (EVar "Some") (ETuple (EVar "help") (EVar "fix"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "findTupleCand") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "firstTupleCallHint" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
 (DFunDef false "firstTupleCallHint" ((PVar "mctx") (PList)) (EVar "None"))
 (DFunDef false "firstTupleCallHint" ((PVar "mctx") (PCons (PVar "m") (PVar "rest"))) (EMatch (EApp (EApp (EVar "tupleCallHintFor") (EVar "mctx")) (EVar "m")) (arm (PCon "Some" (PVar "hf")) () (EApp (EVar "Some") (EVar "hf"))) (arm (PCon "None") () (EApp (EApp (EVar "firstTupleCallHint") (EVar "mctx")) (EVar "rest")))))
@@ -655,6 +546,3 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "noImplFoundMsgHinted" ((PVar "mctx") (PVar "iface") (PVar "args")) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EVar "noImplFoundMsg") (EVar "iface")) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "noImplHint") (EVar "mctx")) (EVar "iface")) (EVar "args")) (arm (PCon "Some" (PVar "hint")) () (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EVar "hint"))) (ELit (LString ""))) (EApp (EVar "Some") (EVar "hint")))) (arm (PCon "None") () (ETuple (EVar "base") (EVar "None")))))))
 (DTypeSig true "pushNoImplError" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit"))))))
 (DFunDef false "pushNoImplError" ((PVar "mctx") (PVar "iface") (PVar "loc") (PVar "args")) (EMatch (EApp (EApp (EVar "firstTupleCallHint") (EVar "mctx")) (EVar "args")) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (EVar "mctx")) (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "noImplFoundMsg") (EVar "iface")) (EVar "args")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "msg") (PVar "mhint")) (EApp (EApp (EApp (EVar "noImplFoundMsgHinted") (EVar "mctx")) (EVar "iface")) (EVar "args"))) (DoExpr (EMatch (EVar "mhint") (arm (PCon "Some" (PVar "hint")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (EVar "mctx")) (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EVar "msg")) (EVar "hint")) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EVar "msg")))))))))
-(DTypeSig true "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
-(DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
-(DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EVar "ds")))
