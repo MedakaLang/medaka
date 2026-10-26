@@ -2816,6 +2816,22 @@ toolchain = []
 link = "production"
 
 [[gate]]
+name = "diff_compiler_wasm_single_traversal"
+area = "wasm"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "heavy"
+kind = "native"
+migration = "done"
+run = "test/diff_compiler_wasm_single_traversal_test.mdk"
+oracles = []
+sources = ["compiler/backend/*.mdk", "compiler/entries/wasm_emit_main.mdk", "compiler/entries/wasm_emit_typed_main.mdk", "compiler/entries/wasm_emit_modules_main.mdk", "compiler/entries/playground_main.mdk", "compiler/entries/entry_support.mdk", "compiler/frontend/*.mdk", "compiler/types/*.mdk", "compiler/ir/*.mdk", "compiler/driver/*.mdk", "compiler/support/*.mdk", "stdlib/*.mdk", "runtime/medaka_rt.c", "test/wasm/run.js", "playground/medaka_host.mjs"]
+corpus = []
+toolchain = ["clang", "wasm-tools", "node>=24"]
+link = "production"
+
+[[gate]]
 name = "diff_compiler_source_bytes"
 area = "infra"
 shard = "gates_2"
