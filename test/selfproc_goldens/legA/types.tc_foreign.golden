@@ -53,5 +53,4 @@ namedArgPositions : Ty -> Int -> List (String, Int)
 positionCells : ModuleCtx -> List (String, Int) -> List (Int, Ref Authvar)
 positionalSigVars : List (String, Int) -> List (Int, Ref Authvar) -> SigVars
 pushFfiDiag : ModuleCtx -> FfiDiag -> Unit
-rangeFromCount : Int -> Int -> List Int
 withFreeAuths : List (String, Ref Authvar) -> SigVars -> SigVars

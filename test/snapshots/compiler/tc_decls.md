@@ -1,5 +1,5 @@
 # META
-source_lines=3410
+source_lines=3400
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -1554,20 +1554,14 @@ recordParamKinds mctx o name kinds =
 -- swallows it (`data Bare e = Bare (Unit -> <e> Unit)`, where `Bare <>` hands
 -- back a pure-typed function that prints).
 --
--- This comment used to claim the table "accumulates across the modules of
--- ONE RUN" and therefore needed no seed chain.  The identity half of that
--- argument holds — the key is identity-bearing (`tyTabKey` carries the
--- DECLARATION's `TyConOrigin` — #1111 A-2.3), so a row can only ever answer for
--- the very declaration that wrote it.  The accumulation half was false.  An
--- entry written while checking one module is not visible to an importer, so
--- #2110's fix was single-file-only for every ABSTRACTLY exported wrapper — the
--- ordinary way a library ships one — because `publicDataDecls` drops
--- `VisAbstract` before an importer's `registerVariants` ever sees the decl.
--- The table is now seeded per module by `declEnvSeedDataUniverse` from
--- `deAtomsBefore`, exactly like its two siblings; see `declEnvRowAtomsChain`.
--- The failure was recoverable only because a MISS reads as "no guarantee"
--- (`[]`), i.e. the pre-#2110 behaviour — an over-rejection, loud, never a
--- launder.
+-- The key is identity-bearing (`tyTabKey` carries the DECLARATION's
+-- `TyConOrigin` — #1111 A-2.3), so a row can only ever answer for the very
+-- declaration that wrote it.  An entry written while checking one module is not
+-- visible to an importer (`publicDataDecls` drops `VisAbstract` before an
+-- importer's `registerVariants` sees the decl), so the table is seeded per
+-- module by `declEnvSeedDataUniverse` from `deAtomsBefore`, exactly like its
+-- two siblings; see `declEnvRowAtomsChain`.  A MISS reads as "no guarantee"
+-- (`[]`): an over-rejection, loud, never a launder.
 recordParamRowAtoms : ModuleCtx ->
   TyConOrigin ->
   String ->
@@ -2214,7 +2208,7 @@ registerAllDataScoped env ds allDs =
 -- (`data A (p : Authority L) = A (H p)` above `data H (p : Authority L)`).
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
 registerAllDataGo env ds =
-  let _ = fold (_ d => recordDeclKinds env.teDyn.dcModule d) () ds
+  let _ = each (recordDeclKinds env.teDyn.dcModule) ds
   registerDeclsAliasesFirst env ds
 
 -- Aliases enter the alias table ahead of every other declaration, so a field
@@ -2279,7 +2273,7 @@ withDeclParamKinds : ModuleCtx -> List Decl -> (Unit -> a) -> a
 withDeclParamKinds mctx ds k =
   let kinds = mctx.mcCells.dataParamKindsRef.value
   let names = mctx.mcCells.dataParamNameIndexRef.value
-  let _ = fold (_ d => recordDeclaredKinds mctx d) () ds
+  let _ = each (recordDeclaredKinds mctx) ds
   let result = k ()
   mctx.mcCells.dataParamKindsRef := kinds
   mctx.mcCells.dataParamNameIndexRef := names
@@ -2703,14 +2697,10 @@ publicStandaloneNames (_ :: rest) = publicStandaloneNames rest
 
 -- substitute interface-typaram NAMES → impl type PATTERNS inside a declared Ty.
 --
--- #1110 (was a residual, DRAINED by the stamping PR).  The `TyCon` arm used to
--- REBUILD the node from its name alone, which dropped the span (pre-existing and
--- deliberate — see below) and would have DESTROYED the `tyConOrigin` identity
--- resolve had already acquired, silently and with no diagnostic, on every declared
--- `Ty` reached through an impl-head substitution.  It now PRESERVES the matched
--- node and clears only the span, which is the fix the carrier PR called for:
--- re-stamping here was never an option, because this function does not know an
--- identity and would have been guessing one.
+-- #1110.  The `TyCon` arm preserves the matched node and clears only the span:
+-- rebuilding it from its name alone would silently destroy the `tyConOrigin`
+-- identity resolve already acquired, and re-stamping here is not an option
+-- because this function does not know an identity and would be guessing one.
 --
 -- The span clear is deliberate and must STAY: a substituted head is no longer
 -- at the source position the interface's declared type named it at, and the
@@ -3785,7 +3775,7 @@ distinctIdentsIn2 _ = False
 (DTypeSig true "registerAllDataScoped" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv")))))
 (DFunDef false "registerAllDataScoped" ((PVar "env") (PVar "ds") (PVar "allDs")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "seedParamPolarityFixpointScoped") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "ds")) (EVar "allDs"))) (DoExpr (EApp (EApp (EVar "registerAllDataGo") (EVar "env")) (EVar "ds")))))
 (DTypeSig false "registerAllDataGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
-(DFunDef false "registerAllDataGo" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "d")) (EApp (EApp (EVar "recordDeclKinds") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "d")))) (ELit LUnit)) (EVar "ds"))) (DoExpr (EApp (EApp (EVar "registerDeclsAliasesFirst") (EVar "env")) (EVar "ds")))))
+(DFunDef false "registerAllDataGo" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "each") (EApp (EVar "recordDeclKinds") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule"))) (EVar "ds"))) (DoExpr (EApp (EApp (EVar "registerDeclsAliasesFirst") (EVar "env")) (EVar "ds")))))
 (DTypeSig false "registerDeclsAliasesFirst" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
 (DFunDef false "registerDeclsAliasesFirst" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false (PVar "env1") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d")) (EVar "e")))) (EVar "env")) (EVar "ds"))) (DoLet false false PWild (EApp (EApp (EVar "rejectCyclicAliases") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "ds"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EVar "e") (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d"))))) (EVar "env1")) (EVar "ds")))))
 (DTypeSig true "isAliasDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
@@ -3806,7 +3796,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "declKindEntry" ((PVar "gctx") (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "name")) (rf "tyAliasParams" (PVar "params")) (rf "tyAliasParamKinds" (PVar "anns")) (rf "tyAliasOrigin" (PVar "o"))) false)) (EApp (EVar "Some") (ETuple (EVar "o") (EVar "name") (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "params")) (EVar "anns")))))
 (DFunDef false "declKindEntry" ((PVar "gctx") PWild) (EVar "None"))
 (DTypeSig true "withDeclParamKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyVar "a")))))
-(DFunDef false "withDeclParamKinds" ((PVar "mctx") (PVar "ds") (PVar "k")) (EBlock (DoLet false false (PVar "kinds") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (DoLet false false (PVar "names") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef") "value")) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "d")) (EApp (EApp (EVar "recordDeclaredKinds") (EVar "mctx")) (EVar "d")))) (ELit LUnit)) (EVar "ds"))) (DoLet false false (PVar "result") (EApp (EVar "k") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef")) (EVar "kinds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef")) (EVar "names"))) (DoExpr (EVar "result"))))
+(DFunDef false "withDeclParamKinds" ((PVar "mctx") (PVar "ds") (PVar "k")) (EBlock (DoLet false false (PVar "kinds") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (DoLet false false (PVar "names") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef") "value")) (DoLet false false PWild (EApp (EApp (EVar "each") (EApp (EVar "recordDeclaredKinds") (EVar "mctx"))) (EVar "ds"))) (DoLet false false (PVar "result") (EApp (EVar "k") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef")) (EVar "kinds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef")) (EVar "names"))) (DoExpr (EVar "result"))))
 (DTypeSig false "recordDeclaredKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyCon "Unit"))))
 (DFunDef false "recordDeclaredKinds" ((PVar "mctx") (PVar "d")) (EMatch (EApp (EApp (EVar "declKindEntry") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "d")) (arm (PCon "Some" (PTuple (PVar "o") (PVar "name") (PVar "kinds"))) ((GBool (EApp (EApp (EVar "anyList") (EVar "kindIsDeclared")) (EVar "kinds")))) (EApp (EApp (EApp (EApp (EVar "recordParamKinds") (EVar "mctx")) (EVar "o")) (EVar "name")) (EVar "kinds"))) (arm PWild () (ELit LUnit))))
 (DTypeSig false "kindIsDeclared" (TyFun (TyCon "Kind") (TyCon "Bool")))
@@ -4379,7 +4369,7 @@ distinctIdentsIn2 _ = False
 (DTypeSig true "registerAllDataScoped" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv")))))
 (DFunDef false "registerAllDataScoped" ((PVar "env") (PVar "ds") (PVar "allDs")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "seedParamPolarityFixpointScoped") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "ds")) (EVar "allDs"))) (DoExpr (EApp (EApp (EVar "registerAllDataGo") (EVar "env")) (EVar "ds")))))
 (DTypeSig false "registerAllDataGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
-(DFunDef false "registerAllDataGo" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "d")) (EApp (EApp (EVar "recordDeclKinds") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "d")))) (ELit LUnit)) (EVar "ds"))) (DoExpr (EApp (EApp (EVar "registerDeclsAliasesFirst") (EVar "env")) (EVar "ds")))))
+(DFunDef false "registerAllDataGo" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "each") (EApp (EVar "recordDeclKinds") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule"))) (EVar "ds"))) (DoExpr (EApp (EApp (EVar "registerDeclsAliasesFirst") (EVar "env")) (EVar "ds")))))
 (DTypeSig false "registerDeclsAliasesFirst" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
 (DFunDef false "registerDeclsAliasesFirst" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false (PVar "env1") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d")) (EVar "e")))) (EVar "env")) (EVar "ds"))) (DoLet false false PWild (EApp (EApp (EVar "rejectCyclicAliases") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "ds"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EVar "e") (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d"))))) (EVar "env1")) (EVar "ds")))))
 (DTypeSig true "isAliasDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
@@ -4400,7 +4390,7 @@ distinctIdentsIn2 _ = False
 (DFunDef false "declKindEntry" ((PVar "gctx") (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "name")) (rf "tyAliasParams" (PVar "params")) (rf "tyAliasParamKinds" (PVar "anns")) (rf "tyAliasOrigin" (PVar "o"))) false)) (EApp (EVar "Some") (ETuple (EVar "o") (EVar "name") (EApp (EApp (EApp (EVar "declParamKinds") (EVar "gctx")) (EVar "params")) (EVar "anns")))))
 (DFunDef false "declKindEntry" ((PVar "gctx") PWild) (EVar "None"))
 (DTypeSig true "withDeclParamKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyVar "a")))))
-(DFunDef false "withDeclParamKinds" ((PVar "mctx") (PVar "ds") (PVar "k")) (EBlock (DoLet false false (PVar "kinds") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (DoLet false false (PVar "names") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef") "value")) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "d")) (EApp (EApp (EVar "recordDeclaredKinds") (EVar "mctx")) (EVar "d")))) (ELit LUnit)) (EVar "ds"))) (DoLet false false (PVar "result") (EApp (EVar "k") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef")) (EVar "kinds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef")) (EVar "names"))) (DoExpr (EVar "result"))))
+(DFunDef false "withDeclParamKinds" ((PVar "mctx") (PVar "ds") (PVar "k")) (EBlock (DoLet false false (PVar "kinds") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (DoLet false false (PVar "names") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef") "value")) (DoLet false false PWild (EApp (EApp (EVar "each") (EApp (EVar "recordDeclaredKinds") (EVar "mctx"))) (EVar "ds"))) (DoLet false false (PVar "result") (EApp (EVar "k") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef")) (EVar "kinds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef")) (EVar "names"))) (DoExpr (EVar "result"))))
 (DTypeSig false "recordDeclaredKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyCon "Unit"))))
 (DFunDef false "recordDeclaredKinds" ((PVar "mctx") (PVar "d")) (EMatch (EApp (EApp (EVar "declKindEntry") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "d")) (arm (PCon "Some" (PTuple (PVar "o") (PVar "name") (PVar "kinds"))) ((GBool (EApp (EApp (EVar "anyList") (EVar "kindIsDeclared")) (EVar "kinds")))) (EApp (EApp (EApp (EApp (EVar "recordParamKinds") (EVar "mctx")) (EVar "o")) (EVar "name")) (EVar "kinds"))) (arm PWild () (ELit LUnit))))
 (DTypeSig false "kindIsDeclared" (TyFun (TyCon "Kind") (TyCon "Bool")))

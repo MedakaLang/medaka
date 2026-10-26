@@ -1,7 +1,7 @@
 -- Tests of `types.tc_foreign`'s own API: the crossable set of FFI-ABI section 1 as
 -- `ffiCheckExternsCrossable` enforces it, the exemption of a catalog-named extern, the
 -- ownership gate (`False` checks nothing), the unlabelled-extern rule, the extern signature
--- table `externSigsToMap` and the helpers `externDecls` and `rangeFromCount`.  Each test
+-- table `externSigsToMap` and the helper `externDecls`.  Each test
 -- parses its own declarations and mints its own module record in a fresh graph record.
 
 import test.{
@@ -26,7 +26,6 @@ import types.tc_foreign.{
   externSigsToMap,
   ffiCheckExternsCrossable,
   ffiCheckExternsLabelled,
-  rangeFromCount,
 }
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
@@ -148,11 +147,4 @@ test "externSigsToMap keys each extern by its name" =
     expectTrue (omHasKey "a" table),
     expectTrue (omHasKey "b" table),
     expectFalse (omHasKey "f" table),
-  ]
-
-test "rangeFromCount counts up from its start and is empty for a non-positive count" = expectAll
-  [
-    expectEqual [3, 4, 5] (rangeFromCount 3 3),
-    expectEqual [] (rangeFromCount 3 0),
-    expectEqual [] (rangeFromCount 3 (-2)),
   ]

@@ -1,5 +1,5 @@
 # META
-source_lines=2189
+source_lines=2184
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_types: the written-type layer of declaration analysis: AST types to `Mono`
@@ -179,6 +179,7 @@ import support.util.{
   reverseL,
   zipL,
 }
+import list.{get}
 import types.effect_param_decode.{
   atomicLabelParamText,
   effectParamMsg,
@@ -395,8 +396,7 @@ checkEffectParamsDecl mctx _ = ()
 -- `registerAllData`: an index slot's domain is read from the kind table.
 export
 checkDeclAuthorityUses : ModuleCtx -> List Decl -> Unit
-checkDeclAuthorityUses mctx ds =
-  fold (_ d => checkDeclAuthorityUsesDecl mctx d) () ds
+checkDeclAuthorityUses mctx ds = each (checkDeclAuthorityUsesDecl mctx) ds
 
 checkDeclAuthorityUsesDecl : ModuleCtx -> Decl -> Unit
 checkDeclAuthorityUsesDecl mctx (DAttrib _ d) =
@@ -682,7 +682,7 @@ paramCarries gctx seen key i
   | anyList (k => tabKeyEq k key) seen = True
   | otherwise = match lookupTab key gctx.crossRun.universeDataCtors.value
     None => False
-    Some (VisPublic, params, variants) => match nthOpt i params
+    Some (VisPublic, params, variants) => match get i params
       None => False
       Some q =>
         allList
@@ -692,11 +692,6 @@ paramCarries gctx seen key i
               (payloadAstTypes (variantPayload v)))
           variants
     Some _ => True
-
-export
-nthOpt : Int -> List a -> Option a
-nthOpt _ [] = None
-nthOpt i (x :: rest) = if i == 0 then Some x else nthOpt (i - 1) rest
 
 -- data / newtype / alias heads: [fieldTys] are every type the declaration's
 -- body mentions.
@@ -1442,7 +1437,7 @@ fromAstTypeE mctx etbl tvs (TyQual t ps loc) =
 -- normally consumes a `TyRow`, routing it through `rowArgOf` instead. Unlike
 -- a misplaced `TyEffect` (which unwraps to a REAL user-written type and can
 -- keep inferring silently), a `TyRow` has no wrapped type at all — inventing
--- one from nothing would turn what used to be a parse error (`List <Stdout>`,
+-- one from nothing would turn a misplaced row (`List <Stdout>`,
 -- `data Holder = Holder <Stdout>`) into a silent mistype (`List Unit`).  Push
 -- a real diagnostic; `TCon "Unit"` is POST-error recovery only, so inference
 -- can keep going, not a value anything should rely on.
@@ -2147,7 +2142,7 @@ kindsEq _ _ = False
 export
 reportUnboundAuthorityNamesIn : ModuleCtx -> List Ty -> SigVars -> Unit
 reportUnboundAuthorityNamesIn mctx tys sv =
-  fold (_ t => reportUnboundAuthorityNames mctx t sv) () tys
+  each (t => reportUnboundAuthorityNames mctx t sv) tys
 
 export
 payloadTypesE : ModuleCtx ->
@@ -2206,6 +2201,7 @@ reqTyToMono mctx _ (TyRow labels tail loc) =
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "ppAuthArg" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "domainKey" false) (mem "extendParam" false) (mem "lookupAxis" false) (mem "subTopOf" false) (mem "writtenSetProblem" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("list") ((mem "get" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "atomicLabelParamText" false) (mem "effectParamMsg" false) (mem "effectParamProblems" false) (mem "repeatedNames" false) (mem "writtenAxis" false) (mem "writtenParam" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false))))
 (DTypeSig false "seedEffectDomains" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
@@ -2255,7 +2251,7 @@ reqTyToMono mctx _ (TyRow labels tail loc) =
 (DFunDef false "checkEffectParamsDecl" ((PVar "mctx") (PRec "DInterface" ((rf "methods" (PVar "ms"))) false)) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" PWild (PVar "t") PWild PWild) () (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t")))))) (ELit LUnit)) (EVar "ms")))
 (DFunDef false "checkEffectParamsDecl" ((PVar "mctx") PWild) (ELit LUnit))
 (DTypeSig true "checkDeclAuthorityUses" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "checkDeclAuthorityUses" ((PVar "mctx") (PVar "ds")) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "d")) (EApp (EApp (EVar "checkDeclAuthorityUsesDecl") (EVar "mctx")) (EVar "d")))) (ELit LUnit)) (EVar "ds")))
+(DFunDef false "checkDeclAuthorityUses" ((PVar "mctx") (PVar "ds")) (EApp (EApp (EVar "each") (EApp (EVar "checkDeclAuthorityUsesDecl") (EVar "mctx"))) (EVar "ds")))
 (DTypeSig false "checkDeclAuthorityUsesDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyCon "Unit"))))
 (DFunDef false "checkDeclAuthorityUsesDecl" ((PVar "mctx") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "checkDeclAuthorityUsesDecl") (EVar "mctx")) (EVar "d")))
 (DFunDef false "checkDeclAuthorityUsesDecl" ((PVar "mctx") (PRec "DData" ((rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "ctors")) (rf "dataCtorBinders" (PVar "bss"))) false)) (EBlock (DoLet false false (PVar "heads") (EApp (EApp (EVar "flatMap") (EApp (EVar "declaredAuthority") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EApp (EVar "zipParamKinds") (EVar "ps")) (EVar "ks")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "cb")) (EMatch (EVar "cb") (arm (PTuple (PCon "Variant" PWild (PVar "payload")) (PVar "bs")) () (EApp (EApp (EApp (EApp (EVar "checkDeclAuthorityDomains") (EVar "mctx")) (EVar "heads")) (EVar "bs")) (EApp (EVar "payloadAstTypes") (EVar "payload"))))))) (ELit LUnit)) (EApp (EApp (EVar "zipCtorBinders") (EVar "ctors")) (EVar "bss"))))))
@@ -2313,10 +2309,7 @@ reqTyToMono mctx _ (TyRow labels tail loc) =
 (DFunDef false "argsCarry" ((PVar "gctx") PWild PWild PWild PWild (PList)) (EVar "False"))
 (DFunDef false "argsCarry" ((PVar "gctx") (PVar "seen") (PVar "p") (PVar "key") (PVar "i") (PCons (PVar "arg") (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "paramCarries") (EVar "gctx")) (EVar "seen")) (EVar "key")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "tyCarries") (EVar "gctx")) (EVar "seen")) (EVar "p")) (EVar "arg"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argsCarry") (EVar "gctx")) (EVar "seen")) (EVar "p")) (EVar "key")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "paramCarries" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyCon "TabKey") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "paramCarries" ((PVar "gctx") (PVar "seen") (PVar "key") (PVar "i")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "k")) (EApp (EApp (EVar "tabKeyEq") (EVar "k")) (EVar "key")))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupTab") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "universeDataCtors") "value")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PCon "VisPublic") (PVar "params") (PVar "variants"))) () (EMatch (EApp (EApp (EVar "nthOpt") (EVar "i")) (EVar "params")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "q")) () (EApp (EApp (EVar "allList") (ELam ((PVar "v")) (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "tyCarries") (EVar "gctx")) (EBinOp "::" (EVar "key") (EVar "seen"))) (EVar "q"))) (EApp (EVar "payloadAstTypes") (EApp (EVar "variantPayload") (EVar "v")))))) (EVar "variants"))))) (arm (PCon "Some" PWild) () (EVar "True"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "nthOpt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "nthOpt" (PWild (PList)) (EVar "None"))
-(DFunDef false "nthOpt" ((PVar "i") (PCons (PVar "x") (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "x")) (EApp (EApp (EVar "nthOpt") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "paramCarries" ((PVar "gctx") (PVar "seen") (PVar "key") (PVar "i")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "k")) (EApp (EApp (EVar "tabKeyEq") (EVar "k")) (EVar "key")))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupTab") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "universeDataCtors") "value")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PCon "VisPublic") (PVar "params") (PVar "variants"))) () (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "params")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "q")) () (EApp (EApp (EVar "allList") (ELam ((PVar "v")) (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "tyCarries") (EVar "gctx")) (EBinOp "::" (EVar "key") (EVar "seen"))) (EVar "q"))) (EApp (EVar "payloadAstTypes") (EApp (EVar "variantPayload") (EVar "v")))))) (EVar "variants"))))) (arm (PCon "Some" PWild) () (EVar "True"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "checkHeadKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))))
 (DFunDef false "checkHeadKinds" ((PVar "mctx") (PVar "name") (PVar "params") (PVar "anns") (PVar "fieldTys")) (EBlock (DoLet false false (PVar "rowNames") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "effTailNames")) (EVar "fieldTys")) (EApp (EApp (EVar "flatMap") (EApp (EVar "rowArgNames") (EVar "mctx"))) (EVar "fieldTys"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkHeadKindsGo") (EVar "mctx")) (EVar "name")) (EVar "rowNames")) (EVar "fieldTys")) (EVar "params")) (EApp (EApp (EVar "padAnns") (EVar "params")) (EVar "anns"))))))
 (DTypeSig false "checkHeadKindsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyCon "Unit"))))))))
@@ -2632,7 +2625,7 @@ reqTyToMono mctx _ (TyRow labels tail loc) =
 (DFunDef false "kindsEq" ((PCons (PCon "KAuth" (PVar "l1") (PVar "p1")) (PVar "a")) (PCons (PCon "KAuth" (PVar "l2") (PVar "p2")) (PVar "b"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "labelKey") (EVar "l1")) (EApp (EVar "labelKey") (EVar "l2"))) (EBinOp "==" (EVar "p1") (EVar "p2"))) (EApp (EApp (EVar "kindsEq") (EVar "a")) (EVar "b"))))
 (DFunDef false "kindsEq" (PWild PWild) (EVar "False"))
 (DTypeSig true "reportUnboundAuthorityNamesIn" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "SigVars") (TyCon "Unit")))))
-(DFunDef false "reportUnboundAuthorityNamesIn" ((PVar "mctx") (PVar "tys") (PVar "sv")) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "t")) (EApp (EApp (EApp (EVar "reportUnboundAuthorityNames") (EVar "mctx")) (EVar "t")) (EVar "sv")))) (ELit LUnit)) (EVar "tys")))
+(DFunDef false "reportUnboundAuthorityNamesIn" ((PVar "mctx") (PVar "tys") (PVar "sv")) (EApp (EApp (EVar "each") (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "reportUnboundAuthorityNames") (EVar "mctx")) (EVar "t")) (EVar "sv")))) (EVar "tys")))
 (DTypeSig true "payloadTypesE" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "SigVars") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "ConPayload") (TyApp (TyCon "List") (TyCon "Mono")))))))
 (DFunDef false "payloadTypesE" ((PVar "mctx") (PVar "etbl") (PVar "tvs") (PCon "ConPos" (PVar "tys"))) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "mctx")) (EVar "etbl")) (EVar "tvs"))) (EVar "tys")))
 (DFunDef false "payloadTypesE" ((PVar "mctx") (PVar "etbl") (PVar "tvs") (PCon "ConNamed" (PVar "fields") PWild)) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "fieldTypeE") (EVar "mctx")) (EVar "etbl")) (EVar "tvs"))) (EVar "fields")))
@@ -2662,6 +2655,7 @@ reqTyToMono mctx _ (TyRow labels tail loc) =
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "ppAuthArg" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "domainKey" false) (mem "extendParam" false) (mem "lookupAxis" false) (mem "subTopOf" false) (mem "writtenSetProblem" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
+(DUse false (UseGroup ("list") ((mem "get" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "atomicLabelParamText" false) (mem "effectParamMsg" false) (mem "effectParamProblems" false) (mem "repeatedNames" false) (mem "writtenAxis" false) (mem "writtenParam" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false))))
 (DTypeSig false "seedEffectDomains" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
@@ -2711,7 +2705,7 @@ reqTyToMono mctx _ (TyRow labels tail loc) =
 (DFunDef false "checkEffectParamsDecl" ((PVar "mctx") (PRec "DInterface" ((rf "methods" (PVar "ms"))) false)) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" PWild (PVar "t") PWild PWild) () (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t")))))) (ELit LUnit)) (EVar "ms")))
 (DFunDef false "checkEffectParamsDecl" ((PVar "mctx") PWild) (ELit LUnit))
 (DTypeSig true "checkDeclAuthorityUses" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "checkDeclAuthorityUses" ((PVar "mctx") (PVar "ds")) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "d")) (EApp (EApp (EVar "checkDeclAuthorityUsesDecl") (EVar "mctx")) (EVar "d")))) (ELit LUnit)) (EVar "ds")))
+(DFunDef false "checkDeclAuthorityUses" ((PVar "mctx") (PVar "ds")) (EApp (EApp (EVar "each") (EApp (EVar "checkDeclAuthorityUsesDecl") (EVar "mctx"))) (EVar "ds")))
 (DTypeSig false "checkDeclAuthorityUsesDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Decl") (TyCon "Unit"))))
 (DFunDef false "checkDeclAuthorityUsesDecl" ((PVar "mctx") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "checkDeclAuthorityUsesDecl") (EVar "mctx")) (EVar "d")))
 (DFunDef false "checkDeclAuthorityUsesDecl" ((PVar "mctx") (PRec "DData" ((rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "ctors")) (rf "dataCtorBinders" (PVar "bss"))) false)) (EBlock (DoLet false false (PVar "heads") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "declaredAuthority") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EApp (EVar "zipParamKinds") (EVar "ps")) (EVar "ks")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "cb")) (EMatch (EVar "cb") (arm (PTuple (PCon "Variant" PWild (PVar "payload")) (PVar "bs")) () (EApp (EApp (EApp (EApp (EVar "checkDeclAuthorityDomains") (EVar "mctx")) (EVar "heads")) (EVar "bs")) (EApp (EVar "payloadAstTypes") (EVar "payload"))))))) (ELit LUnit)) (EApp (EApp (EVar "zipCtorBinders") (EVar "ctors")) (EVar "bss"))))))
@@ -2769,10 +2763,7 @@ reqTyToMono mctx _ (TyRow labels tail loc) =
 (DFunDef false "argsCarry" ((PVar "gctx") PWild PWild PWild PWild (PList)) (EVar "False"))
 (DFunDef false "argsCarry" ((PVar "gctx") (PVar "seen") (PVar "p") (PVar "key") (PVar "i") (PCons (PVar "arg") (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "paramCarries") (EVar "gctx")) (EVar "seen")) (EVar "key")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "tyCarries") (EVar "gctx")) (EVar "seen")) (EVar "p")) (EVar "arg"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argsCarry") (EVar "gctx")) (EVar "seen")) (EVar "p")) (EVar "key")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "paramCarries" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyCon "TabKey") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "paramCarries" ((PVar "gctx") (PVar "seen") (PVar "key") (PVar "i")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "k")) (EApp (EApp (EVar "tabKeyEq") (EVar "k")) (EVar "key")))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupTab") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "universeDataCtors") "value")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PCon "VisPublic") (PVar "params") (PVar "variants"))) () (EMatch (EApp (EApp (EVar "nthOpt") (EVar "i")) (EVar "params")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "q")) () (EApp (EApp (EVar "allList") (ELam ((PVar "v")) (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "tyCarries") (EVar "gctx")) (EBinOp "::" (EVar "key") (EVar "seen"))) (EVar "q"))) (EApp (EVar "payloadAstTypes") (EApp (EVar "variantPayload") (EVar "v")))))) (EVar "variants"))))) (arm (PCon "Some" PWild) () (EVar "True"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "nthOpt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "nthOpt" (PWild (PList)) (EVar "None"))
-(DFunDef false "nthOpt" ((PVar "i") (PCons (PVar "x") (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "x")) (EApp (EApp (EVar "nthOpt") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "paramCarries" ((PVar "gctx") (PVar "seen") (PVar "key") (PVar "i")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "k")) (EApp (EApp (EVar "tabKeyEq") (EVar "k")) (EVar "key")))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupTab") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "universeDataCtors") "value")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PCon "VisPublic") (PVar "params") (PVar "variants"))) () (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "params")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "q")) () (EApp (EApp (EVar "allList") (ELam ((PVar "v")) (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "tyCarries") (EVar "gctx")) (EBinOp "::" (EVar "key") (EVar "seen"))) (EVar "q"))) (EApp (EVar "payloadAstTypes") (EApp (EVar "variantPayload") (EVar "v")))))) (EVar "variants"))))) (arm (PCon "Some" PWild) () (EVar "True"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "checkHeadKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))))
 (DFunDef false "checkHeadKinds" ((PVar "mctx") (PVar "name") (PVar "params") (PVar "anns") (PVar "fieldTys")) (EBlock (DoLet false false (PVar "rowNames") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "effTailNames")) (EVar "fieldTys")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "rowArgNames") (EVar "mctx"))) (EVar "fieldTys"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkHeadKindsGo") (EVar "mctx")) (EVar "name")) (EVar "rowNames")) (EVar "fieldTys")) (EVar "params")) (EApp (EApp (EVar "padAnns") (EVar "params")) (EVar "anns"))))))
 (DTypeSig false "checkHeadKindsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyCon "Unit"))))))))
@@ -3088,7 +3079,7 @@ reqTyToMono mctx _ (TyRow labels tail loc) =
 (DFunDef false "kindsEq" ((PCons (PCon "KAuth" (PVar "l1") (PVar "p1")) (PVar "a")) (PCons (PCon "KAuth" (PVar "l2") (PVar "p2")) (PVar "b"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "labelKey") (EVar "l1")) (EApp (EVar "labelKey") (EVar "l2"))) (EBinOp "==" (EVar "p1") (EVar "p2"))) (EApp (EApp (EVar "kindsEq") (EVar "a")) (EVar "b"))))
 (DFunDef false "kindsEq" (PWild PWild) (EVar "False"))
 (DTypeSig true "reportUnboundAuthorityNamesIn" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "SigVars") (TyCon "Unit")))))
-(DFunDef false "reportUnboundAuthorityNamesIn" ((PVar "mctx") (PVar "tys") (PVar "sv")) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "t")) (EApp (EApp (EApp (EVar "reportUnboundAuthorityNames") (EVar "mctx")) (EVar "t")) (EVar "sv")))) (ELit LUnit)) (EVar "tys")))
+(DFunDef false "reportUnboundAuthorityNamesIn" ((PVar "mctx") (PVar "tys") (PVar "sv")) (EApp (EApp (EVar "each") (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "reportUnboundAuthorityNames") (EVar "mctx")) (EVar "t")) (EVar "sv")))) (EVar "tys")))
 (DTypeSig true "payloadTypesE" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "SigVars") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "ConPayload") (TyApp (TyCon "List") (TyCon "Mono")))))))
 (DFunDef false "payloadTypesE" ((PVar "mctx") (PVar "etbl") (PVar "tvs") (PCon "ConPos" (PVar "tys"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "mctx")) (EVar "etbl")) (EVar "tvs"))) (EVar "tys")))
 (DFunDef false "payloadTypesE" ((PVar "mctx") (PVar "etbl") (PVar "tvs") (PCon "ConNamed" (PVar "fields") PWild)) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "fieldTypeE") (EVar "mctx")) (EVar "etbl")) (EVar "tvs"))) (EVar "fields")))

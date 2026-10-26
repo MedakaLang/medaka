@@ -497,7 +497,8 @@ import support.ordmap.{
   omDelete,
 }
 import list.{
-  replicate, drop, take, elemIndex, indexed, sortOn, findMap, last, head
+  replicate, drop, take, elemIndex, indexed, sortOn, findMap, last, head, get,
+  range
 }
 import support.util.{
   splitOnChar,
@@ -1165,7 +1166,6 @@ import types.tc_decls_types.{
   fromAstType,
   fromAstTypeE,
   kindsEq,
-  nthOpt,
   patternSlotNamesIn,
   populateEffectDomainsGraph,
   reqTyToMono,
@@ -1230,7 +1230,6 @@ import types.tc_foreign.{
   ffiCheckExternsShadow,
   ffiExternTypeRowsWith,
   ffiStampMode,
-  rangeFromCount,
 }
 
 -- ── effect-label DOMAIN registry ───────────────────────────────────────────
@@ -6576,9 +6575,7 @@ registerMethodBodyGrants gctx iface mname heads inst (ScopeId sid) =
               inst.mbiContractForce
               (authOrderIn inst.mbiExpected [])))
       let ids =
-        map
-          (k => optionOr (0 - 1) (nthOpt k own))
-          (rangeFromCount 0 (listLen mg.mgNames))
+        map (k => optionOr (0 - 1) (get k own)) (range 0 (listLen mg.mgNames))
       let st = gctx.graphRun.grants
       st.gsBodies := IdMap.set sid (BodyGrantBinder mname ids) st.gsBodies.value
 
@@ -19359,9 +19356,7 @@ grantMethodParams gctx mg n ps body =
     (take mg.mgArity ps ++ grants ++ drop mg.mgArity ps, body)
   else
     let missing =
-      map
-        (_ => freshGrantName gctx.graphRun.grants ())
-        (rangeFromCount given (mg.mgArity - given))
+      map (_ => freshGrantName gctx.graphRun.grants ()) (range given mg.mgArity)
     (
       ps ++ map (x => PVar x (Loc "" 0 0 0 0) noBinderId) missing ++ grants,
       applyExprs body (map EVar missing),
@@ -19411,7 +19406,7 @@ grantParamPats : List a -> String -> List Pat
 grantParamPats ids n =
   map
     (i => PVar (grantParamName n i) (Loc "" 0 0 0 0) noBinderId)
-    (rangeFromCount 0 (listLen ids))
+    (range 0 (listLen ids))
 
 -- The top-down walk: a use of a file extern or a method is rebuilt with every
 -- argument it takes, so it sees its whole application spine before its
@@ -19503,9 +19498,7 @@ grantLocalRhs : GraphCtx -> String -> Expr -> Expr
 grantLocalRhs gctx x e = match localGrantIds gctx x
   [] => e
   ids =>
-    prependLocalDicts
-      (map (i => grantParamName x i) (rangeFromCount 0 (listLen ids)))
-      e
+    prependLocalDicts (map (i => grantParamName x i) (range 0 (listLen ids))) e
 
 -- An application spine's head and its arguments, through source-location
 -- wrappers.
@@ -19620,8 +19613,7 @@ saturateGrants st head arity grants args =
     applyExprs (applyExprs head (take arity args ++ grants)) (drop arity args)
   else
     let bound = map (a => (freshGrantName st (), a)) args
-    let missing =
-      map (_ => freshGrantName st ()) (rangeFromCount given (arity - given))
+    let missing = map (_ => freshGrantName st ()) (range given arity)
     let call =
       applyExprs
         head
@@ -20334,7 +20326,7 @@ usesImplDict pe mname methodArity nReq body =
 
 implDictNames : String -> Int -> Int -> List String
 implDictNames mname methodArity nReq =
-  map (dictParamName mname) (rangeFromCount methodArity nReq)
+  map (dictParamName mname) (range methodArity (methodArity + nReq))
 
 implMethodDictArity : ModuleCtx -> IfaceRef -> String -> Int
 implMethodDictArity mctx iface method =

@@ -77,7 +77,6 @@ literalDomainTop : List EffParamTy -> Param
 namedArgTypes : Ty -> List (String, Ty)
 namedAtomBinder : GraphCtx -> EffAtomTy -> List (String, Param)
 namedAtomBinders : GraphCtx -> Ty -> List (String, Param)
-nthOpt : Int -> List a -> Option a
 ordinaryBinderIn : SigVars -> Bool -> Ty -> Option String
 paramCarries : GraphCtx -> List TabKey -> TabKey -> Int -> Bool
 patternArgVarNames : List Kind -> List Ty -> List String

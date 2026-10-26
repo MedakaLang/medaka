@@ -18,19 +18,16 @@ import test.{
 }
 import frontend.parser.{parse}
 import frontend.resolve.{stampGraphTyOrigins}
-import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..), tabKeyName}
+import frontend.ast.{Decl(..), Ty(..), tabKeyName}
 import support.ordmap.{omEmpty, omKeys, omLookup}
 import types.publish.{tcCode}
-import types.repr.{IfaceRef(..), ppMono, ppScheme}
+import types.repr.{ppMono, ppScheme}
 import types.tc_types.{
   BuiltinClass(..),
   CeRow(..),
-  ClassEnv(..),
   DataEnv(..),
   DeclEnvModule(..),
   DeclEnvs(..),
-  ImplEnv(..),
-  MethodEnv(..),
   RecordInfo(..),
   ModuleCtx(..),
 }

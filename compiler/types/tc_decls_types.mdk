@@ -175,6 +175,7 @@ import support.util.{
   reverseL,
   zipL,
 }
+import list.{get}
 import types.effect_param_decode.{
   atomicLabelParamText,
   effectParamMsg,
@@ -391,8 +392,7 @@ checkEffectParamsDecl mctx _ = ()
 -- `registerAllData`: an index slot's domain is read from the kind table.
 export
 checkDeclAuthorityUses : ModuleCtx -> List Decl -> Unit
-checkDeclAuthorityUses mctx ds =
-  fold (_ d => checkDeclAuthorityUsesDecl mctx d) () ds
+checkDeclAuthorityUses mctx ds = each (checkDeclAuthorityUsesDecl mctx) ds
 
 checkDeclAuthorityUsesDecl : ModuleCtx -> Decl -> Unit
 checkDeclAuthorityUsesDecl mctx (DAttrib _ d) =
@@ -678,7 +678,7 @@ paramCarries gctx seen key i
   | anyList (k => tabKeyEq k key) seen = True
   | otherwise = match lookupTab key gctx.crossRun.universeDataCtors.value
     None => False
-    Some (VisPublic, params, variants) => match nthOpt i params
+    Some (VisPublic, params, variants) => match get i params
       None => False
       Some q =>
         allList
@@ -688,11 +688,6 @@ paramCarries gctx seen key i
               (payloadAstTypes (variantPayload v)))
           variants
     Some _ => True
-
-export
-nthOpt : Int -> List a -> Option a
-nthOpt _ [] = None
-nthOpt i (x :: rest) = if i == 0 then Some x else nthOpt (i - 1) rest
 
 -- data / newtype / alias heads: [fieldTys] are every type the declaration's
 -- body mentions.
@@ -1438,7 +1433,7 @@ fromAstTypeE mctx etbl tvs (TyQual t ps loc) =
 -- normally consumes a `TyRow`, routing it through `rowArgOf` instead. Unlike
 -- a misplaced `TyEffect` (which unwraps to a REAL user-written type and can
 -- keep inferring silently), a `TyRow` has no wrapped type at all — inventing
--- one from nothing would turn what used to be a parse error (`List <Stdout>`,
+-- one from nothing would turn a misplaced row (`List <Stdout>`,
 -- `data Holder = Holder <Stdout>`) into a silent mistype (`List Unit`).  Push
 -- a real diagnostic; `TCon "Unit"` is POST-error recovery only, so inference
 -- can keep going, not a value anything should rely on.
@@ -2143,7 +2138,7 @@ kindsEq _ _ = False
 export
 reportUnboundAuthorityNamesIn : ModuleCtx -> List Ty -> SigVars -> Unit
 reportUnboundAuthorityNamesIn mctx tys sv =
-  fold (_ t => reportUnboundAuthorityNames mctx t sv) () tys
+  each (t => reportUnboundAuthorityNames mctx t sv) tys
 
 export
 payloadTypesE : ModuleCtx ->

@@ -1550,20 +1550,14 @@ recordParamKinds mctx o name kinds =
 -- swallows it (`data Bare e = Bare (Unit -> <e> Unit)`, where `Bare <>` hands
 -- back a pure-typed function that prints).
 --
--- This comment used to claim the table "accumulates across the modules of
--- ONE RUN" and therefore needed no seed chain.  The identity half of that
--- argument holds — the key is identity-bearing (`tyTabKey` carries the
--- DECLARATION's `TyConOrigin` — #1111 A-2.3), so a row can only ever answer for
--- the very declaration that wrote it.  The accumulation half was false.  An
--- entry written while checking one module is not visible to an importer, so
--- #2110's fix was single-file-only for every ABSTRACTLY exported wrapper — the
--- ordinary way a library ships one — because `publicDataDecls` drops
--- `VisAbstract` before an importer's `registerVariants` ever sees the decl.
--- The table is now seeded per module by `declEnvSeedDataUniverse` from
--- `deAtomsBefore`, exactly like its two siblings; see `declEnvRowAtomsChain`.
--- The failure was recoverable only because a MISS reads as "no guarantee"
--- (`[]`), i.e. the pre-#2110 behaviour — an over-rejection, loud, never a
--- launder.
+-- The key is identity-bearing (`tyTabKey` carries the DECLARATION's
+-- `TyConOrigin` — #1111 A-2.3), so a row can only ever answer for the very
+-- declaration that wrote it.  An entry written while checking one module is not
+-- visible to an importer (`publicDataDecls` drops `VisAbstract` before an
+-- importer's `registerVariants` sees the decl), so the table is seeded per
+-- module by `declEnvSeedDataUniverse` from `deAtomsBefore`, exactly like its
+-- two siblings; see `declEnvRowAtomsChain`.  A MISS reads as "no guarantee"
+-- (`[]`): an over-rejection, loud, never a launder.
 recordParamRowAtoms : ModuleCtx ->
   TyConOrigin ->
   String ->
@@ -2210,7 +2204,7 @@ registerAllDataScoped env ds allDs =
 -- (`data A (p : Authority L) = A (H p)` above `data H (p : Authority L)`).
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
 registerAllDataGo env ds =
-  let _ = fold (_ d => recordDeclKinds env.teDyn.dcModule d) () ds
+  let _ = each (recordDeclKinds env.teDyn.dcModule) ds
   registerDeclsAliasesFirst env ds
 
 -- Aliases enter the alias table ahead of every other declaration, so a field
@@ -2275,7 +2269,7 @@ withDeclParamKinds : ModuleCtx -> List Decl -> (Unit -> a) -> a
 withDeclParamKinds mctx ds k =
   let kinds = mctx.mcCells.dataParamKindsRef.value
   let names = mctx.mcCells.dataParamNameIndexRef.value
-  let _ = fold (_ d => recordDeclaredKinds mctx d) () ds
+  let _ = each (recordDeclaredKinds mctx) ds
   let result = k ()
   mctx.mcCells.dataParamKindsRef := kinds
   mctx.mcCells.dataParamNameIndexRef := names
@@ -2699,14 +2693,10 @@ publicStandaloneNames (_ :: rest) = publicStandaloneNames rest
 
 -- substitute interface-typaram NAMES → impl type PATTERNS inside a declared Ty.
 --
--- #1110 (was a residual, DRAINED by the stamping PR).  The `TyCon` arm used to
--- REBUILD the node from its name alone, which dropped the span (pre-existing and
--- deliberate — see below) and would have DESTROYED the `tyConOrigin` identity
--- resolve had already acquired, silently and with no diagnostic, on every declared
--- `Ty` reached through an impl-head substitution.  It now PRESERVES the matched
--- node and clears only the span, which is the fix the carrier PR called for:
--- re-stamping here was never an option, because this function does not know an
--- identity and would have been guessing one.
+-- #1110.  The `TyCon` arm preserves the matched node and clears only the span:
+-- rebuilding it from its name alone would silently destroy the `tyConOrigin`
+-- identity resolve already acquired, and re-stamping here is not an option
+-- because this function does not know an identity and would be guessing one.
 --
 -- The span clear is deliberate and must STAY: a substituted head is no longer
 -- at the source position the interface's declared type named it at, and the

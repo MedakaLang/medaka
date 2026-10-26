@@ -1,5 +1,5 @@
 # META
-source_lines=915
+source_lines=905
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_foreign: extern signatures checked against the FFI-ABI crossable set and the FFI-ABI rules on
@@ -50,6 +50,7 @@ import types.ffi_bindings.{
   ffiNonCrossableMsg,
   ffiShadowMsg,
 }
+import list.{range}
 import support.ordmap.{omHasKey, omInsert, omLookup, omSize, OrdMap}
 import support.util.{
   allList,
@@ -65,13 +66,6 @@ import support.util.{
 }
 import types.repr.{lookupAssocI, ppTy}
 import types.effect_domain.{Param(..)}
-
--- [start, start+1, .. start+count-1]
-export
-rangeFromCount : Int -> Int -> List Int
-rangeFromCount start count
-  | count <= 0 = []
-  | otherwise = start :: rangeFromCount (start + 1) (count - 1)
 
 export
 externSigsToMap : List Decl ->
@@ -131,8 +125,7 @@ ffiStampModeOwned : GraphCtx -> String -> Bool
 -- Bool here is exact rather than approximate — that id means "the entry", and the
 -- Bool is the entry's ownership.  Dropping this clause turns
 -- `medaka check stdlib/runtime.mdk` into a wall of declaration errors — the 132
--- catalog rows that do not name `FFI` (the same 132 that used to GAIN the atom
--- here, back when this Bool gated a stamp) would each fail the label rule.
+-- catalog rows that do not name `FFI` would each fail the label rule.
 ffiStampModeOwned gctx "__user__" = not gctx.config.value.tcFlatEntryIsStdlib
 ffiStampModeOwned gctx mid = not (omHasKey mid gctx.config.value.tcStdlibOwned)
 
@@ -653,7 +646,7 @@ ffiCheckCatalogRowGo mctx ((DExtern (ExternDecl { edName = n, edTy = ty, ... }))
               (fst (snd ip))
               (snd (snd ip)))
           ()
-          (zipL (rangeFromCount 1 arrows) pairs)
+          (zipL (range 1 (arrows + 1)) pairs)
       -- the shadow rule has refused the declaration
       None => ()
     None => ()
@@ -869,14 +862,11 @@ ffiCheckExternPos mctx n fb t
 
 -- ── the DECLARED-ROW HONESTY rule (F1, epic #2070) ──────────────────────────
 --
--- The rule this replaces was A silent rewrite, and that is why it is A CHECK.
--- `userExternSchemes` used to ADD `FFI` to a user extern's terminal row whenever
--- the label was absent, so the row a reader sees in the source and the row the
--- effect system enforces were two different rows.  It fired on EVERY shape, not
--- just the empty one: `<Net "a.com/*">` was rewritten to `<FFI, Net "a.com/*">`
--- with no diagnostic, so a declaration could not even be WRITTEN honestly and be
--- believed.  The rule now runs in the only direction that keeps the source and
--- the type the same object: the author writes `FFI`, or the declaration fails.
+-- The row a reader sees in the source and the row the effect system enforces
+-- must be the same object, so a user extern's terminal row is never rewritten:
+-- the author writes `FFI`, or the declaration fails.  This holds for every row
+-- shape, not just the empty one: `<Net "a.com/*">` is rejected rather than
+-- silently widened to `<FFI, Net "a.com/*">`.
 --
 -- Every user `extern` is a foreign call by construction (`compiler/FFI-ABI.md`;
 -- nothing in the language distinguishes "models a real foreign symbol" from "is
@@ -902,7 +892,7 @@ ffiCheckLabelsGo mctx ((DExtern d) :: rest) =
       (ffiIsBuiltinExternName mctx.mcGraph d.edName)
       d
       (ffiDeclaredRow mctx d.edTy)
-  let _ = fold (_ diag => pushFfiDiag mctx diag) () diags
+  let _ = each (pushFfiDiag mctx) diags
   ffiCheckLabelsGo mctx rest
 ffiCheckLabelsGo mctx (_ :: rest) = ffiCheckLabelsGo mctx rest
 
@@ -927,12 +917,11 @@ externDecls (_ :: rest) = externDecls rest
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authvar" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "ExternDecl" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "effParamNames" false) (mem "externRowCons" false) (mem "firstTyLoc" false) (mem "isFixedIntHead" false) (mem "orElseLoc" false) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("types" "ffi_bindings") ((mem "FfiDiag" true) (mem "ffiCatalogNarrowMsg" false) (mem "ffiCatalogTailMsg" false) (mem "ffiDeclarationDiags" false) (mem "ffiNonCrossableMsg" false) (mem "ffiShadowMsg" false))))
+(DUse false (UseGroup ("list") ((mem "range" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "lookupAssocI" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
-(DTypeSig true "rangeFromCount" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
-(DFunDef false "rangeFromCount" ((PVar "start") (PVar "count")) (EIf (EBinOp "<=" (EVar "count") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EVar "start") (EApp (EApp (EVar "rangeFromCount") (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EBinOp "-" (EVar "count") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "externSigsToMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))
 (DFunDef false "externSigsToMap" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "externSigsToMap" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "externSigsToMap") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ETuple (EVar "ty") (EApp (EVar "namedArgOrder") (EVar "ty")))) (EVar "m"))))
@@ -1034,7 +1023,7 @@ externDecls (_ :: rest) = externDecls rest
 (DFunDef false "ffiCheckExternsCatalogRow" ((PVar "mctx") (PCon "True") (PVar "ds")) (EApp (EApp (EVar "ffiCheckCatalogRowGo") (EVar "mctx")) (EApp (EVar "externDecls") (EVar "ds"))))
 (DTypeSig false "ffiCheckCatalogRowGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "ffiCheckCatalogRowGo" ((PVar "mctx") (PList)) (ELit LUnit))
-(DFunDef false "ffiCheckCatalogRowGo" ((PVar "mctx") (PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "builtinExternNamesRef") "value")) (arm (PCon "Some" (PTuple (PVar "cat") (PVar "catNames"))) () (EMatch (EApp (EApp (EApp (EVar "ffiSigInstance") (EVar "mctx")) (EVar "cat")) (EVar "ty")) (arm (PCon "Some" (PVar "sub")) () (EBlock (DoLet false false (PVar "aliases") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "aliasTableRef") "value")) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "zipL") (EApp (EApp (EVar "ffiSpineRows") (EVar "aliases")) (EVar "cat"))) (EApp (EApp (EVar "ffiSpineRows") (EVar "aliases")) (EVar "ty")))) (DoLet false false (PVar "arrows") (EApp (EVar "listLen") (EVar "pairs"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "ip")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ffiCheckSpineRow") (EVar "mctx")) (EVar "n")) (EVar "ty")) (EVar "catNames")) (EVar "sub")) (EApp (EApp (EVar "ffiArrowNote") (EApp (EVar "fst") (EVar "ip"))) (EVar "arrows"))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "ip")))) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "ip")))))) (ELit LUnit)) (EApp (EApp (EVar "zipL") (EApp (EApp (EVar "rangeFromCount") (ELit (LInt 1))) (EVar "arrows"))) (EVar "pairs")))))) (arm (PCon "None") () (ELit LUnit)))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "ffiCheckCatalogRowGo") (EVar "mctx")) (EVar "rest")))))
+(DFunDef false "ffiCheckCatalogRowGo" ((PVar "mctx") (PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "builtinExternNamesRef") "value")) (arm (PCon "Some" (PTuple (PVar "cat") (PVar "catNames"))) () (EMatch (EApp (EApp (EApp (EVar "ffiSigInstance") (EVar "mctx")) (EVar "cat")) (EVar "ty")) (arm (PCon "Some" (PVar "sub")) () (EBlock (DoLet false false (PVar "aliases") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "aliasTableRef") "value")) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "zipL") (EApp (EApp (EVar "ffiSpineRows") (EVar "aliases")) (EVar "cat"))) (EApp (EApp (EVar "ffiSpineRows") (EVar "aliases")) (EVar "ty")))) (DoLet false false (PVar "arrows") (EApp (EVar "listLen") (EVar "pairs"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "ip")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ffiCheckSpineRow") (EVar "mctx")) (EVar "n")) (EVar "ty")) (EVar "catNames")) (EVar "sub")) (EApp (EApp (EVar "ffiArrowNote") (EApp (EVar "fst") (EVar "ip"))) (EVar "arrows"))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "ip")))) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "ip")))))) (ELit LUnit)) (EApp (EApp (EVar "zipL") (EApp (EApp (EVar "range") (ELit (LInt 1))) (EBinOp "+" (EVar "arrows") (ELit (LInt 1))))) (EVar "pairs")))))) (arm (PCon "None") () (ELit LUnit)))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "ffiCheckCatalogRowGo") (EVar "mctx")) (EVar "rest")))))
 (DFunDef false "ffiCheckCatalogRowGo" ((PVar "mctx") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiCheckCatalogRowGo") (EVar "mctx")) (EVar "rest")))
 (DTypeSig false "ffiCheckSpineRow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))))))))
 (DFunDef false "ffiCheckSpineRow" ((PVar "mctx") (PVar "n") (PVar "ty") (PVar "catNames") (PVar "sub") (PVar "arrow") (PVar "cat") (PVar "decl")) (EBlock (DoLet false false (PVar "tails") (EApp (EApp (EVar "ffiExpandTails") (EVar "sub")) (EApp (EVar "snd") (EVar "cat")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ffiCheckCatalogRowOne") (EVar "mctx")) (EVar "n")) (EVar "ty")) (EVar "arrow")) (EBinOp "++" (EApp (EApp (EApp (EVar "ffiInstRow") (EVar "catNames")) (EVar "sub")) (EApp (EVar "fst") (EVar "cat"))) (EApp (EVar "fst") (EVar "tails")))) (EVar "catNames")) (EApp (EVar "fst") (EVar "decl")))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EApp (EVar "snd") (EVar "decl")))))) (EApp (EVar "snd") (EVar "tails"))) (arm (PList) () (ELit LUnit)) (arm (PVar "missing") () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (ELit (LString "T-FFI-CATALOG-NARROW"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EVar "ffiCatalogTailMsg") (EVar "n")) (EVar "arrow")) (EVar "missing"))))))))
@@ -1072,7 +1061,7 @@ externDecls (_ :: rest) = externDecls rest
 (DFunDef false "ffiCheckExternsLabelled" ((PVar "mctx") (PCon "True") (PVar "ds")) (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EApp (EVar "externDecls") (EVar "ds"))))
 (DTypeSig false "ffiCheckLabelsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PList)) (ELit LUnit))
-(DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EVar "ffiDeclarationDiags") (EApp (EApp (EVar "ffiIsBuiltinExternName") (EFieldAccess (EVar "mctx") "mcGraph")) (EFieldAccess (EVar "d") "edName"))) (EVar "d")) (EApp (EApp (EVar "ffiDeclaredRow") (EVar "mctx")) (EFieldAccess (EVar "d") "edTy")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "diag")) (EApp (EApp (EVar "pushFfiDiag") (EVar "mctx")) (EVar "diag")))) (ELit LUnit)) (EVar "diags"))) (DoExpr (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))))
+(DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EVar "ffiDeclarationDiags") (EApp (EApp (EVar "ffiIsBuiltinExternName") (EFieldAccess (EVar "mctx") "mcGraph")) (EFieldAccess (EVar "d") "edName"))) (EVar "d")) (EApp (EApp (EVar "ffiDeclaredRow") (EVar "mctx")) (EFieldAccess (EVar "d") "edTy")))) (DoLet false false PWild (EApp (EApp (EVar "each") (EApp (EVar "pushFfiDiag") (EVar "mctx"))) (EVar "diags"))) (DoExpr (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))))
 (DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))
 (DTypeSig false "pushFfiDiag" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "FfiDiag") (TyCon "Unit"))))
 (DFunDef false "pushFfiDiag" ((PVar "mctx") (PCon "FfiDiag" (PVar "code") (PVar "loc") (PVar "msg"))) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "code")) (EVar "loc")) (EVar "msg")))
@@ -1090,12 +1079,11 @@ externDecls (_ :: rest) = externDecls rest
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authvar" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "ExternDecl" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "effParamNames" false) (mem "externRowCons" false) (mem "firstTyLoc" false) (mem "isFixedIntHead" false) (mem "orElseLoc" false) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("types" "ffi_bindings") ((mem "FfiDiag" true) (mem "ffiCatalogNarrowMsg" false) (mem "ffiCatalogTailMsg" false) (mem "ffiDeclarationDiags" false) (mem "ffiNonCrossableMsg" false) (mem "ffiShadowMsg" false))))
+(DUse false (UseGroup ("list") ((mem "range" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "lookupAssocI" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
-(DTypeSig true "rangeFromCount" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
-(DFunDef false "rangeFromCount" ((PVar "start") (PVar "count")) (EIf (EBinOp "<=" (EDictApp "count") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EVar "start") (EApp (EApp (EVar "rangeFromCount") (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EBinOp "-" (EDictApp "count") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "externSigsToMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))
 (DFunDef false "externSigsToMap" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "externSigsToMap" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "externSigsToMap") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ETuple (EVar "ty") (EApp (EVar "namedArgOrder") (EVar "ty")))) (EVar "m"))))
@@ -1197,7 +1185,7 @@ externDecls (_ :: rest) = externDecls rest
 (DFunDef false "ffiCheckExternsCatalogRow" ((PVar "mctx") (PCon "True") (PVar "ds")) (EApp (EApp (EVar "ffiCheckCatalogRowGo") (EVar "mctx")) (EApp (EVar "externDecls") (EVar "ds"))))
 (DTypeSig false "ffiCheckCatalogRowGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "ffiCheckCatalogRowGo" ((PVar "mctx") (PList)) (ELit LUnit))
-(DFunDef false "ffiCheckCatalogRowGo" ((PVar "mctx") (PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "builtinExternNamesRef") "value")) (arm (PCon "Some" (PTuple (PVar "cat") (PVar "catNames"))) () (EMatch (EApp (EApp (EApp (EVar "ffiSigInstance") (EVar "mctx")) (EVar "cat")) (EVar "ty")) (arm (PCon "Some" (PVar "sub")) () (EBlock (DoLet false false (PVar "aliases") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "aliasTableRef") "value")) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "zipL") (EApp (EApp (EVar "ffiSpineRows") (EVar "aliases")) (EVar "cat"))) (EApp (EApp (EVar "ffiSpineRows") (EVar "aliases")) (EVar "ty")))) (DoLet false false (PVar "arrows") (EApp (EVar "listLen") (EVar "pairs"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "ip")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ffiCheckSpineRow") (EVar "mctx")) (EVar "n")) (EVar "ty")) (EVar "catNames")) (EMethodRef "sub")) (EApp (EApp (EVar "ffiArrowNote") (EApp (EVar "fst") (EVar "ip"))) (EVar "arrows"))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "ip")))) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "ip")))))) (ELit LUnit)) (EApp (EApp (EVar "zipL") (EApp (EApp (EVar "rangeFromCount") (ELit (LInt 1))) (EVar "arrows"))) (EVar "pairs")))))) (arm (PCon "None") () (ELit LUnit)))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "ffiCheckCatalogRowGo") (EVar "mctx")) (EVar "rest")))))
+(DFunDef false "ffiCheckCatalogRowGo" ((PVar "mctx") (PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "builtinExternNamesRef") "value")) (arm (PCon "Some" (PTuple (PVar "cat") (PVar "catNames"))) () (EMatch (EApp (EApp (EApp (EVar "ffiSigInstance") (EVar "mctx")) (EVar "cat")) (EVar "ty")) (arm (PCon "Some" (PVar "sub")) () (EBlock (DoLet false false (PVar "aliases") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "aliasTableRef") "value")) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "zipL") (EApp (EApp (EVar "ffiSpineRows") (EVar "aliases")) (EVar "cat"))) (EApp (EApp (EVar "ffiSpineRows") (EVar "aliases")) (EVar "ty")))) (DoLet false false (PVar "arrows") (EApp (EVar "listLen") (EVar "pairs"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "ip")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ffiCheckSpineRow") (EVar "mctx")) (EVar "n")) (EVar "ty")) (EVar "catNames")) (EMethodRef "sub")) (EApp (EApp (EVar "ffiArrowNote") (EApp (EVar "fst") (EVar "ip"))) (EVar "arrows"))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "ip")))) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "ip")))))) (ELit LUnit)) (EApp (EApp (EVar "zipL") (EApp (EApp (EVar "range") (ELit (LInt 1))) (EBinOp "+" (EVar "arrows") (ELit (LInt 1))))) (EVar "pairs")))))) (arm (PCon "None") () (ELit LUnit)))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "ffiCheckCatalogRowGo") (EVar "mctx")) (EVar "rest")))))
 (DFunDef false "ffiCheckCatalogRowGo" ((PVar "mctx") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiCheckCatalogRowGo") (EVar "mctx")) (EVar "rest")))
 (DTypeSig false "ffiCheckSpineRow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))))))))
 (DFunDef false "ffiCheckSpineRow" ((PVar "mctx") (PVar "n") (PVar "ty") (PVar "catNames") (PVar "sub") (PVar "arrow") (PVar "cat") (PVar "decl")) (EBlock (DoLet false false (PVar "tails") (EApp (EApp (EVar "ffiExpandTails") (EMethodRef "sub")) (EApp (EVar "snd") (EVar "cat")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ffiCheckCatalogRowOne") (EVar "mctx")) (EVar "n")) (EVar "ty")) (EVar "arrow")) (EBinOp "++" (EApp (EApp (EApp (EVar "ffiInstRow") (EVar "catNames")) (EMethodRef "sub")) (EApp (EVar "fst") (EVar "cat"))) (EApp (EVar "fst") (EVar "tails")))) (EVar "catNames")) (EApp (EVar "fst") (EVar "decl")))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EApp (EVar "snd") (EVar "decl")))))) (EApp (EVar "snd") (EVar "tails"))) (arm (PList) () (ELit LUnit)) (arm (PVar "missing") () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (ELit (LString "T-FFI-CATALOG-NARROW"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EVar "ffiCatalogTailMsg") (EVar "n")) (EVar "arrow")) (EVar "missing"))))))))
@@ -1235,7 +1223,7 @@ externDecls (_ :: rest) = externDecls rest
 (DFunDef false "ffiCheckExternsLabelled" ((PVar "mctx") (PCon "True") (PVar "ds")) (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EApp (EVar "externDecls") (EVar "ds"))))
 (DTypeSig false "ffiCheckLabelsGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PList)) (ELit LUnit))
-(DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EVar "ffiDeclarationDiags") (EApp (EApp (EVar "ffiIsBuiltinExternName") (EFieldAccess (EVar "mctx") "mcGraph")) (EFieldAccess (EVar "d") "edName"))) (EVar "d")) (EApp (EApp (EVar "ffiDeclaredRow") (EVar "mctx")) (EFieldAccess (EVar "d") "edTy")))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "diag")) (EApp (EApp (EVar "pushFfiDiag") (EVar "mctx")) (EVar "diag")))) (ELit LUnit)) (EVar "diags"))) (DoExpr (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))))
+(DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EVar "ffiDeclarationDiags") (EApp (EApp (EVar "ffiIsBuiltinExternName") (EFieldAccess (EVar "mctx") "mcGraph")) (EFieldAccess (EVar "d") "edName"))) (EVar "d")) (EApp (EApp (EVar "ffiDeclaredRow") (EVar "mctx")) (EFieldAccess (EVar "d") "edTy")))) (DoLet false false PWild (EApp (EApp (EVar "each") (EApp (EVar "pushFfiDiag") (EVar "mctx"))) (EVar "diags"))) (DoExpr (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))))
 (DFunDef false "ffiCheckLabelsGo" ((PVar "mctx") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiCheckLabelsGo") (EVar "mctx")) (EVar "rest")))
 (DTypeSig false "pushFfiDiag" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "FfiDiag") (TyCon "Unit"))))
 (DFunDef false "pushFfiDiag" ((PVar "mctx") (PCon "FfiDiag" (PVar "code") (PVar "loc") (PVar "msg"))) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "code")) (EVar "loc")) (EVar "msg")))

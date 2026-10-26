@@ -615,16 +615,6 @@ class = "shout"
 count = 9
 
 [[entry]]
-file = "compiler/types/tc_decls.mdk"
-class = "history"
-count = 2
-
-[[entry]]
-file = "compiler/types/tc_decls_types.mdk"
-class = "history"
-count = 1
-
-[[entry]]
 file = "compiler/types/tc_decls_variance.mdk"
 class = "history"
 count = 1
@@ -648,11 +638,6 @@ count = 3
 file = "compiler/types/tc_env.mdk"
 class = "draft"
 count = 3
-
-[[entry]]
-file = "compiler/types/tc_foreign.mdk"
-class = "history"
-count = 2
 
 [[entry]]
 file = "compiler/types/tc_mono.mdk"

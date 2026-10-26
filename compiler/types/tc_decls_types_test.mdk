@@ -34,7 +34,6 @@ import types.tc_decls_types.{
   fromAstType,
   kindsEq,
   namedArgTypes,
-  nthOpt,
   patternSlotNamesIn,
   populateEffectDomainsGraph,
   rowArgNames,
@@ -271,14 +270,6 @@ test "patternSlotNamesIn and rowArgNames find nothing in a signature without suc
   expectAll [
     expectEqual [] (patternSlotNamesIn m (firstSig "f : Int -> Int\n")),
     expectEqual [] (rowArgNames m (firstSig "f : Int -> Int\n")),
-  ]
-
-test "nthOpt indexes from zero and is None past the end or below zero" = expectAll
-  [
-    expectEqual (Some "b") (nthOpt 1 ["a", "b"]),
-    expectEqual None (nthOpt 2 ["a", "b"]),
-    expectEqual None (nthOpt (-1) ["a", "b"]),
-    expectEqual None (nthOpt 0 ([] : List String)),
   ]
 
 test "kindsEq compares kind lists position by position" = expectAll [

@@ -46,6 +46,7 @@ import types.ffi_bindings.{
   ffiNonCrossableMsg,
   ffiShadowMsg,
 }
+import list.{range}
 import support.ordmap.{omHasKey, omInsert, omLookup, omSize, OrdMap}
 import support.util.{
   allList,
@@ -61,13 +62,6 @@ import support.util.{
 }
 import types.repr.{lookupAssocI, ppTy}
 import types.effect_domain.{Param(..)}
-
--- [start, start+1, .. start+count-1]
-export
-rangeFromCount : Int -> Int -> List Int
-rangeFromCount start count
-  | count <= 0 = []
-  | otherwise = start :: rangeFromCount (start + 1) (count - 1)
 
 export
 externSigsToMap : List Decl ->
@@ -127,8 +121,7 @@ ffiStampModeOwned : GraphCtx -> String -> Bool
 -- Bool here is exact rather than approximate — that id means "the entry", and the
 -- Bool is the entry's ownership.  Dropping this clause turns
 -- `medaka check stdlib/runtime.mdk` into a wall of declaration errors — the 132
--- catalog rows that do not name `FFI` (the same 132 that used to GAIN the atom
--- here, back when this Bool gated a stamp) would each fail the label rule.
+-- catalog rows that do not name `FFI` would each fail the label rule.
 ffiStampModeOwned gctx "__user__" = not gctx.config.value.tcFlatEntryIsStdlib
 ffiStampModeOwned gctx mid = not (omHasKey mid gctx.config.value.tcStdlibOwned)
 
@@ -649,7 +642,7 @@ ffiCheckCatalogRowGo mctx ((DExtern (ExternDecl { edName = n, edTy = ty, ... }))
               (fst (snd ip))
               (snd (snd ip)))
           ()
-          (zipL (rangeFromCount 1 arrows) pairs)
+          (zipL (range 1 (arrows + 1)) pairs)
       -- the shadow rule has refused the declaration
       None => ()
     None => ()
@@ -865,14 +858,11 @@ ffiCheckExternPos mctx n fb t
 
 -- ── the DECLARED-ROW HONESTY rule (F1, epic #2070) ──────────────────────────
 --
--- The rule this replaces was A silent rewrite, and that is why it is A CHECK.
--- `userExternSchemes` used to ADD `FFI` to a user extern's terminal row whenever
--- the label was absent, so the row a reader sees in the source and the row the
--- effect system enforces were two different rows.  It fired on EVERY shape, not
--- just the empty one: `<Net "a.com/*">` was rewritten to `<FFI, Net "a.com/*">`
--- with no diagnostic, so a declaration could not even be WRITTEN honestly and be
--- believed.  The rule now runs in the only direction that keeps the source and
--- the type the same object: the author writes `FFI`, or the declaration fails.
+-- The row a reader sees in the source and the row the effect system enforces
+-- must be the same object, so a user extern's terminal row is never rewritten:
+-- the author writes `FFI`, or the declaration fails.  This holds for every row
+-- shape, not just the empty one: `<Net "a.com/*">` is rejected rather than
+-- silently widened to `<FFI, Net "a.com/*">`.
 --
 -- Every user `extern` is a foreign call by construction (`compiler/FFI-ABI.md`;
 -- nothing in the language distinguishes "models a real foreign symbol" from "is
@@ -898,7 +888,7 @@ ffiCheckLabelsGo mctx ((DExtern d) :: rest) =
       (ffiIsBuiltinExternName mctx.mcGraph d.edName)
       d
       (ffiDeclaredRow mctx d.edTy)
-  let _ = fold (_ diag => pushFfiDiag mctx diag) () diags
+  let _ = each (pushFfiDiag mctx) diags
   ffiCheckLabelsGo mctx rest
 ffiCheckLabelsGo mctx (_ :: rest) = ffiCheckLabelsGo mctx rest
 
