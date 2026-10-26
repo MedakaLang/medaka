@@ -1,5 +1,5 @@
 # META
-source_lines=559
+source_lines=554
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag: the emission API over `TcDiag` (`recordTypeError`, the `pushTypeError*` family, dedup
@@ -56,7 +56,7 @@ typeErrorsArmed gctx _ = gctx.typeErrorsSticky.value
 -- STORED, the build/run sticky gate is ARMED, and an error OCCURRED.
 --
 -- It is NOT the sole writer of `ModuleCells.mcCells.errorsDetected` — that would put the
--- counter back in step with the list, which is exactly what PR2 removed.  The counter
+-- counter back in step with the list.  The counter
 -- is bumped by `noteTypeErrorDetected` below, from here AND from each dedup
 -- short-circuit, so it counts errors DETECTED rather than errors STORED.  Do not
 -- "restore" the equality: a region containing only a deduped push must still answer
@@ -70,10 +70,10 @@ typeErrorsArmed gctx _ = gctx.typeErrorsSticky.value
 -- message list), around a memo path's drain.  Any future rollback of `typeErrors`
 -- owes the same pairing.
 --
--- The funnel is not cosmetic.  Before it there were SIX push sites, not the five
--- named helpers: `recordDoMonadError` open-codes its own cons + sticky set.  A
--- hand-placed bump at "the five helpers" would have left that one silent, and the
--- counter would then have UNDER-counted exactly on the `do`-requires-a-monad path.
+-- The funnel is not cosmetic.  There are SIX push sites, not the five named helpers:
+-- `recordDoMonadError` open-codes its own cons + sticky set.  A hand-placed bump at
+-- "the five helpers" would leave that one silent, and the counter would UNDER-count
+-- exactly on the `do`-requires-a-monad path.
 -- #2068: it is also the sole writer of `typeErrorMsgSetRef`, the membership
 -- INDEX the `pushTypeErrorOnce*` helpers and `alreadyReportedAt` test instead of
 -- re-scanning the channel (it holds the rendered message and a message-at-site
@@ -97,7 +97,7 @@ recordTypeError mctx raw =
       (omInsert (tcMsg d) () mctx.mcCells.typeErrorMsgSetRef.value)
   wPush mctx.mcCells.typeErrors d
 
--- issue 1146 PR2 — the counter's ONLY incrementing statement, so "an error was
+-- The counter's ONLY incrementing statement, so "an error was
 -- detected" is written in one place whether or not the diagnostic is stored.
 -- Called from `recordTypeError` (stored) and from all three dedup short-circuits
 -- (detected, suppressed as a duplicate).  It deliberately does NOT arm
@@ -107,20 +107,19 @@ noteTypeErrorDetected : ModuleCtx -> Unit -> Unit
 noteTypeErrorDetected mctx _ =
   mctx.mcCells.errorsDetected := mctx.mcCells.errorsDetected.value + 1
 
--- issue 1146 — THE polling convention for "did region [act] DETECT an error".
+-- THE polling convention for "did region [act] DETECT an error" (issue 1146).
 --
--- Three inference sites used to answer that by measuring `listLen typeErrors` before
--- and after the region.  That made the diagnostic accumulator load-bearing CONTROL
--- FLOW rather than a report: any change to how many entries land in it — a dedup-key
+-- Measuring `listLen typeErrors` before and after the region would make the diagnostic
+-- accumulator load-bearing CONTROL FLOW rather than a report: any change to how many entries land in it — a dedup-key
 -- change, a rendering change, a loc-selection change — could silently flip an
 -- inference branch, and a gated `unify` that does not run is a type error that is not
--- caught.  They now read the occurrence COUNTER, through this ONE combinator, so the
+-- caught.  Sites read the occurrence COUNTER, through this ONE combinator, so the
 -- judgment is implemented once and no diagnostics decision reaches a control decision:
 -- the counter records DETECTIONS, and no dedup, rendering, ordering, loc-selection or
 -- code-selection choice changes whether an error was detected.
 --
 -- Read the answer as "an error was detected in [act]", NOT as "[act] added a
--- diagnostic" — since PR2 those differ, and the difference is the point.  Do not
+-- diagnostic" — those differ, and the difference is the point.  Do not
 -- re-derive it from `typeErrors`; that reintroduces the coupling this removes.
 --
 -- Medaka is STRICT, so [act] must be a thunk: `erredDuring (_ => work)`.  Passing
@@ -173,27 +172,27 @@ locKey (Some (Loc file line col _ _)) =
 -- call-site instantiation); ERROR-QUALITY dim R/X want one diagnostic per root cause,
 -- so the second detection is suppressed from the REPORT.
 --
--- issue 1146 PR2: suppressed from the report, NOT from the record of what happened —
+-- Suppressed from the report, NOT from the record of what happened —
 -- the short-circuit still calls `noteTypeErrorDetected`.  Dedup is a presentation
 -- judgment keyed on rendered text; letting it also decide "did an error occur here"
 -- is what made a message-rendering change able to flip an inference branch.
 --
--- #2068: the membership test is an OrdMap lookup on `typeErrorMsgSetRef`, not the
--- `anyList (e => tcMsg e == msg) mctx.mcCells.typeErrors.items.value` scan it used
--- to be.  The scan was O(accumulated) per push, hence O(N^2) over a program whose
--- N diagnostics are pairwise DISTINCT — which is the common case for this family
--- (`pushNoImplError` renders the interface AND the type into every message).  It
--- read linear only on a corpus of REPEATED messages, where the first comparison
--- always matched and the list never grew.  The index answers the identical
+-- #2068: the membership test is an OrdMap lookup on `typeErrorMsgSetRef`, not a scan
+-- of the channel.  A scan is O(accumulated) per push, hence O(N^2) over a program whose
+-- N diagnostics are pairwise DISTINCT — the common case for this family
+-- (`pushNoImplError` renders the interface AND the type into every message).  The
+-- index answers the identical
 -- question: `recordTypeError` is the sole writer of both, so a key is present iff
 -- a diagnostic with that rendered message is in the channel.
 export
 pushTypeErrorOnce : ModuleCtx -> String -> String -> Unit
-pushTypeErrorOnce mctx code msg =
-  if omHasKey msg mctx.mcCells.typeErrorMsgSetRef.value then
-    noteTypeErrorDetected mctx ()
-  else
-    pushTypeError mctx code msg
+pushTypeErrorOnce mctx code msg = pushTypeErrorOnceAt mctx code None msg
+
+-- The dedup funnel: record [d] unless [seen] says its duplicate is already in the
+-- channel, in which case only the detection counter moves.
+recordUnlessSeen : ModuleCtx -> Bool -> TcDiag -> Unit
+recordUnlessSeen mctx seen d =
+  if seen then noteTypeErrorDetected mctx () else recordTypeError mctx d
 
 -- Membership key for "this message at this span".  A located diagnostic is a
 -- duplicate only of the same text at the same span, so two sites with identical
@@ -211,16 +210,14 @@ alreadyReportedAt mctx msg at =
 -- post-HM obligation check runs outside every construct, so the loc was
 -- snapshotted into the obligation tuple at the record site.  `None` falls back
 -- to the record's `mcLoc`, the enclosing construct's span (none after
--- inference).  issue 1146 PR2: the short-circuit bumps the occurrence counter (see `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
+-- inference).  The short-circuit bumps the occurrence counter (see `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
 export
 pushTypeErrorOnceAt : ModuleCtx -> String -> Option Loc -> String -> Unit
 pushTypeErrorOnceAt mctx code loc msg =
-  if omHasKey msg mctx.mcCells.typeErrorMsgSetRef.value then
-    noteTypeErrorDetected mctx ()
-  else
-    recordTypeError
-      mctx
-      (TcDiag code 1 (orElseLoc loc mctx.mcLoc) msg None None)
+  recordUnlessSeen
+    mctx
+    (omHasKey msg mctx.mcCells.typeErrorMsgSetRef.value)
+    (TcDiag code 1 (orElseLoc loc mctx.mcLoc) msg None None)
 
 -- Like `pushTypeErrorOnceAt`, but the duplicate test is per SITE: the same text at
 -- another span is a second diagnostic, the same text at the same span (a signature
@@ -231,10 +228,10 @@ export
 pushTypeErrorOncePerSite : ModuleCtx -> String -> Option Loc -> String -> Unit
 pushTypeErrorOncePerSite mctx code loc msg =
   let at = orElseLoc loc mctx.mcLoc
-  if alreadyReportedAt mctx msg at then
-    noteTypeErrorDetected mctx ()
-  else
-    recordTypeError mctx (TcDiag code 1 at msg None None)
+  recordUnlessSeen
+    mctx
+    (alreadyReportedAt mctx msg at)
+    (TcDiag code 1 at msg None None)
 
 -- A `T-AMBIGUOUS-INSTANCE` is one diagnostic per span, however many checks judge
 -- the goal there: the boundary, the module's obligation check and the selector each
@@ -313,8 +310,8 @@ pushBoundaryAmbiguity mctx rigidIds args loc msg =
 -- message-keyed side channel.  `Fix`/`Diag` live in driver/diagnostics.mdk (which
 -- imports this module), so the fix is carried as a plain (Loc, String)
 -- span+replacement pair, converted to a real `Fix` on the diagnostics.mdk side.
--- issue 1146 PR2: the short-circuit bumps the occurrence counter (see
--- `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
+-- The short-circuit bumps the occurrence counter (see `pushTypeErrorOnce`) — dedup
+-- suppresses the REPORT only.
 export
 pushTypeErrorHelpFixAt : ModuleCtx ->
   String ->
@@ -324,12 +321,10 @@ pushTypeErrorHelpFixAt : ModuleCtx ->
   Option (Loc, String) ->
   Unit
 pushTypeErrorHelpFixAt mctx code loc msg help fix =
-  if omHasKey msg mctx.mcCells.typeErrorMsgSetRef.value then
-    noteTypeErrorDetected mctx ()
-  else
-    recordTypeError
-      mctx
-      (TcDiag code 1 (orElseLoc loc mctx.mcLoc) msg (Some help) fix)
+  recordUnlessSeen
+    mctx
+    (omHasKey msg mctx.mcCells.typeErrorMsgSetRef.value)
+    (TcDiag code 1 (orElseLoc loc mctx.mcLoc) msg (Some help) fix)
 
 -- Diagnostic text with every renamed local binder (`f$m$3$lb`) shown as written.
 writtenNames : String -> String
@@ -592,16 +587,18 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "locKey" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "locKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ""))))
 (DTypeSig true "pushTypeErrorOnce" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))
-(DFunDef false "pushTypeErrorOnce" ((PVar "mctx") (PVar "code") (PVar "msg")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "code")) (EVar "msg"))))
+(DFunDef false "pushTypeErrorOnce" ((PVar "mctx") (PVar "code") (PVar "msg")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "code")) (EVar "None")) (EVar "msg")))
+(DTypeSig false "recordUnlessSeen" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Bool") (TyFun (TyCon "TcDiag") (TyCon "Unit")))))
+(DFunDef false "recordUnlessSeen" ((PVar "mctx") (PVar "seen") (PVar "d")) (EIf (EVar "seen") (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EVar "d"))))
 (DTypeSig false "msgAtKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))
 (DFunDef false "msgAtKey" ((PVar "msg") (PVar "at")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "\t@@\t"))) (EApp (EVar "display") (EApp (EVar "locKey") (EVar "at")))) (ELit (LString ""))))
 (DTypeSig false "alreadyReportedAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))))
 (DFunDef false "alreadyReportedAt" ((PVar "mctx") (PVar "msg") (PCon "None")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")))
 (DFunDef false "alreadyReportedAt" ((PVar "mctx") (PVar "msg") (PVar "at")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "msgAtKey") (EVar "msg")) (EVar "at"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")))
 (DTypeSig true "pushTypeErrorOnceAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
-(DFunDef false "pushTypeErrorOnceAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "msg")) (EVar "None")) (EVar "None")))))
+(DFunDef false "pushTypeErrorOnceAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg")) (EApp (EApp (EApp (EVar "recordUnlessSeen") (EVar "mctx")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "msg")) (EVar "None")) (EVar "None"))))
 (DTypeSig true "pushTypeErrorOncePerSite" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
-(DFunDef false "pushTypeErrorOncePerSite" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "at") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "alreadyReportedAt") (EVar "mctx")) (EVar "msg")) (EVar "at")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None")))))))
+(DFunDef false "pushTypeErrorOncePerSite" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "at") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (DoExpr (EApp (EApp (EApp (EVar "recordUnlessSeen") (EVar "mctx")) (EApp (EApp (EApp (EVar "alreadyReportedAt") (EVar "mctx")) (EVar "msg")) (EVar "at"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None"))))))
 (DTypeSig true "pushAmbiguityAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
 (DFunDef false "pushAmbiguityAt" ((PVar "mctx") (PVar "namesGoal") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "at") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (DoLet false false (PVar "code") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (DoExpr (EIf (EApp (EVar "isNone") (EVar "at")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "code")) (EVar "at")) (EVar "msg")) (EBlock (DoLet false false (PVar "site") (EApp (EVar "locKey") (EVar "at"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "site")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguitySitesRef") "value")) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguitySitesRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "site")) (EVar "namesGoal")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguitySitesRef") "value")))) (DoExpr (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None")))))) (arm (PCon "Some" (PVar "named")) () (EIf (EBinOp "&&" (EVar "namesGoal") (EApp (EVar "not") (EVar "named"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguitySitesRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "site")) (EVar "True")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguitySitesRef") "value")))) (DoExpr (EApp (EApp (EApp (EVar "replaceAmbiguityAt") (EVar "mctx")) (EVar "site")) (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None")))))) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)))))))))))
 (DTypeSig false "replaceAmbiguityAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "TcDiag") (TyCon "Unit")))))
@@ -609,7 +606,7 @@ prependDiagOpt code sev help (Some msg) ds =
 (DTypeSig true "pushBoundaryAmbiguity" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit")))))))
 (DFunDef false "pushBoundaryAmbiguity" ((PVar "mctx") (PVar "rigidIds") (PVar "args") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "reported") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguityVarsRef")) (DoLet false false (PVar "ids") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "boundaryOwnsOpen") (EVar "mctx")) (EVar "rigidIds"))) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EVar "reported") "value")))) (EVar "ids")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "reported")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "i")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "i")) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EVar "reported") "value")) (EVar "ids")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushAmbiguityAt") (EVar "mctx")) (EVar "False")) (EVar "loc")) (EVar "msg"))))))))
 (DTypeSig true "pushTypeErrorHelpFixAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))) (TyCon "Unit"))))))))
-(DFunDef false "pushTypeErrorHelpFixAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix")))))
+(DFunDef false "pushTypeErrorHelpFixAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EApp (EApp (EApp (EVar "recordUnlessSeen") (EVar "mctx")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix"))))
 (DTypeSig false "writtenNames" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "writtenNames" ((PVar "text")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "text")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PVar "parts") () (EApp (EVar "dropRenameSuffixes") (EVar "parts")))))
 (DTypeSig false "dropRenameSuffixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -707,16 +704,18 @@ prependDiagOpt code sev help (Some msg) ds =
 (DFunDef false "locKey" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "locKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ""))))
 (DTypeSig true "pushTypeErrorOnce" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))
-(DFunDef false "pushTypeErrorOnce" ((PVar "mctx") (PVar "code") (PVar "msg")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "code")) (EVar "msg"))))
+(DFunDef false "pushTypeErrorOnce" ((PVar "mctx") (PVar "code") (PVar "msg")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "code")) (EVar "None")) (EVar "msg")))
+(DTypeSig false "recordUnlessSeen" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Bool") (TyFun (TyCon "TcDiag") (TyCon "Unit")))))
+(DFunDef false "recordUnlessSeen" ((PVar "mctx") (PVar "seen") (PVar "d")) (EIf (EVar "seen") (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EVar "d"))))
 (DTypeSig false "msgAtKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))
 (DFunDef false "msgAtKey" ((PVar "msg") (PVar "at")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "\t@@\t"))) (EApp (EMethodRef "display") (EApp (EVar "locKey") (EVar "at")))) (ELit (LString ""))))
 (DTypeSig false "alreadyReportedAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))))
 (DFunDef false "alreadyReportedAt" ((PVar "mctx") (PVar "msg") (PCon "None")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")))
 (DFunDef false "alreadyReportedAt" ((PVar "mctx") (PVar "msg") (PVar "at")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "msgAtKey") (EVar "msg")) (EVar "at"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")))
 (DTypeSig true "pushTypeErrorOnceAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
-(DFunDef false "pushTypeErrorOnceAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "msg")) (EVar "None")) (EVar "None")))))
+(DFunDef false "pushTypeErrorOnceAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg")) (EApp (EApp (EApp (EVar "recordUnlessSeen") (EVar "mctx")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "msg")) (EVar "None")) (EVar "None"))))
 (DTypeSig true "pushTypeErrorOncePerSite" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
-(DFunDef false "pushTypeErrorOncePerSite" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "at") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "alreadyReportedAt") (EVar "mctx")) (EVar "msg")) (EVar "at")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None")))))))
+(DFunDef false "pushTypeErrorOncePerSite" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "at") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (DoExpr (EApp (EApp (EApp (EVar "recordUnlessSeen") (EVar "mctx")) (EApp (EApp (EApp (EVar "alreadyReportedAt") (EVar "mctx")) (EVar "msg")) (EVar "at"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None"))))))
 (DTypeSig true "pushAmbiguityAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
 (DFunDef false "pushAmbiguityAt" ((PVar "mctx") (PVar "namesGoal") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "at") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (DoLet false false (PVar "code") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (DoExpr (EIf (EApp (EVar "isNone") (EVar "at")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (EVar "mctx")) (EVar "code")) (EVar "at")) (EVar "msg")) (EBlock (DoLet false false (PVar "site") (EApp (EVar "locKey") (EVar "at"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "site")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguitySitesRef") "value")) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguitySitesRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "site")) (EVar "namesGoal")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguitySitesRef") "value")))) (DoExpr (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None")))))) (arm (PCon "Some" (PVar "named")) () (EIf (EBinOp "&&" (EVar "namesGoal") (EApp (EVar "not") (EVar "named"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguitySitesRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "site")) (EVar "True")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguitySitesRef") "value")))) (DoExpr (EApp (EApp (EApp (EVar "replaceAmbiguityAt") (EVar "mctx")) (EVar "site")) (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None")))))) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)))))))))))
 (DTypeSig false "replaceAmbiguityAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "TcDiag") (TyCon "Unit")))))
@@ -724,7 +723,7 @@ prependDiagOpt code sev help (Some msg) ds =
 (DTypeSig true "pushBoundaryAmbiguity" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit")))))))
 (DFunDef false "pushBoundaryAmbiguity" ((PVar "mctx") (PVar "rigidIds") (PVar "args") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "reported") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "ambiguityVarsRef")) (DoLet false false (PVar "ids") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "boundaryOwnsOpen") (EVar "mctx")) (EVar "rigidIds"))) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EVar "reported") "value")))) (EVar "ids")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "reported")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "i")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "i")) (ELit LUnit)) (EVar "m")))) (EFieldAccess (EVar "reported") "value")) (EVar "ids")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushAmbiguityAt") (EVar "mctx")) (EVar "False")) (EVar "loc")) (EVar "msg"))))))))
 (DTypeSig true "pushTypeErrorHelpFixAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))) (TyCon "Unit"))))))))
-(DFunDef false "pushTypeErrorHelpFixAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value")) (EApp (EApp (EVar "noteTypeErrorDetected") (EVar "mctx")) (ELit LUnit)) (EApp (EApp (EVar "recordTypeError") (EVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix")))))
+(DFunDef false "pushTypeErrorHelpFixAt" ((PVar "mctx") (PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EApp (EApp (EApp (EVar "recordUnlessSeen") (EVar "mctx")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrorMsgSetRef") "value"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc"))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix"))))
 (DTypeSig false "writtenNames" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "writtenNames" ((PVar "text")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "text")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PVar "parts") () (EApp (EVar "dropRenameSuffixes") (EVar "parts")))))
 (DTypeSig false "dropRenameSuffixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))

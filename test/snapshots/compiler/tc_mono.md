@@ -1,5 +1,5 @@
 # META
-source_lines=1819
+source_lines=1809
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -738,8 +738,7 @@ argMentions typarams ty = anyMember (tyVarNames ty) typarams
 
 export
 anyMember : List String -> List String -> Bool
-anyMember [] _ = False
-anyMember (x :: xs) ys = contains x ys || anyMember xs ys
+anyMember xs ys = any (x => contains x ys) xs
 
 export
 propParamNamesTc : List PropParam -> List String
@@ -960,8 +959,7 @@ cohPpPair xs ys =
   (s1, s2)
 
 cohPpEach : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
-cohPpEach _ _ [] = []
-cohPpEach ctx cnt (m :: ms) = ppGo ctx cnt 0 m :: cohPpEach ctx cnt ms
+cohPpEach ctx cnt ms = map (ppGo ctx cnt 0) ms
 
 -- ── #609: specificity over head VECTORS (DICT-SEMANTICS §3) ─────────────────
 -- §3 defines a predicate as a class applied to a VECTOR (`π ::= C τ̄`) and
@@ -1085,16 +1083,10 @@ tyStructEqList _ _ = False
 -- on one classifier, so `headTyconTy` and `headTyconNameTy` cannot disagree about
 -- WHICH node they are classifying (they are only allowed to disagree about how).
 --
--- it also peels `TyConstrained` — #1630, and this paragraph used to say the
--- OPPOSITE.  It read: *"`TyConstrained` is deliberately NOT peeled … peeling a
--- constraint yields a still-headless body (`impl Sz (Eq a => a)` → `a`), so both
--- sides already answer `None` and agree"*, and cited #1617 as bounding the class
--- at two.  That reasoning generalised from ONE body shape to ALL of them: it is
--- sound for `Eq a => a`, whose peeled body really is a bare `TyVar`, and simply
--- false for `Eq a => Int`, whose peeled body is a `TyCon`.  `eval.headTycon` has
--- peeled `TyConstrained` since long before this projection existed, so the
--- HEADED case reproduced #1618's exact failure with a different wrapper: the
--- definition side filed `impl Sz (Eq a => Int)` under tag `Int` while this side
+-- it also peels `TyConstrained` (#1630).  Peeling a constraint yields a headless
+-- body only for `Eq a => a`; for `Eq a => Int` the peeled body is a `TyCon`.
+-- `eval.headTycon` peels `TyConstrained`, so without the peel here the HEADED case
+-- fails as #1618 did with a different wrapper: the definition side filed `impl Sz (Eq a => Int)` under tag `Int` while this side
 -- answered `None` and stamped `__none__`, and `medaka build` died with `no impl
 -- of method 'sz' for type '__none__'` on a program `check` accepts and `run`
 -- answers correctly (measured: check 0, run `2`, build 1).
@@ -1589,9 +1581,7 @@ monoIsBareTyvar m = match normalize m
 
 -- structural equality of two monos that may contain RIGID tyvars, compared by tyvar
 -- IDENTITY.  Deliberately NOT unification: a given must match a goal only when it IS
--- that goal, never by binding the given's variables.  (This used to contrast itself
--- against a var-free same-shape helper; that helper existed only to serve the
--- swapped-argument hint and was deleted with it — issue 1147.)
+-- that goal, never by binding the given's variables.
 export
 monoSameGiven : Mono -> Mono -> Bool
 monoSameGiven a b = match peelQual a
@@ -2014,8 +2004,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "argMentions" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
 (DFunDef false "argMentions" ((PVar "typarams") (PVar "ty")) (EApp (EApp (EVar "anyMember") (EApp (EVar "tyVarNames") (EVar "ty"))) (EVar "typarams")))
 (DTypeSig true "anyMember" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "anyMember" ((PList) PWild) (EVar "False"))
-(DFunDef false "anyMember" ((PCons (PVar "x") (PVar "xs")) (PVar "ys")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys")) (EApp (EApp (EVar "anyMember") (EVar "xs")) (EVar "ys"))))
+(DFunDef false "anyMember" ((PVar "xs") (PVar "ys")) (EApp (EApp (EVar "any") (ELam ((PVar "x")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys")))) (EVar "xs")))
 (DTypeSig true "propParamNamesTc" (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "propParamNamesTc" ((PVar "ps")) (EApp (EApp (EVar "map") (EVar "propParamName")) (EVar "ps")))
 (DTypeSig true "patVarsTc" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
@@ -2107,8 +2096,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "cohPpPair" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cohPpPair" ((PVar "xs") (PVar "ys")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "s1") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EVar "cohPpEach") (EVar "ctx")) (EVar "cnt")) (EVar "xs")))) (DoLet false false (PVar "s2") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EVar "cohPpEach") (EVar "ctx")) (EVar "cnt")) (EVar "ys")))) (DoExpr (ETuple (EVar "s1") (EVar "s2")))))
 (DTypeSig false "cohPpEach" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "cohPpEach" (PWild PWild (PList)) (EListLit))
-(DFunDef false "cohPpEach" ((PVar "ctx") (PVar "cnt") (PCons (PVar "m") (PVar "ms"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "m")) (EApp (EApp (EApp (EVar "cohPpEach") (EVar "ctx")) (EVar "cnt")) (EVar "ms"))))
+(DFunDef false "cohPpEach" ((PVar "ctx") (PVar "cnt") (PVar "ms")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0)))) (EVar "ms")))
 (DTypeSig true "tySubsumesV" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))
 (DFunDef false "tySubsumesV" ((PVar "generals") (PVar "specifics")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "generals")) (EApp (EVar "listLen") (EVar "specifics"))) (EVar "False") (EIf (EVar "otherwise") (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "tyStep")) (EVar "eqStr")) (EVar "tyStructEq")) (EApp (EApp (EVar "zipL") (EVar "generals")) (EVar "specifics"))) (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "tyHeadEqV" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))
@@ -2504,8 +2492,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "argMentions" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
 (DFunDef false "argMentions" ((PVar "typarams") (PVar "ty")) (EApp (EApp (EVar "anyMember") (EApp (EVar "tyVarNames") (EVar "ty"))) (EVar "typarams")))
 (DTypeSig true "anyMember" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "anyMember" ((PList) PWild) (EVar "False"))
-(DFunDef false "anyMember" ((PCons (PVar "x") (PVar "xs")) (PVar "ys")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys")) (EApp (EApp (EVar "anyMember") (EVar "xs")) (EVar "ys"))))
+(DFunDef false "anyMember" ((PVar "xs") (PVar "ys")) (EApp (EApp (EDictApp "any") (ELam ((PVar "x")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys")))) (EVar "xs")))
 (DTypeSig true "propParamNamesTc" (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "propParamNamesTc" ((PVar "ps")) (EApp (EApp (EMethodRef "map") (EVar "propParamName")) (EVar "ps")))
 (DTypeSig true "patVarsTc" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
@@ -2597,8 +2584,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "cohPpPair" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cohPpPair" ((PVar "xs") (PVar "ys")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "s1") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EVar "cohPpEach") (EVar "ctx")) (EVar "cnt")) (EVar "xs")))) (DoLet false false (PVar "s2") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EVar "cohPpEach") (EVar "ctx")) (EVar "cnt")) (EVar "ys")))) (DoExpr (ETuple (EVar "s1") (EVar "s2")))))
 (DTypeSig false "cohPpEach" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "cohPpEach" (PWild PWild (PList)) (EListLit))
-(DFunDef false "cohPpEach" ((PVar "ctx") (PVar "cnt") (PCons (PVar "m") (PVar "ms"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "m")) (EApp (EApp (EApp (EVar "cohPpEach") (EVar "ctx")) (EVar "cnt")) (EVar "ms"))))
+(DFunDef false "cohPpEach" ((PVar "ctx") (PVar "cnt") (PVar "ms")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0)))) (EVar "ms")))
 (DTypeSig true "tySubsumesV" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))
 (DFunDef false "tySubsumesV" ((PVar "generals") (PVar "specifics")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "generals")) (EApp (EVar "listLen") (EVar "specifics"))) (EVar "False") (EIf (EVar "otherwise") (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "tyStep")) (EVar "eqStr")) (EVar "tyStructEq")) (EApp (EApp (EVar "zipL") (EVar "generals")) (EVar "specifics"))) (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "tyHeadEqV" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))

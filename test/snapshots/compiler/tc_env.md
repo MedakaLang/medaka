@@ -1,5 +1,5 @@
 # META
-source_lines=4540
+source_lines=4509
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -115,7 +115,8 @@ import types.registry.{
 }
 import frontend.visibility.{useModId}
 import support.ordmap.{omEmpty, omHasKey, omInsert, omKeys, omLookup, OrdMap}
-import list.{drop, indexed}
+import list.{drop, indexed, last}
+import string.{endsWith}
 import support.util.{
   anyList,
   contains,
@@ -560,14 +561,9 @@ declEnvRowVisible cur m
 -- True
 
 -- the population half, and it mirrors `registerData`/`registerVariants` ARM FOR
--- ARM — including the arms they DO NOT have.  THE `DAttrib` arm is now one of the
--- arms they do have.  This block used to record its absence as inherited-on-purpose
--- (*"That gap is a real defect — #1586, S0 — but … a RETIREMENT whose bar is
--- neutrality must inherit it, not drain it"*); `S-field-owner-candidates` is the
--- follow-up that drains it, so `registerData` unwraps `DAttrib` and this mirror
--- unwraps with it.  Keeping the mirror is the whole discipline here: the moment the
--- two disagree, an attributed decl means one thing where it is declared and another
--- to an importer.
+-- ARM.  `registerData` unwraps `DAttrib`, so this mirror unwraps with it.  Keeping the
+-- mirror is the whole discipline here: the moment the two disagree, an attributed decl
+-- means one thing where it is declared and another to an importer.
 --
 -- only the own-row arm of `declEnvRowKindEntries` reaches this today.  The
 -- cross-module projection goes through `kindPublicDataDecl`, which still has no
@@ -699,16 +695,12 @@ declEnvDirectImports edges mid = optionOr [] (omLookup mid edges)
 -- substrate, since that pair is exactly the key #1265 is the first-match over.
 -- A method name enters an `IE` row only as PAYLOAD (`ieMethods`).
 --
--- LIVE SINCE A-3.4 PR2 — `IE` is now read, and it decides acceptance.  This
--- block said "zero readers today, deliberately" through PR1; that is no longer
--- true and the distinction is worth a sentence, because "the registry exists" and
--- "the registry answers" are the two halves the arc's progress metric separates.
+-- `IE` is read, and it decides acceptance: "the registry exists" and "the registry
+-- answers" are the two halves the arc's progress metric separates.
 -- The Module arm's obligation universe — the table `checkCallObligationsU` asks
 -- "does an impl exist for this goal", i.e. the table behind every `No impl of X
 -- for Y` on the multi-module path — is a projection of `IE` at the reader's
--- ordinal, through the ONE accessor `ieUniverseAt`.  The three `obUniv*`
--- accumulators that used to answer it are RETIRED (deleted from `CrossRun`, not
--- left unread), which is this unit's `cross_allowed` shrink.
+-- ordinal, through the ONE accessor `ieUniverseAt`; no separate accumulator holds it.
 --
 -- what is still not read: `ieInst`/`InstRef` and `ieMethods`, both payload for
 -- A-3.7 (coherence) and B-2. The standalone decl-list helpers still build their own
@@ -892,11 +884,9 @@ ieAddRows (r :: rest) env = ieAddRows rest (ieInsertRow r env)
 -- interface.  ONLY interface-keyed indexes belong here; anything else DOUBLE-FILES.
 -- The once-per-row seam is `ieFileRow` — read its header before adding a bucket.
 --
--- ✅ FIXED (#2146): `env.ieRows` used to be `++ [r]`, an append PER ROW —
--- O(rows²) over the build, exactly the shape `compiler/AGENTS.md` forbids
--- ("thirteen quadratics, all the same shape"). Now conses (`r :: env.ieRows`);
--- `buildImplEnv` does the one `reverseL` at the end, once, which restores build
--- order — the values are byte-identical, only the fold is linear now.
+-- `env.ieRows` is consed (`r :: env.ieRows`), never appended per row, which would be
+-- O(rows²) over the build (`compiler/AGENTS.md`'s quadratic shape); `buildImplEnv`
+-- does the one `reverseL` at the end, which restores build order (#2146).
 -- does not maintain `ieUnivSnaps` — the table `ieUniverseAt` actually reads.  Only
 -- `buildImplEnv` derives that, after all inserts are done.  Full hazard, and what to do
 -- if you need to insert into a built `ImplEnv`, at `ieAddRows` above.
@@ -2653,15 +2643,12 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- compiler/driver/medaka_cli.mdk` → 37; and #1438's OWN control fixture (a legal
 -- program the pin requires to keep working) rejected too.
 --
--- the drain condition, corrected again by U1c (#1507) — read it before deleting
--- ANYTHING.  This paragraph used to read "both `ifaceRefBare` call sites disappear …
--- delete it then" (a count of TWO against a set of THREE), then "delete the leg only
--- when every remaining `ifaceRefBare` hit is the definition itself" once U1b named the
--- third producer (`recordImplObligation`'s method-occurrence goal).  **U1c retires that
--- third producer** — `recordImplObligation` now records `iface`, the identity-carrying
--- `IfaceRef` `methodEntryHere` already held, instead of stripping it via
--- `ifaceRefBare iface.irName` — so by the census rule stated then, every REMAINING
--- `ifaceRefBare` call site IS the definition or a reader that holds only a spelling.
+-- the drain condition (#1507) — read it before deleting ANYTHING.  There were three
+-- producers of a bare-spelling `IfaceRef` (`ifaceRefBare`), not two, the third being
+-- `recordImplObligation`'s method-occurrence goal.  It records `iface`, the
+-- identity-carrying `IfaceRef` `methodEntryHere` already held, instead of stripping it
+-- via `ifaceRefBare iface.irName`, so every call site of `ifaceRefBare` is its
+-- definition or a reader that holds only a spelling.
 -- `ifaceForInferredId`'s `pendingDictApps` fallback mints none: it returns the
 -- callee slot's `pdaIfaces` entry, declaration included.
 --
@@ -2849,10 +2836,7 @@ methodLevelConstraintVarNames _ _ = []
 
 export
 removeAllS : List String -> List String -> List String
-removeAllS _ [] = []
-removeAllS drop (x :: xs)
-  | contains x drop = removeAllS drop xs
-  | otherwise = x :: removeAllS drop xs
+removeAllS drop xs = filter (x => not (contains x drop)) xs
 
 -- Resolve an impl body's declared method type from the identity-keyed class row at
 -- this module's ordinal.  The row owns the interface typarams and keeps each raw Ty
@@ -3154,13 +3138,6 @@ memberBinding m = (useMemberOrigin m, useMemberLocal m)
 memberSuffix : String -> String
 memberSuffix n = "__" ++ n
 
--- local suffix test (string.endsWith is not imported here): `s` ends with `suf`.
-endsWithStr : String -> String -> Bool
-endsWithStr suf s =
-  let ls = stringLength s
-  let lsuf = stringLength suf
-  lsuf <= ls && stringSlice (ls - lsuf) ls s == suf
-
 -- Look the member up by its ORIGIN name, bind it under its LOCAL name.  Without an
 -- alias the two coincide and this is the historical behaviour.
 --
@@ -3179,7 +3156,7 @@ export
 resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
 resolveMemberRows (origin, local) depRows = match lookupAssoc origin depRows
   Some s => [(local, s)]
-  None => filter (kv => endsWithStr (memberSuffix origin) (fst kv)) depRows
+  None => filter (kv => endsWith (memberSuffix origin) (fst kv)) depRows
 
 -- ── THE admission predicate for VALUES, payload-generic (RUN-XMOD-062) ─────────
 -- "What does this import form admit out of a dependency's exported rows?", answered
@@ -3265,12 +3242,11 @@ ifaceMethodIdentPair origin (IfaceMethod mname _ _ _) =
 -- from [acc] — the dependency's already-folded row.
 --
 -- `local` and `origin` are ALWAYS EQUAL here, so `reexportRenamed` never renames.
--- This comment used to read "the exported NAME is the member's LOCAL spelling
--- (`export import src.{a as b}` exports `b`)" — which describes a program the parser
--- REFUSES: `compiler/frontend/parser.mdk:2369,2376` reject both `export import m as A`
--- and `export import m.{a as b}` outright.  The generality is kept (it costs one
--- `filterList`, and it is the shape a future `export import … as …` would need) but it
--- is DEAD TODAY and must not be cited as behaviour.
+-- The parser refuses `export import m as A` and `export import m.{a as b}`
+-- (`compiler/frontend/parser.mdk:2369,2376`), so no program renames on re-export.  The
+-- generality is kept (it costs one `filterList`, and it is the shape a future
+-- `export import … as …` would need) but it is dead today and must not be cited as
+-- behaviour.
 reexportedMethodIdents : OrdMap (List (String, Ident)) ->
   List Decl ->
   List (String, Ident)
@@ -3701,9 +3677,7 @@ useModuleId _ = []
 
 export
 lastComponent : List String -> String
-lastComponent [] = ""
-lastComponent [x] = x
-lastComponent (_ :: rest) = lastComponent rest
+lastComponent ns = optionOr "" (last ns)
 
 -- test-only observation: declarations whose only callers are tests and probes.
 
@@ -3723,8 +3697,7 @@ lastComponent (_ :: rest) = lastComponent rest
 -- `wrap(int)` where the four-module program rejects), so a later bite that repoints
 -- the evidence reader onto an EMPTY Flat `IE` is a correct→broken regression on the
 -- busiest verbs in the CLI.  This function removes that emptiness FIRST, additively.
--- This sentence used to end "nothing reads `bodyImplEnvRef` yet", which is FALSE from
--- B-2.1-b2 on: the SELECTION legs read it (`concreteReqMatchByIface`,
+-- `bodyImplEnvRef` is read: the SELECTION legs read it (`concreteReqMatchByIface`,
 -- `rowRouteKey`, `implDictRoutesForRow`/`argImplDictRoutesForEncl`),
 -- and B-2.1-g added the METHOD-keyed route word (`keyForSite`) plus all three shadow
 -- existence reads (`ieImplExistsForHead`).  Derive the set, do not trust a list:
@@ -3747,14 +3720,10 @@ lastComponent (_ :: rest) = lastComponent rest
 -- `ieInsertRowAt` the Module arm uses — no per-row `ieRows` write at all, and
 -- therefore no reverse to owe.
 --
--- this paragraph used to argue against A CONS+reverse rewrite of
--- `ieInsertRow` ("would put a load-bearing order on the line for no gain here"),
--- on the premise that `ieInsertRow` APPENDED (`env.ieRows ++ [r]`, O(rows²)).
--- #2146 did that rewrite: `ieInsertRow` now conses and `buildImplEnv` does one
--- `reverseL` at the end.  RUN-B-007's declaration-index ruling still depends on
--- `ieRows` and every bucket being ASCENDING by `instRefSeq` — that is unchanged
--- and still load-bearing — but it is now `buildImplEnv`'s final `reverseL` that
--- discharges it on the Module arm, not the shape of `ieInsertRow`.  See
+-- `ieInsertRow` conses and `buildImplEnv` does one `reverseL` at the end (#2146).
+-- RUN-B-007's declaration-index ruling depends on `ieRows` and every bucket being
+-- ASCENDING by `instRefSeq`; on the Module arm `buildImplEnv`'s final `reverseL`
+-- discharges that, not the shape of `ieInsertRow`.  See
 -- `ieAddRows`'s for what a caller inserting into a BUILT `ImplEnv` owes as a
 -- result.  This construction still yields the same value `ieAddRows rows
 -- emptyImplEnv` (followed by that reverse) would, and the bucket writer is
@@ -4556,7 +4525,8 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "registry") ((mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "indexed" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "indexed" false) (mem "last" false))))
+(DUse false (UseGroup ("string") ((mem "endsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
@@ -5056,8 +5026,7 @@ methodRowSameNameView rows =
 (DFunDef false "methodLevelConstraintVarNames" ((PVar "typarams") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodLevelConstraintVarNames") (EVar "typarams")) (EVar "t")))
 (DFunDef false "methodLevelConstraintVarNames" (PWild PWild) (EListLit))
 (DTypeSig true "removeAllS" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "removeAllS" (PWild (PList)) (EListLit))
-(DFunDef false "removeAllS" ((PVar "drop") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "drop")) (EApp (EApp (EVar "removeAllS") (EVar "drop")) (EVar "xs")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "removeAllS") (EVar "drop")) (EVar "xs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "removeAllS" ((PVar "drop") (PVar "xs")) (EApp (EApp (EVar "filter") (ELam ((PVar "x")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "drop"))))) (EVar "xs")))
 (DTypeSig true "ceMethodTyAt" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))))
 (DFunDef false "ceMethodTyAt" ((PVar "iface") (PVar "mname") (PVar "cur") (PVar "ce")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EApp (EVar "ceMethodTyIn") (EApp (EVar "ceRowTyparams") (EVar "row"))) (EVar "mname")) (EApp (EVar "ceRowMethods") (EVar "row")))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "ceMethodTyIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
@@ -5121,10 +5090,8 @@ methodRowSameNameView rows =
 (DFunDef false "memberBinding" ((PVar "m")) (ETuple (EApp (EVar "useMemberOrigin") (EVar "m")) (EApp (EVar "useMemberLocal") (EVar "m"))))
 (DTypeSig false "memberSuffix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "memberSuffix" ((PVar "n")) (EBinOp "++" (ELit (LString "__")) (EVar "n")))
-(DTypeSig false "endsWithStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "endsWithStr" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "lsuf") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "lsuf") (EVar "ls")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "ls") (EVar "lsuf"))) (EVar "ls")) (EVar "s")) (EVar "suf"))))))
 (DTypeSig true "resolveMemberRows" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
-(DFunDef false "resolveMemberRows" ((PTuple (PVar "origin") (PVar "local")) (PVar "depRows")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "origin")) (EVar "depRows")) (arm (PCon "Some" (PVar "s")) () (EListLit (ETuple (EVar "local") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EVar "filter") (ELam ((PVar "kv")) (EApp (EApp (EVar "endsWithStr") (EApp (EVar "memberSuffix") (EVar "origin"))) (EApp (EVar "fst") (EVar "kv"))))) (EVar "depRows")))))
+(DFunDef false "resolveMemberRows" ((PTuple (PVar "origin") (PVar "local")) (PVar "depRows")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "origin")) (EVar "depRows")) (arm (PCon "Some" (PVar "s")) () (EListLit (ETuple (EVar "local") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EVar "filter") (ELam ((PVar "kv")) (EApp (EApp (EVar "endsWith") (EApp (EVar "memberSuffix") (EVar "origin"))) (EApp (EVar "fst") (EVar "kv"))))) (EVar "depRows")))))
 (DTypeSig true "importFormRows" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
 (DFunDef false "importFormRows" ((PVar "path") (PVar "depRows")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "depRows")) (arm (PCon "Some" (PVar "bindings")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "resolveMemberRows") (EVar "b")) (EVar "depRows")))) (EVar "bindings")))))
 (DTypeSig true "importTableMid" (TyFun (TyCon "UsePath") (TyCon "String")))
@@ -5215,9 +5182,7 @@ methodRowSameNameView rows =
 (DFunDef false "useModuleId" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "useModId") (EVar "path"))))
 (DFunDef false "useModuleId" (PWild) (EListLit))
 (DTypeSig true "lastComponent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "lastComponent" ((PList)) (ELit (LString "")))
-(DFunDef false "lastComponent" ((PList (PVar "x"))) (EVar "x"))
-(DFunDef false "lastComponent" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastComponent") (EVar "rest")))
+(DFunDef false "lastComponent" ((PVar "ns")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "last") (EVar "ns"))))
 (DTypeSig true "buildFlatImplEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ImplEnv")))
 (DFunDef false "buildFlatImplEnv" ((PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EApp (EVar "implRowsOf") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "implDeclFacts") (EVar "prog")))) (DoLet false false (PVar "indexed") (EApp (EApp (EVar "ieIndexRows") (EVar "rows")) (EVar "emptyImplEnv"))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "indexed") ((fa "ieRows" (EVar "rows")) (fa "ieUnivSnaps" (EApp (EVar "ieBuildSnaps") (EVar "rows"))))))))
 (DTypeSig false "ieIndexRows" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv"))))
@@ -5351,7 +5316,8 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("types" "registry") ((mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false) (mem "indexed" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "indexed" false) (mem "last" false))))
+(DUse false (UseGroup ("string") ((mem "endsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "MultiRegistry" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
@@ -5851,8 +5817,7 @@ methodRowSameNameView rows =
 (DFunDef false "methodLevelConstraintVarNames" ((PVar "typarams") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodLevelConstraintVarNames") (EVar "typarams")) (EVar "t")))
 (DFunDef false "methodLevelConstraintVarNames" (PWild PWild) (EListLit))
 (DTypeSig true "removeAllS" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "removeAllS" (PWild (PList)) (EListLit))
-(DFunDef false "removeAllS" ((PVar "drop") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "drop")) (EApp (EApp (EVar "removeAllS") (EVar "drop")) (EVar "xs")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "removeAllS") (EVar "drop")) (EVar "xs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "removeAllS" ((PVar "drop") (PVar "xs")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "x")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "drop"))))) (EVar "xs")))
 (DTypeSig true "ceMethodTyAt" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))))
 (DFunDef false "ceMethodTyAt" ((PVar "iface") (PVar "mname") (PVar "cur") (PVar "ce")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EApp (EVar "ceMethodTyIn") (EApp (EVar "ceRowTyparams") (EVar "row"))) (EVar "mname")) (EApp (EVar "ceRowMethods") (EVar "row")))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "ceMethodTyIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
@@ -5916,10 +5881,8 @@ methodRowSameNameView rows =
 (DFunDef false "memberBinding" ((PVar "m")) (ETuple (EApp (EVar "useMemberOrigin") (EVar "m")) (EApp (EVar "useMemberLocal") (EVar "m"))))
 (DTypeSig false "memberSuffix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "memberSuffix" ((PVar "n")) (EBinOp "++" (ELit (LString "__")) (EVar "n")))
-(DTypeSig false "endsWithStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "endsWithStr" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "lsuf") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "lsuf") (EVar "ls")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "ls") (EVar "lsuf"))) (EVar "ls")) (EVar "s")) (EVar "suf"))))))
 (DTypeSig true "resolveMemberRows" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
-(DFunDef false "resolveMemberRows" ((PTuple (PVar "origin") (PVar "local")) (PVar "depRows")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "origin")) (EVar "depRows")) (arm (PCon "Some" (PVar "s")) () (EListLit (ETuple (EVar "local") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "kv")) (EApp (EApp (EVar "endsWithStr") (EApp (EVar "memberSuffix") (EVar "origin"))) (EApp (EVar "fst") (EVar "kv"))))) (EVar "depRows")))))
+(DFunDef false "resolveMemberRows" ((PTuple (PVar "origin") (PVar "local")) (PVar "depRows")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "origin")) (EVar "depRows")) (arm (PCon "Some" (PVar "s")) () (EListLit (ETuple (EVar "local") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "kv")) (EApp (EApp (EVar "endsWith") (EApp (EVar "memberSuffix") (EVar "origin"))) (EApp (EVar "fst") (EVar "kv"))))) (EVar "depRows")))))
 (DTypeSig true "importFormRows" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
 (DFunDef false "importFormRows" ((PVar "path") (PVar "depRows")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "depRows")) (arm (PCon "Some" (PVar "bindings")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "resolveMemberRows") (EVar "b")) (EVar "depRows")))) (EVar "bindings")))))
 (DTypeSig true "importTableMid" (TyFun (TyCon "UsePath") (TyCon "String")))
@@ -6010,9 +5973,7 @@ methodRowSameNameView rows =
 (DFunDef false "useModuleId" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "useModId") (EVar "path"))))
 (DFunDef false "useModuleId" (PWild) (EListLit))
 (DTypeSig true "lastComponent" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "lastComponent" ((PList)) (ELit (LString "")))
-(DFunDef false "lastComponent" ((PList (PVar "x"))) (EVar "x"))
-(DFunDef false "lastComponent" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastComponent") (EVar "rest")))
+(DFunDef false "lastComponent" ((PVar "ns")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "last") (EVar "ns"))))
 (DTypeSig true "buildFlatImplEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ImplEnv")))
 (DFunDef false "buildFlatImplEnv" ((PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EApp (EVar "implRowsOf") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "implDeclFacts") (EVar "prog")))) (DoLet false false (PVar "indexed") (EApp (EApp (EVar "ieIndexRows") (EVar "rows")) (EVar "emptyImplEnv"))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "indexed") ((fa "ieRows" (EVar "rows")) (fa "ieUnivSnaps" (EApp (EVar "ieBuildSnaps") (EVar "rows"))))))))
 (DTypeSig false "ieIndexRows" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv"))))

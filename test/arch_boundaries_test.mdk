@@ -12,8 +12,8 @@
    to rewrite them from the tree instead of comparing. -}
 import fs.{walkDir}
 import list.{
-  drop, dropWhile, dropWhileEnd, filterMap, last, lookup, nub, reverse, sort,
-  takeWhile
+  drop, dropWhile, dropWhileEnd, filterMap, last, lookup, nub, partition,
+  reverse, sort, takeWhile
 }
 import map as M
 import set as S
@@ -906,18 +906,20 @@ typecheckFamily = [
   "types.tc_diag",
 ]
 
+-- The lines of module [m], empty when it is not loaded.
+linesFor : String -> List (String, List String) -> List String
+linesFor m mods = optionOr [] (lookup m mods)
+
 -- The lines of every module in [typecheckFamily], in that order.
 typecheckFamilyLines : List (String, List String) -> List String
-typecheckFamilyLines mods =
-  flatMap (m => optionOr [] (lookup m mods)) typecheckFamily
+typecheckFamilyLines mods = flatMap (m => linesFor m mods) typecheckFamily
 
 -- The cell census: the column-0 `name = Ref` cells of the typecheck family, then
 -- the `Bundle.field` names of the `tc_types` bundles.
 cellCensus : List (String, List String) -> List String
 cellCensus mods =
-  let linesFor m = optionOr [] (lookup m mods)
   filterMap cellName (typecheckFamilyLines mods)
-    ++ bundleNames (linesFor "types.tc_types")
+    ++ bundleNames (linesFor "types.tc_types" mods)
 
 -- Names in exactly one of the two lists, sorted.
 symmetricDifference : List String -> List String -> List String
@@ -945,16 +947,18 @@ test "arch_boundaries: CELL-LIFETIMES rows equal the cell census" =
       ]
 
 -- The module-field partition (`moduleCtxFrom` and `moduleCellsFrom` in
--- `types.typecheck`): each field the two build, with the class argument it is taken
+-- `types.tc_state`): each field the two name, with the class argument it is taken
 -- from, read off their bodies' `field = <class>.field` and
 -- `field = refFrom detach <class>.field` lines.  `ModuleCtx.mcCells` has no row of its
--- own: `moduleCellsFrom` builds it, and its rows are the cells.
+-- own: `moduleCellsFrom` builds it, and its rows are the cells.  `moduleCellsFrom` is a
+-- record update over `run`, so it names only the fields of the other classes; every
+-- cell it does not name is `run`.
 partitionHeaders : List (String, String)
 partitionHeaders = [
   ("ModuleCtx", "moduleCtxFrom detach run tables drain ident = ModuleCtx {"),
   (
     "ModuleCells",
-    "moduleCellsFrom detach run tables drain ident = ModuleCells {",
+    "moduleCellsFrom detach run tables drain ident = { run |",
   ),
 ]
 
@@ -988,18 +992,27 @@ classOf field w = match split "." (optionOr w (stripSuffix "," w))
 -- class.
 test "arch_boundaries: the module-field partition classifies every ModuleCtx field" =
   let mods = loadModules
-  let linesFor m = optionOr [] (lookup m mods)
   let fields =
     filter
       (/= "ModuleCtx.mcCells")
       (flatMap
-        (h => bundleFieldNames (linesFor "types.tc_types") (fst h))
+        (h => bundleFieldNames (linesFor "types.tc_types" mods) (fst h))
         partitionHeaders)
   let rows =
     flatMap (partitionRows (typecheckFamilyLines mods)) partitionHeaders
+  let (cellRows, ctxRows) =
+    partition (r => startsWith "ModuleCells." (fst r)) rows
   expectAll [
     expectAtLeast 90 (length fields),
-    expectEqual [] (symmetricDifference fields (map fst rows)),
-    expectEqual (length fields) (length rows),
-    expectEqual [] (filter (r => not (elem (snd r) partitionClasses)) rows),
+    expectEqual
+      []
+      (symmetricDifference
+        (filter (f => not (startsWith "ModuleCells." f)) fields)
+        (map fst ctxRows)),
+    expectEqual [] (filter (r => not (elem (fst r) fields)) cellRows),
+    expectAtLeast 5 (length cellRows),
+    expectEqual
+      []
+      (filter (r => not (elem (snd r) (drop 1 partitionClasses))) cellRows),
+    expectEqual [] (filter (r => not (elem (snd r) partitionClasses)) ctxRows),
   ]

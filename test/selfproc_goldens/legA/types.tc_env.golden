@@ -102,7 +102,6 @@ emptyDeclEnvAcc : DeclEnvAcc
 emptyImplAcc : ImplAcc
 emptyMethodModulePredicateSlot : String -> IfaceRef -> List String -> IfaceMethod -> List ((String, String), List MethodPredicateSlot)
 emptyMethodModulePredicateSlots : String -> List Decl -> List ((String, String), List MethodPredicateSlot)
-endsWithStr : String -> String -> Bool
 envAlphaLets : TcEnv -> List (String, AlphaBinder)
 envFor : ModuleCtx -> TcEnv
 envVarType : TcEnv -> String -> Option Mono

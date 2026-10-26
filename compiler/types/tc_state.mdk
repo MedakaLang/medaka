@@ -55,6 +55,7 @@ import types.tc_types.{
   Windowed(..),
 }
 import map.{Map(..)}
+import list.{take}
 import types.evidence.{EvidenceBinderId(..), ScopeId(..)}
 import types.scopes.{
   DefaultBodyIdentity(..), ScopeCursor(..), ScopeOwner(..), ScopeStore
@@ -159,23 +160,16 @@ import types.runtime_types.{emptyBinderTypes}
 -- decls — still resolves its index during that module's check).  Set per module by
 -- checkModuleFullImpl from [implDecls].  Independent of `methodEntryHere`.
 
--- #154 PR-B: PERSISTENT per-run dispatch-index accumulator for the multi-module path.
--- checkBodyImpl's Module arm used to `argDispatchIndices implDecls` (= `accAll ++ prog`) —
--- a flatMap over EVERY earlier module's decls once per module, an O(N²) rebuild on the
--- emit path (graphModuleWorker / elabModuleStamp).  The scan is pure and structural (no tyvars,
--- no side effects) and distributes over `++`, so the accumulator grown ONE module at a
--- time in `appendUniverseAccums` (BEFORE the Module arm copies it, so module k sees
--- interfaces 1..k INCLUDING its own — the same membership `accAll ++ prog` gave) holds
--- exactly what the per-module rebuild held.
---
--- ✅ #1351 L5 (CONTRACT): the accumulator this paragraph described is now the
--- IDENTITY-KEYED one, `universeMethodDispatchIdxByIdRef`, copied into
--- `methodDispatchIdxByIdRef`.  Its bare-name predecessor is DELETED, and with it the
--- whole hazard the rest of this comment used to carry: the pick between two same-named
--- methods' dispatch indices is no longer made by a first-wins `lookupAssoc` over
--- registration order, because the key now carries the declaring interface's identity
--- (`IfaceRef`, `irOrigin` included) and `dispatchIdxScoped` asks for ONE declaration —
--- the one `methodIfaceHere` says this module admits.  A prior module's entry that this
+-- Persistent per-run dispatch-index accumulator for the multi-module path: the
+-- IDENTITY-KEYED `universeMethodDispatchIdxByIdRef`, copied into
+-- `methodDispatchIdxByIdRef`.  It is grown ONE module at a time in
+-- `appendUniverseAccums`, before the Module arm copies it, so module k sees interfaces
+-- 1..k including its own; a per-module rebuild over every earlier module's decls would
+-- be O(N²) on the emit path (#154).  The key carries the declaring interface's identity
+-- (`IfaceRef`, `irOrigin` included), so the pick between two same-named methods'
+-- dispatch indices is not a first-wins `lookupAssoc` over registration order:
+-- `dispatchIdxScoped` asks for ONE declaration, the one `methodIfaceHere` says this
+-- module admits.  A prior module's entry that this
 -- module cannot name is unreachable by construction rather than merely unqueried.
 -- Survives per-module `freshModuleCtx`; cleared per
 -- RUN by `mintGraphCtx`; seeded by the core pass (also Module mode).
@@ -458,8 +452,8 @@ export
 wMark : Windowed a -> Int
 wMark w = !w.n
 
--- recover exactly the items pushed since [mark] (consed on the front, so
--- `takeFirst` recovers them in push order).
+-- recover exactly the items pushed since [mark], newest-first like the channel itself
+-- (they sit at the front, so `takeFirst` takes them without reordering).
 export
 wWindow : Windowed a -> Int -> List a
 wWindow w mark = takeFirst (!w.n - mark) !w.items
@@ -754,11 +748,8 @@ graphLineageRun lineage =
     evBase = base,
   }
 
--- #1557 A-3.5c REMOVED `ifaceParamKindsRef` from this record, and with it the
--- `universeIfaceParamKinds` CrossRun cell that marshalled it between modules.  Its
--- one reader (`checkGradedImplTys`) reads stage K's `CE` instead; the writer
--- (`registerIfaceParamKinds`) is gone too, since a table nobody reads is not a
--- second source of truth worth keeping (design law L1).
+-- Interface parameter kinds are not a cell of this record: `checkGradedImplTys` reads
+-- stage K's `CE`, and a second table would be a second source of truth (design law L1).
 
 -- Construct every field fresh (each reproduces its former top-level ref's initial).
 -- no count here, deliberately: a number written into this comment has twice gone stale
@@ -943,90 +934,7 @@ moduleCellsFrom : Bool ->
   ModuleCells ->
   ModuleCells ->
   ModuleCells
-moduleCellsFrom detach run tables drain ident = ModuleCells {
-  currentScope = run.currentScope,
-  admittedOccObls = run.admittedOccObls,
-  curEffect = run.curEffect,
-  effectSummaries = run.effectSummaries,
-  pendingJoinsRef = run.pendingJoinsRef,
-  fileValueFlows = run.fileValueFlows,
-  fileValueScopes = run.fileValueScopes,
-  rigidEffvarsRef = run.rigidEffvarsRef,
-  rigidAuthvarsRef = run.rigidAuthvarsRef,
-  effectSitesRef = run.effectSitesRef,
-  rowFailureReportedRef = run.rowFailureReportedRef,
-  typeErrorKeySetRef = run.typeErrorKeySetRef,
-  escapedExistentialsRef = run.escapedExistentialsRef,
-  openedAuthvarsRef = run.openedAuthvarsRef,
-  indexSubstitutedRef = run.indexSubstitutedRef,
-  extendedBindersRef = run.extendedBindersRef,
-  displayHiddenBindersRef = run.displayHiddenBindersRef,
-  openedExistentialsRef = run.openedExistentialsRef,
-  openedExistentialsStackRef = run.openedExistentialsStackRef,
-  recordByNameRef = run.recordByNameRef,
-  fieldOwnersRef = run.fieldOwnersRef,
-  dataParamKindsRef = run.dataParamKindsRef,
-  dataParamNameIndexRef = run.dataParamNameIndexRef,
-  dataParamPolarityRef = run.dataParamPolarityRef,
-  dataParamRowAtomsRef = run.dataParamRowAtomsRef,
-  aliasTableRef = run.aliasTableRef,
-  numLitFromIntAnchorRef = run.numLitFromIntAnchorRef,
-  definerShadowNamesRef = run.definerShadowNamesRef,
-  definerShadowSigsRef = run.definerShadowSigsRef,
-  bodyImplEnvRef = run.bodyImplEnvRef,
-  methodAliasEntriesRef = run.methodAliasEntriesRef,
-  methodScopeCtxRef = run.methodScopeCtxRef,
-  methodScopeMemoRef = run.methodScopeMemoRef,
-  aliasMethodOriginsRef = run.aliasMethodOriginsRef,
-  implObls = run.implObls,
-  poisonedVars = run.poisonedVars,
-  deferrableVarIds = run.deferrableVarIds,
-  liveMemberMonosRef = run.liveMemberMonosRef,
-  quiescentGoalsRef = run.quiescentGoalsRef,
-  heldLiveGoalsRef = run.heldLiveGoalsRef,
-  determinedRowsRef = run.determinedRowsRef,
-  declaredSigVarIds = run.declaredSigVarIds,
-  tupleCallCandidates = run.tupleCallCandidates,
-  numlitVarLocs = run.numlitVarLocs,
-  patLitPending = run.patLitPending,
-  patLitDeferred = run.patLitDeferred,
-  matchChecksDeferred = run.matchChecksDeferred,
-  numlitRanges = run.numlitRanges,
-  wideLitRanges = run.wideLitRanges,
-  numlitUntainted = run.numlitUntainted,
-  numlitOpLocs = run.numlitOpLocs,
-  numlitCtxTags = run.numlitCtxTags,
-  localBindRefs = run.localBindRefs,
-  localSchemesOut = run.localSchemesOut,
-  seedSchemesOut = run.seedSchemesOut,
-  funPredicateSlotsRef = run.funPredicateSlotsRef,
-  funPredicateSlotsIdxRef = run.funPredicateSlotsIdxRef,
-  funConstraintDeclaredRef = run.funConstraintDeclaredRef,
-  currentImportDefinersRef = run.currentImportDefinersRef,
-  currentImportOriginsRef = run.currentImportOriginsRef,
-  importedSchemeOblsRef = run.importedSchemeOblsRef,
-  obls = run.obls,
-  absorptions = run.absorptions,
-  schemeObligationsRef = run.schemeObligationsRef,
-  schemeDefIdsRef = run.schemeDefIdsRef,
-  methodPredicateSlotsRef = run.methodPredicateSlotsRef,
-  currentFn = run.currentFn,
-  currentImplBody = run.currentImplBody,
-  methodSiteFns = run.methodSiteFns,
-  dictAppFns = run.dictAppFns,
-  residualUnivRef = run.residualUnivRef,
-  promotedRef = run.promotedRef,
-  fieldOwnerModulesRef = run.fieldOwnerModulesRef,
-  fieldOwnerReachRef = run.fieldOwnerReachRef,
-  typeErrors = run.typeErrors,
-  typeErrorMsgSetRef = run.typeErrorMsgSetRef,
-  ambiguitySitesRef = run.ambiguitySitesRef,
-  ambiguityVarsRef = run.ambiguityVarsRef,
-  errorsDetected = run.errorsDetected,
-  occursCheckFailed = run.occursCheckFailed,
-  currentLevel = run.currentLevel,
-  markingRef = run.markingRef,
-  ownPopsRef = run.ownPopsRef,
+moduleCellsFrom detach run tables drain ident = { run |
   superDeclsRef = refFrom detach tables.superDeclsRef,
   sigNameSetRef = refFrom detach tables.sigNameSetRef,
   sigTyMapRef = refFrom detach tables.sigTyMapRef,
@@ -1041,8 +949,10 @@ moduleCellsFrom detach run tables drain ident = ModuleCells {
 refFrom : Bool -> Ref a -> Ref a
 refFrom detach r = if detach then Ref r.value else r
 
--- A record with fresh run fields in the graph record [gctx] and [m]'s other fields,
--- copied by value: what a test probe runs in.
+-- A record with fresh run cells in the graph record [gctx] and [m]'s table, drain and
+-- ident cells copied by value (later writes on either side do not reach the other):
+-- what a test probe runs in.  It shares nothing with [m]; `mctxAt` is what shares
+-- `mcCells`.
 export
 carryModuleCtx : GraphCtx -> ModuleCtx -> ModuleCtx
 carryModuleCtx gctx m = moduleCtxFrom True (initialModuleCtx gctx) m m m
@@ -1096,10 +1006,7 @@ emptyBuiltinClasses = BuiltinClasses {
 -- the first [n] entries of a list (the newly-prepended obligations of a group)
 export
 takeFirst : Int -> List a -> List a
-takeFirst n _
-  | n <= 0 = []
-takeFirst _ [] = []
-takeFirst n (x :: xs) = x :: takeFirst (n - 1) xs
+takeFirst n xs = take n xs
 
 export
 dictParamName : String -> Int -> String

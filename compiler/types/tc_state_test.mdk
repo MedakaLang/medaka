@@ -2,7 +2,7 @@
 -- the process interners cell, the `Windowed` channel ops, and the trace-sink builders.
 -- A minted `ModuleCtx` or `GraphCtx` is needed throughout, so none of these is a doctest.
 
-import list.{sort}
+import list.{reverse}
 import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
 import frontend.ast.{Loc(..)}
 import types.tc_diag.{recordTypeError}
@@ -73,8 +73,7 @@ errorMessages m =
     (wAll m.mcCells.typeErrors)
 
 -- Law: the items pushed since a mark are exactly the window after it.  The window's order
--- is not asserted (the channel is newest-first), so both sides are sorted.  No
--- precondition.
+-- is newest-first, like the channel.  No precondition.
 prop "a window holds exactly the items pushed since its mark" (before : List Int) (after : List Int) =
   let w = emptyChannel ()
   let _ = pushAll w before
@@ -82,7 +81,7 @@ prop "a window holds exactly the items pushed since its mark" (before : List Int
   let _ = pushAll w after
   mark == length before
     && wMark w == length before + length after
-    && sort (wWindow w mark) == sort after
+    && wWindow w mark == reverse after
 
 -- Law: restoring a snapshot returns both the items and the mark, whatever was pushed in
 -- between.  No precondition.

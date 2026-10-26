@@ -32,6 +32,7 @@ pushTypeErrorOnceAt : ModuleCtx -> String -> Option Loc -> String -> Unit
 pushTypeErrorOncePerSite : ModuleCtx -> String -> Option Loc -> String -> Unit
 quotedNames : List String -> String
 recordTypeError : ModuleCtx -> TcDiag -> Unit
+recordUnlessSeen : ModuleCtx -> Bool -> TcDiag -> Unit
 replaceAmbiguityAt : ModuleCtx -> String -> TcDiag -> Unit
 tupleCallHintFor : ModuleCtx -> Mono -> Option (String, Option (Loc, String))
 typeErrorsArmed : GraphCtx -> Unit -> Bool

@@ -1,5 +1,5 @@
 # META
-source_lines=1245
+source_lines=1152
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts` and the
@@ -59,6 +59,7 @@ import types.tc_types.{
   Windowed(..),
 }
 import map.{Map(..)}
+import list.{take}
 import types.evidence.{EvidenceBinderId(..), ScopeId(..)}
 import types.scopes.{
   DefaultBodyIdentity(..), ScopeCursor(..), ScopeOwner(..), ScopeStore
@@ -163,23 +164,16 @@ import types.runtime_types.{emptyBinderTypes}
 -- decls — still resolves its index during that module's check).  Set per module by
 -- checkModuleFullImpl from [implDecls].  Independent of `methodEntryHere`.
 
--- #154 PR-B: PERSISTENT per-run dispatch-index accumulator for the multi-module path.
--- checkBodyImpl's Module arm used to `argDispatchIndices implDecls` (= `accAll ++ prog`) —
--- a flatMap over EVERY earlier module's decls once per module, an O(N²) rebuild on the
--- emit path (graphModuleWorker / elabModuleStamp).  The scan is pure and structural (no tyvars,
--- no side effects) and distributes over `++`, so the accumulator grown ONE module at a
--- time in `appendUniverseAccums` (BEFORE the Module arm copies it, so module k sees
--- interfaces 1..k INCLUDING its own — the same membership `accAll ++ prog` gave) holds
--- exactly what the per-module rebuild held.
---
--- ✅ #1351 L5 (CONTRACT): the accumulator this paragraph described is now the
--- IDENTITY-KEYED one, `universeMethodDispatchIdxByIdRef`, copied into
--- `methodDispatchIdxByIdRef`.  Its bare-name predecessor is DELETED, and with it the
--- whole hazard the rest of this comment used to carry: the pick between two same-named
--- methods' dispatch indices is no longer made by a first-wins `lookupAssoc` over
--- registration order, because the key now carries the declaring interface's identity
--- (`IfaceRef`, `irOrigin` included) and `dispatchIdxScoped` asks for ONE declaration —
--- the one `methodIfaceHere` says this module admits.  A prior module's entry that this
+-- Persistent per-run dispatch-index accumulator for the multi-module path: the
+-- IDENTITY-KEYED `universeMethodDispatchIdxByIdRef`, copied into
+-- `methodDispatchIdxByIdRef`.  It is grown ONE module at a time in
+-- `appendUniverseAccums`, before the Module arm copies it, so module k sees interfaces
+-- 1..k including its own; a per-module rebuild over every earlier module's decls would
+-- be O(N²) on the emit path (#154).  The key carries the declaring interface's identity
+-- (`IfaceRef`, `irOrigin` included), so the pick between two same-named methods'
+-- dispatch indices is not a first-wins `lookupAssoc` over registration order:
+-- `dispatchIdxScoped` asks for ONE declaration, the one `methodIfaceHere` says this
+-- module admits.  A prior module's entry that this
 -- module cannot name is unreachable by construction rather than merely unqueried.
 -- Survives per-module `freshModuleCtx`; cleared per
 -- RUN by `mintGraphCtx`; seeded by the core pass (also Module mode).
@@ -462,8 +456,8 @@ export
 wMark : Windowed a -> Int
 wMark w = !w.n
 
--- recover exactly the items pushed since [mark] (consed on the front, so
--- `takeFirst` recovers them in push order).
+-- recover exactly the items pushed since [mark], newest-first like the channel itself
+-- (they sit at the front, so `takeFirst` takes them without reordering).
 export
 wWindow : Windowed a -> Int -> List a
 wWindow w mark = takeFirst (!w.n - mark) !w.items
@@ -758,11 +752,8 @@ graphLineageRun lineage =
     evBase = base,
   }
 
--- #1557 A-3.5c REMOVED `ifaceParamKindsRef` from this record, and with it the
--- `universeIfaceParamKinds` CrossRun cell that marshalled it between modules.  Its
--- one reader (`checkGradedImplTys`) reads stage K's `CE` instead; the writer
--- (`registerIfaceParamKinds`) is gone too, since a table nobody reads is not a
--- second source of truth worth keeping (design law L1).
+-- Interface parameter kinds are not a cell of this record: `checkGradedImplTys` reads
+-- stage K's `CE`, and a second table would be a second source of truth (design law L1).
 
 -- Construct every field fresh (each reproduces its former top-level ref's initial).
 -- no count here, deliberately: a number written into this comment has twice gone stale
@@ -947,90 +938,7 @@ moduleCellsFrom : Bool ->
   ModuleCells ->
   ModuleCells ->
   ModuleCells
-moduleCellsFrom detach run tables drain ident = ModuleCells {
-  currentScope = run.currentScope,
-  admittedOccObls = run.admittedOccObls,
-  curEffect = run.curEffect,
-  effectSummaries = run.effectSummaries,
-  pendingJoinsRef = run.pendingJoinsRef,
-  fileValueFlows = run.fileValueFlows,
-  fileValueScopes = run.fileValueScopes,
-  rigidEffvarsRef = run.rigidEffvarsRef,
-  rigidAuthvarsRef = run.rigidAuthvarsRef,
-  effectSitesRef = run.effectSitesRef,
-  rowFailureReportedRef = run.rowFailureReportedRef,
-  typeErrorKeySetRef = run.typeErrorKeySetRef,
-  escapedExistentialsRef = run.escapedExistentialsRef,
-  openedAuthvarsRef = run.openedAuthvarsRef,
-  indexSubstitutedRef = run.indexSubstitutedRef,
-  extendedBindersRef = run.extendedBindersRef,
-  displayHiddenBindersRef = run.displayHiddenBindersRef,
-  openedExistentialsRef = run.openedExistentialsRef,
-  openedExistentialsStackRef = run.openedExistentialsStackRef,
-  recordByNameRef = run.recordByNameRef,
-  fieldOwnersRef = run.fieldOwnersRef,
-  dataParamKindsRef = run.dataParamKindsRef,
-  dataParamNameIndexRef = run.dataParamNameIndexRef,
-  dataParamPolarityRef = run.dataParamPolarityRef,
-  dataParamRowAtomsRef = run.dataParamRowAtomsRef,
-  aliasTableRef = run.aliasTableRef,
-  numLitFromIntAnchorRef = run.numLitFromIntAnchorRef,
-  definerShadowNamesRef = run.definerShadowNamesRef,
-  definerShadowSigsRef = run.definerShadowSigsRef,
-  bodyImplEnvRef = run.bodyImplEnvRef,
-  methodAliasEntriesRef = run.methodAliasEntriesRef,
-  methodScopeCtxRef = run.methodScopeCtxRef,
-  methodScopeMemoRef = run.methodScopeMemoRef,
-  aliasMethodOriginsRef = run.aliasMethodOriginsRef,
-  implObls = run.implObls,
-  poisonedVars = run.poisonedVars,
-  deferrableVarIds = run.deferrableVarIds,
-  liveMemberMonosRef = run.liveMemberMonosRef,
-  quiescentGoalsRef = run.quiescentGoalsRef,
-  heldLiveGoalsRef = run.heldLiveGoalsRef,
-  determinedRowsRef = run.determinedRowsRef,
-  declaredSigVarIds = run.declaredSigVarIds,
-  tupleCallCandidates = run.tupleCallCandidates,
-  numlitVarLocs = run.numlitVarLocs,
-  patLitPending = run.patLitPending,
-  patLitDeferred = run.patLitDeferred,
-  matchChecksDeferred = run.matchChecksDeferred,
-  numlitRanges = run.numlitRanges,
-  wideLitRanges = run.wideLitRanges,
-  numlitUntainted = run.numlitUntainted,
-  numlitOpLocs = run.numlitOpLocs,
-  numlitCtxTags = run.numlitCtxTags,
-  localBindRefs = run.localBindRefs,
-  localSchemesOut = run.localSchemesOut,
-  seedSchemesOut = run.seedSchemesOut,
-  funPredicateSlotsRef = run.funPredicateSlotsRef,
-  funPredicateSlotsIdxRef = run.funPredicateSlotsIdxRef,
-  funConstraintDeclaredRef = run.funConstraintDeclaredRef,
-  currentImportDefinersRef = run.currentImportDefinersRef,
-  currentImportOriginsRef = run.currentImportOriginsRef,
-  importedSchemeOblsRef = run.importedSchemeOblsRef,
-  obls = run.obls,
-  absorptions = run.absorptions,
-  schemeObligationsRef = run.schemeObligationsRef,
-  schemeDefIdsRef = run.schemeDefIdsRef,
-  methodPredicateSlotsRef = run.methodPredicateSlotsRef,
-  currentFn = run.currentFn,
-  currentImplBody = run.currentImplBody,
-  methodSiteFns = run.methodSiteFns,
-  dictAppFns = run.dictAppFns,
-  residualUnivRef = run.residualUnivRef,
-  promotedRef = run.promotedRef,
-  fieldOwnerModulesRef = run.fieldOwnerModulesRef,
-  fieldOwnerReachRef = run.fieldOwnerReachRef,
-  typeErrors = run.typeErrors,
-  typeErrorMsgSetRef = run.typeErrorMsgSetRef,
-  ambiguitySitesRef = run.ambiguitySitesRef,
-  ambiguityVarsRef = run.ambiguityVarsRef,
-  errorsDetected = run.errorsDetected,
-  occursCheckFailed = run.occursCheckFailed,
-  currentLevel = run.currentLevel,
-  markingRef = run.markingRef,
-  ownPopsRef = run.ownPopsRef,
+moduleCellsFrom detach run tables drain ident = { run |
   superDeclsRef = refFrom detach tables.superDeclsRef,
   sigNameSetRef = refFrom detach tables.sigNameSetRef,
   sigTyMapRef = refFrom detach tables.sigTyMapRef,
@@ -1045,8 +953,10 @@ moduleCellsFrom detach run tables drain ident = ModuleCells {
 refFrom : Bool -> Ref a -> Ref a
 refFrom detach r = if detach then Ref r.value else r
 
--- A record with fresh run fields in the graph record [gctx] and [m]'s other fields,
--- copied by value: what a test probe runs in.
+-- A record with fresh run cells in the graph record [gctx] and [m]'s table, drain and
+-- ident cells copied by value (later writes on either side do not reach the other):
+-- what a test probe runs in.  It shares nothing with [m]; `mctxAt` is what shares
+-- `mcCells`.
 export
 carryModuleCtx : GraphCtx -> ModuleCtx -> ModuleCtx
 carryModuleCtx gctx m = moduleCtxFrom True (initialModuleCtx gctx) m m m
@@ -1100,10 +1010,7 @@ emptyBuiltinClasses = BuiltinClasses {
 -- the first [n] entries of a list (the newly-prepended obligations of a group)
 export
 takeFirst : Int -> List a -> List a
-takeFirst n _
-  | n <= 0 = []
-takeFirst _ [] = []
-takeFirst n (x :: xs) = x :: takeFirst (n - 1) xs
+takeFirst n xs = take n xs
 
 export
 dictParamName : String -> Int -> String
@@ -1254,6 +1161,7 @@ defaultBodyBinderNamesProbe _ =
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
 (DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "Predicate" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "UObligation" true) (mem "Windowed" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
+(DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
@@ -1353,7 +1261,7 @@ defaultBodyBinderNamesProbe _ =
 (DTypeSig true "moduleCtxFrom" (TyFun (TyCon "Bool") (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx")))))))
 (DFunDef false "moduleCtxFrom" ((PVar "detach") (PVar "run") (PVar "tables") (PVar "drain") (PVar "ident")) (ERecordCreate "ModuleCtx" ((fa "mcCells" (EApp (EApp (EApp (EApp (EApp (EVar "moduleCellsFrom") (EVar "detach")) (EFieldAccess (EVar "run") "mcCells")) (EFieldAccess (EVar "tables") "mcCells")) (EFieldAccess (EVar "drain") "mcCells")) (EFieldAccess (EVar "ident") "mcCells"))) (fa "mcGraph" (EFieldAccess (EVar "run") "mcGraph")) (fa "mcLoc" (EFieldAccess (EVar "run") "mcLoc")))))
 (DTypeSig false "moduleCellsFrom" (TyFun (TyCon "Bool") (TyFun (TyCon "ModuleCells") (TyFun (TyCon "ModuleCells") (TyFun (TyCon "ModuleCells") (TyFun (TyCon "ModuleCells") (TyCon "ModuleCells")))))))
-(DFunDef false "moduleCellsFrom" ((PVar "detach") (PVar "run") (PVar "tables") (PVar "drain") (PVar "ident")) (ERecordCreate "ModuleCells" ((fa "currentScope" (EFieldAccess (EVar "run") "currentScope")) (fa "admittedOccObls" (EFieldAccess (EVar "run") "admittedOccObls")) (fa "curEffect" (EFieldAccess (EVar "run") "curEffect")) (fa "effectSummaries" (EFieldAccess (EVar "run") "effectSummaries")) (fa "pendingJoinsRef" (EFieldAccess (EVar "run") "pendingJoinsRef")) (fa "fileValueFlows" (EFieldAccess (EVar "run") "fileValueFlows")) (fa "fileValueScopes" (EFieldAccess (EVar "run") "fileValueScopes")) (fa "rigidEffvarsRef" (EFieldAccess (EVar "run") "rigidEffvarsRef")) (fa "rigidAuthvarsRef" (EFieldAccess (EVar "run") "rigidAuthvarsRef")) (fa "effectSitesRef" (EFieldAccess (EVar "run") "effectSitesRef")) (fa "rowFailureReportedRef" (EFieldAccess (EVar "run") "rowFailureReportedRef")) (fa "typeErrorKeySetRef" (EFieldAccess (EVar "run") "typeErrorKeySetRef")) (fa "escapedExistentialsRef" (EFieldAccess (EVar "run") "escapedExistentialsRef")) (fa "openedAuthvarsRef" (EFieldAccess (EVar "run") "openedAuthvarsRef")) (fa "indexSubstitutedRef" (EFieldAccess (EVar "run") "indexSubstitutedRef")) (fa "extendedBindersRef" (EFieldAccess (EVar "run") "extendedBindersRef")) (fa "displayHiddenBindersRef" (EFieldAccess (EVar "run") "displayHiddenBindersRef")) (fa "openedExistentialsRef" (EFieldAccess (EVar "run") "openedExistentialsRef")) (fa "openedExistentialsStackRef" (EFieldAccess (EVar "run") "openedExistentialsStackRef")) (fa "recordByNameRef" (EFieldAccess (EVar "run") "recordByNameRef")) (fa "fieldOwnersRef" (EFieldAccess (EVar "run") "fieldOwnersRef")) (fa "dataParamKindsRef" (EFieldAccess (EVar "run") "dataParamKindsRef")) (fa "dataParamNameIndexRef" (EFieldAccess (EVar "run") "dataParamNameIndexRef")) (fa "dataParamPolarityRef" (EFieldAccess (EVar "run") "dataParamPolarityRef")) (fa "dataParamRowAtomsRef" (EFieldAccess (EVar "run") "dataParamRowAtomsRef")) (fa "aliasTableRef" (EFieldAccess (EVar "run") "aliasTableRef")) (fa "numLitFromIntAnchorRef" (EFieldAccess (EVar "run") "numLitFromIntAnchorRef")) (fa "definerShadowNamesRef" (EFieldAccess (EVar "run") "definerShadowNamesRef")) (fa "definerShadowSigsRef" (EFieldAccess (EVar "run") "definerShadowSigsRef")) (fa "bodyImplEnvRef" (EFieldAccess (EVar "run") "bodyImplEnvRef")) (fa "methodAliasEntriesRef" (EFieldAccess (EVar "run") "methodAliasEntriesRef")) (fa "methodScopeCtxRef" (EFieldAccess (EVar "run") "methodScopeCtxRef")) (fa "methodScopeMemoRef" (EFieldAccess (EVar "run") "methodScopeMemoRef")) (fa "aliasMethodOriginsRef" (EFieldAccess (EVar "run") "aliasMethodOriginsRef")) (fa "implObls" (EFieldAccess (EVar "run") "implObls")) (fa "poisonedVars" (EFieldAccess (EVar "run") "poisonedVars")) (fa "deferrableVarIds" (EFieldAccess (EVar "run") "deferrableVarIds")) (fa "liveMemberMonosRef" (EFieldAccess (EVar "run") "liveMemberMonosRef")) (fa "quiescentGoalsRef" (EFieldAccess (EVar "run") "quiescentGoalsRef")) (fa "heldLiveGoalsRef" (EFieldAccess (EVar "run") "heldLiveGoalsRef")) (fa "determinedRowsRef" (EFieldAccess (EVar "run") "determinedRowsRef")) (fa "declaredSigVarIds" (EFieldAccess (EVar "run") "declaredSigVarIds")) (fa "tupleCallCandidates" (EFieldAccess (EVar "run") "tupleCallCandidates")) (fa "numlitVarLocs" (EFieldAccess (EVar "run") "numlitVarLocs")) (fa "patLitPending" (EFieldAccess (EVar "run") "patLitPending")) (fa "patLitDeferred" (EFieldAccess (EVar "run") "patLitDeferred")) (fa "matchChecksDeferred" (EFieldAccess (EVar "run") "matchChecksDeferred")) (fa "numlitRanges" (EFieldAccess (EVar "run") "numlitRanges")) (fa "wideLitRanges" (EFieldAccess (EVar "run") "wideLitRanges")) (fa "numlitUntainted" (EFieldAccess (EVar "run") "numlitUntainted")) (fa "numlitOpLocs" (EFieldAccess (EVar "run") "numlitOpLocs")) (fa "numlitCtxTags" (EFieldAccess (EVar "run") "numlitCtxTags")) (fa "localBindRefs" (EFieldAccess (EVar "run") "localBindRefs")) (fa "localSchemesOut" (EFieldAccess (EVar "run") "localSchemesOut")) (fa "seedSchemesOut" (EFieldAccess (EVar "run") "seedSchemesOut")) (fa "funPredicateSlotsRef" (EFieldAccess (EVar "run") "funPredicateSlotsRef")) (fa "funPredicateSlotsIdxRef" (EFieldAccess (EVar "run") "funPredicateSlotsIdxRef")) (fa "funConstraintDeclaredRef" (EFieldAccess (EVar "run") "funConstraintDeclaredRef")) (fa "currentImportDefinersRef" (EFieldAccess (EVar "run") "currentImportDefinersRef")) (fa "currentImportOriginsRef" (EFieldAccess (EVar "run") "currentImportOriginsRef")) (fa "importedSchemeOblsRef" (EFieldAccess (EVar "run") "importedSchemeOblsRef")) (fa "obls" (EFieldAccess (EVar "run") "obls")) (fa "absorptions" (EFieldAccess (EVar "run") "absorptions")) (fa "schemeObligationsRef" (EFieldAccess (EVar "run") "schemeObligationsRef")) (fa "schemeDefIdsRef" (EFieldAccess (EVar "run") "schemeDefIdsRef")) (fa "methodPredicateSlotsRef" (EFieldAccess (EVar "run") "methodPredicateSlotsRef")) (fa "currentFn" (EFieldAccess (EVar "run") "currentFn")) (fa "currentImplBody" (EFieldAccess (EVar "run") "currentImplBody")) (fa "methodSiteFns" (EFieldAccess (EVar "run") "methodSiteFns")) (fa "dictAppFns" (EFieldAccess (EVar "run") "dictAppFns")) (fa "residualUnivRef" (EFieldAccess (EVar "run") "residualUnivRef")) (fa "promotedRef" (EFieldAccess (EVar "run") "promotedRef")) (fa "fieldOwnerModulesRef" (EFieldAccess (EVar "run") "fieldOwnerModulesRef")) (fa "fieldOwnerReachRef" (EFieldAccess (EVar "run") "fieldOwnerReachRef")) (fa "typeErrors" (EFieldAccess (EVar "run") "typeErrors")) (fa "typeErrorMsgSetRef" (EFieldAccess (EVar "run") "typeErrorMsgSetRef")) (fa "ambiguitySitesRef" (EFieldAccess (EVar "run") "ambiguitySitesRef")) (fa "ambiguityVarsRef" (EFieldAccess (EVar "run") "ambiguityVarsRef")) (fa "errorsDetected" (EFieldAccess (EVar "run") "errorsDetected")) (fa "occursCheckFailed" (EFieldAccess (EVar "run") "occursCheckFailed")) (fa "currentLevel" (EFieldAccess (EVar "run") "currentLevel")) (fa "markingRef" (EFieldAccess (EVar "run") "markingRef")) (fa "ownPopsRef" (EFieldAccess (EVar "run") "ownPopsRef")) (fa "superDeclsRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "superDeclsRef"))) (fa "sigNameSetRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "sigNameSetRef"))) (fa "sigTyMapRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "sigTyMapRef"))) (fa "matchOracle" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "matchOracle"))) (fa "matchWarnings" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "matchWarnings"))) (fa "standaloneValuesRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "drain") "standaloneValuesRef"))) (fa "methodDispatchIdxByIdRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "drain") "methodDispatchIdxByIdRef"))) (fa "currentModuleRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "ident") "currentModuleRef"))) (fa "invocationViewRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "ident") "invocationViewRef"))))))
+(DFunDef false "moduleCellsFrom" ((PVar "detach") (PVar "run") (PVar "tables") (PVar "drain") (PVar "ident")) (ERecordUpdate (EVar "run") ((fa "superDeclsRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "superDeclsRef"))) (fa "sigNameSetRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "sigNameSetRef"))) (fa "sigTyMapRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "sigTyMapRef"))) (fa "matchOracle" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "matchOracle"))) (fa "matchWarnings" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "matchWarnings"))) (fa "standaloneValuesRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "drain") "standaloneValuesRef"))) (fa "methodDispatchIdxByIdRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "drain") "methodDispatchIdxByIdRef"))) (fa "currentModuleRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "ident") "currentModuleRef"))) (fa "invocationViewRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "ident") "invocationViewRef"))))))
 (DTypeSig false "refFrom" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyVar "a")) (TyApp (TyCon "Ref") (TyVar "a")))))
 (DFunDef false "refFrom" ((PVar "detach") (PVar "r")) (EIf (EVar "detach") (EApp (EVar "Ref") (EFieldAccess (EVar "r") "value")) (EVar "r")))
 (DTypeSig true "carryModuleCtx" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx"))))
@@ -1367,9 +1275,7 @@ defaultBodyBinderNamesProbe _ =
 (DTypeSig true "emptyBuiltinClasses" (TyCon "BuiltinClasses"))
 (DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClasses" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")) (fa "bcNumPresent" (EVar "False")) (fa "bcEqPresent" (EVar "False")) (fa "bcOrdPresent" (EVar "False")) (fa "bcSemigroupPresent" (EVar "False")) (fa "bcPreludeSeeded" (EVar "False")))))
 (DTypeSig true "takeFirst" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "takeFirst" ((PVar "n") PWild) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "takeFirst" (PWild (PList)) (EListLit))
-(DFunDef false "takeFirst" ((PVar "n") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "xs"))))
+(DFunDef false "takeFirst" ((PVar "n") (PVar "xs")) (EApp (EApp (EVar "take") (EVar "n")) (EVar "xs")))
 (DTypeSig true "dictParamName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "dictParamName" ((PVar "fn") (PVar "slot")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EVar "display") (EVar "fn"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "slot")))) (ELit (LString ""))))
 (DTypeSig true "defaultReceiverOrdinal" (TyCon "Int"))
@@ -1411,6 +1317,7 @@ defaultBodyBinderNamesProbe _ =
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
 (DUse false (UseGroup ("types" "tc_types") ((mem "AbsorptionEvent" true) (mem "AssumptionTraceEntry" true) (mem "BuiltinClasses" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "CrossRun" true) (mem "DataEnv" true) (mem "DeclEnvs" true) (mem "DeclEnvSeedAcc" true) (mem "DriveInputs" true) (mem "DynCtx" true) (mem "EvidenceObservationEntry" true) (mem "GrantState" true) (mem "GraphCtx" true) (mem "GraphRun" true) (mem "ImplEnv" true) (mem "ImplUniverse" true) (mem "Interners" true) (mem "InvocationView" true) (mem "Lineage" true) (mem "LocalAbsState" true) (mem "MethodEnv" true) (mem "ModuleCells" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "Predicate" true) (mem "ShadowDicts" true) (mem "SigVars" true) (mem "TcConfig" true) (mem "TcEnv" true) (mem "TraceSink" true) (mem "UObligation" true) (mem "Windowed" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
+(DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
@@ -1510,7 +1417,7 @@ defaultBodyBinderNamesProbe _ =
 (DTypeSig true "moduleCtxFrom" (TyFun (TyCon "Bool") (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx")))))))
 (DFunDef false "moduleCtxFrom" ((PVar "detach") (PVar "run") (PVar "tables") (PVar "drain") (PVar "ident")) (ERecordCreate "ModuleCtx" ((fa "mcCells" (EApp (EApp (EApp (EApp (EApp (EVar "moduleCellsFrom") (EVar "detach")) (EFieldAccess (EVar "run") "mcCells")) (EFieldAccess (EVar "tables") "mcCells")) (EFieldAccess (EVar "drain") "mcCells")) (EFieldAccess (EVar "ident") "mcCells"))) (fa "mcGraph" (EFieldAccess (EVar "run") "mcGraph")) (fa "mcLoc" (EFieldAccess (EVar "run") "mcLoc")))))
 (DTypeSig false "moduleCellsFrom" (TyFun (TyCon "Bool") (TyFun (TyCon "ModuleCells") (TyFun (TyCon "ModuleCells") (TyFun (TyCon "ModuleCells") (TyFun (TyCon "ModuleCells") (TyCon "ModuleCells")))))))
-(DFunDef false "moduleCellsFrom" ((PVar "detach") (PVar "run") (PVar "tables") (PVar "drain") (PVar "ident")) (ERecordCreate "ModuleCells" ((fa "currentScope" (EFieldAccess (EVar "run") "currentScope")) (fa "admittedOccObls" (EFieldAccess (EVar "run") "admittedOccObls")) (fa "curEffect" (EFieldAccess (EVar "run") "curEffect")) (fa "effectSummaries" (EFieldAccess (EVar "run") "effectSummaries")) (fa "pendingJoinsRef" (EFieldAccess (EVar "run") "pendingJoinsRef")) (fa "fileValueFlows" (EFieldAccess (EVar "run") "fileValueFlows")) (fa "fileValueScopes" (EFieldAccess (EVar "run") "fileValueScopes")) (fa "rigidEffvarsRef" (EFieldAccess (EVar "run") "rigidEffvarsRef")) (fa "rigidAuthvarsRef" (EFieldAccess (EVar "run") "rigidAuthvarsRef")) (fa "effectSitesRef" (EFieldAccess (EVar "run") "effectSitesRef")) (fa "rowFailureReportedRef" (EFieldAccess (EVar "run") "rowFailureReportedRef")) (fa "typeErrorKeySetRef" (EFieldAccess (EVar "run") "typeErrorKeySetRef")) (fa "escapedExistentialsRef" (EFieldAccess (EVar "run") "escapedExistentialsRef")) (fa "openedAuthvarsRef" (EFieldAccess (EVar "run") "openedAuthvarsRef")) (fa "indexSubstitutedRef" (EFieldAccess (EVar "run") "indexSubstitutedRef")) (fa "extendedBindersRef" (EFieldAccess (EVar "run") "extendedBindersRef")) (fa "displayHiddenBindersRef" (EFieldAccess (EVar "run") "displayHiddenBindersRef")) (fa "openedExistentialsRef" (EFieldAccess (EVar "run") "openedExistentialsRef")) (fa "openedExistentialsStackRef" (EFieldAccess (EVar "run") "openedExistentialsStackRef")) (fa "recordByNameRef" (EFieldAccess (EVar "run") "recordByNameRef")) (fa "fieldOwnersRef" (EFieldAccess (EVar "run") "fieldOwnersRef")) (fa "dataParamKindsRef" (EFieldAccess (EVar "run") "dataParamKindsRef")) (fa "dataParamNameIndexRef" (EFieldAccess (EVar "run") "dataParamNameIndexRef")) (fa "dataParamPolarityRef" (EFieldAccess (EVar "run") "dataParamPolarityRef")) (fa "dataParamRowAtomsRef" (EFieldAccess (EVar "run") "dataParamRowAtomsRef")) (fa "aliasTableRef" (EFieldAccess (EVar "run") "aliasTableRef")) (fa "numLitFromIntAnchorRef" (EFieldAccess (EVar "run") "numLitFromIntAnchorRef")) (fa "definerShadowNamesRef" (EFieldAccess (EVar "run") "definerShadowNamesRef")) (fa "definerShadowSigsRef" (EFieldAccess (EVar "run") "definerShadowSigsRef")) (fa "bodyImplEnvRef" (EFieldAccess (EVar "run") "bodyImplEnvRef")) (fa "methodAliasEntriesRef" (EFieldAccess (EVar "run") "methodAliasEntriesRef")) (fa "methodScopeCtxRef" (EFieldAccess (EVar "run") "methodScopeCtxRef")) (fa "methodScopeMemoRef" (EFieldAccess (EVar "run") "methodScopeMemoRef")) (fa "aliasMethodOriginsRef" (EFieldAccess (EVar "run") "aliasMethodOriginsRef")) (fa "implObls" (EFieldAccess (EVar "run") "implObls")) (fa "poisonedVars" (EFieldAccess (EVar "run") "poisonedVars")) (fa "deferrableVarIds" (EFieldAccess (EVar "run") "deferrableVarIds")) (fa "liveMemberMonosRef" (EFieldAccess (EVar "run") "liveMemberMonosRef")) (fa "quiescentGoalsRef" (EFieldAccess (EVar "run") "quiescentGoalsRef")) (fa "heldLiveGoalsRef" (EFieldAccess (EVar "run") "heldLiveGoalsRef")) (fa "determinedRowsRef" (EFieldAccess (EVar "run") "determinedRowsRef")) (fa "declaredSigVarIds" (EFieldAccess (EVar "run") "declaredSigVarIds")) (fa "tupleCallCandidates" (EFieldAccess (EVar "run") "tupleCallCandidates")) (fa "numlitVarLocs" (EFieldAccess (EVar "run") "numlitVarLocs")) (fa "patLitPending" (EFieldAccess (EVar "run") "patLitPending")) (fa "patLitDeferred" (EFieldAccess (EVar "run") "patLitDeferred")) (fa "matchChecksDeferred" (EFieldAccess (EVar "run") "matchChecksDeferred")) (fa "numlitRanges" (EFieldAccess (EVar "run") "numlitRanges")) (fa "wideLitRanges" (EFieldAccess (EVar "run") "wideLitRanges")) (fa "numlitUntainted" (EFieldAccess (EVar "run") "numlitUntainted")) (fa "numlitOpLocs" (EFieldAccess (EVar "run") "numlitOpLocs")) (fa "numlitCtxTags" (EFieldAccess (EVar "run") "numlitCtxTags")) (fa "localBindRefs" (EFieldAccess (EVar "run") "localBindRefs")) (fa "localSchemesOut" (EFieldAccess (EVar "run") "localSchemesOut")) (fa "seedSchemesOut" (EFieldAccess (EVar "run") "seedSchemesOut")) (fa "funPredicateSlotsRef" (EFieldAccess (EVar "run") "funPredicateSlotsRef")) (fa "funPredicateSlotsIdxRef" (EFieldAccess (EVar "run") "funPredicateSlotsIdxRef")) (fa "funConstraintDeclaredRef" (EFieldAccess (EVar "run") "funConstraintDeclaredRef")) (fa "currentImportDefinersRef" (EFieldAccess (EVar "run") "currentImportDefinersRef")) (fa "currentImportOriginsRef" (EFieldAccess (EVar "run") "currentImportOriginsRef")) (fa "importedSchemeOblsRef" (EFieldAccess (EVar "run") "importedSchemeOblsRef")) (fa "obls" (EFieldAccess (EVar "run") "obls")) (fa "absorptions" (EFieldAccess (EVar "run") "absorptions")) (fa "schemeObligationsRef" (EFieldAccess (EVar "run") "schemeObligationsRef")) (fa "schemeDefIdsRef" (EFieldAccess (EVar "run") "schemeDefIdsRef")) (fa "methodPredicateSlotsRef" (EFieldAccess (EVar "run") "methodPredicateSlotsRef")) (fa "currentFn" (EFieldAccess (EVar "run") "currentFn")) (fa "currentImplBody" (EFieldAccess (EVar "run") "currentImplBody")) (fa "methodSiteFns" (EFieldAccess (EVar "run") "methodSiteFns")) (fa "dictAppFns" (EFieldAccess (EVar "run") "dictAppFns")) (fa "residualUnivRef" (EFieldAccess (EVar "run") "residualUnivRef")) (fa "promotedRef" (EFieldAccess (EVar "run") "promotedRef")) (fa "fieldOwnerModulesRef" (EFieldAccess (EVar "run") "fieldOwnerModulesRef")) (fa "fieldOwnerReachRef" (EFieldAccess (EVar "run") "fieldOwnerReachRef")) (fa "typeErrors" (EFieldAccess (EVar "run") "typeErrors")) (fa "typeErrorMsgSetRef" (EFieldAccess (EVar "run") "typeErrorMsgSetRef")) (fa "ambiguitySitesRef" (EFieldAccess (EVar "run") "ambiguitySitesRef")) (fa "ambiguityVarsRef" (EFieldAccess (EVar "run") "ambiguityVarsRef")) (fa "errorsDetected" (EFieldAccess (EVar "run") "errorsDetected")) (fa "occursCheckFailed" (EFieldAccess (EVar "run") "occursCheckFailed")) (fa "currentLevel" (EFieldAccess (EVar "run") "currentLevel")) (fa "markingRef" (EFieldAccess (EVar "run") "markingRef")) (fa "ownPopsRef" (EFieldAccess (EVar "run") "ownPopsRef")) (fa "superDeclsRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "superDeclsRef"))) (fa "sigNameSetRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "sigNameSetRef"))) (fa "sigTyMapRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "sigTyMapRef"))) (fa "matchOracle" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "matchOracle"))) (fa "matchWarnings" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "matchWarnings"))) (fa "standaloneValuesRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "drain") "standaloneValuesRef"))) (fa "methodDispatchIdxByIdRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "drain") "methodDispatchIdxByIdRef"))) (fa "currentModuleRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "ident") "currentModuleRef"))) (fa "invocationViewRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "ident") "invocationViewRef"))))))
+(DFunDef false "moduleCellsFrom" ((PVar "detach") (PVar "run") (PVar "tables") (PVar "drain") (PVar "ident")) (ERecordUpdate (EVar "run") ((fa "superDeclsRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "superDeclsRef"))) (fa "sigNameSetRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "sigNameSetRef"))) (fa "sigTyMapRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "sigTyMapRef"))) (fa "matchOracle" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "matchOracle"))) (fa "matchWarnings" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "tables") "matchWarnings"))) (fa "standaloneValuesRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "drain") "standaloneValuesRef"))) (fa "methodDispatchIdxByIdRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "drain") "methodDispatchIdxByIdRef"))) (fa "currentModuleRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "ident") "currentModuleRef"))) (fa "invocationViewRef" (EApp (EApp (EVar "refFrom") (EVar "detach")) (EFieldAccess (EVar "ident") "invocationViewRef"))))))
 (DTypeSig false "refFrom" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyVar "a")) (TyApp (TyCon "Ref") (TyVar "a")))))
 (DFunDef false "refFrom" ((PVar "detach") (PVar "r")) (EIf (EVar "detach") (EApp (EVar "Ref") (EFieldAccess (EVar "r") "value")) (EVar "r")))
 (DTypeSig true "carryModuleCtx" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx"))))
@@ -1524,9 +1431,7 @@ defaultBodyBinderNamesProbe _ =
 (DTypeSig true "emptyBuiltinClasses" (TyCon "BuiltinClasses"))
 (DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClasses" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")) (fa "bcNumPresent" (EVar "False")) (fa "bcEqPresent" (EVar "False")) (fa "bcOrdPresent" (EVar "False")) (fa "bcSemigroupPresent" (EVar "False")) (fa "bcPreludeSeeded" (EVar "False")))))
 (DTypeSig true "takeFirst" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "takeFirst" ((PVar "n") PWild) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "takeFirst" (PWild (PList)) (EListLit))
-(DFunDef false "takeFirst" ((PVar "n") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "xs"))))
+(DFunDef false "takeFirst" ((PVar "n") (PVar "xs")) (EApp (EApp (EVar "take") (EVar "n")) (EVar "xs")))
 (DTypeSig true "dictParamName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "dictParamName" ((PVar "fn") (PVar "slot")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EMethodRef "display") (EVar "fn"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "slot")))) (ELit (LString ""))))
 (DTypeSig true "defaultReceiverOrdinal" (TyCon "Int"))
