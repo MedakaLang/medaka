@@ -31,7 +31,7 @@ import types.publish.{tcCode}
 import types.repr.{IfaceRef(..), ppScheme}
 import types.registry.{spEmpty}
 import types.tc_env.{addCtor, declEnvModule, envFor, lookupCtor, methodEnvGo}
-import types.tc_mono.{monoScheme, tconBuiltin}
+import types.tc_mono.{monoScheme, tconUnresolved}
 import types.tc_scope.{
   aliasMethodSpellings,
   aliasQualifiedMethodEntries,
@@ -144,8 +144,8 @@ test "sortIfaceRefs orders by identity then name whatever the input order" =
     expectEqual 3 (length (keys [a, b, c])),
   ]
 
-test "sortIfaceRefs keeps two refs of one sort key, so an absent origin never merges declarations" =
-  let a = IfaceRef { irName = "Same", irOrigin = OriginUnresolved }
+test "sortIfaceRefs keeps two refs of one sort key, so equal keys never merge declarations" =
+  let a = IfaceRef { irName = "Same", irOrigin = OriginModule "m" }
   expectEqual 2 (length (sortIfaceRefs [a, a]))
 
 -- ── the admission predicate ───────────────────────────────────────────────
@@ -403,15 +403,15 @@ ctorAfter src =
   g.declEnvsRef :=
     { empty | deData = { empty.deData | deCtorExports = exports } }
   let env0 = envFor (blankModuleCtx g "user")
-  let withT = addCtor env0 "Mk" (monoScheme (tconBuiltin "T"))
-  let withU = addCtor env0 "Mk" (monoScheme (tconBuiltin "U"))
+  let withT = addCtor env0 "Mk" (monoScheme (tconUnresolved "T"))
+  let withU = addCtor env0 "Mk" (monoScheme (tconUnresolved "U"))
   let pop =
     insertCtorPop
       withU
       (ctorDecls "mb" "U")
       (insertCtorPop withT (ctorDecls "ma" "T") spEmpty)
   g.crossRun.universeCtorPop := pop
-  let env = addCtor env0 "Mk" (monoScheme (tconBuiltin "Base"))
+  let env = addCtor env0 "Mk" (monoScheme (tconUnresolved "Base"))
   let prog = parse src
   match lookupCtor (applyCtorScopeOverrides prog env) "Mk"
     Some s => ppScheme s

@@ -58,7 +58,7 @@ varsFor : ModuleCtx -> MTy -> List (Int, Mono)
 varsFor m t = map (k => (k, freshVar m ())) (nub (varsOf t))
 
 build : List (Int, Mono) -> MTy -> Mono
-build _ (MCon n) = tconBuiltin n
+build _ (MCon n) = tconFrom (OriginModule "gen") n
 build vs (MVar k) = optionOr (tconUnresolved "no-var") (lookup k vs)
 build vs (MApp a b) = TApp (build vs a) (build vs b)
 build vs (MFun a b) = TFun (build vs a) pureRow (build vs b)
@@ -205,7 +205,7 @@ test "a constructor clash is a type mismatch and binds nothing" =
   let m = fresh ()
   let a = freshVar m ()
   unify m (tconBuiltin "Int") (tconBuiltin "Bool")
-  unify m (TApp (tconBuiltin "List") a) (TApp (tconBuiltin "Pair") a)
+  unify m (TApp (tconBuiltin "List") a) (TApp (tconUnresolved "Pair") a)
   expectAll [
     expectEqual ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"] (codes m),
     expectEqual ["v0"] (shapes [a]),
