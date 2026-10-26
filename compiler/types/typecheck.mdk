@@ -938,8 +938,11 @@ import types.tc_state.{
 }
 import types.tc_env.{
   addCtor,
+  aliasUniverseAt,
   anyArgMentions,
   anyKRow,
+  attachStandaloneSources,
+  bindingDeclared,
   bindingWithStandalone,
   buildClassEnvGo,
   buildFlatImplEnv,
@@ -981,6 +984,8 @@ import types.tc_env.{
   declGradedScope,
   declParamKinds,
   declTopFnNames,
+  depExportsStandalone,
+  depExportsUnknown,
   dispatchTyparams,
   dispHeadTab,
   domainHasPatterns,
@@ -1002,6 +1007,7 @@ import types.tc_env.{
   extendVars,
   funClausePair,
   funDefs,
+  graphAmbigValues,
   graphPubDefiners,
   ieCandidatesForIface,
   ieCandidatesForMethod,
@@ -1024,6 +1030,7 @@ import types.tc_env.{
   ieRowTriple,
   ieRowTys,
   ieUniverseAt,
+  ifaceExportsIndex,
   ifaceMethodNames,
   ifaceMethodRows,
   ifaceParamKindsDeclAll,
@@ -1033,10 +1040,12 @@ import types.tc_env.{
   ifaceTabKey,
   implAccFinish,
   importedBindings,
+  importerReachIndex,
   importFormRows,
   importTableMid,
   instRefMid,
   instRefSeq,
+  keyEntryIface,
   kindAnnSlots,
   kindName,
   kindPublicDataDecl,
@@ -1093,6 +1102,8 @@ import types.tc_env.{
   seedAlphaLets,
   selectIfaceRows,
   sortIfaceRefs,
+  standaloneValueFor,
+  superLookup,
   tyTabKey,
   useModuleId,
   usePathAdmitsDecl,
@@ -5442,113 +5453,6 @@ addAliasDecl name o params rhs ord pub att env =
   }
   DataEnv { env | deAliases = (key, ad) :: env.deAliases }
 
--- ── A-3.2b residual (#1512): the alias universe, sourced from stage K ──────
---
--- THE RETIREMENT.  `CrossRun.universeAliasTable` was a cross-run accumulator
--- grown one module at a time by `appendDataUniverse`'s load/register/store
--- round trip.  It is GONE; this is its whole-graph replacement, and it is a
--- projection of K rather than a second copy of the same fact.
---
--- 🚨 THREE SEPARATELY NAMED CONDITIONS, AND THE SPLIT IS THE WHOLE DESIGN.
--- They are NOT one fused `adPub && adOrd < cur` test — this file prohibits
--- open-coding the filter in four places (`grep -n 'open-cod'`), and
--- `declEnvRowVisible`'s own comment is *"Both arms go through the predicate;
--- neither open-codes `<=` or a `pub` test."*
---
---   1. `declEnvVisibleTo cur ad.adOrd ad.adPub` — BOTH ratified conjuncts, the
---      ordinal one and the publicity one, applied through the ONE predicate.
---      This is a production reader of `declEnvVisibleAt`.  ⚠️ It used to say "the
---      THIRD (after `declEnvRowVisible` and `ieSnapAt`); the ratchet's
---      `declEnvsRef` row records all three".  BOTH halves are now wrong: the
---      ratchet's count was measured wrong in both directions (RUN-007/RUN-013 —
---      it is eight leaf read paths, not three), and `ieSnapAt` is no longer a
---      reader of this predicate at all, having moved to `ieCandidacyVisibleAt` at
---      A-3.6.  DERIVE the set; do not carry a count.
---   2. `ad.adOrd /= cur` — the OWN-ROW EXCLUSION.  ⚠️ THIS ONE IS STRUCTURAL, NOT
---      TRANSITIONAL.  This clause used to justify itself by "A-3.6 deletes
---      `declEnvVisibleAt`'s body, at which point condition 1 reduces to the
---      publicity conjunct alone and this line is the only thing still keeping the
---      reader's own row out."  A-3.6 did NOT delete that body (it split the
---      predicate and flipped the instance axis only), so condition 1 still
---      carries the ordinal — but the conclusion is UNCHANGED and does not depend
---      on the premise: this condition is structural on its own terms.  It is not
---      an ordinal FILTER wearing an
---      ordinal's clothes: the retired accumulator held the public aliases of
---      every module whose arm had ALREADY FINISHED (`appendDataUniverse` is the
---      last statement of a module's arm), so a reader at ordinal k saw
---      0..k-1 and never itself, and its own aliases — public AND private —
---      arrive by a route this unit does not touch (`registerAllData … prog0`
---      conses them onto the front of the working `aliasTableRef`).  Dropping
---      this would double-register every public alias the reader declares.
---      Conditions 1 ∧ 2 are exactly the `<` the accumulator had (`<=` ∧ `/=`).
---      ⚠️ This used to add "under A-3.6 they reduce to `adPub && adOrd /= cur`,
---      which is the intended end state".  They do NOT: A-3.6 left the alias table
---      — a NAME-scoping table — on `declEnvVisibleAt`, deliberately, because
---      `DICT-SEMANTICS.md`'s I5 boundary clause says its price does not extend to
---      names.  That reduction is owed to whichever unit widens the name axis, if
---      one ever is; it is not scheduled.
---   3. ⚠️ RETIRED.  This was `not ad.adAttrib`, the attributed-alias drop applied
---      HERE at the read rather than in the population.  #1228/#1586's re-add
---      condition on `dataEnvAddDecl` fired: `registerData` gained its `DAttrib`
---      unwrap arm, so the guard had to go in the same diff.  The POPULATION still
---      records `adAttrib` and still holds attributed aliases — that neutrality is
---      what the `listLen aliasFixtureEnv.deAliases` doctest asserts — the read
---      simply no longer narrows on it.
---
--- ⚠️ THE CYCLIC-ALIAS REMOVAL IS PRESERVED BY DOING NOTHING.
--- `rejectCyclicAliases` DELETES cyclic entries from the per-run
--- `aliasTableRef`, and that deletion never reached the accumulator either:
--- `appendDataUniverse` opens by RELOADING the working ref from the universe,
--- discarding the filtered value, before it registers and stores.  So the
--- cross-module alias source has always held cyclic entries and every module
--- re-detects them through its own `rejectCyclicAliases` call.  This function
--- reproduces that exactly — it filters on visibility only.  A future edit that
--- "helpfully" pre-drops cyclic aliases here would silence the second and later
--- modules' `T-RECURSIVE-ALIAS`, which is a loud → silent severity increase.
--- Pinned by the `1512-A32b/alias-cycle-importer` leg of
--- `test/diff_compiler_check_cli_modules.sh`, which requires the diagnostic to
--- name BOTH the declaring module and the importer.
--- ⚠️ ALLOCATION SHAPE, RECORDED BECAUSE THE PERF GATE CANNOT SEE IT.  The line
--- this replaced in `loadDataUniverse` was a pointer copy (`setRef … .value`);
--- this MATERIALISES a filtered list, and it runs twice per module (the arm's
--- own reload and `appendDataUniverse`'s).  That is the allocation term
--- `declEnvRowVisible`'s "ZERO ALLOCATION … MEASURED perf contract" note forbids
--- for its sibling — and `diff_compiler_perf_scaling.sh`'s `gen_modules` shape
--- declares no type aliases at all, so the gate is BLIND to it (derive, don't
--- trust: `grep -n 'type ' test/diff_compiler_perf_scaling.sh`).
--- It is immaterial at this size and that was MEASURED, not assumed — but by PR
--- #1588's independent reviewer, not by me, so it is RELAYED: with 24 aliases,
--- 40 modules 864 → 824 ms and 80 modules 3489 → 3462 ms (interleaved, min of 3),
--- i.e. inside the noise.  The reason it stays immaterial is that `deAliases` is
--- SMALL — 11 type aliases in the whole tree today.  If a future graph makes
--- aliases numerous, the fix is the per-ordinal snapshot `ieUnivSnaps` already
--- uses for `IE`, not a wider filter.
-aliasUniverseAt : Int ->
-  List (TabKey, AliasDecl) ->
-  List (TabKey, (List String, Ty))
-aliasUniverseAt _ [] = []
-aliasUniverseAt cur ((key, ad) :: rest)
-  | aliasVisibleTo cur ad =
-    (key, (ad.adParams, ad.adRhs)) :: aliasUniverseAt cur rest
-  | otherwise = aliasUniverseAt cur rest
-
--- The three conditions of the block above, in that order.  Split out so each is
--- separately readable and separately greppable.  ⚠️ This said "A-3.6 edits
--- condition 1's predicate and must leave conditions 2 and 3 standing".  A-3.6
--- (#1558) edited NONE of the three — the alias table is a NAME-scoping table and
--- the split ruling left the whole name axis alone.  All three conditions stand as
--- written; the split-out shape is what will make a future name-axis unit cheap, and
--- conditions 2 and 3 remain structural whatever happens to condition 1.
--- ⚠️ CONDITION 3 IS GONE — #1228/#1586's re-add condition FIRED.  `registerData` now
--- has a `DAttrib` unwrap arm, so an attributed alias expands where it is DECLARED;
--- keeping `not ad.adAttrib` here would have left it opaque in importers, i.e. the
--- exact mirror-widening `dataEnvAddDecl`'s 🚨 note said this guard must not outlive.
--- `adAttrib` stays RECORDED (population neutrality is still asserted by the
--- `listLen aliasFixtureEnv.deAliases` doctest) but no longer filters.
-aliasVisibleTo : Int -> AliasDecl -> Bool
-aliasVisibleTo cur ad =
-  declEnvVisibleTo cur ad.adOrd ad.adPub && ad.adOrd /= cur
-
 -- Fixture for the doctests below: a PUBLIC alias in the prelude row (ordinal 0),
 -- a PRIVATE one beside it, and a public one in a later module (ordinal 1).
 aliasFixturePubCore : Decl
@@ -6029,11 +5933,6 @@ methodVisibleHere : ModuleCtx -> String -> List MethodRow
 methodVisibleHere mctx n = match mctx.mcCells.methodScopeCtxRef.value
   None => []
   Some (_, cur) => methodCandsAt n cur mctx.mcGraph.declEnvsRef.value.deMethods
-
--- The graph's interface-row index (`meIfaceExports`); `omEmpty` before a driver
--- built `DeclEnvs`, which `nameableIfaceShadows` and its peers read as "no index".
-ifaceExportsIndex : GraphCtx -> Unit -> OrdMap (List (String, List String))
-ifaceExportsIndex gctx _ = gctx.declEnvsRef.value.deMethods.meIfaceExports
 
 -- one entry per occurrence of a registered interface method: (iface, typarams,
 -- declared method Ty, the occurrence's instantiated mono).  Resolved post-inference.
@@ -11261,13 +11160,6 @@ lookupImportedStandalone env name = match lookupBinding env name
     _ => None
   None => None
 
--- Recursive contracts precede body generalization. Their predicate templates
--- belong to the same allocation as their scheme, not the final definition's ids.
-bindingDeclared : TcEnv -> String -> Option CDeclared
-bindingDeclared env name = match lookupBinding env name
-  Some binding => binding.ebValue.vsDeclared
-  None => None
-
 bindingDeclaredAt : TcEnv ->
   String ->
   MethodTrackedInstantiation ->
@@ -11306,22 +11198,6 @@ recordDeclaredBindingCall mctx dc subst =
     (map fst expanded)
     (constraintMonosOf (map (pair => (fst pair).csId) expanded) subst)
     (callArgVecsV mctx.mcGraph expanded subst)
-
-attachStandaloneSources : OrdMap Scheme ->
-  List (String, EnvBinding) ->
-  List (String, EnvBinding)
-attachStandaloneSources sources bindings =
-  map
-    ((name, binding) => (
-      name,
-      match omLookup name sources
-        Some source => bindingWithStandalone binding (
-          ImportedStandalone,
-          ordinaryValueScheme source,
-        )
-        None => binding,
-    ))
-    bindings
 
 -- ── pattern inference: returns the pattern's type + the bindings it adds ───
 inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
@@ -12048,15 +11924,6 @@ recordRLocalSite env name tagRef innerRef inst
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme
 standaloneSchemeFor env name sym =
   map (value => value.vsScheme) (standaloneValueFor env name sym)
-
-standaloneValueFor : TcEnv -> String -> String -> Option ValueScheme
-standaloneValueFor env name sym = match lookupStandaloneValue env name
-  Some value => Some value
-  None =>
-    if sym == "" then
-      None
-    else
-      map (binding => binding.ebValue) (lookupBinding env sym)
 
 standaloneOccurrence : TcEnv ->
   String ->
@@ -26939,14 +26806,6 @@ substParams (p :: rest) subst = match lookupAssoc p subst
   Some t => t :: substParams rest subst
   None => substParams rest subst
 
--- The type parameters and direct supers of one interface, by identity.
-superLookup : GraphCtx -> IfaceRef -> Option (List String, List Super)
-superLookup gctx ir =
-  let key = regKeyOfTab (ifaceTabKey ir.irOrigin ir.irName)
-  map
-    (row => (ceRowTyparams row, ceRowSupers row))
-    (ceLookupGraph key gctx.declEnvsRef.value.deIfaces)
-
 -- the (typarams, supers) of interface [target], scanning DInterface decls; None if
 -- no such interface is in scope.
 ifaceSupersOf : List Decl -> String -> Option (List String, List Super)
@@ -27268,9 +27127,6 @@ candsOneIface : List KeyEntry -> Option String
 candsOneIface [] = None
 candsOneIface ((KeyEntry _ _ _ _ ifn _ _ _) :: rest) =
   if allList (e => keyEntryIface e == ifn) rest then Some ifn else None
-
-keyEntryIface : KeyEntry -> String
-keyEntryIface (KeyEntry _ _ _ _ ifn _ _ _) = ifn
 
 -- #1155: names the GOAL and every competing impl head, not just the interface, so the
 -- reader can find the impls that collided (ERROR-QUALITY §1: "in the user's
@@ -45276,16 +45132,6 @@ memberDefinerRow depId pubs (origin, local) =
     [] => [(local, (depId, origin))]
     rows => rows
 
--- #1675: the `deAmbigValues` peer of `graphPubDefiners`.  A driver that never built an
--- envelope (Flat / loader-less) reads the empty map and answers `[]`, so the ambiguity
--- check FAILS OPEN there — the same discipline `memberDefinerRow`'s fallback takes for
--- an absent graph, and the reason a single-file program can never trip this diagnostic.
-graphAmbigValues : GraphCtx -> String -> List (String, List String)
-graphAmbigValues gctx mid =
-  match omLookup mid gctx.declEnvsRef.value.deAmbigValues
-    None => []
-    Some rows => rows
-
 -- #739 fix follow-up: local-import-name → ORIGINAL exported name.  `importedBindings`
 -- yields (origin, local) pairs, so an aliased member `{x as y}` gives (y ↦ x) and a plain
 -- `{f}` gives (f ↦ f).  qualConstraintFor keys the (source, name) qual tables by the ORIGIN,
@@ -48232,42 +48078,6 @@ transitiveImporters reach mid modules =
       fst p /= mid && omHasKey mid (optionOr omEmpty (omLookup (fst p) reach)))
     modules
 
--- Module id → every module id it reaches through `DUse` edges, seeded EMPTY so a
--- module is reachable from itself only through a genuine cycle (the property the
--- per-target `fst p /= mid` guard above relied on the old path-pruned DFS for).
---
--- The direct-import edges are indexed FIRST, for the reason spelled out at
--- `declEnvReachIndex`: this walk visits O(modules) rows per module, so a direct-import
--- lookup that SCANS the module list — and re-runs `flatMap useModuleId` over the
--- scanned module's whole decl list, as the DFS this replaces did — makes the index
--- cubic in the module count.
-importerReachIndex : List (String, List Decl) -> OrdMap (OrdMap Unit)
-importerReachIndex mods =
-  importerReachGo (importerEdgeIndex mods omEmpty) mods omEmpty
-
-importerReachGo : OrdMap (List String) ->
-  List (String, List Decl) ->
-  OrdMap (OrdMap Unit) ->
-  OrdMap (OrdMap Unit)
-importerReachGo _ [] acc = acc
-importerReachGo edges ((mid, _) :: rest) acc =
-  importerReachGo
-    edges
-    rest
-    (omInsert mid (declEnvReachFrom edges [mid] omEmpty) acc)
-
--- Module id → the ids its `DUse` decls name, mirroring the oracle's path→module-id
--- mapping (`useModuleId`).  FIRST row wins and an absent id yields `[]` — the two
--- properties of the `lookupAssoc` scan this replaces.
-importerEdgeIndex : List (String, List Decl) ->
-  OrdMap (List String) ->
-  OrdMap (List String)
-importerEdgeIndex [] acc = acc
-importerEdgeIndex ((mid, prog) :: rest) acc
-  | omHasKey mid acc = importerEdgeIndex rest acc
-  | otherwise =
-    importerEdgeIndex rest (omInsert mid (flatMap useModuleId prog) acc)
-
 -- The `=>`-constrained-function dict-name set `elaborateModules` hands to prePass and
 -- dictPass, which must see the same set: the prelude's constrained names, then the
 -- full `constrainedSigNames` of every module (not the return-position subset:
@@ -48618,47 +48428,6 @@ formBareLocals gctx path acc =
         filterList (l => depExportsStandalone gctx depId l) (map snd bindings)
           ++ acc.blSet,
     }
-
--- S1's standalone operand is TWO conjuncts, and the second one is not optional.
--- An import form admits the row only if it binds the LOCAL name [bare] *and* the module
--- it imports from actually exports a STANDALONE so named.  Binding the name is not the
--- same fact: `import ifc.{Sizeable, size}` binds `size` to the interface METHOD, and
--- `import list.*` binds every name `list` exports and no others — in neither case is a
--- standalone `size`/`length` owned by some third module "imported into `M`", so in
--- neither case is it a shadow in `M` (`docs/spec/SHADOW-SEMANTICS.md` §1, clause S1).
---
--- MEASURED (#2809): the wildcard arm used to answer `True` for EVERY name, and while
--- the row's symbol was `<owner>__name` that over-admission was inert (the route always
--- named a define that existed).  With the bare row the route is `name`, resolved per
--- unit, and a unit that merely binds the method name has no such define: two files,
--- `import list.*` beside another module's standalone `length`, and `build` died
--- `use of undefined value '@mdk_length'` on a program `check` and `run` both accept and
--- get right.  The member-list arm reached the same end one step earlier — a DISPATCH
--- became a direct call to a standalone that is not in scope at the call site
--- (`@mdk_impl_BoxS_size` → `@mdk_size`) — so both arms are filtered, not just the
--- wildcard.
---
--- The export half is `graphPubDefiners`, the same table `importDefinersOf` admits
--- through: declared public top-level funDefs plus re-exports resolved transitively, so
--- a standalone reaching `M` through a re-export chain is admitted exactly as a directly
--- imported one is.  It answers `[]` on a driver that built no envelope (Flat /
--- loader-less) and for `core`, and both of those FAIL OPEN — the status-quo answer, and
--- the same discipline `memberDefinerRow`'s fallback takes for an absent graph.
--- does [depId] export a top-level STANDALONE named [bare]?  Fail-open where the graph
--- cannot say (`depExportsUnknown`).
-depExportsStandalone : GraphCtx -> String -> String -> Bool
-depExportsStandalone gctx depId bare
-  | depExportsUnknown gctx depId = True
-  | otherwise = anyList (r => fst r == bare) (graphPubDefiners gctx depId)
-
--- can [depId]'s export table answer at all?  Named rather than restated because
--- `formBareLocals`' wildcard arm asks the SAME question of a whole form: a form whose
--- dependency the graph cannot speak for admits every name, which is what makes that arm
--- `blAll` rather than a set.  Two answers to one question here would be two fail-open
--- policies, which is the shape S1's admission predicate cannot afford.
-depExportsUnknown : GraphCtx -> String -> Bool
-depExportsUnknown gctx depId =
-  depId == "core" || omSize gctx.declEnvsRef.value.deDefiners == 0
 
 -- the BARE interface-method name a (possibly mangled) standalone-shadow symbol stands for.
 -- Identity on the un-mangled run/check path, where the map is empty.
